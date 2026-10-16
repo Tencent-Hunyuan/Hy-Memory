@@ -103,6 +103,7 @@ import { createSourceChangeHandler } from "./source-change-handler";
 import { SourceDirectoryPicker } from "./source-directory-picker";
 import {
   installBundledCliIfNeeded,
+  isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
   startStableRuntimeRepair,
@@ -1039,7 +1040,27 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
               await removeRuntimeServiceOwner(dataDir);
             else await writeRuntimeServiceOwner(dataDir, previousOwner);
           }
-          throw error;
+          // A durable `launchctl disable` override is a state to report, not a
+          // failure to undo: `installUserService` never re-enables a service the
+          // user or the system disabled, so the override outlives a re-install.
+          // Treating the refusal as fatal is what leaves the app unopenable,
+          // with no surface left to re-enable the service. Degrade the way the
+          // non-managed mode already does instead: own the Runtime as a child
+          // process, and leave the login-time service disabled and the override
+          // untouched. Every other install failure still fails closed.
+          if (!isDisabledServiceInstallError(error)) throw error;
+          await diagnostics.log({
+            level: "warn",
+            component: "desktop.stable_runtime",
+            event: "stable_runtime.service_disabled",
+            outcome: "degraded",
+            error_code: "runtime_service_disabled_by_system",
+          });
+          await ensureRuntimeProcess({
+            dataDir,
+            launch: runtimeLaunch(),
+            attempts: app.isPackaged ? 360 : 120,
+          });
         }
       }
       if (owner?.owner === "app" && !startAtLogin) {
