@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ensureStableRuntimeThenRepair,
   installBundledCliIfNeeded,
+  isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
   startStableRuntimeRepair,
@@ -156,5 +157,29 @@ describe("ensureStableRuntimeThenRepair", () => {
     expect(stableRuntimeErrorCode("installed_version_conflict")).toBe(
       "desktop_start_failed",
     );
+  });
+});
+
+describe("isDisabledServiceInstallError", () => {
+  it("recognises the durable disabled-service refusal", () => {
+    expect(
+      isDisabledServiceInstallError(
+        new Error("runtime_service_disabled_by_system"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps every other install failure fatal", () => {
+    for (const other of [
+      new Error("runtime_service_label_conflict"),
+      new Error("runtime_service_install_root_not_ready"),
+      new Error("runtime_service_command_failed"),
+      new Error("runtime_service_disabled_by_system" + " "),
+      "runtime_service_disabled_by_system",
+      null,
+      undefined,
+    ]) {
+      expect(isDisabledServiceInstallError(other)).toBe(false);
+    }
   });
 });
