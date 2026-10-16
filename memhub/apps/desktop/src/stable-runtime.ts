@@ -137,3 +137,12 @@ export function stableRuntimeErrorCode(error: unknown): string {
   }
   return "desktop_start_failed";
 }
+
+const DISABLED_SERVICE_INSTALL_ERROR = "runtime_service_disabled_by_system";
+
+/** Whether `installUserService` refused because the service is disabled. */
+export function isDisabledServiceInstallError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message === DISABLED_SERVICE_INSTALL_ERROR
+  );
+}
