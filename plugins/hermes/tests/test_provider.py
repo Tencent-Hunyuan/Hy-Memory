@@ -251,6 +251,33 @@ def test_defaults_and_missing_owner(monkeypatch):
     monkeypatch.delenv("HY_MEMORY_USER_ID", raising=False)
     p = HyMemoryProvider()
     assert not p.is_available()
+
+
+def test_write_timeout_inherits_and_selects_per_operation(provider, monkeypatch):
+    calls = transport(monkeypatch, {"success": True, "memories": []})
+    assert provider.timeout == 5
+    assert provider.write_timeout == 5
+    call(provider, query="read")
+    call(provider, "add", text="write")
+    assert [timeout for _, timeout in calls] == [5, 5]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-1", "0", "120.1"])
+def test_write_timeout_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    monkeypatch.setenv("HY_MEMORY_WRITE_TIMEOUT", value)
+    assert not HyMemoryProvider().is_available()
+
+
+def test_write_timeout_accepts_extended_bound(monkeypatch):
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    monkeypatch.setenv("HY_MEMORY_TIMEOUT", "30")
+    monkeypatch.setenv("HY_MEMORY_WRITE_TIMEOUT", "95")
+    p = HyMemoryProvider()
+    assert p.is_available()
+    assert p.timeout == 30 and p.write_timeout == 95
     assert p.unavailable_reason()
 
 

@@ -108,6 +108,7 @@ class HyMemoryProvider(MemoryProvider):
         self._lock = threading.RLock()
         self._queue = queue.Queue(maxsize=8)
         self._worker = None
+        self._inflight = False
         self._closed = True
         self._primary = False
         self._generation = 0
@@ -145,6 +146,7 @@ class HyMemoryProvider(MemoryProvider):
             if any(c in self.token for c in "\r\n"):
                 raise ProviderError("invalid_config")
             self.timeout = self._number("TIMEOUT", 5, 0.1, 30)
+            self.write_timeout = self._number("WRITE_TIMEOUT", self.timeout, 0.1, 120)
             self.limit = int(self._number("LIMIT", 5, 1, 20, integer=True))
             self.chars = int(self._number("MAX_CHARS", 4000, 256, 16000, integer=True))
             self.body_bytes = int(
@@ -204,6 +206,8 @@ class HyMemoryProvider(MemoryProvider):
             "hy_memory_url": getattr(self, "url", None)
             if self.is_available()
             else None,
+            "hy_memory_timeout": getattr(self, "timeout", None),
+            "hy_memory_write_timeout": getattr(self, "write_timeout", None),
         }
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -240,13 +244,14 @@ class HyMemoryProvider(MemoryProvider):
         )
         try:
             # Disable ambient proxies and all redirects, including same-origin redirects.
-            deadline = time.monotonic() + self.timeout
+            budget = self.write_timeout if operation == "add" else self.timeout
+            deadline = time.monotonic() + budget
             opener = urllib.request.build_opener(
                 urllib.request.ProxyHandler({}), _NoRedirect(),
                 *(_deadline_handlers(deadline) if self._ssl_context is None
                   else _deadline_handlers(deadline, self._ssl_context)),
             )
-            with opener.open(request, timeout=self.timeout) as response:
+            with opener.open(request, timeout=budget) as response:
                 if response.status != 200:
                     raise ProviderError("http_failure")
                 # HTTPResponse ignores Content-Length when chunked framing is active.
@@ -452,6 +457,7 @@ class HyMemoryProvider(MemoryProvider):
             try:
                 with self._lock:
                     closed = self._closed
+                    self._inflight = not closed
                 if not closed:
                     job()
             except ProviderError as exc:
@@ -459,6 +465,8 @@ class HyMemoryProvider(MemoryProvider):
             except Exception:
                 self.last_error = "background_failure"
             finally:
+                with self._lock:
+                    self._inflight = False
                 self._queue.task_done()
 
     def _key(self, query: str, session_id: str) -> tuple[int, str, str]:
@@ -562,4 +570,7 @@ class HyMemoryProvider(MemoryProvider):
             self._generation += 1
             self._cache = self._desired = self._status = None
         if self._worker is not None:
-            self._worker.join(timeout=self.timeout + 1)
+            with self._lock:
+                inflight = self._inflight
+            if inflight:
+                self._worker.join(timeout=max(self.timeout, self.write_timeout) + 1)
