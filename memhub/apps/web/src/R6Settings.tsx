@@ -42,11 +42,11 @@ function safeEndpoint(value: string | null) {
 export function R6Settings({
   active = true,
   onDiagnostics: _onDiagnostics,
-  showDiagnostics = import.meta.env.VITE_ENABLE_DIAGNOSTICS === "true",
+  showDiagnostics = import.meta.env.VITE_ENABLE_DIAGNOSTICS !== "false",
 }: {
   onDiagnostics(): void;
   active?: boolean;
-  /** Hidden in release builds unless explicitly enabled at build time. */
+  /** Shown by default; a release build may still opt out with VITE_ENABLE_DIAGNOSTICS=false. */
   showDiagnostics?: boolean;
 }) {
   const id = useId();

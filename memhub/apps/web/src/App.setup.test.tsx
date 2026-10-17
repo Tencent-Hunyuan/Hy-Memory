@@ -123,7 +123,7 @@ it("enters D47 settings without a tour or mandatory second scope-confirmation fl
   expect(screen.queryByRole("button", { name: "管理已有授权" })).toBeNull();
   expect(screen.getByRole("button", { name: "模型" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "连接其他应用" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
+  expect(screen.getByRole("button", { name: "帮助与诊断" })).toBeTruthy();
   noModelWrites();
 });
 
@@ -139,7 +139,7 @@ it("enters the workbench without an automatic tour or removed help section", asy
   expect(localStorage.getItem("one-memory.learning.s1-3")).toBeNull();
   const nav = screen.getByRole("navigation", { name: "主要导航" });
   await userEvent.click(within(nav).getByRole("button", { name: "设置" }));
-  expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
+  expect(screen.getByRole("button", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.queryByRole("dialog", { name: "功能教学" })).toBeNull();
   noModelWrites();
 });
