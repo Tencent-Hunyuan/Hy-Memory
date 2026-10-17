@@ -977,6 +977,44 @@ class MemoryTaskStore:
             error_code=error_code,
         )
 
+    def release_unstarted(
+        self,
+        task_id: str,
+        *,
+        runner_token: str,
+        error_code: str,
+    ) -> MemoryTask:
+        """Return a claimed task to pending when a user pause wins before HY.
+
+        Claim increments ``attempts``. A pause is not an execution failure, so
+        the attempt is returned as well; repeatedly pausing and resuming can
+        never exhaust an otherwise healthy task.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._connect(writing=True) as connection:
+            changed = connection.execute(
+                """
+                UPDATE memory_tasks
+                SET status=?, runner_token=NULL,
+                    attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+                    last_error_code=?, duration_seconds=NULL, updated_at=?
+                WHERE task_id=? AND status=? AND runner_token=?
+                """,
+                (
+                    MemoryTaskStatus.PENDING,
+                    error_code,
+                    now,
+                    task_id,
+                    MemoryTaskStatus.RUNNING,
+                    runner_token,
+                ),
+            )
+            if changed.rowcount != 1:
+                raise MemoryTaskOwnershipError(
+                    "Memory task runner no longer owns this task"
+                )
+        return self.require(task_id)
+
     def park_for_permission(self, task_id: str, *, error_code: str) -> bool:
         """Park unstarted work until a later permission snapshot admits it."""
         now = datetime.now(UTC).isoformat()

@@ -52,7 +52,6 @@ from one_memory.auth import local_api_guard, renderer_origins
 from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import context_router
-from one_memory.diagnostic_log import diagnostic_event
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
     close_main_databases,
@@ -939,6 +938,7 @@ def create_app(
             app.state.source_permission_locks = {
                 source_id: asyncio.Lock() for source_id in app.state.source_catalog
             }
+            app.state.sedimentation_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
             app.state.secret_store = secret_store or KeyringSecretStore()
@@ -1104,8 +1104,12 @@ def create_app(
                 mark_invoked: Callable[[], Awaitable[bool]],
             ) -> bool:
                 """Serialize pause with the last boundary before an HY call."""
-                lock = app.state.source_permission_locks.setdefault(source_id, asyncio.Lock())
-                async with lock:
+                source_lock = app.state.source_permission_locks.setdefault(
+                    source_id, asyncio.Lock()
+                )
+                async with app.state.sedimentation_lock, source_lock:
+                    if not _config_store(app).sedimentation_enabled():
+                        raise RuntimeError("model_sedimentation_disabled")
                     if not _source_writes_on(app, source_id):
                         raise RuntimeError("model_content_source_disabled")
                     return await mark_invoked()
@@ -1143,7 +1147,9 @@ def create_app(
                     + 10
                 ),
                 reconcile_unknown=reconcile_unknown_writes,
-                source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
+                source_writes_permitted=lambda source_id: _sedimentation_claim_enabled(
+                    app, source_id
+                ),
                 # The claim gate has to be the same question the write gate
                 # asks, not a second answer to it. It used to be
                 # `sync_enabled`, the per-app toggle, and `one-memory-manual` is
@@ -1152,7 +1158,9 @@ def create_app(
                 # write gate admits it by its grant. Every manual note's job was
                 # therefore skipped on every drain tick — the note stayed
                 # "saved, waiting" with no task behind it, forever.
-                source_claim_enabled=lambda source_id: _source_writes_on(app, source_id),
+                source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(
+                    app, source_id
+                ),
             )
             app.state.memory_write_drain = memory_write_drain
             app.state.memory_write_drain_task = watched_task(
@@ -3675,20 +3683,25 @@ def create_app(
         resumes it. Importing conversations is not affected either way.
         """
         store = _config_store(app)
-        previous = store.sedimentation_enabled()
-        if previous is not request.enabled:
-            await asyncio.to_thread(store.set_sedimentation_enabled, request.enabled)
-            diagnostic_event(
-                level="info",
-                component="memory.sedimentation",
-                event="memory_sedimentation.toggled",
-                outcome="succeeded",
-                details={"enabled": request.enabled},
-            )
-            if request.enabled:
-                # Work parked by the stop is picked up again rather than waiting
-                # for the next natural dispatch.
-                await _memory_processing_supervisor(app).resume_allowed()
+        changed = False
+        async with app.state.sedimentation_lock:
+            previous = store.sedimentation_enabled()
+            if previous is not request.enabled:
+                await asyncio.to_thread(
+                    store.set_sedimentation_enabled, request.enabled
+                )
+                changed = True
+                diagnostic_event(
+                    level="info",
+                    component="memory.sedimentation",
+                    event="memory_sedimentation.toggled",
+                    outcome="succeeded",
+                    details={"enabled": request.enabled},
+                )
+        if changed and request.enabled:
+            # Work parked by the stop is picked up again rather than waiting
+            # for the next natural dispatch.
+            await _memory_processing_supervisor(app).resume_allowed()
         return SedimentationState(enabled=store.sedimentation_enabled())
 
     @app.post(
@@ -5020,6 +5033,14 @@ def _source_writes_on(app: FastAPI, source_id: str) -> bool:
         receipt = _grant_store(app).receipt(user_id="local", source_id=source_id)
         return receipt is not None and receipt.revoked_at is None
     return _source_processing_enabled(app, source_id)
+
+
+def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
+    """Claim queued model work only while both global and source gates allow it."""
+
+    return _config_store(app).sedimentation_enabled() and _source_writes_on(
+        app, source_id
+    )
 
 
 def _model_prober(app: FastAPI) -> ModelProber:

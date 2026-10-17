@@ -3,7 +3,11 @@ import sqlite3
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from one_memory.api import _run_backfill, _source_writes_on
+from one_memory.api import (
+    _run_backfill,
+    _sedimentation_claim_enabled,
+    _source_writes_on,
+)
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.config_state import ConfigStore
@@ -114,3 +118,7 @@ def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> No
 
     assert _source_writes_on(app, "one-memory-manual") is True
     assert config.sync_enabled("one-memory-manual") is False
+
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is True
+    config.set_sedimentation_enabled(False)
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is False

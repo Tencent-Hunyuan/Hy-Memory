@@ -8,11 +8,17 @@ so starting again resumes it instead of beginning from nothing.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
+from one_memory.api import create_app
+from one_memory.config import Settings
 from one_memory.extraction_settings import ExtractionSettingsStore
+from one_memory.hy_memory_bridge import HyMemoryBridgeError
 from one_memory.imports.models import EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceInput, EvidenceStore
 from one_memory.memory_processing import MemoryProcessingSupervisor
@@ -36,6 +42,32 @@ class _Flag:
 
     def __call__(self) -> bool:
         return self.value
+
+
+def test_sedimentation_route_persists_and_resumes_without_restart(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            _env_file=None,
+            data_dir=tmp_path / "data",
+            source_home=tmp_path / "home",
+            api_token=SecretStr("test"),
+            imports_enabled=False,
+            automatic_memory_processing=False,
+            live_sync_enabled=False,
+        ),
+        source_catalog={},
+    )
+    with TestClient(app, headers={"Authorization": "Bearer test"}) as client:
+        assert client.get("/api/v1/sedimentation").json()["enabled"] is True
+        stopped = client.put(
+            "/api/v1/sedimentation", json={"enabled": False}
+        )
+        assert stopped.status_code == 200
+        assert stopped.json()["enabled"] is False
+        assert client.get("/api/v1/sedimentation").json()["enabled"] is False
+        resumed = client.put("/api/v1/sedimentation", json={"enabled": True})
+        assert resumed.status_code == 200
+        assert resumed.json()["enabled"] is True
 
 
 def _stores(tmp_path, flag: _Flag):
@@ -118,6 +150,58 @@ def test_stopped_switch_classifies_no_work_and_keeps_it_pending(tmp_path) -> Non
 
     flag.value = True
     assert len(supervisor._classify([task])) == 1
+
+
+def test_stopped_switch_refuses_direct_durable_processing(tmp_path) -> None:
+    flag = _Flag(False)
+    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(
+        tmp_path, flag
+    )
+    task = _task(evidence, tasks, active, index=1)
+    record = evidence.get(task.input_ref)
+    assert record is not None
+
+    with pytest.raises(HyMemoryBridgeError, match="model_sedimentation_disabled"):
+        asyncio.run(supervisor.process_records((record,)))
+
+    assert tasks.require(task.task_id).status is MemoryTaskStatus.PENDING
+
+
+def test_pause_returns_a_claimed_task_attempt(tmp_path) -> None:
+    flag = _Flag(True)
+    evidence, tasks, active, _supervisor, _profiles, _secrets = _stores(
+        tmp_path, flag
+    )
+    task = _task(evidence, tasks, active, index=1)
+    claimed, token = tasks.claim(task.task_id)
+    assert claimed.attempts == 1
+
+    released = tasks.release_unstarted(
+        task.task_id,
+        runner_token=token,
+        error_code="model_sedimentation_disabled",
+    )
+
+    assert released.status is MemoryTaskStatus.PENDING
+    assert released.attempts == 0
+
+
+def test_stopping_after_scheduler_classification_starts_no_worker(tmp_path) -> None:
+    flag = _Flag(True)
+    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(
+        tmp_path, flag
+    )
+    task = _task(evidence, tasks, active, index=1)
+    work = supervisor._classify([task])
+    assert len(work) == 1
+    supervisor._queue.add(work[0])
+
+    flag.value = False
+    asyncio.run(supervisor._work())
+
+    current = tasks.require(task.task_id)
+    assert current.status is MemoryTaskStatus.PENDING
+    assert current.attempts == 0
 
 
 def test_stopped_switch_enqueues_nothing(tmp_path) -> None:

@@ -1108,6 +1108,7 @@ class DurableWriteQueue:
         with main_database(self.database_path).write() as connection, connection:
             updated = connection.execute(
                 "UPDATE memory_write_jobs SET state=?,lease_owner=NULL,"
+                "attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,"
                 "lease_expires_at=NULL,updated_at=? WHERE " + where,
                 (PENDING, now, *params),
             )
@@ -1863,7 +1864,10 @@ async def execute_job(
         # Never persist the raw message: it may be a provider response or the
         # user's own text, and `last_error` is shown over HTTP as `detail`.
         code = safe_error_code(error)
-        if code == "model_content_source_disabled" and not hy_invoked:
+        if code in {
+            "model_content_source_disabled",
+            "model_sedimentation_disabled",
+        } and not hy_invoked:
             await in_the_background(queue.release_unstarted, job_id, owner=owner)
             return
         # The task layer classifies these before any bridge is opened, so HY

@@ -4268,9 +4268,40 @@ def test_pause_before_hy_releases_an_already_claimed_job(tmp_path) -> None:
     assert current.state == PENDING
     with sqlite3.connect(path) as connection:
         assert connection.execute(
-            "SELECT hy_invoked FROM memory_write_jobs WHERE job_id=?",
+            "SELECT attempts,hy_invoked FROM memory_write_jobs WHERE job_id=?",
             (record.job_id,),
-        ).fetchone()[0] == 0
+        ).fetchone() == (0, 0)
+
+
+def test_sedimentation_pause_releases_claim_without_spending_an_attempt(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request(key="sedimentation-pause", source="cursor"))
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="pause-owner")
+    assert drain.claim(limit=1) == (record.job_id,)
+
+    async def refuse_before_hy(_source_id, _mark_invoked):
+        raise RuntimeError("model_sedimentation_disabled")
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Recorder(invoke_hy=True),
+            evidence=_EvidenceStore({"e1"}),
+            owner="pause-owner",
+            source_writes_permitted=lambda _source_id: True,
+            admit_hy_invocation=refuse_before_hy,
+        )
+    )
+
+    current = queue.get(record.request_id)
+    assert current is not None and current.state == PENDING
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT attempts,hy_invoked FROM memory_write_jobs WHERE job_id=?",
+            (record.job_id,),
+        ).fetchone() == (0, 0)
 
 
 def test_pause_after_first_hy_call_does_not_interrupt_the_current_job(tmp_path) -> None:

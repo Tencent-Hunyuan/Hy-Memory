@@ -534,6 +534,13 @@ class MemoryTaskRunner:
             self._log_step(task_id, 6, "governance", step_started)
         except HyMemoryBridgeError as error:
             code = str(error)
+            if code == "model_sedimentation_disabled" and not hy_invoked:
+                return await in_the_background(
+                    self.tasks.release_unstarted,
+                    task_id,
+                    runner_token=runner_token,
+                    error_code=code,
+                )
             model_wait_errors = {
                 "hy_memory_unavailable",
                 "hy_memory_rate_limit",
@@ -1332,6 +1339,8 @@ class MemoryProcessingSupervisor:
     ) -> tuple[MemoryTask, ...]:
         """Process a bounded, authorized snapshot through the existing HY runner."""
         async with self._explicit_processing_lock(records):
+            if self._sedimentation_stopped():
+                raise HyMemoryBridgeError("model_sedimentation_disabled")
             records = await in_the_background(self._original_records, records)
             active = await in_the_background(self.profiles.active, self.secrets)
             if active is None or (profile_id is not None and profile_id != active.profile_id):
@@ -2267,7 +2276,7 @@ class MemoryProcessingSupervisor:
         return self.HARNESS_SERIAL
 
     def _ensure_workers(self) -> None:
-        if self._shutting_down:
+        if self._shutting_down or self._sedimentation_stopped():
             return
         load = self._harness_load()
         background_capacity = (
@@ -2345,6 +2354,8 @@ class MemoryProcessingSupervisor:
         """
         looked_for_older = False
         while not self._shutting_down:
+            if self._sedimentation_stopped():
+                return
             # The harness cap is recomputed from what is running, so a worker
             # that just finished frees its harness's slot immediately.
             work = self._queue.take(
@@ -2398,7 +2409,17 @@ class MemoryProcessingSupervisor:
                         scope_key=scope_key,
                     ),
                 ):
-                    finished = await runner.run(work.task_id, timeout=self._profile_timeout)
+                    async def require_sedimentation() -> None:
+                        if self._sedimentation_stopped():
+                            raise HyMemoryBridgeError(
+                                "model_sedimentation_disabled"
+                            )
+
+                    finished = await runner.run(
+                        work.task_id,
+                        timeout=self._profile_timeout,
+                        before_hy_invocation=require_sedimentation,
+                    )
                 if finished.status is MemoryTaskStatus.COMPLETED:
                     self._request_read_bridge_refresh(finished.profile_snapshot)
                 elif (
