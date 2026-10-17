@@ -207,3 +207,48 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 
 历史配置不会生效；当前支持项以本页表格和 `.env.example` 为准。Cache backend 当前仅支持
 `sqlite` 和 `mysql`。
+
+### History backend
+
+`MEMORY_HISTORY_BACKEND=sqlite` (default) keeps the existing local history store.
+The runtime factory `create_history_store(config)` selects the configured backend;
+direct `HistoryStore(config)` construction remains SQLite for compatibility.
+Set `MEMORY_HISTORY_BACKEND=mysql` with `MEMORY_HISTORY_ENABLE=true` to use native
+async MySQL history. Unknown backends fail configuration validation. Install the
+SDK `mysql` extra (`aiomysql`) before enabling it. There is no SQLite fallback or
+automatic import, and MySQL history does not open `MEMORY_HISTORY_DB_PATH`.
+
+History reuses `config.cache.mysql_*` / `MEMORY_MYSQL_HOST`, `MEMORY_MYSQL_PORT`,
+`MEMORY_MYSQL_USER`, `MEMORY_MYSQL_PASSWORD`, `MEMORY_MYSQL_DATABASE`,
+`MEMORY_MYSQL_POOL_SIZE`, and `MEMORY_MYSQL_POOL_RECYCLE` even when the cache
+backend remains SQLite. The history pool accepts 1–32 connections (default 10),
+uses utf8mb4 and autocommit, and bounds connect/read/write/initialize/close to
+10/15/15/30/5 seconds respectively. Operation budgets include pool acquisition.
+A timed-out write can have committed; do not blindly retry audit inserts.
+
+An operator must provision a dedicated database and credentials. Initialization
+creates only `memory_history` and its indexes if absent; it does not create a
+database, grant privileges, or alter an existing table. Use a fresh compatible
+schema; pre-existing incompatible tables fail operations rather than being migrated.
+Isolation filters compare exact bytes, preserving case, Unicode and trailing spaces.
+`get_history(memory_id)` remains unscoped and is **not an authorization boundary**.
+Callers own authorization and best-effort audit error handling.
+
+This externalizes **history only**. Coding trace/chain storage remains SQLite;
+this setting does not make the SDK entirely remote or SQL-only.
+
+Migration plan (manual, not implemented): stop history writers; back up SQLite;
+provision an empty dedicated MySQL schema; export and import all history fields,
+preserving IDs, NULLs, JSON text and ISO timestamps; verify row counts, field
+parity, isolation queries and next auto-increment ID; switch the backend and
+validate reads/writes before resuming writers. Keep the SQLite backup for rollback
+and reconcile any MySQL-only writes before switching back. No automatic data import
+or schema migration is supplied.
+
+For real integration validation, provision a throwaway database matching
+`hy_canary_[A-Za-z0-9_]+`, explicitly set all five `HY_TEST_MYSQL_HOST`,
+`HY_TEST_MYSQL_PORT`, `HY_TEST_MYSQL_USER`, `HY_TEST_MYSQL_PASSWORD`,
+`HY_TEST_MYSQL_DATABASE` variables, then run
+`python -m pytest tests/test_history_mysql_integration.py -m integration`.
+Tests skip without configuration, never read normal MySQL/Neo4j targets, and leave
+only UUID-namespaced audit rows for inspection; they do not delete existing data.

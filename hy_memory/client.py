@@ -38,7 +38,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union, TYPE_CHECKING
 from .config import MemoryConfig
 from .core.embed_service import EmbedService, embed_endpoint_override
 from .data.vector_store import create_vector_store
-from .data.history_store import HistoryStore
+from .data.history_store import create_history_store
 from .data.cache import create_cache
 from .utils.log_setup import setup_logging, set_request_id, request_id_scope
 from .utils.async_executor import (
@@ -600,7 +600,7 @@ class HyMemoryClient:
         # 7. HistoryStore（可选，由 config.history.enable 控制）
         self._history_store = None
         if self._config.history.enable:
-            self._history_store = HistoryStore(self._config)
+            self._history_store = create_history_store(self._config)
             await self._history_store.initialize()
             logger.info("[init] HistoryStore ready")
 
