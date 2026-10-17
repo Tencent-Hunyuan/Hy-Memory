@@ -1050,12 +1050,12 @@ def create_app(
                     )
                 await asyncio.to_thread(
                     memory_write_queue.retry_first_unknown_after_reconcile,
-                    older_than=datetime.now(UTC) - timedelta(minutes=5),
+                    older_than=datetime.now(UTC) - timedelta(seconds=10),
                     limit=32,
                 )
                 await asyncio.to_thread(
                     app.state.memory_task_store.retry_first_unknown_after_reconcile,
-                    older_than=datetime.now(UTC) - timedelta(minutes=5),
+                    older_than=datetime.now(UTC) - timedelta(seconds=10),
                     limit=128,
                 )
 

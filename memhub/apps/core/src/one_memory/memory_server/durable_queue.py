@@ -1949,6 +1949,13 @@ class DurableWriteDrain:
         #: Reaping is a write; it runs at most once per this interval on the
         #: idle path so an empty queue does not issue one write per poll.
         self._reap_interval = reap_interval
+        # Unknown recovery is user-visible and lightweight enough to check
+        # sooner than general database housekeeping. Tests that set the common
+        # interval to zero keep immediate maintenance.
+        self._unknown_reconcile_interval = min(
+            reap_interval,
+            timedelta(seconds=10),
+        )
         #: The maintenance writes below are recoverability/retention work, not
         #: idle housekeeping, so each has its own interval and runs at the start
         #: of every drain tick. Sharing one timestamp would let a busy tick
@@ -2361,7 +2368,8 @@ class DurableWriteDrain:
                     )
                 if self.reconcile_unknown is not None and (
                     self._last_unknown_reconcile is None
-                    or tick_started - self._last_unknown_reconcile >= self._reap_interval
+                    or tick_started - self._last_unknown_reconcile
+                    >= self._unknown_reconcile_interval
                 ):
                     self._last_unknown_reconcile = tick_started
                     try:

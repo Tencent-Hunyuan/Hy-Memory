@@ -1162,6 +1162,20 @@ def test_drain_runs_unknown_reconciliation_during_busy_safe_maintenance(tmp_path
     assert calls == 1
 
 
+def test_unknown_reconciliation_runs_on_a_ten_second_ceiling(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+
+    production = DurableWriteDrain(queue, execute=_never_execute)
+    immediate = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        reap_interval=timedelta(0),
+    )
+
+    assert production._unknown_reconcile_interval == timedelta(seconds=10)
+    assert immediate._unknown_reconcile_interval == timedelta(0)
+
+
 def test_a_reclaimed_uninvoked_job_with_attempts_left_is_retryable(tmp_path) -> None:
     """Recovery of a never-invoked lease is the retry path, not `unknown`.
 
