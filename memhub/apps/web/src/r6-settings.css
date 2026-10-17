@@ -53,7 +53,9 @@
     sans-serif;
   box-shadow: none;
   transform: none;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .r6-settings .r6-settings-layout > nav > button[aria-current="page"] {
   background: #e1eaf0;
@@ -311,20 +313,23 @@
   flex-shrink: 0;
 }
 .r6-settings .r6-settings-help .r6-setting-row {
-  display: block;
-  min-height: 226px;
-  padding: 41px 0 35px;
+  display: flex;
+  min-height: 132px;
+  padding: 30px 0 25px;
+  align-items: center;
+  gap: 32px;
 }
 .r6-settings .r6-settings-help .r6-setting-row h3 {
-  font-size: 20px;
-  margin-bottom: 15px;
+  font-size: 18px;
+  margin-bottom: 10px;
 }
 .r6-settings .r6-settings-help .r6-setting-row p {
-  font-size: 15px;
+  font-size: 14px;
 }
 .r6-settings .r6-settings-help .r6-setting-row > button {
-  margin-top: 38px;
-  min-width: 174px;
+  min-width: 132px;
+  margin-top: 0;
+  margin-left: auto;
 }
 .r6-settings .r6-settings-help .r6-settings-about {
   min-height: 0;
