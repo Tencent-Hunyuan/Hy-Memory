@@ -122,7 +122,7 @@ export async function planLocalInstall(options: {
       installRoot,
       "versions",
       transition.sameBuildReplace
-        ? `${id}-r${payloadFingerprint(manifest)}`
+        ? `${id}-r${manifestFingerprint(manifest)}`
         : id,
     ),
     current_link: path.join(installRoot, "current"),
@@ -367,7 +367,13 @@ async function inspectBuildNumberTransition(options: {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("install_current_unmanaged");
   }
-  const selected = await readManifest(target).catch(() => null);
+  const selected = options.allowSameBuildReplace
+    ? await verifyDistribution(
+        target,
+        options.incoming.platform,
+        options.incoming.arch,
+      )
+    : await readManifest(target).catch(() => null);
   if (selected === null) return { sameBuildReplace: false };
   // Pre-contract packages have no `build_number`. Comparing them against an
   // invented ordinal would either break the hourly chain or manufacture a
@@ -387,6 +393,15 @@ async function inspectBuildNumberTransition(options: {
       if (!options.allowSameBuildReplace) {
         throw new Error("installed_version_conflict");
       }
+      if (
+        !isReleaseCommit(selected.git_commit) ||
+        !isReleaseCommit(options.incoming.git_commit) ||
+        selected.git_commit === options.incoming.git_commit
+      ) {
+        // Same commit with different bytes is not a new build: it is a
+        // non-reproducible or corrupted artifact and must stay rejected.
+        throw new Error("installed_version_conflict");
+      }
       return { sameBuildReplace: true };
     }
     return { sameBuildReplace: false };
@@ -397,20 +412,44 @@ async function inspectBuildNumberTransition(options: {
   return { sameBuildReplace: false };
 }
 
-/** Short, stable digest of the payload a manifest describes.
+/** Short, stable digest of the complete normalized manifest identity.
  *
  * Two packages of the same `build_number` whose bytes differ must not share a
  * version directory: `applyLocalInstall` compares the staged tree against the
  * directory it is about to occupy and would refuse the replacement before
  * `current` could move. Suffixing the directory with a payload fingerprint
  * keeps the equal-build replacement a plain "install then switch" operation. */
-function payloadFingerprint(manifest: DistributionManifest): string {
-  const digest = createHash("sha256");
-  digest.update(`${manifest.version}\0${manifest.build_number ?? ""}\0`);
-  for (const relative of Object.keys(manifest.files).sort()) {
-    digest.update(`${relative}\0${manifest.files[relative]}\0`);
-  }
-  return digest.digest("hex").slice(0, 12);
+function manifestFingerprint(manifest: DistributionManifest): string {
+  const packageId = (
+    manifest as DistributionManifest & {
+      package_id?: unknown;
+    }
+  ).package_id;
+  const identity = {
+    schema_version: manifest.schema_version,
+    product: manifest.product,
+    version: manifest.version,
+    build_number: manifest.build_number ?? null,
+    git_commit: manifest.git_commit ?? null,
+    runtime_protocol: manifest.runtime_protocol ?? null,
+    supported_cli_protocol: manifest.supported_cli_protocol ?? null,
+    platform: manifest.platform,
+    arch: manifest.arch,
+    package_id: typeof packageId === "string" ? packageId : null,
+    files: Object.fromEntries(
+      Object.entries(manifest.files).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(identity))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function isReleaseCommit(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
 }
 
 async function assertPrivateDirectory(target: string): Promise<void> {

@@ -89,11 +89,6 @@ export {
 } from "./local-install.js";
 export { installPackagedRuntime } from "./packaged-runtime-install.js";
 export {
-  isRecoverableInstallConflict,
-  type InstallQuarantineReceipt,
-  quarantineSelectedRuntime,
-} from "./install-conflict-recovery.js";
-export {
   type RecallBrokerFactory,
   RecallBrokerSupervisor,
   type RecallBrokerSupervisorOptions,

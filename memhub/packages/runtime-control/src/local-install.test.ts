@@ -61,7 +61,12 @@ function macho(cpuArch: string): Buffer {
 
 async function distribution(
   version = "1.0.0",
-  options: { buildNumber?: number; arch?: string; nativeArch?: string } = {},
+  options: {
+    buildNumber?: number;
+    arch?: string;
+    nativeArch?: string;
+    gitCommit?: string;
+  } = {},
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "one-memory-local-install-"));
   roots.push(root);
@@ -106,6 +111,7 @@ async function distribution(
         // Derive a monotonic default from the fixture version so an "upgrade"
         // to 2.0.0 outranks 1.0.0 unless a test overrides it explicitly.
         (Number.parseInt(version.split(".")[0] ?? "1", 10) || 1),
+      git_commit: options.gitCommit ?? null,
       platform,
       arch,
       files: digests,
@@ -620,7 +626,10 @@ describe("local Runtime installation", () => {
 
   it("replaces an equal build_number whose bytes differ only when the caller opts in", async () => {
     if (process.platform !== "darwin") return;
-    const first = await distribution("1.0.0", { buildNumber: 5 });
+    const first = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: "a".repeat(40),
+    });
     const firstPlan = await planLocalInstall({
       source: first.source,
       installRoot: first.installRoot,
@@ -631,11 +640,11 @@ describe("local Runtime installation", () => {
 
     // The same release rebuilt from a new commit: identical build number,
     // different bytes. This is what a re-cut MemHub package looks like.
-    const rebuilt = await distribution("1.0.0", { buildNumber: 5 });
-    await writeFile(
-      path.join(rebuilt.source, "web/index.html"),
-      "rebuilt web",
-    );
+    const rebuilt = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: "b".repeat(40),
+    });
+    await writeFile(path.join(rebuilt.source, "web/index.html"), "rebuilt web");
     const manifestPath = path.join(rebuilt.source, "manifest.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
     manifest.files["web/index.html"] = createHash("sha256")
@@ -671,6 +680,106 @@ describe("local Runtime installation", () => {
         "utf8",
       ),
     ).toBe("web");
+  });
+
+  it("uses different directories for different commits with identical payload files", async () => {
+    if (process.platform !== "darwin") return;
+    const first = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: "a".repeat(40),
+    });
+    const firstPlan = await planLocalInstall({
+      source: first.source,
+      installRoot: first.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    await applyLocalInstall(firstPlan);
+    const rebuilt = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: "b".repeat(40),
+    });
+    const replacement = await planLocalInstall({
+      source: rebuilt.source,
+      installRoot: first.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+      allowSameBuildReplace: true,
+    });
+
+    expect(replacement.same_build_replace).toBe(true);
+    expect(replacement.version_directory).not.toBe(firstPlan.version_directory);
+  });
+
+  it("refuses different bytes from the same commit even with the opt-in", async () => {
+    if (process.platform !== "darwin") return;
+    const commit = "a".repeat(40);
+    const first = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: commit,
+    });
+    await applyLocalInstall(
+      await planLocalInstall({
+        source: first.source,
+        installRoot: first.installRoot,
+        platform: process.platform,
+        arch: process.arch,
+      }),
+    );
+    const rebuilt = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: commit,
+    });
+    await writeFile(path.join(rebuilt.source, "web/index.html"), "different");
+    const manifestPath = path.join(rebuilt.source, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.files["web/index.html"] = createHash("sha256")
+      .update("different")
+      .digest("hex");
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    await expect(
+      planLocalInstall({
+        source: rebuilt.source,
+        installRoot: first.installRoot,
+        platform: process.platform,
+        arch: process.arch,
+        allowSameBuildReplace: true,
+      }),
+    ).rejects.toThrow("installed_version_conflict");
+  });
+
+  it("refuses a tampered selected runtime instead of taking it over", async () => {
+    if (process.platform !== "darwin") return;
+    const first = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: "a".repeat(40),
+    });
+    const firstPlan = await planLocalInstall({
+      source: first.source,
+      installRoot: first.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    await applyLocalInstall(firstPlan);
+    await writeFile(
+      path.join(firstPlan.version_directory, "web/index.html"),
+      "tampered",
+    );
+    const rebuilt = await distribution("1.0.0", {
+      buildNumber: 5,
+      gitCommit: "b".repeat(40),
+    });
+
+    await expect(
+      planLocalInstall({
+        source: rebuilt.source,
+        installRoot: first.installRoot,
+        platform: process.platform,
+        arch: process.arch,
+        allowSameBuildReplace: true,
+      }),
+    ).rejects.toThrow("distribution_hash_mismatch");
   });
 
   it("does not let the same-build opt-in weaken downgrade refusal", async () => {

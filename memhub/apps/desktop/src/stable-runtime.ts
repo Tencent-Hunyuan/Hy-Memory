@@ -8,13 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import {
-  installCliLink,
-  isRecoverableInstallConflict,
-  type InstallQuarantineReceipt,
-  planCliLink,
-  quarantineSelectedRuntime,
-} from "@one-memory/runtime-control";
+import { installCliLink, planCliLink } from "@one-memory/runtime-control";
 
 const CLI_PATH_BEGIN = "# >>> memhub PATH >>>";
 const CLI_PATH_END = "# <<< memhub PATH <<<";
@@ -185,34 +179,6 @@ export async function installServiceWithDisabledFallback(options: {
   }
 }
 
-/** Install once, and on a runtime conflict move the selected tree aside and
- * install again.
- *
- * The ordinary upgrade paths already succeed without this: the bundled runtime
- * takes over from a same-build tree whose bytes differ. What is left is the
- * residue of an interrupted or hand-edited install, where the selected tree
- * cannot be reused and nothing else will fix it either. Quarantining costs
- * nothing a reinstall cannot rebuild, and the memory data lives elsewhere, so
- * it is safe to do without asking. A second failure is still reported: two
- * attempts are a repair, an endless loop would be a cover-up.
- */
-export async function withInstallConflictRecovery<T>(options: {
-  install: () => Promise<T>;
-  installRoot: string;
-  onRecovered?: (receipt: InstallQuarantineReceipt) => void | Promise<void>;
-}): Promise<T> {
-  try {
-    return await options.install();
-  } catch (error) {
-    if (!isRecoverableInstallConflict(error)) throw error;
-    const receipt = await quarantineSelectedRuntime({
-      installRoot: options.installRoot,
-    });
-    await options.onRecovered?.(receipt);
-    return await options.install();
-  }
-}
-
 /** What the user is told, instead of an internal error code.
  *
  * The codes are contractual and stay in the logs; this is the layer that turns
@@ -220,9 +186,9 @@ export async function withInstallConflictRecovery<T>(options: {
  * their memories, because that is the first thing anyone asks. */
 export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
   installed_version_conflict:
-    "运行环境与这个安装包不一致，已尝试自动修复但没有成功。请重新启动 MemHub 再试一次；如果仍然打不开，重新安装即可，你的记忆数据不会受到影响。",
+    "运行环境与这个安装包不一致，无法安全接管。请安装更新版本的 MemHub；你的记忆数据不会受到影响。",
   distribution_downgrade_refused:
-    "已安装的运行环境比这个安装包更新，已保留较新的版本，无需处理。",
+    "已安装的运行环境比这个安装包更新，无法用旧安装包启动。请安装最新版本的 MemHub；你的记忆数据不会受到影响。",
   install_current_unmanaged:
     "运行环境的安装目录被改动过，无法安全接管。请重新安装 MemHub，你的记忆数据不会受到影响。",
   desktop_start_failed:

@@ -106,9 +106,7 @@ import {
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
-  stableRuntimeUserMessage,
   startStableRuntimeRepair,
-  withInstallConflictRecovery,
 } from "./stable-runtime";
 import { resolveTrialProfile } from "./trial-profile";
 import { createWindowOptions } from "./window-options";
@@ -994,28 +992,22 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       let runtimeChanged = false;
       let transientRuntime = false;
       if (owner?.owner !== "cli") {
-        const installed = await withInstallConflictRecovery({
-          install: () =>
-            installPackagedRuntime({
-              resourcesPath: process.resourcesPath,
-              executablePath: process.execPath,
-              installRoot,
-              platform: "darwin",
-              arch: process.arch,
-              ...(packagedBuildNumber === undefined
-                ? {}
-                : { buildNumber: packagedBuildNumber }),
-              ...(packagedCommit === undefined
-                ? {}
-                : { gitCommit: packagedCommit }),
-              // The bundle ships inside this notarized app, so it may take
-              // over from a same-build runtime whose bytes differ: a rebuild
-              // of one release keeps its build number, and refusing it leaves
-              // the app unable to start. The superseded tree is kept.
-              replaceSameBuild: true,
-              serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
-            }),
+        const installed = await installPackagedRuntime({
+          resourcesPath: process.resourcesPath,
+          executablePath: process.execPath,
           installRoot,
+          platform: "darwin",
+          arch: process.arch,
+          ...(packagedBuildNumber === undefined
+            ? {}
+            : { buildNumber: packagedBuildNumber }),
+          ...(packagedCommit === undefined
+            ? {}
+            : { gitCommit: packagedCommit }),
+          // Only the packaged Desktop path opts into a valid same-build,
+          // different-commit takeover. CLI installs remain strict.
+          replaceSameBuild: true,
+          serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
         });
         runtimeChanged = !installed.reused_current;
         await installBundledCliIfNeeded({
@@ -1184,24 +1176,20 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
             app.getPath("home"),
             process.env.LOCALAPPDATA,
           );
-          await withInstallConflictRecovery({
-            install: () =>
-              installPackagedRuntime({
-                resourcesPath: process.resourcesPath,
-                executablePath: process.execPath,
-                installRoot,
-                platform: hostPlatform,
-                arch: process.arch,
-                ...(packagedBuildNumber === undefined
-                  ? {}
-                  : { buildNumber: packagedBuildNumber }),
-                ...(packagedCommit === undefined
-                  ? {}
-                  : { gitCommit: packagedCommit }),
-                replaceSameBuild: true,
-                serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
-              }),
+          await installPackagedRuntime({
+            resourcesPath: process.resourcesPath,
+            executablePath: process.execPath,
             installRoot,
+            platform: hostPlatform,
+            arch: process.arch,
+            ...(packagedBuildNumber === undefined
+              ? {}
+              : { buildNumber: packagedBuildNumber }),
+            ...(packagedCommit === undefined
+              ? {}
+              : { gitCommit: packagedCommit }),
+            replaceSameBuild: true,
+            serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
           });
           await installBundledCliIfNeeded({
             home: app.getPath("home"),
