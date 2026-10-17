@@ -165,6 +165,13 @@ def test_import_request_trace_reaches_the_background_job_without_original_text(t
     assert "import.queued" in names
     assert "import.started" in names
     assert "import.finished" in names
+    finished = next(event for event in events if event["event"] == "import.finished")
+    assert {
+        "stored_count",
+        "revised_count",
+        "skipped_count",
+        "error_count",
+    } <= finished["details"].keys()
     assert secret not in written
 
 

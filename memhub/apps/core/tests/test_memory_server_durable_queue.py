@@ -1097,6 +1097,52 @@ def test_reconciled_absent_timeout_is_requeued_once_without_resetting_attempts(
     )
 
 
+def test_unresolved_unknown_is_automatically_retried_only_once(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+            "last_error='model_content_outcome_unknown',updated_at=? WHERE job_id=?",
+            ("2026-01-01T00:00:00+00:00", record.job_id),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert queue.retry_first_unknown_after_reconcile(older_than=cutoff) == 1
+    first_retry = queue.get(record.request_id)
+    assert first_retry.state == PENDING
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT attempts FROM memory_write_jobs WHERE job_id=?",
+            (record.job_id,),
+        ).fetchone()[0] == 1
+
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="retry-owner")
+    assert drain.claim(limit=1) == (record.job_id,)
+    assert queue.mark_invoked(record.job_id, owner="retry-owner")
+    queue.settle(
+        record.job_id,
+        state=UNKNOWN,
+        owner="retry-owner",
+        error_code="model_content_outcome_unknown",
+        hy_invoked=True,
+    )
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT attempts FROM memory_write_jobs WHERE job_id=?",
+            (record.job_id,),
+        ).fetchone()[0] == 2
+    assert (
+        queue.retry_first_unknown_after_reconcile(
+            older_than=datetime.now(UTC) + timedelta(minutes=1)
+        )
+        == 0
+    )
+    assert queue.get(record.request_id).state == UNKNOWN
+
+
 def test_drain_runs_unknown_reconciliation_during_busy_safe_maintenance(tmp_path) -> None:
     queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
     calls = 0
@@ -1114,6 +1160,20 @@ def test_drain_runs_unknown_reconciliation_during_busy_safe_maintenance(tmp_path
     )
     asyncio.run(drain.run_forever(idle_pause=0.001))
     assert calls == 1
+
+
+def test_unknown_reconciliation_runs_on_a_ten_second_ceiling(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+
+    production = DurableWriteDrain(queue, execute=_never_execute)
+    immediate = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        reap_interval=timedelta(0),
+    )
+
+    assert production._unknown_reconcile_interval == timedelta(seconds=10)
+    assert immediate._unknown_reconcile_interval == timedelta(0)
 
 
 def test_a_reclaimed_uninvoked_job_with_attempts_left_is_retryable(tmp_path) -> None:
@@ -2061,6 +2121,19 @@ def test_sqlite_claim_keeps_fifo_order_when_later_work_is_live(tmp_path) -> None
 
     drain = DurableWriteDrain(queue, execute=_never_execute)
     assert drain.claim(limit=1) == (normal.job_id,)
+
+
+def test_unknown_source_head_does_not_block_later_pending_work(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    uncertain = queue.submit(_request(evidence=("e1",), key="unknown"))
+    later = queue.submit(_request(evidence=("e2",), key="later"))
+    queue.settle(uncertain.job_id, state=UNKNOWN, hy_invoked=True)
+
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="next-owner")
+
+    assert drain.claim(limit=1) == (later.job_id,)
+    assert queue.get("unknown").state == UNKNOWN
 
 
 def test_sqlite_claim_orders_different_sources_by_enqueue_sequence(tmp_path) -> None:

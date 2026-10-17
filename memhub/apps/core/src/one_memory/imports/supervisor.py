@@ -316,6 +316,10 @@ class ImportSupervisor:
                     "source_id": current.source_id,
                     "mode": current.operation,
                     "count": current.stored,
+                    "stored_count": current.stored,
+                    "revised_count": current.revised,
+                    "skipped_count": current.skipped,
+                    "error_count": current.errors,
                 },
             )
 

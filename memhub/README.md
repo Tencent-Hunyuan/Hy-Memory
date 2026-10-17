@@ -42,6 +42,8 @@ Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命�
 
 架构详情见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 和
 [`docs/contracts/runtime-unification.md`](docs/contracts/runtime-unification.md)。
+产品、测试和一线支持排查导入与记忆沉淀时，使用
+[`docs/PRODUCT_LOG_TROUBLESHOOTING.md`](docs/PRODUCT_LOG_TROUBLESHOOTING.md)。
 
 ## 开发环境
 
