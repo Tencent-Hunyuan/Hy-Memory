@@ -31,6 +31,7 @@ _COLLECTION_LOGGERS = (
     "httpx",
     "httpcore",
 )
+_NOISY_LIBRARY_LOGGERS = ("httpx", "httpcore", "watchfiles", "jieba")
 
 # One Memory deliberately stays on ultra because its existing, user-visible
 # profile/graph flow calls digest(), which the pinned public SDK exposes only
@@ -139,6 +140,18 @@ def apply_diagnostic_log_level(level: DiagnosticLogLevel) -> None:
     for name in tuple(logging.Logger.manager.loggerDict):
         if any(name == root or name.startswith(f"{root}.") for root in _COLLECTION_LOGGERS):
             logging.getLogger(name).setLevel(selected)
+    # Successful HTTP exchanges, file-watch notifications and tokenizer
+    # initialization are useful only while actively debugging. At INFO they
+    # dominated core.log and the in-app panel without describing product work.
+    noisy_level = selected if selected == logging.DEBUG else max(selected, logging.WARNING)
+    for root in _NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(root).setLevel(noisy_level)
+    for name in tuple(logging.Logger.manager.loggerDict):
+        if any(
+            name == root or name.startswith(f"{root}.")
+            for root in _NOISY_LIBRARY_LOGGERS
+        ):
+            logging.getLogger(name).setLevel(noisy_level)
 
     os.environ["MEMORY_LOG_LEVEL"] = logging.getLevelName(selected)
     os.environ["MEMORY_PIPELINE_TRACE_ENABLED"] = "true" if level == "debug" else "false"

@@ -163,7 +163,7 @@ def _report_stale_known_reasons(task_id: str, reasons: Mapping[str, int]) -> Non
     """Emit one schema-valid scalar diagnostic per stale-memory reason."""
     for reason, count in sorted(reasons.items()):
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.context",
             event="known_memory_stale_omitted",
             outcome="omitted",
@@ -284,7 +284,7 @@ class MemoryTaskRunner:
     ) -> MemoryTask:
         started = monotonic()
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.task",
             event="memory_task.started",
             outcome="started",
@@ -368,7 +368,7 @@ class MemoryTaskRunner:
     @staticmethod
     def _log_step(task_id: str, step: int, action: str, started: float) -> None:
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.task",
             event="memory_task.step_completed",
             outcome="succeeded",
@@ -1289,7 +1289,7 @@ class MemoryProcessingSupervisor:
             return
         self._diagnostic_idle_reason = reason
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.scheduler",
             event="memory_scheduler.idle",
             outcome="idle",
@@ -1719,7 +1719,7 @@ class MemoryProcessingSupervisor:
         visited = 0
         seed_ids = self.evidence.list_conversation_seed_ids()
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.scheduler",
             event="memory_scheduler.scan_inventory",
             outcome="observed",
@@ -1789,7 +1789,7 @@ class MemoryProcessingSupervisor:
         started = monotonic()
         prepared_count = 0
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.scheduler",
             event="memory_scheduler.scan_started",
             outcome="started",
@@ -1848,7 +1848,7 @@ class MemoryProcessingSupervisor:
                             on_first_scheduled()
                 if not exhausted and not self._shutting_down:
                     diagnostic_event(
-                        level="info",
+                        level="debug",
                         component="memory.scheduler",
                         event="memory_scheduler.scan_yielded",
                         outcome="yielded",
@@ -1885,7 +1885,7 @@ class MemoryProcessingSupervisor:
             elif prepared_count:
                 self._diagnostic_idle_reason = None
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="memory.scheduler",
                 event="memory_scheduler.scan_completed",
                 outcome=(
@@ -2175,7 +2175,7 @@ class MemoryProcessingSupervisor:
         if work:
             self._diagnostic_idle_reason = None
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="memory.scheduler",
                 event="memory_scheduler.tasks_queued",
                 outcome="succeeded",
@@ -3050,7 +3050,7 @@ class MemoryProcessingSupervisor:
             self._read_bridges_ready.add(key)
             self._read_bridge_generations[key] = generation
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="memory.semantic",
                 event="semantic_read_bridge.refreshed",
                 outcome="succeeded",

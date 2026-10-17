@@ -1039,7 +1039,7 @@ def close_main_databases() -> None:
 def log_main_database_stats(moment: str) -> None:
     """One line in core.log: how many connections are open and who waited."""
     stats = main_database_stats()
-    logger.info(
+    logger.debug(
         "main_database_connections moment=%s %s",
         moment,
         " ".join(f"{key}={value}" for key, value in stats.items()),

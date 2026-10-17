@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -87,6 +88,9 @@ def _segment_at_the_legacy_window(monkeypatch):
 
 def test_stale_known_reason_diagnostics_never_fail_dispatch(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path)
     try:
         _report_stale_known_reasons(
@@ -95,6 +99,7 @@ def test_stale_known_reason_diagnostics_never_fail_dispatch(tmp_path, monkeypatc
         )
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
 
     records = [json.loads(line) for line in receipt.path.read_text().splitlines()]
     assert [(row["details"]["reason"], row["details"]["count"]) for row in records] == [
@@ -306,11 +311,15 @@ def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
         content=marker,
     )
     task = _task(tasks, profile, record)
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path)
     try:
         asyncio.run(_runner(tmp_path, stores, FakeBridge()).run(task.task_id))
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
     written = receipt.path.read_text()
     events = [json.loads(line) for line in written.splitlines()]
     steps = [event for event in events if event["event"] == "memory_task.step_completed"]
@@ -1390,6 +1399,9 @@ def test_backfill_scan_logs_inventory_and_queue_without_content(tmp_path) -> Non
             conversation_id=f"conversation-{index}",
             content_kind=EvidenceContentKind.MEMORY_CONTENT,
         )
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path / "logs")
 
     async def exercise() -> None:
@@ -1409,6 +1421,7 @@ def test_backfill_scan_logs_inventory_and_queue_without_content(tmp_path) -> Non
         asyncio.run(exercise())
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
 
     written = receipt.path.read_text()
     events = [json.loads(line) for line in written.splitlines()]

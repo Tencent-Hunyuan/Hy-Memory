@@ -355,7 +355,7 @@ class JsonlSourceAdapter:
                 source_file, checkpoint, header = await asyncio.to_thread(
                     self._prepare, listed, options
                 )
-                _log.info(
+                _log.debug(
                     "import_file_read source=%s file=%d/%d file_bytes=%d planned_bytes=%d",
                     self.descriptor.source_id,
                     index,
@@ -376,7 +376,7 @@ class JsonlSourceAdapter:
                     else DEFAULT_IMPORT_MAX_FILE_BYTES
                 )
                 if source_file.size > budget:
-                    _log.info(
+                    _log.debug(
                         "import_file_budgeted source=%s file=%d/%d file_bytes=%d budget=%d path=%s",
                         self.descriptor.source_id,
                         index,

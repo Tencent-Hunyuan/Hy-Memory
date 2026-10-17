@@ -10,18 +10,19 @@ export function installRendererDebugLogCapture(): () => void {
   if (installed) return () => undefined;
   installed = true;
   const originals = {
-    debug: console.debug,
-    info: console.info,
-    log: console.log,
     warn: console.warn,
     error: console.error,
   };
-  const methods = ["debug", "info", "log", "warn", "error"] as const;
+  // Successful renderer chatter is already represented by structured UI
+  // diagnostics. Mirroring console.log/info/debug duplicated it without trace
+  // identity and made the panel less useful. Console capture is now only the
+  // actionable fallback for warnings and failures.
+  const methods = ["warn", "error"] as const;
   for (const method of methods) {
     console[method] = (...values: unknown[]) => {
       originals[method](...values);
       recordRendererDebugLog({
-        level: method === "log" ? "info" : method,
+        level: method,
         event: `console.${method}`,
         outcome: method === "error" ? "failed" : "observed",
         message: values.map(debugValue).join(" "),

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import re
 import sys
@@ -648,6 +649,10 @@ def _drain_diagnostics_at_exit() -> None:
 def diagnostic_event(**values: object) -> None:
     active = _active
     if active is None:
+        return
+    if values.get("level") == "debug" and not logging.getLogger().isEnabledFor(
+        logging.DEBUG
+    ):
         return
     try:
         active.write(**values)  # type: ignore[arg-type]

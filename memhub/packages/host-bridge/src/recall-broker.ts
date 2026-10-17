@@ -589,13 +589,7 @@ export class RecallBroker {
         throw Error("connection_control_response_limit");
       if (!response.destroyed) sendJson(response, 200, envelope);
       this.recordConnectionDiagnostic(value.action, false);
-      const fingerprint = connectionStateFingerprint(result);
-      const previous = this.connectionDiagnosticState.get(value.action);
-      if (
-        !["capability", "receipt", "host"].includes(value.action) ||
-        previous !== fingerprint
-      ) {
-        this.connectionDiagnosticState.set(value.action, fingerprint);
+      if (!["capability", "receipt", "host"].includes(value.action)) {
         this.emit({
           level: "info",
           component: "host.broker",
@@ -1261,62 +1255,26 @@ export class RecallBroker {
       this.connectionDiagnosticSummary.set(action, current);
       return;
     }
-    this.emit({
-      level: current.errorCount ? "warn" : "info",
-      component: "host.broker",
-      event: "connection_control.summary",
-      outcome: "observed",
-      instance_id: this.options.instanceId,
-      details: {
-        action,
-        count: current.count,
-        error_count: current.errorCount,
-      },
-    });
+    if (current.errorCount) {
+      this.emit({
+        level: "warn",
+        component: "host.broker",
+        event: "connection_control.summary",
+        outcome: "observed",
+        instance_id: this.options.instanceId,
+        details: {
+          action,
+          count: current.count,
+          error_count: current.errorCount,
+        },
+      });
+    }
     this.connectionDiagnosticSummary.set(action, {
       startedAt: now,
       count: 0,
       errorCount: 0,
     });
   }
-}
-
-function connectionStateFingerprint(value: unknown): string {
-  const safe: Array<[string, string | number | boolean | null]> = [];
-  const visit = (item: unknown): void => {
-    if (Array.isArray(item)) {
-      for (const child of item) visit(child);
-      return;
-    }
-    if (!item || typeof item !== "object") return;
-    for (const [key, child] of Object.entries(item)) {
-      if (
-        [
-          "status",
-          "state",
-          "error",
-          "code",
-          "installed",
-          "approved",
-          "available",
-        ].includes(key) &&
-        (child === null ||
-          ["string", "number", "boolean"].includes(typeof child))
-      ) {
-        safe.push([key, child as string | number | boolean | null]);
-      } else if (child && typeof child === "object") {
-        visit(child);
-      }
-    }
-  };
-  visit(value);
-  return JSON.stringify(
-    safe.sort(([leftKey, left], [rightKey, right]) =>
-      `${leftKey}:${String(left)}`.localeCompare(
-        `${rightKey}:${String(right)}`,
-      ),
-    ),
-  );
 }
 
 function requestTraceId(request: IncomingMessage): string {

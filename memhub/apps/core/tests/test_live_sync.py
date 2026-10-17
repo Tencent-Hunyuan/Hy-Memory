@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -1255,6 +1256,9 @@ def test_triggering_a_sync_leaves_the_loop_free_to_answer(tmp_path) -> None:
 
 def test_live_sync_diagnostics_only_emit_state_changes(tmp_path, monkeypatch):
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path)
     try:
         supervisor = PollingLiveSyncSupervisor(
@@ -1267,5 +1271,7 @@ def test_live_sync_diagnostics_only_emit_state_changes(tmp_path, monkeypatch):
         supervisor._set_health("codex", unavailable.model_copy(update={"source_id": "codex"}))
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
     events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
     assert [event["event"] for event in events] == ["live_sync.state_changed"]
+    assert events[0]["level"] == "warn"

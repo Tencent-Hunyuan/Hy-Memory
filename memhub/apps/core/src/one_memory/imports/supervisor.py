@@ -111,7 +111,7 @@ class ImportSupervisor:
                 )
             )
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="import.supervisor",
                 event="import.queued",
                 outcome="queued",
@@ -198,7 +198,7 @@ class ImportSupervisor:
         started = monotonic()
         failure_type: str | None = None
         diagnostic_event(
-            level="info",
+            level="debug",
             component="import.supervisor",
             event="import.started",
             outcome="started",

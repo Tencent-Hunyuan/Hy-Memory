@@ -19,7 +19,12 @@ def test_production_serve_passes_only_supported_app_options(monkeypatch, tmp_pat
 
     def run(application, **kwargs):
         assert application is marker
-        assert kwargs == {"host": "127.0.0.1", "port": 12345, "reload": False}
+        assert kwargs == {
+            "host": "127.0.0.1",
+            "port": 12345,
+            "reload": False,
+            "access_log": False,
+        }
 
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(log_file, "start_logging_to_file", lambda _: None)
@@ -46,7 +51,12 @@ def test_maintenance_serve_does_not_own_the_runtime(monkeypatch, tmp_path):
 
     def run(application, **kwargs):
         assert application is marker
-        assert kwargs == {"host": "127.0.0.1", "port": 12346, "reload": False}
+        assert kwargs == {
+            "host": "127.0.0.1",
+            "port": 12346,
+            "reload": False,
+            "access_log": False,
+        }
 
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(log_file, "start_logging_to_file", lambda _: None)

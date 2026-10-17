@@ -4652,7 +4652,7 @@ async def _keep_loop_heartbeat(watchdog: LoopWatchdog) -> None:
 async def _emit_resource_snapshots(interval_seconds: float = 60.0) -> None:
     while True:
         diagnostic_event(
-            level="info",
+            level="debug",
             component="core.resources",
             event="core.resource_snapshot",
             outcome="observed",

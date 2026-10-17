@@ -191,10 +191,12 @@ from one_memory import cli
 from one_memory.config import Settings
 
 served_on = []
+served_with = []
 
 
 def fake_run(application, *, host=None, port=None, **_kwargs):
     served_on.append(port)
+    served_with.append(_kwargs)
 
 
 uvicorn.run = fake_run
@@ -219,6 +221,7 @@ json.dump(
     {
         "printed": printed,
         "served_on": served_on,
+        "served_with": served_with,
         "port": int(match.group(1)) if match else None,
     },
     sys.stdout,
@@ -249,3 +252,4 @@ json.dump(
     # Port 0 means "any free port", so the reported value must be a real one.
     assert payload["port"] > 0
     assert payload["served_on"] == [payload["port"]]
+    assert payload["served_with"] == [{"reload": False, "access_log": False}]

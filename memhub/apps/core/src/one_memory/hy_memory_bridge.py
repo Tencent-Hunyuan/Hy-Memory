@@ -438,7 +438,7 @@ class HyMemoryBridge:
     async def _ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         started = monotonic()
         diagnostic_event(
-            level="info",
+            level="debug",
             component="hy.bridge",
             event="hy.ingest_started",
             outcome="started",
@@ -574,7 +574,7 @@ class HyMemoryBridge:
         """Import source memory content when no raw conversation is available."""
         started = monotonic()
         diagnostic_event(
-            level="info",
+            level="debug",
             component="hy.bridge",
             event="hy.ingest_started",
             outcome="started",
@@ -1156,7 +1156,7 @@ class HyMemoryBridge:
                     )
                     raise HyMemoryBridgeError("hy_memory_init_failed") from error
                 diagnostic_event(
-                    level="info",
+                    level="debug",
                     component="hy.client",
                     event="hy.client_initialization.completed",
                     outcome="succeeded",

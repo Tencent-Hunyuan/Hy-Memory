@@ -106,7 +106,7 @@ class PollingLiveSyncSupervisor:
             level=(
                 "warn"
                 if value.state in {LiveSyncState.DEGRADED, LiveSyncState.UNAVAILABLE}
-                else "info"
+                else "debug"
             ),
             component="import.live_sync",
             event="live_sync.state_changed",

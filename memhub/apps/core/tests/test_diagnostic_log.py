@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from one_memory.diagnostic_log import (
     configure_diagnostics,
     current_trace_id,
     database_error_code,
+    diagnostic_event,
     diagnostic_exception,
     diagnostics_enabled,
     diagnostics_requested,
@@ -21,6 +23,32 @@ from one_memory.diagnostic_log import (
     reset_trace_id,
     resource_snapshot,
 )
+
+
+def test_debug_events_are_collected_only_at_debug_level(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.INFO)
+    receipt = configure_diagnostics(tmp_path)
+    try:
+        diagnostic_event(
+            level="debug",
+            component="core.poll",
+            event="poll.completed",
+            outcome="succeeded",
+        )
+        diagnostic_event(
+            level="info",
+            component="memory.task",
+            event="memory_task.finished",
+            outcome="completed",
+        )
+    finally:
+        reset_diagnostics()
+        root.setLevel(previous)
+    events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["memory_task.finished"]
 
 
 def test_high_frequency_success_events_are_summarized_but_warnings_are_not(

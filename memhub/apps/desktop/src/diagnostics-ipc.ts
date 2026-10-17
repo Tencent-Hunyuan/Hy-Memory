@@ -441,6 +441,13 @@ async function readServiceLogEntries(
       const message = line.trimEnd();
       if (!message) continue;
       const level = serviceLogLevel(message, cursor.name);
+      // Raw stdout is an implementation trace, not a product event. Core's
+      // structured diagnostics and HY pipeline logs already carry meaningful
+      // successful work with request/task identity. Showing raw INFO/DEBUG
+      // here duplicated those events and turned polling access logs, file
+      // watchers and library initialization into thousands of fake "useful"
+      // rows. Keep raw output only when it needs attention.
+      if (level === "info" || level === "debug") continue;
       entries.push({
         id: `${cursor.name}:${file.info.dev}:${file.info.ino}:${offset}:${lineIndex}`,
         timestamp: logLineTimestamp(message, startedAt, file.info.mtimeMs),
@@ -645,7 +652,11 @@ function pipelineLogEntry(
       phase: step,
       ...(tokens === undefined ? {} : { count: tokens }),
     },
-    message: line,
+    message: [
+      step,
+      ...(tokens === undefined ? [] : [`${Math.round(tokens)} tokens`]),
+      ...(elapsed === undefined ? [] : [`${Math.round(elapsed)} ms`]),
+    ].join(" · "),
     source: "pipeline",
   };
 }

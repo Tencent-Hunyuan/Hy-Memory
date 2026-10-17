@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 describe("RecallBroker", () => {
-  it("logs connection polling only when its safe state changes", async () => {
+  it("does not log successful connection polling", async () => {
     const diagnostics: Array<Record<string, unknown>> = [];
     const root = await mkdtemp(path.join(os.tmpdir(), "om-broker-poll-log-"));
     let available = true;
@@ -55,14 +55,7 @@ describe("RecallBroker", () => {
     await poll();
     available = false;
     await poll();
-    expect(diagnostics.map((event) => event.event)).toEqual([
-      "connection_control.completed",
-      "connection_control.summary",
-      "connection_control.completed",
-    ]);
-    expect(diagnostics[1]).toMatchObject({
-      details: { action: "host", count: 101, error_count: 0 },
-    });
+    expect(diagnostics).toEqual([]);
   });
 
   it("logs one repeated connection failure plus a five-minute summary", async () => {
@@ -163,8 +156,8 @@ describe("RecallBroker", () => {
         error_type: "Error",
       }),
     });
-    expect(typeof exception!.details).toBe("object");
-    const details = exception!.details as Record<string, unknown>;
+    expect(typeof exception?.details).toBe("object");
+    const details = exception?.details as Record<string, unknown>;
     expect(typeof details.stack_origin).toBe("string");
     expect(details.stack_origin).toContain("recall-broker");
   });
