@@ -35,13 +35,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("hides diagnostics by default and exposes it only when configured", async () => {
+it("shows the help and diagnostics group by default and hides it when opted out", async () => {
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
-  expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
-
-  view.rerender(<R6Settings onDiagnostics={vi.fn()} showDiagnostics={true} />);
   await user.click(screen.getByRole("button", { name: "帮助与诊断" }));
   expect(screen.getByRole("heading", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "导出日志" })).toBeTruthy();
+
+  view.rerender(
+    <R6Settings onDiagnostics={vi.fn()} showDiagnostics={false} />,
+  );
+  expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
 });
