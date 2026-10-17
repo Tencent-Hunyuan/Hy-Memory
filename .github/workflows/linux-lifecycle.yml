@@ -122,19 +122,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s globstar nullglob
           version=$(node -p 'require("./package.json").version')
           node scripts/verify-release-version.mjs \
             --channel stable \
             --version "$version" \
             --build-number "$(node -p 'require("./package.json").release.build_number')" \
             --tag "$GITHUB_REF_NAME"
+          mkdir -p publish-assets
           for arch in x64 arm64; do
-            archive="release-assets/memhub-runtime-v${version}-linux-${arch}.tar.gz"
-            test -f "$archive"
-            test -f "$archive.sha256"
+            name="memhub-runtime-v${version}-linux-${arch}.tar.gz"
+            archives=(release-assets/**/"$name")
+            checksums=(release-assets/**/"$name.sha256")
+            test "${#archives[@]}" -eq 1
+            test "${#checksums[@]}" -eq 1
+            cp -- "${archives[0]}" "publish-assets/$name"
+            cp -- "${checksums[0]}" "publish-assets/$name.sha256"
             (
-              cd release-assets
-              sha256sum -c "$(basename "$archive.sha256")"
+              cd publish-assets
+              sha256sum -c "$name.sha256"
             )
           done
       - name: Upload Linux assets to a draft GitHub Release
@@ -160,7 +166,7 @@ jobs:
               --title "$GITHUB_REF_NAME"
           fi
           gh release upload "$GITHUB_REF_NAME" \
-            release-assets/memhub-runtime-v*-linux-*.tar.gz \
-            release-assets/memhub-runtime-v*-linux-*.tar.gz.sha256 \
+            publish-assets/memhub-runtime-v*-linux-*.tar.gz \
+            publish-assets/memhub-runtime-v*-linux-*.tar.gz.sha256 \
             --repo "$GITHUB_REPOSITORY" \
             --clobber

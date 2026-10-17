@@ -117,9 +117,19 @@ describe("Linux runtime scripts", () => {
       workflow,
       /verify-release-version\.mjs[\s\S]*--channel stable/,
     );
+    assert.match(workflow, /shopt -s globstar nullglob/);
+    assert.match(workflow, /archives=\(release-assets\/\*\*\/"\$name"\)/);
+    assert.match(
+      workflow,
+      /cp -- "\$\{archives\[0\]\}" "publish-assets\/\$name"/,
+    );
     assert.match(workflow, /sha256sum -c/);
     assert.match(workflow, /--json isDraft[\s\S]*--jq \.isDraft/);
     assert.match(workflow, /gh release create[\s\S]*--draft/);
     assert.match(workflow, /gh release upload[\s\S]*--clobber/);
+    assert.match(
+      workflow,
+      /publish-assets\/memhub-runtime-v\*-linux-\*\.tar\.gz/,
+    );
   });
 });
