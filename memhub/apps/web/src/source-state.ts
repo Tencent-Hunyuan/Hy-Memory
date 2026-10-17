@@ -139,6 +139,29 @@ function applySyncReceipt(receipt: SourceSyncState | undefined) {
   );
 }
 
+/** What a source authorization state asks the person to do, or null.
+ *
+ * Every one of these is a source fix. None of them is a plugin fix, and
+ * pointing at "reinstall" here is what sent people through uninstall cycles
+ * that could not touch the cause (issue #29).
+ */
+export function sourceAuthorizationNote(source: SourceResponse): string | null {
+  switch (source.authorization_state) {
+    case "missing_grant":
+      return "此应用还没有读取授权，请先授权它的对话目录。";
+    case "revoked_grant":
+      return "此应用的读取授权已撤销，请重新授权。";
+    case "source_identity_changed":
+      return "此应用的对话目录已被重建，请重新授权。";
+    case "source_root_unavailable":
+      return "此应用的对话目录现在读不到，请确认应用已安装并产生过对话。";
+    case "candidate_changed":
+      return "此应用的对话目录已变更，请按最新目录重新授权。";
+    default:
+      return null;
+  }
+}
+
 /** Core stores a rejected sync write without its reason; the re-read shows it. */
 function syncRejectionMessage(
   before: SourceResponse,
@@ -146,6 +169,8 @@ function syncRejectionMessage(
   latest: SourceResponse | undefined,
 ): string | null {
   if (!latest) return null;
+  const authorization = sourceAuthorizationNote(latest);
+  if (authorization) return `${authorization}完成后再开启持续同步。`;
   if (!latest.authorized)
     return "此应用的读取授权已失效，请重新授权后再开启持续同步。";
   if (

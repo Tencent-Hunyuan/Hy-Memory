@@ -3,6 +3,7 @@
 import json
 import time
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TextIO, cast
 
@@ -104,7 +105,13 @@ def capture_hook(source_id: str, payload: object, database: Path) -> bool:
     # Cursor also runs ~/.claude/settings.json hooks; its own hook already files the turn.
     if source_id != "cursor" and "cursor_version" in payload:
         return False
-    if not database.is_file() or not _sync_open(database, source_id):
+    if not database.is_file():
+        return False
+    rejection = capture_rejection(database, source_id)
+    if rejection is not None:
+        # Silent, and the reason is counted rather than printed: a hook that
+        # spoke would put this into the host's turn as text.
+        record_capture_rejection(database, source_id, rejection)
         return False
     if source_id == "pi" and _is_automated_session(first_string(payload.get("cwd"))):
         return False
@@ -139,17 +146,78 @@ def capture_hook(source_id: str, payload: object, database: Path) -> bool:
 
 
 def _sync_open(database: Path, source_id: str) -> bool:
+    return capture_rejection(database, source_id) is None
+
+
+class CaptureRejection(StrEnum):
+    """Why a hook's turn was dropped, or nothing at all.
+
+    Capture fails open on purpose: a hook that raises or prints would be read
+    back into the host's turn, so a refusal has to be silent and exit 0. It was
+    also completely invisible, which is why "持续同步开着但一条都没进" could not be
+    told apart from "capture 坏了". These values name the reason without any
+    payload, path, session or message — the only part that may be recorded.
+    """
+
+    SYNC_DISABLED = "sync_disabled"
+    GRANT_MISSING = "grant_missing"
+    GRANT_REVOKED = "grant_revoked"
+
+
+def capture_rejection(database: Path, source_id: str) -> CaptureRejection | None:
+    """None when this turn may be captured, otherwise why it may not."""
     from one_memory.memory_server.config_state import ConfigStore
 
     if not ConfigStore(database.parent).sync_enabled(source_id):
-        return False
+        return CaptureRejection.SYNC_DISABLED
     with main_database(database).read() as connection:
         row = connection.execute(
-            "SELECT 1 FROM source_grants WHERE user_id='local' AND source_id=? "
-            "AND revoked_at IS NULL",
+            "SELECT revoked_at FROM source_grants WHERE user_id='local' AND source_id=?",
             (source_id,),
         ).fetchone()
-    return row is not None
+    if row is None:
+        return CaptureRejection.GRANT_MISSING
+    # Indexed, not named: this connection has no row factory, and a hook is
+    # not the place to add one.
+    if row[0] is not None:
+        return CaptureRejection.GRANT_REVOKED
+    return None
+
+
+def record_capture_rejection(
+    database: Path,
+    source_id: str,
+    reason: CaptureRejection,
+    *,
+    window_seconds: float = 600.0,
+) -> None:
+    """Note one dropped turn, at most once per window per source and reason.
+
+    Best effort by construction: a hook runs inside somebody's turn, so a sink
+    that is slow, full or read-only must never surface here. The record is a
+    count and nothing else — no payload, no path, no session or conversation
+    id — because this file is meant to be handed to support as is.
+
+    One small file per source and reason, rather than a line per turn: capture
+    runs on every prompt, and a log that grew with the conversation would be a
+    privacy problem wearing a diagnosis as a disguise.
+    """
+    try:
+        directory = database.parent / "logs"
+        directory.mkdir(parents=True, exist_ok=True)
+        marker = directory / f"capture-rejection-{source_id}-{reason.value}.json"
+        now = time.time()
+        payload: dict[str, object] = {"source_id": source_id, "reason": reason.value}
+        if marker.exists() and now - marker.stat().st_mtime < window_seconds:
+            payload = json.loads(marker.read_text(encoding="utf8"))
+            payload["count"] = int(payload.get("count", 1)) + 1
+        else:
+            payload["count"] = 1
+            payload["window_started_at"] = datetime.fromtimestamp(now, UTC).isoformat()
+            payload["last_at"] = payload["window_started_at"]
+        marker.write_text(json.dumps(payload, sort_keys=True), encoding="utf8")
+    except Exception:
+        return
 
 
 def _submit_live_memory(store: EvidenceStore, record: EvidenceRecord, *, changed: bool) -> None:

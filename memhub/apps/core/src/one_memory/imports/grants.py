@@ -1,6 +1,7 @@
 import sqlite3
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -18,6 +19,23 @@ from one_memory.memory_server.migrations import source_grants_ddl
 
 CURSOR_MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024 * 1024
 GRANT_SCHEMA = source_grants_ddl("sqlite")
+
+
+class SourceAuthorizationState(StrEnum):
+    """Why a source cannot be read right now, or `ok` when it can.
+
+    The API used to answer `authorized=false` for all of these at once, which
+    is how a revoked grant, a rebuilt history directory and a moved candidate
+    all looked like the same bug and all got the same advice. The values carry
+    no paths and no user content, because they are written to diagnostics.
+    """
+
+    OK = "ok"
+    MISSING_GRANT = "missing_grant"
+    REVOKED_GRANT = "revoked_grant"
+    SOURCE_IDENTITY_CHANGED = "source_identity_changed"
+    SOURCE_ROOT_UNAVAILABLE = "source_root_unavailable"
+    CANDIDATE_CHANGED = "candidate_changed"
 
 
 class SourceGrantReceipt(BaseModel):
@@ -145,6 +163,46 @@ class SourceGrantStore:
         if not root_identity_matches(Path(row["requested_path"]), row["root_identity"]):
             raise SourceAccessError(SourceAccessErrorCode.SOURCE_IDENTITY_CHANGED)
         return authorized
+
+    def authorization_state(
+        self,
+        *,
+        user_id: str,
+        source_id: str,
+        candidate: Path,
+    ) -> SourceAuthorizationState:
+        """Why reading this source would be refused.
+
+        Read-only and fails the same way `authorized_root` does: this names a
+        state for the UI and for diagnostics, it does not widen access. The
+        candidate is compared by path, so a grant that still points somewhere
+        else reads as a moved candidate rather than as a rebuilt directory —
+        the two need different fixes.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM source_grants WHERE user_id=? AND source_id=?",
+                (user_id, source_id),
+            ).fetchone()
+        if row is None:
+            return SourceAuthorizationState.MISSING_GRANT
+        if row["revoked_at"] is not None or row["revision"] <= 0:
+            return SourceAuthorizationState.REVOKED_GRANT
+        granted = Path(row["requested_path"])
+        if not granted.exists():
+            return SourceAuthorizationState.SOURCE_ROOT_UNAVAILABLE
+        try:
+            if not root_identity_matches(granted, row["root_identity"]):
+                return SourceAuthorizationState.SOURCE_IDENTITY_CHANGED
+        except SourceAccessError:
+            # Unreadable or gone between the two calls: there is no grant to
+            # repair, only a directory to make available again.
+            return SourceAuthorizationState.SOURCE_ROOT_UNAVAILABLE
+        # Same directory, but the app now looks somewhere else. Re-authorizing
+        # the old grant would not help; the candidate has to be granted.
+        if granted != candidate:
+            return SourceAuthorizationState.CANDIDATE_CHANGED
+        return SourceAuthorizationState.OK
 
     def revoke(self, *, user_id: str, source_id: str) -> SourceGrantReceipt:
         now = datetime.now(UTC).isoformat()
