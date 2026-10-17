@@ -6,8 +6,10 @@
 2. 记忆沉淀有没有持续运行、产出了多少条；
 3. 如果停住，停在导入、模型调用还是最终写入。
 
-日志不包含会话正文、模型输入输出或 API Key。排查时仍应通过 App 的“导出日志”提供文件，
-不要直接发送整个 `~/.one-memory` 数据目录。
+默认 `info` 下的结构化诊断日志不包含会话正文、模型输入输出或 API Key。`debug`
+会额外启用 HY pipeline trace，其中可能包含完整 prompt/response 和获授权的对话正文。
+排查时优先通过 App 的“导出日志”提供文件，不要直接发送整个 `~/.one-memory` 数据目录；
+debug 期间产生的 pipeline 日志在分享前必须由开发人员确认并脱敏。
 
 ## 1. Log level 设什么
 
@@ -18,7 +20,7 @@
 
 ### 复现具体问题：`debug`
 
-需要跟踪一次点击、一次召回或一个具体任务时，打开：
+只有开发人员明确要求跟踪一次点击、一次召回或一个具体模型任务时，才打开：
 
 > 设置 → 运行诊断 → 详细日志（排查用）
 
@@ -28,12 +30,16 @@
 2. 点击“导出日志（发给开发排查）”；
 3. 关闭“详细日志（排查用）”。
 
+debug 可能把完整模型 prompt/response 写入本机调试日志，不得长期开启。切回 `info`
+只会停止后续正文记录，不会自动删除此前已经产生的 debug 文件。
+
 不要把日志级别设置成仅 `warning` 或 `error` 来判断系统是否健康，因为正常进度事件是
 `info`。
 
 ## 2. 日志在哪里
 
-App 内推荐直接使用“运行诊断 → 导出日志”。需要现场查看时，Core 日志默认位于：
+App 内推荐直接使用“运行诊断 → 导出日志”。开发人员远程指导时，优先使用
+`memhub logs`，它会再次过滤不安全字段。需要现场查看原始结构化日志时，Core 日志默认位于：
 
 ```text
 ~/.one-memory/logs/diagnostic-core.jsonl
@@ -145,6 +151,18 @@ details.attempt = 第几次尝试
 排查。
 
 ## 5. 可复制的过滤命令
+
+优先使用以下安全读取命令：
+
+```bash
+memhub logs --since 2h --event memory_task.finished --json
+memhub logs --since 2h --event hy.reconcile.completed --json
+memhub logs --since 24h --errors-only --tail 500 --json
+memhub status --json
+```
+
+以下 `jq` 命令仅用于 `diagnostic-core.jsonl`，不要对 `core.log`、`service.log` 或 debug
+pipeline 日志直接运行后把完整输出发给他人。
 
 ### 查看最近的失败
 
