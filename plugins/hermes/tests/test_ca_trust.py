@@ -81,9 +81,9 @@ def test_context_is_scoped_and_initialized_once(certificates, monkeypatch):
     assert _deadline_handlers(100, context)[1]._context is context
     provider.is_available()
     provider.identity_signature()
-    assert calls == [{"cafile": str(cert)}]
+    assert calls == [{"cadata": cert.read_text()}]
     assert ssl._create_default_https_context is global_factory
-    expected = hashlib.sha256(b"".join(sorted(context.get_ca_certs(True)))).hexdigest()
+    expected = hashlib.sha256(ssl.PEM_cert_to_DER_cert(cert.read_text())).hexdigest()
     assert provider.identity_signature()["hy_memory_ca_sha256"] == expected
     assert str(cert) not in json.dumps(provider.identity_signature())
 
@@ -231,3 +231,133 @@ def test_request_handler_context_and_legacy_argument_count(
     assert len(calls[0]) == (2 if scoped else 1)
     if scoped:
         assert calls[0][1] is provider._ssl_context
+
+
+def test_context_without_ca_inspection(certificates, monkeypatch):
+    original = ssl.create_default_context
+    calls = []
+
+    class Context:
+        def __init__(self, context):
+            self.context = context
+
+        def get_ca_certs(self, *args, **kwargs):
+            calls.append(True)
+            raise NotImplementedError
+
+        @property
+        def check_hostname(self):
+            return self.context.check_hostname
+
+        @check_hostname.setter
+        def check_hostname(self, value):
+            self.context.check_hostname = value
+
+        @property
+        def verify_mode(self):
+            return self.context.verify_mode
+
+        @verify_mode.setter
+        def verify_mode(self, value):
+            self.context.verify_mode = value
+
+    monkeypatch.setattr(ssl, "create_default_context", lambda **kw: Context(original(**kw)))
+    monkeypatch.setenv("HY_MEMORY_CA_FILE", str(certificates[0][0]))
+    provider = HyMemoryProvider()
+    assert provider.is_available()
+    assert provider._ssl_context.check_hostname
+    assert provider._ssl_context.verify_mode == ssl.CERT_REQUIRED
+    assert calls == []
+
+
+def test_single_read_rotation_snapshot(certificates, tmp_path, monkeypatch):
+    path = tmp_path / "ca.pem"
+    snapshot = certificates[0][0].read_bytes()
+    path.write_bytes(snapshot)
+    original = ssl.create_default_context
+    original_open = open
+    reads = []
+
+    def tracked_open(file, *args, **kwargs):
+        if file == str(path):
+            reads.append(file)
+        return original_open(file, *args, **kwargs)
+
+    def create(**kwargs):
+        path.write_bytes(certificates[1][0].read_bytes())
+        assert kwargs == {"cadata": snapshot.decode("ascii")}
+        return original(**kwargs)
+
+    monkeypatch.setattr("builtins.open", tracked_open)
+    monkeypatch.setattr(ssl, "create_default_context", create)
+    monkeypatch.setenv("HY_MEMORY_CA_FILE", str(path))
+    provider = HyMemoryProvider()
+    assert provider.is_available()
+    assert reads == [str(path)]
+    assert provider.identity_signature()["hy_memory_ca_sha256"] == hashlib.sha256(
+        ssl.PEM_cert_to_DER_cert(snapshot.decode("ascii"))
+    ).hexdigest()
+
+
+def test_bundle_order_whitespace_and_der_identity(certificates, tmp_path, monkeypatch):
+    path = tmp_path / "ca.pem"
+    monkeypatch.setenv("HY_MEMORY_CA_FILE", str(path))
+    first, second = [pair[0].read_text() for pair in certificates]
+    path.write_text(first + second)
+    bundle = HyMemoryProvider()
+    path.write_text("\n" + second + "\n" + first + "\n")
+    reordered = HyMemoryProvider()
+    assert bundle.is_available() and reordered.is_available()
+    assert bundle.identity_signature() == reordered.identity_signature()
+    path.write_text(first)
+    pem = HyMemoryProvider()
+    path.write_bytes(ssl.PEM_cert_to_DER_cert(first))
+    der = HyMemoryProvider()
+    assert pem.is_available() and der.is_available()
+    assert pem.identity_signature() == der.identity_signature()
+
+
+@pytest.mark.parametrize("contents", [b"", b"x" * 1048577, b"\xffPRIVATE", b"-----BEGIN CERTIFICATE-----\nPRIVATE\n-----END CERTIFICATE-----"])
+def test_invalid_ca_snapshot(tmp_path, monkeypatch, contents):
+    path = tmp_path / "PRIVATE.pem"
+    path.write_bytes(contents)
+    monkeypatch.setenv("HY_MEMORY_CA_FILE", str(path))
+    provider = HyMemoryProvider()
+    assert not provider.is_available()
+    assert provider._config_error == "invalid_configuration"
+    with pytest.raises(ProviderError, match="^invalid_configuration$"):
+        provider.initialize("session")
+
+
+def test_real_truststore_context(certificates, monkeypatch):
+    import importlib.util
+    if importlib.util.find_spec("truststore") is None:
+        return  # Optional dependency; deterministic regression always runs above.
+    import truststore
+    calls = []
+
+    def forbidden(*args, **kwargs):
+        calls.append(True)
+        raise NotImplementedError
+
+    monkeypatch.setattr(truststore.SSLContext, "get_ca_certs", forbidden)
+    monkeypatch.setattr(ssl, "SSLContext", truststore.SSLContext)
+    monkeypatch.setenv("HY_MEMORY_CA_FILE", str(certificates[0][0]))
+    provider = HyMemoryProvider()
+    assert provider.is_available()
+    assert isinstance(provider._ssl_context, truststore.SSLContext)
+    assert provider._ssl_context.check_hostname
+    assert provider._ssl_context.verify_mode == ssl.CERT_REQUIRED
+    assert calls == []
+
+
+def test_maximum_size_bundle_is_accepted(certificates, tmp_path, monkeypatch):
+    snapshot = certificates[0][0].read_bytes()
+    path = tmp_path / "ca.pem"
+    path.write_bytes(snapshot + b"\n" * (1048576 - len(snapshot)))
+    monkeypatch.setenv("HY_MEMORY_CA_FILE", str(path))
+    provider = HyMemoryProvider()
+    assert provider.is_available()
+    assert provider.identity_signature()["hy_memory_ca_sha256"] == hashlib.sha256(
+        ssl.PEM_cert_to_DER_cert(snapshot.decode("ascii"))
+    ).hexdigest()

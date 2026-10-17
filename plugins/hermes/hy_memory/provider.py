@@ -10,6 +10,7 @@ import json
 import math
 import os
 import queue
+import re
 import ssl
 import threading
 import time
@@ -158,15 +159,32 @@ class HyMemoryProvider(MemoryProvider):
             if ca_file is not None:
                 if not ca_file.strip():
                     raise ProviderError("invalid_config")
-                # Explicit trust is scoped to this provider, never installed globally.
-                self._ssl_context = ssl.create_default_context(cafile=ca_file)
+                # One bounded snapshot supplies both scoped trust and its identity.
+                with open(ca_file, "rb") as source:
+                    ca_bytes = source.read(1048576 + 1)
+                if not ca_bytes or len(ca_bytes) > 1048576:
+                    raise ProviderError("invalid_config")
+                if b"-----BEGIN CERTIFICATE-----" in ca_bytes:
+                    ca_data = ca_bytes.decode("ascii")
+                    blocks = re.findall(
+                        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+                        ca_data, re.DOTALL,
+                    )
+                    remainder = re.sub(
+                        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+                        "", ca_data, flags=re.DOTALL,
+                    )
+                    if not blocks or remainder.strip():
+                        raise ProviderError("invalid_config")
+                    certificates = [ssl.PEM_cert_to_DER_cert(block) for block in blocks]
+                else:
+                    ca_data = ca_bytes
+                    certificates = [ca_bytes]
+                self._ssl_context = ssl.create_default_context(cadata=ca_data)
                 self._ssl_context.check_hostname = True
                 self._ssl_context.verify_mode = ssl.CERT_REQUIRED
-                # Fingerprint the certificates actually loaded, avoiding a second file
-                # read and detecting trust rotation at the same configured path.
-                certificates = self._ssl_context.get_ca_certs(binary_form=True)
                 self._ca_fingerprint = hashlib.sha256(
-                    b"".join(sorted(certificates))
+                    b"".join(sorted(set(certificates)))
                 ).hexdigest()
         except (ProviderError, ValueError, TypeError, OSError):
             self._config_error = "invalid_configuration"
