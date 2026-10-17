@@ -8,6 +8,7 @@ import {
   mkdtemp,
   readFile,
   readlink,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -16,7 +17,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyLocalInstall, planLocalInstall } from "./local-install.js";
-import { installPackagedRuntime } from "./packaged-runtime-install.js";
+import {
+  describeBundlePayload,
+  installPackagedRuntime,
+} from "./packaged-runtime-install.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -604,6 +608,45 @@ describe("installPackagedRuntime", () => {
       }),
     ).rejects.toThrow("packaged_runtime_incomplete");
     await expect(lstat(installRoot)).rejects.toThrow();
+  });
+
+  it("describes the bundle payload exactly as the staged copy would, without staging it", async () => {
+    const { resources, executable, installRoot } = await fixture();
+    await mkdir(path.join(resources, "core", "assets"));
+    await writeFile(
+      path.join(resources, "core", "assets", "model.bin"),
+      "model",
+    );
+    await symlink(
+      "assets/model.bin",
+      path.join(resources, "core", "model-link"),
+    );
+
+    // The reuse decision reads this instead of a staged copy. It has to agree
+    // with the manifest the staged copy produces, file for file, or moving the
+    // decision ahead of the copy would decide something different. The paths
+    // are resolved because the generated launchers embed them verbatim.
+    const payload = await describeBundlePayload({
+      resources: await realpath(resources),
+      executable: await realpath(executable),
+    });
+    const receipt = await installPackagedRuntime({
+      resourcesPath: resources,
+      executablePath: executable,
+      installRoot,
+      platform: "darwin",
+      arch: "arm64",
+    });
+    const manifest = JSON.parse(
+      await readFile(
+        path.join(receipt.version_directory, "manifest.json"),
+        "utf8",
+      ),
+    ) as { version: string; files: Record<string, string> };
+
+    expect(manifest.version).toBe(payload.version);
+    expect(manifest.files).toEqual(payload.files);
+    expect(Object.keys(payload.files)).toContain("bin/node");
   });
 
   it("refuses to replace a current that is not a managed version link", async () => {
