@@ -2,8 +2,9 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { getSedimentation, setSedimentation } from "./api";
+import { getModelProfiles, getSedimentation, setSedimentation } from "./api";
 import { R6Settings } from "./R6Settings";
 
 vi.mock("./api", () => ({
@@ -23,9 +24,23 @@ vi.mock("./api", () => ({
   }),
   setSedimentation: vi.fn(),
 }));
-vi.mock("./ModelSettings", () => ({
-  ModelSettings: () => null,
-}));
+vi.mock("./ModelSettings", async () => {
+  const { createElement, useImperativeHandle } = await import("react");
+  return {
+    // Stands in for the real component at its worst: every mutating action is
+    // fenced, and the only way out is the recovery entry that lives inside the
+    // same area the fence used to keep shut.
+    ModelSettings: ({ controlsRef }: { controlsRef?: Ref<unknown> }) => {
+      useImperativeHandle(controlsRef, () => ({
+        edit: () => false,
+        editProfile: () => false,
+        add: () => false,
+        test: () => Promise.resolve(undefined),
+      }));
+      return createElement("button", { type: "button" }, "核对测试结果");
+    },
+  };
+});
 vi.mock("./ConnectionFallback", () => ({
   ConnectionFallback: () => null,
 }));
@@ -97,6 +112,30 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
   // The model configuration is a different store: a failed switch must not
   // leave the page claiming the model was removed.
   expect(screen.getByRole("heading", { name: "当前模型" })).toBeTruthy();
+});
+
+it("opens the model area even when a pending probe fences the editor, so recovery stays reachable", async () => {
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "修改模型" }));
+
+  // The fence is still reported: the editor really did refuse.
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("待核对");
+  // What changed is that the recovery entry no longer hides with the form it
+  // is supposed to unlock.
+  expect(screen.getByRole("button", { name: "核对测试结果" })).toBeTruthy();
+});
+
+it("reaches the same recovery entry when no model has been configured yet", async () => {
+  vi.mocked(getModelProfiles).mockResolvedValueOnce([]);
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "配置模型" }));
+
+  expect(screen.getByRole("button", { name: "核对测试结果" })).toBeTruthy();
 });
 
 it("leaves the switch unusable when the state cannot be read", async () => {

@@ -215,6 +215,11 @@ export interface ModelSettingsActions {
   test(profileId: string): Promise<unknown>;
 }
 
+/** What the owner asked for before the fence said no. */
+type ModelOpenIntent =
+  | { kind: "add" }
+  | { kind: "edit"; profile: ModelProfile };
+
 export function ModelSettings({
   controlsRef,
   onProfilesChanged,
@@ -258,6 +263,7 @@ export function ModelSettings({
   const [setupError, setSetupError] = useState<string | null>(null);
   const flight = useRef(false);
   const alive = useRef(true);
+  const queuedOpen = useRef<ModelOpenIntent | null>(null);
   const savedCard = useRef<HTMLElement>(null);
   const formEl = useRef<HTMLFormElement>(null);
   useEffect(() => {
@@ -390,17 +396,27 @@ export function ModelSettings({
       const profile = models.profiles.find(
         (item) => item.profile_id === profileId,
       );
-      if (!profile || ownerLocked) return false;
+      if (!profile) return false;
+      if (ownerLocked) {
+        queuedOpen.current = { kind: "edit", profile };
+        return false;
+      }
       editProfile(profile);
       return true;
     },
     editProfile(profile) {
-      if (ownerLocked) return false;
+      if (ownerLocked) {
+        queuedOpen.current = { kind: "edit", profile };
+        return false;
+      }
       editProfile(profile);
       return true;
     },
     add() {
-      if (ownerLocked) return false;
+      if (ownerLocked) {
+        queuedOpen.current = { kind: "add" };
+        return false;
+      }
       newProfile();
       return true;
     },
@@ -413,6 +429,19 @@ export function ModelSettings({
       return models.probeProfile(profileId);
     },
   }));
+  // A refused open is not a cancelled one. Replay it once the fence clears so
+  // the person lands back in the form they asked for, instead of a blank
+  // new-config form that invites a duplicate. Replaying only fills fields in;
+  // it never sends a request.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the fence is the only trigger.
+  useEffect(() => {
+    if (editorLocked) return;
+    const intent = queuedOpen.current;
+    if (!intent) return;
+    queuedOpen.current = null;
+    if (intent.kind === "add") newProfile();
+    else editProfile(intent.profile);
+  }, [editorLocked]);
   const profileSnapshot = JSON.stringify(models.profiles);
   const previousProfileSnapshot = useRef(profileSnapshot);
   useEffect(() => {

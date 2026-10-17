@@ -206,8 +206,13 @@ export function R6Settings({
     const opened = currentModel
       ? modelActions.current?.editProfile(currentModel)
       : modelActions.current?.add();
-    if (opened) setConfigurationOpen(true);
-    else setConfigurationRefusal(true);
+    // The area opens even when the editor refuses: the only recovery entry
+    // lives inside it, and hiding both is what locked people out of their own
+    // settings. They needed the form open to reach “核对测试结果”, and that
+    // button to clear the pending record that kept the form shut. The fence
+    // itself is untouched (see ModelSettings): refusing still returns false.
+    setConfigurationOpen(true);
+    if (!opened) setConfigurationRefusal(true);
   }
 
   async function quitApplication() {
@@ -321,8 +326,8 @@ export function R6Settings({
               )}
               {configurationRefusal && (
                 <p role="alert" className="r6-settings-error">
-                  模型配置暂时无法打开：正在处理上一次创建或测试，或本机存储暂时不可用。
-                  请等待当前操作结束后重试；现有配置和原文不会被改动。
+                  上次模型测试或创建还待核对，配置暂时不能改动。请先在下方模型配置区核对结果；
+                  现有配置和原文不会被改动。
                 </p>
               )}
               {currentModel && (
