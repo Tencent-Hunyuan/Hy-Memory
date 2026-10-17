@@ -214,6 +214,11 @@ export interface RecallUninstallPreview {
 declare global {
   interface Window {
     oneMemory?: {
+      getBuildInfo?(): {
+        version: string;
+        buildNumber: string;
+        commit: string;
+      };
       getDebugLogs?(): Promise<DebugLogSnapshot>;
       /** Renderer end of the four-step UI/kernel trace. */
       logUiTrace?(input: {

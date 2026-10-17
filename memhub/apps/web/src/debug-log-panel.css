@@ -53,6 +53,13 @@
   backdrop-filter: blur(28px);
   color: #25353f;
 }
+.debug-log-panel.is-fullscreen {
+  position: fixed;
+  inset: 12px;
+  width: auto;
+  height: auto;
+  z-index: 1;
+}
 .debug-log-header {
   display: flex;
   align-items: center;
@@ -456,6 +463,12 @@
   .debug-log-panel {
     width: calc(100vw - 20px);
     height: calc(100dvh - 76px);
+  }
+  .debug-log-panel.is-fullscreen {
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
   }
   .debug-log-toolbar {
     grid-template-columns: minmax(0, 1fr) 118px;

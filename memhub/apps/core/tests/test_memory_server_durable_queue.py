@@ -54,11 +54,19 @@ def _rows(path):
         return [dict(row) for row in db.execute("SELECT * FROM memory_write_jobs")]
 
 
-def test_acceptance_is_written_to_the_business_database(tmp_path) -> None:
+def test_acceptance_is_written_to_the_business_database(tmp_path, monkeypatch) -> None:
+    from one_memory.memory_server import durable_queue
+
+    events: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        durable_queue,
+        "diagnostic_event",
+        lambda **event: events.append(event),
+    )
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
 
-    record = queue.submit(_request())
+    record = queue.submit(_request(source="cursor"))
 
     rows = _rows(path)
     assert len(rows) == 1
@@ -67,6 +75,20 @@ def test_acceptance_is_written_to_the_business_database(tmp_path) -> None:
     assert rows[0]["state"] == "pending"
     assert rows[0]["hy_invoked"] == 0
     assert record.enqueued is True
+    assert events == [
+        {
+            "level": "info",
+            "component": "memory.write_queue",
+            "event": "memory_write_job.queued",
+            "outcome": "queued",
+            "job_id": record.job_id,
+            "details": {
+                "source_id": "cursor",
+                "mode": "normal",
+                "count": 1,
+            },
+        }
+    ]
 
 
 def test_the_stored_payload_is_references_only(tmp_path) -> None:

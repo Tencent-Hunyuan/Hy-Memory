@@ -284,7 +284,7 @@ class MemoryTaskRunner:
     ) -> MemoryTask:
         started = monotonic()
         diagnostic_event(
-            level="debug",
+            level="info",
             component="memory.task",
             event="memory_task.started",
             outcome="started",

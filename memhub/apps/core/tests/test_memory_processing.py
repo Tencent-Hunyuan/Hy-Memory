@@ -322,9 +322,12 @@ def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
         root.setLevel(previous)
     written = receipt.path.read_text()
     events = [json.loads(line) for line in written.splitlines()]
+    started = next(event for event in events if event["event"] == "memory_task.started")
+    assert started["level"] == "info"
     steps = [event for event in events if event["event"] == "memory_task.step_completed"]
     assert [event["details"]["phase"] for event in steps] == ["1", "2", "3", "4", "5", "6"]
     finished = next(event for event in events if event["event"] == "memory_task.finished")
+    assert finished["level"] == "info"
     assert finished["details"] == {
         "attempt": 1,
         "pending_count": 0,

@@ -438,7 +438,7 @@ class HyMemoryBridge:
     async def _ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         started = monotonic()
         diagnostic_event(
-            level="debug",
+            level="info",
             component="hy.bridge",
             event="hy.ingest_started",
             outcome="started",
@@ -574,7 +574,7 @@ class HyMemoryBridge:
         """Import source memory content when no raw conversation is available."""
         started = monotonic()
         diagnostic_event(
-            level="debug",
+            level="info",
             component="hy.bridge",
             event="hy.ingest_started",
             outcome="started",

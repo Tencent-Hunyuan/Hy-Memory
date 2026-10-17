@@ -711,7 +711,8 @@ class DurableWriteQueue:
             )
             connection.execute(
                 "INSERT INTO memory_write_jobs ("
-                " job_id, queue_seq, session_key, source_key, batch_id, idempotency_key, payload_json,"
+                " job_id, queue_seq, session_key, source_key, batch_id,"
+                " idempotency_key, payload_json,"
                 " evidence_ids_json,"
                 " state, priority, attempts, max_attempts, lease_owner,"
                 " lease_expires_at, hy_invoked, last_error, created_at, updated_at"
@@ -741,6 +742,18 @@ class DurableWriteQueue:
                 "INSERT INTO memory_write_job_evidence (job_id, evidence_id) VALUES (?,?)",
                 ((job_id, str(evidence_id)) for evidence_id in request.evidence_ids),
             )
+        diagnostic_event(
+            level="info",
+            component="memory.write_queue",
+            event="memory_write_job.queued",
+            outcome="queued",
+            job_id=job_id,
+            details={
+                "source_id": request.source_id or request.internal_session_id,
+                "mode": request.priority,
+                "count": len(request.evidence_ids),
+            },
+        )
         return DurableWriteRecord(
             job_id=job_id,
             request_id=key,

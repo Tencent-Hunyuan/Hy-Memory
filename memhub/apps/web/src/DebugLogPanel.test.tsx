@@ -157,6 +157,26 @@ it("keeps the underlying page interactive while the log panel is open", async ()
   expect(action).toHaveBeenCalledOnce();
 });
 
+it("toggles the diagnostics panel fullscreen", async () => {
+  render(<DebugLogPanel />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "打开 Debug 日志" }),
+  );
+  const panel = await screen.findByRole("complementary", {
+    name: "Debug 日志",
+  });
+
+  await userEvent.click(
+    within(panel).getByRole("button", { name: "全屏显示日志" }),
+  );
+  expect(panel.classList.contains("is-fullscreen")).toBe(true);
+
+  await userEvent.click(
+    within(panel).getByRole("button", { name: "退出全屏显示日志" }),
+  );
+  expect(panel.classList.contains("is-fullscreen")).toBe(false);
+});
+
 it("shows renderer logs immediately and polls desktop logs while live", async () => {
   vi.useFakeTimers();
   const read = window.oneMemory?.getDebugLogs;

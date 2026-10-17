@@ -64,6 +64,14 @@ export function R6Settings({
   const [quitError, setQuitError] = useState("");
   const [exportingLogs, setExportingLogs] = useState(false);
   const [exportMessage, setExportMessage] = useState("");
+  const [buildInfo] = useState(
+    () =>
+      window.oneMemory?.getBuildInfo?.() ?? {
+        version: "development",
+        buildNumber: "development",
+        commit: "unknown",
+      },
+  );
   const modelActions = useRef<ModelSettingsActions>(null);
   const quitPanel = useRef<HTMLElement>(null);
   const quitOpener = useRef<HTMLElement | null>(null);
@@ -344,6 +352,29 @@ export function R6Settings({
                   <Download size={16} aria-hidden="true" />
                   导出日志
                 </R6Button>
+              </div>
+              <div className="r6-setting-row r6-settings-about">
+                <div>
+                  <h3>关于</h3>
+                  <dl>
+                    <div>
+                      <dt>版本</dt>
+                      <dd>{buildInfo.version}</dd>
+                    </div>
+                    <div>
+                      <dt>Build</dt>
+                      <dd>{buildInfo.buildNumber}</dd>
+                    </div>
+                    <div>
+                      <dt>Commit</dt>
+                      <dd title={buildInfo.commit}>
+                        {buildInfo.commit === "unknown"
+                          ? "unknown"
+                          : buildInfo.commit.slice(0, 12)}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
               </div>
             </section>
           )}

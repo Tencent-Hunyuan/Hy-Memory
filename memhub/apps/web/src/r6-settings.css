@@ -326,6 +326,38 @@
   margin-top: 38px;
   min-width: 174px;
 }
+.r6-settings .r6-settings-help .r6-settings-about {
+  min-height: 0;
+  padding-bottom: 24px;
+}
+.r6-settings .r6-settings-about dl {
+  display: grid;
+  gap: 8px;
+  max-width: 440px;
+  margin: 0;
+}
+.r6-settings .r6-settings-about dl > div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+}
+.r6-settings .r6-settings-about dt {
+  color: #63707b;
+  font-size: 13px;
+}
+.r6-settings .r6-settings-about dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #25353f;
+  font:
+    13px / 22px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .r6-settings .r6-settings-help-footer {
   margin-top: 89px;
 }
