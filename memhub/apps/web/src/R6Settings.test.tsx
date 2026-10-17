@@ -42,8 +42,6 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   expect(screen.getByRole("heading", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "导出日志" })).toBeTruthy();
 
-  view.rerender(
-    <R6Settings onDiagnostics={vi.fn()} showDiagnostics={false} />,
-  );
+  view.rerender(<R6Settings onDiagnostics={vi.fn()} showDiagnostics={false} />);
   expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
 });
