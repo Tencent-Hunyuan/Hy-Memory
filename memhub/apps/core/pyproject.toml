@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "one-memory"
-version = "1.0.3"
+version = "1.0.4"
 description = "MemHub local-first memory core"
 readme = "README.md"
 requires-python = ">=3.12"
