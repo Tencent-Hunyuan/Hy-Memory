@@ -1326,7 +1326,7 @@ def test_hy_runtime_matches_public_sdk_without_reranker_or_service_backends(
     config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
 
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.2"
+    assert HY_MEMORY_VERSION == "2.0.3"
     assert HY_MEMORY_MODE == "ultra"
     assert HY_MEMORY_READER == "hybrid"
     assert os.environ["MEMORY_MODE"] == "ultra"

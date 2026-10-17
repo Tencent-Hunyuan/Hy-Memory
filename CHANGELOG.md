@@ -2,6 +2,16 @@
 
 Hy Memory and MemHub are versioned and released independently.
 
+## Hy Memory 2.0.3 — 2026-10-17
+
+- Added an optional runtime HTTP transport factory so embedded products can
+  enforce request budgets without wrapping or restricting SDK local-store
+  access.
+- Published
+  [`hy-memory==2.0.3`](https://pypi.org/project/hy-memory/2.0.3/) with
+  unchanged memory extraction, reconciliation, storage, and Coding/Working
+  behavior.
+
 ## Unreleased
 
 - Removed MemHub's task-scoped HyPermission store wrappers and global

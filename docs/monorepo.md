@@ -37,7 +37,7 @@ do not belong in the public source tree.
 - Root GitHub workflows run SDK and MemHub checks from their respective working
   directories. Native lifecycle workflows produce reviewable Actions artifacts;
   tag releases remain fail-closed on public identity, signing and notarization.
-- Hy Memory is published as `hy-memory==2.0.2`. MemHub pins that public
+- Hy Memory is published as `hy-memory==2.0.3`. MemHub pins that public
   distribution; its selected npm package is `memhub-cli`, which is not yet
   published.
 - Hy-Memory source uses Apache-2.0 at the repository root. Third-party

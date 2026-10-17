@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 HY_MEMORY_DISTRIBUTION = "hy-memory"
-HY_MEMORY_VERSION = "2.0.2"
+HY_MEMORY_VERSION = "2.0.3"
 HY_MEMORY_NAMESPACE = "governed-v2"
 DiagnosticLogLevel = Literal["error", "warning", "info", "debug"]
 
@@ -35,7 +35,7 @@ _COLLECTION_LOGGERS = (
 # One Memory deliberately stays on ultra because its existing, user-visible
 # profile/graph flow calls digest(), which the pinned public SDK exposes only
 # for ultra clients. Reader and non-reranker behavior remain pinned for
-# compatibility with public SDK 2.0.2.
+# compatibility with public SDK 2.0.3.
 HY_MEMORY_MODE = "ultra"
 # The SDK only recognises `legacy` and `hybrid` (see
 # hy_memory/pipelines/_retrieval/config.py: `ALL_READERS = (READER_LEGACY,

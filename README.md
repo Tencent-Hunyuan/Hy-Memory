@@ -32,7 +32,7 @@ English | [中文](README.zh.md)
 
 ## Latest News
 
-* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Released** **Hy Memory 2.0 (`hy-memory==2.0.2`)** on [PyPI](https://pypi.org/project/hy-memory/2.0.2/) and open-sourced the **Hy-Memory** monorepo together with **[MemHub](memhub/README.md)**!
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Released** **Hy Memory 2.0 (`hy-memory==2.0.3`)** on [PyPI](https://pypi.org/project/hy-memory/2.0.3/) and open-sourced the **Hy-Memory** monorepo together with **[MemHub](memhub/README.md)**!
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Open-sourced** **[Hy-Memory-30B-A3B](https://huggingface.co/tencent/Hy-Memory-30B-A3B)** on Hugging Face along with its [technical report](https://arxiv.org/abs/2610.22196) on attributed reinforcement learning for long-term memory writing!
 * *<mark>[new]</mark>* 🔥🔥 **[2026-09]**: 📊 **Released** **[CMB: A Coding Memory Benchmark for Long-Horizon and Interleaved Coding Agents](docs/papers/CMB_A_Coding_Memory_Benchmark_for_Long_Horizon_and_Interleaved_Coding_Agents.pdf)** (submitted to **ICLR 2027**).
 * *<mark>[new]</mark>* 🔥🔥 **[2026-08]**: 🎉 **Accepted** at **EMNLP 2026**: **[Memory Beyond Recall: A Dual-Process Cognitive Memory System for Self-Evolving LLM Agents](https://arxiv.org/abs/2606.09483)**!
@@ -63,13 +63,13 @@ Welcome to the **Hy Memory Research Family**, covering cognitive chat memory, lo
 ### 1. Installation
 
 ```bash
-pip install hy-memory==2.0.2              # core (includes ChromaDB and Kuzu)
-pip install "hy-memory[qdrant]==2.0.2"    # + Qdrant
-pip install "hy-memory[faiss]==2.0.2"     # + FAISS
-pip install "hy-memory[graph]==2.0.2"     # + Neo4j
-pip install "hy-memory[mysql]==2.0.2"     # + MySQL cache
-pip install "hy-memory[rerank]==2.0.2"    # + local multilingual cross-encoder rerank
-pip install "hy-memory[all]==2.0.2"       # everything
+pip install hy-memory==2.0.3              # core (includes ChromaDB and Kuzu)
+pip install "hy-memory[qdrant]==2.0.3"    # + Qdrant
+pip install "hy-memory[faiss]==2.0.3"     # + FAISS
+pip install "hy-memory[graph]==2.0.3"     # + Neo4j
+pip install "hy-memory[mysql]==2.0.3"     # + MySQL cache
+pip install "hy-memory[rerank]==2.0.3"    # + local multilingual cross-encoder rerank
+pip install "hy-memory[all]==2.0.3"       # everything
 ```
 
 ### 2. Configuration

@@ -15,12 +15,12 @@ write、search，并把搜索结果格式化为可交给模型的 memory text ch
 
 ```text
 distribution: hy-memory
-version:      2.0.2
+version:      2.0.3
 mode:         按运行时配置选择
 reader:       hybrid
 ```
 
-仓库 pin、lockfile 和运行时版本守卫均固定到公开的 `hy-memory==2.0.2`。
+仓库 pin、lockfile 和运行时版本守卫均固定到公开的 `hy-memory==2.0.3`。
 MemHub 在本地 Runtime 内嵌入 SDK，但不绕过自身的来源授权、模型授权、Evidence、
 Governance 和撤权边界。
 

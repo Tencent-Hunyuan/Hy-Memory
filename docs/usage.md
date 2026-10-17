@@ -5,7 +5,7 @@
 ## 安装与快速开始
 
 ```bash
-pip install hy-memory==2.0.2
+pip install hy-memory==2.0.3
 
 # 可选后端
 pip install 'hy-memory[qdrant]==2.0.1'

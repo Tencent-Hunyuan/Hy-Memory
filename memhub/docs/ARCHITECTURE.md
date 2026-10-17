@@ -155,7 +155,7 @@ write. Retrieval results are checked against current Governance and access
 scope before being returned to the UI or an authorized host.
 
 The currently pinned SDK is the public PyPI distribution
-`hy-memory==2.0.2`. Runtime configuration and permission boundaries are
+`hy-memory==2.0.3`. Runtime configuration and permission boundaries are
 documented in [`../MEMORY.md`](../MEMORY.md).
 
 ## Permission Boundaries
@@ -355,7 +355,7 @@ Support is declared per immutable GitHub Release manifest:
 - macOS arm64 and x64 App/Runtime artifacts must carry Developer ID signatures,
   notarization tickets, and native-platform acceptance receipts.
 - Windows is not supported.
-- `hy-memory==2.0.2` is the public Python SDK dependency.
+- `hy-memory==2.0.3` is the public Python SDK dependency.
 
 See [`INSTALLATION.md`](INSTALLATION.md) for the release matrix. A source test,
 fake hosting test, or cross-build does not substitute for a native-platform
