@@ -50,6 +50,10 @@ interface Overrides {
   whenReady?: Promise<void>;
   windowGate?: Promise<void>;
   windowError?: Error;
+  /** Give the lifecycle a startup placeholder, as the packaged App does. */
+  startupWindow?: boolean;
+  startupWindowError?: Error;
+  revealError?: Error;
 }
 
 function fixture(background = false, lock = true, overrides: Overrides = {}) {
@@ -71,6 +75,15 @@ function fixture(background = false, lock = true, overrides: Overrides = {}) {
     if (overrides.windowError) throw overrides.windowError;
     windows.push(liveWindow());
   });
+  // The startup placeholder is a window the lifecycle raises before the
+  // services exist, then hands back to be swapped onto the real app.
+  const showStartupWindow = vi.fn(async () => {
+    if (overrides.startupWindowError) throw overrides.startupWindowError;
+    windows.push(liveWindow());
+  });
+  const revealStartupWindow = vi.fn(async () => {
+    if (overrides.revealError) throw overrides.revealError;
+  });
   const prepare = vi.fn(() => {
     if (overrides.prepareError) throw overrides.prepareError;
   });
@@ -84,6 +97,9 @@ function fixture(background = false, lock = true, overrides: Overrides = {}) {
     initialize,
     stop,
     dispose,
+    ...(overrides.startupWindow
+      ? { showStartupWindow, revealStartupWindow }
+      : {}),
     createWindow,
     getWindows: () => windows,
     installTray,
@@ -118,6 +134,9 @@ function fixture(background = false, lock = true, overrides: Overrides = {}) {
     dispose,
     windows,
     createWindow,
+    showStartupWindow,
+    revealStartupWindow,
+    startupWindow: overrides.startupWindow === true,
     prepare,
     installTray,
     onError,
@@ -215,6 +234,76 @@ describe("desktop background lifecycle with injected Electron", () => {
     f.app.emit("will-quit");
     expect(f.dispose).toHaveBeenCalledTimes(1);
     expect(f.app.listenerCount("activate")).toBe(0);
+  });
+});
+
+describe("desktop lifecycle startup window", () => {
+  it("raises the placeholder before initialization and swaps it after", async () => {
+    const f = fixture(false, true, { startupWindow: true });
+    f.ready.resolve();
+    await f.flush();
+    // The whole point: a window exists while `initialize` is still pending,
+    // because that is the part that takes tens of seconds.
+    expect(f.initialize).toHaveBeenCalledTimes(1);
+    expect(f.showStartupWindow).toHaveBeenCalledTimes(1);
+    expect(f.windows).toHaveLength(1);
+    expect(f.revealStartupWindow).not.toHaveBeenCalled();
+    expect(f.createWindow).not.toHaveBeenCalled();
+    f.starting.resolve();
+    await f.flush();
+    expect(f.revealStartupWindow).toHaveBeenCalledTimes(1);
+    // The placeholder is reused, not replaced: two windows would flash.
+    expect(f.createWindow).not.toHaveBeenCalled();
+    expect(f.windows).toHaveLength(1);
+    expect(f.windows[0].show).toHaveBeenCalled();
+  });
+  it("keeps no placeholder for a background launch", async () => {
+    const f = fixture(true, true, { startupWindow: true });
+    await f.boot();
+    expect(f.initialize).toHaveBeenCalledTimes(1);
+    expect(f.showStartupWindow).not.toHaveBeenCalled();
+    expect(f.revealStartupWindow).not.toHaveBeenCalled();
+    expect(f.windows).toHaveLength(0);
+  });
+  it("opens the real app when the placeholder was closed during startup", async () => {
+    const f = fixture(false, true, { startupWindow: true });
+    f.ready.resolve();
+    await f.flush();
+    expect(f.windows).toHaveLength(1);
+    f.windows.length = 0;
+    f.starting.resolve();
+    await f.flush();
+    expect(f.revealStartupWindow).toHaveBeenCalledTimes(1);
+    expect(f.createWindow).toHaveBeenCalledTimes(1);
+    expect(f.windows).toHaveLength(1);
+  });
+  it("quitting during initialization leaves the placeholder unrevealed", async () => {
+    const f = fixture(false, true, { startupWindow: true });
+    f.ready.resolve();
+    await f.flush();
+    expect(f.showStartupWindow).toHaveBeenCalledTimes(1);
+    f.quit();
+    f.starting.resolve();
+    await f.flush();
+    expect(f.revealStartupWindow).not.toHaveBeenCalled();
+    expect(f.createWindow).not.toHaveBeenCalled();
+  });
+  it("still opens the real app when the placeholder cannot be raised", async () => {
+    const f = fixture(false, true, {
+      startupWindow: true,
+      startupWindowError: new Error("startup_window_unavailable"),
+    });
+    f.ready.resolve();
+    await f.flush();
+    // The placeholder is a courtesy, not a dependency: a launch that cannot
+    // draw it must still bring up the services and the real window.
+    expect(f.initialize).toHaveBeenCalledTimes(1);
+    expect(f.onError).not.toHaveBeenCalled();
+    f.starting.resolve();
+    await f.flush();
+    expect(f.revealStartupWindow).not.toHaveBeenCalled();
+    expect(f.createWindow).toHaveBeenCalledTimes(1);
+    expect(f.windows).toHaveLength(1);
   });
 });
 

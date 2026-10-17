@@ -168,8 +168,8 @@ vi.mock("./recall-hosts", () => ({
   isHostPresent: vi.fn(),
 }));
 vi.mock("./permissions", () => ({ installDenyAllPermissionPolicy: vi.fn() }));
-vi.mock("./app-protocol", () => ({
-  APP_ORIGIN: "one-memory://app",
+vi.mock("./app-protocol", async (importOriginal) => ({
+  ...(await importOriginal()),
   installAppProtocol: vi.fn(),
 }));
 vi.mock("./core-supervisor", () => ({
@@ -271,8 +271,14 @@ describe("display preference main IPC", () => {
     expect(failed.destroyed).toBe(true);
     fake.loadFailure = false;
     fake.app.emit("activate");
-    await vi.waitFor(() => expect(fake.windows).toHaveLength(2));
-    expect(fake.windows[1].frame.url).toBe("one-memory://app/index.html");
+    // The startup placeholder fails the same page load first, so count the
+    // windows that survived rather than the ones that were ever created.
+    await vi.waitFor(() =>
+      expect(fake.windows.filter((window) => !window.destroyed)).toHaveLength(
+        1,
+      ),
+    );
+    expect(fake.windows.at(-1)?.frame.url).toBe("one-memory://app/index.html");
     expect(fake.app.listenerCount("before-quit")).toBe(1);
   });
   it("reads exact native dimensions at revision zero and sends only changes", async () => {

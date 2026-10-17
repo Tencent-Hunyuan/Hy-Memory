@@ -62,7 +62,12 @@ class FakeWindow extends EventEmitter {
   isDestroyed() {
     return false;
   }
+  isMinimized() {
+    return false;
+  }
+  restore() {}
   show() {}
+  focus() {}
   async loadURL(url: string) {
     this.frame.url = url;
   }
@@ -121,8 +126,8 @@ vi.mock("electron", () => ({
   shell: { openExternal: vi.fn() },
 }));
 vi.mock("./permissions", () => ({ installDenyAllPermissionPolicy: vi.fn() }));
-vi.mock("./app-protocol", () => ({
-  APP_ORIGIN: "one-memory://app",
+vi.mock("./app-protocol", async (importOriginal) => ({
+  ...(await importOriginal()),
   installAppProtocol: vi.fn(),
 }));
 vi.mock("./core-supervisor", () => ({
@@ -534,7 +539,11 @@ describe("packaged Desktop host-control ownership", () => {
       "runtime_broker_unavailable",
     );
     expect(fake.quit).toHaveBeenCalledTimes(1);
-    expect(fake.windows).toHaveLength(0);
+    // A window exists, but it is the startup placeholder raised before the
+    // services were tried. The app window itself was never opened.
+    expect(fake.windows.map((window) => window.frame.url)).toEqual([
+      "one-memory://app/__startup",
+    ]);
     expect(fake.open).not.toHaveBeenCalled();
     expect(fake.brokerConstructed).not.toHaveBeenCalled();
     expect(fake.brokerStart).not.toHaveBeenCalled();
