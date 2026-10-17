@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import ipaddress
 import io
@@ -9,6 +10,7 @@ import json
 import math
 import os
 import queue
+import ssl
 import threading
 import time
 import uuid
@@ -73,7 +75,7 @@ class _DeadlineSocket:
         ))
 
 
-def _deadline_handlers(deadline):
+def _deadline_handlers(deadline, context=None):
     def connection(base):
         def create(*args, **kwargs):
             conn = base(*args, **kwargs)
@@ -94,7 +96,7 @@ def _deadline_handlers(deadline):
                 context=self._context,
             )
 
-    return HTTP(), HTTPS()
+    return HTTP(), HTTPS(context=context)
 
 
 class HyMemoryProvider(MemoryProvider):
@@ -115,6 +117,8 @@ class HyMemoryProvider(MemoryProvider):
         self._status = None
         self.last_error = None
         self._config_error = None
+        self._ssl_context = None
+        self._ca_fingerprint = None
         try:
             self.user_id = _string(os.getenv("HY_MEMORY_USER_ID"), 256)
             self.agent_id = _string(os.getenv("HY_MEMORY_AGENT_ID"), 256)
@@ -148,7 +152,21 @@ class HyMemoryProvider(MemoryProvider):
             )
             self.auto_recall = self._boolean("AUTO_RECALL")
             self.auto_capture = self._boolean("AUTO_CAPTURE")
-        except (ProviderError, ValueError, TypeError):
+            ca_file = os.getenv("HY_MEMORY_CA_FILE")
+            if ca_file is not None:
+                if not ca_file.strip():
+                    raise ProviderError("invalid_config")
+                # Explicit trust is scoped to this provider, never installed globally.
+                self._ssl_context = ssl.create_default_context(cafile=ca_file)
+                self._ssl_context.check_hostname = True
+                self._ssl_context.verify_mode = ssl.CERT_REQUIRED
+                # Fingerprint the certificates actually loaded, avoiding a second file
+                # read and detecting trust rotation at the same configured path.
+                certificates = self._ssl_context.get_ca_certs(binary_form=True)
+                self._ca_fingerprint = hashlib.sha256(
+                    b"".join(sorted(certificates))
+                ).hexdigest()
+        except (ProviderError, ValueError, TypeError, OSError):
             self._config_error = "invalid_configuration"
 
     @staticmethod
@@ -180,6 +198,7 @@ class HyMemoryProvider(MemoryProvider):
     def identity_signature(self) -> dict[str, Any]:
         """Bust cached agents when configured scope or endpoint changes."""
         return {
+            "hy_memory_ca_sha256": self._ca_fingerprint if self.is_available() else None,
             "hy_memory_user": getattr(self, "user_id", None),
             "hy_memory_agent": getattr(self, "agent_id", None),
             "hy_memory_url": getattr(self, "url", None)
@@ -224,7 +243,8 @@ class HyMemoryProvider(MemoryProvider):
             deadline = time.monotonic() + self.timeout
             opener = urllib.request.build_opener(
                 urllib.request.ProxyHandler({}), _NoRedirect(),
-                *_deadline_handlers(deadline),
+                *(_deadline_handlers(deadline) if self._ssl_context is None
+                  else _deadline_handlers(deadline, self._ssl_context)),
             )
             with opener.open(request, timeout=self.timeout) as response:
                 if response.status != 200:

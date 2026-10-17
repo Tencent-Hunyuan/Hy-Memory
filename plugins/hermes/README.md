@@ -41,6 +41,7 @@ unscoped get, list, or delete tools are exposed.
 | `HY_MEMORY_USER_ID` | required | nonblank string, at most 256 characters |
 | `HY_MEMORY_AGENT_ID` | required | nonblank string, at most 256 characters |
 | `HY_MEMORY_URL` | `http://127.0.0.1:19527` | origin only, no credentials/path/query/fragment |
+| `HY_MEMORY_CA_FILE` | unset (OS trust) | explicit PEM CA file, e.g. `/etc/hy-memory/ca.crt` for a private cluster CA |
 | `HY_MEMORY_API_KEY` | unset | optional Bearer key for an authenticated reverse proxy |
 | `HY_MEMORY_TIMEOUT` | `5` | finite seconds, 0.1–30 |
 | `HY_MEMORY_LIMIT` | `5` | integer, 1–20 |
@@ -86,7 +87,13 @@ Remote plain HTTP fails closed. Remote deployment requires HTTPS to a TLS/auth
 reverse proxy, gateway authorization appropriate to the owner/agent boundary,
 and network policy preventing direct server access. Configure
 `HY_MEMORY_API_KEY` only for a gateway that actually verifies it. HTTPS alone does
-not establish authorization. The timeout is a total response-read deadline,
+not establish authorization. Optional `HY_MEMORY_CA_FILE` loads and validates a
+provider-scoped CA context once at construction. Missing, unreadable, or malformed
+files make the provider unavailable with `invalid_configuration`. Certificate and
+hostname verification remain required; no global TLS settings are changed. When
+unset, HTTPS retains its existing OS trust behavior. Trust rotation requires a new
+provider instance; its identity includes a SHA-256 fingerprint of loaded CA
+certificates, without paths or PEM contents. The timeout is a total response-read deadline,
 reapplied before every socket read (including headers and chunk framing). DNS resolution and connection/TLS
 setup still follow platform/per-operation timeouts; this is not a hard deadline
 for those operating-system operations. No timeout threads are created.
