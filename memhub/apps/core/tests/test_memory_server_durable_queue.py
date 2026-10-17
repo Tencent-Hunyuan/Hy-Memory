@@ -146,6 +146,68 @@ def test_submit_accepts_a_write_whose_evidence_exists(tmp_path) -> None:
     assert len(_rows(path)) == 1
 
 
+def test_processing_stats_use_durable_jobs_evidence_recency_and_unknown_reasons(tmp_path) -> None:
+    from one_memory.imports.models import (
+        EvidenceInput,
+        EvidenceOrigin,
+        OriginMetadata,
+        WrittenBy,
+    )
+    from one_memory.imports.storage import EvidenceStore
+
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    fresh_since = datetime.now(UTC) - timedelta(hours=1)
+
+    def put(message_id: str, created_at: datetime | None) -> str:
+        return store.put(
+            EvidenceInput(
+                source_id="test",
+                conversation_id=message_id,
+                message_id=message_id,
+                role="user",
+                written_by=WrittenBy.PERSON,
+                verbatim=message_id,
+                created_at=created_at,
+                origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+            )
+        ).record.evidence_id
+
+    old = put("old", fresh_since - timedelta(days=1))
+    imported = put("imported", None)
+    queue = DurableWriteQueue(path, evidence=store)
+    queue.submit(_request(evidence=(old,), key="pending-old"))
+    queue.submit(_request(evidence=(imported,), key="pending-imported"))
+    unlinked = queue.submit(_request(evidence=(old,), key="pending-unlinked"))
+    timeout = queue.submit(_request(evidence=(old,), key="unknown-timeout"))
+    unspecified = queue.submit(_request(evidence=(old,), key="unknown-unspecified"))
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            "DELETE FROM memory_write_job_evidence WHERE job_id=?",
+            (unlinked.job_id,),
+        )
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',last_error='hy_memory_timeout' "
+            "WHERE job_id=?",
+            (timeout.job_id,),
+        )
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',last_error=NULL WHERE job_id=?",
+            (unspecified.job_id,),
+        )
+
+    stats = queue.processing_stats(fresh_since=fresh_since)
+
+    assert stats.pending == 3
+    assert stats.fresh == 1
+    assert stats.backlog == 2
+    assert stats.unknown == 2
+    assert stats.unknown_reasons == {
+        "hy_memory_timeout": 1,
+        "model_content_outcome_unknown": 1,
+    }
+
+
 def test_a_replay_is_idempotent_even_after_its_evidence_is_removed(tmp_path) -> None:
     """Evidence-first must guard a new row, not re-open a settled identity.
 
@@ -1065,38 +1127,6 @@ def test_startup_never_repairs_a_possibly_sent_identity_failure(tmp_path) -> Non
     assert queue.get(job.request_id).state == UNKNOWN
 
 
-def test_reconciled_absent_timeout_is_requeued_once_without_resetting_attempts(
-    tmp_path,
-) -> None:
-    path = tmp_path / "one-memory.sqlite3"
-    queue = DurableWriteQueue(path)
-    record = queue.submit(_request())
-    with sqlite3.connect(path) as connection, connection:
-        connection.execute(
-            "UPDATE memory_write_jobs SET state='unknown', attempts=1, "
-            "hy_invoked=1, last_error='hy_memory_timeout', updated_at=? WHERE job_id=?",
-            ("2026-01-01T00:00:00+00:00", record.job_id),
-        )
-
-    assert (
-        queue.retry_timed_out_unknown_after_reconcile(
-            older_than=datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
-        )
-        == 1
-    )
-    with sqlite3.connect(path) as connection:
-        state, attempts, invoked, error = connection.execute(
-            "SELECT state, attempts, hy_invoked, last_error FROM memory_write_jobs WHERE job_id=?",
-            (record.job_id,),
-        ).fetchone()
-    assert (state, attempts, invoked, error) == (
-        "pending",
-        1,
-        0,
-        "model_content_reconciled_absent_retry",
-    )
-
-
 def test_drain_runs_unknown_reconciliation_during_busy_safe_maintenance(tmp_path) -> None:
     queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
     calls = 0
@@ -1964,6 +1994,85 @@ def test_user_confirmed_unknown_retry_requeues_job_and_linked_tasks(tmp_path) ->
         ).fetchone() == ("pending", 0, "model_content_manual_retry_requested")
 
     assert queue.retry_unknown_confirmed(record.job_id) == 0
+
+
+def test_unknown_retry_snapshot_maps_only_its_linked_tasks(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    first = queue.submit(_request(evidence=("e1",), key="idem-1"))
+    second = queue.submit(_request(evidence=("e2",), key="idem-2"))
+    overlapping = queue.submit(_request(evidence=("e2",), key="idem-overlap"))
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',hy_invoked=1 "
+            "WHERE job_id IN (?, ?, ?)",
+            (first.job_id, second.job_id, overlapping.job_id),
+        )
+        connection.executescript(
+            """
+            CREATE TABLE memory_tasks (
+                task_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                runner_token TEXT,
+                attempts INTEGER NOT NULL,
+                last_error_code TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE memory_task_inputs (
+                task_id TEXT PRIMARY KEY,
+                refs_json TEXT NOT NULL
+            );
+            """
+        )
+        connection.executemany(
+            "INSERT INTO memory_tasks VALUES (?,?,?,?,?,?)",
+            (
+                ("task-1", "unknown", None, 1, "outcome_unknown", "1"),
+                ("task-2", "unknown", None, 1, "outcome_unknown", "2"),
+                ("task-partial", "unknown", None, 1, "outcome_unknown", "3"),
+                ("task-only", "unknown", None, 1, "outcome_unknown", "4"),
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO memory_task_inputs VALUES (?,?)",
+            (
+                ("task-1", '[{"evidence_id":"e1"}]'),
+                ("task-2", '[{"evidence_id":"e2"}]'),
+                (
+                    "task-partial",
+                    '[{"evidence_id":"e2"},{"evidence_id":"e3"}]',
+                ),
+                ("task-only", '[{"evidence_id":"e3"}]'),
+            ),
+        )
+
+    assert queue.linked_unknown_task_ids((second.job_id,)) == ("task-2",)
+    assert queue.task_only_unknown_task_ids() == ("task-partial", "task-only")
+
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='pending' WHERE job_id=?",
+            (first.job_id,),
+        )
+    assert queue.task_only_unknown_task_ids() == ("task-partial", "task-only")
+
+    assert (
+        queue.retry_unknown_confirmed(
+            second.job_id,
+            task_ids=("task-1", "task-2"),
+            snapshot_job_ids=(second.job_id,),
+        )
+        == 1
+    )
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT task_id,status FROM memory_tasks ORDER BY task_id"
+        ).fetchall() == [
+            ("task-1", "unknown"),
+            ("task-2", "unknown"),
+            ("task-only", "unknown"),
+            ("task-partial", "unknown"),
+        ]
 
 
 def test_restart_redrains_a_job_claimed_by_a_worker_that_died(tmp_path) -> None:
@@ -4233,10 +4342,13 @@ def test_pause_before_hy_releases_an_already_claimed_job(tmp_path) -> None:
     assert current is not None
     assert current.state == PENDING
     with sqlite3.connect(path) as connection:
-        assert connection.execute(
-            "SELECT hy_invoked FROM memory_write_jobs WHERE job_id=?",
-            (record.job_id,),
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT hy_invoked FROM memory_write_jobs WHERE job_id=?",
+                (record.job_id,),
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_pause_after_first_hy_call_does_not_interrupt_the_current_job(tmp_path) -> None:

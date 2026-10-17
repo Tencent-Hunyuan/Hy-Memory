@@ -20,8 +20,8 @@ import re
 import shutil
 import sqlite3
 import time as _time
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Collection
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -320,6 +320,19 @@ class DurableWriteRecord:
     detail: str = ""
 
 
+@dataclass(frozen=True)
+class DurableWriteQueueStats:
+    """Read-only processing counts from the authoritative durable queue."""
+
+    pending: int = 0
+    fresh: int = 0
+    backlog: int = 0
+    waiting_for_permission: int = 0
+    waiting_for_model: int = 0
+    unknown: int = 0
+    unknown_reasons: dict[str, int] = field(default_factory=dict)
+
+
 class ReconcileSchemaUnavailableError(RuntimeError):
     """The Evidence schema is not ready for a reconcile read.
 
@@ -479,8 +492,7 @@ class DurableWriteQueue:
             "UPDATE memory_write_jobs SET source_key=session_key WHERE source_key=''"
         )
         legacy_rows = connection.execute(
-            "SELECT job_id FROM memory_write_jobs WHERE queue_seq=0 "
-            "ORDER BY created_at, rowid"
+            "SELECT job_id FROM memory_write_jobs WHERE queue_seq=0 ORDER BY created_at, rowid"
         ).fetchall()
         next_seq = int(
             connection.execute(
@@ -711,8 +723,8 @@ class DurableWriteQueue:
             )
             connection.execute(
                 "INSERT INTO memory_write_jobs ("
-                " job_id, queue_seq, session_key, source_key, batch_id, idempotency_key, payload_json,"
-                " evidence_ids_json,"
+                " job_id, queue_seq, session_key, source_key, batch_id, idempotency_key,"
+                " payload_json, evidence_ids_json,"
                 " state, priority, attempts, max_attempts, lease_owner,"
                 " lease_expires_at, hy_invoked, last_error, created_at, updated_at"
                 ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1295,6 +1307,156 @@ class DurableWriteQueue:
                 )
         return changed
 
+    def processing_stats(self, *, fresh_since: datetime) -> DurableWriteQueueStats:
+        """Count pending and sticky unknown work without mutating the queue.
+
+        Pending recency follows the linked Evidence rather than the queue row's
+        insertion time. A job is fresh when at least one linked Evidence row is
+        fresh; old, missing, or unlinked Evidence is backlog so the split always
+        accounts for every pending durable job.
+        """
+        if fresh_since.tzinfo is None:
+            fresh_since = fresh_since.replace(tzinfo=UTC)
+        threshold = fresh_since.isoformat()
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            connection.execute("BEGIN")
+            _require_queue_schema(connection)
+            row = connection.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN job.state=? THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN job.state=? AND EXISTS (
+                        SELECT 1
+                        FROM memory_write_job_evidence AS linked
+                        JOIN evidence AS evidence ON evidence.evidence_id=linked.evidence_id
+                        WHERE linked.job_id=job.job_id
+                          AND julianday(COALESCE(evidence.created_at, evidence.imported_at))
+                              >= julianday(?)
+                    ) THEN 1 ELSE 0 END) AS fresh,
+                    SUM(CASE WHEN job.state=? AND NOT EXISTS (
+                        SELECT 1
+                        FROM memory_write_job_evidence AS linked
+                        JOIN evidence AS evidence ON evidence.evidence_id=linked.evidence_id
+                        WHERE linked.job_id=job.job_id
+                          AND julianday(COALESCE(evidence.created_at, evidence.imported_at))
+                              >= julianday(?)
+                    ) THEN 1 ELSE 0 END) AS backlog,
+                    SUM(CASE WHEN job.state=? THEN 1 ELSE 0 END) AS waiting_for_permission,
+                    SUM(CASE WHEN job.state=? THEN 1 ELSE 0 END) AS waiting_for_model,
+                    SUM(CASE WHEN job.state=? THEN 1 ELSE 0 END) AS unknown
+                FROM memory_write_jobs AS job
+                WHERE job.state IN (?, ?, ?, ?)
+                """,
+                (
+                    PENDING,
+                    PENDING,
+                    threshold,
+                    PENDING,
+                    threshold,
+                    WAITING_FOR_PERMISSION,
+                    WAITING_FOR_MODEL,
+                    UNKNOWN,
+                    PENDING,
+                    WAITING_FOR_PERMISSION,
+                    WAITING_FOR_MODEL,
+                    UNKNOWN,
+                ),
+            ).fetchone()
+            reasons = connection.execute(
+                "SELECT COALESCE(last_error,'model_content_outcome_unknown') AS reason, "
+                "COUNT(*) AS count FROM memory_write_jobs WHERE state=? "
+                "GROUP BY COALESCE(last_error,'model_content_outcome_unknown') ORDER BY reason",
+                (UNKNOWN,),
+            ).fetchall()
+            task_counts = {
+                "pending": 0,
+                "fresh": 0,
+                "backlog": 0,
+                "waiting_for_permission": 0,
+                "waiting_for_model": 0,
+                "unknown": 0,
+            }
+            task_unknown_reasons: dict[str, int] = {}
+            task_tables = {
+                str(item[0])
+                for item in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                    "('memory_tasks','memory_task_inputs')"
+                ).fetchall()
+            }
+            if task_tables == {"memory_tasks", "memory_task_inputs"}:
+                blocking = ",".join("?" for _ in _FIFO_BLOCKING_STATES)
+                task_groups = connection.execute(
+                    "WITH task_refs AS ("
+                    "SELECT inputs.task_id AS task_id, "
+                    "json_extract(ref.value, '$.evidence_id') AS evidence_id "
+                    "FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref "
+                    "WHERE json_extract(ref.value, '$.evidence_id') IS NOT NULL"
+                    "), task_ref_counts AS ("
+                    "SELECT task_id,COUNT(DISTINCT evidence_id) AS ref_count "
+                    "FROM task_refs GROUP BY task_id"
+                    "), blocking_matches AS ("
+                    "SELECT refs.task_id,linked.job_id,"
+                    "COUNT(DISTINCT refs.evidence_id) AS match_count "
+                    "FROM task_refs AS refs JOIN memory_write_job_evidence AS linked "
+                    "ON linked.evidence_id=refs.evidence_id "
+                    "JOIN memory_write_jobs AS job ON job.job_id=linked.job_id "
+                    f"WHERE job.state IN ({blocking}) GROUP BY refs.task_id,linked.job_id"
+                    "), governed_tasks AS ("
+                    "SELECT matches.task_id FROM blocking_matches AS matches "
+                    "JOIN task_ref_counts AS counts ON counts.task_id=matches.task_id "
+                    "WHERE matches.match_count=counts.ref_count GROUP BY matches.task_id"
+                    ") SELECT task.status,"
+                    "CASE WHEN task.status=? AND EXISTS ("
+                    "SELECT 1 FROM evidence WHERE evidence.evidence_id=task.input_ref "
+                    "AND julianday(COALESCE(evidence.created_at,evidence.imported_at)) "
+                    ">=julianday(?)) THEN 1 ELSE 0 END AS is_fresh,"
+                    "COALESCE(task.last_error_code,'model_content_outcome_unknown') AS reason,"
+                    "COUNT(*) AS count FROM memory_tasks AS task "
+                    "LEFT JOIN governed_tasks AS governed ON governed.task_id=task.task_id "
+                    "WHERE task.status IN (?, ?, ?, ?) AND governed.task_id IS NULL "
+                    "GROUP BY task.status,is_fresh,reason",
+                    (
+                        *_FIFO_BLOCKING_STATES,
+                        MemoryTaskStatus.PENDING,
+                        threshold,
+                        MemoryTaskStatus.PENDING,
+                        MemoryTaskStatus.WAITING_FOR_PERMISSION,
+                        MemoryTaskStatus.WAITING_FOR_MODEL,
+                        MemoryTaskStatus.UNKNOWN,
+                    ),
+                ).fetchall()
+                for item in task_groups:
+                    status = str(item["status"])
+                    count = int(item["count"])
+                    if status == MemoryTaskStatus.PENDING:
+                        task_counts["pending"] += count
+                        task_counts["fresh" if int(item["is_fresh"]) else "backlog"] += count
+                    elif status == MemoryTaskStatus.WAITING_FOR_PERMISSION:
+                        task_counts["waiting_for_permission"] += count
+                    elif status == MemoryTaskStatus.WAITING_FOR_MODEL:
+                        task_counts["waiting_for_model"] += count
+                    elif status == MemoryTaskStatus.UNKNOWN:
+                        task_counts["unknown"] += count
+                        task_unknown_reasons[str(item["reason"])] = count
+        combined_reasons = {
+            str(item["reason"]): int(item["count"])
+            for item in reasons
+        }
+        for reason, count in task_unknown_reasons.items():
+            combined_reasons[reason] = combined_reasons.get(reason, 0) + count
+        return DurableWriteQueueStats(
+            pending=int(row["pending"] or 0) + task_counts["pending"],
+            fresh=int(row["fresh"] or 0) + task_counts["fresh"],
+            backlog=int(row["backlog"] or 0) + task_counts["backlog"],
+            waiting_for_permission=int(row["waiting_for_permission"] or 0)
+            + task_counts["waiting_for_permission"],
+            waiting_for_model=int(row["waiting_for_model"] or 0)
+            + task_counts["waiting_for_model"],
+            unknown=int(row["unknown"] or 0) + task_counts["unknown"],
+            unknown_reasons=combined_reasons,
+        )
+
     def resolve_unknown(self, job_id: str, *, found: bool, detail: str = "") -> str | None:
         """Retire an `unknown` job after an inquiry, never by guessing.
 
@@ -1346,17 +1508,24 @@ class DurableWriteQueue:
             )
         return str(target)
 
-    def retry_unknown_confirmed(self, job_id: str) -> int:
+    def retry_unknown_confirmed(
+        self,
+        job_id: str,
+        *,
+        task_ids: Collection[str] | None = None,
+        snapshot_job_ids: Collection[str] | None = None,
+    ) -> int:
         """Requeue one unknown write only after an explicit user decision.
 
         Automatic workers may never move ``unknown`` back to pending because
-        HY may already contain the result. This separate command boundary is
-        intentionally named for the confirmation it requires. The durable
-        job and any task rows created from the same Evidence are reset in one
-        short transaction, so the unified queue remains the only execution
-        entry and a half-reset attempt cannot become permanently stranded.
+        HY may already contain the result. The durable row and its task rows
+        move in one writer transaction. A task is reset only when its complete
+        input snapshot belongs to this job and every other blocking job that
+        owns the same snapshot was part of the reconciled API batch.
         """
         now = datetime.now(UTC).isoformat()
+        selected_task_ids = tuple(dict.fromkeys(task_ids or ()))
+        selected_job_ids = frozenset(dict.fromkeys(snapshot_job_ids or (job_id,)))
         with (
             main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
             connection,
@@ -1366,21 +1535,65 @@ class DurableWriteQueue:
             ).fetchone()
             if row is None or str(row["state"]) != UNKNOWN:
                 return 0
-            connection.execute(
-                """
-                UPDATE memory_tasks
-                SET status='pending', runner_token=NULL, attempts=0,
-                    last_error_code='model_content_manual_retry_requested', updated_at=?
-                WHERE status='unknown' AND task_id IN (
-                    SELECT inputs.task_id
-                    FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
-                    JOIN memory_write_job_evidence AS linked
-                      ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
-                    WHERE linked.job_id=?
+            tables = {
+                str(item[0])
+                for item in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                    "('memory_tasks','memory_task_inputs')"
+                ).fetchall()
+            }
+            safe_task_ids: tuple[str, ...] = ()
+            if tables == {"memory_tasks", "memory_task_inputs"}:
+                if task_ids is None:
+                    candidates = connection.execute(
+                        "SELECT task.task_id FROM memory_tasks AS task "
+                        "JOIN memory_task_inputs AS inputs ON inputs.task_id=task.task_id "
+                        "WHERE task.status=? "
+                        "AND EXISTS (SELECT 1 FROM json_each(inputs.refs_json)) "
+                        "AND NOT EXISTS (SELECT 1 FROM json_each(inputs.refs_json) AS ref "
+                        "WHERE NOT EXISTS (SELECT 1 FROM memory_write_job_evidence AS linked "
+                        "WHERE linked.job_id=? AND linked.evidence_id="
+                        "json_extract(ref.value, '$.evidence_id')))",
+                        (MemoryTaskStatus.UNKNOWN, job_id),
+                    ).fetchall()
+                    selected_task_ids = tuple(str(item["task_id"]) for item in candidates)
+                if selected_task_ids:
+                    task_placeholders = ",".join("?" for _ in selected_task_ids)
+                    blocking = ",".join("?" for _ in _FIFO_BLOCKING_STATES)
+                    ownership_rows = connection.execute(
+                        "SELECT task.task_id, job.job_id FROM memory_tasks AS task "
+                        "JOIN memory_task_inputs AS inputs ON inputs.task_id=task.task_id "
+                        "CROSS JOIN memory_write_jobs AS job "
+                        f"WHERE task.task_id IN ({task_placeholders}) "
+                        f"AND task.status=? AND job.state IN ({blocking}) "
+                        "AND EXISTS (SELECT 1 FROM json_each(inputs.refs_json)) "
+                        "AND NOT EXISTS (SELECT 1 FROM json_each(inputs.refs_json) AS ref "
+                        "WHERE NOT EXISTS (SELECT 1 FROM memory_write_job_evidence AS linked "
+                        "WHERE linked.job_id=job.job_id AND linked.evidence_id="
+                        "json_extract(ref.value, '$.evidence_id')))",
+                        (
+                            *selected_task_ids,
+                            MemoryTaskStatus.UNKNOWN,
+                            *_FIFO_BLOCKING_STATES,
+                        ),
+                    ).fetchall()
+                    owners: dict[str, set[str]] = {}
+                    for item in ownership_rows:
+                        owners.setdefault(str(item["task_id"]), set()).add(str(item["job_id"]))
+                    safe_task_ids = tuple(
+                        task_id
+                        for task_id in selected_task_ids
+                        if job_id in owners.get(task_id, set())
+                        and owners[task_id].issubset(selected_job_ids)
+                    )
+            if safe_task_ids:
+                placeholders = ",".join("?" for _ in safe_task_ids)
+                connection.execute(
+                    "UPDATE memory_tasks SET status='pending', runner_token=NULL, attempts=0, "
+                    "last_error_code='model_content_manual_retry_requested', updated_at=? "
+                    f"WHERE status='unknown' AND task_id IN ({placeholders})",
+                    (now, *safe_task_ids),
                 )
-                """,
-                (now, job_id),
-            )
             changed = connection.execute(
                 """
                 UPDATE memory_write_jobs
@@ -1439,79 +1652,35 @@ class DurableWriteQueue:
             ).rowcount
         return changed
 
-    def retry_timed_out_unknown_after_reconcile(
-        self,
-        *,
-        older_than: datetime,
-        limit: int = 32,
-    ) -> int:
-        """Requeue bounded timeout unknowns only after the caller queried HY.
-
-        This is not the general unknown retry path. Only a timed-out write with
-        attempts remaining is eligible, and attempts are preserved so repeated
-        timeouts stop at the durable ceiling instead of looping forever.
-        """
-        if type(limit) is not int or limit < 1:
-            raise ValueError("limit must be positive")
-        now = datetime.now(UTC).isoformat()
-        with (
-            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
-            connection,
-        ):
-            rows = connection.execute(
-                "SELECT job_id FROM memory_write_jobs "
-                "WHERE state=? AND last_error='hy_memory_timeout' "
-                "AND attempts < max_attempts AND updated_at <= ? "
-                "ORDER BY updated_at, job_id LIMIT ?",
-                (UNKNOWN, older_than.isoformat(), limit),
-            ).fetchall()
-            job_ids = tuple(str(row["job_id"]) for row in rows)
-            if not job_ids:
-                return 0
-            placeholders = ",".join("?" for _ in job_ids)
-            connection.execute(
-                f"UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
-                f"lease_expires_at=NULL, hy_invoked=0, "
-                f"last_error='model_content_reconciled_absent_retry', updated_at=? "
-                f"WHERE state=? AND job_id IN ({placeholders})",
-                (PENDING, now, UNKNOWN, *job_ids),
-            )
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
-            ).fetchone():
-                connection.execute(
-                    f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
-                    f"last_error_code='model_content_reconciled_absent_retry', updated_at=? "
-                    f"WHERE status=? AND task_id IN ("
-                    f"SELECT inputs.task_id FROM memory_task_inputs AS inputs "
-                    f"JOIN memory_write_job_evidence AS linked ON EXISTS ("
-                    f"SELECT 1 FROM json_each(inputs.refs_json) AS ref "
-                    f"WHERE json_extract(ref.value, '$.evidence_id')=linked.evidence_id) "
-                    f"WHERE linked.job_id IN ({placeholders}))",
-                    (MemoryTaskStatus.PENDING, now, MemoryTaskStatus.UNKNOWN, *job_ids),
-                )
-        return len(job_ids)
-
     def resolve_unknown_from_linked_output(self, job_id: str) -> bool:
-        """Close an unknown durable row when local governance output proves success."""
+        """Close an unknown durable row only when every linked task is complete."""
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
             row = connection.execute(
                 """
-                SELECT 1
-                FROM memory_write_job_evidence AS linked
-                JOIN memory_task_inputs AS inputs
-                  ON EXISTS (
-                    SELECT 1 FROM json_each(inputs.refs_json) AS ref
-                    WHERE json_extract(ref.value, '$.evidence_id')=linked.evidence_id
-                  )
+                SELECT
+                    COUNT(DISTINCT task.task_id) AS task_count,
+                    COUNT(DISTINCT CASE
+                        WHEN task.status='completed' AND output.task_id IS NOT NULL
+                        THEN task.task_id
+                    END) AS completed_count
+                FROM memory_task_inputs AS inputs
                 JOIN memory_tasks AS task ON task.task_id=inputs.task_id
-                JOIN memory_task_outputs AS output ON output.task_id=task.task_id
-                WHERE linked.job_id=? AND task.status='completed'
-                LIMIT 1
+                LEFT JOIN memory_task_outputs AS output ON output.task_id=task.task_id
+                WHERE EXISTS (SELECT 1 FROM json_each(inputs.refs_json))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM json_each(inputs.refs_json) AS ref
+                    WHERE NOT EXISTS (
+                      SELECT 1 FROM memory_write_job_evidence AS linked
+                      WHERE linked.job_id=?
+                        AND linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+                    )
+                  )
                 """,
                 (job_id,),
             ).fetchone()
-        if row is None:
+        task_count = int(row["task_count"] or 0) if row is not None else 0
+        completed_count = int(row["completed_count"] or 0) if row is not None else 0
+        if task_count == 0 or completed_count != task_count:
             return False
         return (
             self.resolve_unknown(
@@ -1574,6 +1743,78 @@ class DurableWriteQueue:
             )
             for row in rows
         )
+
+    def linked_unknown_task_ids(self, job_ids: Collection[str]) -> tuple[str, ...]:
+        """Return unknown task ids linked to an exact unknown-job snapshot."""
+        selected = tuple(dict.fromkeys(job_ids))
+        if not selected:
+            return ()
+        placeholders = ",".join("?" for _ in selected)
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                    "('memory_tasks','memory_task_inputs','memory_write_job_evidence')"
+                ).fetchall()
+            }
+            if tables != {
+                "memory_tasks",
+                "memory_task_inputs",
+                "memory_write_job_evidence",
+            }:
+                return ()
+            rows = connection.execute(
+                "SELECT DISTINCT task.task_id, task.updated_at "
+                "FROM memory_tasks AS task JOIN memory_task_inputs AS inputs "
+                "ON inputs.task_id=task.task_id JOIN memory_write_jobs AS job "
+                f"ON job.job_id IN ({placeholders}) "
+                "WHERE task.status=? AND job.state=? "
+                "AND EXISTS (SELECT 1 FROM json_each(inputs.refs_json)) "
+                "AND NOT EXISTS (SELECT 1 FROM json_each(inputs.refs_json) AS ref "
+                "WHERE NOT EXISTS (SELECT 1 FROM memory_write_job_evidence AS linked "
+                "WHERE linked.job_id=job.job_id "
+                "AND linked.evidence_id=json_extract(ref.value, '$.evidence_id'))) "
+                "ORDER BY task.updated_at, task.task_id",
+                (*selected, MemoryTaskStatus.UNKNOWN, UNKNOWN),
+            ).fetchall()
+        return tuple(str(row["task_id"]) for row in rows)
+
+    def task_only_unknown_task_ids(self, *, limit: int = 128) -> tuple[str, ...]:
+        """Return unknown tasks not governed by a currently unknown durable job."""
+        if type(limit) is not int or limit < 1:
+            raise ValueError("limit must be positive")
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                    "('memory_tasks','memory_task_inputs','memory_write_job_evidence')"
+                ).fetchall()
+            }
+            if tables != {
+                "memory_tasks",
+                "memory_task_inputs",
+                "memory_write_job_evidence",
+            }:
+                return ()
+            blocking = ",".join("?" for _ in _FIFO_BLOCKING_STATES)
+            rows = connection.execute(
+                "SELECT task.task_id FROM memory_tasks AS task "
+                "WHERE task.status=? AND NOT EXISTS ("
+                "SELECT 1 FROM memory_write_jobs AS job "
+                f"WHERE job.state IN ({blocking}) AND EXISTS ("
+                "SELECT 1 FROM memory_task_inputs AS inputs "
+                "WHERE inputs.task_id=task.task_id "
+                "AND EXISTS (SELECT 1 FROM json_each(inputs.refs_json)) "
+                "AND NOT EXISTS (SELECT 1 FROM json_each(inputs.refs_json) AS ref "
+                "WHERE NOT EXISTS (SELECT 1 FROM memory_write_job_evidence AS linked "
+                "WHERE linked.job_id=job.job_id "
+                "AND linked.evidence_id=json_extract(ref.value, '$.evidence_id')))"
+                ")) ORDER BY task.updated_at, task.task_id LIMIT ?",
+                (MemoryTaskStatus.UNKNOWN, *_FIFO_BLOCKING_STATES, limit),
+            ).fetchall()
+        return tuple(str(row["task_id"]) for row in rows)
 
 
 class DurableWriteRegistry:
@@ -1998,9 +2239,7 @@ class DurableWriteDrain:
                     (PENDING,),
                 ).fetchall()
             enabled_sources = {
-                str(row[0])
-                for row in source_rows
-                if self.source_writes_permitted(str(row[0]))
+                str(row[0]) for row in source_rows if self.source_writes_permitted(str(row[0]))
             }
             if not enabled_sources:
                 return ()
@@ -2024,8 +2263,8 @@ class DurableWriteDrain:
                 "FROM memory_write_jobs AS candidate "
                 "WHERE candidate.state=? "
                 "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
-                + source_clause +
-                "AND NOT EXISTS ("
+                + source_clause
+                + "AND NOT EXISTS ("
                 "SELECT 1 FROM memory_write_jobs AS held "
                 "WHERE held.source_key=candidate.source_key AND held.state=? "
                 "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "

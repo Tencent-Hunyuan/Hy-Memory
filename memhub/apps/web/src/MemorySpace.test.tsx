@@ -1667,11 +1667,10 @@ describe("MemorySpace", () => {
       seconds_per_completion: 20,
     });
     retryUnknownMemoryProcessing.mockResolvedValue({ requeued: 17 });
-    render(<MemorySpace />);
+    render(<MemorySpace simplified />);
 
-    expect(
-      await screen.findByText("有 17 段对话的整理结果不确定"),
-    ).toBeTruthy();
+    const warning = await screen.findByText("有 17 段对话的整理结果不确定");
+    expect((warning.closest("details") as HTMLDetailsElement).open).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "重新整理" }));
     expect(retryUnknownMemoryProcessing).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "重新整理" }));
@@ -1679,6 +1678,9 @@ describe("MemorySpace", () => {
       expect(retryUnknownMemoryProcessing).toHaveBeenCalledOnce(),
     );
     expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm).toHaveBeenCalledWith(
+      "系统会先核对已有结果；仍不确定时重新整理可能产生重复记忆。是否继续？",
+    );
     confirm.mockRestore();
   });
 

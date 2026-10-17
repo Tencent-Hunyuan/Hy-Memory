@@ -2134,33 +2134,59 @@ class MemoryTaskStore:
             ).fetchall()
         return {str(row["code"]): int(row["count"]) for row in rows}
 
-    def retry_unknown_confirmed(self, *, limit: int = 2048) -> int:
+    def retry_unknown_confirmed(
+        self,
+        *,
+        limit: int = 2048,
+        task_ids: Sequence[str] | None = None,
+    ) -> int:
         """Requeue task-only unknowns after the user explicitly confirms.
 
         Older and partially completed queue revisions can leave a valid task
         without a surviving durable write row. Reconciliation runs first; this
         bounded transition is only for the still-unproven remainder and never
-        runs automatically.
+        runs automatically. When the API provides ``task_ids``, only that exact
+        reconciled snapshot may move, preventing a second query from selecting
+        different rows after reconciliation changed the queue.
         """
+        if type(limit) is not int or limit < 1:
+            raise ValueError("limit must be positive")
         now = datetime.now(UTC).isoformat()
+        selected = tuple(dict.fromkeys(task_ids or ()))[:limit]
         with self._connect(writing=True) as connection:
-            changed = connection.execute(
-                """
-                UPDATE memory_tasks
-                SET status=?, runner_token=NULL, attempts=0,
-                    last_error_code='model_content_manual_retry_requested', updated_at=?
-                WHERE task_id IN (
-                    SELECT task_id FROM memory_tasks
-                    WHERE status=? ORDER BY updated_at, task_id LIMIT ?
+            if task_ids is None:
+                changed = connection.execute(
+                    """
+                    UPDATE memory_tasks
+                    SET status=?, runner_token=NULL, attempts=0,
+                        last_error_code='model_content_manual_retry_requested', updated_at=?
+                    WHERE task_id IN (
+                        SELECT task_id FROM memory_tasks
+                        WHERE status=? ORDER BY updated_at, task_id LIMIT ?
+                    )
+                    """,
+                    (
+                        MemoryTaskStatus.PENDING,
+                        now,
+                        MemoryTaskStatus.UNKNOWN,
+                        limit,
+                    ),
                 )
-                """,
-                (
-                    MemoryTaskStatus.PENDING,
-                    now,
-                    MemoryTaskStatus.UNKNOWN,
-                    limit,
-                ),
-            )
+            elif not selected:
+                return 0
+            else:
+                placeholders = ",".join("?" for _ in selected)
+                changed = connection.execute(
+                    "UPDATE memory_tasks SET status=?, runner_token=NULL, attempts=0, "
+                    "last_error_code='model_content_manual_retry_requested', updated_at=? "
+                    f"WHERE status=? AND task_id IN ({placeholders})",
+                    (
+                        MemoryTaskStatus.PENDING,
+                        now,
+                        MemoryTaskStatus.UNKNOWN,
+                        *selected,
+                    ),
+                )
         return changed.rowcount
 
     def recover_running(self) -> int:

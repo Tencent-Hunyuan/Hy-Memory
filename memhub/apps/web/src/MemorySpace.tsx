@@ -1358,7 +1358,7 @@ export function MemorySpace({
     if (
       busy ||
       !window.confirm(
-        "重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？",
+        "系统会先核对已有结果；仍不确定时重新整理可能产生重复记忆。是否继续？",
       )
     )
       return;
@@ -1524,8 +1524,12 @@ export function MemorySpace({
           </div>
         )}
       </header>
-      {processing && (!simplified || managementOpen) ? (
-        <details className="memory-processing-details">
+      {processing &&
+      (!simplified || managementOpen || processingNeedsAttention) ? (
+        <details
+          className="memory-processing-details"
+          open={processingNeedsAttention ? true : undefined}
+        >
           <summary>
             <span
               className={processingNeedsAttention ? "status-attention" : ""}

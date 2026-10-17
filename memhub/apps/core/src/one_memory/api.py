@@ -171,6 +171,7 @@ from one_memory.memory_processing import (
 )
 from one_memory.memory_qa import MemoryAnswerer, MemoryAnswerError
 from one_memory.memory_queue import (
+    FRESH_WINDOW,
     ExtractionState,
     ExtractionWindowPreset,
     extraction_window_for,
@@ -818,6 +819,7 @@ def create_app(
                 evidence=app.state.evidence_store,
             )
             app.state.memory_write_queue = memory_write_queue
+            app.state.memory_write_unknown_reconcile_lock = asyncio.Lock()
             repaired_identity_failures = await asyncio.to_thread(
                 memory_write_queue.repair_pre_send_identity_failures
             )
@@ -1031,18 +1033,14 @@ def create_app(
             drain_budget = production_drain_budget()
 
             async def reconcile_unknown_writes() -> None:
-                await app.state.memory_processing_supervisor.reconcile_unknown_outputs()
-                unknown = await asyncio.to_thread(memory_write_queue.unknown_jobs, limit=128)
-                for job in unknown:
-                    await asyncio.to_thread(
-                        memory_write_queue.resolve_unknown_from_linked_output,
-                        job.job_id,
-                    )
-                await asyncio.to_thread(
-                    memory_write_queue.retry_timed_out_unknown_after_reconcile,
-                    older_than=datetime.now(UTC) - timedelta(minutes=5),
-                    limit=32,
-                )
+                async with app.state.memory_write_unknown_reconcile_lock:
+                    await app.state.memory_processing_supervisor.reconcile_unknown_outputs()
+                    unknown = await asyncio.to_thread(memory_write_queue.unknown_jobs, limit=128)
+                    for job in unknown:
+                        await asyncio.to_thread(
+                            memory_write_queue.resolve_unknown_from_linked_output,
+                            job.job_id,
+                        )
 
             async def admit_hy_invocation(
                 source_id: str,
@@ -3408,11 +3406,19 @@ def create_app(
     def memory_processing() -> MemoryProcessingSummary:
         store = _memory_task_store(app)
         counts = store.counts()
-        # Two numbers, not one: 675 as a single total reads as "stuck", when
-        # what is true is that the three from this morning are nearly done
-        # and the rest is catch-up (R-02).
+        # The accepted durable write is the authority for parked and sticky
+        # work. Task rows are execution detail and may be absent even while a
+        # FIFO head is blocking later durable jobs.
+        queue_stats = app.state.memory_write_queue.processing_stats(
+            fresh_since=datetime.now(UTC) - FRESH_WINDOW
+        )
         supervisor = app.state.memory_processing_supervisor
         depths = supervisor.queue_depths()
+        pending = queue_stats.pending
+        fresh_pending = queue_stats.fresh
+        backlog_pending = queue_stats.backlog
+        unknown = queue_stats.unknown
+        unknown_reasons = queue_stats.unknown_reasons
         active_queue, in_flight_count = supervisor.active_depths()
         planned, current = supervisor.manual_batch_progress()
         # `running` counts rows the store still marks running, which includes
@@ -3421,9 +3427,9 @@ def create_app(
         # its own number.
         running_rows = counts.get(MemoryTaskStatus.RUNNING, 0)
         return MemoryProcessingSummary(
-            pending=counts.get(MemoryTaskStatus.PENDING, 0),
-            fresh_pending=depths.fresh,
-            backlog_pending=depths.backlog,
+            pending=pending,
+            fresh_pending=fresh_pending,
+            backlog_pending=backlog_pending,
             outside_window_pending=counts.get(
                 MemoryTaskStatus.DEFERRED_OUTSIDE_WINDOW,
                 0,
@@ -3432,11 +3438,11 @@ def create_app(
             running=running_rows,
             stranded_running=max(0, running_rows - in_flight_count),
             unexecuted_policy_failures=store.unexecuted_policy_failures(),
-            waiting_for_model=counts.get(MemoryTaskStatus.WAITING_FOR_MODEL, 0),
+            waiting_for_model=queue_stats.waiting_for_model,
             completed=counts.get(MemoryTaskStatus.COMPLETED, 0),
             failed=counts.get(MemoryTaskStatus.FAILED, 0),
-            unknown=counts.get(MemoryTaskStatus.UNKNOWN, 0),
-            unknown_reasons=store.unknown_error_counts(),
+            unknown=unknown,
+            unknown_reasons=unknown_reasons,
             blocked_stages=tuple(
                 MemoryProcessingBlock(kind=kind, reason=reason, count=count)
                 for kind, reason, count in store.blocked_stages()[:6]
@@ -3460,15 +3466,46 @@ def create_app(
     ) -> RetryUnknownMemoryTasksReceipt:
         """Retry unknown writes only behind the user's explicit confirmation."""
         del request
-        reconciled = await _memory_processing_supervisor(app).reconcile_unknown_outputs()
-        from one_memory.memory_server.durable_queue import DurableWriteQueue
-
-        queue = DurableWriteQueue(app.state.memory_write_queue_path)
-        unknown = queue.unknown_jobs(limit=2048)
-        for job in unknown:
-            queue.resolve_unknown_from_linked_output(job.job_id)
-        requeued = sum(queue.retry_unknown_confirmed(job.job_id) for job in unknown)
-        requeued += app.state.memory_task_store.retry_unknown_confirmed()
+        queue = app.state.memory_write_queue
+        task_store = app.state.memory_task_store
+        batch_size = 128
+        async with app.state.memory_write_unknown_reconcile_lock:
+            unknown_jobs = await asyncio.to_thread(queue.unknown_jobs, limit=batch_size)
+            job_ids = tuple(job.job_id for job in unknown_jobs)
+            durable_task_ids = await asyncio.to_thread(queue.linked_unknown_task_ids, job_ids)
+            task_only_ids = await asyncio.to_thread(
+                queue.task_only_unknown_task_ids,
+                limit=batch_size,
+            )
+            reconcile_ids = tuple(dict.fromkeys((*durable_task_ids, *task_only_ids)))
+            reconciled = 0
+            if reconcile_ids:
+                reconciled = await _memory_processing_supervisor(app).reconcile_unknown_outputs(
+                    limit=len(reconcile_ids),
+                    task_ids=reconcile_ids,
+                )
+            for job in unknown_jobs:
+                await asyncio.to_thread(queue.resolve_unknown_from_linked_output, job.job_id)
+            requeued = 0
+            durable_task_id_set = frozenset(durable_task_ids)
+            for job in unknown_jobs:
+                job_task_ids = await asyncio.to_thread(
+                    queue.linked_unknown_task_ids,
+                    (job.job_id,),
+                )
+                requeued += await asyncio.to_thread(
+                    queue.retry_unknown_confirmed,
+                    job.job_id,
+                    task_ids=tuple(
+                        task_id for task_id in job_task_ids if task_id in durable_task_id_set
+                    ),
+                    snapshot_job_ids=job_ids,
+                )
+            requeued += await asyncio.to_thread(
+                task_store.retry_unknown_confirmed,
+                limit=batch_size,
+                task_ids=task_only_ids,
+            )
         return RetryUnknownMemoryTasksReceipt(reconciled=reconciled, requeued=requeued)
 
     @app.get(

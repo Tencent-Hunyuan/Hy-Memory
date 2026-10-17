@@ -36,7 +36,6 @@ from one_memory.memory_governance import MemoryGovernanceStore
 from one_memory.memory_processing import MemoryProcessingSupervisor
 from one_memory.memory_queue import MemoryWorkQueue, QueuedWork
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
-from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_tasks import MemoryTaskKind, MemoryTaskStatus, MemoryTaskStore
 from one_memory.model_profiles import (
     ModelCapabilities,
@@ -812,6 +811,139 @@ async def test_the_app_is_told_both_numbers(tmp_path) -> None:
 
 
 @pytest.mark.anyio
+async def test_processing_reports_durable_pending_and_unknown_when_tasks_are_empty(
+    tmp_path,
+) -> None:
+    app = create_app(
+        Settings(
+            data_dir=tmp_path / "data",
+            source_home=tmp_path,
+            instance_id="test-instance",
+            api_token=SecretStr("local-token"),
+        )
+    )
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={
+                "Authorization": "Bearer local-token",
+                "Origin": "http://127.0.0.1:5173",
+            },
+        ) as client,
+    ):
+        app.state.memory_write_drain.stop()
+        evidence = app.state.evidence_store
+        pending_evidence = _put(
+            evidence,
+            message_id="durable-pending",
+            conversation_id="durable-pending",
+            content="pending",
+            created_at=datetime.now(UTC),
+        )
+        unknown_evidence = _put(
+            evidence,
+            message_id="durable-unknown",
+            conversation_id="durable-unknown",
+            content="unknown",
+            created_at=datetime.now(UTC),
+        )
+        queue = app.state.memory_write_queue
+
+        def submit(record: EvidenceRecord, key: str):
+            return queue.submit(
+                WriteRequest(
+                    internal_session_id=record.conversation_id,
+                    batch_identity=BatchIdentity(
+                        internal_session_id=record.conversation_id,
+                        first_round=1,
+                        last_round=1,
+                    ),
+                    evidence_ids=[record.evidence_id],
+                    idempotency_key=key,
+                )
+            )
+
+        submit(pending_evidence, "durable-pending")
+        unknown = submit(unknown_evidence, "durable-unknown")
+        with sqlite3.connect(app.state.evidence_store.database_path) as connection, connection:
+            connection.execute(
+                "UPDATE memory_write_jobs SET state='unknown',hy_invoked=1,"
+                "last_error='hy_memory_timeout' WHERE job_id=?",
+                (unknown.job_id,),
+            )
+        assert app.state.memory_task_store.list() == []
+
+        response = await client.get("/api/v1/memory-processing")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pending"] == 1
+    assert body["fresh_pending"] == 1
+    assert body["backlog_pending"] == 0
+    assert body["unknown"] == 1
+    assert body["unknown_reasons"] == {"hy_memory_timeout": 1}
+    assert body["running"] == 0
+    assert body["completed"] == 0
+    assert body["failed"] == 0
+
+
+@pytest.mark.anyio
+async def test_periodic_unknown_reconcile_never_blindly_requeues(tmp_path, monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    app = create_app(
+        Settings(
+            data_dir=tmp_path / "data",
+            source_home=tmp_path,
+            instance_id="test-instance",
+            api_token=SecretStr("local-token"),
+        )
+    )
+    async with app.router.lifespan_context(app):
+        app.state.memory_write_drain.stop()
+        record = _put(
+            app.state.evidence_store,
+            message_id="background-unknown",
+            conversation_id="background-unknown",
+            content="unknown",
+            created_at=datetime.now(UTC),
+        )
+        queue = app.state.memory_write_queue
+        job = queue.submit(
+            WriteRequest(
+                internal_session_id=record.conversation_id,
+                batch_identity=BatchIdentity(
+                    internal_session_id=record.conversation_id,
+                    first_round=1,
+                    last_round=1,
+                ),
+                evidence_ids=[record.evidence_id],
+                idempotency_key="background-unknown",
+            )
+        )
+        with sqlite3.connect(app.state.evidence_store.database_path) as connection, connection:
+            connection.execute(
+                "UPDATE memory_write_jobs SET state='unknown',hy_invoked=1,attempts=1,"
+                "last_error='hy_memory_timeout',updated_at='2026-01-01T00:00:00+00:00' "
+                "WHERE job_id=?",
+                (job.job_id,),
+            )
+        reconcile = AsyncMock(return_value=0)
+        monkeypatch.setattr(
+            app.state.memory_processing_supervisor,
+            "reconcile_unknown_outputs",
+            reconcile,
+        )
+
+        await app.state.memory_write_drain.reconcile_unknown()
+
+        assert queue.get("background-unknown").state == "unknown"
+        reconcile.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_unknown_retry_api_requires_confirmation_and_requeues_once(tmp_path) -> None:
     app = create_app(
         Settings(
@@ -833,7 +965,15 @@ async def test_unknown_retry_api_requires_confirmation_and_requeues_once(tmp_pat
             headers=headers,
         ) as client,
     ):
-        queue = DurableWriteQueue(app.state.evidence_store.database_path)
+        queue = app.state.memory_write_queue
+        app.state.memory_write_drain.stop()
+        evidence = _put(
+            app.state.evidence_store,
+            message_id="unknown-api",
+            conversation_id="unknown-api",
+            content="unknown",
+            created_at=datetime.now(UTC),
+        )
         queued = queue.submit(
             WriteRequest(
                 internal_session_id="unknown-api",
@@ -842,7 +982,7 @@ async def test_unknown_retry_api_requires_confirmation_and_requeues_once(tmp_pat
                     first_round=1,
                     last_round=1,
                 ),
-                evidence_ids=["e1"],
+                evidence_ids=[evidence.evidence_id],
                 idempotency_key="unknown-api",
             )
         )

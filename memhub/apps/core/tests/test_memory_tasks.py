@@ -1070,6 +1070,34 @@ def test_confirmed_retry_requeues_task_only_unknown_without_a_durable_job(tmp_pa
     assert store.retry_unknown_confirmed() == 0
 
 
+def test_confirmed_retry_only_moves_the_reconciled_task_snapshot(tmp_path) -> None:
+    store, profile = _profile_and_tasks(tmp_path)
+    first = store.create(
+        request_id="unknown-first",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="evidence-first",
+        profile=profile,
+    )
+    second = store.create(
+        request_id="unknown-second",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="evidence-second",
+        profile=profile,
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?, attempts=3 WHERE task_id IN (?, ?)",
+            (MemoryTaskStatus.UNKNOWN, first.task_id, second.task_id),
+        )
+
+    assert store.retry_unknown_confirmed(task_ids=(second.task_id,)) == 1
+    assert store.require(first.task_id).status is MemoryTaskStatus.UNKNOWN
+    assert store.require(second.task_id).status is MemoryTaskStatus.PENDING
+    assert store.retry_unknown_confirmed(task_ids=(second.task_id,)) == 0
+
+
 def test_orphan_recovery_preserves_active_running_tasks(tmp_path) -> None:
     store, profile = _profile_and_tasks(tmp_path)
     active = store.create(
