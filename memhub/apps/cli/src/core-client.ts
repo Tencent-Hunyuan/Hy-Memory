@@ -8,7 +8,6 @@ import axios from "axios";
  */
 const READ_ONLY_PATHS = [
   "/api/v1/call-events",
-  "/api/v1/model-content-permission",
   "/api/v1/home-summary",
   "/api/v1/import-jobs",
   "/api/v1/live-sync",

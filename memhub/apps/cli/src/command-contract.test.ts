@@ -81,7 +81,6 @@ const COMMANDS = [
   "calls",
   "import-file",
   "notes",
-  "permission",
   "extraction",
   "graph",
   "host",
@@ -260,7 +259,14 @@ describe("CLI-22 shared output contract", () => {
 
   describe("argument validation", () => {
     it("fails unknown commands without printing data or running anything", async () => {
-      for (const argv of [["unknown"], ["unknown", "--help"], ["--typo"]]) {
+      for (const argv of [
+        ["unknown"],
+        ["unknown", "--help"],
+        ["--typo"],
+        ["permission", "status"],
+        ["permission", "allow"],
+        ["permission", "deny"],
+      ]) {
         const streams = captureStreams();
         try {
           expect(await run(argv, {})).toBe(2);

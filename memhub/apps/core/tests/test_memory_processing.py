@@ -2925,7 +2925,7 @@ def test_frozen_harness_refuses_new_processing_before_a_task_or_model_call(tmp_p
     supervisor._bridges[(profile.profile_id, profile.revision, None)] = bridge
 
     assert supervisor._source_may_write([user]) is False
-    with pytest.raises(HyMemoryBridgeError, match="model_content_source_disabled"):
+    with pytest.raises(HyMemoryBridgeError, match="hy_memory_source_disabled"):
         asyncio.run(supervisor.process_records((user, reply)))
     assert asyncio.run(supervisor.enqueue_conversation_off_thread(user)) == []
     assert supervisor.prepare_backfill() == []
@@ -2999,7 +2999,7 @@ def test_revoked_grant_refuses_new_processing(tmp_path) -> None:
     supervisor._bridges[(profile.profile_id, profile.revision, None)] = bridge
 
     assert supervisor._source_may_write([user]) is False
-    with pytest.raises(HyMemoryBridgeError, match="model_content_source_disabled"):
+    with pytest.raises(HyMemoryBridgeError, match="hy_memory_source_disabled"):
         asyncio.run(supervisor.process_records((user, reply)))
     assert asyncio.run(supervisor.enqueue_conversation_off_thread(user)) == []
     assert supervisor.prepare_backfill() == []

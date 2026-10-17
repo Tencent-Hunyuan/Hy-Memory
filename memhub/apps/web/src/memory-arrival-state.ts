@@ -9,7 +9,6 @@ export type MemoryArrivalPhase =
   | "checking"
   | "importing"
   | "model-required"
-  | "consent-required"
   | "processing"
   | "failed"
   | "idle"
@@ -30,11 +29,6 @@ export interface MemoryArrival {
   /** Confirmed memory count, never inferred from completed processing tasks. */
   memoryCount?: number;
 }
-
-const permissionReasons = new Set([
-  "model_content_permission_required",
-  "model_content_permission_revoked",
-]);
 
 export function resolveMemoryArrival({
   arrival,
@@ -65,13 +59,9 @@ export function resolveMemoryArrival({
   let phase: MemoryArrivalPhase = arrival?.phase ?? "idle";
   if (
     arrival &&
-    [
-      "checking",
-      "unavailable",
-      "stopped",
-      "model-required",
-      "consent-required",
-    ].includes(arrival.phase)
+    ["checking", "unavailable", "stopped", "model-required"].includes(
+      arrival.phase,
+    )
   ) {
     return blocks.length ? { ...arrival, blockedStages: blocks } : arrival;
   }
@@ -86,8 +76,6 @@ export function resolveMemoryArrival({
     phase = "processing";
   } else if ((processing?.waiting_for_model ?? 0) > 0 || modelBlock(blocks)) {
     phase = "model-required";
-  } else if (blocks.some((block) => permissionReasons.has(block.reason))) {
-    phase = "consent-required";
   } else if ((processing?.failed ?? 0) > 0 && !onlyRetries(blocks)) {
     // "Failed" is a prompt to go and look. Work the pipeline will pick up on
     // its own pass is not that, and asking the reader to check a failure
@@ -135,8 +123,6 @@ export function memoryArrivalTitle(arrival: MemoryArrival): string {
       return modelBlock(arrival.blockedStages ?? [])
         ? "待继续"
         : "尚未设置整理模型";
-    case "consent-required":
-      return "等待允许模型读取本地会话内容";
     case "failed":
     case "stopped":
       return "待继续";

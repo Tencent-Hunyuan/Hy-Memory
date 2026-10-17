@@ -594,7 +594,7 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                 相关对话会发送给所选服务商。
               </small>
               <small>
-                测试连接只发送测试内容。启用时会打开全局模型内容权限；之后可在设置中随时关闭。
+                测试连接只发送测试内容。启用后会使用此模型整理已导入和之后同步的会话。
               </small>
             </div>
             {!props.capability.saveAndEnable && (

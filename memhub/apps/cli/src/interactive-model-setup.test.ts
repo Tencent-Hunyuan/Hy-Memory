@@ -132,12 +132,6 @@ function clients(options: { failedProbes?: number } = {}) {
       if (path.endsWith("/activate")) {
         return { state: "committed" as const, data: profile(true) };
       }
-      if (path === "/api/v1/model-content-permission") {
-        return {
-          state: "committed" as const,
-          data: { allowed: body.allowed },
-        };
-      }
       return {
         state: "rejected" as const,
         code: "unexpected_path",
@@ -160,8 +154,8 @@ function clients(options: { failedProbes?: number } = {}) {
 }
 
 describe("interactive model setup", () => {
-  it("uses App defaults, keeps the key out of output, and allows model content", async () => {
-    const prompt = prompter(["", "", "", "", "", ""]);
+  it("uses App defaults and keeps the key out of output", async () => {
+    const prompt = prompter(["", "", ""]);
     const api = clients();
 
     const result = await runInteractiveModelSetup(prompt.value, api, {
@@ -170,10 +164,7 @@ describe("interactive model setup", () => {
       installHosts: false,
     });
 
-    expect(result).toMatchObject({
-      state: "configured",
-      model_content_allowed: true,
-    });
+    expect(result).toMatchObject({ state: "configured" });
     expect(api.post).toHaveBeenCalledWith(
       "/api/v1/model-profiles",
       expect.objectContaining({
@@ -184,9 +175,10 @@ describe("interactive model setup", () => {
         embedding_provider_kind: "local_onnx",
       }),
     );
-    expect(api.post).toHaveBeenCalledWith("/api/v1/model-content-permission", {
-      allowed: true,
-    });
+    expect(api.post).not.toHaveBeenCalledWith(
+      "/api/v1/model-content-permission",
+      expect.anything(),
+    );
     expect(prompt.written.join("\n")).not.toContain("sk-do-not-print");
   });
 
@@ -205,7 +197,7 @@ describe("interactive model setup", () => {
   });
 
   it("removes an unverified profile before skipping after a failed probe", async () => {
-    const prompt = prompter(["", "", "", "n", "0"]);
+    const prompt = prompter(["", "", "", "0"]);
     const api = clients();
     api.post.mockImplementation(
       async (path: string, body: Record<string, unknown>) => {
@@ -280,7 +272,7 @@ describe("interactive model setup", () => {
   });
 
   it("cleans a failed probe and lets the user re-enter the model settings", async () => {
-    const prompt = prompter(["", "", "", "", "", "", "", "", "", "", ""]);
+    const prompt = prompter(["", "", "", "", "", "", ""]);
     const api = clients({ failedProbes: 1 });
 
     const result = await runInteractiveModelSetup(prompt.value, api, {
@@ -289,10 +281,7 @@ describe("interactive model setup", () => {
       installHosts: false,
     });
 
-    expect(result).toMatchObject({
-      state: "configured",
-      model_content_allowed: true,
-    });
+    expect(result).toMatchObject({ state: "configured" });
     expect(api.remove).toHaveBeenCalledTimes(1);
     expect(
       api.post.mock.calls.filter(([path]) => path === "/api/v1/model-profiles"),
@@ -305,7 +294,7 @@ describe("interactive model setup", () => {
     const prompt = prompter(["", "", ""]);
     prompt.value.ask = async () => {
       asked += 1;
-      if (asked === 4) throw new Error("interrupted");
+      if (asked === 3) throw new Error("interrupted");
       return "";
     };
     const api = clients();
@@ -322,7 +311,7 @@ describe("interactive model setup", () => {
   });
 
   it("installs selected detected hosts through preview and fingerprint apply", async () => {
-    const prompt = prompter(["", "", "", "n", "", ""]);
+    const prompt = prompter(["", "", "", "", ""]);
     const api = clients();
     const read = vi
       .fn()
@@ -360,7 +349,6 @@ describe("interactive model setup", () => {
 
     expect(result).toMatchObject({
       state: "configured",
-      model_content_allowed: false,
       installed_hosts: ["codex"],
     });
     expect(read).toHaveBeenNthCalledWith(
@@ -373,7 +361,7 @@ describe("interactive model setup", () => {
   });
 
   it("lists and installs only hosts that are actually present", async () => {
-    const prompt = prompter(["", "", "", "n", "", ""]);
+    const prompt = prompter(["", "", "", "", ""]);
     const api = clients();
     const read = vi
       .fn()
@@ -420,7 +408,7 @@ describe("interactive model setup", () => {
   });
 
   it("completes the wizard and keeps onboarding reachable when one host install fails", async () => {
-    const prompt = prompter(["", "", "", "n", "", ""]);
+    const prompt = prompter(["", "", "", "", ""]);
     const api = clients();
     const read = vi
       .fn()
@@ -469,7 +457,6 @@ describe("interactive model setup", () => {
     // calling the install a failure.
     expect(result).toMatchObject({
       state: "configured",
-      model_content_allowed: false,
       installed_hosts: ["codex"],
     });
     const summary = prompt.written.join("\n");
@@ -479,7 +466,7 @@ describe("interactive model setup", () => {
   });
 
   it("tells the user to install App-only hosts in the App instead of calling them failed", async () => {
-    const prompt = prompter(["", "", "", "n", "", ""]);
+    const prompt = prompter(["", "", "", "", ""]);
     const api = clients();
     const read = vi
       .fn()
@@ -506,7 +493,6 @@ describe("interactive model setup", () => {
     // only the App can install, so nothing counts as "installed".
     expect(result).toMatchObject({
       state: "configured",
-      model_content_allowed: false,
       installed_hosts: [],
     });
     const summary = prompt.written.join("\n");

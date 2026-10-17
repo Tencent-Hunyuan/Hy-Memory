@@ -259,7 +259,7 @@ describe("A2 dual-mode init", () => {
     expect(streams.value()).toContain("处理：已开启");
   });
 
-  it("continues the TTY wizard through model probe and content permission", async () => {
+  it("continues the TTY wizard through model setup and probe", async () => {
     const profileId = "22222222-2222-4222-8222-222222222222";
     const profile = {
       profile_id: profileId,
@@ -361,12 +361,6 @@ describe("A2 dual-mode init", () => {
           };
         }
         if (url.endsWith("/activate")) return { status: 200, data: profile };
-        if (url === "/api/v1/model-content-permission") {
-          return {
-            status: 200,
-            data: { allowed: body.allowed },
-          };
-        }
         if (url === "/api/v1/onboarding/complete") {
           return {
             status: 200,
@@ -383,7 +377,7 @@ describe("A2 dual-mode init", () => {
       },
     );
     const prompt = extendedPrompter(
-      ["", "", "", "", "", "", "", "", "n"],
+      ["", "", "", "", "", "", "", "n"],
       "sk-never-print-this",
     );
     const streams = captureStdout();
@@ -402,7 +396,6 @@ describe("A2 dual-mode init", () => {
       streams.restore();
     }
     expect(streams.value()).toContain("已接入来源：codex");
-    expect(prompt.written.join("\n")).toContain("模型内容外发：已允许");
     expect(streams.value()).toContain("首次设置完成。");
     expect(`${streams.value()}\n${prompt.written.join("\n")}`).not.toContain(
       "sk-never-print-this",
@@ -412,10 +405,10 @@ describe("A2 dual-mode init", () => {
       expect.objectContaining({ api_key: "sk-never-print-this" }),
       undefined,
     );
-    expect(transport.post).toHaveBeenCalledWith(
+    expect(transport.post).not.toHaveBeenCalledWith(
       "/api/v1/model-content-permission",
-      { allowed: true },
-      undefined,
+      expect.anything(),
+      expect.anything(),
     );
     expect(transport.post).toHaveBeenCalledWith(
       "/api/v1/onboarding/complete",

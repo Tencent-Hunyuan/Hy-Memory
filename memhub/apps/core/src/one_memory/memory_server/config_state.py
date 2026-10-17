@@ -29,7 +29,6 @@ class ConfigDocument(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     schema_version: int = Field(default=1, ge=1, le=1)
-    model_content_allowed: StrictBool = False
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
 
     @field_validator("sources")
@@ -64,10 +63,6 @@ class ConfigStore:
             source = self._document.sources.get(source_id)
             return bool(source and source.sync_enabled)
 
-    def model_content_allowed(self) -> bool:
-        with self._lock:
-            return self._document.model_content_allowed
-
     def set_sync(self, source_id: str, enabled: bool) -> ConfigDocument:
         return self.set_sync_many({source_id: enabled})
 
@@ -86,20 +81,17 @@ class ConfigStore:
             self._document = updated
             return updated
 
-    def set_model_content_allowed(self, allowed: bool) -> ConfigDocument:
-        if type(allowed) is not bool:
-            raise ValueError("invalid_model_content_config")
-        with self._lock:
-            updated = self._document.model_copy(update={"model_content_allowed": allowed})
-            self._write(updated)
-            self._document = updated
-            return updated
-
     def _read(self) -> ConfigDocument:
         if not self.path.exists():
             return ConfigDocument()
         try:
-            return ConfigDocument.model_validate_json(self.path.read_text(encoding="utf-8"))
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(value, dict):
+                # Builds through 1.0.2 persisted this global consent bit.
+                # The embedded SDK is now trusted to use all local memory, so
+                # accept existing files while discarding the retired setting.
+                value.pop("model_content_allowed", None)
+            return ConfigDocument.model_validate(value)
         except (OSError, ValueError) as error:
             raise ConfigFileError("config_invalid") from error
 

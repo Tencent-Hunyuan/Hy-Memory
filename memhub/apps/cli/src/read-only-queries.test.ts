@@ -840,6 +840,7 @@ describe("CLI-21 memory reads", () => {
     expect(isReadOnlyPath("/api/v1/memories/graph")).toBe(false);
     expect(isReadOnlyPath("/api/v1/memories/ask")).toBe(false);
     expect(isReadOnlyPath("/api/v1/memories/m1")).toBe(true);
+    expect(isReadOnlyPath("/api/v1/model-content-permission")).toBe(false);
     expect(
       isReadOnlyPath(
         "/api/v1/memory-mutations/123e4567-e89b-12d3-a456-426614174000",

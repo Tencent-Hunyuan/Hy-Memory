@@ -32,7 +32,6 @@ const REQUIRED_COMMAND_SURFACE = [
   "calls",
   "import-file",
   "notes",
-  "permission",
   "extraction",
   "graph",
   "models",
@@ -77,7 +76,7 @@ const REQUIRED_MARKERS = [
 
 /**
  * Sub-commands the UI-write parity work added. A package can declare the
- * parent command (`permission`, `models`) while still missing the new verb, so
+ * parent command (`models`) while still missing the new verb, so
  * checking command names alone would pass a stale bundle. The marker is the
  * exact literal the catalog usage string contains.
  */
@@ -88,9 +87,6 @@ const REQUIRED_SUBCOMMANDS = [
   { command: "import-file", marker: "memhub import-file discard" },
   { command: "notes", marker: "memhub notes add" },
   { command: "notes", marker: "memhub notes process" },
-  { command: "permission", marker: "memhub permission status" },
-  { command: "permission", marker: "memhub permission allow" },
-  { command: "permission", marker: "memhub permission deny" },
   { command: "extraction", marker: "memhub extraction set" },
   { command: "graph", marker: "memhub graph width" },
   { command: "models", marker: "memhub models edit" },
@@ -153,8 +149,6 @@ const STOPPED_DESTRUCTIVE_PROBES = [
       "--confirm",
     ],
   },
-  { name: "permission_allow", args: ["permission", "allow"] },
-  { name: "permission_deny", args: ["permission", "deny"] },
   {
     name: "extraction_set_apply",
     args: ["extraction", "set", "--window", "6m", "--confirm"],

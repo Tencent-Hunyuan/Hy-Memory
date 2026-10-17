@@ -13,7 +13,6 @@ def test_sync_config_defaults_off_and_survives_restart(tmp_path):
 
     saved = json.loads((tmp_path / "config.json").read_text())
     assert saved == {
-        "model_content_allowed": False,
         "schema_version": 1,
         "sources": {"cursor": {"sync_enabled": True}},
     }
@@ -31,19 +30,27 @@ def test_sync_config_updates_one_source_without_losing_another(tmp_path):
     assert reopened.sync_enabled("claude-code")
 
 
-def test_model_content_permission_is_one_global_final_state(tmp_path):
+def test_legacy_model_content_permission_is_ignored_on_upgrade(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "model_content_allowed": False,
+                "sources": {"cursor": {"sync_enabled": True}},
+            }
+        )
+    )
+
     store = ConfigStore(tmp_path)
-    assert not store.model_content_allowed()
-
-    store.set_model_content_allowed(True)
-    store.set_sync("cursor", True)
-    reopened = ConfigStore(tmp_path)
-    assert reopened.model_content_allowed()
-    assert reopened.sync_enabled("cursor")
-
-    reopened.set_model_content_allowed(False)
-    assert not ConfigStore(tmp_path).model_content_allowed()
-    assert ConfigStore(tmp_path).sync_enabled("cursor")
+    assert store.sync_enabled("cursor")
+    store.set_sync("codex", True)
+    assert json.loads((tmp_path / "config.json").read_text()) == {
+        "schema_version": 1,
+        "sources": {
+            "codex": {"sync_enabled": True},
+            "cursor": {"sync_enabled": True},
+        },
+    }
 
 
 def test_invalid_config_fails_loudly_instead_of_silently_disabling_sources(tmp_path):

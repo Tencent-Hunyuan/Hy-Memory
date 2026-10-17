@@ -21,7 +21,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.diagnostic_log import diagnostic_event, diagnostic_exception, elapsed_ms
 from one_memory.hy_lifecycle import HyLifecycle, HyLifecycleUnreadable, read_hy_lifecycle
-from one_memory.hy_permission_store import native_store_read_slot
 from one_memory.hy_presence import HyPresence, confirm_deleted
 from one_memory.hy_runtime_config import (
     HY_MEMORY_MODE,
@@ -32,6 +31,7 @@ from one_memory.hy_runtime_config import (
     diagnostic_log_level,
 )
 from one_memory.hy_source_context import HySourceContext, HyWriteBindings
+from one_memory.hy_store_concurrency import native_store_read_slot
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind, attach_disable_thinking
 from one_memory.semantic_deadline import SemanticMemoryHit
 
@@ -376,11 +376,13 @@ class HyMemoryBridge:
         api_key: str | None,
         data_dir: Path,
         client: HyMemoryClientProtocol | None = None,
+        http_transport_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.profile = profile
         self.api_key = api_key
         self.data_dir = data_dir
         self._client = client
+        self._http_transport_factory = http_transport_factory
         self._client_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._last_bindings: HyWriteBindings | None = None
@@ -427,6 +429,13 @@ class HyMemoryBridge:
         )
         client = await self._get_client()
         guards = getattr(client, "_one_memory_write_guards", ())
+        from one_memory.hy_response_guard import HyReconcileGuard
+
+        reconcile_guards = tuple(
+            guard for guard in guards if isinstance(guard, HyReconcileGuard)
+        )
+        for guard in reconcile_guards:
+            guard.begin_write()
         before = [len(guard.failures) for guard in guards]
         bindings = HyWriteBindings(request.source_context) if request.source_context else None
         if bindings:
@@ -500,6 +509,12 @@ class HyMemoryBridge:
             if len(guard.failures) > count:
                 raise HyMemoryBridgeError(guard.failures[count])
         result = await self._result(client, request, raw, expected_contents=None, bindings=bindings)
+        result = await _with_native_mutation_delta(
+            client,
+            result,
+            raw,
+            reconcile_guards,
+        )
         if bindings:
             outputs = []
             for memory in result.memories:
@@ -553,6 +568,8 @@ class HyMemoryBridge:
         from one_memory.hy_response_guard import HyReconcileGuard
 
         report_guards = tuple(guard for guard in guards if isinstance(guard, HyReconcileGuard))
+        for guard in report_guards:
+            guard.begin_write()
         expected_contents = frozenset(content.strip() for content in contents if content.strip())
         for guard in report_guards:
             guard.imported_contents = expected_contents
@@ -598,6 +615,12 @@ class HyMemoryBridge:
             request,
             raw,
             expected_contents=expected_contents,
+        )
+        result = await _with_native_mutation_delta(
+            client,
+            result,
+            raw,
+            report_guards,
         )
         diagnostic_event(
             level="info",
@@ -1087,6 +1110,7 @@ class HyMemoryBridge:
                                 self.profile,
                                 api_key=self.api_key,
                                 data_dir=self.data_dir,
+                        http_transport_factory=self._http_transport_factory,
                             )
 
                     await _joined_thread(initialize)
@@ -1136,6 +1160,7 @@ def create_hy_memory_client(
     *,
     api_key: str | None,
     data_dir: Path,
+    http_transport_factory: Callable[[], Any] | None = None,
 ) -> HyMemoryClientProtocol:
     configure_hy_memory_environment(data_dir)
     config = build_hy_memory_config(
@@ -1143,6 +1168,7 @@ def create_hy_memory_client(
         api_key=api_key,
         data_dir=data_dir,
     )
+    config.http_transport_factory = http_transport_factory
     reattach_legacy_vector_collection(profile, config)
     mismatch = inspect_graph_width_mismatch(config)
     if mismatch is not None:
@@ -1285,6 +1311,74 @@ async def _coding_result(
                 )
             )
     return HyMemoryIngestResult(success=True, memories=tuple(outputs))
+
+
+async def _with_native_mutation_delta(
+    client: HyMemoryClientProtocol,
+    result: HyMemoryIngestResult,
+    raw: Mapping[str, object],
+    reconcile_guards: Sequence[Any],
+) -> HyMemoryIngestResult:
+    """Map native SDK mutations back into MemHub governance.
+
+    Store permission wrappers used to discover this by intercepting every
+    native CRUD call. The embedded SDK now owns unrestricted local CRUD, so
+    chat targets come from the reconcile observer and coding targets come from
+    the SDK's public result document.
+    """
+
+    retired = set(result.retired_memory_ids)
+    superseded = {
+        key: tuple(values) for key, values in result.superseded_memory_ids.items()
+    }
+    chat_targets = {
+        key
+        for guard in reconcile_guards
+        for key in getattr(guard, "mutation_target_ids", ())
+        if isinstance(key, str) and key
+    }
+
+    for item in raw.get("ops", ()) if isinstance(raw.get("ops"), list) else ():
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("action") == "DELETE":
+            key = item.get("target_experience_id")
+            if isinstance(key, str) and key:
+                retired.add(key)
+
+    for item in raw.get("fact_ops", ()) if isinstance(raw.get("fact_ops"), list) else ():
+        if not isinstance(item, Mapping) or item.get("action") != "SUPERSEDE":
+            continue
+        old, new = item.get("fact_id"), item.get("superseded_by")
+        if isinstance(old, str) and old:
+            retired.add(old)
+            if isinstance(new, str) and new:
+                superseded[old] = (new,)
+
+    for key in chat_targets:
+        record = await _joined_thread(_read_hy_record, client, key)
+        if record is None:
+            retired.add(key)
+            continue
+        status = str(record.get("status", "")).lower()
+        if status in {"deleted", "shadow", "superseded"}:
+            retired.add(key)
+        replacement = record.get("superseded_by")
+        if isinstance(replacement, str) and replacement:
+            superseded[key] = (replacement,)
+        elif isinstance(replacement, list):
+            values = tuple(
+                value for value in replacement if isinstance(value, str) and value
+            )
+            if values:
+                superseded[key] = values
+
+    return result.model_copy(
+        update={
+            "retired_memory_ids": tuple(sorted(retired)),
+            "superseded_memory_ids": superseded,
+        }
+    )
 
 
 def _read_hy_record(

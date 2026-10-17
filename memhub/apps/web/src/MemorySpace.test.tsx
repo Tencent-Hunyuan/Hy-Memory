@@ -85,7 +85,6 @@ const {
   getGraphWidth,
   decideGraphWidth,
   getModelProfiles,
-  getModelContentPermission,
   createMemory,
   digestMemoryGraph,
   searchConversations,
@@ -112,7 +111,6 @@ const {
   getGraphWidth: vi.fn(),
   decideGraphWidth: vi.fn(),
   getModelProfiles: vi.fn(),
-  getModelContentPermission: vi.fn(),
   createMemory: vi.fn(),
   digestMemoryGraph: vi.fn(),
   searchConversations: vi.fn(),
@@ -143,7 +141,6 @@ vi.mock("./api", () => ({
   getGraphWidth,
   decideGraphWidth,
   getModelProfiles,
-  getModelContentPermission,
   createMemory,
   digestMemoryGraph,
   searchConversations,
@@ -241,7 +238,6 @@ describe("MemorySpace", () => {
     getModelProfiles.mockResolvedValue([
       { profile_id: "profile-1", is_active: true },
     ]);
-    getModelContentPermission.mockResolvedValue({ allowed: false });
     getMemoryNotes.mockResolvedValue([]);
     searchConversations.mockResolvedValue({
       hits: [
@@ -706,7 +702,7 @@ describe("MemorySpace", () => {
       // The arrival status belongs to the workbench surface, not the ask tab.
       await userEvent.click(screen.getByRole("tab", { name: "工作台" }));
       expect(screen.getByRole("region", { name: "记忆整理状态" })).toBeTruthy();
-      expect(screen.getByText("等待允许模型读取本地会话内容")).toBeTruthy();
+      expect(screen.getByText("还没有保存的对话")).toBeTruthy();
       expect(screen.queryByTestId("memory-graph")).toBeNull();
       expectNoTeachingWrites();
     });

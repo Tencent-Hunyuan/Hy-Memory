@@ -6,7 +6,7 @@ Agent Memory - 配置管理
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
 
 
@@ -1252,6 +1252,13 @@ class MemoryConfig:
     enable_agent: bool = False
     debug: bool = False
     metrics_enabled: bool = True
+    # Runtime-only HTTP transport factory. MemHub uses this for request-cost
+    # budgeting without restricting the embedded SDK's local store access.
+    http_transport_factory: Optional[Callable[[], Any]] = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self):
         # enable_graph 跟随 mode 走：mode=ultra 时自动启用，无需独立环境变量

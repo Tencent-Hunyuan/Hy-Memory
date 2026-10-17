@@ -14,7 +14,6 @@ const api = vi.hoisted(() => ({
   saveMemoryNote: vi.fn(),
   apiErrorCode: vi.fn(),
   getSources: vi.fn(),
-  getModelContentPermission: vi.fn(),
 }));
 vi.mock("./api", () => api);
 

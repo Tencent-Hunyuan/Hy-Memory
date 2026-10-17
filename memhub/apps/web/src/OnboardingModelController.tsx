@@ -4,7 +4,7 @@ import type {
   ModelProfileInput,
 } from "@one-memory/contracts";
 import { useRef, useState } from "react";
-import { getModelProfiles, setModelContentPermission } from "./api";
+import { getModelProfiles } from "./api";
 import {
   type OnboardingModelDraft,
   OnboardingModelStep,
@@ -232,12 +232,11 @@ export function OnboardingModelController({
     try {
       const active = await models.activate(saved.profile_id);
       if (!active?.is_active) throw new Error("model_activation_unconfirmed");
-      await setModelContentPermission(true, trace.traceId);
       trace.done("succeeded");
       onEnabled?.();
     } catch {
       trace.done("unknown", { reason: "model_enable_unconfirmed" });
-      setError("模型或内容权限未能确认启用，请在设置中核对。");
+      setError("模型未能确认启用，请在设置中核对。");
     } finally {
       flight.current = false;
       setPhase("idle");

@@ -356,11 +356,21 @@ class EmbedService:
         key = self._client_cache_key(base_url, api_key, timeout)
         client = self._client_cache.get(key)
         if client is None:
+            client_options = {
+                "api_key": api_key,
+                "base_url": base_url or None,
+                "timeout": timeout,
+                "max_retries": 0,
+            }
+            transport_factory = getattr(self.config, "http_transport_factory", None)
+            if callable(transport_factory):
+                import httpx
+
+                client_options["http_client"] = httpx.AsyncClient(
+                    transport=transport_factory()
+                )
             client = AsyncOpenAI(
-                api_key=api_key,
-                base_url=base_url or None,
-                timeout=timeout,
-                max_retries=0,
+                **client_options,
             )
             self._client_cache[key] = client
         return client

@@ -11,11 +11,10 @@ from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 
 
-def _application(tmp_path, *, allowed: bool, sync_enabled: bool):
+def _application(tmp_path, *, sync_enabled: bool):
     database = tmp_path / "one-memory.sqlite3"
     evidence = EvidenceStore(database)
     config = ConfigStore(tmp_path)
-    config.set_model_content_allowed(allowed)
     config.set_sync("cursor", sync_enabled)
     queue = DurableWriteQueue(database, evidence=evidence)
     return SimpleNamespace(
@@ -59,18 +58,8 @@ def _put_complete_turn(app) -> tuple[str, str]:
     return tuple(values)
 
 
-def test_global_model_permission_off_does_not_backfill(tmp_path) -> None:
-    app = _application(tmp_path, allowed=False, sync_enabled=True)
-    _put_complete_turn(app)
-
-    asyncio.run(_run_backfill(app))
-
-    with sqlite3.connect(app.state.evidence_store.database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM memory_write_jobs").fetchone()[0] == 0
-
-
 def test_backfill_puts_history_on_write_jobs_without_scheduling_memory_tasks(tmp_path) -> None:
-    app = _application(tmp_path, allowed=True, sync_enabled=True)
+    app = _application(tmp_path, sync_enabled=True)
     evidence_ids = _put_complete_turn(app)
 
     asyncio.run(_run_backfill(app))
@@ -93,7 +82,7 @@ def test_backfill_puts_history_on_write_jobs_without_scheduling_memory_tasks(tmp
 
 
 def test_source_pause_skips_history_until_the_source_is_reenabled(tmp_path) -> None:
-    app = _application(tmp_path, allowed=True, sync_enabled=False)
+    app = _application(tmp_path, sync_enabled=False)
     _put_complete_turn(app)
 
     asyncio.run(_run_backfill(app))

@@ -251,7 +251,7 @@ it("discloses that testing does not send historical conversations", () => {
 
   expect(screen.getByText(/测试连接只发送测试内容/)).toBeTruthy();
   expect(screen.getByText(/已导入 37 条对话/)).toBeTruthy();
-  expect(screen.getByText(/启用时会打开全局模型内容权限/)).toBeTruthy();
+  expect(screen.getByText(/启用后会使用此模型整理/)).toBeTruthy();
 });
 
 it("does not expose an extra backlog selector in the first-run model page", () => {

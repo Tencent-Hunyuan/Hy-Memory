@@ -20,7 +20,6 @@ from copy import copy
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import partial
-from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -164,7 +163,6 @@ from one_memory.memory_library import (
 )
 from one_memory.memory_notes import MemoryNoteStore, memory_note_router
 from one_memory.memory_processing import (
-    MemoryBridgeProtocol,
     MemoryProcessingSupervisor,
     _conversation_chunks,
     memory_task_timeout_seconds,
@@ -178,10 +176,8 @@ from one_memory.memory_queue import (
 )
 from one_memory.memory_server.config_state import ConfigStore
 from one_memory.memory_tasks import MemoryTask, MemoryTaskStatus, MemoryTaskStore
-from one_memory.model_content_routes import model_content_router
 from one_memory.model_presets import seed_preset_profile
 from one_memory.model_probe import ModelProber, ModelProbeResult
-from one_memory.model_processing_permission_guard import ModelProcessingPermissionLease
 from one_memory.model_profiles import (
     ActiveModelProfileError,
     ModelCreationOperationConflictError,
@@ -818,6 +814,13 @@ def create_app(
                 evidence=app.state.evidence_store,
             )
             app.state.memory_write_queue = memory_write_queue
+            # Builds through 1.0.2 parked pre-invocation jobs behind the
+            # retired model-content consent bit. The embedded SDK is trusted
+            # now, so make those durable jobs claimable on the first startup.
+            await asyncio.to_thread(
+                memory_write_queue.readmit_parked,
+                states=("waiting_for_permission",),
+            )
             repaired_identity_failures = await asyncio.to_thread(
                 memory_write_queue.repair_pre_send_identity_failures
             )
@@ -960,7 +963,7 @@ def create_app(
                 # Not fatal: without the tables every read checks exactly, as
                 # it does today.
                 app.state.memory_visibility_error = str(error)
-            app.state.model_request_budget = (
+            model_request_budget = (
                 ModelRequestBudget(
                     database_path,
                     request_limit=runtime_settings.model_request_limit,
@@ -970,6 +973,7 @@ def create_app(
                 if runtime_settings.model_request_limit is not None
                 else None
             )
+            app.state.model_request_budget = model_request_budget
             app.state.memory_answerer = MemoryAnswerer(
                 governance=app.state.memory_governance_store,
                 filter_memories=app.state.source_read_access.memories,
@@ -1008,6 +1012,16 @@ def create_app(
                 governance=app.state.memory_governance_store,
                 data_dir=runtime_settings.data_dir,
                 extraction_settings=app.state.extraction_settings_store,
+                bridge_factory=lambda profile, api_key, data_dir: HyMemoryBridge(
+                    profile=profile,
+                    api_key=api_key,
+                    data_dir=data_dir,
+                    http_transport_factory=(
+                        (lambda: BudgetedModelTransport(model_request_budget))
+                        if model_request_budget is not None
+                        else None
+                    ),
+                ),
                 # `None` means "whatever the active profile allows". Pinned to
                 # 1 in `a59f4b5` as temporary load-shedding for an acceptance
                 # package, and left pinned after it: a hardcoded 1 is rule 9's
@@ -1016,10 +1030,6 @@ def create_app(
                 # profile concurrency 4, recall latency is unchanged while
                 # precipitation goes 4x.
                 max_concurrent_tasks=runtime_settings.precipitation_max_concurrent_tasks,
-                model_content_config=app.state.config_store,
-                permission_bridge_factory=lambda lease, secret, directory: _permission_context(
-                    app, lease, secret, directory
-                ),
                 source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                 service_levels=app.state.service_levels,
             )
@@ -1134,7 +1144,6 @@ def create_app(
             app.state.matter_discovery.processor = app.state.memory_processing_supervisor
             app.state.matter_discovery.write_intake = app.state.memory_write_intake
             app.state.matter_discovery.write_queue = memory_write_queue
-            app.state.processing_coordinator = None
             app.state.memory_note_store = MemoryNoteStore(
                 app.state.evidence_store,
                 app.state.memory_processing_supervisor,
@@ -1446,7 +1455,6 @@ def create_app(
     app.include_router(matter_router(protected))
     app.include_router(memory_note_router(protected))
     app.include_router(file_import_router(protected))
-    app.include_router(model_content_router(protected))
     app.include_router(context_router(protected))
 
     def require_workbuddy_boundary(request: Request) -> None:
@@ -2342,7 +2350,7 @@ def create_app(
         await asyncio.to_thread(
             app.state.memory_task_store.park_source_for_permission,
             source_id=source_id,
-            error_code="model_content_permission_required",
+            error_code="hy_memory_source_revoked",
         )
         await _live_sync(app).stop_source(source_id)
         _supervisor(app).unregister_adapter(source_id)
@@ -3908,12 +3916,7 @@ async def _authorize_answer_generation(
     # The explicit question is this operation's input, not a standing permission for history.
     if not question.strip() or not grounding:
         raise MemoryAnswerError("memory_answer_generation_not_authorized")
-    if not await asyncio.to_thread(_config_store(app).model_content_allowed):
-        raise MemoryAnswerError("memory_answer_generation_not_authorized")
-
     def check() -> None:
-        if not _config_store(app).model_content_allowed():
-            raise MemoryAnswerError("memory_answer_generation_not_authorized")
         if _model_profile_store(app).active_identity() != (
             profile.profile_id,
             profile.revision,
@@ -3935,30 +3938,6 @@ async def _authorize_answer_generation(
 
     await recheck()
     return recheck
-
-
-@asynccontextmanager
-async def _permission_context(
-    app: FastAPI,
-    lease: ModelProcessingPermissionLease,
-    secret: str | None,
-    directory: Path,
-) -> AsyncIterator[MemoryBridgeProtocol]:
-    module = await asyncio.to_thread(import_module, "one_memory.hy_permission_context")
-    budget = cast(ModelRequestBudget | None, app.state.model_request_budget)
-    source_id = lease.records[0].source_id if lease.records else "manual"
-    factory = module.permission_bridge_factory(
-        lambda profile, api_key, data_dir: _memory_processing_supervisor(app)._bridge(
-            profile,
-            api_key,
-            data_dir,
-            scope_key=source_id,
-        ),
-        **({"http_transport": BudgetedModelTransport(budget)} if budget else {}),
-    )
-    async with factory(lease, secret, directory) as bridge:
-        yield cast(MemoryBridgeProtocol, bridge)
-
 
 class _LazyASGIApp:
     """Compatibility ASGI app that is built only when a server imports it.
@@ -4736,8 +4715,6 @@ async def _run_backfill(app: FastAPI) -> None:
     """
     app.state.memory_backfill_error = None
     if not app.state.settings.automatic_memory_processing:
-        return
-    if not await asyncio.to_thread(_config_store(app).model_content_allowed):
         return
     try:
         queue = app.state.memory_write_queue

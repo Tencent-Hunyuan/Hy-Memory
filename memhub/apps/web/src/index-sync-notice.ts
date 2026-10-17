@@ -43,12 +43,11 @@ export function indexSyncPresentation(
   if (
     reason === "context_changed" ||
     reason === "memory_revision_conflict" ||
-    reason === "model_content_permission_changed" ||
     reason === "model_content_profile_changed"
   ) {
     return {
       attemptedLine,
-      explanation: "这条记忆或授权版本已经变化，先刷新核对再决定下一步。",
+      explanation: "这条记忆或模型版本已经变化，先刷新核对再决定下一步。",
       action: "refresh",
     };
   }

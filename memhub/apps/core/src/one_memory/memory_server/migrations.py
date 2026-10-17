@@ -1404,7 +1404,14 @@ async def _024_matter_model_cache(cursor: Any) -> None:
 
 
 async def _026_hy_node_permissions(cursor: Any) -> None:
-    await cursor.execute(hy_node_permissions_ddl(_dialect(cursor)))
+    # Historical migration retained as a ledger slot. Fresh databases no
+    # longer create this retired proof table; migration 51 removes it from
+    # databases that ran the original v26 body.
+    return None
+
+
+async def _051_drop_hy_node_permissions(cursor: Any) -> None:
+    await cursor.execute("DROP TABLE IF EXISTS hy_node_permissions")
 
 
 def model_profiles_ddl(dialect: str = "mysql") -> str:
@@ -2756,7 +2763,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
     Migration(23, "source_candidates", _023_source_candidates, ("source_candidates",)),
     Migration(24, "matter_model_cache", _024_matter_model_cache, ("matter_model_cache",)),
-    Migration(26, "hy_node_permissions", _026_hy_node_permissions, ("hy_node_permissions",)),
+    Migration(26, "hy_node_permissions", _026_hy_node_permissions),
     Migration(
         27,
         "model_profiles",
@@ -2841,4 +2848,5 @@ MIGRATIONS: tuple[Migration, ...] = (
         "model_probe_operations_reserved_at",
         _050_model_probe_operations_reserved_at,
     ),
+    Migration(51, "drop_hy_node_permissions", _051_drop_hy_node_permissions),
 )

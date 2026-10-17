@@ -151,9 +151,6 @@ describe("memhub short-command contract", () => {
       "memhub import-file discard",
       "memhub notes add",
       "memhub notes process",
-      "memhub permission status",
-      "memhub permission allow",
-      "memhub permission deny",
       "memhub models setup",
       "memhub models activate",
       "memhub models edit",
@@ -163,6 +160,9 @@ describe("memhub short-command contract", () => {
     ]) {
       expect(flattened).toContain(shortForm);
     }
+    expect(COMMANDS.some((command) => command.name === "permission")).toBe(
+      false,
+    );
   });
 
   it("ships a memhub bin entry pointing at a real bundle path", () => {

@@ -496,11 +496,21 @@ class LLMProvider:
         clients = self._clients.setdefault(loop, {})
         client = clients.get(client_key)
         if client is None:
+            client_options: Dict[str, Any] = {
+                "api_key": base_api_key,
+                "base_url": base_url,
+                "timeout": self._llm_config.timeout,
+                "max_retries": 0,
+            }
+            transport_factory = getattr(self.config, "http_transport_factory", None)
+            if callable(transport_factory):
+                import httpx
+
+                client_options["http_client"] = httpx.AsyncClient(
+                    transport=transport_factory()
+                )
             client = AsyncOpenAI(
-                api_key=base_api_key,
-                base_url=base_url,
-                timeout=self._llm_config.timeout,
-                max_retries=0,
+                **client_options,
             )
             clients[client_key] = client
 

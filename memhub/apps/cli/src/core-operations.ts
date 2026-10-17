@@ -30,7 +30,6 @@ const IMPORT_FILE =
 const MEMORY_NOTES_PATH = "/api/v1/memory-notes";
 const MEMORY_NOTE_PROCESS =
   /^\/api\/v1\/memory-notes\/[A-Za-z0-9][\w.:-]{0,127}\/process$/;
-const MODEL_CONTENT_PERMISSION_PATH = "/api/v1/model-content-permission";
 const EXTRACTION_SETTINGS_PATH = "/api/v1/extraction-settings";
 const GRAPH_WIDTH_PATH = "/api/v1/graph-width";
 const MANUAL_EXTRACT_PATH = "/api/v1/memory-processing/manual-extract";
@@ -134,7 +133,6 @@ export function createCoreOperations(attachment: {
         !IMPORT_FILE_COMMIT.test(path) &&
         path !== MEMORY_NOTES_PATH &&
         !MEMORY_NOTE_PROCESS.test(path) &&
-        path !== MODEL_CONTENT_PERMISSION_PATH &&
         path !== GRAPH_WIDTH_PATH &&
         path !== MANUAL_EXTRACT_PATH &&
         path !== ONBOARDING_COMPLETE_PATH &&

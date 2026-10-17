@@ -3,14 +3,7 @@ import type {
   ImportJob,
   SourceResponse,
 } from "@one-memory/contracts";
-import {
-  LoaderCircle,
-  Pause,
-  Play,
-  RefreshCw,
-  Settings2,
-  ShieldCheck,
-} from "lucide-react";
+import { LoaderCircle, Pause, Play, RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   type MemoryArrival,
@@ -67,7 +60,6 @@ export interface ImportProgressStripProps {
   onRefresh?(): Promise<unknown>;
   arrival?: MemoryArrival;
   onConfigureModel?(): void;
-  onReviewProcessing?(): void;
   /** Pauses or continues one job and resolves with its receipt. */
   onJobAction?: SourceJobActionsProps["onAction"];
   issues?: readonly ImportIssue[];
@@ -87,7 +79,6 @@ export function ImportProgressStrip({
   onRefresh,
   arrival,
   onConfigureModel,
-  onReviewProcessing,
   onJobAction,
   issues,
   showSourceLink = true,
@@ -225,7 +216,6 @@ export function ImportProgressStrip({
     currentArrival &&
     [
       "model-required",
-      "consent-required",
       "failed",
       "stopped",
       "idle",
@@ -246,13 +236,9 @@ export function ImportProgressStrip({
     const firstImport = !stale && runningHistory.length > 0;
     const actionable =
       currentArrival !== null &&
-      [
-        "model-required",
-        "consent-required",
-        "failed",
-        "stopped",
-        "unavailable",
-      ].includes(currentArrival.phase);
+      ["model-required", "failed", "stopped", "unavailable"].includes(
+        currentArrival.phase,
+      );
     if (
       !firstImport &&
       !actionable &&
@@ -269,9 +255,7 @@ export function ImportProgressStrip({
       ? `正在导入你的历史对话，已导入 ${imported.toLocaleString("zh-CN")} 个会话。记忆会陆续生成，你可以先正常使用。`
       : currentArrival?.phase === "model-required"
         ? "模型还没有配置好，新的对话暂时不会整理成记忆。"
-        : currentArrival?.phase === "consent-required"
-          ? "模型授权已撤回，新的对话不会再整理成记忆。"
-          : "有些内容没有处理完成，请前往设置查看。";
+        : "有些内容没有处理完成，请前往设置查看。";
     return (
       <div
         className="import-strip"
@@ -337,7 +321,7 @@ export function ImportProgressStrip({
       ? "已保存内容保留，正在核对进度"
       : "进度待更新"
     : currentArrival && needsAction
-      ? ["model-required", "consent-required"].includes(currentArrival.phase)
+      ? currentArrival.phase === "model-required"
         ? "待继续"
         : memoryArrivalTitle(currentArrival)
       : generating
@@ -385,22 +369,20 @@ export function ImportProgressStrip({
             ? "已保存内容保留。"
             : currentArrival?.phase === "model-required"
               ? "请核对整理模型，已保存原文保留在本机。"
-              : currentArrival?.phase === "consent-required"
-                ? "打开模型内容权限后继续，已保存原文保留在本机。"
-                : importPaused
-                  ? "导入已暂停，已保存内容保留，随时可以继续。"
-                  : generating
-                    ? "先整理近期对话，更多记忆会陆续出现"
-                    : currentArrival?.phase === "failed" ||
-                        currentArrival?.phase === "stopped"
-                      ? importing
-                        ? "原文仍在导入，记忆整理待继续；已保存内容保留。"
-                        : "已保存内容保留，可继续整理。"
-                      : importing || currentArrival?.phase === "importing"
-                        ? "正在保存原文；导入进度不代表记忆生成进度。"
-                        : backfilling
-                          ? "正在准备已授权的对话，尚未确认有运行中的生成任务。"
-                          : "已保存内容保留。"}
+              : importPaused
+                ? "导入已暂停，已保存内容保留，随时可以继续。"
+                : generating
+                  ? "先整理近期对话，更多记忆会陆续出现"
+                  : currentArrival?.phase === "failed" ||
+                      currentArrival?.phase === "stopped"
+                    ? importing
+                      ? "原文仍在导入，记忆整理待继续；已保存内容保留。"
+                      : "已保存内容保留，可继续整理。"
+                    : importing || currentArrival?.phase === "importing"
+                      ? "正在保存原文；导入进度不代表记忆生成进度。"
+                      : backfilling
+                        ? "正在准备已授权的对话，尚未确认有运行中的生成任务。"
+                        : "已保存内容保留。"}
         </span>
       </div>
 
@@ -670,16 +652,10 @@ export function ImportProgressStrip({
           )}
         {!stale &&
           currentArrival &&
-          ["consent-required", "failed", "stopped"].includes(
-            currentArrival.phase,
-          ) &&
-          (onReviewProcessing || onConfigureModel) && (
-            <button
-              type="button"
-              className="quiet"
-              onClick={onReviewProcessing ?? onConfigureModel}
-            >
-              <ShieldCheck size={16} aria-hidden="true" />
+          ["failed", "stopped"].includes(currentArrival.phase) &&
+          onConfigureModel && (
+            <button type="button" className="quiet" onClick={onConfigureModel}>
+              <Settings2 size={16} aria-hidden="true" />
               继续整理
             </button>
           )}

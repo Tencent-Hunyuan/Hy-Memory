@@ -69,7 +69,9 @@ Source root authorization and Harness synchronization are distinct:
 - SQLite `source_grants` records the authorized root, its identity, grant and
   revocation state. A grant does not by itself turn synchronization on.
 - Core-owned `<data_dir>/config.json` is the durable desired state for
-  `sync_enabled` per source and the global `model_content_allowed` setting.
+  `sync_enabled` per source. The embedded Hy Memory SDK is part of MemHub and
+  may use the complete local memory store; there is no second model-content
+  permission switch.
 - Core is the only writer of `config.json`. It validates a strict schema and
   persists updates through a private temporary file, `fsync`, atomic replace,
   and directory `fsync`.

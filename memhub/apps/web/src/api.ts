@@ -36,7 +36,6 @@ import {
   type MemoryNoteReceipt,
   type MemoryOrigin,
   type MemoryProcessingSummary,
-  type ModelContentPermission,
   type ModelCreationOperation,
   type ModelProbeOperationReceipt,
   type ModelProbeResult,
@@ -701,44 +700,6 @@ export async function getModelProfiles(): Promise<ModelProfile[]> {
   if (profiles.some((profile) => profile === null))
     throw new Error("model_profiles_invalid");
   return profiles as ModelProfile[];
-}
-
-export async function getModelContentPermission(
-  signal?: AbortSignal,
-): Promise<ModelContentPermission> {
-  const response = await client.get<unknown>(
-    "/api/v1/model-content-permission",
-    { signal },
-  );
-  const permission = parseModelContentPermission(response.data);
-  if (permission === null) throw new Error("model_content_permission_invalid");
-  return permission;
-}
-
-export async function setModelContentPermission(
-  allowed: boolean,
-  traceId?: string,
-): Promise<ModelContentPermission> {
-  const response = await client.post<unknown>(
-    "/api/v1/model-content-permission",
-    { allowed },
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const permission = parseModelContentPermission(response.data);
-  if (permission === null || permission.allowed !== allowed)
-    throw new Error("model_content_permission_invalid");
-  return permission;
-}
-
-export function parseModelContentPermission(
-  value: unknown,
-): ModelContentPermission | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const permission = value as Record<string, unknown>;
-  return Object.keys(permission).length === 1 &&
-    typeof permission.allowed === "boolean"
-    ? { allowed: permission.allowed }
-    : null;
 }
 
 export async function getModelCreationOperation(

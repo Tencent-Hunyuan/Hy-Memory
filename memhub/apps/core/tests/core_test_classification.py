@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 428
-EXPECTED_TEST_FILES_SHA256 = "bd3bf4fc9cda2a8e4427d106283c40d22dad026fd452db954046b6f28d21b896"
+EXPECTED_TEST_FILE_COUNT = 380
+EXPECTED_TEST_FILES_SHA256 = "9f075d18403328882c25325d29ebe77d0e3365d675ba19d56134a6a0fb9b64b4"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
@@ -68,7 +68,6 @@ INTEGRATION_FILES = frozenset(
         "test_external_installation_permissions.py",
         "test_fault_matrix.py",
         "test_file_import_operations.py",
-        "test_four_app_live_ingest.py",
         "test_graph_width_endpoint.py",
         "test_home_summary.py",
         "test_hy_writeback.py",
@@ -100,7 +99,6 @@ INTEGRATION_FILES = frozenset(
         "test_memory_supersede.py",
         "test_memory_visibility.py",
         "test_memory_write_routes.py",
-        "test_model_content_routes.py",
         "test_model_creation_api.py",
         "test_model_creation_validation_boundary.py",
         "test_model_probe_operations.py",
@@ -124,17 +122,14 @@ INTEGRATION_FILES = frozenset(
         "test_source_connection_intents.py",
         "test_source_import_receipts.py",
         "test_source_permission_races.py",
-        "test_source_read_revocation.py",
         "test_source_revocation_parking.py",
         "test_source_session_count_api.py",
         "test_source_status_latency.py",
         "test_source_sync_idempotent.py",
         "test_source_sync_permissions.py",
-        "test_source_upload_intents.py",
         "test_ui_session_api.py",
         "test_unified_write_entry_wiring.py",
         "test_visibility_background.py",
-        "test_workbuddy_prompt_backfill.py",
     }
 )
 

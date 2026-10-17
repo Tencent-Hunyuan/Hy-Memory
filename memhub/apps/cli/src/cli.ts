@@ -192,13 +192,6 @@ import {
   renderMemoryPageText,
 } from "./memory-report.js";
 import {
-  type ModelContentPermissionDocument,
-  modelContentPermissionExitCode,
-  readModelContentPermission,
-  renderModelContentPermissionText,
-  setModelContentPermission,
-} from "./model-content-permission-flow.js";
-import {
   executeModelProbe,
   inspectModelProbePlan,
   type ModelProbeFlowDocument,
@@ -218,12 +211,10 @@ import {
   executeModelProfileActivate,
   executeModelProfileEdit,
   type ModelWriteDocument,
-  type ModelWritePlan,
   modelWriteExitCode,
   planModelProfileActivate,
   planModelProfileEdit,
   renderModelWriteText,
-  validateModelWritePlan,
 } from "./model-write-flows.js";
 import { claimPlanAttempt } from "./operation-journal.js";
 import {
@@ -2492,45 +2483,6 @@ async function runCommand(
       asJson ? `${JSON.stringify(document)}\n` : renderUiWriteText(document),
     );
     return uiWriteExitCode(document);
-  }
-  if (named === "permission") {
-    const parsed = parsePermissionCommand(arguments_.slice(1));
-    if (!parsed) return usage();
-    const config = resolveRuntimeCliConfig(environment, process.argv[1]);
-    const runtime = await inspectRuntimeStatus({
-      dataDir: config.dataDir,
-      probeIdentity,
-      requireServiceReceipt: true,
-    });
-    const attached =
-      runtime.state === "running"
-        ? await attachClients(config.dataDir)
-        : { reader: null, operations: null, failure: runtime.code };
-    if (
-      runtime.state !== "running" ||
-      (parsed === "status" ? !attached.reader : !attached.operations)
-    ) {
-      const document: ModelContentPermissionDocument = {
-        schema_version: 1,
-        product: PRODUCT,
-        state: "unknown",
-        code:
-          runtime.state !== "running"
-            ? runtime.code
-            : (attached.failure ?? "runtime_attach_failed"),
-      };
-      emitModelContentPermissionDocument(document, asJson);
-      return runtime.state === "stopped" ? 3 : 1;
-    }
-    const document =
-      parsed === "status"
-        ? await readModelContentPermission(attached.reader!)
-        : await setModelContentPermission(
-            attached.operations!,
-            parsed === "allow",
-          );
-    emitModelContentPermissionDocument(document, asJson);
-    return modelContentPermissionExitCode(document);
   }
   if (named === "notes" || named === "extraction" || named === "graph") {
     const parsed = parseExtendedWriteCommand(
@@ -5155,18 +5107,6 @@ function parseHeadlessCommand(
     : null;
 }
 
-function parsePermissionCommand(
-  rest: readonly string[],
-): "status" | "allow" | "deny" | null {
-  if (rest.filter((item) => item === "--json").length > 1) return null;
-  const tokens = rest.filter((item) => item !== "--json");
-  const action = tokens[0];
-  return tokens.length === 1 &&
-    (action === "status" || action === "allow" || action === "deny")
-    ? action
-    : null;
-}
-
 function unwrapPlan(value: unknown): unknown {
   if (
     value &&
@@ -5351,17 +5291,6 @@ function emitModelReportDocument(
 ): void {
   process.stdout.write(
     asJson ? `${JSON.stringify(document)}\n` : renderModelReportText(document),
-  );
-}
-
-function emitModelContentPermissionDocument(
-  document: ModelContentPermissionDocument,
-  asJson: boolean,
-): void {
-  process.stdout.write(
-    asJson
-      ? `${JSON.stringify(document)}\n`
-      : renderModelContentPermissionText(document),
   );
 }
 

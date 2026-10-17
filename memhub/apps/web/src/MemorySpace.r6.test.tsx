@@ -17,7 +17,6 @@ const { reads } = vi.hoisted(() => ({
     graph: vi.fn(),
     processing: vi.fn(),
     profiles: vi.fn(),
-    permission: vi.fn(),
     library: vi.fn(),
     mapLibrary: vi.fn(),
     recent: vi.fn(),
@@ -30,7 +29,6 @@ vi.mock("./api", async (importOriginal) => ({
   getMemoryGraph: reads.graph,
   getMemoryProcessing: reads.processing,
   getModelProfiles: reads.profiles,
-  getModelContentPermission: reads.permission,
   getMemoryLibrary: (query: { active_only?: boolean }, signal?: AbortSignal) =>
     query.active_only === true
       ? reads.mapLibrary(query, signal)
@@ -106,7 +104,6 @@ function setup() {
     completed: 1,
   });
   reads.profiles.mockResolvedValue([]);
-  reads.permission.mockResolvedValue({ allowed: false });
   reads.library.mockResolvedValue({
     items: [],
     total: 0,

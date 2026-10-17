@@ -1,10 +1,8 @@
 import json
 import logging
 from importlib import import_module
-from inspect import getsource
 from pathlib import Path
 
-from one_memory.hy_permission_transport import HyPermissionTransport
 from one_memory.hy_runtime_config import (
     configure_hy_runtime_environment,
     detailed_logging_enabled,
@@ -64,13 +62,6 @@ def test_info_collects_hy_info_without_enabling_debug_pipeline_content(
     assert __import__("os").environ["MEMORY_LOG_LEVEL"] == "INFO"
     assert __import__("os").environ["MEMORY_PIPELINE_TRACE_ENABLED"] == "false"
     assert __import__("os").environ["MEMORY_LOG_LLM_CONTENT"] == "false"
-
-
-def test_transport_does_not_reject_debug_wire_logging() -> None:
-    source = getsource(HyPermissionTransport)
-
-    assert "_check_wire_logging" not in source
-    assert "unsafe_wire_logging" not in source
 
 
 def test_live_debug_switch_makes_sdk_pipeline_writer_keep_original_content(

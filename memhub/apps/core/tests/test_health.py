@@ -3,13 +3,10 @@ import logging
 import sqlite3
 import threading
 import traceback
-from collections.abc import Callable
 from contextlib import suppress
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
-from one_memory.model_content_permissions import ModelContentPermissionStore
-from pydantic import SecretStr
 
 from one_memory.api import create_app
 from one_memory.config import Settings
@@ -18,10 +15,10 @@ from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetad
 from one_memory.imports.sources.registry import RootCandidateKind
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_governance import MemoryGovernanceStore
-from one_memory.memory_processing import MemoryProcessingSupervisor
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 from one_memory.model_profiles import ModelCapabilities, ModelProfileInput, ModelProfileStore
-from one_memory.secrets import InMemorySecretStore, SecretStoreUnavailableError
+from one_memory.secrets import InMemorySecretStore
 
 
 async def request(
@@ -82,45 +79,6 @@ def test_core_refuses_to_start_a_database_written_by_a_newer_build(tmp_path, mon
         with pytest.raises(Exception, match="database_schema_too_new"):
             async with app.router.lifespan_context(app):
                 pass
-
-    asyncio.run(scenario())
-
-
-def test_core_stays_ready_when_legacy_policy_upgrade_cannot_read_keychain(
-    tmp_path, monkeypatch
-) -> None:
-    monkeypatch.setattr("one_memory.model_presets._preset_data", lambda: None)
-    monkeypatch.setattr(
-        "one_memory.model_policy_activation.ModelPolicyActivation.upgrade_legacy_none_policy",
-        lambda _self: (_ for _ in ()).throw(
-            SecretStoreUnavailableError("Operating system secure storage read backoff")
-        ),
-    )
-    settings = Settings(
-        _env_file=None,
-        data_dir=tmp_path / "data",
-        source_home=tmp_path / "source",
-        api_token=SecretStr("test"),
-        imports_enabled=False,
-        automatic_memory_processing=False,
-        live_sync_enabled=False,
-    )
-    app = create_app(settings, secret_store=InMemorySecretStore())
-
-    async def scenario() -> None:
-        async with (
-            app.router.lifespan_context(app),
-            AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                headers={"Authorization": "Bearer test"},
-            ) as client,
-        ):
-            health = await client.get("/api/v1/health")
-            recall = await client.post("/api/v1/recall", json={"query": "still ready"})
-        assert health.status_code == 200
-        assert health.json()["status"] == "ok"
-        assert recall.status_code == 200
 
     asyncio.run(scenario())
 
@@ -211,7 +169,7 @@ def test_lifespan_drains_committed_pending_dispatch_through_enqueue(tmp_path, mo
             origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
         )
     ).record
-    evidence.put(
+    _ = evidence.put(
         EvidenceInput(
             source_id="fixture",
             conversation_id="conversation",
@@ -360,7 +318,7 @@ def test_diagnostic_log_level_allows_desktop_put_preflight() -> None:
     assert "PUT" in response.headers["access-control-allow-methods"]
 
 
-def core(tmp_path, *, permission=True):
+def core(tmp_path):
     database = tmp_path / "data/one-memory.sqlite3"
     root = tmp_path / "source"
     root.mkdir()
@@ -369,7 +327,7 @@ def core(tmp_path, *, permission=True):
         user_id="local", source_id="fixture", root=root, candidate_kind=RootCandidateKind.DEFAULT
     )
     evidence = EvidenceStore(database)
-    record = evidence.put(
+    _record = evidence.put(
         EvidenceInput(
             source_id="fixture",
             conversation_id="health",
@@ -399,15 +357,6 @@ def core(tmp_path, *, permission=True):
         secrets=secrets,
     )
     profiles.activate(profile.profile_id, secrets)
-    store = ModelContentPermissionStore(database)
-    if permission:
-        snapshot = store.snapshot(
-            user_id="local",
-            source_ids=("fixture",),
-            profile=profiles.snapshot(profile.profile_id, profile.revision),
-            evidence=(record,),
-        )
-        store.grant(snapshot, user_confirmed=True, expected_revision=0)
     return create_app(
         Settings(
             data_dir=tmp_path / "data",
@@ -418,25 +367,6 @@ def core(tmp_path, *, permission=True):
         ),
         secret_store=secrets,
     )
-
-
-def test_configured_model_without_content_consent_does_not_start_backfill(tmp_path, monkeypatch):
-    started = []
-
-    def prepare(*args, **kwargs):
-        started.append(True)
-        yield []
-
-    monkeypatch.setattr(MemoryProcessingSupervisor, "_prepare_backfill_batches", prepare)
-
-    async def scenario():
-        app = core(tmp_path, permission=False)
-        async with app.router.lifespan_context(app):
-            await app.state.memory_backfill
-            assert started == []
-            assert app.state.memory_task_store.list() == []
-
-    asyncio.run(scenario())
 
 
 def test_startup_finishes_before_the_memory_backfill_does(tmp_path, monkeypatch) -> None:
@@ -451,16 +381,16 @@ def test_startup_finishes_before_the_memory_backfill_does(tmp_path, monkeypatch)
     release = threading.Event()
 
     def blocking(
-        _: MemoryProcessingSupervisor,
-        should_stop: Callable[[], bool] = lambda: False,
+        _: DurableWriteQueue,
         *,
-        expected_permission_revision: int | None = None,
+        limit: int = 512,
+        after_cursor: str | None = None,
     ):
         walking.set()
         assert release.wait(10)
-        yield []
+        return ()
 
-    monkeypatch.setattr(MemoryProcessingSupervisor, "_prepare_backfill_batches", blocking)
+    monkeypatch.setattr(DurableWriteQueue, "unsubmitted_evidence_ids", blocking)
 
     async def scenario() -> None:
         app = core(tmp_path)
@@ -489,15 +419,14 @@ def test_startup_finishes_before_the_memory_backfill_does(tmp_path, monkeypatch)
 
 def test_a_backfill_that_fails_says_so_rather_than_disappearing(tmp_path, monkeypatch) -> None:
     def broken(
-        _: MemoryProcessingSupervisor,
-        should_stop: Callable[[], bool] = lambda: False,
+        _: DurableWriteQueue,
         *,
-        expected_permission_revision: int | None = None,
+        limit: int = 512,
+        after_cursor: str | None = None,
     ):
         raise RuntimeError("the catch-up broke")
-        yield []
 
-    monkeypatch.setattr(MemoryProcessingSupervisor, "_prepare_backfill_batches", broken)
+    monkeypatch.setattr(DurableWriteQueue, "unsubmitted_evidence_ids", broken)
 
     async def scenario() -> None:
         app = core(tmp_path)
@@ -521,16 +450,16 @@ def test_shutting_down_mid_backfill_leaves_nothing_running(tmp_path, monkeypatch
     started = threading.Event()
 
     def slow(
-        _: MemoryProcessingSupervisor,
-        should_stop: Callable[[], bool] = lambda: False,
+        _: DurableWriteQueue,
         *,
-        expected_permission_revision: int | None = None,
+        limit: int = 512,
+        after_cursor: str | None = None,
     ):
         started.set()
         threading.Event().wait(0.2)
-        yield []
+        return ()
 
-    monkeypatch.setattr(MemoryProcessingSupervisor, "_prepare_backfill_batches", slow)
+    monkeypatch.setattr(DurableWriteQueue, "unsubmitted_evidence_ids", slow)
 
     async def scenario() -> None:
         app = core(tmp_path)
@@ -553,15 +482,14 @@ def test_a_failed_catch_up_leaves_a_traceback_behind(tmp_path, monkeypatch, capl
     """
 
     def failing(
-        _: MemoryProcessingSupervisor,
-        should_stop: Callable[[], bool] = lambda: False,
+        _: DurableWriteQueue,
         *,
-        expected_permission_revision: int | None = None,
+        limit: int = 512,
+        after_cursor: str | None = None,
     ):
         raise sqlite3.OperationalError("database is locked")
-        yield []
 
-    monkeypatch.setattr(MemoryProcessingSupervisor, "_prepare_backfill_batches", failing)
+    monkeypatch.setattr(DurableWriteQueue, "unsubmitted_evidence_ids", failing)
 
     async def scenario() -> dict:
         app = core(tmp_path)
@@ -591,7 +519,7 @@ def test_a_failed_catch_up_leaves_a_traceback_behind(tmp_path, monkeypatch, capl
         if record.exc_info is not None
         for frame in traceback.extract_tb(record.exc_info[2])
     ]
-    assert any(frame.name == "backfill_off_thread" for frame in frames)
+    assert any(frame.name == "_run_backfill" for frame in frames)
     assert any(frame.name == "failing" and frame.filename == __file__ for frame in frames), (
         "栈里没有出事的那个调用"
     )

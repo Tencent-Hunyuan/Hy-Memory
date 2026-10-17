@@ -19,21 +19,14 @@ import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { queryClient } from "./query-client";
 
-const {
-  summary,
-  processing,
-  permission,
-  history,
-  liveSync,
-  recentConversations,
-} = vi.hoisted(() => ({
-  summary: vi.fn(),
-  processing: vi.fn(),
-  permission: vi.fn(),
-  history: vi.fn(),
-  liveSync: vi.fn(),
-  recentConversations: vi.fn(),
-}));
+const { summary, processing, history, liveSync, recentConversations } =
+  vi.hoisted(() => ({
+    summary: vi.fn(),
+    processing: vi.fn(),
+    history: vi.fn(),
+    liveSync: vi.fn(),
+    recentConversations: vi.fn(),
+  }));
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
   getCallHistory: history,
@@ -42,7 +35,6 @@ vi.mock("./api", () => ({
   getHomeSummary: summary,
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
-  getModelContentPermission: permission,
   getRecentConversations: recentConversations,
   getSources: vi.fn().mockResolvedValue([]),
 }));
@@ -82,7 +74,6 @@ beforeEach(() => {
     observed_at: "2026-09-19T00:00:00Z",
   });
   processing.mockReset().mockResolvedValue({ running: 0, pending: 0 });
-  permission.mockReset().mockResolvedValue({ allowed: true });
   liveSync.mockReset().mockResolvedValue([]);
   recentConversations.mockReset().mockResolvedValue({
     items: [],
@@ -545,26 +536,6 @@ it.each([
   },
 );
 
-it("shows disabled model-content permission and opens settings", async () => {
-  permission.mockResolvedValue({ allowed: false });
-  const onSettings = vi.fn();
-
-  render(
-    <ApplicationsHome
-      imports={imports}
-      onManage={() => {}}
-      onMemories={() => {}}
-      onSettings={onSettings}
-    />,
-  );
-
-  expect((await screen.findAllByText("模型读取已关闭")).length).toBeGreaterThan(
-    0,
-  );
-  expect(screen.getByText("新的对话不会再整理成记忆")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "打开模型内容权限" }));
-  expect(onSettings).toHaveBeenCalledOnce();
-});
 afterEach(() => {
   cleanup();
   resetConnectionReconcile();

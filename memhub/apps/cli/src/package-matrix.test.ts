@@ -137,8 +137,8 @@ describe("package matrix harness", () => {
     };
     expect(document.state).toBe("verified");
     const results = document.commands.stopped_destructive.results;
-    // 13 destructive commands, each unknown/runtime_not_running with exit 3.
-    expect(Object.keys(results)).toHaveLength(13);
+    // 11 destructive commands, each unknown/runtime_not_running with exit 3.
+    expect(Object.keys(results)).toHaveLength(11);
     for (const [name, result] of Object.entries(results)) {
       expect(result, `${name} did not fail closed`).toEqual({
         exit: 3,
@@ -162,7 +162,7 @@ describe("package matrix harness", () => {
     const shim = [
       "#!/usr/bin/env node",
       "const a=process.argv.slice(2);",
-      "if(['calls','import-file','notes','permission','extraction','graph','models'].includes(a[0])||(a[0]==='processing'&&a[1]==='extract')){",
+      "if(['calls','import-file','notes','extraction','graph','models'].includes(a[0])||(a[0]==='processing'&&a[1]==='extract')){",
       '  process.stdout.write(\'{"schema_version":1,"product":"memhub","state":"committed","operation_id":"x","receipt":{}}\\n\');',
       "  process.exit(0);",
       "}",
@@ -188,7 +188,7 @@ describe("package matrix harness", () => {
     expect(failure?.state).toBe("failed");
     expect(
       failure?.failures.filter((item) => item.includes("did not fail closed")),
-    ).toHaveLength(13);
+    ).toHaveLength(11);
   });
 
   it("can require an expected bundle SHA and reports bundle metadata", {
@@ -280,9 +280,8 @@ describe("package matrix harness", () => {
   });
 
   it("rejects a catalog that declares the parent command but not the new verb", async () => {
-    // A bundle can still declare `permission`/`models` while missing
-    // `permission allow` or `models activate`. Names alone would pass it; the
-    // usage marker must not.
+    // A bundle can still declare `models` while missing `models activate`.
+    // Names alone would pass it; the usage marker must not.
     const declared = [
       "install",
       "init",
@@ -292,7 +291,6 @@ describe("package matrix harness", () => {
       "calls",
       "import-file",
       "notes",
-      "permission",
       "extraction",
       "graph",
       "models",
@@ -342,9 +340,6 @@ describe("package matrix harness", () => {
       },
     };
     const failures = harness.validateCatalog(catalog);
-    expect(failures).toContain(
-      'command "permission" is missing usage "memhub permission allow"',
-    );
     expect(failures).toContain(
       'command "models" is missing usage "memhub models activate"',
     );

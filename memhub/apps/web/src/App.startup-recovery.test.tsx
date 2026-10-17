@@ -48,7 +48,6 @@ vi.mock("./ImportProgressStrip", () => ({ ImportProgressStrip: () => null }));
 vi.mock("./MatterWorkspace", () => ({ MatterWorkspace: () => null }));
 vi.mock("./HealthPanel", () => ({ HealthPanel: () => null }));
 vi.mock("./FirstUseGuide", () => ({ FirstUseGuide: () => null }));
-vi.mock("./ModelContentConsent", () => ({ ModelContentConsent: () => null }));
 
 function deferred() {
   let resolve!: (state: { status: string }) => void;

@@ -27,8 +27,7 @@ export type PollKey =
   | "conversations"
   | "applications"
   | "calls"
-  | "model-consent"
-  | "model-consent-request"
+  | "model-profiles"
   | "note-evidence"
   | "note-processing"
   | "health";

@@ -262,23 +262,6 @@
   justify-content: flex-end;
   gap: 12px;
 }
-.r6-settings .r6-model-permission {
-  padding: 24px 0 40px;
-  border-bottom: 1px solid #d8e2ea;
-}
-.r6-settings .r6-model-permission h3 {
-  font:
-    400 18px / 28px "Noto Sans SC",
-    "PingFang SC",
-    sans-serif;
-  margin: 0 0 14px;
-}
-.r6-settings .r6-model-permission p {
-  font-size: 15px;
-  line-height: 28px;
-  color: #63707b;
-  margin: 0 0 19px;
-}
 .r6-settings .r6-model-maintenance {
   margin-top: 24px;
 }

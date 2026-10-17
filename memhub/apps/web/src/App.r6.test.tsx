@@ -42,7 +42,6 @@ vi.mock("./MatterWorkspace", () => ({ MatterWorkspace: () => null }));
 vi.mock("./HealthPanel", () => ({ HealthPanel: () => null }));
 vi.mock("./FirstUseGuide", () => ({ FirstUseGuide: () => null }));
 vi.mock("./OnboardingFlow", () => ({ OnboardingFlow: () => null }));
-vi.mock("./ModelContentConsent", () => ({ ModelContentConsent: () => null }));
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/");

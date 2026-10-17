@@ -79,9 +79,3 @@ def test_default_distribution_avoids_per_launch_self_extraction(monkeypatch):
     calls, _, _ = evaluate_spec(monkeypatch, None)
     assert calls["exe"][1]["exclude_binaries"] is True
     assert calls["collect"][1]["name"] == "one-memory-runtime"
-
-
-@pytest.mark.parametrize("layout", ["folder", "single-file"])
-def test_runtime_permission_factory_is_explicitly_bundled(monkeypatch, layout):
-    calls, _, _ = evaluate_spec(monkeypatch, layout)
-    assert "one_memory.hy_permission_context" in calls["analysis"][1]["hiddenimports"]

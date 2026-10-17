@@ -299,7 +299,7 @@ export function ConversationSearch({
       </form>
 
       <p className="conversation-search-note">
-        这里搜的是你导入的原始对话，不是记忆。设置模型并打开模型内容权限后，才会开始生成记忆。
+        这里搜的是你导入的原始对话，不是记忆。设置模型后，才会开始生成记忆。
       </p>
 
       <label className="conversation-source-filter">

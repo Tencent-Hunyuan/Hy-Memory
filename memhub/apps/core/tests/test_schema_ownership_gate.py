@@ -88,10 +88,6 @@ KNOWN_INLINE_DDL = frozenset(
         # migration 29, and `test_call_event_ddl_matches_the_store_that_compares_it`
         # pins the two together.
         "call_event_store.py",
-        # Direct store construction predates the migration runner in narrow
-        # tests and repair tools. The canonical table also lives in migration
-        # 48; this mirrored bootstrap is pinned until those callers migrate.
-        "model_content_permissions.py",
         # Deliberate exception, not an oversight (D93 A). These two tables are
         # a derived cache of a decision the read path already makes, and they
         # must NOT go through a migration: `schema_gate` derives the build's

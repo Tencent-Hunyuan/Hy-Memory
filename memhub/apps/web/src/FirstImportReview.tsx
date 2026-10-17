@@ -377,7 +377,7 @@ export function FirstImportReview({
               : "对话先保存在本机。你可以同时设置后续连接。"}
           </p>
           <p className="first-import-r6-subintro">
-            导入不等于允许模型读取内容，也不会自动开放应用读取权限。配置模型并打开全局模型内容权限后，才会开始生成记忆。
+            导入不会自动开放应用读取权限。配置模型后，才会开始生成记忆。
           </p>
           {historyWindowLimited && (
             <p className="first-import-r6-history-window" role="status">

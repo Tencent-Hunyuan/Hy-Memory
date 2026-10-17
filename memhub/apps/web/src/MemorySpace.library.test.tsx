@@ -45,7 +45,6 @@ vi.mock("./api", () => ({
   }),
   getMemoryProcessing: async () => null,
   getModelProfiles: async () => [],
-  getModelContentPermission: async () => ({ allowed: false }),
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryNoteComposer", () => ({ MemoryNoteComposer: () => null }));

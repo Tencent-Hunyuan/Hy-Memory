@@ -36,7 +36,7 @@ from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.recall import _terms
 from one_memory.secrets import KeyringSecretStore
-from tests.source_consent import confirm_model_content, connection_request
+from tests.source_consent import connection_request
 
 PROFILE_DB = os.environ.get("ONE_MEMORY_MODEL_TEST_DB")
 pytestmark = [
@@ -127,7 +127,6 @@ def test_both_lanes_answer_through_one_real_hy_instance(tmp_path, monkeypatch):
             linked.raise_for_status()
             job = await app.state.import_supervisor.wait(linked.json()["jobs"][0]["job_id"])
             assert job.stored == 1 and job.errors == 0, job
-            await confirm_model_content(client, source_ids=(receipt["source_id"],))
             processor = app.state.memory_processing_supervisor
             await asyncio.gather(*tuple(processor._debounces.values()), return_exceptions=True)
             await asyncio.wait_for(asyncio.gather(*tuple(processor._workers.values())), timeout=300)

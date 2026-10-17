@@ -1,9 +1,8 @@
 """Diagnostic: why does an all-imported preview see zero Evidence?
 
-The C0 integration red asserts a preview snapshot has two Evidence rows after a
-real WorkBuddy import. Reproduces the exact query path from
-`ModelContentPermissionStore.snapshot_from_ids` and reports what the import
-actually wrote, so the owner can be named from evidence instead of inference.
+The C0 integration red asserted a preview snapshot had two Evidence rows after
+a real WorkBuddy import. This keeps the useful import-path diagnostic after
+the retired model-content preview layer was removed.
 """
 
 import asyncio

@@ -10,7 +10,6 @@ from fastapi.params import Depends
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from one_memory.database_access import main_database
-from one_memory.hy_memory_bridge import HyMemoryBridgeError
 from one_memory.imports.models import (
     EvidenceInput,
     EvidenceOrigin,
@@ -186,6 +185,10 @@ class MemoryNoteStore:
         ]
         if task is None or task.status == MemoryTaskStatus.WAITING_FOR_MODEL:
             state = "waiting_for_model"
+        elif task.status == MemoryTaskStatus.WAITING_FOR_PERMISSION:
+            # Upgrade compatibility: old rows are claimable and will leave
+            # this state as soon as the direct SDK runner claims them.
+            state = "waiting_for_permission"
         elif task.status == MemoryTaskStatus.COMPLETED:
             state = "ready" if memory_ids else "no_memories"
         elif task.status == MemoryTaskStatus.RUNNING:
@@ -195,22 +198,6 @@ class MemoryNoteStore:
         else:
             state = "failed"
         error = task.last_error_code if task else None
-        if self.processor.model_content_config is not None and state in {
-            "waiting_for_model",
-            "failed",
-        }:
-            try:
-                active = self.processor.profiles.active(self.processor.secrets)
-                if active is not None:
-                    self.processor._guard_records((record,), active)
-            except HyMemoryBridgeError as failure:
-                if str(failure).startswith("model_content_"):
-                    state = "waiting_for_permission"
-                    error = str(failure)
-                else:
-                    raise
-            except SecretStoreUnavailableError:
-                error = "secure_storage_unavailable"
         return MemoryNoteReceipt(
             evidence_id=record.evidence_id,
             text=sanitize_model_input(record.verbatim),
@@ -274,11 +261,8 @@ def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
                 # unchanged; replaying the same request returns the original
                 # `entry:<evidence_id>` job instead of a second HY call.
                 if readmit:
-                    # `/{evidence_id}/process` is the explicit "the condition
-                    # that parked it may have changed" signal: the person just
-                    # granted consent or fixed the model. `submit_evidence`
-                    # alone would return an existing parked row unchanged, so
-                    # without this readmit the note stays parked forever.
+                    # `/{evidence_id}/process` is the explicit retry signal.
+                    # It also revives pre-upgrade permission waiters.
                     await asyncio.to_thread(notes.intake.queue.readmit_parked)
                 submitted = await asyncio.to_thread(
                     notes.intake.submit_evidence,
@@ -296,10 +280,6 @@ def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
                         last_round=1,
                         priority="live",
                     )
-        except HyMemoryBridgeError as error:
-            if not str(error).startswith("model_content_"):
-                raise
-            return await asyncio.to_thread(notes.receipt, record.evidence_id)
         except SecretStoreUnavailableError:
             saved = await asyncio.to_thread(notes.receipt, record.evidence_id)
             return saved.model_copy(

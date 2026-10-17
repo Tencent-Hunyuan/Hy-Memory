@@ -2,6 +2,16 @@
 
 Hy Memory and MemHub are versioned and released independently.
 
+## Unreleased
+
+- Removed MemHub's task-scoped HyPermission store wrappers and global
+  model-content consent switch. The trusted embedded Hy Memory SDK now uses
+  its native local stores directly.
+- Existing installations ignore the retired config flag, readmit previously
+  parked pre-invocation work, and drop only the obsolete
+  `hy_node_permissions` proof table. Evidence, governed memories, model
+  profiles, SDK stores, and source/host grants are preserved.
+
 ## Hy Memory 2.0.2 — 2026-10-17
 
 - Published

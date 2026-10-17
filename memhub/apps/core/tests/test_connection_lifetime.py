@@ -12,15 +12,12 @@ import asyncio
 import gc
 import sqlite3
 from contextlib import contextmanager
-from types import SimpleNamespace
 
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
 from one_memory.api import create_app
 from one_memory.config import Settings
-from one_memory.database_access import close_main_databases, main_database_stats
-from one_memory.hy_permission_context import _NativeProofs
 from one_memory.imports.sources.registry import build_source_catalog
 
 
@@ -81,24 +78,3 @@ def test_polled_endpoints_close_every_connection_they_open(tmp_path, monkeypatch
             assert left_open == 0, f"{left_open} connections left for the collector"
 
     asyncio.run(scenario())
-
-
-def test_hy_permission_proofs_close_their_connections(tmp_path):
-    database = tmp_path / "one-memory.sqlite3"
-    with sqlite3.connect(database) as db:
-        db.execute("CREATE TABLE governed_memories (memory_id TEXT, revision INT, status TEXT)")
-    db.close()
-    proofs = _NativeProofs(database)
-    lease = SimpleNamespace(records=())
-    # The first read opens the pooled reader; it is meant to stay open.
-    proofs.guard(proofs.load(lease))()
-
-    with _without_cyclic_collection():
-        before = _open_connections()
-        for _ in range(5):
-            check = proofs.guard(proofs.load(lease))
-            check()
-        left_open = _open_connections() - before
-    assert left_open == 0, f"{left_open} connections left for the collector"
-    close_main_databases()
-    assert main_database_stats()["open_connections"] == 0

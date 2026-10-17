@@ -254,7 +254,7 @@ describe("ImportProgressStrip", () => {
     ).not.toContain("异常");
   });
 
-  it.each(["model-required", "consent-required", "failed"] as const)(
+  it.each(["model-required", "failed"] as const)(
     "does not override critical %s with running import/backfill",
     (phase) => {
       const { container } = render(
@@ -270,7 +270,6 @@ describe("ImportProgressStrip", () => {
             phase,
           }}
           onConfigureModel={vi.fn()}
-          onReviewProcessing={vi.fn()}
         />,
       );
       expect(
@@ -405,15 +404,13 @@ describe("ImportProgressStrip", () => {
   );
 
   it("opens all supplied exact issues and task receipts without triggering processing", async () => {
-    const open = vi.fn(),
-      review = vi.fn();
+    const open = vi.fn();
     const { container } = render(
       <ImportProgressStrip
         jobs={[job({ status: "completed", errors: 2 })]}
         sources={sources}
         backfilling={false}
         onOpenSources={open}
-        onReviewProcessing={review}
         issues={[
           {
             issue_id: 1,
@@ -440,7 +437,6 @@ describe("ImportProgressStrip", () => {
     expect(details?.textContent).toContain("已完成");
     expect(details?.textContent).not.toContain("completed");
     expect(open).not.toHaveBeenCalled();
-    expect(review).not.toHaveBeenCalled();
   });
 
   it("makes authentication failure actionable when no generation task is running", async () => {

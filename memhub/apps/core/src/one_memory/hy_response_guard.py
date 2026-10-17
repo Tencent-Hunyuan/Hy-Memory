@@ -144,6 +144,10 @@ class HyReconcileGuard:
         self.failures: list[str] = []
         self.bindings: HyWriteBindings | None = None
         self.imported_contents: frozenset[str] | None = None
+        self.mutation_target_ids: set[str] = set()
+
+    def begin_write(self) -> None:
+        self.mutation_target_ids.clear()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.reconciler, name)
@@ -210,6 +214,15 @@ class HyReconcileGuard:
         for operation in result.ops:
             raw_name = getattr(operation, "op", "")
             name = str(getattr(raw_name, "value", raw_name)).upper()
+            if name in {"UPDATE", "SUPERSEDE", "DELETE", "SHADOW"}:
+                target = getattr(operation, "memory_id", None)
+                if isinstance(target, str) and target:
+                    self.mutation_target_ids.add(target)
+                self.mutation_target_ids.update(
+                    key
+                    for key in getattr(operation, "memory_ids", ())
+                    if isinstance(key, str) and key
+                )
             if name == "ADD":
                 operation_counts["ADD"] += 1
             elif name in {"UPDATE", "MERGE", "NOOP"}:
@@ -232,20 +245,6 @@ class HyReconcileGuard:
                 "result_count": len(result.ops),
             },
         )
-        timer = self.step_timer
-        try:
-            with (
-                timer.step("write_verification", items=len(result.ops))
-                if timer is not None
-                else nullcontext()
-            ):
-                await self._check_targets(result, kwargs)
-        except Exception as error:
-            code = str(error)
-            if not code.startswith("hy_memory_write_verification_") or len(code) > 100:
-                code = "hy_memory_write_verification_failed"
-            self.failures.append(code)
-            raise ValueError(code) from error
         return result
 
     async def _check_targets(self, result: Any, kwargs: dict[str, Any]) -> None:

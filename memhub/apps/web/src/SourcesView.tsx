@@ -24,7 +24,6 @@ import {
   uninstallHost,
   useRecallHosts,
 } from "./host-state";
-import { ModelContentConsent } from "./ModelContentConsent";
 import { RecallPermissionControl } from "./RecallPermissionControl";
 import { fullGrantSelection, selectionIsValid } from "./recall-grant";
 import { LINK_WORDING, SKILL_WORDING } from "./recall-host-wording";
@@ -87,7 +86,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
     string | null
   >(null);
   const [directoryBusy, setDirectoryBusy] = useState<string | null>(null);
-  const [modelConsentOpen, setModelConsentOpen] = useState(false);
   const [consentPhase, setConsentPhase] = useState<
     "general" | "environment_override" | null
   >(null);
@@ -474,9 +472,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
 
   return (
     <section className="view sources-view" aria-labelledby="sources-title">
-      {modelConsentOpen && (
-        <ModelContentConsent onClose={() => setModelConsentOpen(false)} />
-      )}
       <header className="view-header">
         <div>
           <h1 id="sources-title">应用</h1>
@@ -508,32 +503,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
         snapshot={imports.sourceSnapshot}
         onRefresh={imports.refresh}
       />
-
-      <section className="model-content-entry" aria-label="模型整理权限">
-        <div>
-          <h2>模型内容权限</h2>
-          <p>用一个全局开关控制当前模型能否读取本地会话内容。</p>
-        </div>
-        <button
-          type="button"
-          className="secondary"
-          disabled={
-            actionBusy ||
-            consentOpen ||
-            installPreview !== null ||
-            uninstallPreview !== null ||
-            busyHost !== null
-          }
-          onClick={() => {
-            if (!document.querySelector('[role="dialog"][aria-modal="true"]')) {
-              setModelConsentOpen(true);
-            }
-          }}
-        >
-          <ShieldCheck size={16} aria-hidden="true" />
-          管理模型权限
-        </button>
-      </section>
 
       <div className="history-import-row" data-tour-id="history-import-row">
         <HistoryImport
@@ -732,7 +701,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                   disabled={
                     connecting ||
                     consentOpen ||
-                    modelConsentOpen ||
                     installPreview !== null ||
                     uninstallPreview !== null ||
                     hostBusy ||
@@ -758,7 +726,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     snapshotStale={snapshotStale}
                     disabled={
                       consentOpen ||
-                      modelConsentOpen ||
                       installPreview !== null ||
                       uninstallPreview !== null ||
                       hostBusy ||
@@ -785,7 +752,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                 actionBusy ||
                 hostBusy ||
                 consentOpen ||
-                modelConsentOpen ||
                 installPreview !== null ||
                 uninstallPreview !== null
               }
@@ -1013,7 +979,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                   disabled={
                     hostBusy ||
                     consentOpen ||
-                    modelConsentOpen ||
                     installPreview !== null ||
                     uninstallPreview !== null
                   }
@@ -1028,7 +993,6 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                   disabled={
                     hostBusy ||
                     consentOpen ||
-                    modelConsentOpen ||
                     installPreview !== null ||
                     uninstallPreview !== null
                   }

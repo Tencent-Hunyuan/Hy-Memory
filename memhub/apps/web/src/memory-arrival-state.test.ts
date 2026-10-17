@@ -69,33 +69,7 @@ it.each([
     },
     "model-required",
   ],
-  [
-    "consent block",
-    {
-      blocked_stages: [
-        {
-          kind: "extract",
-          reason: "model_content_permission_required",
-          count: 1,
-        },
-      ],
-    },
-    "consent-required",
-  ],
   ["failure", { failed: 1 }, "failed"],
-  [
-    "revoked consent block",
-    {
-      blocked_stages: [
-        {
-          kind: "extract",
-          reason: "model_content_permission_revoked",
-          count: 210,
-        },
-      ],
-    },
-    "consent-required",
-  ],
   [
     "unknown block",
     { blocked_stages: [{ kind: "extract", reason: "unknown", count: 1 }] },
@@ -152,7 +126,6 @@ it("does not promise continued processing for stale or queued-only state", () =>
 
 it.each([
   ["model_profile_not_active", "model-required"],
-  ["model_content_permission_required", "consent-required"],
   ["hy_memory_model_authentication_failed", "model-required"],
   ["hy_memory_model_payment_required", "model-required"],
 ] as const)(
@@ -279,13 +252,7 @@ it.each([
   ).toBe("processing");
 });
 
-it.each([
-  "checking",
-  "unavailable",
-  "stopped",
-  "model-required",
-  "consent-required",
-] as const)(
+it.each(["checking", "unavailable", "stopped", "model-required"] as const)(
   "explicit parent %s remains authoritative over a running count",
   (phase) => {
     expect(
@@ -315,29 +282,4 @@ it("raw import alone has an import title, without a generated-memory promise", (
   });
   expect(result.phase).toBe("importing");
   expect(memoryArrivalTitle(result)).toBe("正在导入对话");
-});
-
-it("reports the global model-content permission block", () => {
-  const result = resolveMemoryArrival({
-    ...base,
-    arrival: {
-      importing: false,
-      importedMessages: 12,
-      importedConversations: 3,
-      phase: "idle",
-    },
-    processing: {
-      ...processing,
-      blocked_stages: [
-        {
-          kind: "extract",
-          reason: "model_content_permission_required",
-          count: 2,
-        },
-      ],
-    },
-  });
-  expect(result.phase).toBe("consent-required");
-  expect(memoryArrivalTitle(result)).toBe("等待允许模型读取本地会话内容");
-  expect(result.blockedStages).toHaveLength(1);
 });

@@ -34,8 +34,6 @@ vi.mock("./api", () => ({
   getRecentConversations: recent,
   getSources: vi.fn().mockResolvedValue([]),
   getModelProfiles: vi.fn().mockResolvedValue([]),
-  getModelContentPermission: vi.fn().mockResolvedValue({ allowed: false }),
-  setModelContentPermission: vi.fn(),
   setSourceSync: vi.fn(),
 }));
 vi.mock("./ModelSettings", () => ({ ModelSettings: () => null }));

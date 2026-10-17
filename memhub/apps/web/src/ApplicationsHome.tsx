@@ -12,7 +12,6 @@ import {
   getHomeSummary,
   getLiveSyncHealth,
   getMemoryProcessing,
-  getModelContentPermission,
   getRecentConversations,
 } from "./api";
 import { AppMark } from "./app-mark";
@@ -169,7 +168,6 @@ export function ApplicationsHome({
   imports,
   onManage,
   onMemories,
-  onSettings,
   onCalls,
   active = true,
 }: {
@@ -178,7 +176,7 @@ export function ApplicationsHome({
   onMemories(memoryId?: string): void;
   /** 保留兼容旧调用方；“查看会话”入口已按产品要求下线。 */
   onConversations?(): void;
-  onSettings(): void;
+  onSettings?(): void;
   onCalls?(): void;
   active?: boolean;
 }) {
@@ -198,9 +196,6 @@ export function ApplicationsHome({
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
-  const [modelContentAllowed, setModelContentAllowed] = useState<
-    boolean | null
-  >(null);
   const [syncHealth, setSyncHealth] = useState<LiveSyncHealth[]>([]);
   const [failed, setFailed] = useState(false);
   const [recentCall, setRecentCall] = useState<CallEvent | null>(null);
@@ -554,10 +549,9 @@ export function ApplicationsHome({
     async function refresh() {
       if (busy || document.hidden) return;
       busy = true;
-      const [home, state, permission, sync, recent] = await Promise.allSettled([
+      const [home, state, sync, recent] = await Promise.allSettled([
         getHomeSummary(),
         getMemoryProcessing(),
-        getModelContentPermission(),
         getLiveSyncHealth(),
         getRecentConversations({ limit: 1, recentActivity: true }),
       ]);
@@ -572,9 +566,6 @@ export function ApplicationsHome({
         setFailed(true);
       }
       if (state.status === "fulfilled") setProcessing(state.value);
-      if (permission.status === "fulfilled")
-        setModelContentAllowed(permission.value.allowed);
-      else setModelContentAllowed(null);
       if (sync.status === "fulfilled") setSyncHealth(sync.value);
       if (recent.status === "fulfilled") {
         setLatestDialogue(recent.value.items[0] ?? null);
@@ -660,22 +651,19 @@ export function ApplicationsHome({
   const apps = imports.sources.filter(
     (s) => s.authorized || s.detected === true || s.location_state === "found",
   );
-  const stateLabel =
-    modelContentAllowed === false
-      ? "模型读取已关闭"
-      : processing?.running
-        ? "整理中"
-        : processing?.blocked_stages?.some((stage) => stage.count > 0)
-          ? "排队处理中"
-          : processing?.waiting_for_model
-            ? "等待模型"
-            : processing?.failed
-              ? "需要处理"
-              : processing?.pending
-                ? "准备中"
-                : processing
-                  ? "一切就绪"
-                  : "待核对";
+  const stateLabel = processing?.running
+    ? "整理中"
+    : processing?.blocked_stages?.some((stage) => stage.count > 0)
+      ? "排队处理中"
+      : processing?.waiting_for_model
+        ? "等待模型"
+        : processing?.failed
+          ? "需要处理"
+          : processing?.pending
+            ? "准备中"
+            : processing
+              ? "一切就绪"
+              : "待核对";
   const latestClock = latest ? clockParts(latest.updated_at) : null;
   const time = latestClock?.clock ?? (latest ? "时间未知" : null);
   const checked = visible ? clockParts(visible.observed_at) : null;
@@ -848,19 +836,12 @@ export function ApplicationsHome({
                 <p>沉淀状态</p>
                 <strong className="r6-home-word">{stateLabel}</strong>
                 <small>
-                  {modelContentAllowed === false
-                    ? "新的对话不会再整理成记忆"
-                    : processing?.running
-                      ? "新的对话正在整理"
-                      : processing?.pending
-                        ? "等待队列开始处理"
-                        : "以当前处理状态为准"}
+                  {processing?.running
+                    ? "新的对话正在整理"
+                    : processing?.pending
+                      ? "等待队列开始处理"
+                      : "以当前处理状态为准"}
                 </small>
-                {modelContentAllowed === false ? (
-                  <R6Button variant="quiet" onClick={() => onSettings()}>
-                    打开模型内容权限
-                  </R6Button>
-                ) : null}
               </div>
               <div>
                 <p>最近更新</p>

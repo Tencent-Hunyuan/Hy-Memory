@@ -24,12 +24,10 @@ import {
   getLiveSyncHealth,
   getMemoryNoteOperation,
   getMemoryNotes,
-  getModelContentPermission,
   getModelCreationOperation,
   getModelProfiles,
   getSourceImportReceipt,
   getSources,
-  setModelContentPermission,
 } from "./api";
 
 const receipt = {
@@ -78,14 +76,9 @@ const modelProfile = {
 };
 
 describe("model read transport validation", () => {
-  it("accepts a valid model profile list and permission", async () => {
-    fake.get
-      .mockResolvedValueOnce({ data: [modelProfile] })
-      .mockResolvedValueOnce({ data: { allowed: false } });
+  it("accepts a valid model profile list", async () => {
+    fake.get.mockResolvedValueOnce({ data: [modelProfile] });
     await expect(getModelProfiles()).resolves.toEqual([modelProfile]);
-    await expect(getModelContentPermission()).resolves.toEqual({
-      allowed: false,
-    });
   });
 
   it("rejects a malformed profile before settings renders it", async () => {
@@ -93,27 +86,6 @@ describe("model read transport validation", () => {
       data: [{ ...modelProfile, revision: 0 }],
     });
     await expect(getModelProfiles()).rejects.toThrow("model_profiles_invalid");
-  });
-
-  it("rejects a malformed model-content permission", async () => {
-    fake.get.mockResolvedValue({
-      data: { allowed: "yes" },
-    });
-    await expect(getModelContentPermission()).rejects.toThrow(
-      "model_content_permission_invalid",
-    );
-  });
-
-  it("posts only the desired global permission", async () => {
-    fake.post.mockResolvedValue({ data: { allowed: true } });
-    await expect(setModelContentPermission(true)).resolves.toEqual({
-      allowed: true,
-    });
-    expect(fake.post).toHaveBeenCalledWith(
-      "/api/v1/model-content-permission",
-      { allowed: true },
-      undefined,
-    );
   });
 });
 

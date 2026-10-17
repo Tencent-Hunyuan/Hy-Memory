@@ -305,9 +305,9 @@ Runtime 应长期复用 client，不为每次请求重新初始化数据库和�
 
 ```text
 Evidence
-  -> ModelProcessingPermissionLease
-  -> HyPermissionTransport
-  -> HyMemoryBridge.ingest / ingest_extracted / search_ids
+  -> HyMemoryBridge
+  -> embedded Hy Memory SDK
+  -> native Vector / Coding / Graph stores
   -> write result verification
   -> Governance
   -> Recall Broker / UI
@@ -316,8 +316,11 @@ Evidence
 不要在新业务模块里直接创建 `HyMemoryClient`，否则会绕过：
 
 - 来源读取授权；
-- 模型内容处理授权；
-- 发送前与响应后的撤权复核；
+- 共享 Runtime、模型配置、API Key 安全存储与请求预算；
 - Evidence 引用与作者归属；
 - 写后回读验证；
 - Governance 状态、版本、更正和删除级联。
+
+Hy Memory SDK 是 MemHub 的内置可信组件，可自由访问和管理本机的全部
+Hy Memory 数据。来源授权仍决定哪些宿主数据可以进入本机；宿主 Recall Grant
+仍决定哪些外部 AI 应用可以读取治理后的记忆。这两类边界不限制内置 SDK 的本地 CRUD。

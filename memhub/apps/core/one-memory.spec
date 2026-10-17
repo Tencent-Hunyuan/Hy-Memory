@@ -11,7 +11,7 @@ folder_layout = layout == 'folder'
 datas = [('src/one_memory/embedding_assets', 'one_memory/embedding_assets')]
 binaries = []
 # Loaded lazily by the API; static dependency analysis cannot discover it.
-hiddenimports = ['one_memory.hy_permission_context']
+hiddenimports = []
 tmp_ret = collect_all('hy_memory')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('chromadb')

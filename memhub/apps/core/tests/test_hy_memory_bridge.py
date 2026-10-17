@@ -18,10 +18,12 @@ from one_memory.hy_memory_bridge import (
     HyMemoryBridge,
     HyMemoryBridgeError,
     HyMemoryIngestRequest,
+    HyMemoryIngestResult,
     HyMemoryTurn,
     UnsupportedHyMemoryProviderError,
     _basic_info_memories,
     _collection_name,
+    _with_native_mutation_delta,
     build_hy_memory_config,
     configure_hy_memory_environment,
     reattach_legacy_vector_collection,
@@ -1507,3 +1509,58 @@ def test_the_client_mode_follows_the_graph_store_switch(tmp_path, monkeypatch) -
     hy_memory_bridge.create_hy_memory_client(profile, api_key=None, data_dir=tmp_path).close()
 
     assert seen == ["pro", HY_MEMORY_MODE]
+
+
+def test_native_mutation_delta_reports_coding_deletes_and_supersedes() -> None:
+    raw = {
+        "ops": [
+            {
+                "action": "DELETE",
+                "target_experience_id": "old-experience",
+            }
+        ],
+        "fact_ops": [
+            {
+                "action": "SUPERSEDE",
+                "fact_id": "old-fact",
+                "superseded_by": "new-fact",
+            }
+        ],
+    }
+
+    result = asyncio.run(
+        _with_native_mutation_delta(
+            SimpleNamespace(),
+            HyMemoryIngestResult(success=True),
+            raw,
+            (),
+        )
+    )
+
+    assert result.retired_memory_ids == ("old-experience", "old-fact")
+    assert result.superseded_memory_ids == {"old-fact": ("new-fact",)}
+
+
+def test_native_mutation_delta_reads_chat_status_from_the_sdk() -> None:
+    class Client:
+        def get(self, memory_id: str) -> Mapping[str, object]:
+            assert memory_id == "old-chat"
+            return {
+                "memory_id": memory_id,
+                "content": "old",
+                "status": "superseded",
+                "superseded_by": ["new-chat"],
+            }
+
+    guard = SimpleNamespace(mutation_target_ids={"old-chat"})
+    result = asyncio.run(
+        _with_native_mutation_delta(
+            Client(),
+            HyMemoryIngestResult(success=True),
+            {},
+            (guard,),
+        )
+    )
+
+    assert result.retired_memory_ids == ("old-chat",)
+    assert result.superseded_memory_ids == {"old-chat": ("new-chat",)}

@@ -1,10 +1,4 @@
-import {
-  FileText,
-  Link2,
-  LoaderCircle,
-  Settings2,
-  ShieldCheck,
-} from "lucide-react";
+import { FileText, Link2, LoaderCircle, Settings2 } from "lucide-react";
 import {
   type MemoryArrival,
   memoryArrivalTitle,
@@ -22,7 +16,6 @@ export function MemoryArrivalPanel({
   hasMemories = false,
   suspended = false,
   onViewHistory,
-  onReviewProcessing,
   onConfigureModel,
   onConnect,
   showDetails = true,
@@ -31,7 +24,6 @@ export function MemoryArrivalPanel({
   hasMemories?: boolean;
   suspended?: boolean;
   onViewHistory?(): void;
-  onReviewProcessing?(): void;
   onConfigureModel(): void;
   onConnect(): void;
   showDetails?: boolean;
@@ -115,20 +107,11 @@ export function MemoryArrivalPanel({
             设置记忆整理
           </button>
         )}
-        {arrival.phase === "consent-required" && (
-          <button
-            type="button"
-            onClick={onReviewProcessing ?? onConfigureModel}
-          >
-            <ShieldCheck size={15} aria-hidden="true" />
-            打开模型内容权限
-          </button>
-        )}
         {["failed", "unavailable", "stopped"].includes(arrival.phase) && (
           <button
             type="button"
             className="secondary"
-            onClick={onReviewProcessing ?? onConfigureModel}
+            onClick={onConfigureModel}
           >
             <Settings2 size={15} aria-hidden="true" />
             查看整理状态
@@ -157,8 +140,6 @@ function arrivalDescription(arrival: MemoryArrival): string {
   switch (arrival.phase) {
     case "model-required":
       return `${retained}请核对整理模型后继续。`;
-    case "consent-required":
-      return `${retained}确认来源和内容范围后才能开始整理。`;
     case "processing":
       return "先整理近期对话，更多记忆会陆续出现";
     case "importing":

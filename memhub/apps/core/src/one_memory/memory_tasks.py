@@ -267,15 +267,13 @@ class MemoryTaskOutput(BaseModel):
 MEMORY_TASK_SCHEMA = memory_tasks_ddl("sqlite")
 
 
-#: Transport refusals raised before the physical send, so provably nothing
-#: reached HY: nothing can have been written and retrying cannot duplicate.
+#: Legacy transport refusals raised before the physical send, so provably
+#: nothing reached HY: nothing can have been written and retrying cannot
+#: duplicate. Kept to recover rows written by builds through 1.0.2.
 #:
-#: Every name here is denied by `HyPermissionTransport._check_request` (the
-#: httpx request hook) or by `_PhysicalTransport.handle_async_request` before
-#: it counts the request — both run inside httpx, before the socket. Explicit
-#: on purpose (D88): the transport also denies `budget_exceeded`, `redirect`,
-#: `lease_*` and `request_failed`, all of which can arrive after HY persisted
-#: a node, so a prefix rule would requeue work that may already exist.
+#: The retired request hook denied every name below before opening a socket.
+#: This stays explicit: other old transport codes may have happened after HY
+#: persisted a node and must not be blindly requeued.
 _PRE_SEND_REFUSALS = (
     "model_content_transport_headers_mismatch",
     "model_content_transport_body_mismatch",

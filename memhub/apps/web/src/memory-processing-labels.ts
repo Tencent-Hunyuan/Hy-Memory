@@ -63,12 +63,8 @@ const BLOCK_REASON_LABELS: Record<string, string> = {
   hy_memory_model_request_failed: "模型请求未成功",
   hy_memory_unavailable: "HY Memory 不可用",
   hy_memory_init_failed: "HY Memory 启动失败",
-  model_content_permission_required: "模型内容权限已关闭",
-  model_content_permission_revoked: "模型内容权限已关闭",
-  model_content_permission_changed: "模型内容权限已变化",
   model_content_profile_changed: "当前模型已变化",
   model_content_content_scope_changed: "本地会话内容已变化",
-  model_content_evidence_not_permitted: "模型内容权限未开启",
   // Named rather than summed up as a retry: Core never picks this one up
   // again (`_guard_task`), so calling it "正在重试" would be a lie.
   hy_memory_input_exceeds_window: "这段对话含过长原文，暂未整理；原文已保留",
@@ -104,12 +100,8 @@ const NAMED_BLOCK_REASONS = new Set([
   "hy_memory_model_request_failed",
   "hy_memory_unavailable",
   "hy_memory_init_failed",
-  "model_content_permission_required",
-  "model_content_permission_revoked",
-  "model_content_permission_changed",
   "model_content_profile_changed",
   "model_content_content_scope_changed",
-  "model_content_evidence_not_permitted",
   // Never retried, and the one stall whose answer is "nothing to do, the
   // original is still there" — worth saying out loud.
   "hy_memory_input_exceeds_window",

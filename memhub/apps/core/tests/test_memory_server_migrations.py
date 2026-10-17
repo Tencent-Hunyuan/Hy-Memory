@@ -2103,7 +2103,47 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50)
+    assert result.applied == (49, 50, 51)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
+
+
+def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
+    tmp_path,
+) -> None:
+    import sqlite3
+
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore
+
+    path = tmp_path / "existing.sqlite3"
+    asyncio.run(
+        migrate(
+            SqliteMigrationStore(path),
+            tuple(migration for migration in MIGRATIONS if migration.version <= 50),
+        )
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE hy_node_permissions ("
+            "node_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, evidence_json TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO hy_node_permissions(node_id,fingerprint,evidence_json) "
+            "VALUES ('legacy-node', ?, '[]')",
+            ("a" * 64,),
+        )
+
+    result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
+
+    assert result.applied == (51,)
+    with sqlite3.connect(path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    assert "hy_node_permissions" not in tables
+    assert "governed_memories" in tables
+    assert "evidence" in tables

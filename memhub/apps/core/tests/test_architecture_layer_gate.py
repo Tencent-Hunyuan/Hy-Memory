@@ -65,12 +65,7 @@ HY_BRIDGE = f"{PACKAGE_LABEL}/hy_memory_bridge.py"
 SDK_CALLER = HY_BRIDGE
 
 #: Type-only importers of HY datatypes; they hold no client and write nothing.
-HY_TYPE_ONLY = frozenset(
-    {
-        f"{PACKAGE_LABEL}/hy_permission_store.py",
-        f"{PACKAGE_LABEL}/hy_permission_coding_store.py",
-    }
-)
+HY_TYPE_ONLY: frozenset[str] = frozenset()
 
 
 def _relative(path: Path) -> str:

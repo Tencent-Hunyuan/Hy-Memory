@@ -180,5 +180,8 @@ describe("import-job write allow-list", () => {
     await expect(
       operations.post("/api/v1/import-jobs/job-1/delete", {}),
     ).rejects.toThrow("core_operation_path_not_allowed");
+    await expect(
+      operations.post("/api/v1/model-content-permission", { allowed: true }),
+    ).rejects.toThrow("core_operation_path_not_allowed");
   });
 });

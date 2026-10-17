@@ -892,7 +892,7 @@ function PermissionDialog({
                       {toolNames[tool]}
                       {tool === "om_ask" && (
                         <small>
-                          可能使用另行获准的模型处理。本次不会授予模型内容权限。
+                          可能使用已配置的模型处理。本次只授予此应用的记忆读取范围。
                         </small>
                       )}
                     </span>
@@ -1068,7 +1068,8 @@ function PermissionDialog({
           )}
           {snapshot.action === "grant" && (
             <p className="recall-permission-meta">
-              本次不会安装连接、导入历史、开启持续同步或授权模型处理。授权不代表应用已实际调用或采用记忆。
+              本次不会安装连接、导入历史或开启持续同步，也不改变内置 SDK
+              的本地记忆处理。授权不代表应用已实际调用或采用记忆。
             </p>
           )}
           {pending && (

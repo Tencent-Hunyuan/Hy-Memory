@@ -30,7 +30,6 @@ import { HealthPanel } from "./HealthPanel";
 import { ImportProgressStrip } from "./ImportProgressStrip";
 import { MatterWorkspace } from "./MatterWorkspace";
 import { MemorySpace } from "./MemorySpace";
-import { ModelContentConsent } from "./ModelContentConsent";
 import type { MemoryArrival } from "./memory-arrival-state";
 import { OnboardingFlow } from "./OnboardingFlow";
 import { R6Button, R6LocalStorage } from "./R6Controls";
@@ -72,7 +71,6 @@ function AppContent() {
   const startupFlight = useRef<Promise<OnboardingState> | null>(null);
   const startupEpoch = useRef(0);
   const startupAlive = useRef(false);
-  const [processingScopeOpen, setProcessingScopeOpen] = useState(false);
   const [detailSourceId, setDetailSourceId] = useState<string | null>(null);
   const [memoryArrival, setMemoryArrival] = useState<
     MemoryArrival | undefined
@@ -212,11 +210,6 @@ function AppContent() {
     setView(next);
   };
 
-  const openProcessingScope = () => {
-    if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
-    setProcessingScopeOpen(true);
-  };
-
   if (!onboarding || imports.loading) {
     return (
       <main className="onboarding-shell">
@@ -351,7 +344,6 @@ function AppContent() {
               onRefresh={imports.refresh}
               arrival={memoryArrival}
               onConfigureModel={() => navigate("settings")}
-              onReviewProcessing={openProcessingScope}
               onJobAction={imports.changeJob}
               showSourceLink={displayedView !== "settings"}
               showProgressDetails={displayedView !== "settings"}
@@ -378,7 +370,6 @@ function AppContent() {
               onFocusDialogueConsumed={() => setFocusDialogue(false)}
               onConnect={() => navigate("sources")}
               onConfigureModel={() => navigate("settings")}
-              onReviewProcessing={openProcessingScope}
               onArrivalChange={setMemoryArrival}
             />
           </div>
@@ -419,7 +410,6 @@ function AppContent() {
                     navigate("memory");
                   }}
                   onCalls={() => navigate("calls")}
-                  onSettings={() => navigate("settings")}
                 />
               )}
             </div>
@@ -469,15 +459,6 @@ function AppContent() {
       <footer className="r6-shell-footer">
         <R6LocalStorage />
       </footer>
-      {processingScopeOpen && (
-        <ModelContentConsent
-          onClose={() => setProcessingScopeOpen(false)}
-          onConfigureModel={() => {
-            setProcessingScopeOpen(false);
-            navigate("settings");
-          }}
-        />
-      )}
     </div>
   );
 }

@@ -11,7 +11,6 @@ import {
 } from "./headless-flows.js";
 import { approvalFingerprint, listHosts, readHost } from "./host-flow.js";
 import { parseSelection, type WizardPrompter } from "./init-wizard.js";
-import { setModelContentPermission } from "./model-content-permission-flow.js";
 import { executeModelProbe, planModelProbe } from "./model-probe-flow.js";
 import {
   executeModelProfileActivate,
@@ -122,7 +121,6 @@ export type InteractiveModelSetupState =
   | {
       state: "configured";
       profile: ModelProfile;
-      model_content_allowed: boolean;
       installed_hosts: string[];
     }
   | { state: "skipped" }
@@ -289,15 +287,11 @@ async function installHosts(
 function writeSummary(
   prompter: WizardPrompter,
   profile: ModelProfile,
-  modelContentAllowed: boolean,
   installedHosts: readonly string[],
   failedHosts: readonly { hostId: string; label: string }[],
 ): void {
   prompter.write("配置摘要：");
   prompter.write(`  模型：${profile.name} / ${profile.model}`);
-  prompter.write(
-    `  模型内容外发：${modelContentAllowed ? "已允许" : "已禁止"}`,
-  );
   prompter.write(
     `  应用接入：${installedHosts.length > 0 ? installedHosts.join("、") : "已跳过"}`,
   );
@@ -353,14 +347,6 @@ export async function runInteractiveModelSetup(
       prompter.write("未填写 API Key。输入 back 返回，或重新选择模型服务。");
       continue;
     }
-    const permissionAnswer = (
-      await prompter.ask("允许将对话内容发送给模型以整理记忆？[Y/n]: ")
-    )
-      .trim()
-      .toLowerCase();
-    const modelContentAllowed = !["n", "no", "否", "0"].includes(
-      permissionAnswer,
-    );
     const hostApi = options.hostApi ?? { list: listHosts, read: readHost };
     const selectedHosts = options.installHosts
       ? await chooseDetectedHosts(prompter, options.hostHome, hostApi)
@@ -452,13 +438,6 @@ export async function runInteractiveModelSetup(
       return { state: "failed", code: "model_activate_failed" };
     }
 
-    const permission = await setModelContentPermission(
-      clients.operations,
-      modelContentAllowed,
-    );
-    if (permission.state !== "ok") {
-      return { state: "failed", code: "model_content_permission_set_failed" };
-    }
     const { installed, failed } = await installHosts(
       options.dataDir,
       selectedHosts,
@@ -467,7 +446,6 @@ export async function runInteractiveModelSetup(
     writeSummary(
       prompter,
       profile,
-      modelContentAllowed,
       installed,
       failed.map((hostId) => ({
         hostId,
@@ -477,7 +455,6 @@ export async function runInteractiveModelSetup(
     return {
       state: "configured",
       profile,
-      model_content_allowed: modelContentAllowed,
       installed_hosts: installed,
     };
   }

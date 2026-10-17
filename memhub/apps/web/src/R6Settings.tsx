@@ -18,7 +18,6 @@ import {
   setLoginPreference,
   useLoginPreference,
 } from "./runtime-state";
-import { useModelContentPermission } from "./use-model-content-permission";
 import "./r6-settings.css";
 
 type Group = "model" | "connections" | "help";
@@ -69,9 +68,6 @@ export function R6Settings({
   const quitPanel = useRef<HTMLElement>(null);
   const quitOpener = useRef<HTMLElement | null>(null);
   const currentModel = profiles?.find((profile) => profile.is_active) ?? null;
-  const contentPermission = useModelContentPermission(
-    active && group === "model",
-  );
 
   useLayoutEffect(() => {
     if (!active) return;
@@ -278,32 +274,6 @@ export function R6Settings({
                   模型配置暂时无法打开：正在处理上一次创建或测试，或本机存储暂时不可用。
                   请等待当前操作结束后重试；现有配置和原文不会被改动。
                 </p>
-              )}
-              {currentModel && (
-                <div className="r6-model-permission">
-                  <h3>模型内容权限</h3>
-                  <p>
-                    允许当前配置模型读取已导入和之后同步到本机的会话内容。
-                    已生成记忆的搜索不受此开关影响。
-                  </p>
-                  <R6Switch
-                    label="允许当前配置模型读取本地会话内容"
-                    checked={contentPermission.allowed === true}
-                    disabled={
-                      contentPermission.allowed === null ||
-                      contentPermission.reading ||
-                      contentPermission.writing
-                    }
-                    onCheckedChange={(allowed) =>
-                      void contentPermission.update(allowed)
-                    }
-                  />
-                  {contentPermission.error && (
-                    <p role="alert" className="r6-settings-error">
-                      {contentPermission.error}
-                    </p>
-                  )}
-                </div>
               )}
             </div>
             <section

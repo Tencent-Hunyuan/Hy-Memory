@@ -51,7 +51,6 @@ type Props = Parameters<typeof Workbench>[0] & {
   id?: string;
   arrival?: MemoryArrival;
   onViewHistory?(): void;
-  onReviewProcessing?(): void;
   onMutationComplete?(id: string): void;
   focusDialogue?: boolean;
   onFocusDialogueConsumed?(): void;
@@ -1052,7 +1051,6 @@ export function MemoryMap(props: Props) {
             hasMemories={active.length > 0}
             suspended={overlaysSuspended}
             onViewHistory={props.onViewHistory}
-            onReviewProcessing={props.onReviewProcessing}
             onConfigureModel={props.onConfigureModel}
             onConnect={props.onConnect}
           />

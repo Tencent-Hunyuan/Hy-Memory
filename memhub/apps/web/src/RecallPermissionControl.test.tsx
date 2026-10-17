@@ -356,10 +356,10 @@ describe("RecallPermissionControl", () => {
     ]);
   });
 
-  it("discloses that ask may use model processing, and lets it be left out", async () => {
+  it("discloses that ask may use the configured model, and lets it be left out", async () => {
     const api = setup();
     await open();
-    expect(screen.getByText(/可能使用另行获准的模型处理/)).toBeTruthy();
+    expect(screen.getByText(/可能使用已配置的模型处理/)).toBeTruthy();
     await userEvent.click(check("记忆问答（可选）"));
     await confirm();
     expect(api.set.mock.calls[0][1].allowedTools).toEqual([

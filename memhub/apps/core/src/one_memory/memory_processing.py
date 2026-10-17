@@ -13,7 +13,7 @@ from collections.abc import (
     Generator,
     Mapping,
 )
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -82,7 +82,6 @@ from one_memory.memory_queue import (
     classify,
     extraction_window_for,
 )
-from one_memory.memory_server.config_state import ConfigStore
 from one_memory.memory_tasks import (
     TASK_MAX_ATTEMPTS,
     ActiveMemoryTask,
@@ -99,17 +98,10 @@ from one_memory.memory_tasks import (
     materialize_evidence_ref,
     segment_evidence_record,
 )
-from one_memory.model_processing_permission_guard import (
-    ModelProcessingPermissionGuard,
-    ModelProcessingPermissionLease,
-    error_is_policy_stop,
-    permission_error,
-)
 from one_memory.model_profiles import (
     ModelProfile,
     ModelProfileSnapshot,
     ModelProfileStore,
-    ProviderKind,
 )
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 from one_memory.semantic_deadline import SemanticMemoryHit, normalize_semantic_hits
@@ -258,12 +250,6 @@ class MemoryBridgeProtocol(Protocol):
     async def close(self) -> None: ...
 
 
-PermissionBridgeFactory = Callable[
-    [ModelProcessingPermissionLease, str | None, Path],
-    AbstractAsyncContextManager[MemoryBridgeProtocol],
-]
-
-
 class MemoryTaskRunner:
     def __init__(
         self,
@@ -278,8 +264,6 @@ class MemoryTaskRunner:
             Callable[[ModelProfileSnapshot, str | None, Path], MemoryBridgeProtocol] | None
         ) = None,
         close_bridge: bool = True,
-        model_content_config: ConfigStore | None = None,
-        permission_bridge_factory: PermissionBridgeFactory | None = None,
     ) -> None:
         self.tasks = tasks
         self.profiles = profiles
@@ -289,17 +273,6 @@ class MemoryTaskRunner:
         self.data_dir = data_dir
         self.bridge_factory = bridge_factory or self._create_bridge
         self.close_bridge = close_bridge
-        self.model_content_config = model_content_config
-        self.permission_bridge_factory = permission_bridge_factory
-        self._permission_guard = (
-            ModelProcessingPermissionGuard(
-                model_content_config,
-                governance,
-                profiles,
-            )
-            if model_content_config is not None
-            else None
-        )
 
     async def run(
         self,
@@ -317,24 +290,13 @@ class MemoryTaskRunner:
             task_id=task_id,
         )
         try:
-            if self._permission_guard is not None:
-                body = (
-                    self._run_with_content_permission(task_id)
-                    if before_hy_invocation is None
-                    else self._run_with_content_permission(
-                        task_id, before_hy_invocation=before_hy_invocation
-                    )
+            body = (
+                self._run_without_content_permission(task_id)
+                if before_hy_invocation is None
+                else self._run_without_content_permission(
+                    task_id, before_hy_invocation=before_hy_invocation
                 )
-            else:
-                # Explicit compatibility for isolated callers without a guard. Production
-                # Compatibility for isolated callers. Production always supplies ConfigStore.
-                body = (
-                    self._run_without_content_permission(task_id)
-                    if before_hy_invocation is None
-                    else self._run_without_content_permission(
-                        task_id, before_hy_invocation=before_hy_invocation
-                    )
-                )
+            )
             # The ceiling bounds how long this task holds its harness's slot:
             # a harness is serial, so one hung task starves every turn behind
             # it. It is insurance against a single bad call, not a way to run
@@ -395,213 +357,6 @@ class MemoryTaskRunner:
             duration_ms=elapsed_ms(started),
             details={"phase": str(step), "action": action},
         )
-
-    def _prepare_permission_lease(
-        self,
-        task: MemoryTask,
-        *,
-        persist_context: bool = True,
-    ) -> tuple[ModelProcessingPermissionLease, HyMemoryIngestRequest, tuple[EvidenceRecord, ...]]:
-        guard = self._permission_guard
-        if guard is None:
-            raise permission_error("permission_required")
-        try:
-            chunk = self._frozen_chunk(task)
-            if not chunk:
-                raise permission_error("task_input_scope_required")
-            permission_records = self._original_records(chunk)
-            # Check current inputs before expanding history; the complete context
-            # is checked again before the adapter can see any of it.
-            guard.check(task.profile_snapshot, permission_records)
-            request = self._request(task, chunk)
-            if request.source_context is not None:
-                context = (
-                    self._source_context(task, request.source_context)
-                    if persist_context
-                    else self._source_context(task, request.source_context, persist_inputs=False)
-                )
-                request = request.model_copy(
-                    update={
-                        "source_context": context,
-                    }
-                )
-            lease = guard.lease(task, permission_records, request.source_context)
-            if request.source_context is not None:
-                self._check_source_context(request.source_context)
-            return lease, request, chunk
-        except HyMemoryBridgeError as error:
-            if str(error).startswith("model_content_"):
-                raise
-            raise permission_error("evidence_changed") from error
-
-    async def _run_with_content_permission(
-        self,
-        task_id: str,
-        *,
-        before_hy_invocation: Callable[[], Awaitable[None]] | None = None,
-    ) -> MemoryTask:
-        step_started = monotonic()
-        task, token = await in_the_background(self.tasks.claim, task_id)
-        self._log_step(task_id, 1, "claim", step_started)
-        hy_invoked = False
-        try:
-            if task.kind is not MemoryTaskKind.EXTRACT:
-                raise permission_error("task_kind_unsupported")
-            derivation = await in_the_background(self.governance.hy_derivation)
-            step_started = monotonic()
-            lease, request, chunk = await in_the_background(self._prepare_permission_lease, task)
-            self._log_step(task_id, 2, "permission_context", step_started)
-            factory = self.permission_bridge_factory
-            if factory is None:
-                # Explicit refs cannot prove what an existing HY cache holds.
-                # The adapter must isolate that context and guard SDK children.
-                raise permission_error("context_unverified")
-            await in_the_background(lease.recheck)
-            step_started = monotonic()
-            secret = await in_the_background(
-                self.profiles.resolve_snapshot_secret,
-                task.profile_id,
-                task.profile_revision,
-                self.secrets,
-            )
-            if task.profile_snapshot.has_api_key and secret is None:
-                raise HyMemoryBridgeError("model_secret_unavailable")
-            self._log_step(task_id, 3, "credential", step_started)
-            await in_the_background(lease.recheck)
-            step_started = monotonic()
-            async with factory(lease, secret, self.data_dir) as bridge:
-                self._log_step(task_id, 4, "bridge_context", step_started)
-                await in_the_background(lease.recheck)
-                contents = tuple(
-                    sanitize_model_input(record.verbatim)
-                    for record in chunk
-                    if _imported_as_said(record)
-                )
-                only_contents = bool(contents) and all(_imported_as_said(r) for r in chunk)
-                step_started = monotonic()
-                if before_hy_invocation is not None:
-                    await before_hy_invocation()
-                await in_the_background(
-                    self.tasks.record_hy_invocation,
-                    task_id,
-                    runner_token=token,
-                )
-                hy_invoked = True
-                result = (
-                    await bridge.ingest_extracted(request, contents)
-                    if only_contents
-                    else await bridge.ingest(request)
-                )
-                self._log_step(task_id, 5, "hy_ingest", step_started)
-                await in_the_background(lease.recheck)
-                if not result.success:
-                    raise HyMemoryBridgeError("hy_memory_runtime_failed")
-                if only_contents and not result.memories:
-                    raise HyMemoryBridgeError("hy_memory_import_no_readable_output")
-                outputs = (
-                    *result.memories,
-                    *await bridge.profile_memories(
-                        user_id=request.user_id,
-                        agent_id=request.agent_id,
-                    ),
-                )
-            # HY's request-scoped wiring and native-store lease are closed now.
-            # Governance writes only touch One Memory's SQLite store, so keeping
-            # the shared HY bridge locked through them serializes unrelated
-            # sources without protecting any HY state.
-            await in_the_background(lease.recheck)
-            step_started = monotonic()
-            await in_the_background(
-                self._record_outputs,
-                task=task,
-                chunk=self._original_records(chunk),
-                outputs=outputs,
-                request=request,
-                derivation=derivation,
-                permission_lease=lease,
-                retired=result.retired_memory_ids,
-                superseded=result.superseded_memory_ids,
-            )
-            self._log_step(task_id, 6, "governance", step_started)
-            await in_the_background(lease.recheck_permission)
-        except SecretStoreUnavailableError:
-            return await in_the_background(
-                self.tasks.wait_for_model,
-                task_id,
-                runner_token=token,
-                error_code="secure_storage_unavailable",
-            )
-        except HyMemoryBridgeError as error:
-            code = str(error)
-            model_wait_errors = {
-                "hy_memory_unavailable",
-                "hy_memory_rate_limit",
-                "hy_memory_runtime_failed",
-                "model_secret_unavailable",
-                "hy_memory_model_authentication_failed",
-                "hy_memory_model_payment_required",
-                "hy_memory_model_access_denied",
-                "hy_memory_model_rate_limited",
-                "hy_memory_model_service_unavailable",
-                "hy_memory_model_timeout",
-            }
-            safe_terminal_after_invocation = {"hy_memory_import_no_readable_output"}
-            if hy_invoked and (
-                code == "hy_memory_evidence_changed"
-                or (
-                    not error_is_policy_stop(code)
-                    and code not in model_wait_errors | safe_terminal_after_invocation
-                )
-            ):
-                return await in_the_background(
-                    self.tasks.mark_unknown,
-                    task_id,
-                    runner_token=token,
-                    error_code=code,
-                )
-            if error_is_policy_stop(code):
-                # The user turned this off while the task was running, or the
-                # policy behind it was revoked. Evidence replacement after an
-                # HY call is the exception: its outcome is unknown above.
-                return await in_the_background(
-                    self.tasks.stop,
-                    task_id,
-                    runner_token=token,
-                    error_code=code,
-                )
-            if code == "model_content_permission_required":
-                return await in_the_background(
-                    self.tasks.wait_for_permission,
-                    task_id,
-                    runner_token=token,
-                    error_code=code,
-                )
-            if code == "model_content_transport_request_failed":
-                return await in_the_background(
-                    self.tasks.mark_unknown,
-                    task_id,
-                    runner_token=token,
-                    error_code=code,
-                )
-            finish = self.tasks.wait_for_model if code in model_wait_errors else self.tasks.fail
-            return await in_the_background(finish, task_id, runner_token=token, error_code=code)
-        except Exception:
-            # Adapter/setup errors must not strand RUNNING tasks or expose
-            # content/credentials through provider exception messages.
-            if hy_invoked:
-                return await in_the_background(
-                    self.tasks.mark_unknown,
-                    task_id,
-                    runner_token=token,
-                    error_code="model_content_outcome_unknown",
-                )
-            return await in_the_background(
-                self.tasks.fail,
-                task_id,
-                runner_token=token,
-                error_code="model_content_execution_failed",
-            )
-        return await in_the_background(self.tasks.complete, task_id, runner_token=token)
 
     async def _run_without_content_permission(
         self,
@@ -777,7 +532,7 @@ class MemoryTaskRunner:
             if hy_invoked and (
                 code == "hy_memory_evidence_changed"
                 or (
-                    not error_is_policy_stop(code)
+                    code not in {"hy_memory_source_changed", "hy_memory_source_revoked"}
                     and code not in model_wait_errors | safe_terminal_after_invocation
                 )
             ):
@@ -787,10 +542,8 @@ class MemoryTaskRunner:
                     runner_token=runner_token,
                     error_code=code,
                 )
-            if error_is_policy_stop(code):
-                # The user stopped the policy after this task was claimed.
-                # Evidence replacement after an HY call is the exception: its
-                # outcome is unknown and is handled above.
+            if code in {"hy_memory_source_changed", "hy_memory_source_revoked"}:
+                # The source grant changed after this task was claimed.
                 return await in_the_background(
                     self.tasks.stop,
                     task_id,
@@ -1022,24 +775,10 @@ class MemoryTaskRunner:
         outputs: tuple[HyMemoryOutput, ...],
         request: HyMemoryIngestRequest,
         derivation: HyDerivation,
-        permission_lease: ModelProcessingPermissionLease | None = None,
         retired: tuple[str, ...] = (),
         superseded: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         try:
-            if permission_lease is not None:
-                with self.governance.guard_writes(permission_lease.recheck_permission):
-                    self._record_outputs_checked(
-                        task=task,
-                        chunk=chunk,
-                        outputs=outputs,
-                        request=request,
-                        derivation=derivation,
-                        permission_lease=permission_lease,
-                        retired=retired,
-                        superseded=superseded or {},
-                    )
-                return
             self._record_outputs_checked(
                 task=task,
                 chunk=chunk,
@@ -1062,14 +801,11 @@ class MemoryTaskRunner:
         outputs: tuple[HyMemoryOutput, ...],
         request: HyMemoryIngestRequest,
         derivation: HyDerivation,
-        permission_lease: ModelProcessingPermissionLease | None = None,
         retired: tuple[str, ...] = (),
         superseded: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         """Writes what HY produced into governance. Synchronous on purpose:
         the caller runs it in a thread, so the loop stays free to answer."""
-        if permission_lease is not None:
-            permission_lease.recheck()
         source_records = (
             (
                 *request.source_context.current,
@@ -1084,8 +820,6 @@ class MemoryTaskRunner:
         # rests on everything the turn showed it.
         whole_turn = derivation.citing(by_id)
         for output in outputs:
-            if permission_lease is not None:
-                permission_lease.recheck_permission()
             layer = output.layer
             ids = output.evidence_ids or request.evidence_ids
             if not set(ids) <= set(by_id):
@@ -1115,8 +849,6 @@ class MemoryTaskRunner:
                 if known.owner != output.owner:
                     raise HyMemoryBridgeError("hy_memory_write_verification_authority_invalid")
                 try:
-                    if permission_lease is not None:
-                        permission_lease.recheck_permission()
                     updated = self.governance.write_from_hy(
                         HyRevise(
                             memory_id=known.governed_memory_id,
@@ -1130,8 +862,6 @@ class MemoryTaskRunner:
                     )
                 except MemoryMutationConflictError as error:
                     raise HyMemoryBridgeError("hy_memory_evidence_changed") from error
-                if permission_lease is not None:
-                    permission_lease.recheck_permission()
                 self._record_provenance(task, updated.memory_id, output, support)
                 continue
             revised = (
@@ -1146,8 +876,6 @@ class MemoryTaskRunner:
                 ) <= set(by_id):
                     raise HyMemoryBridgeError("hy_memory_write_verification_authority_invalid")
                 try:
-                    if permission_lease is not None:
-                        permission_lease.recheck_permission()
                     updated = self.governance.write_from_hy(
                         HyRevise(
                             memory_id=revised.memory_id,
@@ -1161,27 +889,19 @@ class MemoryTaskRunner:
                     )
                 except MemoryMutationConflictError as error:
                     raise HyMemoryBridgeError("hy_memory_evidence_changed") from error
-                if permission_lease is not None:
-                    permission_lease.recheck_permission()
                 self._record_provenance(task, updated.memory_id, output, support)
                 continue
             existing = self.governance.get(output.memory_id, user_id=task.user_id)
             if existing is not None and existing.content == content:
                 linked = existing
                 for evidence_id in ids:
-                    if permission_lease is not None:
-                        permission_lease.recheck_permission()
                     linked = self.governance.write_from_hy(
                         HyLink(memory_id=existing.memory_id, evidence_id=evidence_id),
                         user_id=task.user_id,
                         derivation=derivation.citing(ids),
                     )
-                if permission_lease is not None:
-                    permission_lease.recheck_permission()
                 self._record_provenance(task, linked.memory_id, output, support)
                 continue
-            if permission_lease is not None:
-                permission_lease.recheck_permission()
             memory = self.governance.write_from_hy(
                 HyCreate(
                     draft=MemoryDraft(
@@ -1201,15 +921,11 @@ class MemoryTaskRunner:
             )
             # Usable on arrival whoever said it; `origin` tells recall and
             # matters that an assistant's sentence is not the person's own.
-            if permission_lease is not None:
-                permission_lease.recheck_permission()
             self._record_provenance(task, memory.memory_id, output, support)
         for memory_id in retired:
             mirrored = self.governance.get(memory_id, user_id=task.user_id)
             if mirrored is None or mirrored.status is MemoryStatus.DELETED:
                 continue
-            if permission_lease is not None:
-                permission_lease.recheck_permission()
             self.governance.write_from_hy(
                 HyRetire(
                     memory_id=memory_id,
@@ -1236,8 +952,6 @@ class MemoryTaskRunner:
             )
             if not heads:
                 continue
-            if permission_lease is not None:
-                permission_lease.recheck_permission()
             self.governance.write_from_hy(
                 HySupersede(
                     memory_id=memory_id,
@@ -1248,8 +962,6 @@ class MemoryTaskRunner:
                 user_id=task.user_id,
                 derivation=whole_turn,
             )
-        if permission_lease is not None:
-            permission_lease.recheck_permission()
         self._save_extraction_for_training(task, outputs)
 
     def _save_extraction_for_training(
@@ -1486,8 +1198,6 @@ class MemoryProcessingSupervisor:
             Callable[[ModelProfileSnapshot, str | None, Path], MemoryBridgeProtocol] | None
         ) = None,
         max_concurrent_tasks: int | None = None,
-        model_content_config: ConfigStore | None = None,
-        permission_bridge_factory: PermissionBridgeFactory | None = None,
         source_writes_permitted: Callable[[str], bool] | None = None,
         service_levels: ServiceLevelScheduler | None = None,
     ) -> None:
@@ -1497,23 +1207,12 @@ class MemoryProcessingSupervisor:
         self.evidence = evidence
         self.governance = governance
         self.data_dir = data_dir
-        self.model_content_config = model_content_config
-        self.permission_bridge_factory = permission_bridge_factory
         #: Per-source "may this become a memory" switch. Optional so tests and
         #: a Core without a grant store keep their current behaviour; when
         #: absent every source is treated as writable, which is what the
         #: product did before the switch existed.
         self.source_writes_permitted = source_writes_permitted
         self.service_levels = service_levels or ServiceLevelScheduler()
-        self._permission_guard = (
-            ModelProcessingPermissionGuard(
-                model_content_config,
-                governance,
-                profiles,
-            )
-            if model_content_config is not None
-            else None
-        )
         self.extraction_settings = extraction_settings or ExtractionSettingsStore(
             data_dir / "one-memory.sqlite3"
         )
@@ -1597,8 +1296,6 @@ class MemoryProcessingSupervisor:
             active = await in_the_background(self.profiles.active, self.secrets)
             if active is None or (profile_id is not None and profile_id != active.profile_id):
                 raise HyMemoryBridgeError("model_profile_not_active")
-            if self._permission_guard is not None:
-                await in_the_background(self._guard_records, records, active)
             # The durable drain and explicit processing entry reach HY through
             # this method, not through the backfill scheduler. New work from a
             # frozen Harness must be refused before any task or bridge call.
@@ -1607,7 +1304,7 @@ class MemoryProcessingSupervisor:
                 and self.source_writes_permitted is not None
                 and not await in_the_background(self._source_may_write, list(records))
             ):
-                raise permission_error("source_disabled")
+                raise HyMemoryBridgeError("hy_memory_source_disabled")
             conversations: dict[tuple[str, str, str | None], list[EvidenceRecord]] = {}
             for record in records:
                 stored = await in_the_background(self.evidence.get, record.evidence_id)
@@ -1633,9 +1330,6 @@ class MemoryProcessingSupervisor:
                 for conversation in conversations.values()
                 for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True)
             ]
-            if self._permission_guard is not None:
-                for chunk in chunks:
-                    await in_the_background(self._preview_chunk_permission, chunk, active)
             prepared = []
             for chunk in chunks:
                 task = await in_the_background(
@@ -1701,8 +1395,6 @@ class MemoryProcessingSupervisor:
             }
             if expected != actual:
                 raise HyMemoryBridgeError("hy_memory_input_coverage_incomplete")
-            if self._permission_guard is not None:
-                await in_the_background(self._guard_records, records, active)
             if completed:
                 await self._refresh_read_bridge(completed[-1].profile_snapshot)
             return tuple(completed)
@@ -1719,15 +1411,7 @@ class MemoryProcessingSupervisor:
             bridge: MemoryBridgeProtocol | None = None
             try:
                 chunk = await in_the_background(runner._frozen_chunk, task)
-                permission_lease: ModelProcessingPermissionLease | None = None
-                if runner._permission_guard is not None:
-                    permission_lease, request, chunk = await in_the_background(
-                        runner._prepare_permission_lease, task
-                    )
-                    assert permission_lease is not None
-                    await in_the_background(permission_lease.recheck)
-                else:
-                    request = runner._request(task, chunk)
+                request = runner._request(task, chunk)
                 secret = await in_the_background(
                     self.profiles.resolve_snapshot_secret,
                     task.profile_id,
@@ -1756,7 +1440,6 @@ class MemoryProcessingSupervisor:
                     outputs=outputs,
                     request=request,
                     derivation=derivation,
-                    permission_lease=permission_lease,
                 )
                 resolved = await in_the_background(
                     self.tasks.resolve_unknown,
@@ -1877,26 +1560,6 @@ class MemoryProcessingSupervisor:
         task_ids: tuple[str, ...] | None = None,
     ) -> list[MemoryTask]:
         """Promote at most one small batch of deferred work into the queue."""
-        if self._permission_guard is not None:
-            candidates = (
-                task_ids
-                or tuple(self._manual_batch_remaining)
-                or tuple(
-                    task.task_id
-                    for task in self.tasks.list(
-                        statuses=(MemoryTaskStatus.DEFERRED_OUTSIDE_WINDOW,)
-                    )
-                )
-            )
-            permitted = tuple(
-                key for key in candidates if self._guard_task(self.tasks.require(key))
-            )
-            if not permitted:
-                return []
-            if task_ids is not None:
-                task_ids = permitted
-            else:
-                self._manual_batch_remaining = list(permitted)
         if task_ids is not None:
             self._plan_manual_batches(list(task_ids))
         elif not self._manual_batch_remaining and self._manual_batches_planned == 0:
@@ -2032,8 +1695,6 @@ class MemoryProcessingSupervisor:
         if active is None:
             self._record_idle("no_active_profile")
             return
-        if self._permission_guard is not None:
-            self._permission_guard.check(self.profiles.snapshot(active.profile_id, active.revision))
         tasks: list[MemoryTask] = []
         first = True
         visited = 0
@@ -2057,63 +1718,20 @@ class MemoryProcessingSupervisor:
             # but preparation must not create additional processing tasks.
             if not self._source_may_write(conversation):
                 continue
-            scoped = conversation
-            allowed = True
-            if self._permission_guard is not None:
-                try:
-                    self._guard_records(
-                        tuple(r for r in scoped if _is_hy_turn_record(r)),
-                        active,
-                    )
-                except HyMemoryBridgeError:
-                    allowed = False
-            try:
-                chunks = (
-                    self._prepare_conversation_chunks(
-                        scoped,
-                        active,
-                        merge_history=self._permission_guard is not None,
-                    )
-                    if allowed
-                    else []
-                )
-            except HyMemoryBridgeError as error:
-                # A stale conversation is that conversation's problem. Skipping
-                # it lets the rest of the scan prepare instead of discarding an
-                # entire round; the next scan re-evaluates this conversation.
-                if str(error) != "model_content_evidence_changed":
-                    raise
-                conversation_hash = sha256(
-                    (conversation[0].conversation_id if conversation else "").encode()
-                ).hexdigest()[:16]
-                diagnostic_event(
-                    level="warn",
-                    component="memory.scheduler",
-                    event="memory_scheduler.conversation_skipped",
-                    outcome="skipped",
-                    details={
-                        "reason": "evidence_changed",
-                        "conversation_hash": conversation_hash,
-                    },
-                )
-                continue
+            chunks = self._prepare_conversation_chunks(conversation, active)
             for chunk in chunks:
                 if should_stop() or self._shutting_down:
                     return
-                try:
-                    # Historical turns may be coalesced across their original
-                    # boundaries. Freeze that exact union so the runner cannot
-                    # reconstruct only the final turn from `input_ref` later.
-                    tasks.append(
-                        self._enqueue_chunk(
-                            chunk,
-                            active,
-                            freeze_inputs=sum(_opens_turn(record) for record in chunk) > 1,
-                        )
+                # Historical turns may be coalesced across their original
+                # boundaries. Freeze that exact union so the runner cannot
+                # reconstruct only the final turn from `input_ref` later.
+                tasks.append(
+                    self._enqueue_chunk(
+                        chunk,
+                        active,
+                        freeze_inputs=sum(_opens_turn(record) for record in chunk) > 1,
                     )
-                except HyMemoryBridgeError as error:
-                    if not str(error).startswith("model_content_"):
-                        raise
+                )
                 if len(tasks) >= (1 if first else _BACKFILL_BATCH_SIZE):
                     self._check_backfill_context(active)
                     classified = self._classify(tasks)
@@ -2136,9 +1754,7 @@ class MemoryProcessingSupervisor:
             active.profile_id,
             active.revision,
         ):
-            raise permission_error("profile_changed")
-        if self._permission_guard is not None:
-            self._permission_guard.check(self.profiles.snapshot(active.profile_id, active.revision))
+            raise HyMemoryBridgeError("model_profile_changed")
 
     def backfill(self) -> None:
         self._schedule_tasks(self.prepare_backfill())
@@ -2272,12 +1888,10 @@ class MemoryProcessingSupervisor:
     async def accept_backfill_off_thread(self) -> None:
         """Accept processing after the first scheduled batch; the rest continues."""
         if self._shutting_down:
-            raise permission_error("processing_unavailable")
-        if self._permission_guard is not None:
-            await in_the_background(self._permission_guard.require_allowed)
+            raise HyMemoryBridgeError("hy_memory_processing_unavailable")
         async with self._accept_backfill_lock:
             if self._shutting_down:
-                raise permission_error("processing_unavailable")
+                raise HyMemoryBridgeError("hy_memory_processing_unavailable")
             state = self._backfill_acceptance
             running = state.task if state is not None else None
             if running is not None and not running.done() and state is not None:
@@ -2291,11 +1905,9 @@ class MemoryProcessingSupervisor:
                 self._live_backfill = state.task
         await state.ready.wait()
         if self._shutting_down or state.task is None or state.task.cancelled():
-            raise permission_error("processing_unavailable")
+            raise HyMemoryBridgeError("hy_memory_processing_unavailable")
         if state.error is not None:
             raise HyMemoryBridgeError(state.error)
-        if self._permission_guard is not None:
-            await in_the_background(self._permission_guard.require_allowed)
 
     async def _prewarm_write_bridges(self, source_ids: tuple[str, ...]) -> None:
         credentials = await self._active_credentials()
@@ -2442,10 +2054,7 @@ class MemoryProcessingSupervisor:
         await self._schedule_tasks_off_thread(work)
 
     async def resume_allowed(self) -> None:
-        """Recover tasks and backfill while the live global permission is enabled."""
-        if self._permission_guard is None:
-            raise permission_error("permission_required")
-        await in_the_background(self._permission_guard.require_allowed)
+        """Compatibility entry: recover waiting tasks and start backfill."""
         await self.resume_off_thread()
         await self.backfill_off_thread(cohort_size=8)
 
@@ -2468,12 +2077,6 @@ class MemoryProcessingSupervisor:
         now = datetime.now(UTC)
         window = self._extraction_window() if within_window else None
         exempt_all_apps_from_window = True
-        if self._permission_guard is not None:
-            try:
-                self._permission_guard.require_allowed()
-                window = None
-            except HyMemoryBridgeError:
-                pass
         work: list[QueuedWork] = []
         deferred_count = 0
         for task in tasks:
@@ -2536,21 +2139,6 @@ class MemoryProcessingSupervisor:
     def _schedule_tasks(self, work: list[QueuedWork]) -> None:
         if self._shutting_down:
             return
-        tasks_by_id: dict[str, MemoryTask] = {}
-        for item in work:
-            task = self.tasks.get(item.task_id)
-            if task is not None:
-                tasks_by_id[task.task_id] = task
-        if self._permission_guard is not None:
-            work = [
-                item
-                for item in work
-                if (task := tasks_by_id.get(item.task_id)) is not None and self._guard_task(task)
-            ]
-        # `_classify` already validated every task while it was off the event
-        # loop. Re-running the full guard here doubles permission work before a
-        # task starts and does not improve revocation semantics: the runner takes a
-        # fresh lease before model content is released.
         self._queue_validated_work(work)
 
     async def _schedule_tasks_off_thread(self, work: list[QueuedWork]) -> None:
@@ -2742,20 +2330,9 @@ class MemoryProcessingSupervisor:
                     task.status is MemoryTaskStatus.FAILED and task.attempts >= TASK_MAX_ATTEMPTS
                 ):
                     continue
-                if self._permission_guard is not None and not await in_the_background(
-                    self._guard_task, task
-                ):
+                if not await in_the_background(self._guard_task, task):
                     continue
                 runner = self.runner_factory()
-                if self._permission_guard is not None and (
-                    runner.model_content_config is not self.model_content_config
-                ):
-                    await in_the_background(
-                        self._permission_guard.reject_unstarted,
-                        work.task_id,
-                        "runner_permission_required",
-                    )
-                    continue
                 # A wall-clock ceiling, because a harness is serial: a task
                 # that hangs holds the only slot its harness has, and every
                 # later turn of that harness waits behind it. The runner owns
@@ -2929,7 +2506,7 @@ class MemoryProcessingSupervisor:
                 self.secrets,
             )
             if self.profiles.active_identity() != identity:
-                raise permission_error("profile_changed")
+                raise HyMemoryBridgeError("model_profile_changed")
             if snapshot.has_api_key and secret is None:
                 raise HyMemoryBridgeError("model_secret_unavailable")
             return snapshot, secret
@@ -2944,8 +2521,6 @@ class MemoryProcessingSupervisor:
             return await self._digest_locked()
 
     async def _digest_locked(self) -> dict[str, object]:
-        if self._permission_guard is not None:
-            raise permission_error("context_unverified")
         credentials = await self._active_credentials()
         if credentials is None:
             raise HyMemoryBridgeError("model_profile_not_active")
@@ -3163,30 +2738,6 @@ class MemoryProcessingSupervisor:
         )
 
     async def update_hy_memory(self, memory_id: str, content: str) -> dict[str, object]:
-        if self._permission_guard is not None:
-            with self.profiles._connect() as db:
-                row = db.execute(
-                    "SELECT profile_id,revision FROM model_profiles WHERE is_active=1"
-                ).fetchone()
-            if row is None:
-                raise HyMemoryBridgeError("model_profile_not_active")
-            profile = self.profiles.snapshot(row["profile_id"], row["revision"])
-            if profile.embedding_provider_kind is not ProviderKind.LOCAL_ONNX:
-                raise permission_error("correction_embedding_consent_required")
-            current = self.governance.get(memory_id, user_id="local")
-            if (
-                current is None
-                or current.content != content
-                or current.status is MemoryStatus.DELETED
-            ):
-                raise permission_error("context_changed")
-            # Explicit correction updates the existing on-device index only. This
-            # branch cannot authorize extraction, digest or a remote embedder.
-            bridge = self._bridge(builtin_retrieval_snapshot(), None, self.data_dir)
-            result = await bridge.update(memory_id, content)
-            if self.governance.get(memory_id, user_id="local") != current:
-                raise permission_error("context_changed")
-            return result
         credentials = await self._active_credentials()
         if credentials is None:
             raise HyMemoryBridgeError("model_profile_not_active")
@@ -3315,28 +2866,10 @@ class MemoryProcessingSupervisor:
     async def semantic_recall(
         self, query: str, *, limit: int = 12
     ) -> tuple[SemanticMemoryHit, ...]:
-        if self._permission_guard is not None:
-            # A consent for Evidence cannot authorize an arbitrary remote query.
-            # Preserve existing local-ONNX paths, without a new fallback/store.
-            def ensure_local_embedding() -> None:
-                with self.profiles._connect() as db:
-                    row = db.execute(
-                        "SELECT profile_id, revision FROM model_profiles WHERE is_active=1"
-                    ).fetchone()
-                if row is not None:
-                    profile = self.profiles.snapshot(row["profile_id"], row["revision"])
-                    if profile.embedding_provider_kind is not ProviderKind.LOCAL_ONNX:
-                        raise permission_error("semantic_scope_unsupported")
-
-            await in_the_background(ensure_local_embedding)
         credentials = await self._active_credentials()
         if credentials is None:
             return await self._search_with_builtin_embedding(query, limit=limit)
         snapshot, secret = credentials
-        if self._permission_guard is not None and (
-            snapshot.embedding_provider_kind is not ProviderKind.LOCAL_ONNX
-        ):
-            raise permission_error("semantic_scope_unsupported")
         key = (snapshot.profile_id, snapshot.revision)
         bridge = self._read_bridges.get(key)
         if bridge is None or key not in self._read_bridges_ready:
@@ -3410,8 +2943,6 @@ class MemoryProcessingSupervisor:
             data_dir=self.data_dir,
             bridge_factory=self._bridge,
             close_bridge=False,
-            model_content_config=self.model_content_config,
-            permission_bridge_factory=self.permission_bridge_factory,
         )
 
     def _bridge(
@@ -3589,7 +3120,6 @@ class MemoryProcessingSupervisor:
         active = self.profiles.active(self.secrets)
         if active is None:
             return []
-        self._guard_records((seed,), active)
         conversation = self.evidence.list_conversation(seed.evidence_id)
         if not self._source_may_write(conversation):
             return []
@@ -3601,10 +3131,6 @@ class MemoryProcessingSupervisor:
             for item in conversation
         ):
             return []
-        self._guard_records(
-            tuple(r for r in conversation if _is_hy_turn_record(r)),
-            active,
-        )
         # A realtime turn that is still open must not become a task, whichever
         # path gets here first. The debounce is the record of "this arrival is
         # still waiting for its reply"; without this check a periodic scan
@@ -3646,16 +3172,6 @@ class MemoryProcessingSupervisor:
         admitted: list[tuple[tuple[EvidenceRecord, ...], MemoryTask | None]] = []
         for chunk in chunks:
             done = self._finished_chunk_task(chunk)
-            if done is None and self._permission_guard is not None:
-                try:
-                    self._preview_chunk_permission(chunk, profile)
-                except HyMemoryBridgeError:
-                    if not self.governance.blocked_source_ids(
-                        user_id=chunk[0].user_id,
-                        evidence_ids=tuple(record.evidence_id for record in chunk),
-                    ):
-                        raise
-                    continue
             admitted.append((chunk, done))
         return admitted
 
@@ -3710,7 +3226,6 @@ class MemoryProcessingSupervisor:
         records = tuple(record for record in conversation if _is_hy_turn_record(record))
         if self._shutting_down or not records:
             return []
-        self._guard_records(records, profile)
         self._check_backfill_context(profile)
         # Keep a full, immutable failure snapshot. Appended originals remain
         # unprocessed while the same blocker persists; they are never marked done.
@@ -3747,27 +3262,7 @@ class MemoryProcessingSupervisor:
             preparation_error="hy_memory_input_exceeds_window",
             preparation_group=group,
         )
-        if self._permission_guard is not None:
-            self._guard_records(records, profile)
         return []
-
-    def _guard_records(
-        self,
-        records: tuple[EvidenceRecord, ...],
-        profile: ModelProfile | None = None,
-    ) -> None:
-        guard = self._permission_guard
-        if guard is None:
-            return
-        records = self._original_records(records)
-        if profile is None:
-            active = self.profiles.active_identity()
-            if active is None:
-                raise permission_error("profile_changed")
-            snapshot = self.profiles.snapshot(*active)
-        else:
-            snapshot = self.profiles.snapshot(profile.profile_id, profile.revision)
-        guard.check(snapshot, records)
 
     def _original_records(self, records: tuple[EvidenceRecord, ...]) -> tuple[EvidenceRecord, ...]:
         originals: dict[str, EvidenceRecord] = {}
@@ -3777,46 +3272,6 @@ class MemoryProcessingSupervisor:
                 raise HyMemoryBridgeError("hy_memory_evidence_changed")
             originals.setdefault(current.evidence_id, current)
         return tuple(originals.values())
-
-    def _preview_chunk_permission(
-        self,
-        chunk: tuple[EvidenceRecord, ...],
-        profile: ModelProfile,
-    ) -> None:
-        guard = self._permission_guard
-        if guard is None:
-            return
-        snapshot = self.profiles.snapshot(profile.profile_id, profile.revision)
-        now = datetime.now(UTC)
-        # An in-memory task-shaped query selects exactly the history the runner
-        # would load. It is not persisted and cannot claim or execute work.
-        preview = MemoryTask(
-            task_id="permission-preview",
-            request_id="permission-preview",
-            user_id=chunk[0].user_id,
-            kind=MemoryTaskKind.EXTRACT,
-            input_ref=chunk[0].evidence_id,
-            status=MemoryTaskStatus.PENDING,
-            profile_id=snapshot.profile_id,
-            profile_revision=snapshot.revision,
-            profile_snapshot=snapshot,
-            attempts=0,
-            last_error_code=None,
-            created_at=now,
-            updated_at=now,
-        )
-        runner = self._create_runner()
-        request = runner._request(preview, chunk)
-        context = request.source_context
-        originals = self._original_records(chunk)
-        if context is not None:
-            try:
-                context = runner._source_context(preview, context, persist_inputs=False)
-            except HyMemoryBridgeError as error:
-                raise permission_error("evidence_changed") from error
-        records = guard.context_records(originals, context)
-        guard.check(snapshot, records)
-        guard.check_context(records, context)
 
     def _guard_task(self, task: MemoryTask) -> bool:
         if task.last_error_code in {
@@ -3832,19 +3287,6 @@ class MemoryProcessingSupervisor:
                 # Freeze: the durable row stays pending. Reopening the Harness
                 # causes the ordinary resume pass to classify it again.
                 return False
-        guard = self._permission_guard
-        if guard is None:
-            return True
-        try:
-            guard.check(task.profile_snapshot)
-            self._create_runner()._prepare_permission_lease(task, persist_context=False)
-        except HyMemoryBridgeError as error:
-            code = str(error)
-            if code == "model_content_permission_required":
-                self.tasks.park_for_permission(task.task_id, error_code=code)
-            else:
-                guard.reject_unstarted(task.task_id, code)
-            return False
         return True
 
     def _source_may_write(self, conversation: list[EvidenceRecord]) -> bool:
@@ -3868,7 +3310,6 @@ class MemoryProcessingSupervisor:
         *,
         freeze_inputs: bool = False,
     ) -> MemoryTask:
-        self._guard_records(chunk, profile)
         if any("segment_hash" in evidence_ref(record) for record in chunk):
             freeze_inputs = True
         source = chunk[0]
@@ -3876,9 +3317,6 @@ class MemoryProcessingSupervisor:
         finished = self._finished_chunk_task(chunk)
         if finished is not None:
             return finished
-        if self._permission_guard is not None:
-            self._preview_chunk_permission(chunk, profile)
-            freeze_inputs = True
         digest = sha256(
             "|".join(
                 (
@@ -3912,15 +3350,6 @@ class MemoryProcessingSupervisor:
             profile=profile,
             input_records=chunk if freeze_inputs else (),
         )
-        if self._permission_guard is not None:
-            try:
-                self._permission_guard.check(
-                    task.profile_snapshot,
-                    self._original_records(chunk),
-                )
-            except HyMemoryBridgeError as error:
-                self._permission_guard.reject_unstarted(task.task_id, str(error))
-                raise
         if task.status is MemoryTaskStatus.PENDING:
             self.tasks.supersede_unstarted(
                 task,

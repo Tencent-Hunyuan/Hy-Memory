@@ -272,7 +272,6 @@ function Host({
   loaded = true,
   deferMemoryId,
   onViewHistory,
-  onReviewProcessing,
   onConfigureModel = () => {},
   libraryView,
 }: {
@@ -288,7 +287,6 @@ function Host({
   loaded?: boolean;
   deferMemoryId?: string;
   onViewHistory?(): void;
-  onReviewProcessing?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
 } = {}) {
@@ -304,7 +302,6 @@ function Host({
       sources={sources}
       arrival={arrival}
       onViewHistory={onViewHistory}
-      onReviewProcessing={onReviewProcessing}
       loaded={loaded}
       processing={processing}
       detail={
@@ -598,31 +595,6 @@ it("explains missing setup during ongoing raw import without pretending to gener
   );
   expect(configure).toHaveBeenCalledOnce();
   expect(history).toHaveBeenCalledOnce();
-});
-
-it("uses a separate consent action and never auto-confirms or processes", async () => {
-  const review = vi.fn(),
-    configure = vi.fn();
-  render(
-    <Host
-      items={[]}
-      arrival={{
-        importing: false,
-        importedMessages: 12,
-        importedConversations: 2,
-        phase: "consent-required",
-      }}
-      onReviewProcessing={review}
-      onConfigureModel={configure}
-    />,
-  );
-  expect(review).not.toHaveBeenCalled();
-  expect(configure).not.toHaveBeenCalled();
-  await userEvent.click(
-    screen.getByRole("button", { name: "打开模型内容权限" }),
-  );
-  expect(review).toHaveBeenCalledOnce();
-  expect(configure).not.toHaveBeenCalled();
 });
 
 it("adds real memories without replacing graph, current detail, or question draft", async () => {

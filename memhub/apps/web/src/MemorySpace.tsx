@@ -16,7 +16,6 @@ import {
   MessageCircle,
   Network,
   TextSearch,
-  X,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -36,7 +35,6 @@ import {
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
-  getModelContentPermission,
   getModelProfiles,
   manualExtract,
   mutateMemory,
@@ -95,7 +93,6 @@ export function MemorySpace({
   sourceSnapshotStale = false,
   onConnect = () => undefined,
   onConfigureModel = () => undefined,
-  onReviewProcessing,
   onArrivalChange,
   active = true,
   preload = false,
@@ -112,7 +109,6 @@ export function MemorySpace({
   sourceSnapshotStale?: boolean;
   onConnect?(): void;
   onConfigureModel?(): void;
-  onReviewProcessing?(): void;
   onArrivalChange?(arrival: MemoryArrival): void;
   active?: boolean;
   preload?: boolean;
@@ -284,7 +280,7 @@ export function MemorySpace({
     null,
   );
   const [arrivalSetup, setArrivalSetup] = useState<
-    "checking" | "model-required" | "consent-required" | "ready" | "unavailable"
+    "checking" | "model-required" | "ready" | "unavailable"
   >("checking");
   const [checkingSetup, setCheckingSetup] = useState(false);
   const liveLoading = useRef(false);
@@ -301,27 +297,18 @@ export function MemorySpace({
     }
     let stopped = false;
     let request = 0;
-    let controller: AbortController | null = null;
     setArrivalSetup("checking");
     async function inspectSetup() {
       const version = ++request;
-      controller?.abort();
-      controller = new AbortController();
       setCheckingSetup(true);
-      const [profiles, permission] = await Promise.allSettled([
-        getModelProfiles(),
-        getModelContentPermission(controller.signal),
-      ]);
+      const profiles = await Promise.allSettled([getModelProfiles()]);
       if (stopped || version !== request) return;
       setCheckingSetup(false);
-      if (
-        profiles.status !== "fulfilled" ||
-        permission.status !== "fulfilled"
-      ) {
+      if (profiles[0].status !== "fulfilled") {
         setArrivalSetup("unavailable");
         return;
       }
-      const activeProfiles = profiles.value.filter((item) => item.is_active);
+      const activeProfiles = profiles[0].value.filter((item) => item.is_active);
       const profile = activeProfiles.length === 1 ? activeProfiles[0] : null;
       if (activeProfiles.length > 1) {
         setArrivalSetup("unavailable");
@@ -331,18 +318,17 @@ export function MemorySpace({
         setArrivalSetup("model-required");
         return;
       }
-      setArrivalSetup(permission.value.allowed ? "ready" : "consent-required");
+      setArrivalSetup("ready");
     }
     void inspectSetup();
     const stop = subscribePoll({
-      key: "model-consent",
+      key: "model-profiles",
       intervalMs: 12_000,
       run: inspectSetup,
     });
     return () => {
       stopped = true;
       request++;
-      controller?.abort();
       stop();
     };
   }, [active, onArrivalChange, simplified, sourceKey, sourceSnapshotStale]);
@@ -1781,7 +1767,6 @@ export function MemorySpace({
         processing={processing}
         arrival={memoryArrival}
         onViewHistory={simplified ? onConnect : () => setMode("history")}
-        onReviewProcessing={onReviewProcessing ?? onConnect}
         loaded={simplified ? mapLibrary.page !== null : loaded}
         detail={detail}
         detailLoad={detailLoad}

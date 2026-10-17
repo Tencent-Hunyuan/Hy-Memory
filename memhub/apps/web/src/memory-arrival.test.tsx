@@ -64,7 +64,6 @@ it.each([
   ["checking", "进度待更新", false],
   ["importing", "正在导入对话", true],
   ["model-required", "尚未设置整理模型", false],
-  ["consent-required", "等待允许模型读取本地会话内容", false],
   ["processing", "正在沉淀记忆", true],
   ["failed", "待继续", false],
   ["idle", "待继续", false],
@@ -86,22 +85,6 @@ it.each([
     expect(screen.queryByRole("progressbar")).toBeNull();
   },
 );
-
-it("uses existing settings navigation for consent when no separate callback is supplied", async () => {
-  const settings = vi.fn();
-  render(
-    <MemoryArrivalPanel
-      arrival={{ ...base, phase: "consent-required" }}
-      onConfigureModel={settings}
-      onConnect={noop}
-    />,
-  );
-  expect(settings).not.toHaveBeenCalled();
-  await userEvent.click(
-    screen.getByRole("button", { name: "打开模型内容权限" }),
-  );
-  expect(settings).toHaveBeenCalledOnce();
-});
 
 it("offers explicit connection only for the truly empty idle state", async () => {
   const connect = vi.fn();

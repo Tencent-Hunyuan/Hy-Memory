@@ -31,14 +31,12 @@ const { getOnboarding, sources, modelProps, mutations } = vi.hoisted(() => ({
   modelProps: vi.fn(),
   mutations: {
     activateModelProfile: vi.fn(),
-    setModelContentPermission: vi.fn(),
   },
 }));
 
 vi.mock("./api", () => ({
   getOnboarding,
   getModelProfiles: vi.fn().mockResolvedValue([]),
-  getModelContentPermission: vi.fn().mockResolvedValue({ allowed: false }),
   getSources: vi.fn().mockResolvedValue(sources),
   ...mutations,
 }));
@@ -46,17 +44,8 @@ vi.mock("./use-import-sources", () => ({
   useImportSources: () => ({ sources, jobs: [], loading: false, health: null }),
 }));
 vi.mock("./MemorySpace", () => ({
-  MemorySpace: ({
-    onReviewProcessing,
-    onConfigureModel,
-  }: {
-    onReviewProcessing?(): void;
-    onConfigureModel(): void;
-  }) => (
+  MemorySpace: ({ onConfigureModel }: { onConfigureModel(): void }) => (
     <section aria-label="测试工作台">
-      <button type="button" onClick={onReviewProcessing}>
-        打开模型内容权限
-      </button>
       <button type="button" onClick={onConfigureModel}>
         设置记忆整理
       </button>
@@ -78,24 +67,6 @@ vi.mock("./ModelSettings", () => ({
       };
     return <input aria-label="保留的模型草稿" defaultValue="" />;
   },
-}));
-vi.mock("./ModelContentConsent", () => ({
-  ModelContentConsent: ({
-    onClose,
-    onConfigureModel,
-  }: {
-    onClose(): void;
-    onConfigureModel?(): void;
-  }) => (
-    <section role="dialog" aria-label="模型内容权限">
-      <button type="button" onClick={onClose}>
-        关闭
-      </button>
-      <button type="button" onClick={onConfigureModel}>
-        配置模型
-      </button>
-    </section>
-  ),
 }));
 vi.mock("./OnboardingFlow", () => ({
   OnboardingFlow: ({ onFinish }: { onFinish(target: string): void }) => (
@@ -127,26 +98,10 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-function noPermissionWrites() {
+function noModelWrites() {
   for (const mutation of Object.values(mutations))
     expect(mutation).not.toHaveBeenCalled();
 }
-
-it("opens model-content permission over the memory workbench", async () => {
-  window.history.replaceState({}, "", "/?view=memory");
-  render(<App />);
-  await userEvent.click(
-    await screen.findByRole("button", { name: "打开模型内容权限" }),
-  );
-  expect(screen.getByRole("dialog", { name: "模型内容权限" })).toBeTruthy();
-  expect(window.location.search).toBe("?view=memory");
-  expect(screen.queryByText("应用列表")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "关闭" }));
-  expect(screen.queryByRole("dialog", { name: "模型内容权限" })).toBeNull();
-  expect(getOnboarding).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("region", { name: "测试工作台" })).toBeTruthy();
-  noPermissionWrites();
-});
 
 it("enters D47 settings without a tour or mandatory second scope-confirmation flow", async () => {
   getOnboarding.mockResolvedValue({ status: "new" });
@@ -164,13 +119,12 @@ it("enters D47 settings without a tour or mandatory second scope-confirmation fl
   expect(
     screen.queryByRole("button", { name: "继续：确认整理范围" }),
   ).toBeNull();
-  expect(screen.queryByRole("dialog", { name: "模型内容权限" })).toBeNull();
-  noPermissionWrites();
+  noModelWrites();
   expect(screen.queryByRole("button", { name: "管理已有授权" })).toBeNull();
   expect(screen.getByRole("button", { name: "模型" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "连接其他应用" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
-  noPermissionWrites();
+  noModelWrites();
 });
 
 it("enters the workbench without an automatic tour or removed help section", async () => {
@@ -187,7 +141,7 @@ it("enters the workbench without an automatic tour or removed help section", asy
   await userEvent.click(within(nav).getByRole("button", { name: "设置" }));
   expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
   expect(screen.queryByRole("dialog", { name: "功能教学" })).toBeNull();
-  noPermissionWrites();
+  noModelWrites();
 });
 
 it("does not resume a pending tour over a settings deep link", async () => {
@@ -202,14 +156,13 @@ it("does not resume a pending tour over a settings deep link", async () => {
   await waitFor(() => expect(modelProps).toHaveBeenCalled());
   expect(modelProps.mock.calls.at(-1)?.[0].compactSingle).toBe(true);
   expect(screen.queryByRole("dialog", { name: "功能教学" })).toBeNull();
-  expect(screen.queryByRole("dialog", { name: "模型内容权限" })).toBeNull();
   expect(window.location.search).toBe("?view=settings");
   // Still pending: nothing read or rewrote it.
   expect(
     JSON.parse(localStorage.getItem("one-memory.learning.s1-3") ?? "null")
       ?.state,
   ).toBe("pending");
-  noPermissionWrites();
+  noModelWrites();
 });
 
 it("keeps the applications default while explicit model configuration remains reachable", async () => {
@@ -224,7 +177,7 @@ it("keeps the applications default while explicit model configuration remains re
   expect(window.location.search).toBe("?view=settings");
   expect(modelProps.mock.calls.at(-1)?.[0].compactSingle).toBe(true);
   expect(screen.queryByRole("dialog")).toBeNull();
-  noPermissionWrites();
+  noModelWrites();
 });
 
 it("keeps an open model draft while switching settings groups", async () => {
@@ -243,5 +196,5 @@ it("keeps an open model draft while switching settings groups", async () => {
     "value",
     "unsaved draft",
   );
-  noPermissionWrites();
+  noModelWrites();
 });

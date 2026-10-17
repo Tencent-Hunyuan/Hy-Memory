@@ -384,9 +384,7 @@ it("uses user-facing connection confirmation copy without implementation narrati
     screen.queryByText(/选择草稿|按各应用回执|本页任务控制尚未接通/),
   ).toBeNull();
   expect(screen.getByText(/不会自动开放应用读取权限/)).toBeTruthy();
-  expect(
-    screen.getByText(/配置模型并打开全局模型内容权限后，才会开始生成记忆/),
-  ).toBeTruthy();
+  expect(screen.getByText(/配置模型后，才会开始生成记忆/)).toBeTruthy();
 });
 
 it.each(["paused", "failed", "cancelled", "interrupted"] as const)(

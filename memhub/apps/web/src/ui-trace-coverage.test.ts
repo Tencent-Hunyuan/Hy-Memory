@@ -54,19 +54,6 @@ describe("ui trace write coverage", () => {
     );
   });
 
-  it("traces the global model-content permission write", () => {
-    const hook = source("use-model-content-permission.ts");
-    expect(hook).toMatch(/setModelContentPermission\(next, trace\.traceId\)/);
-    const api = source("api.ts");
-    const start = api.indexOf(
-      "export async function setModelContentPermission(",
-    );
-    expect(start, "setModelContentPermission not found").toBeGreaterThan(-1);
-    const body = api.slice(start, start + 650);
-    expect(body).toContain("traceId?: string");
-    expect(body).toContain("X-One-Memory-Trace-Id");
-  });
-
   it("traces the history-import and graph-width writes", () => {
     const history = source("HistoryImport.tsx");
     expect(history).toMatch(
@@ -329,13 +316,6 @@ describe("ui trace write coverage", () => {
     expect(api).toContain("X-One-Memory-Trace-Id");
   });
 
-  it("traces the global model-content permission toggle", () => {
-    const hook = source("use-model-content-permission.ts");
-    expect(hook).toMatch(/traceUiAction\("settings", "toggle"\)/);
-    expect(hook).toMatch(/setModelContentPermission\(next, trace\.traceId\)/);
-    expect(hook).toContain('trace.done("succeeded")');
-  });
-
   it("traces the onboarding completion write", () => {
     // Finishing first-run setup records durable onboarding state. It is a
     // non-GET and had no trace.
@@ -423,9 +403,8 @@ describe("ui trace write coverage", () => {
     // A poll key is a *data plane* name. When two call sites name the same key
     // but lead to different Core endpoints, one is misnamed — the scheduler
     // runs every subscriber, so the key stops meaning "this surface". That is
-    // how `getMemoryProcessing` once shared `model-consent` with
-    // `getModelContentPermission`. Walk each `subscribePoll({...})` body and
-    // require the reachable endpoints to agree per key.
+    // Walk each `subscribePoll({...})` body and require the reachable
+    // endpoints to agree per key.
     const files = readdirSync(path.join(ROOT, "src"))
       .filter((name) => /\.(ts|tsx)$/.test(name) && !/\.test\./.test(name))
       .map((name) => path.join(ROOT, "src", name));

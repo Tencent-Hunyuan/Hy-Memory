@@ -393,11 +393,9 @@ it("点开一条结果就地展开它的原文", async () => {
   expect(getConversation).toHaveBeenCalledWith("evidence-1");
 });
 
-it("explains both model configuration and content consent before generating memory", () => {
+it("explains model configuration before generating memory", () => {
   render(<ConversationSearch />);
-  expect(
-    screen.getByText(/设置模型并打开模型内容权限后，才会开始生成记忆/),
-  ).toBeTruthy();
+  expect(screen.getByText(/设置模型后，才会开始生成记忆/)).toBeTruthy();
   expect(screen.queryByText(/配好生成模型之后/)).toBeNull();
 });
 

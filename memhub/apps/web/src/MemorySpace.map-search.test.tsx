@@ -24,7 +24,6 @@ vi.mock("./api", () => ({
   getMemoryGraph: vi.fn(),
   getMemoryProcessing: vi.fn(),
   getModelProfiles: vi.fn(),
-  getModelContentPermission: vi.fn(),
   getMemory: vi.fn(),
   getConversation: vi.fn(),
   correctMemory: vi.fn(),
@@ -155,9 +154,6 @@ beforeEach(() => {
   vi.mocked(api.getMemoryGraph).mockResolvedValue(graph(corpus.slice(0, 100)));
   vi.mocked(api.getMemoryProcessing).mockResolvedValue(null as never);
   vi.mocked(api.getModelProfiles).mockResolvedValue([]);
-  vi.mocked(api.getModelContentPermission).mockResolvedValue({
-    allowed: false,
-  });
 });
 afterEach(() => {
   cleanup();

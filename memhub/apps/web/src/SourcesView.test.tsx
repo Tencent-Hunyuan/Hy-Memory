@@ -4,7 +4,6 @@ import type { ConnectSourcesResponse, ImportJob } from "@one-memory/contracts";
 import {
   act,
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
@@ -13,21 +12,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ModelContentConsent } from "./ModelContentConsent";
 import { SourcesView } from "./SourcesView";
 import type { useImportSources } from "./use-import-sources";
 
 afterEach(cleanup);
-
-vi.mock("./ModelContentConsent", () => ({
-  ModelContentConsent: vi.fn(({ onClose }: { onClose(): void }) => (
-    <div role="dialog" aria-modal="true" aria-label="模型整理测试">
-      <button type="button" onClick={onClose}>
-        关闭模型授权
-      </button>
-    </div>
-  )),
-}));
 
 describe("SourcesView", () => {
   afterEach(() => {
@@ -1465,43 +1453,6 @@ it("Thaw and Freeze use the one Harness processing switch", async () => {
     false,
     expect.any(String),
   );
-});
-
-it("opens the global model-content permission only on demand", async () => {
-  const imports = syncImports();
-  const view = render(<SourcesView imports={imports} />);
-  expect(screen.queryByRole("dialog", { name: "模型整理测试" })).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "管理模型权限" }));
-  expect(screen.getByRole("dialog", { name: "模型整理测试" })).toBeTruthy();
-  expect(
-    screen.getByRole<HTMLButtonElement>("button", { name: "管理模型权限" })
-      .disabled,
-  ).toBe(false);
-  expect(ModelContentConsent).toHaveBeenCalled();
-  expect(
-    screen.getByRole<HTMLInputElement>("checkbox", { name: "处理 WorkBuddy" })
-      .disabled,
-  ).toBe(false);
-  const next = {
-    ...imports,
-    sources: imports.sources.map((source) => ({
-      ...source,
-      imported_messages: 8,
-    })),
-  };
-  view.rerender(<SourcesView imports={next} />);
-  await userEvent.click(screen.getByRole("button", { name: "关闭模型授权" }));
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(imports.connectSelected).not.toHaveBeenCalled();
-  expect(imports.setSync).not.toHaveBeenCalled();
-});
-
-it("COLD-14..16: model consent does not nest inside history import", async () => {
-  render(<SourcesView imports={syncImports()} />);
-  await userEvent.click(screen.getByRole("button", { name: "导入历史包" }));
-  fireEvent.click(screen.getByRole("button", { name: "管理模型权限" }));
-  expect(screen.getAllByRole("dialog")).toHaveLength(1);
-  expect(screen.getByRole("dialog", { name: "导入历史包" })).toBeTruthy();
 });
 
 it("S1.3: an incomplete permission receipt cannot activate global sync", () => {

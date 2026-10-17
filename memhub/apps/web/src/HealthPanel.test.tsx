@@ -139,7 +139,7 @@ describe("HealthPanel", () => {
         unknown: 1,
         failed: 2,
         cancelled: 3,
-        cancelled_reasons: { model_content_permission_revoked: 3 },
+        cancelled_reasons: { source_permission_changed: 3 },
         governed_memories: 80,
         workbuddy: { injected: 20, timed_out: 1, unavailable: 0 },
       },
