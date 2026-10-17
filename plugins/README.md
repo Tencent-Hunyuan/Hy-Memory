@@ -6,6 +6,7 @@
 
 | 目录 | 说明 | 发布 |
 |------|------|------|
+| `hermes/` | Hermes 原生 memory provider（标准库 HTTP 客户端，独立服务） | [安装说明](hermes/README.md) |
 | `openclaw/` | OpenClaw 记忆插件（TypeScript，拉起 Python `hy_memory.server`） | npm: `openclaw-hy-memory` |
 | `hook/` | Claude Code 等 hook 集成（预留） | — |
 | `mcp/` | MCP Server 集成（预留） | — |

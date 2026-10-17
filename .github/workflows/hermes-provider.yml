@@ -1,0 +1,49 @@
+name: Hermes provider
+
+on:
+  pull_request:
+    paths:
+      - "plugins/hermes/**"
+      - ".github/workflows/hermes-provider.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugins/hermes/**"
+      - ".github/workflows/hermes-provider.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  provider:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Download and verify native Hermes contract
+        run: |
+          uv run --no-project --python 3.12 python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import urllib.request
+
+          url = "https://raw.githubusercontent.com/NousResearch/hermes-agent/818c13be1dc4fd28987e1e881a9408224afd4535/agent/memory_provider.py"
+          with urllib.request.urlopen(url, timeout=30) as response:
+              data = response.read()
+          expected = "a4e44a293013fff831ac136ab77c556541cd18817f53bd662e97090cd80bd5a6"
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise SystemExit("Hermes contract SHA-256 mismatch")
+          snapshot = Path(os.environ["RUNNER_TEMP"]) / "hermes-memory-provider.py"
+          snapshot.write_bytes(data)
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"HERMES_MEMORY_PROVIDER_SNAPSHOT={snapshot}\n")
+          PY
+      - name: Test provider with native contract
+        run: uv run --no-project --python 3.12 --with pytest python -m pytest plugins/hermes/tests -o addopts= -o log_cli=false -q
