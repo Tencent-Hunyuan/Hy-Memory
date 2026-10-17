@@ -1049,9 +1049,14 @@ def create_app(
                         job.job_id,
                     )
                 await asyncio.to_thread(
-                    memory_write_queue.retry_timed_out_unknown_after_reconcile,
+                    memory_write_queue.retry_first_unknown_after_reconcile,
                     older_than=datetime.now(UTC) - timedelta(minutes=5),
                     limit=32,
+                )
+                await asyncio.to_thread(
+                    app.state.memory_task_store.retry_first_unknown_after_reconcile,
+                    older_than=datetime.now(UTC) - timedelta(minutes=5),
+                    limit=128,
                 )
 
             async def admit_hy_invocation(

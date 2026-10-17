@@ -2161,6 +2161,43 @@ class MemoryTaskStore:
             )
         return changed.rowcount
 
+    def retry_first_unknown_after_reconcile(
+        self,
+        *,
+        older_than: datetime,
+        limit: int = 128,
+    ) -> int:
+        """Automatically retry a task-only unknown exactly once.
+
+        Reconciliation runs before this transition. Attempts are preserved, so
+        the retry claim moves `attempts=1` to two and another unknown is left
+        for explicit user recovery.
+        """
+        if type(limit) is not int or limit < 1:
+            raise ValueError("limit must be positive")
+        now = datetime.now(UTC).isoformat()
+        with self._connect(writing=True) as connection:
+            changed = connection.execute(
+                """
+                UPDATE memory_tasks
+                SET status=?, runner_token=NULL,
+                    last_error_code='model_content_unknown_auto_retry', updated_at=?
+                WHERE task_id IN (
+                    SELECT task_id FROM memory_tasks
+                    WHERE status=? AND attempts=1 AND updated_at <= ?
+                    ORDER BY updated_at, task_id LIMIT ?
+                )
+                """,
+                (
+                    MemoryTaskStatus.PENDING,
+                    now,
+                    MemoryTaskStatus.UNKNOWN,
+                    older_than.isoformat(),
+                    limit,
+                ),
+            )
+        return changed.rowcount
+
     def recover_running(self) -> int:
         """Return tasks orphaned by a previous process to the pending queue."""
         return self.recover_orphan_running()

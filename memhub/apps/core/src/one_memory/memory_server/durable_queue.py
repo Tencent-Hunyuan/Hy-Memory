@@ -306,7 +306,7 @@ LEGACY_MEMORY_WRITE_JOB_COLUMNS = (
     ("last_error", "TEXT"),
 )
 
-_FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL, UNKNOWN)
+_FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
 
 
 @dataclass(frozen=True)
@@ -1482,6 +1482,59 @@ class DurableWriteQueue:
                 connection.execute(
                     f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
                     f"last_error_code='model_content_reconciled_absent_retry', updated_at=? "
+                    f"WHERE status=? AND task_id IN ("
+                    f"SELECT inputs.task_id FROM memory_task_inputs AS inputs "
+                    f"JOIN memory_write_job_evidence AS linked ON EXISTS ("
+                    f"SELECT 1 FROM json_each(inputs.refs_json) AS ref "
+                    f"WHERE json_extract(ref.value, '$.evidence_id')=linked.evidence_id) "
+                    f"WHERE linked.job_id IN ({placeholders}))",
+                    (MemoryTaskStatus.PENDING, now, MemoryTaskStatus.UNKNOWN, *job_ids),
+                )
+        return len(job_ids)
+
+    def retry_first_unknown_after_reconcile(
+        self,
+        *,
+        older_than: datetime,
+        limit: int = 32,
+    ) -> int:
+        """Retry one unresolved unknown outcome once, after reconciliation.
+
+        The caller first asks HY and checks linked governed output. Rows still
+        unknown may have lost the response after the SDK call, so one bounded
+        retry is useful. `attempts=1` is the guard: the retry claim increments
+        it to two, and a second unknown is left for explicit user recovery.
+        """
+        if type(limit) is not int or limit < 1:
+            raise ValueError("limit must be positive")
+        now = datetime.now(UTC).isoformat()
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            rows = connection.execute(
+                "SELECT job_id FROM memory_write_jobs "
+                "WHERE state=? AND attempts=1 AND attempts < max_attempts "
+                "AND updated_at <= ? ORDER BY updated_at, job_id LIMIT ?",
+                (UNKNOWN, older_than.isoformat(), limit),
+            ).fetchall()
+            job_ids = tuple(str(row["job_id"]) for row in rows)
+            if not job_ids:
+                return 0
+            placeholders = ",".join("?" for _ in job_ids)
+            connection.execute(
+                f"UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
+                f"lease_expires_at=NULL, hy_invoked=0, "
+                f"last_error='model_content_unknown_auto_retry', updated_at=? "
+                f"WHERE state=? AND attempts=1 AND job_id IN ({placeholders})",
+                (PENDING, now, UNKNOWN, *job_ids),
+            )
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
+            ).fetchone():
+                connection.execute(
+                    f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
+                    f"last_error_code='model_content_unknown_auto_retry', updated_at=? "
                     f"WHERE status=? AND task_id IN ("
                     f"SELECT inputs.task_id FROM memory_task_inputs AS inputs "
                     f"JOIN memory_write_job_evidence AS linked ON EXISTS ("

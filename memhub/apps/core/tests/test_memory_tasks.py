@@ -1070,6 +1070,49 @@ def test_confirmed_retry_requeues_task_only_unknown_without_a_durable_job(tmp_pa
     assert store.retry_unknown_confirmed() == 0
 
 
+def test_task_only_unknown_is_automatically_retried_only_once(tmp_path) -> None:
+    store, profile = _profile_and_tasks(tmp_path)
+    task = store.create(
+        request_id="auto-retry-unknown",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="orphan-evidence",
+        profile=profile,
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?,attempts=1,last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                MemoryTaskStatus.UNKNOWN,
+                "model_content_outcome_unknown",
+                "2026-01-01T00:00:00+00:00",
+                task.task_id,
+            ),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 1
+    retried = store.require(task.task_id)
+    assert retried.status is MemoryTaskStatus.PENDING
+    assert retried.attempts == 1
+
+    running, token = store.claim(task.task_id)
+    assert running.attempts == 2
+    store.mark_unknown(
+        task.task_id,
+        runner_token=token,
+        error_code="model_content_outcome_unknown",
+    )
+    assert (
+        store.retry_first_unknown_after_reconcile(
+            older_than=datetime.now(UTC) + timedelta(minutes=1)
+        )
+        == 0
+    )
+    assert store.require(task.task_id).status is MemoryTaskStatus.UNKNOWN
+
+
 def test_orphan_recovery_preserves_active_running_tasks(tmp_path) -> None:
     store, profile = _profile_and_tasks(tmp_path)
     active = store.create(
