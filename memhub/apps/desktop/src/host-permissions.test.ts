@@ -985,7 +985,7 @@ describe.skipIf(process.platform === "win32")(
       );
     });
 
-    it("does not overwrite modified plugin registry ownership during uninstall", async () => {
+    it("reports a modified managed registry entry instead of overwriting it", async () => {
       const context = await fixture();
       const layout = workbuddyLayout(path.join(context.root, "workbuddy"));
       const plugin = required(layout.plugin);
@@ -1004,9 +1004,18 @@ describe.skipIf(process.platform === "win32")(
       config["one-memory"].installLocation = "changed-by-user";
       const changed = JSON.stringify(config);
       await writeFile(plugin.knownMarketplacesPath, changed);
+      // The value at our own key changed. Overwriting it would be a guess, so
+      // uninstall schedules nothing, names the file in a review finding, and
+      // refuses when the preview is applied. The bytes stay as the host left
+      // them either way.
+      const removal = await context.permissions.previewUninstall(layout);
+      expect(removal.files).toEqual([]);
+      expect((removal.review ?? []).map((finding) => finding.path)).toContain(
+        plugin.knownMarketplacesPath,
+      );
       await expect(
-        context.permissions.previewUninstall(layout),
-      ).rejects.toThrow("host_uninstall_modified_files");
+        context.permissions.uninstall(layout, removal.fingerprint),
+      ).rejects.toThrow("host_uninstall_needs_review");
       expect(await readFile(plugin.knownMarketplacesPath, "utf8")).toBe(
         changed,
       );

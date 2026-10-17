@@ -1,4 +1,13 @@
 export {
+  DOMAIN_CODES,
+  type DomainCode,
+  DomainError,
+  diagnosticDomainError,
+  domainCodeOf,
+  isDomainCode,
+  isDomainError,
+} from "@one-memory/host-bridge";
+export {
   type BackgroundHealth,
   inspectBackgroundHealth,
 } from "./background-health.js";

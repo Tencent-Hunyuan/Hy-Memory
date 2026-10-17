@@ -27,6 +27,7 @@
  *   difference between an install that looks healthy and one that works.
  */
 
+import { createHash } from "node:crypto";
 import { failOpenHookCommand, quoteCaptureCommand } from "./capture-hooks.js";
 
 const MARKETPLACE_MANIFEST = ".codebuddy-plugin/marketplace.json";
@@ -522,6 +523,76 @@ export function removeRegistryEntry(
   if (isRecord(node))
     delete node[registry.keyPath[registry.keyPath.length - 1]];
   return serializeRegistry(document, raw);
+}
+
+/** A stable digest of the one value that is ours.
+ *
+ * Ownership of a shared registry file is the value at our key, not the bytes
+ * of the file the host and every other plugin also write to. Comparing the
+ * whole file made uninstall refuse whenever anything else in it moved — a
+ * plugin installed since, a key reordered, two spaces where there was one.
+ * Issue #29 could not be uninstalled at all because of that.
+ *
+ * `null` means the key is absent, which is a different fact from a key holding
+ * `null` and must stay distinguishable.
+ */
+export function registryManagedDigest(value: unknown): string | null {
+  if (value === undefined) return null;
+  return createHash("sha256")
+    .update(canonicalJson(value), "utf8")
+    .digest("hex");
+}
+
+/** JSON with object keys sorted, so formatting cannot change a digest. */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object")
+    return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
+}
+
+/** The document with our key removed, as canonical JSON.
+ *
+ * Comparing this against what the file held before we installed is how a
+ * registry can be handed back byte for byte when nothing else has moved, and
+ * merged rather than reverted when something has.
+ */
+export function registryWithoutOurs(
+  raw: string,
+  registry: PluginRegistry,
+  label: string,
+): string {
+  const document = parseRegistry(raw, registry.path, label);
+  const withoutOurs = structuredClone(document);
+  let node: unknown = withoutOurs;
+  for (const key of registry.keyPath.slice(0, -1)) {
+    if (isRecord(node)) node = node[key];
+  }
+  if (isRecord(node))
+    delete node[registry.keyPath[registry.keyPath.length - 1]];
+  return canonicalJson(withoutOurs);
+}
+
+/** Whether our key is the only thing in the file beyond the seed.
+ *
+ * Only then may a file we created be deleted outright on uninstall. Anything
+ * else in it — a key the user or another plugin added after we installed —
+ * means removing our key and leaving the file, rather than deleting work that
+ * was never ours.
+ */
+export function registryHoldsOnlyOurs(
+  raw: string,
+  registry: PluginRegistry,
+  label: string,
+): boolean {
+  return (
+    registryWithoutOurs(raw, registry, label) === canonicalJson(registry.seed)
+  );
 }
 
 function parseRegistry(

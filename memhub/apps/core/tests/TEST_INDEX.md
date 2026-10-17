@@ -336,6 +336,7 @@
 | `test_snapshot_pool.py` | `contract` | A whole-directory snapshot must not hold a thread everything else is waiting for. |
 | `test_soak_probe_effectiveness.py` | `integration` | The soak probe must observe the load it reports on. |
 | `test_source_access.py` | `contract` | 覆盖 source root requires explicit user grant、sensitive home directory is rejected without requesting os access、authorized file cannot escape root through a symlink 等 24 个场景。 |
+| `test_source_authorization_state.py` | `unit` | Why a source cannot be read, named separately from whether it can. |
 | `test_source_candidate_api.py` | `integration` | Candidate location changes must not implicitly grant or import anything. |
 | `test_source_candidate_connections.py` | `contract` | 覆盖 empty candidate revisions preserve default fingerprint、persisted candidate requires exact revision、connection resolves candidate in transaction and prior replay never regrants 等 7 个场景。 |
 | `test_source_candidates.py` | `contract` | 覆盖 preview is metadata only and cancel changes nothing、select persists only candidate and restarts with revision、compare and swap and aba cannot reuse old preview 等 9 个场景。 |
@@ -385,4 +386,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 380 个测试文件。
+共 381 个测试文件。

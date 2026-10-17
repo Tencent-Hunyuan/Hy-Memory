@@ -191,7 +191,12 @@ vi.mock("@one-memory/host-bridge/installer", () => ({
   renderConnectionMaterial: fake.localRead,
   verifyRecallInstall: fake.localRead,
 }));
-vi.mock("@one-memory/host-bridge", () => ({
+// Spread the real module instead of whitelisting it. Main imports domain
+// helpers that runtime-control re-exports from host-bridge, so a partial mock
+// silently hands back undefined for them and every error path that calls one
+// fails with a TypeError instead of the code under test.
+vi.mock("@one-memory/host-bridge", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@one-memory/host-bridge")>()),
   RecallBroker: class {
     constructor(options: unknown) {
       fake.brokerConstructed(options);

@@ -1181,3 +1181,32 @@ it("sends a click made while the remembered sync is still writing (D77)", async 
   );
   await waitFor(() => expect(screen.getByText("已冻结")).toBeTruthy());
 });
+
+it("asks for the source fix beside the sync switch, and never for a reinstall", () => {
+  // `authorized=false` used to be all the UI knew, so the same words covered a
+  // revoked grant and a broken plugin, and people reinstalled for a source
+  // problem that reinstalling cannot touch (issue #29).
+  const unauthorized = {
+    ...source,
+    authorized: false,
+    sync_enabled: false,
+    authorization_state: "revoked_grant",
+  } as SourceResponse;
+  render(
+    <ApplicationDetail
+      {...props}
+      source={unauthorized}
+      sources={[unauthorized]}
+    />,
+  );
+
+  expect(screen.getByText("此应用的读取授权已撤销，请重新授权。")).toBeTruthy();
+  expect(screen.queryByText(/重新插入|重装|卸载/)).toBeNull();
+});
+
+it("says nothing about the source beside the sync switch when one is not needed", () => {
+  const healthy = { ...source, authorization_state: "ok" } as SourceResponse;
+  render(<ApplicationDetail {...props} source={healthy} sources={[healthy]} />);
+
+  expect(screen.queryByText(/读取授权/)).toBeNull();
+});
