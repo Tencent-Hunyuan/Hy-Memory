@@ -328,6 +328,7 @@
 | `test_secret_store_error_codes.py` | `integration` | 3925a kernel item 3: keychain failure classification and backoff that heals. |
 | `test_secure_storage.py` | `integration` | 覆盖 isolated keychain service namespace、custom keychain service is refused outside isolated tests、packaged keychain budget covers loaded process startup 等 20 个场景。 |
 | `test_sedimentation_concurrency.py` | `contract` | Sedimentation runs several harnesses at once, but one harness at a time. |
+| `test_sedimentation_switch.py` | `contract` | Stopping model-driven sedimentation without losing the configuration. |
 | `test_service_level_pressure_acceptance.py` | `contract` | 覆盖 workbuddy recall remains available during 100k import 场景。 |
 | `test_service_levels.py` | `contract` | 覆盖 background never consumes the realtime reservation、realtime is next for the same source after background yields、import history gets one slice after nine realtime admissions 等 8 个场景。 |
 | `test_session_inbox.py` | `contract` | A session inbox is not a shared mailbox and a pull is not adoption. |
@@ -386,4 +387,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 381 个测试文件。
+共 382 个测试文件。

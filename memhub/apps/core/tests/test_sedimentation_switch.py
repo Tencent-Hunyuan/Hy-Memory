@@ -145,7 +145,28 @@ def test_stopped_switch_enqueues_nothing(tmp_path) -> None:
 def test_stopped_switch_prepares_no_backfill(tmp_path) -> None:
     flag = _Flag(False)
     evidence, tasks, active, supervisor, _profiles, _secrets = _stores(tmp_path, flag)
-    _task(evidence, tasks, active, index=1)
+    # No task is queued yet: backfill is what would create one for this
+    # conversation, so the stopped switch must keep it from creating any.
+    # A settled turn (question plus answer): an unanswered user tail is not
+    # backfill material, so the conversation needs both records.
+    for message_id, role, written_by, verbatim in (
+        ("m-old", "user", WrittenBy.PERSON, "Remember this too."),
+        ("m-old-reply", "assistant", WrittenBy.AGENT, "Saved."),
+    ):
+        evidence.put(
+            EvidenceInput(
+                source_id="cursor",
+                workspace="/Users/me/project",
+                conversation_id="conv-old",
+                message_id=message_id,
+                correlation_id=message_id,
+                role=role,
+                written_by=written_by,
+                created_at=NOW - timedelta(days=1),
+                verbatim=verbatim,
+                origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+            )
+        )
 
     assert supervisor.prepare_backfill() == []
 
