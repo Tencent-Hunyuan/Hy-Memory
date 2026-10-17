@@ -100,7 +100,13 @@ from one_memory.imports.access import (
     SourceAccessError,
     root_identity_matches,
 )
-from one_memory.imports.adapters import SourceAdapter, SyncCompleteness
+from one_memory.imports.adapters import (
+    ScanFailure,
+    ScannedEvidence,
+    ScanOptions,
+    SourceAdapter,
+    SyncCompleteness,
+)
 from one_memory.imports.candidates import (
     SourceCandidateError,
     SourceCandidateSelection,
@@ -123,7 +129,7 @@ from one_memory.imports.jobs import (
 from one_memory.imports.live_sync import LiveSyncHealth, PollingLiveSyncSupervisor
 from one_memory.imports.live_watch import WATCH_MODE, FileWatchLiveSync
 from one_memory.imports.locations import SourceLocation, inspect_source_location
-from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
+from one_memory.imports.models import EvidenceOrigin, EvidenceRecord, WrittenBy
 from one_memory.imports.runner import live_sync_arrival
 from one_memory.imports.sources.common import SourceInstallState
 from one_memory.imports.sources.registry import (
@@ -190,6 +196,7 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ModelProfileUnavailableError,
 )
+from one_memory.model_request_audit import AuditedModelTransport, ModelRequestAuditStore
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
 from one_memory.onboarding import OnboardingState, OnboardingStore
 from one_memory.recall import GovernedRecallTarget, RecallReceipt, RecallRequest
@@ -339,7 +346,7 @@ class ConnectSourcesRequest(BaseModel):
     import_upload_id: UUID | None = None
 
 
-ONBOARDING_LARGE_HISTORY_SESSIONS = 200
+ONBOARDING_LARGE_HISTORY_USER_TURNS = 200
 ONBOARDING_HISTORY_WINDOW = timedelta(days=3)
 
 
@@ -974,6 +981,7 @@ def create_app(
                 else None
             )
             app.state.model_request_budget = model_request_budget
+            app.state.model_request_audit_store = ModelRequestAuditStore(database_path)
             app.state.memory_answerer = MemoryAnswerer(
                 governance=app.state.memory_governance_store,
                 filter_memories=app.state.source_read_access.memories,
@@ -1016,10 +1024,17 @@ def create_app(
                     profile=profile,
                     api_key=api_key,
                     data_dir=data_dir,
-                    http_transport_factory=(
-                        (lambda: BudgetedModelTransport(model_request_budget))
-                        if model_request_budget is not None
-                        else None
+                    http_transport_factory=lambda: AuditedModelTransport(
+                        app.state.model_request_audit_store,
+                        profile_id=profile.profile_id,
+                        profile_revision=profile.revision,
+                        provider_kind=str(profile.provider_kind),
+                        model=profile.model,
+                        inner=(
+                            BudgetedModelTransport(model_request_budget)
+                            if model_request_budget is not None
+                            else None
+                        ),
                     ),
                 ),
                 # `None` means "whatever the active profile allows". Pinned to
@@ -1748,6 +1763,30 @@ def create_app(
             "state": "ok" if events else "not_found",
             "events": events,
         }
+
+    @app.get("/api/v1/diagnostics/model-usage", dependencies=protected)
+    def diagnostic_model_usage(
+        since: datetime | None = Query(default=None),  # noqa: B008
+        request_id: str | None = Query(  # noqa: B008
+            default=None, min_length=1, max_length=512
+        ),
+        limit: int = Query(default=200, ge=1, le=2_000),  # noqa: B008
+    ) -> dict[str, object]:
+        """Return content-free precipitation usage for provider reconciliation."""
+
+        normalized_since = (
+            (since if since.tzinfo is not None else since.replace(tzinfo=UTC))
+            if since is not None
+            else None
+        )
+        report = app.state.model_request_audit_store.report(
+            since=normalized_since.astimezone(UTC).isoformat()
+            if normalized_since is not None
+            else None,
+            request_id=request_id,
+            limit=limit,
+        )
+        return {"schema_version": 1, **report}
 
     @app.get(
         "/api/v1/runtime/identity",
@@ -4238,7 +4277,7 @@ async def _onboarding_history_after(
     home: Path,
     now: datetime | None = None,
 ) -> datetime | None:
-    """Return one shared cutoff when any selected harness has large history.
+    """Return one shared cutoff when any selected harness has large, old history.
 
     The cutoff is decided before any history job is created, then persisted on
     every accepted job. This is deliberately global: independently limiting
@@ -4247,6 +4286,8 @@ async def _onboarding_history_after(
     """
     if not request.onboarding:
         return None
+    anchor = now or datetime.now(UTC)
+    cutoff = anchor - ONBOARDING_HISTORY_WINDOW
     revisions = request.source_candidate_revisions or {}
     for registration in registrations:
         source_id = registration.descriptor.source_id
@@ -4274,27 +4315,50 @@ async def _onboarding_history_after(
                 home=home,
             )
             adapter = registration.create_adapter(grant)
-            count_sessions = cast(
-                Callable[..., Awaitable[int]] | None,
-                getattr(adapter, "count_sessions", None),
-            )
-            if count_sessions is not None:
-                session_count = await count_sessions(limit=ONBOARDING_LARGE_HISTORY_SESSIONS + 1)
-            else:
-                pending = _install_state(adapter)
-                if pending is None:
-                    continue
-                session_count = (await pending).session_count
+            if await _has_large_old_history(adapter, cutoff=cutoff):
+                return cutoff
         except (OSError, SourceAccessError):
             # A supported source whose metadata count cannot be completed is
             # treated conservatively. The later connection still owns the
             # precise authorization error, while onboarding never falls back
             # to an unbounded history import.
-            session_count = ONBOARDING_LARGE_HISTORY_SESSIONS + 1
-        if session_count > ONBOARDING_LARGE_HISTORY_SESSIONS:
-            anchor = now or datetime.now(UTC)
-            return anchor - ONBOARDING_HISTORY_WINDOW
+            return cutoff
     return None
+
+
+async def _has_large_old_history(adapter: SourceAdapter, *, cutoff: datetime) -> bool:
+    """Probe one authorized Harness with the same parsers the import will use.
+
+    Stop as soon as both policy facts are proven: more than 200 genuine person
+    turns and at least one record older than the three-day cutoff. Counting
+    parsed Evidence instead of transcript files prevents one giant coding
+    session from bypassing the limit, while reusing the adapters keeps host
+    envelopes and tool-shaped user records out of the count.
+    """
+
+    user_turns = 0
+    has_old_data = False
+    async for event in adapter.scan(ScanOptions()):
+        if isinstance(event, ScanFailure):
+            # A partial probe must never turn into an unbounded first import.
+            return True
+        if not isinstance(event, ScannedEvidence):
+            continue
+        observed = event.evidence.created_at
+        if observed is None and event.cursor.observed_modified_ns > 0:
+            observed = datetime.fromtimestamp(
+                event.cursor.observed_modified_ns / 1_000_000_000,
+                tz=UTC,
+            )
+        if observed is not None:
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=UTC)
+            has_old_data = has_old_data or observed.astimezone(UTC) < cutoff
+        if event.evidence.role == "user" and event.evidence.written_by is WrittenBy.PERSON:
+            user_turns += 1
+        if user_turns > ONBOARDING_LARGE_HISTORY_USER_TURNS and has_old_data:
+            return True
+    return False
 
 
 def _install_state(adapter: object) -> Awaitable[SourceInstallState] | None:

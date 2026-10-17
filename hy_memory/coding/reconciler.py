@@ -310,6 +310,7 @@ class CodingMemoryReconciler:
         resp = await self.llm_provider.complete(
             prompt=prompt,
             max_tokens=self.max_tokens,
+            audit_stage="coding_reconcile",
         )
         return self._parse_ops(resp.content), prompt, resp.content, resp
 

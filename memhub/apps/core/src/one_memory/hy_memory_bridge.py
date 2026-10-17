@@ -33,6 +33,7 @@ from one_memory.hy_runtime_config import (
 from one_memory.hy_source_context import HySourceContext, HyWriteBindings
 from one_memory.hy_store_concurrency import native_store_read_slot
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind, attach_disable_thinking
+from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.semantic_deadline import SemanticMemoryHit
 
 #: D102: how relevant HY has to call a hit before it counts. Raised from 0.25
@@ -141,6 +142,22 @@ async def _joined_thread[**P, T](call: Callable[P, T], *args: P.args, **kwargs: 
 
 class HyMemoryBridgeError(RuntimeError):
     pass
+
+
+MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES = 512
+
+
+def coding_tool_result_max_bytes() -> int:
+    """Return the per-tool payload ceiling used by MemHub's HY client."""
+
+    raw = os.environ.get("MEMORY_CODING_TOOL_RESULT_MAX_BYTES")
+    if raw is None:
+        return MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+    return value if value > 0 else MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
 
 
 def _exclusive[**P, T](
@@ -414,8 +431,9 @@ class HyMemoryBridge:
 
     @_exclusive
     async def ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
-        async with self._write_lock:
-            return await self._ingest(request)
+        with audit_precipitation_request(request.request_id):
+            async with self._write_lock:
+                return await self._ingest(request)
 
     async def _ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         started = monotonic()
@@ -544,8 +562,9 @@ class HyMemoryBridge:
         request: HyMemoryIngestRequest,
         contents: Sequence[str],
     ) -> HyMemoryIngestResult:
-        async with self._write_lock:
-            return await self._ingest_extracted(request, contents)
+        with audit_precipitation_request(request.request_id):
+            async with self._write_lock:
+                return await self._ingest_extracted(request, contents)
 
     async def _ingest_extracted(
         self,
@@ -1697,6 +1716,7 @@ def build_hy_memory_config(
     config.history.db_path = str(memory_root / "history.sqlite3")
     config.coding.enable = True
     config.coding.db_path = str(memory_root / "coding.sqlite3")
+    config.coding.tool_result_max_bytes = coding_tool_result_max_bytes()
     config.recall.episode_recall_enabled = True
     config.recall.episode_summary_enabled = False
     config.recall.dynamic_episode_enabled = True

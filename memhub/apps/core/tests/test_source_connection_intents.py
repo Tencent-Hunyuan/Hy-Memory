@@ -195,11 +195,19 @@ def test_connection_retry_reuses_completed_job_and_checks_root_snapshot(tmp_path
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(("session_count", "limited"), [(200, False), (201, True)])
+@pytest.mark.parametrize(
+    ("turn_count", "age_days", "limited"),
+    [
+        (200, 4, False),
+        (201, 1, False),
+        (201, 4, True),
+    ],
+)
 def test_onboarding_applies_large_history_window_to_all_sources(
     tmp_path,
     monkeypatch,
-    session_count,
+    turn_count,
+    age_days,
     limited,
 ):
     monkeypatch.setattr("one_memory.model_presets._preset_data", lambda: None)
@@ -210,8 +218,22 @@ def test_onboarding_applies_large_history_window_to_all_sources(
         codex = home / ".codex/sessions"
         claude.mkdir(parents=True)
         codex.mkdir(parents=True)
-        for index in range(session_count):
-            (claude / f"{index:03}.jsonl").write_text("")
+        timestamp = (datetime.now(UTC) - timedelta(days=age_days)).isoformat()
+        (claude / "large-session.jsonl").write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "sessionId": "large-session",
+                        "uuid": f"user-{index}",
+                        "timestamp": timestamp,
+                        "message": {"content": f"turn {index}"},
+                    }
+                )
+                + "\n"
+                for index in range(turn_count)
+            )
+        )
         (codex / "one.jsonl").write_text("")
         app = create_app(
             Settings(
@@ -240,7 +262,7 @@ def test_onboarding_applies_large_history_window_to_all_sources(
                 "/api/v1/sources/connect",
                 json={
                     "source_ids": ["claude-code", "codex"],
-                    "request_id": f"history-window-{session_count}",
+                    "request_id": f"history-window-{turn_count}-{age_days}",
                     "source_roots": {
                         "claude-code": claude_root,
                         "codex": codex_root,

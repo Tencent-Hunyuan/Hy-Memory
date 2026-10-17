@@ -669,6 +669,7 @@ class MemoryReconciler:
             response = await llm.complete(
                 prompt=prompt,
                 max_tokens=500,
+                audit_stage="reconcile",
             )
             text = response.content.strip()
             if "```json" in text:
@@ -1383,6 +1384,7 @@ class MemoryReconciler:
                     response = await llm.complete(
                         prompt=prompt,
                         max_tokens=dyn_max_tokens,
+                        audit_stage="reconcile",
                     )
                 except Exception as e:
                     # LLM 彻底不可用（provider 已按 max_retries 重试过，网关 500 /

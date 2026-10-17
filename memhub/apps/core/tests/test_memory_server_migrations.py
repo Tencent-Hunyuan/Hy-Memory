@@ -2103,7 +2103,7 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50, 51)
+    assert result.applied == (49, 50, 51, 52)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
@@ -2136,7 +2136,7 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (51,)
+    assert result.applied == (51, 52)
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]

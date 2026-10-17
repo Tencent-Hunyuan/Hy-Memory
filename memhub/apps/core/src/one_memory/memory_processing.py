@@ -45,6 +45,7 @@ from one_memory.hy_memory_bridge import (
     HyMemoryOutput,
     HyMemoryTurn,
     builtin_retrieval_snapshot,
+    coding_tool_result_max_bytes,
     decide_profile_graph_width,
     hy_memory_store_exists,
     inspect_profile_graph_width,
@@ -3595,7 +3596,7 @@ _HOST_ENVELOPE = re.compile(
 #: before HY chose a path cut long answers mid-way and sent tool-heavy turns as
 #: dozens of calls. ONE_MEMORY_SPLIT_TURNS=1 restores the 12,000 / 24 split.
 _WHOLE_TURN_CHARACTERS = 60_000
-_HY_TOOL_CHARACTERS = 2_048
+_HY_TOOL_CHARACTERS = coding_tool_result_max_bytes()
 #: Hard ceiling on the UTF-8 bytes one window may hold, whatever HY counts.
 #: HY reads the payload in-process, so a turn made of enormous raw tool
 #: records is held in memory even though HY will cut each one down. Cut by

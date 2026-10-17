@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 _JUDGE_MAX_TURNS = 20
 _JUDGE_HEAD_TURNS = 5
+_JUDGE_USER_CONTENT_LIMIT = 1_000
+_JUDGE_USER_CONTENT_HEAD = 200
+_JUDGE_USER_CONTENT_TAIL = 200
 _JUDGE_MAX_QUERY_CHARS = 300
 _JUDGE_MAX_QUERIES = 20
 
@@ -186,6 +189,7 @@ async def classify_messages_scene(
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature,
+            audit_stage="coding_judge",
         )
         _elapsed = round((time.perf_counter() - _t0) * 1000, 2)
         result = _parse_scene_json(resp.content)
@@ -631,9 +635,13 @@ def _format_turns(summary: List[Dict[str, Any]]) -> str:
     rows = []
     for t in summary:
         user = t.get("user", "") or ""
-        # 单 turn 用户文本截到 200 字符
-        if len(user) > 200:
-            user = user[:200] + "..."
+        if len(user) > _JUDGE_USER_CONTENT_LIMIT:
+            omitted = len(user) - _JUDGE_USER_CONTENT_HEAD - _JUDGE_USER_CONTENT_TAIL
+            user = (
+                user[:_JUDGE_USER_CONTENT_HEAD]
+                + f"\n[...{omitted} chars omitted...]\n"
+                + user[-_JUDGE_USER_CONTENT_TAIL:]
+            )
         tools = t.get("tools", []) or []
         rows.append(
             f"- turn {t.get('turn', '?')}: user={user!r}, tools={tools}"

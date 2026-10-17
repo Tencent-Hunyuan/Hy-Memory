@@ -1231,6 +1231,68 @@ CREATE TABLE IF NOT EXISTS model_request_budget_events (
 """
 
 
+def model_request_audit_ddl(dialect: str = "mysql") -> str:
+    """Content-free accounting for physical precipitation model requests."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS model_request_audit (
+    audit_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    profile_revision INTEGER NOT NULL,
+    provider_kind TEXT NOT NULL,
+    model TEXT NOT NULL,
+    request_kind TEXT NOT NULL,
+    prompt_stage TEXT NOT NULL DEFAULT 'other',
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    outcome TEXT NOT NULL CHECK(outcome IN ('in_flight','succeeded','failed')),
+    http_status INTEGER,
+    error_type TEXT,
+    provider_request_id TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    cached_prompt_tokens INTEGER,
+    reasoning_tokens INTEGER
+);
+CREATE INDEX IF NOT EXISTS model_request_audit_request
+ON model_request_audit(request_id, started_at);
+CREATE INDEX IF NOT EXISTS model_request_audit_started
+ON model_request_audit(started_at);
+"""
+    return """
+CREATE TABLE IF NOT EXISTS model_request_audit (
+    audit_id VARCHAR(128) PRIMARY KEY,
+    request_id VARCHAR(512) NOT NULL,
+    profile_id VARCHAR(128) NOT NULL,
+    profile_revision INT NOT NULL,
+    provider_kind VARCHAR(64) NOT NULL,
+    model VARCHAR(512) NOT NULL,
+    request_kind VARCHAR(64) NOT NULL,
+    prompt_stage VARCHAR(128) NOT NULL DEFAULT 'other',
+    started_at DATETIME(6) NOT NULL,
+    completed_at DATETIME(6) NULL,
+    outcome VARCHAR(32) NOT NULL CHECK(outcome IN ('in_flight','succeeded','failed')),
+    http_status INT NULL,
+    error_type VARCHAR(128) NULL,
+    provider_request_id VARCHAR(512) NULL,
+    prompt_tokens BIGINT NULL,
+    completion_tokens BIGINT NULL,
+    total_tokens BIGINT NULL,
+    cached_prompt_tokens BIGINT NULL,
+    reasoning_tokens BIGINT NULL,
+    KEY model_request_audit_request (request_id, started_at),
+    KEY model_request_audit_started (started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _052_model_request_audit(cursor: Any) -> None:
+    for statement in _split_statements(model_request_audit_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def model_probe_operations_ddl(dialect: str = "mysql") -> str:
     """Probe operations; `state` is CHECKed to a known set.
 
@@ -2849,4 +2911,10 @@ MIGRATIONS: tuple[Migration, ...] = (
         _050_model_probe_operations_reserved_at,
     ),
     Migration(51, "drop_hy_node_permissions", _051_drop_hy_node_permissions),
+    Migration(
+        52,
+        "model_request_audit",
+        _052_model_request_audit,
+        ("model_request_audit",),
+    ),
 )

@@ -571,6 +571,7 @@ class WorkingFactReconciler:
         resp = await self.llm_provider.complete(
             prompt=prompt,
             max_tokens=self.max_tokens,
+            audit_stage="coding_fact_reconcile",
         )
         return self._parse_ops(resp.content)
 
@@ -637,6 +638,7 @@ class WorkingFactReconciler:
             resp = await self.llm_provider.complete(
                 prompt=prompt,
                 max_tokens=_CHAIN_SUMMARY_MAX_TOKENS,
+                audit_stage="coding_fact_summary",
             )
         except Exception as e:
             logger.warning(f"[fact-reconcile] chain summary failed: {e}")

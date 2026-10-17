@@ -1148,6 +1148,56 @@ export async function setDiagnosticLogLevel(
   return value.log_level as DiagnosticLogLevel;
 }
 
+export interface ModelUsageSummary {
+  request_count: number;
+  succeeded: number;
+  failed: number;
+  in_flight: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_prompt_tokens: number;
+  reasoning_tokens: number;
+  avg_prompt_tokens: number;
+  avg_completion_tokens: number;
+}
+
+export interface ModelUsageMinute {
+  minute: string;
+  prompt_stage: string;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  avg_prompt_tokens: number;
+  avg_completion_tokens: number;
+}
+
+export interface ModelUsageReport {
+  schema_version: 1;
+  summary: ModelUsageSummary;
+  by_minute: ModelUsageMinute[];
+  requests: Array<Record<string, unknown>>;
+}
+
+export async function getModelUsage(
+  since: string,
+  limit = 200,
+): Promise<ModelUsageReport> {
+  const response = await client.get<ModelUsageReport>(
+    "/api/v1/diagnostics/model-usage",
+    { params: { since, limit } },
+  );
+  const value = response.data;
+  if (
+    value.schema_version !== 1 ||
+    !Array.isArray(value.by_minute) ||
+    typeof value.summary?.request_count !== "number"
+  )
+    throw new Error("model_usage_invalid");
+  return value;
+}
+
 export async function retryUnknownMemoryProcessing(
   traceId?: string,
 ): Promise<{ requeued: number }> {

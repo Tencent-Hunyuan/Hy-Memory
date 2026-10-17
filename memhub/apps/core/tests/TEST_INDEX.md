@@ -250,6 +250,7 @@
 | `test_model_profile_identity.py` | `contract` | Stable model editing and configured-vs-available credentials; no Keychain/network. |
 | `test_model_profile_queue_handover.py` | `contract` | Queued work when the model changes or its configuration is deleted (D75). |
 | `test_model_profiles.py` | `contract` | 覆盖 profile uses one model and keeps key out of database、api key updates reuse one stable secret reference、startup cleanup removes only secrets not referenced by current profiles 等 15 个场景。 |
+| `test_model_request_audit.py` | `contract` | 覆盖 failure is recorded without error message、missing usage stays unknown in detail and zero in summary、records one physical request with provider usage and no content 等 5 个场景。 |
 | `test_model_request_budget.py` | `contract` | 覆盖 persists failed request reservations without content、parallel leases cannot exceed request limit、unknown or excessive output and body are denied 等 6 个场景。 |
 | `test_mysql_lifecycle.py` | `contract` | A1-07: the decisions Runtime makes around the bundled MySQL. |
 | `test_mysql_platform.py` | `contract` | A1-07: the machine-facing half of managing the bundled MySQL. |
@@ -385,4 +386,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 380 个测试文件。
+共 381 个测试文件。

@@ -30,6 +30,7 @@ import {
   rendererDebugLogs,
   subscribeRendererDebugLogs,
 } from "./renderer-debug-log";
+import { ModelUsageView } from "./ModelUsageView";
 import "./debug-log-panel.css";
 
 const LEVELS: Array<{ value: DebugLogLevel | "all"; label: string }> = [
@@ -52,7 +53,9 @@ const SERVICE_LABELS: Record<DebugLogEntry["service"], string> = {
 export function DebugLogPanel() {
   const supported = typeof window.oneMemory?.getDebugLogs === "function";
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<"logs" | "usage">("logs");
   const [live, setLive] = useState(true);
+  const [usageRefreshToken, setUsageRefreshToken] = useState(0);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<DebugLogLevel | "all">("all");
   const [captureLevel, setCaptureLevel] = useState<DiagnosticLogLevel>("info");
@@ -67,6 +70,7 @@ export function DebugLogPanel() {
   const snapshotRef = useRef<DebugLogSnapshot | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
   const rendererEntries = useSyncExternalStore(
     subscribeRendererDebugLogs,
     rendererDebugLogs,
@@ -88,7 +92,7 @@ export function DebugLogPanel() {
   }, []);
 
   useEffect(() => {
-    if (!open || !supported) return;
+    if (!open || !supported || tab !== "logs") return;
     void refresh();
     void getDiagnosticLogLevel()
       .then(setCaptureLevel)
@@ -96,7 +100,7 @@ export function DebugLogPanel() {
     if (!live) return;
     const timer = window.setInterval(() => void refresh(), 1_000);
     return () => window.clearInterval(timer);
-  }, [live, open, refresh, supported]);
+  }, [live, open, refresh, supported, tab]);
 
   const entries = useMemo(() => {
     const byId = new Map<string, DebugLogEntry>();
@@ -120,9 +124,23 @@ export function DebugLogPanel() {
 
   useEffect(() => {
     if (filtered.length === 0) return;
-    if (!open || !live || !listRef.current) return;
+    if (
+      !open ||
+      tab !== "logs" ||
+      !live ||
+      !followLatestRef.current ||
+      !listRef.current
+    )
+      return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [filtered.length, live, open]);
+  }, [filtered.length, live, open, tab]);
+
+  const handleListScroll = () => {
+    const list = listRef.current;
+    if (!list) return;
+    followLatestRef.current =
+      list.scrollHeight - list.scrollTop - list.clientHeight <= 24;
+  };
 
   const toggleExpanded = (id: string) => {
     setExpanded((current) => {
@@ -140,8 +158,12 @@ export function DebugLogPanel() {
         <aside className="debug-log-panel" aria-label="Debug 日志">
           <header className="debug-log-header">
             <div>
-              <strong>Debug 日志</strong>
-              <span>{entries.length} 条，本次启动</span>
+              <strong>诊断</strong>
+              <span>
+                {tab === "logs"
+                  ? `${entries.length} 条日志，本次启动`
+                  : "记忆沉淀模型用量"}
+              </span>
             </div>
             <div className="debug-log-header-actions">
               <button
@@ -158,7 +180,10 @@ export function DebugLogPanel() {
                 className="debug-icon-button"
                 title="立即刷新"
                 aria-label="立即刷新"
-                onClick={() => void refresh()}
+                onClick={() => {
+                  if (tab === "logs") void refresh();
+                  else setUsageRefreshToken((value) => value + 1);
+                }}
               >
                 <RefreshCw
                   size={17}
@@ -176,7 +201,27 @@ export function DebugLogPanel() {
               </button>
             </div>
           </header>
-          <div className="debug-log-toolbar">
+          <div className="debug-panel-tabs" role="tablist" aria-label="诊断页面">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "logs"}
+              onClick={() => setTab("logs")}
+            >
+              日志
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "usage"}
+              onClick={() => setTab("usage")}
+            >
+              模型用量
+            </button>
+          </div>
+          {tab === "logs" ? (
+            <div className="debug-log-content">
+              <div className="debug-log-toolbar">
             <label className="debug-search">
               <Search size={15} aria-hidden="true" />
               <input
@@ -245,7 +290,11 @@ export function DebugLogPanel() {
               <span className="debug-read-error">读取失败</span>
             ) : null}
           </div>
-          <div className="debug-log-list" ref={listRef}>
+          <div
+            className="debug-log-list"
+            ref={listRef}
+            onScroll={handleListScroll}
+          >
             {filtered.length ? (
               filtered.map((entry) => {
                 const isExpanded = expanded.has(entry.id);
@@ -287,6 +336,10 @@ export function DebugLogPanel() {
               </p>
             )}
           </div>
+            </div>
+          ) : (
+            <ModelUsageView live={live} refreshToken={usageRefreshToken} />
+          )}
         </aside>
       ) : null}
       <button
