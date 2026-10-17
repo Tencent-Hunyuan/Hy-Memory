@@ -1219,6 +1219,7 @@ class MemoryProcessingSupervisor:
         max_concurrent_tasks: int | None = None,
         source_writes_permitted: Callable[[str], bool] | None = None,
         service_levels: ServiceLevelScheduler | None = None,
+        sedimentation_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self.tasks = tasks
         self.profiles = profiles
@@ -1231,6 +1232,12 @@ class MemoryProcessingSupervisor:
         #: absent every source is treated as writable, which is what the
         #: product did before the switch existed.
         self.source_writes_permitted = source_writes_permitted
+        #: User-level "stop turning conversations into memories" switch. Optional
+        #: so tests and a Core without a config file keep their current
+        #: behaviour; when absent sedimentation is on, which is what the product
+        #: did before the switch existed. Read per decision rather than cached,
+        #: so stopping takes effect on the next dispatch without a restart.
+        self.sedimentation_enabled = sedimentation_enabled
         self.service_levels = service_levels or ServiceLevelScheduler()
         self.extraction_settings = extraction_settings or ExtractionSettingsStore(
             data_dir / "one-memory.sqlite3"
@@ -1283,6 +1290,20 @@ class MemoryProcessingSupervisor:
         self._shutdown_task: asyncio.Task[None] | None = None
         self._orphan_reclaimer: asyncio.Task[None] | None = None
         self._diagnostic_idle_reason: str | None = None
+
+    def _sedimentation_stopped(self) -> bool:
+        """Whether the user stopped model-driven sedimentation.
+
+        Stopping must not look like a broken pipeline: nothing is sent to the
+        model, so the pending count stays as it is and the scheduler reports
+        why it is idle. Starting again picks the same work up.
+        """
+        if self.sedimentation_enabled is None:
+            return False
+        if self.sedimentation_enabled():
+            return False
+        self._record_idle("sedimentation_stopped")
+        return True
 
     def _record_idle(self, reason: str) -> None:
         if self._diagnostic_idle_reason == reason:
@@ -1668,6 +1689,8 @@ class MemoryProcessingSupervisor:
     def enqueue_evidence(self, record: EvidenceRecord) -> MemoryTask | None:
         if self._shutting_down:
             return None
+        if self._sedimentation_stopped():
+            return None
         if (
             record.role not in {"user", "assistant"}
             and record.content_kind is not EvidenceContentKind.MEMORY_CONTENT
@@ -1700,6 +1723,8 @@ class MemoryProcessingSupervisor:
         should_stop: Callable[[], bool] = lambda: False,
     ) -> list[QueuedWork]:
         """Synchronous compatibility entry; preparation never starts a model."""
+        if self._sedimentation_stopped():
+            return []
         work = [item for batch in self._prepare_backfill_batches(should_stop) for item in batch]
         return [] if should_stop() or self._shutting_down else work
 
@@ -1708,7 +1733,7 @@ class MemoryProcessingSupervisor:
         should_stop: Callable[[], bool] = lambda: False,
     ) -> Generator[list[QueuedWork], None, None]:
         """Read bodies as needed; yield the first task before the next conversation."""
-        if should_stop() or self._shutting_down:
+        if should_stop() or self._shutting_down or self._sedimentation_stopped():
             return
         active = self.profiles.active(self.secrets)
         if active is None:
@@ -2093,6 +2118,8 @@ class MemoryProcessingSupervisor:
         Work that falls outside the extraction window is marked deferred so
         the pending count stops pretending it is about to run.
         """
+        if self._sedimentation_stopped():
+            return []
         now = datetime.now(UTC)
         window = self._extraction_window() if within_window else None
         exempt_all_apps_from_window = True

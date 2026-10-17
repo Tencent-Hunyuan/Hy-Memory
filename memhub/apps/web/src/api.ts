@@ -1233,6 +1233,35 @@ export async function setExtractionWindow(
   return receipt;
 }
 
+export type SedimentationState = {
+  enabled: boolean;
+  pending_retained: boolean;
+  imports_unaffected: boolean;
+};
+
+export async function getSedimentation(): Promise<SedimentationState> {
+  const response = await client.get<SedimentationState>(
+    "/api/v1/sedimentation",
+  );
+  return response.data;
+}
+
+export async function setSedimentation(
+  enabled: boolean,
+  traceId?: string,
+): Promise<SedimentationState> {
+  const response = await client.put<SedimentationState>(
+    "/api/v1/sedimentation",
+    { enabled },
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+  );
+  // The switch is a cost control: a 200 that did not save the choice would
+  // leave the model running while the app shows it stopped.
+  if (typeof response.data?.enabled !== "boolean")
+    throw new Error("sedimentation_receipt_invalid");
+  return response.data;
+}
+
 export async function manualExtract(
   evidenceIds: string[] = [],
   traceId?: string,

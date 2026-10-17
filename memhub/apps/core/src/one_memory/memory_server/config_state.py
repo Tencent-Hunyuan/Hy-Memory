@@ -30,6 +30,12 @@ class ConfigDocument(BaseModel):
 
     schema_version: int = Field(default=1, ge=1, le=1)
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
+    #: Whether the configured model may turn imported conversations into
+    #: memories. Defaulting to on keeps every existing install doing what it
+    #: did before the switch existed; stopping it is the user's cost control
+    #: and leaves the model configuration itself untouched, so starting again
+    #: needs no re-entry of a key.
+    sedimentation_enabled: StrictBool = True
 
     @field_validator("sources")
     @classmethod
@@ -62,6 +68,19 @@ class ConfigStore:
         with self._lock:
             source = self._document.sources.get(source_id)
             return bool(source and source.sync_enabled)
+
+    def sedimentation_enabled(self) -> bool:
+        with self._lock:
+            return bool(self._document.sedimentation_enabled)
+
+    def set_sedimentation_enabled(self, enabled: bool) -> ConfigDocument:
+        if type(enabled) is not bool:
+            raise ValueError("invalid_sedimentation_config")
+        with self._lock:
+            updated = self._document.model_copy(update={"sedimentation_enabled": enabled})
+            self._write(updated)
+            self._document = updated
+            return updated
 
     def set_sync(self, source_id: str, enabled: bool) -> ConfigDocument:
         return self.set_sync_many({source_id: enabled})
