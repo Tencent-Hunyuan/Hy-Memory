@@ -36,7 +36,21 @@ Hy Memory and MemHub are versioned and released independently.
   Because PyPI release metadata is immutable, the next SDK patch release must
   carry the updated license metadata; `2.0.1` retains its published metadata.
 
-## MemHub 1.0.2 — Unreleased
+## MemHub 1.0.3 — Unreleased
+
+- Updated the source version to `1.0.3` (build 7).
+- Pinned the public SDK to `hy-memory==2.0.3`.
+- Removed the HyPermission store wrappers and global model-content consent
+  switch; the trusted embedded SDK now uses native local stores.
+- Prevented uncertain writes from blocking later source work and added one
+  reconciled automatic retry after ten seconds.
+- Added product-facing memory pipeline counters and the log troubleshooting
+  runbook.
+- Allowed a verified packaged Desktop Runtime from a different commit to take
+  over an equal-build install atomically while preserving downgrade and
+  tamper refusal.
+
+## MemHub 1.0.2 — 2026-10-17
 
 - Updated the source version to `1.0.2` (build 6).
 - Pinned the public SDK to `hy-memory==2.0.2`.
