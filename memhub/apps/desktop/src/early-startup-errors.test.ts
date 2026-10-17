@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installEarlyStartupErrorHandler } from "./early-startup-errors";
+import { stableRuntimeUserMessage } from "./stable-runtime";
 
 const roots: string[] = [];
 
@@ -14,6 +15,40 @@ afterEach(async () => {
 });
 
 describe("early desktop startup errors", () => {
+  it.each(["es", "throws"] as const)(
+    "uses best-effort language (%s) without changing safe error codes",
+    async (language) => {
+      const dataDir = await mkdtemp(
+        path.join(os.tmpdir(), "desktop-early-language-"),
+      );
+      roots.push(dataDir);
+      const processEvents = new EventEmitter();
+      const showError = vi.fn();
+      const exit = vi.fn();
+      const dispose = installEarlyStartupErrorHandler({
+        processEvents,
+        dataDir,
+        stderr: { write: vi.fn(() => true) },
+        showError,
+        exit,
+        readLocale: () => {
+          if (language === "throws") throw new Error("unavailable");
+          return "es";
+        },
+      });
+      processEvents.emit(
+        "uncaughtException",
+        new Error("synthetic_safe_failure"),
+      );
+      expect(showError).toHaveBeenCalledExactlyOnceWith(
+        language === "es" ? "MemHub no pudo iniciarse" : "MemHub 无法启动",
+        stableRuntimeUserMessage(new Error("synthetic_safe_failure")),
+      );
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      dispose();
+    },
+  );
+
   it("replaces an earlier handler on the same process emitter", () => {
     const processEvents = new EventEmitter();
     const options = {
@@ -31,6 +66,37 @@ describe("early desktop startup errors", () => {
     expect(processEvents.listenerCount("unhandledRejection")).toBe(1);
     dispose();
   });
+
+  it.each(["es", undefined] as const)(
+    "uses a safe title for initialized locale %s and retains the technical code",
+    async (locale) => {
+      const dataDir = await mkdtemp(
+        path.join(os.tmpdir(), "desktop-early-locale-"),
+      );
+      roots.push(dataDir);
+      const processEvents = new EventEmitter();
+      const showError = vi.fn();
+      const exit = vi.fn();
+      const dispose = installEarlyStartupErrorHandler({
+        processEvents,
+        dataDir,
+        stderr: { write: vi.fn(() => true) },
+        showError,
+        exit,
+        readLocale: () => locale,
+      });
+      processEvents.emit(
+        "uncaughtException",
+        new Error("desktop_startup_failed"),
+      );
+      expect(showError).toHaveBeenCalledExactlyOnceWith(
+        locale === "es" ? "MemHub no pudo iniciarse" : "MemHub 无法启动",
+        stableRuntimeUserMessage(new Error("desktop_startup_failed")),
+      );
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      dispose();
+    },
+  );
 
   it("writes stderr and diagnostics before showing the fatal dialog", async () => {
     const dataDir = await mkdtemp(

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { type MessageKey, translate } from "@one-memory/contracts/gui-i18n";
 import type {
   App,
   Menu,
@@ -7,6 +8,7 @@ import type {
   Tray,
 } from "electron";
 import type { LoginPreference } from "./login-preference";
+import type { NativeLanguageSource } from "./native-language";
 
 export const LOGIN_SERVICE_NAME = "com.tencent.onememory.runtime.plist";
 
@@ -24,6 +26,7 @@ interface TrayOptions {
   setLoginPreference(enabled: boolean): Promise<LoginPreference>;
   allowLoginStartup?: boolean;
   productName?: string;
+  language?: NativeLanguageSource;
 }
 
 export function installBackgroundTray(options: TrayOptions): () => void {
@@ -41,29 +44,32 @@ export function installBackgroundTray(options: TrayOptions): () => void {
   let generation = 0;
   const refresh = async () => {
     if (disposed) return;
+    const locale = options.language?.read().locale ?? "zh-CN";
+    const t = (key: MessageKey) =>
+      translate(locale, key, { product: productName });
     const current = ++generation;
     let checked = false;
     let enabled = app.isPackaged && options.allowLoginStartup !== false;
-    let label = `登录时启动 ${productName}`;
+    let label = t("nativeLogin");
     if (options.allowLoginStartup === false) {
-      label += "（阶段包不可用）";
+      label += t("nativeTrialUnavailable");
     } else if (app.isPackaged) {
       try {
         const state = await options.readLoginPreference();
         if (disposed || current !== generation) return;
         checked = state.enabled;
         enabled = state.supported;
-        if (state.status === "managed-by-cli") label += "（由 CLI 管理）";
+        if (state.status === "managed-by-cli") label += t("nativeCliManaged");
       } catch {
-        label += "（状态不可用）";
+        label += t("nativeStatusUnavailable");
         enabled = false;
       }
     } else {
-      label += "（开发模式不可用）";
+      label += t("nativeDevelopmentUnavailable");
     }
     tray.setContextMenu(
       options.buildMenu([
-        { label: `打开 ${productName}`, click: options.open },
+        { label: t("nativeOpen"), click: options.open },
         {
           label,
           type: "checkbox",
@@ -74,14 +80,19 @@ export function installBackgroundTray(options: TrayOptions): () => void {
             void options
               .setLoginPreference(item.checked)
               .catch(() =>
-                options.reportError("无法更改登录启动设置，请重试。"),
+                options.reportError(
+                  translate(
+                    options.language?.read().locale ?? "zh-CN",
+                    "nativeLoginError",
+                  ),
+                ),
               )
               .finally(() => void refresh());
           },
         },
         { type: "separator" },
         {
-          label: `退出 ${productName}（后台服务继续运行）`,
+          label: t("nativeQuit"),
           click: () => {
             if (!disposed) app.quit();
           },
@@ -89,6 +100,7 @@ export function installBackgroundTray(options: TrayOptions): () => void {
       ]),
     );
   };
+  const unsubscribeLanguage = options.language?.subscribe(() => void refresh());
   try {
     void refresh();
     // Refresh before the native menu opens, including changes made in Settings.
@@ -101,6 +113,7 @@ export function installBackgroundTray(options: TrayOptions): () => void {
   return () => {
     if (disposed) return;
     disposed = true;
+    unsubscribeLanguage?.();
     tray.removeAllListeners("mouse-down");
     tray.removeAllListeners("right-click");
     tray.destroy();

@@ -11,6 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DebugLogPanel } from "./DebugLogPanel";
+import { LanguageProvider, useGuiLanguage } from "./gui-language";
 import {
   recordRendererDebugLog,
   resetRendererDebugLogsForTest,
@@ -57,6 +58,7 @@ const snapshot = {
 };
 
 beforeEach(() => {
+  window.localStorage.clear();
   resetRendererDebugLogsForTest();
   diagnosticLevel.get.mockClear();
   diagnosticLevel.set.mockClear();
@@ -69,6 +71,55 @@ afterEach(() => {
   cleanup();
   window.oneMemory = undefined;
   vi.useRealTimers();
+});
+
+function SwitchLanguage() {
+  const { setPreference } = useGuiLanguage();
+  return (
+    <button type="button" onClick={() => void setPreference("zh-CN")}>
+      Cambiar idioma
+    </button>
+  );
+}
+
+it("translates controls live but preserves events and does not change capture", async () => {
+  // A language bridge is not required by this synthetic browser fixture.
+  const read = vi.fn().mockResolvedValue(snapshot);
+  window.oneMemory = undefined;
+  localStorage.setItem("one-memory.gui-language", "es");
+  const view = render(
+    <LanguageProvider>
+      <SwitchLanguage />
+      <DebugLogPanel />
+    </LanguageProvider>,
+  );
+  window.oneMemory = { getDebugLogs: read } as unknown as NonNullable<
+    typeof window.oneMemory
+  >;
+  view.rerender(
+    <LanguageProvider>
+      <SwitchLanguage />
+      <DebugLogPanel />
+    </LanguageProvider>,
+  );
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Abrir registros de depuración",
+    }),
+  );
+  await screen.findByText(/source\.scanned/);
+  expect(
+    screen.getByRole("searchbox", { name: "Buscar registros" }),
+  ).toBeTruthy();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Pausar actualización en vivo" }),
+  );
+  const count = read.mock.calls.length;
+  await userEvent.click(screen.getByRole("button", { name: "Cambiar idioma" }));
+  await screen.findByRole("searchbox", { name: "搜索日志" });
+  expect(screen.getByText(/source\.scanned/)).toBeTruthy();
+  expect(read).toHaveBeenCalledTimes(count);
+  expect(diagnosticLevel.set).not.toHaveBeenCalled();
 });
 
 it("opens from the floating button and filters by text, level and source", async () => {

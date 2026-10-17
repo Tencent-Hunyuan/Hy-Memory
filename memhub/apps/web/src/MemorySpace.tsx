@@ -63,6 +63,7 @@ import {
 } from "./MemoryNoteComposer";
 import { MemoryRecallScope, memoryProvenanceLabel } from "./MemoryRecallScope";
 import type { MemoryArrival } from "./memory-arrival-state";
+import { useMemoryLanguage } from "./memory-language";
 import {
   blockReasonLabel,
   extractionStateLabel,
@@ -119,6 +120,7 @@ export function MemorySpace({
   focusDialogue?: boolean;
   onFocusDialogueConsumed?(): void;
 }) {
+  const { locale, text, count } = useMemoryLanguage();
   const [memories, setMemories] = useState<GovernedMemory[]>([]);
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [detailFreshness, setDetailFreshness] = useState<{
@@ -197,10 +199,12 @@ export function MemorySpace({
   // filter's, and naming the new one would caption the wrong numbers.
   const settledFilterLabel = [
     mapLibrary.settledSource
-      ? `来源 ${sourceNameOr(sources, mapLibrary.settledSource, mapLibrary.settledSource)}`
+      ? `${text("来源")} ${sourceNameOr(sources, mapLibrary.settledSource, mapLibrary.settledSource)}`
       : "",
     mapLibrary.settledQuery.trim()
-      ? `关键词“${mapLibrary.settledQuery.trim()}”`
+      ? locale === "es"
+        ? `Búsqueda: «${mapLibrary.settledQuery.trim()}»`
+        : `关键词“${mapLibrary.settledQuery.trim()}”`
       : "",
   ]
     .filter(Boolean)
@@ -1416,16 +1420,18 @@ export function MemorySpace({
       </div>
       <header className="memory-instrument-header">
         <div>
-          <h1 id="memory-title">{simplified ? "记忆" : "记忆空间"}</h1>
+          <h1 id="memory-title">{text(simplified ? "记忆" : "记忆空间")}</h1>
           <span className="memory-loaded-count">
             {simplified && !management
               ? mapLibrary.failed
-                ? "记忆读取失败"
+                ? text("记忆读取失败")
                 : mapLibrary.stale
-                  ? "正在导入历史会话，记忆将陆续出现"
+                  ? text("正在导入历史会话，记忆将陆续出现")
                   : mapLibrary.page
-                    ? `已沉淀 ${mapLibrary.page.total} 条${settledFilterLabel ? `（${settledFilterLabel}）` : ""} · 当前展示 ${mapLibrary.page.items.length} 条`
-                    : "正在读取…"
+                    ? locale === "es"
+                      ? `${count(mapLibrary.page.total)} ${mapLibrary.page.total === 1 ? "memoria guardada" : "memorias guardadas"}${settledFilterLabel ? ` (${settledFilterLabel})` : ""} · ${count(mapLibrary.page.items.length)} visibles`
+                      : `已沉淀 ${mapLibrary.page.total} 条${settledFilterLabel ? `（${settledFilterLabel}）` : ""} · 当前展示 ${mapLibrary.page.items.length} 条`
+                    : text("正在读取…")
               : loaded
                 ? `已加载 ${memories.filter((m) => m.status !== "deleted").length} 条记忆`
                 : "正在读取…"}
@@ -1596,10 +1602,15 @@ export function MemorySpace({
       />
       {simplified && pendingNote ? (
         <p className="memory-pending-note" role="status">
-          <span>原话已保存，正在等待整理：{pendingNote.text}</span>
+          <span>
+            {locale === "es"
+              ? "Texto guardado; pendiente de procesar: "
+              : "原话已保存，正在等待整理："}
+            {pendingNote.text}
+          </span>
           {pendingNote.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
-              配置整理模型
+              {text("配置整理模型")}
             </button>
           ) : null}
         </p>
@@ -1607,18 +1618,18 @@ export function MemorySpace({
 
       {readError && (
         <details className="memory-feedback-details">
-          <summary>查看读取详情</summary>
-          <p>{readError}</p>
+          <summary>{text("查看读取详情")}</summary>
+          <p>{text(readError)}</p>
         </details>
       )}
       {refreshing ? (
         <p className="memory-refreshing" role="status">
-          正在更新…
+          {text("正在更新…")}
         </p>
       ) : null}
       {error ? (
         <p className="error-banner" role="alert">
-          {error}
+          {text(error)}
         </p>
       ) : null}
 
@@ -1901,17 +1912,24 @@ export function MemorySpace({
           {management && (
             <>
               {library.page ? (
-                <nav aria-label="记忆库分页">
-                  <span aria-live="polite">共 {library.page.total} 条</span>{" "}
+                <nav
+                  className="memory-library-pagination"
+                  aria-label={text("记忆库分页")}
+                >
+                  <span aria-live="polite">
+                    {locale === "es"
+                      ? `${library.page.total} memorias en total`
+                      : `共 ${library.page.total} 条`}
+                  </span>{" "}
                   <span>
-                    第{" "}
-                    {Math.floor(library.page.offset / library.page.limit) + 1}{" "}
-                    页
+                    {locale === "es"
+                      ? `Página ${Math.floor(library.page.offset / library.page.limit) + 1}`
+                      : `第 ${Math.floor(library.page.offset / library.page.limit) + 1} 页`}
                   </span>
                   <R6Button
                     variant="quiet"
-                    title="上一页"
-                    aria-label="上一页"
+                    title={text("上一页")}
+                    aria-label={text("上一页")}
                     disabled={busy || library.page.offset === 0}
                     onClick={() => {
                       if (library.page) {
@@ -1924,8 +1942,8 @@ export function MemorySpace({
                   </R6Button>
                   <R6Button
                     variant="quiet"
-                    title="下一页"
-                    aria-label="下一页"
+                    title={text("下一页")}
+                    aria-label={text("下一页")}
                     disabled={
                       busy ||
                       library.page.offset + library.page.limit >=
@@ -2100,6 +2118,7 @@ function ModelPrompt({
   hasMemories: boolean;
   onConfigureModel(): void;
 }) {
+  const { locale, text, count } = useMemoryLanguage();
   const blocked = processing ? modelBlock(processing.blocked_stages) : null;
   if (!blocked) return null;
   if (
@@ -2110,12 +2129,20 @@ function ModelPrompt({
   )
     return null;
   return (
-    <p className="model-prompt" role="status" aria-label="记忆未在生成">
+    <p
+      className="model-prompt"
+      role="status"
+      aria-label={
+        locale === "es" ? "Generación de memorias detenida" : "记忆未在生成"
+      }
+    >
       <span>
-        {`还没有开始生成记忆：${blockReasonLabel(blocked.reason)}（${blocked.count} 条待处理）`}
+        {locale === "es"
+          ? `Aún no se generan memorias: ${text(blockReasonLabel(blocked.reason))} (${count(blocked.count)} pendientes)`
+          : `还没有开始生成记忆：${blockReasonLabel(blocked.reason)}（${blocked.count} 条待处理）`}
       </span>
       <button type="button" onClick={onConfigureModel}>
-        去配置生成模型
+        {locale === "es" ? "Configurar modelo de generación" : "去配置生成模型"}
       </button>
     </p>
   );

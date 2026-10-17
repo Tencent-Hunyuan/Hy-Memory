@@ -2,6 +2,7 @@ import type { ImportJob, SourceResponse } from "@one-memory/contracts";
 import { Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { connectionHostId } from "./connection-hosts";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { R6ColdStartFrame } from "./R6ColdStartFrame";
 import { R6Button } from "./R6Controls";
 import { R6ImportProgress } from "./R6ImportProgress";
@@ -87,6 +88,7 @@ export function FirstImportReview({
   onConnectionDraftChange,
   onContinue,
 }: FirstImportReviewProps) {
+  const { text, t } = useOnboardingTranslation();
   const stale = sourceSnapshot?.stale === true;
   const ids = [...new Set(sourceIds)];
   // Without explicit IDs, capture the initial batch once; later sync/history jobs
@@ -120,7 +122,14 @@ export function FirstImportReview({
   );
   const progressStale = stale && batch.length === 0;
   const [changing, setChanging] = useState(false);
-  const [actionMessage, setActionMessage] = useState("");
+  const [actionResult, setActionResult] = useState<{
+    stopped: boolean;
+    confirmed: number;
+    failed: number;
+  } | null>(null);
+  const actionMessage = actionResult
+    ? `${actionResult.stopped ? t("onboardingBatchStopped") : ""}${t("onboardingBatchResult", { confirmed: actionResult.confirmed, failed: actionResult.failed })}${actionResult.failed ? text("已确认项保留，请核对未确认任务后重试。") : ""}`
+    : "";
   const batchFlight = useRef(false),
     stopBatch = useRef(false),
     mounted = useRef(true);
@@ -196,7 +205,7 @@ export function FirstImportReview({
     batchFlight.current = true;
     stopBatch.current = false;
     setChanging(true);
-    setActionMessage("");
+    setActionResult(null);
     let confirmed = 0,
       failed = 0;
     try {
@@ -262,9 +271,7 @@ export function FirstImportReview({
         }
       }
       if (mounted.current)
-        setActionMessage(
-          `${stopBatch.current ? "已停止后续操作；已发出的操作仍按回执核对。" : ""}已确认 ${confirmed} 项，${failed} 项未确认。${failed ? "已确认项保留，请核对未确认任务后重试。" : ""}`,
-        );
+        setActionResult({ stopped: stopBatch.current, confirmed, failed });
     } finally {
       batchFlight.current = false;
       if (mounted.current) setChanging(false);
@@ -274,21 +281,23 @@ export function FirstImportReview({
   return (
     <R6ColdStartFrame
       step={2}
-      title={title}
-      eyebrow="导入进行中 · 顺手连接应用"
+      title={text(title)}
+      eyebrow={text("导入进行中 · 顺手连接应用")}
       footer={
         <>
           <div className="first-import-r6-footer-note">
             <p>
-              {allCompleted
-                ? "对话已保存，记忆尚待生成。"
-                : displayImporting
-                  ? "导入在后台继续，无需等待。"
-                  : stale
-                    ? "正在重新核对来源；已保存数量仍按任务回执显示。"
-                    : allPaused
-                      ? "本次历史导入已暂停，已保存的对话还在。"
-                      : "导入等待处理，已保存的对话还在。"}
+              {text(
+                allCompleted
+                  ? "对话已保存，记忆尚待生成。"
+                  : displayImporting
+                    ? "导入在后台继续，无需等待。"
+                    : stale
+                      ? "正在重新核对来源；已保存数量仍按任务回执显示。"
+                      : allPaused
+                        ? "本次历史导入已暂停，已保存的对话还在。"
+                        : "导入等待处理，已保存的对话还在。",
+              )}
             </p>
             {(error || actionMessage) && (
               <p
@@ -307,7 +316,7 @@ export function FirstImportReview({
                     : undefined
                 }
               >
-                {error || actionMessage}
+                {error ? text(error) : actionMessage}
               </p>
             )}
           </div>
@@ -318,7 +327,7 @@ export function FirstImportReview({
                   stopBatch.current = true;
                 }}
               >
-                停止后续操作
+                {text("停止后续操作")}
               </R6Button>
             ) : onChangeJob && (canPause || canResume) ? (
               <R6Button
@@ -330,7 +339,7 @@ export function FirstImportReview({
                 ) : (
                   <Play size={16} aria-hidden="true" />
                 )}
-                {canPause ? "暂停导入" : "继续导入"}
+                {text(canPause ? "暂停导入" : "继续导入")}
               </R6Button>
             ) : null}
             {recovery ? (
@@ -342,18 +351,20 @@ export function FirstImportReview({
                     recovery.onSkip();
                   }}
                 >
-                  {recovery.destination === "sources"
-                    ? "仍进入应用页"
-                    : recovery.destination === "settings"
-                      ? "仍进入设置"
-                      : "仍进入工作台"}
+                  {text(
+                    recovery.destination === "sources"
+                      ? "仍进入应用页"
+                      : recovery.destination === "settings"
+                        ? "仍进入设置"
+                        : "仍进入工作台",
+                  )}
                 </R6Button>
                 <R6Button
                   variant="primary"
                   disabled={busy}
                   onClick={() => leave(recovery.destination)}
                 >
-                  重试保存并进入
+                  {text("重试保存并进入")}
                 </R6Button>
               </>
             ) : (
@@ -362,7 +373,7 @@ export function FirstImportReview({
                 disabled={busy}
                 onClick={() => leave("settings")}
               >
-                配置模型，沉淀记忆
+                {text("配置模型，沉淀记忆")}
               </R6Button>
             )}
           </div>
@@ -370,19 +381,25 @@ export function FirstImportReview({
       }
     >
       <div className="first-import-r6-layout">
-        <section className="first-import-r6-main" aria-label="导入与原文">
+        <section
+          className="first-import-r6-main"
+          aria-label={text("导入与原文")}
+        >
           <p className="first-import-r6-intro">
-            {allCompleted
-              ? "本次导入已结束。已保存的对话无需重复导入。"
-              : "对话先保存在本机。你可以同时设置后续连接。"}
+            {text(
+              allCompleted
+                ? "本次导入已结束。已保存的对话无需重复导入。"
+                : "对话先保存在本机。你可以同时设置后续连接。",
+            )}
           </p>
           <p className="first-import-r6-subintro">
-            导入不会自动开放应用读取权限。配置模型后，才会开始生成记忆。
+            {text(
+              "导入不会自动开放应用读取权限。配置模型后，才会开始生成记忆。",
+            )}
           </p>
           {historyWindowLimited && (
             <p className="first-import-r6-history-window" role="status">
-              检测到会话数据量较大。为控制用量并保持各应用时间线一致，本次所有应用仅导入最近
-              3 天的对话。
+              {t("onboardingHistoryWindow")}
             </p>
           )}
           <R6ImportProgress
@@ -391,21 +408,24 @@ export function FirstImportReview({
             jobs={batch}
             stale={progressStale}
           />
-          <section className="first-import-r6-feed" aria-label="导入说明">
-            <h2>正在导入你的会话</h2>
+          <section
+            className="first-import-r6-feed"
+            aria-label={text("导入说明")}
+          >
+            <h2>{text("正在导入你的会话")}</h2>
             <p className="first-import-r6-feed-status">
-              后台将持续为你导入，可以放心进入下一步
+              {text("后台将持续为你导入，可以放心进入下一步")}
             </p>
             {Object.keys(failedSources).length > 0 && (
               <section
                 className="first-import-r6-failures"
-                aria-label="未开始的导入"
+                aria-label={text("未开始的导入")}
               >
                 {Object.keys(failedSources).map((id) => (
                   <p key={id}>
                     {sources.find((source) => source.source_id === id)
                       ?.display_name ?? id}{" "}
-                    未能开始导入，其他已接受任务不受影响。
+                    {text("未能开始导入，其他已接受任务不受影响。")}
                   </p>
                 ))}
                 <R6Button
@@ -413,27 +433,30 @@ export function FirstImportReview({
                   disabled={busy}
                   onClick={() => leave("sources")}
                 >
-                  查看未导入的应用
+                  {text("查看未导入的应用")}
                 </R6Button>
               </section>
             )}
           </section>
         </section>
-        <aside className="first-import-r6-options" aria-label="连接应用">
-          <p className="first-import-r6-eyebrow">让记忆继续生长</p>
-          <h2>连接你的应用</h2>
+        <aside
+          className="first-import-r6-options"
+          aria-label={text("连接应用")}
+        >
+          <p className="first-import-r6-eyebrow">{text("让记忆继续生长")}</p>
+          <h2>{text("连接你的应用")}</h2>
           <p className="first-import-r6-options-intro">
-            适用于本次选择且支持的应用。
+            {text("适用于本次选择且支持的应用。")}
           </p>
           <SelectionTile
-            title={
-              hostConnectionAvailable ? "一键接入应用" : "测试实例不接入应用"
-            }
-            body={
+            title={text(
+              hostConnectionAvailable ? "一键接入应用" : "测试实例不接入应用",
+            )}
+            body={text(
               hostConnectionAvailable
                 ? "安装记忆连接，让所选应用用上 MemHub 中的相关记忆。"
-                : "当前使用独立测试数据目录，不会修改本机应用的连接配置。"
-            }
+                : "当前使用独立测试数据目录，不会修改本机应用的连接配置。",
+            )}
             checked={
               hostConnectionAvailable &&
               !!hostEligible.length &&
@@ -456,12 +479,16 @@ export function FirstImportReview({
             }
           />
           {connectionNote && (
-            <p className="first-import-r6-options-note">{connectionNote}</p>
+            <p className="first-import-r6-options-note">
+              {text(connectionNote)}
+            </p>
           )}
           <p className="first-import-r6-options-note">
-            {draftReady
-              ? "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。"
-              : "暂时无法连接应用，当前不会安装连接。"}
+            {text(
+              draftReady
+                ? "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。"
+                : "暂时无法连接应用，当前不会安装连接。",
+            )}
           </p>
         </aside>
       </div>

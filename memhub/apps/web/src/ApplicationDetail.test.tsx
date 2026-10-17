@@ -12,6 +12,32 @@ import {
 import { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ApplicationDetail } from "./ApplicationDetail";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
+
+it("translates application detail live without triggering extra reads or writes", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  const refresh = vi.fn().mockResolvedValue({ sources: [source] });
+  render(
+    <LanguageProvider>
+      <ApplicationDetail {...props} refresh={refresh} />
+    </LanguageProvider>,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Detalles de la aplicación" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("switch", { name: "Sincronización" })).toBeTruthy();
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  await act(async () =>
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
+    ),
+  );
+  expect(await screen.findByRole("heading", { name: "应用详情" })).toBeTruthy();
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(props.setSync).not.toHaveBeenCalled();
+});
+
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { commitSources } from "./source-state";

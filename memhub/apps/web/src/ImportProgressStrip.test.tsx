@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { LanguageProvider, useGuiLanguage } from "./gui-language";
 import { ImportProgressStrip } from "./ImportProgressStrip";
 
 function job(overrides: Partial<ImportJob> = {}): ImportJob {
@@ -83,6 +84,57 @@ function deferred() {
 
 describe("ImportProgressStrip", () => {
   afterEach(cleanup);
+
+  it("translates user-facing progress and live settings CTA without invoking actions", async () => {
+    localStorage.setItem("one-memory.gui-language", "es");
+    const open = vi.fn();
+    function Switch() {
+      const { setPreference } = useGuiLanguage();
+      return (
+        <button type="button" onClick={() => void setPreference("zh-CN")}>
+          Cambiar idioma
+        </button>
+      );
+    }
+    const view = render(
+      <LanguageProvider>
+        <Switch />
+        <ImportProgressStrip
+          userFacing
+          jobs={[job()]}
+          sources={[
+            source("cursor", "Cursor", { imported_conversations: 12345 }),
+          ]}
+          backfilling={false}
+          onOpenSources={open}
+        />
+      </LanguageProvider>,
+    );
+    expect((await screen.findByRole("status")).textContent).toContain(
+      "12.345 conversaciones",
+    );
+    view.rerender(
+      <LanguageProvider>
+        <Switch />
+        <ImportProgressStrip
+          userFacing
+          jobs={[job({ status: "failed" })]}
+          sources={sources}
+          backfilling={false}
+          onOpenSources={open}
+          onConfigureModel={open}
+        />
+      </LanguageProvider>,
+    );
+    await screen.findByRole("button", { name: "Ir a configuración" });
+    expect(open).not.toHaveBeenCalled();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Cambiar idioma" }),
+    );
+    await screen.findByRole("button", { name: "去设置" });
+    expect(open).not.toHaveBeenCalled();
+    localStorage.clear();
+  });
 
   it("keeps daily sync silent in the user-facing shell", () => {
     const { container } = render(

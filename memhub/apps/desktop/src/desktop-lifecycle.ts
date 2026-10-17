@@ -18,6 +18,7 @@ interface LifecycleOptions {
   platform: NodeJS.Platform;
   background: boolean;
   prepare(): void;
+  beforeNativeUi?(): Promise<void>;
   initialize(isQuitting: () => boolean): Promise<void>;
   stop(): Promise<void>;
   dispose(): void;
@@ -145,6 +146,8 @@ export function startDesktopLifecycle(options: LifecycleOptions): void {
     .then(async () => {
       if (quitting) return;
       startup = Promise.resolve().then(async () => {
+        if (quitting) return;
+        await options.beforeNativeUi?.();
         if (quitting) return;
         options.installTray(open);
         await options.initialize(() => quitting);

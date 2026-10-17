@@ -8,8 +8,38 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { DIALOGUE_PANE_VISIBLE } from "./MemoryMap";
 import { MemorySpace } from "./MemorySpace";
+
+it("translates memory filters and detail affordances live without refetching", async () => {
+  setup();
+  delete window.oneMemory;
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <MemorySpace simplified />
+    </LanguageProvider>,
+  );
+  await screen.findByRole("heading", { name: "Memorias", level: 1 });
+  await screen.findByText("已保存的记忆");
+  expect(
+    screen.getByRole("textbox", { name: "Filtrar memorias del mapa" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Actualizar memorias" }),
+  ).toBeTruthy();
+  const calls = reads.mapLibrary.mock.calls.length;
+  act(() => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
+    );
+  });
+  expect(screen.getByRole("heading", { name: "记忆", level: 1 })).toBeTruthy();
+  expect(reads.mapLibrary).toHaveBeenCalledTimes(calls);
+  localStorage.clear();
+});
 
 const { reads } = vi.hoisted(() => ({
   reads: {
@@ -69,6 +99,36 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
 });
+it("translates the model-required prompt without configuring a model", async () => {
+  setup();
+  reads.processing.mockResolvedValue({
+    running: 0,
+    pending: 0,
+    completed: 0,
+    blocked_stages: [
+      { kind: "extract", reason: "waiting_for_model", count: 4 },
+    ],
+  });
+  delete window.oneMemory;
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  const configure = vi.fn();
+  render(
+    <LanguageProvider>
+      <MemorySpace simplified onConfigureModel={configure} />
+    </LanguageProvider>,
+  );
+  expect(
+    await screen.findByRole("status", {
+      name: "Generación de memorias detenida",
+    }),
+  ).toHaveProperty(
+    "textContent",
+    "Aún no se generan memorias: Esperando un modelo disponible (4 pendientes)Configurar modelo de generación",
+  );
+  expect(configure).not.toHaveBeenCalled();
+  localStorage.clear();
+});
+
 function setup() {
   const items = [
     {

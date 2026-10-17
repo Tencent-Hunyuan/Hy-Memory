@@ -12,13 +12,52 @@ import {
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import {
   ModelSettings,
   type ModelSettingsActions,
   probeLabel,
 } from "./ModelSettings";
 import { PROVIDER_PRESETS } from "./provider-presets";
+
+it("keeps the edited model draft and does not mutate on live language changes", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  profiles = [profile];
+  const user = userEvent.setup();
+  render(
+    <LanguageProvider>
+      <ModelSettings />
+    </LanguageProvider>,
+  );
+  const field = await screen.findByLabelText(
+    "Identificador del modelo de generación",
+  );
+  await user.type(field, "synthetic-model");
+  const before = [
+    create.mock.calls.length,
+    update.mock.calls.length,
+    activate.mock.calls.length,
+    probeProfile.mock.calls.length,
+  ];
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  await act(async () =>
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
+    ),
+  );
+  expect(await screen.findByLabelText("生成模型名")).toHaveProperty(
+    "value",
+    "synthetic-model",
+  );
+  expect([
+    create.mock.calls.length,
+    update.mock.calls.length,
+    activate.mock.calls.length,
+    probeProfile.mock.calls.length,
+  ]).toEqual(before);
+  cleanup();
+  localStorage.clear();
+});
 
 const create = vi.fn();
 const probeProfile = vi.fn();

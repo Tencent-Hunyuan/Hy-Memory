@@ -17,7 +17,53 @@ import {
 import * as api from "./api";
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
+import { LanguageProvider } from "./gui-language";
 import { queryClient } from "./query-client";
+
+it("localizes the whole home live without repeating reads or changing imported text", async () => {
+  let change:
+    | ((snapshot: {
+        preference: "es" | "zh-CN";
+        locale: "es" | "zh-CN";
+        revision: number;
+      }) => void)
+    | undefined;
+  Object.assign(window.oneMemory ?? {}, {
+    getLanguagePreference: vi
+      .fn()
+      .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+    onLanguagePreferenceChanged: vi.fn((listener) => {
+      change = listener;
+      return () => {};
+    }),
+  });
+  render(<LanguageProvider>{mountHome()}</LanguageProvider>);
+  await screen.findByRole("heading", { name: "Aplicaciones", level: 1 });
+  await screen.findByText("实际治理记忆");
+  expect(
+    screen.getByRole("region", { name: "Resumen de memorias" }),
+  ).toBeTruthy();
+  expect(screen.getByText("Servicio activo")).toBeTruthy();
+  expect(screen.getByText("2 aplicaciones conectadas")).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "Ver detalles" })).toHaveLength(
+    3,
+  );
+  const calls = summary.mock.calls.length;
+  fireEvent.click(
+    screen.getByRole("button", { name: "Ver las 5 aplicaciones" }),
+  );
+  act(() => change?.({ preference: "zh-CN", locale: "zh-CN", revision: 2 }));
+  expect(
+    screen.getByRole("heading", { name: "全部应用", level: 1 }),
+  ).toBeTruthy();
+  expect(screen.getByText("App 4")).toBeTruthy();
+  expect(summary).toHaveBeenCalledTimes(calls);
+  act(() => change?.({ preference: "es", locale: "es", revision: 3 }));
+  expect(
+    screen.getByRole("heading", { name: "Todas las aplicaciones", level: 1 }),
+  ).toBeTruthy();
+  expect(summary).toHaveBeenCalledTimes(calls);
+});
 
 const { summary, processing, history, liveSync, recentConversations } =
   vi.hoisted(() => ({
@@ -100,6 +146,53 @@ beforeEach(() => {
       },
     ]),
   } as unknown as NonNullable<typeof window.oneMemory>;
+});
+it.each([
+  [{ running: 1, pending: 0 }, "Organizando"],
+  [{ running: 0, pending: 1 }, "Preparando"],
+  [{ running: 0, pending: 0, waiting_for_model: 1 }, "Esperando modelo"],
+  [{ running: 0, pending: 0, failed: 1 }, "Requiere atención"],
+])(
+  "renders Spanish processing states without extra requests: %j",
+  async (value, label) => {
+    processing.mockResolvedValue(value);
+    Object.assign(window.oneMemory ?? {}, {
+      getLanguagePreference: vi
+        .fn()
+        .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+      onLanguagePreferenceChanged: vi.fn(() => () => {}),
+    });
+    render(<LanguageProvider>{mountHome()}</LanguageProvider>);
+    expect(await screen.findAllByText(label)).toHaveLength(2);
+    expect(processing).toHaveBeenCalledOnce();
+  },
+);
+it("localizes failure and empty states without leaking errors", async () => {
+  summary.mockRejectedValue(new Error("synthetic_private_error"));
+  Object.assign(window.oneMemory ?? {}, {
+    getLanguagePreference: vi
+      .fn()
+      .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+    onLanguagePreferenceChanged: vi.fn(() => () => {}),
+  });
+  render(
+    <LanguageProvider>
+      <ApplicationsHome
+        imports={{ ...imports, sources: [] }}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  expect(
+    await screen.findByText("No se puede leer el estado de las memorias"),
+  ).toBeTruthy();
+  expect(screen.getByText("Aún no hay aplicaciones para mostrar")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Reintentar lectura" }),
+  ).toBeTruthy();
+  expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
 it("hides a debug-frame dialogue excerpt from 最近更新 and falls back to memory", async () => {
   recentConversations.mockResolvedValue({

@@ -5,6 +5,7 @@ import type {
 } from "@one-memory/contracts";
 import { LoaderCircle, Pause, Play, RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useGuiLanguage } from "./gui-language";
 import {
   type MemoryArrival,
   memoryArrivalTitle,
@@ -85,6 +86,7 @@ export function ImportProgressStrip({
   showProgressDetails = true,
   userFacing = false,
 }: ImportProgressStripProps) {
+  const { t, locale } = useGuiLanguage();
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<{
     epoch: number;
@@ -252,10 +254,10 @@ export function ImportProgressStrip({
       0,
     );
     const message = firstImport
-      ? `正在导入你的历史对话，已导入 ${imported.toLocaleString("zh-CN")} 个会话。记忆会陆续生成，你可以先正常使用。`
+      ? t("importUserProgress", { count: imported.toLocaleString(locale) })
       : currentArrival?.phase === "model-required"
-        ? "模型还没有配置好，新的对话暂时不会整理成记忆。"
-        : "有些内容没有处理完成，请前往设置查看。";
+        ? t("importUserModel")
+        : t("importUserIncomplete");
     return (
       <div
         className="import-strip"
@@ -277,7 +279,7 @@ export function ImportProgressStrip({
               onClick={onConfigureModel}
             >
               <Settings2 size={15} aria-hidden="true" />
-              去设置
+              {t("importUserSettings")}
             </button>
           )}
         </div>

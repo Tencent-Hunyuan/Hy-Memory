@@ -1,3 +1,4 @@
+import type { GuiLocale } from "@one-memory/contracts/gui-i18n";
 import {
   clearAllCallEventsRequest,
   clearCallEventsRequest,
@@ -64,14 +65,30 @@ export const CALL_HOSTS: Record<string, string> = {
   pi: "Pi",
   "deepseek-harness": "DeepSeek Harness",
 };
-export function callHostName(id: string | null) {
-  return id === null ? "直接调用（诊断）" : (CALL_HOSTS[id] ?? id);
+export function callHostName(id: string | null, locale: GuiLocale = "zh-CN") {
+  return id === null
+    ? locale === "es"
+      ? "Consulta directa (diagnóstico)"
+      : "直接调用（诊断）"
+    : (CALL_HOSTS[id] ?? id);
 }
 export function callEventHeadline(
   item: CallEvent,
   host = callHostName(item.host_id),
+  locale: GuiLocale = "zh-CN",
 ) {
   const count = item.raw_count + item.memory_count;
+  if (locale === "es") {
+    if (item.state === "timed_out")
+      return `${host} no pudo consultar las memorias a tiempo`;
+    if (item.state === "unavailable")
+      return `${host} no puede consultar memorias ahora`;
+    if (item.state === "denied")
+      return `${host} no tiene permiso para consultar memorias`;
+    if (item.state === "empty")
+      return `${host} no encontró memorias relacionadas`;
+    return `${host} encontró ${new Intl.NumberFormat(locale).format(count)} ${count === 1 ? "contenido relacionado" : "contenidos relacionados"}`;
+  }
   if (item.state === "timed_out") return `${host} 这次没来得及查到记忆`;
   if (item.state === "unavailable") return `${host} 暂时无法查记忆`;
   if (item.state === "denied") return `${host} 未获准查记忆`;
@@ -81,8 +98,26 @@ export function callEventHeadline(
 export function callRowHeadline(item: CallEvent) {
   return callEventHeadline(item);
 }
-export function callRowDetail(item: CallEvent) {
-  const host = callHostName(item.host_id);
+export function callRowDetail(item: CallEvent, locale: GuiLocale = "zh-CN") {
+  const host = callHostName(item.host_id, locale);
+  if (locale === "es") {
+    if (item.state === "timed_out")
+      return "La consulta agotó el tiempo mientras se organizaban las memorias; la respuesta no incluyó memorias";
+    if (item.state === "unavailable")
+      return "One Memory no está disponible; la respuesta no incluyó memorias";
+    if (item.state === "denied")
+      return "Los permisos actuales no permiten esta consulta";
+    if (item.state === "partial")
+      return item.delivery === "delivered"
+        ? `Entregado a ${host} · Parte del contenido sigue procesándose`
+        : "Parte del contenido sigue procesándose";
+    if (item.delivery === "delivered") return `Entregado a ${host}`;
+    if (item.delivery === "not_delivered")
+      return "No se entregó a la aplicación";
+    return item.state === "empty"
+      ? "No se encontraron memorias relacionadas"
+      : "Consulta completada";
+  }
   if (item.state === "timed_out")
     return "后台正在整理记忆，查询超时，这次回答没有带上记忆";
   if (item.state === "unavailable")
@@ -100,8 +135,9 @@ export function callRowDetail(item: CallEvent) {
 export function callDetailHeadline(
   item: CallEvent,
   host = callHostName(item.host_id),
+  locale: GuiLocale = "zh-CN",
 ) {
-  return callEventHeadline(item, host);
+  return callEventHeadline(item, host, locale);
 }
 export function callDeliveryLabel(item: CallEvent) {
   if (item.delivery === "delivered")

@@ -6,6 +6,12 @@ import type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "@one-memory/contracts";
+import {
+  isLanguagePreference,
+  isLanguageSnapshot,
+  type LanguagePreference,
+  type LanguageSnapshot,
+} from "@one-memory/contracts/gui-i18n";
 import type {
   RecallInstallPreview,
   RecallUninstallPreview,
@@ -30,7 +36,55 @@ import type {
   SyncHookStatus,
 } from "./sync-hook";
 
+function languageSnapshot(payload: unknown): LanguageSnapshot {
+  if (!isLanguageSnapshot(payload))
+    throw Error("language_preferences_unavailable");
+  return {
+    preference: payload.preference,
+    locale: payload.locale,
+    revision: payload.revision,
+  };
+}
+
 contextBridge.exposeInMainWorld("oneMemory", {
+  getLanguagePreference: async (): Promise<LanguageSnapshot> =>
+    languageSnapshot(
+      await ipcRenderer.invoke("one-memory:get-language-preference"),
+    ),
+  setLanguagePreference: async (
+    preference: LanguagePreference,
+  ): Promise<LanguageSnapshot> => {
+    if (!isLanguagePreference(preference))
+      throw Error("invalid_language_preference");
+    return languageSnapshot(
+      await ipcRenderer.invoke(
+        "one-memory:set-language-preference",
+        preference,
+      ),
+    );
+  },
+  onLanguagePreferenceChanged: (
+    listener: (value: LanguageSnapshot) => void,
+  ): (() => void) => {
+    if (typeof listener !== "function")
+      throw Error("invalid_language_preference_listener");
+    const handler = (_event: unknown, payload: unknown) => {
+      if (isLanguageSnapshot(payload)) listener(languageSnapshot(payload));
+    };
+    let subscribed = true;
+    const unsubscribe = () => {
+      if (!subscribed) return;
+      subscribed = false;
+      ipcRenderer.removeListener(
+        "one-memory:language-preference-changed",
+        handler,
+      );
+      window.removeEventListener("unload", unsubscribe);
+    };
+    ipcRenderer.on("one-memory:language-preference-changed", handler);
+    window.addEventListener("unload", unsubscribe, { once: true });
+    return unsubscribe;
+  },
   getDebugLogs: (): Promise<DebugLogSnapshot> =>
     ipcRenderer.invoke("one-memory:get-debug-logs"),
   logUiTrace: (input: {
