@@ -251,6 +251,7 @@ Coding 与 Working **复用同一套双层 pipeline 和数据 schema**，区别�
 - [Graph 记忆设计](docs/pro_graph_design.md) — 图投影、重排、关系路径与部署限制
 - [环境变量模板](.env.example) — 可直接复制的配置模板
 - [MemHub 说明文档](memhub/README.md) — 本地优先桌面端与 CLI 产品总览、Runtime 命令与隐私边界
+- [Hermes 原生记忆 Provider](plugins/hermes/README.md) — 显式用户与 Agent 隔离，独立 HTTP 服务，自动记录与召回默认关闭。
 - [OpenClaw 插件](plugins/openclaw/README.md) — Agent 集成见 `plugins/`（总览：[plugins/README.md](plugins/README.md)）
 
 ### License

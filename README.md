@@ -251,6 +251,7 @@ That version is usually not in the working tree or at HEAD either, so it cannot 
 - [Graph memory design](docs/pro_graph_design.md) — graph projection, rerank, relation paths, and deployment limits
 - [Environment template](.env.example) — a copy-ready configuration template
 - [MemHub README](memhub/README.md) — local-first desktop & CLI product overview, runtime commands, and privacy boundaries
+- [Hermes native memory provider](plugins/hermes/README.md) — explicit owner/agent scope; separate HTTP service; automatic capture and recall opt-in.
 - [OpenClaw plugin](plugins/openclaw/README.md) — agent integrations live under `plugins/` (overview: [plugins/README.md](plugins/README.md))
 
 ### License
