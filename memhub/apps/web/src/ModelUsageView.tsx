@@ -40,10 +40,7 @@ interface ModelUsageViewProps {
   refreshToken: number;
 }
 
-export function ModelUsageView({
-  live,
-  refreshToken,
-}: ModelUsageViewProps) {
+export function ModelUsageView({ live, refreshToken }: ModelUsageViewProps) {
   const [rangeMinutes, setRangeMinutes] = useState(60);
   const [report, setReport] = useState<ModelUsageReport | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -59,6 +56,7 @@ export function ModelUsageView({
     }
   }, [rangeMinutes]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshToken is the explicit refresh trigger.
   useEffect(() => {
     void load();
   }, [load, refreshToken]);
@@ -69,7 +67,10 @@ export function ModelUsageView({
     return () => window.clearInterval(timer);
   }, [live, load]);
 
-  const stages = useMemo(() => summarizeStages(report?.by_minute ?? []), [report]);
+  const stages = useMemo(
+    () => summarizeStages(report?.by_minute ?? []),
+    [report],
+  );
 
   return (
     <div className="model-usage-view">
@@ -100,7 +101,10 @@ export function ModelUsageView({
       </div>
 
       <div className="model-usage-metrics">
-        <Metric label="总 Tokens" value={formatTokens(report?.summary.total_tokens)} />
+        <Metric
+          label="总 Tokens"
+          value={formatTokens(report?.summary.total_tokens)}
+        />
         <Metric
           label="Avg Prompt"
           value={formatTokens(report?.summary.avg_prompt_tokens)}
@@ -109,10 +113,16 @@ export function ModelUsageView({
           label="Avg Completion"
           value={formatTokens(report?.summary.avg_completion_tokens)}
         />
-        <Metric label="请求数" value={String(report?.summary.request_count ?? 0)} />
+        <Metric
+          label="请求数"
+          value={String(report?.summary.request_count ?? 0)}
+        />
       </div>
 
-      <section className="model-usage-chart-card" aria-label="各 Prompt 每分钟 Token 曲线">
+      <section
+        className="model-usage-chart-card"
+        aria-label="各 Prompt 每分钟 Token 曲线"
+      >
         <div className="model-usage-section-title">
           <strong>各 Prompt 花费曲线</strong>
           <span>每分钟 · Total Tokens</span>
@@ -164,12 +174,19 @@ function UsageChart({ rows }: { rows: ModelUsageMinute[] }) {
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   const lookup = new Map(
-    rows.map((row) => [`${row.minute}\u0000${row.prompt_stage}`, row.total_tokens]),
+    rows.map((row) => [
+      `${row.minute}\u0000${row.prompt_stage}`,
+      row.total_tokens,
+    ]),
   );
   const max = Math.max(1, ...rows.map((row) => row.total_tokens));
   const x = (index: number) =>
-    pad.left + (minutes.length <= 1 ? plotWidth / 2 : (index / (minutes.length - 1)) * plotWidth);
-  const y = (value: number) => pad.top + plotHeight - (value / max) * plotHeight;
+    pad.left +
+    (minutes.length <= 1
+      ? plotWidth / 2
+      : (index / (minutes.length - 1)) * plotWidth);
+  const y = (value: number) =>
+    pad.top + plotHeight - (value / max) * plotHeight;
 
   if (!rows.length)
     return <div className="model-usage-chart-empty">暂无曲线数据</div>;
@@ -204,7 +221,9 @@ function UsageChart({ rows }: { rows: ModelUsageMinute[] }) {
           return (
             <g key={stage}>
               <polyline
-                points={points.map((point) => `${point.x},${y(point.value)}`).join(" ")}
+                points={points
+                  .map((point) => `${point.x},${y(point.value)}`)
+                  .join(" ")}
                 stroke={stageColor(stage)}
               />
               {points.map((point) => (
@@ -243,7 +262,13 @@ function UsageChart({ rows }: { rows: ModelUsageMinute[] }) {
 function summarizeStages(rows: ModelUsageMinute[]) {
   const stages = new Map<
     string,
-    { name: string; requests: number; prompt: number; completion: number; total: number }
+    {
+      name: string;
+      requests: number;
+      prompt: number;
+      completion: number;
+      total: number;
+    }
   >();
   for (const row of rows) {
     const stage = stages.get(row.prompt_stage) ?? {
@@ -270,7 +295,8 @@ function stageColor(stage: string): string {
   const known = Object.keys(STAGE_LABELS).indexOf(stage);
   if (known >= 0) return COLORS[known % COLORS.length];
   let hash = 0;
-  for (const character of stage) hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  for (const character of stage)
+    hash = (hash * 31 + character.charCodeAt(0)) | 0;
   return COLORS[Math.abs(hash) % COLORS.length];
 }
 

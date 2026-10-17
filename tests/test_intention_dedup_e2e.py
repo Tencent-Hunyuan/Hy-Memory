@@ -16,6 +16,7 @@
 """
 
 import asyncio
+import hashlib
 import shutil
 import tempfile
 import uuid
@@ -179,8 +180,10 @@ async def test_writer_batch_dedup_e2e():
             self.dims = dims
 
         def _vec(self, text):
+            # 确定性哈希：内建 hash() 每个进程随机化，两条不同文案约有 1/dims
+            # 概率撞进同一格，被误判成复本，整个测试随 PYTHONHASHSEED 变 flaky。
             v = [0.0] * self.dims
-            v[abs(hash(text)) % self.dims] = 1.0
+            v[int(hashlib.md5(text.encode()).hexdigest(), 16) % self.dims] = 1.0
             return v
 
         async def embed_batch(self, texts):

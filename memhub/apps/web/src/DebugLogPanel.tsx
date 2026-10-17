@@ -26,11 +26,11 @@ import type {
   DebugLogLevel,
   DebugLogSnapshot,
 } from "./debug-log-types";
+import { ModelUsageView } from "./ModelUsageView";
 import {
   rendererDebugLogs,
   subscribeRendererDebugLogs,
 } from "./renderer-debug-log";
-import { ModelUsageView } from "./ModelUsageView";
 import "./debug-log-panel.css";
 
 const LEVELS: Array<{ value: DebugLogLevel | "all"; label: string }> = [
@@ -201,7 +201,11 @@ export function DebugLogPanel() {
               </button>
             </div>
           </header>
-          <div className="debug-panel-tabs" role="tablist" aria-label="诊断页面">
+          <div
+            className="debug-panel-tabs"
+            role="tablist"
+            aria-label="诊断页面"
+          >
             <button
               type="button"
               role="tab"
@@ -222,120 +226,125 @@ export function DebugLogPanel() {
           {tab === "logs" ? (
             <div className="debug-log-content">
               <div className="debug-log-toolbar">
-            <label className="debug-search">
-              <Search size={15} aria-hidden="true" />
-              <input
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索事件、组件、错误码或内容"
-                aria-label="搜索日志"
-              />
-            </label>
-            <select
-              aria-label="日志来源"
-              value={service}
-              onChange={(event) =>
-                setService(event.target.value as typeof service)
-              }
-            >
-              <option value="all">全部来源</option>
-              {Object.entries(SERVICE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <label className="debug-capture-level">
-              <span>采集级别</span>
-              <select
-                aria-label="采集级别"
-                value={captureLevel}
-                disabled={capturePending}
-                onChange={(event) => {
-                  const next = event.target.value as DiagnosticLogLevel;
-                  setCapturePending(true);
-                  void setDiagnosticLogLevel(next)
-                    .then(setCaptureLevel)
-                    .then(() => refresh())
-                    .catch(() => setReadState("error"))
-                    .finally(() => setCapturePending(false));
-                }}
-              >
-                <option value="error">Error</option>
-                <option value="warning">Warning</option>
-                <option value="info">Info</option>
-                <option value="debug">Debug</option>
-              </select>
-            </label>
-          </div>
-          <fieldset className="debug-levels">
-            <legend>显示级别</legend>
-            {LEVELS.map((option) => (
-              <button
-                type="button"
-                key={option.value}
-                aria-pressed={level === option.value}
-                onClick={() => setLevel(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </fieldset>
-          <div className="debug-log-status" aria-live="polite">
-            <span>{filtered.length} 条匹配</span>
-            <span>{live ? "实时刷新" : "已暂停"}</span>
-            {snapshot?.truncated ? <span>日志过多，已截断</span> : null}
-            {readState === "error" ? (
-              <span className="debug-read-error">读取失败</span>
-            ) : null}
-          </div>
-          <div
-            className="debug-log-list"
-            ref={listRef}
-            onScroll={handleListScroll}
-          >
-            {filtered.length ? (
-              filtered.map((entry) => {
-                const isExpanded = expanded.has(entry.id);
-                return (
-                  <article
-                    className={`debug-log-row level-${entry.level}`}
-                    key={entry.id}
+                <label className="debug-search">
+                  <Search size={15} aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="搜索事件、组件、错误码或内容"
+                    aria-label="搜索日志"
+                  />
+                </label>
+                <select
+                  aria-label="日志来源"
+                  value={service}
+                  onChange={(event) =>
+                    setService(event.target.value as typeof service)
+                  }
+                >
+                  <option value="all">全部来源</option>
+                  {Object.entries(SERVICE_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <label className="debug-capture-level">
+                  <span>采集级别</span>
+                  <select
+                    aria-label="采集级别"
+                    value={captureLevel}
+                    disabled={capturePending}
+                    onChange={(event) => {
+                      const next = event.target.value as DiagnosticLogLevel;
+                      setCapturePending(true);
+                      void setDiagnosticLogLevel(next)
+                        .then(setCaptureLevel)
+                        .then(() => refresh())
+                        .catch(() => setReadState("error"))
+                        .finally(() => setCapturePending(false));
+                    }}
                   >
-                    <button
-                      type="button"
-                      className="debug-log-summary"
-                      onClick={() => toggleExpanded(entry.id)}
-                      aria-expanded={isExpanded}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown size={14} />
-                      ) : (
-                        <ChevronRight size={14} />
-                      )}
-                      <time>{logTime(entry.timestamp)}</time>
-                      <span className="debug-log-level">{entry.level}</span>
-                      <span className="debug-log-service">
-                        {SERVICE_LABELS[entry.service]}
-                      </span>
-                      <span className="debug-log-event">
-                        {entry.message || `${entry.component} · ${entry.event}`}
-                      </span>
-                      <span className="debug-log-outcome">{entry.outcome}</span>
-                    </button>
-                    {isExpanded ? (
-                      <pre>{JSON.stringify(entry, null, 2)}</pre>
-                    ) : null}
-                  </article>
-                );
-              })
-            ) : (
-              <p className="debug-log-empty">
-                {readState === "loading" ? "正在读取日志…" : "没有匹配的日志"}
-              </p>
-            )}
-          </div>
+                    <option value="error">Error</option>
+                    <option value="warning">Warning</option>
+                    <option value="info">Info</option>
+                    <option value="debug">Debug</option>
+                  </select>
+                </label>
+              </div>
+              <fieldset className="debug-levels">
+                <legend>显示级别</legend>
+                {LEVELS.map((option) => (
+                  <button
+                    type="button"
+                    key={option.value}
+                    aria-pressed={level === option.value}
+                    onClick={() => setLevel(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </fieldset>
+              <div className="debug-log-status" aria-live="polite">
+                <span>{filtered.length} 条匹配</span>
+                <span>{live ? "实时刷新" : "已暂停"}</span>
+                {snapshot?.truncated ? <span>日志过多，已截断</span> : null}
+                {readState === "error" ? (
+                  <span className="debug-read-error">读取失败</span>
+                ) : null}
+              </div>
+              <div
+                className="debug-log-list"
+                ref={listRef}
+                onScroll={handleListScroll}
+              >
+                {filtered.length ? (
+                  filtered.map((entry) => {
+                    const isExpanded = expanded.has(entry.id);
+                    return (
+                      <article
+                        className={`debug-log-row level-${entry.level}`}
+                        key={entry.id}
+                      >
+                        <button
+                          type="button"
+                          className="debug-log-summary"
+                          onClick={() => toggleExpanded(entry.id)}
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown size={14} />
+                          ) : (
+                            <ChevronRight size={14} />
+                          )}
+                          <time>{logTime(entry.timestamp)}</time>
+                          <span className="debug-log-level">{entry.level}</span>
+                          <span className="debug-log-service">
+                            {SERVICE_LABELS[entry.service]}
+                          </span>
+                          <span className="debug-log-event">
+                            {entry.message ||
+                              `${entry.component} · ${entry.event}`}
+                          </span>
+                          <span className="debug-log-outcome">
+                            {entry.outcome}
+                          </span>
+                        </button>
+                        {isExpanded ? (
+                          <pre>{JSON.stringify(entry, null, 2)}</pre>
+                        ) : null}
+                      </article>
+                    );
+                  })
+                ) : (
+                  <p className="debug-log-empty">
+                    {readState === "loading"
+                      ? "正在读取日志…"
+                      : "没有匹配的日志"}
+                  </p>
+                )}
+              </div>
             </div>
           ) : (
             <ModelUsageView live={live} refreshToken={usageRefreshToken} />
