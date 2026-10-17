@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { getModelProfiles } from "./api";
+import { getModelProfiles, getSedimentation, setSedimentation } from "./api";
 import { ConnectionFallback } from "./ConnectionFallback";
 import { exportDiagnosticsFile } from "./diagnostics-export";
 import { ModelSettings, type ModelSettingsActions } from "./ModelSettings";
@@ -72,6 +72,11 @@ export function R6Settings({
         commit: "unknown",
       },
   );
+  const [sedimentation, setSedimentationState] = useState<boolean | null>(null);
+  const [sedimentationPending, setSedimentationPending] = useState(false);
+  const [sedimentationError, setSedimentationError] = useState("");
+  const [sedimentationUnavailable, setSedimentationUnavailable] =
+    useState(false);
   const modelActions = useRef<ModelSettingsActions>(null);
   const quitPanel = useRef<HTMLElement>(null);
   const quitOpener = useRef<HTMLElement | null>(null);
@@ -111,6 +116,43 @@ export function R6Settings({
     if (group !== "model") return;
     void readModels();
   }, [active, group, modelVersion, readModels]);
+
+  const readSedimentation = useCallback(async () => {
+    try {
+      const state = await getSedimentation();
+      setSedimentationState(state.enabled === true);
+      setSedimentationUnavailable(false);
+    } catch {
+      // Left unknown rather than assumed on: showing "已停止" when the switch
+      // could not be read would hide a running model.
+      setSedimentationState(null);
+      setSedimentationUnavailable(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    if (group !== "model") return;
+    void readSedimentation();
+  }, [active, group, readSedimentation]);
+
+  async function changeSedimentation(enabled: boolean) {
+    setSedimentationPending(true);
+    setSedimentationError("");
+    try {
+      const state = await setSedimentation(enabled);
+      setSedimentationState(state.enabled === true);
+    } catch {
+      setSedimentationError(
+        enabled
+          ? "启用未能确认，仍显示上次确认的状态；请重试。"
+          : "停止未能确认，模型可能仍在整理记忆，请重试。",
+      );
+      await readSedimentation();
+    } finally {
+      setSedimentationPending(false);
+    }
+  }
 
   const login = useLoginPreference() ?? null;
   const [dataReady, setDataReady] = useState(login !== null);
@@ -281,6 +323,40 @@ export function R6Settings({
                 <p role="alert" className="r6-settings-error">
                   模型配置暂时无法打开：正在处理上一次创建或测试，或本机存储暂时不可用。
                   请等待当前操作结束后重试；现有配置和原文不会被改动。
+                </p>
+              )}
+              {currentModel && (
+                <div className="r6-setting-row">
+                  <div>
+                    <h3>用模型沉淀记忆</h3>
+                    <p>
+                      开启后，导入和同步到本机的会话会交给当前模型整理成记忆，会产生模型调用。
+                      停止后不再调用模型、不再整理记忆，但会话仍会照常导入和保存；已排队的内容会留着，重新开启后继续。
+                      模型配置始终保留，重新开启不需要重新填写。
+                    </p>
+                  </div>
+                  <R6Switch
+                    label="用模型沉淀记忆"
+                    checked={sedimentation === true}
+                    disabled={
+                      sedimentation === null ||
+                      sedimentationPending ||
+                      sedimentationUnavailable
+                    }
+                    onCheckedChange={(enabled) =>
+                      void changeSedimentation(enabled)
+                    }
+                  />
+                </div>
+              )}
+              {sedimentationError && (
+                <p role="alert" className="r6-settings-error">
+                  {sedimentationError}
+                </p>
+              )}
+              {sedimentationUnavailable && (
+                <p role="alert" className="r6-settings-error">
+                  当前安装还不能读取这个开关，请确认后台服务已启动后重试。
                 </p>
               )}
             </div>

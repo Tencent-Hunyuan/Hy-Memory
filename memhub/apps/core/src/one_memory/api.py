@@ -52,6 +52,7 @@ from one_memory.auth import local_api_guard, renderer_origins
 from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import context_router
+from one_memory.diagnostic_log import diagnostic_event
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
     close_main_databases,
@@ -318,6 +319,22 @@ class SourceSyncState(BaseModel):
 
     source_id: str
     sync_enabled: bool
+
+
+class SedimentationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
+
+
+class SedimentationState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool
+    #: What the switch means for the model bill and for what still runs. Read
+    #: by the app so the setting can say so without hardcoding the wording.
+    pending_retained: bool = True
+    imports_unaffected: bool = True
 
 
 class DetectionResponse(BaseModel):
@@ -1047,6 +1064,7 @@ def create_app(
                 max_concurrent_tasks=runtime_settings.precipitation_max_concurrent_tasks,
                 source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                 service_levels=app.state.service_levels,
+                sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -3599,6 +3617,44 @@ def create_app(
     )
     def put_extraction_settings(request: ExtractionWindowUpdate) -> ExtractionSettings:
         return _memory_processing_supervisor(app).set_extraction_window(request.window_preset)
+
+    @app.get(
+        "/api/v1/sedimentation",
+        response_model=SedimentationState,
+        dependencies=protected,
+    )
+    def get_sedimentation() -> SedimentationState:
+        """Whether the model may still turn conversations into memories."""
+        return SedimentationState(enabled=_config_store(app).sedimentation_enabled())
+
+    @app.put(
+        "/api/v1/sedimentation",
+        response_model=SedimentationState,
+        dependencies=protected,
+    )
+    async def put_sedimentation(request: SedimentationRequest) -> SedimentationState:
+        """Start or stop model-driven sedimentation, keeping the configuration.
+
+        Stopping is the user's cost control: nothing further goes to the model
+        and already queued work waits rather than failing, so starting again
+        resumes it. Importing conversations is not affected either way.
+        """
+        store = _config_store(app)
+        previous = store.sedimentation_enabled()
+        if previous is not request.enabled:
+            await asyncio.to_thread(store.set_sedimentation_enabled, request.enabled)
+            diagnostic_event(
+                level="info",
+                component="memory.sedimentation",
+                event="memory_sedimentation.toggled",
+                outcome="succeeded",
+                details={"enabled": request.enabled},
+            )
+            if request.enabled:
+                # Work parked by the stop is picked up again rather than waiting
+                # for the next natural dispatch.
+                await _memory_processing_supervisor(app).resume_allowed()
+        return SedimentationState(enabled=store.sedimentation_enabled())
 
     @app.post(
         "/api/v1/memory-processing/manual-extract",
