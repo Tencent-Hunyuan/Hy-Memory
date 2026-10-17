@@ -334,6 +334,19 @@ class MemoryTaskRunner:
                 **diagnostic_exception(error),
             )
             raise
+        outputs, counts = await asyncio.gather(
+            in_the_background(self.tasks.outputs, task_id),
+            in_the_background(self.tasks.counts),
+        )
+        outstanding = sum(
+            counts.get(status, 0)
+            for status in (
+                MemoryTaskStatus.PENDING,
+                MemoryTaskStatus.WAITING_FOR_PERMISSION,
+                MemoryTaskStatus.WAITING_FOR_MODEL,
+                MemoryTaskStatus.FAILED,
+            )
+        )
         diagnostic_event(
             level="error" if result.status is MemoryTaskStatus.FAILED else "info",
             component="memory.task",
@@ -343,6 +356,11 @@ class MemoryTaskRunner:
             duration_ms=elapsed_ms(started),
             state_after=str(result.status),
             error_code=result.last_error_code,
+            details={
+                "result_count": len(outputs),
+                "pending_count": outstanding,
+                "attempt": result.attempts,
+            },
         )
         return result
 
