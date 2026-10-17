@@ -125,6 +125,53 @@ def test_arbitrary_detail_and_absolute_stack_are_rejected(tmp_path):
         )
 
 
+def test_a_rejected_payload_does_not_break_the_caller(tmp_path, monkeypatch) -> None:
+    """Rejection protects the log; it must not become the caller's outage.
+
+    Two of our own nodes shipped with unlisted `details` keys. Both sat on a
+    request path, so the rejection surfaced as a 500 to the person using the
+    app — including the sedimentation switch, whose every request failed
+    because logging the toggle raised before the endpoint could answer.
+    """
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    receipt = configure_diagnostics(tmp_path)
+    try:
+        diagnostic_event(
+            level="info",
+            component="memory.sedimentation",
+            event="memory_sedimentation.toggled",
+            outcome="succeeded",
+            details={"prompt": "private"},
+        )
+    finally:
+        reset_diagnostics()
+    # Rejected, so nothing is written — but the call returned.
+    assert not receipt.path.exists() or receipt.path.read_text() == ""
+
+
+def test_the_sedimentation_toggle_payload_is_recorded(tmp_path, monkeypatch) -> None:
+    """`enabled` is a bounded boolean and has to be a legal detail key.
+
+    Omitting it from the allow-list is what made the switch's own endpoint
+    answer 500 while still saving the new value.
+    """
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    receipt = configure_diagnostics(tmp_path)
+    try:
+        diagnostic_event(
+            level="info",
+            component="memory.sedimentation",
+            event="memory_sedimentation.toggled",
+            outcome="succeeded",
+            details={"enabled": False},
+        )
+    finally:
+        reset_diagnostics()
+    events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["memory_sedimentation.toggled"]
+    assert events[0]["details"]["enabled"] is False
+
+
 def test_exception_diagnostic_keeps_code_location_not_message():
     secret = "private-provider-response-918273"
     log = DiagnosticLog(Path.cwd())
