@@ -6,9 +6,9 @@ History Store - SQLite 审计追踪
 记录所有内存操作（ADD/UPDATE/DELETE/SEARCH）的完整历史，用于审计追踪和版本控制。
 
 设计决策:
-- 独立于 rdb.py 抽象，history 只需 SQLite，不需要 MySQL/PG 切换
+- 直接构造 HistoryStore 保留 SQLite；运行时通过 create_history_store 选择后端
 - 通过 _run_in_sqlite_pool() 包装同步 sqlite3 调用，避免阻塞事件循环
-- 所有写入操作都是 try-except 安全的，失败不影响主流程
+- 审计失败的 best-effort 策略由调用方负责
 """
 
 import functools
@@ -209,6 +209,8 @@ class HistoryStore:
         """
         获取某条记忆的完整变更历史。
 
+        This lookup is unscoped; callers own authorization.
+
         Args:
             memory_id: 记忆 ID
 
@@ -221,7 +223,7 @@ class HistoryStore:
         if self._conn is None:
             return []
         cursor = self._conn.execute(
-            "SELECT * FROM memory_history WHERE memory_id = ? ORDER BY created_at ASC",
+            "SELECT * FROM memory_history WHERE memory_id = ? ORDER BY created_at ASC, id ASC",
             (memory_id,),
         )
         return [dict(row) for row in cursor.fetchall()]
@@ -248,7 +250,7 @@ class HistoryStore:
             return []
         cursor = self._conn.execute(
             "SELECT * FROM memory_history WHERE isolation_key = ? "
-            "ORDER BY created_at DESC LIMIT ?",
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
             (isolation_key, limit),
         )
         return [dict(row) for row in cursor.fetchall()]
@@ -369,3 +371,18 @@ class HistoryStore:
         )
         self._conn.commit()
         return cursor.lastrowid
+
+
+def create_history_store(config) -> HistoryStore:
+    """Select history storage without falling back on backend failures."""
+    backend = str(config.history.backend).strip().lower()
+    if backend not in ("sqlite", "mysql"):
+        raise ValueError("Unsupported history backend; must be sqlite / mysql")
+    config.history.backend = backend
+    if backend == "sqlite":
+        return HistoryStore(config)
+    if backend == "mysql":
+        from .history_store_mysql import MysqlHistoryStore
+
+        return MysqlHistoryStore(config)
+    raise ValueError("Unsupported history backend; must be sqlite / mysql")

@@ -18,6 +18,10 @@ ENV/
 .mypy_cache/
 .ruff_cache/
 data/
+# SDK data backends are source files, not runtime databases.
+!hy_memory/data/
+hy_memory/data/*
+!hy_memory/data/*.py
 node_modules/
 package-lock.json
 !plugins/openclaw/package-lock.json
