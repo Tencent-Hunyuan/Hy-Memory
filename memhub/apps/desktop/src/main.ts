@@ -18,6 +18,7 @@ import {
   defaultManagedInstallRoot,
   diagnosticError,
   disableRuntimeService,
+  domainCodeOf,
   type HostPermissionClient,
   installPackagedRuntime,
   installUserService,
@@ -596,7 +597,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     event: string,
     action: () => Promise<T> | T,
     details: Record<string, string | number | boolean | null> = {},
-    errorCode = "desktop_action_failed",
+    fallbackCode = "desktop_action_failed",
   ): Promise<T> => {
     const traceId = randomUUID();
     const started = Date.now();
@@ -621,6 +622,10 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       });
       return result;
     } catch (error) {
+      // A thrown DomainError already says what failed; the caller's code is
+      // only the fallback for the failures nobody has classified yet. Logging
+      // the fallback over a real code is what made issue #29 undiagnosable:
+      // every refusal looked like the same generic action failure.
       await diagnostics.log({
         level: "error",
         component: "desktop.action",
@@ -628,7 +633,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         outcome: "failed",
         trace_id: traceId,
         duration_ms: Date.now() - started,
-        error_code: errorCode,
+        error_code: domainCodeOf(error) ?? fallbackCode,
         ...diagnosticError(error),
         details,
       });

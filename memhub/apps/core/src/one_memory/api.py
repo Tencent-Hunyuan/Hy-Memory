@@ -118,7 +118,11 @@ from one_memory.imports.connections import (
     ConnectionIntentReceipt,
     SourceConnectionStore,
 )
-from one_memory.imports.grants import SourceGrantReceipt, SourceGrantStore
+from one_memory.imports.grants import (
+    SourceAuthorizationState,
+    SourceGrantReceipt,
+    SourceGrantStore,
+)
 from one_memory.imports.host_packages import CapabilityState, HostPackageCapabilities
 from one_memory.imports.jobs import (
     ImportIssueRecord,
@@ -289,6 +293,9 @@ class SourceResponse(BaseModel):
     candidate_revision: int = 0
     candidate_change_allowed: bool = False
     candidate_change_reason: str | None = None
+    #: Why `authorized` is false, so the UI can ask for the one thing that
+    #: would fix it instead of offering every recovery at once.
+    authorization_state: SourceAuthorizationState = SourceAuthorizationState.OK
 
 
 class PreviewSourceCandidateRequest(BaseModel):
@@ -1994,6 +2001,11 @@ def create_app(
                     candidate_change_reason=app.state.source_candidate_store.change_reason(
                         registration
                     ),
+                    authorization_state=grant_store.authorization_state(
+                        user_id="local",
+                        source_id=source_id,
+                        candidate=registration.candidate.path,
+                    ),
                 )
                 for source_id, registration in _catalog(app).items()
             ]
@@ -2305,24 +2317,39 @@ def create_app(
                 raise HTTPException(status_code=409, detail=error.code) from None
             if grant is None:
                 raise HTTPException(status_code=409, detail="grant_required")
-            await _prepare_source_resume(source_id)
+            try:
+                await _prepare_source_resume(source_id)
+            except BaseException as error:
+                raise _sync_refused("sync_prepare_failed") from error
         else:
-            await _live_sync(app).stop_source(source_id)
+            try:
+                await _live_sync(app).stop_source(source_id)
+            except BaseException as error:
+                raise _sync_refused("sync_prepare_failed") from error
         try:
             await asyncio.to_thread(_config_store(app).set_sync, source_id, request.enabled)
-        except BaseException:
+        except BaseException as error:
             if request.enabled:
                 await _live_sync(app).stop_source(source_id)
             else:
                 await _prepare_source_resume(source_id)
                 await _activate_source_resume(source_id)
             await _refresh_live_watch(app)
-            raise
+            raise _sync_refused("sync_config_write_failed") from error
         try:
             if request.enabled:
-                await _activate_source_resume(source_id)
-            await _refresh_live_watch(app)
+                try:
+                    await _activate_source_resume(source_id)
+                except BaseException as error:
+                    raise _sync_refused("sync_resume_failed") from error
+            try:
+                await _refresh_live_watch(app)
+            except BaseException as error:
+                raise _sync_refused("sync_watcher_failed") from error
         except BaseException:
+            # Rolls back the desired state and settles the watcher exactly as
+            # before; the only change is that the raise above now carries a
+            # code saying which stage failed.
             await asyncio.to_thread(_config_store(app).set_sync, source_id, previous)
             if request.enabled:
                 await _live_sync(app).stop_source(source_id)
@@ -4070,6 +4097,16 @@ class _LazyASGIApp:
 app = _LazyASGIApp()
 
 
+def _sync_refused(code: str) -> HTTPException:
+    """A sync refusal that says which stage refused.
+
+    Turning the switch on takes four steps: authorize, prepare, write, resume.
+    The UI used to be told only that the switch had sprung back, and every
+    stage needs a different fix, so each one gets its own code.
+    """
+    return HTTPException(status_code=409, detail=code)
+
+
 def _granted_roots(
     source_ids: Iterable[str],
     grant_store: SourceGrantStore,
@@ -4121,6 +4158,7 @@ def _source_response(
     totals: tuple[int, int],
     *,
     candidate_change_reason: str | None = None,
+    authorization_state: SourceAuthorizationState = SourceAuthorizationState.OK,
 ) -> SourceResponse:
     location = inspect_source_location(
         registration.descriptor.source_id, registration.candidate.path
