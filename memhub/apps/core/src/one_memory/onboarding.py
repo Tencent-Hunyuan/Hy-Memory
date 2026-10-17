@@ -68,6 +68,16 @@ COMPLETE_INSERT_MYSQL = (
     "singleton, status, selected_source_ids_json, started_at, completed_at, updated_at"
     ") VALUES (1, 'completed', '[]', NULL, %s, %s)"
 )
+RESET_UPDATE_SQLITE = (
+    "UPDATE onboarding_state SET status = 'not_started', "
+    "selected_source_ids_json = '[]', started_at = NULL, completed_at = NULL, "
+    "updated_at = ? WHERE singleton = 1"
+)
+RESET_UPDATE_MYSQL = (
+    "UPDATE onboarding_state SET status = 'not_started', "
+    "selected_source_ids_json = '[]', started_at = NULL, completed_at = NULL, "
+    "updated_at = %s WHERE singleton = 1"
+)
 
 
 class OnboardingState(BaseModel):
@@ -138,6 +148,30 @@ class OnboardingStore:
                     COMPLETE_INSERT_MYSQL if mysql else COMPLETE_INSERT_SQLITE,
                     (now, now),
                 )
+        return self.get()
+
+    def reset(self) -> OnboardingState:
+        """Return onboarding to its first-run state, touching nothing else.
+
+        The completion flag is stored beside the memories on purpose: a fresh
+        install of the app must not greet someone who already has memories as a
+        first-time user. That makes the way back to the cold-start screens an
+        explicit action rather than a side effect of reinstalling, and it is
+        the whole reason this exists: QA and long-time users need to see those
+        screens again without giving up a single memory.
+
+        Sources, memories and settings are separate tables and are not read or
+        written here.
+        """
+        now = datetime.now(UTC).isoformat()
+        mysql = is_mysql(self._store)
+        with self._connect(writing=True) as connection:
+            execute(
+                connection,
+                mysql,
+                RESET_UPDATE_MYSQL if mysql else RESET_UPDATE_SQLITE,
+                (now,),
+            )
         return self.get()
 
     @contextmanager

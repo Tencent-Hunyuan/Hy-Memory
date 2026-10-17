@@ -660,6 +660,14 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
   },
   {
+    name: "onboarding",
+    summary:
+      "onboarding reset 回到首次运行的引导流程。只清除引导完成状态：不删记忆数据，也不需要卸载重装。",
+    usage: "memhub onboarding reset [--json]",
+    options: [JSON_OPTION],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE],
+  },
+  {
     name: "help",
     summary: "显示总帮助或单个命令的用法。",
     usage: "memhub help [command] [--json]",

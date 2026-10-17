@@ -376,6 +376,45 @@ describe("installPackagedRuntime", () => {
     expect((await lstat(current)).ino).toBe(inodeBefore);
   });
 
+  it("takes over from a same-build runtime whose bytes differ when the bundle asks it to", async () => {
+    const { root, resources, executable, installRoot } = await fixture();
+    const { current, selected } = await installFormalCurrent({
+      root,
+      resources,
+      executable,
+      installRoot,
+    });
+    // A re-cut package: same build number, manifest still self-consistent,
+    // but not the bytes this bundle carries.
+    await writeFile(path.join(selected, "web", "index.html"), "rebuilt-body");
+    await rewriteManifestDigest(selected, "web/index.html");
+    const receipt = await installPackagedRuntime({
+      resourcesPath: resources,
+      executablePath: executable,
+      installRoot,
+      platform: "darwin",
+      arch: "arm64",
+      buildNumber: 3757,
+      replaceSameBuild: true,
+    });
+    expect(receipt.reused_current).toBe(false);
+    expect(receipt.version_directory).not.toBe(selected);
+    // `current` serves the payload this bundle brought.
+    expect(await readlink(current)).toBe(
+      path.relative(installRoot, receipt.version_directory),
+    );
+    expect(
+      await readFile(
+        path.join(receipt.version_directory, "web", "index.html"),
+        "utf8",
+      ),
+    ).toBe("web-body");
+    // The superseded tree is left on disk, not edited: it is the rollback.
+    expect(
+      await readFile(path.join(selected, "web", "index.html"), "utf8"),
+    ).toBe("rebuilt-body");
+  });
+
   it.each(["missing"])(
     "refuses a same-build current whose bin/node is %s",
     async (state) => {

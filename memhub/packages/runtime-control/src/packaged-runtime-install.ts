@@ -51,6 +51,16 @@ export async function installPackagedRuntime(options: {
    * CLI-installed distribution. Callers that do know the bundle's build number
    * must pass it (see `docs/contracts/c0-anti-downgrade-versioning.md`). */
   buildNumber?: number;
+  /** Allow the bundle to take over from an already-selected runtime that
+   * reports this same `build_number` but different bytes.
+   *
+   * Off by default, which preserves `installed_version_conflict`. Desktop turns
+   * it on: the bundle it carries has passed notarization, so its payload is
+   * already trusted, and the same build number is re-released whenever a
+   * release is rebuilt from a new commit. Refusing that case leaves an affected
+   * machine with an app that exits on every launch, which is a worse outcome
+   * than replacing the runtime. The superseded tree is kept, not edited. */
+  replaceSameBuild?: boolean;
   gitCommit?: string;
   /** App-owned services use this marker to stop launchd before the App binary
    * is invoked after the bundle has been removed. */
@@ -150,6 +160,7 @@ export async function installPackagedRuntime(options: {
       platform: options.platform,
       arch: options.arch,
       buildNumber: options.buildNumber,
+      replaceSameBuild: options.replaceSameBuild === true,
       executablePath: executable,
       serviceEnableMarker: options.serviceEnableMarker,
     });
@@ -159,6 +170,7 @@ export async function installPackagedRuntime(options: {
       installRoot: options.installRoot,
       platform: options.platform,
       arch: options.arch,
+      allowSameBuildReplace: options.replaceSameBuild === true,
       requireProtocolCompatibility: true,
     });
     return Object.freeze({
@@ -176,6 +188,7 @@ async function reuseSelectedSameBuild(options: {
   platform: "darwin" | "linux";
   arch: string;
   buildNumber: number | undefined;
+  replaceSameBuild: boolean;
   executablePath: string;
   serviceEnableMarker: string | undefined;
 }): Promise<PackagedRuntimeInstallReceipt | null> {
@@ -239,11 +252,15 @@ async function reuseSelectedSameBuild(options: {
             )
           : null;
       if (selectedDigest !== digest && selectedDigest !== formalDigest) {
+        // Same build number, different bytes: not reusable. Hand the install
+        // back to the normal path so the bundle lands in its own directory.
+        if (options.replaceSameBuild) return null;
         throw new Error("installed_version_conflict");
       }
       continue;
     }
     if (selectedManifest.files[relative] !== digest) {
+      if (options.replaceSameBuild) return null;
       throw new Error("installed_version_conflict");
     }
   }
@@ -276,6 +293,8 @@ async function reuseSelectedSameBuild(options: {
     version: selectedManifest.version,
     build_number: selectedManifest.build_number ?? null,
     allow_downgrade: false,
+    // Nothing was replaced: the selected tree already matched this bundle.
+    same_build_replace: false,
     require_protocol_compatibility: true,
     platform: selectedManifest.platform,
     arch: selectedManifest.arch,

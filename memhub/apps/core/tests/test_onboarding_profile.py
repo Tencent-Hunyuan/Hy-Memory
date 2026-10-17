@@ -296,6 +296,46 @@ def test_finishing_onboarding_is_not_model_content_consent(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_the_way_back_to_the_first_run_deletes_nothing(tmp_path) -> None:
+    """重置只动完成标记，记忆一条不少。
+
+    完成态和记忆放在同一个库里是有意的:重装一遍 App 不该把一个已经有记忆的人
+    当成新用户。代价是想再看一次冷启动，重装不管用。这条盯着那个出口:
+    状态回到首次运行，别的都不动。
+    """
+
+    async def scenario() -> None:
+        app = _app(tmp_path)
+        async with app.router.lifespan_context(app), _client(app) as client:
+            finished = await client.post("/api/v1/onboarding/complete")
+
+            assert finished.json()["status"] == "completed"
+
+            reset = await client.post("/api/v1/onboarding/reset")
+
+            assert reset.status_code == 200
+            assert reset.json()["status"] == "not_started"
+            assert reset.json()["completed_at"] is None
+            # 落盘了，不是只在响应里改一下：下一次启动读到的也是首次运行。
+            assert (await client.get("/api/v1/onboarding")).json()["status"] == "not_started"
+
+    asyncio.run(scenario())
+
+
+def test_resetting_before_anything_was_completed_is_not_an_error(tmp_path) -> None:
+    """绿对照:新库里还没有那一行，重置不能炸。"""
+
+    async def scenario() -> None:
+        app = _app(tmp_path)
+        async with app.router.lifespan_context(app), _client(app) as client:
+            reset = await client.post("/api/v1/onboarding/reset")
+
+            assert reset.status_code == 200
+            assert reset.json()["status"] == "not_started"
+
+    asyncio.run(scenario())
+
+
 def test_hy_being_down_does_not_leave_the_first_install_unfinished(tmp_path) -> None:
     """守卫：这一步可跳过，归纳失败不能把引导卡住。
 

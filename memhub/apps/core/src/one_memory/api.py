@@ -1873,6 +1873,20 @@ def create_app(
         """Record UI completion only; finishing or skipping is never model consent."""
         return await asyncio.to_thread(_onboarding_store(app).complete)
 
+    @app.post(
+        "/api/v1/onboarding/reset",
+        response_model=OnboardingState,
+        dependencies=protected,
+    )
+    async def reset_onboarding() -> OnboardingState:
+        """Go back to the first-run screens. Only the completion flag moves.
+
+        Memories, sources and settings live in other tables and are untouched,
+        which is the point: someone who wants to see the cold-start flow again
+        should not have to delete anything to do it.
+        """
+        return await asyncio.to_thread(_onboarding_store(app).reset)
+
     @app.get(
         "/api/v1/sources",
         response_model=list[SourceResponse],

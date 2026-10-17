@@ -618,6 +618,84 @@ describe("local Runtime installation", () => {
     ).rejects.toThrow("installed_version_conflict");
   });
 
+  it("replaces an equal build_number whose bytes differ only when the caller opts in", async () => {
+    if (process.platform !== "darwin") return;
+    const first = await distribution("1.0.0", { buildNumber: 5 });
+    const firstPlan = await planLocalInstall({
+      source: first.source,
+      installRoot: first.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    await applyLocalInstall(firstPlan);
+
+    // The same release rebuilt from a new commit: identical build number,
+    // different bytes. This is what a re-cut MemHub package looks like.
+    const rebuilt = await distribution("1.0.0", { buildNumber: 5 });
+    await writeFile(
+      path.join(rebuilt.source, "web/index.html"),
+      "rebuilt web",
+    );
+    const manifestPath = path.join(rebuilt.source, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.files["web/index.html"] = createHash("sha256")
+      .update("rebuilt web")
+      .digest("hex");
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    const plan = await planLocalInstall({
+      source: rebuilt.source,
+      installRoot: first.installRoot,
+      platform: process.platform,
+      arch: process.arch,
+      allowSameBuildReplace: true,
+    });
+    // The replacement lands in its own directory, so the superseded tree is
+    // left intact as a rollback instead of being edited under a running host.
+    expect(plan.same_build_replace).toBe(true);
+    expect(plan.version_directory).not.toBe(firstPlan.version_directory);
+
+    await applyLocalInstall(plan);
+    expect(await readlink(path.join(first.installRoot, "current"))).toBe(
+      path.relative(first.installRoot, plan.version_directory),
+    );
+    expect(
+      await readFile(
+        path.join(plan.version_directory, "web/index.html"),
+        "utf8",
+      ),
+    ).toBe("rebuilt web");
+    expect(
+      await readFile(
+        path.join(firstPlan.version_directory, "web/index.html"),
+        "utf8",
+      ),
+    ).toBe("web");
+  });
+
+  it("does not let the same-build opt-in weaken downgrade refusal", async () => {
+    if (process.platform !== "darwin") return;
+    const first = await distribution("1.0.0", { buildNumber: 5 });
+    await applyLocalInstall(
+      await planLocalInstall({
+        source: first.source,
+        installRoot: first.installRoot,
+        platform: process.platform,
+        arch: process.arch,
+      }),
+    );
+    const older = await distribution("0.9.0", { buildNumber: 4 });
+    await expect(
+      planLocalInstall({
+        source: older.source,
+        installRoot: first.installRoot,
+        platform: process.platform,
+        arch: process.arch,
+        allowSameBuildReplace: true,
+      }),
+    ).rejects.toThrow("distribution_downgrade_refused");
+  });
+
   it("accepts an equal build_number when the bytes are identical (idempotent reinstall)", async () => {
     if (process.platform !== "darwin") return;
     const first = await distribution("1.0.0", { buildNumber: 5 });

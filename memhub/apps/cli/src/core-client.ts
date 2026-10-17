@@ -398,6 +398,41 @@ export async function readMemoryWrite(
   }
 }
 
+export interface OnboardingState {
+  status: string;
+  selected_source_ids: string[];
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+/** Send onboarding back to its first-run state.
+ *
+ * Returns null when the endpoint is not there, so an older runtime degrades to
+ * "not available" instead of failing the command. Only the completion flag
+ * moves: memories, sources and settings live in other tables, which is what
+ * makes this the honest way to see the cold-start screens again.
+ */
+export async function resetOnboarding(
+  attachment: RuntimeAttachmentLike,
+): Promise<OnboardingState | null> {
+  try {
+    const response = await axios.post<OnboardingState>(
+      `${baseUrlOf(attachment)}/api/v1/onboarding/reset`,
+      undefined,
+      {
+        headers: { Authorization: `Bearer ${attachment.apiToken}` },
+        timeout: 15_000,
+        proxy: false,
+        maxRedirects: 0,
+        maxContentLength: MAX_RESPONSE_BYTES,
+      },
+    );
+    return response.data;
+  } catch {
+    return null;
+  }
+}
+
 export async function readScanRoots(
   attachment: RuntimeAttachmentLike,
 ): Promise<{

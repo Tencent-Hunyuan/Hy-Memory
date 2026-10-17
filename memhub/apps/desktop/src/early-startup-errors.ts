@@ -3,6 +3,7 @@ import {
   diagnosticError,
   writeDiagnosticEventSync,
 } from "@one-memory/runtime-control";
+import { stableRuntimeUserMessage } from "./stable-runtime";
 
 interface EarlyStartupErrorHandlerOptions {
   processEvents: Pick<EventEmitter, "on" | "removeListener">;
@@ -52,7 +53,10 @@ export function installEarlyStartupErrorHandler(
       );
       options.afterDiagnosticWrite?.();
     } finally {
-      options.showError("MemHub 无法启动", errorCode);
+      // The dialog is the only part of this a person ever reads, so it gets the
+      // explanation, not the code. The code stays in the diagnostic event,
+      // where support can still match it against a known failure.
+      options.showError("MemHub 无法启动", stableRuntimeUserMessage(error));
       options.exit(1);
     }
   };

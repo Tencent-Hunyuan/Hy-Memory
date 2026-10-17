@@ -93,6 +93,7 @@ const COMMANDS = [
   "uninstall",
   "upgrade",
   "delete-data",
+  "onboarding",
   "help",
   "version",
   // A6 product commands. Appended, not inserted: the catalog is a stable

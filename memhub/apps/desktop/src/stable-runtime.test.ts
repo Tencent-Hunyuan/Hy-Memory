@@ -1,8 +1,10 @@
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
   readlink,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -16,7 +18,9 @@ import {
   isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeUserMessage,
   startStableRuntimeRepair,
+  withInstallConflictRecovery,
 } from "./stable-runtime";
 
 it("only treats a packaged macOS executable under Applications as installed", () => {
@@ -252,5 +256,81 @@ describe("installServiceWithDisabledFallback", () => {
     expect(restoreOwner).toHaveBeenCalledOnce();
     expect(reportDisabled).not.toHaveBeenCalled();
     expect(startTransient).not.toHaveBeenCalled();
+  });
+});
+
+describe("startup install conflict recovery", () => {
+  async function selectedInstallRoot(): Promise<{
+    installRoot: string;
+    selected: string;
+  }> {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "memhub-conflict-recovery-"),
+    );
+    const installRoot = path.join(root, "One Memory");
+    const selected = path.join(
+      installRoot,
+      "versions",
+      "1.0.0-b6-darwin-arm64",
+    );
+    await mkdir(selected, { recursive: true });
+    await writeFile(path.join(selected, "manifest.json"), "{}");
+    await symlink(
+      path.relative(installRoot, selected),
+      path.join(installRoot, "current"),
+      "dir",
+    );
+    return { installRoot, selected };
+  }
+
+  it("retries once after moving the conflicting runtime aside", async () => {
+    const { installRoot, selected } = await selectedInstallRoot();
+    let attempts = 0;
+    const result = await withInstallConflictRecovery({
+      install: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("installed_version_conflict");
+        return "installed";
+      },
+      installRoot,
+    });
+    expect(result).toBe("installed");
+    expect(attempts).toBe(2);
+    // The tree that could not be reused is out of the way, not deleted.
+    expect(await lstat(selected).catch(() => null)).toBeNull();
+  });
+
+  it("does not quarantine for a failure it cannot repair", async () => {
+    const { installRoot, selected } = await selectedInstallRoot();
+    let attempts = 0;
+    await expect(
+      withInstallConflictRecovery({
+        install: async () => {
+          attempts += 1;
+          throw new Error("distribution_downgrade_refused");
+        },
+        installRoot,
+      }),
+    ).rejects.toThrow("distribution_downgrade_refused");
+    expect(attempts).toBe(1);
+    expect(await lstat(selected)).toBeTruthy();
+  });
+
+  it("explains the failure to the user instead of showing an error code", () => {
+    const conflict = stableRuntimeUserMessage(
+      new Error("installed_version_conflict"),
+    );
+    expect(conflict).toContain("记忆数据");
+    expect(conflict).not.toContain("installed_version_conflict");
+    expect(
+      stableRuntimeUserMessage(new Error("distribution_downgrade_refused")),
+    ).toContain("更新");
+    // An unrecognised failure still gets a sentence, never a raw code.
+    expect(stableRuntimeUserMessage(new Error("something_unexpected"))).toContain(
+      "MemHub 启动失败",
+    );
+    expect(stableRuntimeUserMessage("not an error")).toContain(
+      "MemHub 启动失败",
+    );
   });
 });

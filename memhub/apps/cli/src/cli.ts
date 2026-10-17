@@ -81,6 +81,7 @@ import {
   readMemoryWrite,
   readScanRoots,
   removeScanRoot,
+  resetOnboarding,
   submitBackup,
   submitMemoryWrite,
   submitScan,
@@ -697,6 +698,36 @@ async function runCommand(
   // `path list` and `adapter list` are read-only: they have no plan to confirm,
   // so they are answered here rather than falling into the two-phase branch
   // (which would reject them for having nothing to apply).
+  // Back to the cold-start screens on purpose. Deleting the app cannot do this
+  // (the completion flag lives with the memories, by design), and deleting the
+  // data to get there would cost the user everything they have stored.
+  if (named === "onboarding" && arguments_.includes("reset")) {
+    if (
+      arguments_.filter((item) => item === "--json").length > 1 ||
+      arguments_.filter((item) => item !== "--json").join(" ") !==
+        "onboarding reset"
+    ) {
+      return usage();
+    }
+    const attachment = await attachToRuntime(
+      resolveRuntimeCliConfig(environment, process.argv[1]).dataDir,
+    );
+    if (attachment === null) {
+      return runtimeUnavailable(descriptor, asJson);
+    }
+    const state = await resetOnboarding(attachment);
+    if (state === null) {
+      return reject(descriptor, asJson, "引导状态端点不可用。");
+    }
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify(state)}\n`);
+      return EXIT_OK;
+    }
+    process.stdout.write(
+      `引导流程已回到首次运行（status=${state.status}），记忆数据未改动。\n`,
+    );
+    return EXIT_OK;
+  }
   if (named === "path" && arguments_.includes("list")) {
     if (
       arguments_.filter((item) => item === "--json").length > 1 ||

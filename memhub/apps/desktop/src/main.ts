@@ -106,7 +106,9 @@ import {
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeUserMessage,
   startStableRuntimeRepair,
+  withInstallConflictRecovery,
 } from "./stable-runtime";
 import { resolveTrialProfile } from "./trial-profile";
 import { createWindowOptions } from "./window-options";
@@ -992,19 +994,28 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       let runtimeChanged = false;
       let transientRuntime = false;
       if (owner?.owner !== "cli") {
-        const installed = await installPackagedRuntime({
-          resourcesPath: process.resourcesPath,
-          executablePath: process.execPath,
+        const installed = await withInstallConflictRecovery({
+          install: () =>
+            installPackagedRuntime({
+              resourcesPath: process.resourcesPath,
+              executablePath: process.execPath,
+              installRoot,
+              platform: "darwin",
+              arch: process.arch,
+              ...(packagedBuildNumber === undefined
+                ? {}
+                : { buildNumber: packagedBuildNumber }),
+              ...(packagedCommit === undefined
+                ? {}
+                : { gitCommit: packagedCommit }),
+              // The bundle ships inside this notarized app, so it may take
+              // over from a same-build runtime whose bytes differ: a rebuild
+              // of one release keeps its build number, and refusing it leaves
+              // the app unable to start. The superseded tree is kept.
+              replaceSameBuild: true,
+              serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
+            }),
           installRoot,
-          platform: "darwin",
-          arch: process.arch,
-          ...(packagedBuildNumber === undefined
-            ? {}
-            : { buildNumber: packagedBuildNumber }),
-          ...(packagedCommit === undefined
-            ? {}
-            : { gitCommit: packagedCommit }),
-          serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
         });
         runtimeChanged = !installed.reused_current;
         await installBundledCliIfNeeded({
@@ -1165,24 +1176,32 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           if (process.platform !== "darwin" && process.platform !== "linux") {
             throw new Error("packaged_runtime_platform_unsupported");
           }
+          // Captured here, not at the call site: the install callback below is
+          // a nested function, and TypeScript drops property narrowing there.
+          const hostPlatform = process.platform;
           const installRoot = defaultManagedInstallRoot(
             process.platform,
             app.getPath("home"),
             process.env.LOCALAPPDATA,
           );
-          await installPackagedRuntime({
-            resourcesPath: process.resourcesPath,
-            executablePath: process.execPath,
+          await withInstallConflictRecovery({
+            install: () =>
+              installPackagedRuntime({
+                resourcesPath: process.resourcesPath,
+                executablePath: process.execPath,
+                installRoot,
+                platform: hostPlatform,
+                arch: process.arch,
+                ...(packagedBuildNumber === undefined
+                  ? {}
+                  : { buildNumber: packagedBuildNumber }),
+                ...(packagedCommit === undefined
+                  ? {}
+                  : { gitCommit: packagedCommit }),
+                replaceSameBuild: true,
+                serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
+              }),
             installRoot,
-            platform: process.platform,
-            arch: process.arch,
-            ...(packagedBuildNumber === undefined
-              ? {}
-              : { buildNumber: packagedBuildNumber }),
-            ...(packagedCommit === undefined
-              ? {}
-              : { gitCommit: packagedCommit }),
-            serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
           });
           await installBundledCliIfNeeded({
             home: app.getPath("home"),
