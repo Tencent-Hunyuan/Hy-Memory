@@ -4209,6 +4209,42 @@ def test_disabled_source_is_not_claimed_until_reenabled(tmp_path) -> None:
     assert drain.claim(limit=1) == (record.job_id,)
 
 
+def test_a_source_admitted_only_by_grant_is_claimed(tmp_path) -> None:
+    """The claim gate must ask the question the write gate asks.
+
+    `one-memory-manual` is not a connected app: it never appears in the
+    configuration document, so a per-app toggle answers False for it while the
+    write gate admits it by its grant. Wired as the drain's claim gate, that
+    second answer skipped the job on every tick — a saved manual note stayed
+    pending with no task behind it and never reached the model. Admission is
+    one decision, and it has one predicate.
+    """
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request(key="manual-note", source="one-memory-manual"))
+    # What `sync_enabled` answers for this source: no entry, therefore not on.
+    per_app_toggle: dict[str, bool] = {}
+    granted = {"one-memory-manual"}
+
+    drained = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        source_writes_permitted=lambda source_id: source_id in granted,
+        source_claim_enabled=lambda source_id: source_id in granted,
+    )
+    assert drained.claim(limit=1) == (record.job_id,)
+
+    # The wiring that shipped: admitted for writes, refused at claim.
+    queue.settle(record.job_id, state=PENDING, owner=None)
+    stranded = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        source_writes_permitted=lambda source_id: source_id in granted,
+        source_claim_enabled=lambda source_id: per_app_toggle.get(source_id, False),
+    )
+    assert stranded.claim(limit=1) == ()
+
+
 def test_pause_before_hy_releases_an_already_claimed_job(tmp_path) -> None:
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)

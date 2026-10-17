@@ -1144,7 +1144,15 @@ def create_app(
                 ),
                 reconcile_unknown=reconcile_unknown_writes,
                 source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
-                source_claim_enabled=lambda source_id: _config_store(app).sync_enabled(source_id),
+                # The claim gate has to be the same question the write gate
+                # asks, not a second answer to it. It used to be
+                # `sync_enabled`, the per-app toggle, and `one-memory-manual` is
+                # not a connected app: it has no entry in the configuration
+                # document, so that predicate answers False for it while the
+                # write gate admits it by its grant. Every manual note's job was
+                # therefore skipped on every drain tick — the note stayed
+                # "saved, waiting" with no task behind it, forever.
+                source_claim_enabled=lambda source_id: _source_writes_on(app, source_id),
             )
             app.state.memory_write_drain = memory_write_drain
             app.state.memory_write_drain_task = watched_task(
