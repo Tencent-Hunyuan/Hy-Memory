@@ -107,6 +107,8 @@ def build_request(
     first_round: int,
     last_round: int,
     evidence_ids: list[str],
+    input_records: tuple[EvidenceRecord, ...] = (),
+    source_id: str | None = None,
     priority: Literal["live", "normal"] = "normal",
     idempotency_key: str | None = None,
 ) -> WriteRequest:
@@ -125,6 +127,8 @@ def build_request(
         internal_session_id=internal_session_id,
         batch_identity=batch,
         evidence_ids=evidence_ids,
+        input_records=input_records,
+        source_id=source_id,
         idempotency_key=idempotency_key or batch.batch_id,
         priority=priority,
     )
@@ -271,6 +275,8 @@ def build_request_from_evidence(
         first_round=first_round,
         last_round=last_round,
         evidence_ids=list(ordered),
+        input_records=tuple(ordered.values()),
+        source_id=seed.source_id,
         priority=priority,
         idempotency_key=idempotency_key,
     )

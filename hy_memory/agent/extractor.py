@@ -1123,6 +1123,7 @@ class Extractor:
                 max_tokens=self._llm_config.agent_max_tokens,
                 tools=None,
                 tool_choice=None,
+                audit_stage="extract",
             )
             self._call_count += 1
             total_tokens += response.tokens_used
@@ -1233,6 +1234,7 @@ class Extractor:
                         max_tokens=self._llm_config.agent_max_tokens,
                         tools=None,
                         tool_choice=None,
+                        audit_stage="extract",
                     )
                     self._call_count += 1
                     total_tokens += response.tokens_used

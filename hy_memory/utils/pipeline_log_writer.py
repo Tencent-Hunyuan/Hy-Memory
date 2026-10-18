@@ -80,7 +80,11 @@ class PipelineLogWriter:
                 split_namespace_user,
             )
 
-            tokens = (prompt_tokens or 0) + (completion_tokens or 0) + (total_tokens or 0)
+            # Providers define total_tokens as prompt+completion. Adding all
+            # three fields doubled every cost estimate in this JSONL.
+            tokens = (total_tokens or 0) or (
+                (prompt_tokens or 0) + (completion_tokens or 0)
+            )
             namespace, uid = split_namespace_user(user_id or "")
             if not is_llm_content_logging_enabled():
                 prompt = redact_content(prompt)

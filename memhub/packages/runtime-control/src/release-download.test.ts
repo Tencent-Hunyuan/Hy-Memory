@@ -312,6 +312,48 @@ describe("remote Runtime acquisition", () => {
     });
   });
 
+  it("allows the exact GitHub Release asset redirect hosts by default", async () => {
+    const value = await fixture();
+    const manifestUrl =
+      "https://github.com/example/project/releases/download/v1.2.3/release-manifest.json";
+    const artifactUrl =
+      "https://github.com/example/project/releases/download/v1.2.3/runtime.tar.gz";
+    const manifestAssetUrl =
+      "https://release-assets.githubusercontent.com/manifest-download";
+    const runtimeAssetUrl =
+      "https://release-assets.githubusercontent.com/runtime-download";
+    const release = {
+      ...value.release,
+      artifacts: [{ ...value.artifact, url: artifactUrl }],
+    };
+    const temporaryParent = await mkdtemp(
+      path.join(os.tmpdir(), "memhub-github-release-parent-"),
+    );
+    roots.push(temporaryParent);
+
+    const acquired = await acquireRuntimeDistribution({
+      manifestUrl,
+      expectedVersion: "1.2.3",
+      channel: "stable",
+      platform: "linux",
+      arch: "x64",
+      temporaryParent,
+      httpGet: httpFixture({
+        [manifestUrl]: response(new Uint8Array(), 302, {
+          location: manifestAssetUrl,
+        }),
+        [manifestAssetUrl]: response(Buffer.from(JSON.stringify(release))),
+        [artifactUrl]: response(new Uint8Array(), 302, {
+          location: runtimeAssetUrl,
+        }),
+        [runtimeAssetUrl]: response(value.archiveBytes),
+      }),
+    });
+
+    expect(acquired.release.version).toBe("1.2.3");
+    await acquired.cleanup();
+  });
+
   it("rejects an archive whose internal commit drifts from the Release", async () => {
     const value = await fixture();
     const release = { ...value.release, git_commit: "b".repeat(40) };
@@ -368,7 +410,6 @@ describe("remote Runtime acquisition", () => {
   );
 
   it("rejects a redirect to an untrusted host", async () => {
-    const value = await fixture();
     await expect(
       acquireRuntimeDistribution({
         manifestUrl: "https://downloads.example.test/release-manifest.json",

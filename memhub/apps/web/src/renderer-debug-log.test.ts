@@ -8,18 +8,20 @@ import {
 
 afterEach(() => resetRendererDebugLogsForTest());
 
-it("captures console output and uncaught renderer failures", () => {
-  const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+it("captures only actionable console output and uncaught renderer failures", () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
   const stop = installRendererDebugLogCapture();
-  console.debug("debug-value", { count: 2 });
+  console.info("routine-value", { count: 1 });
+  console.warn("warning-value", { count: 2 });
   window.dispatchEvent(new ErrorEvent("error", { message: "render exploded" }));
 
   expect(rendererDebugLogs()).toEqual([
     expect.objectContaining({
-      level: "debug",
-      event: "console.debug",
-      message: 'debug-value {"count":2}',
+      level: "warn",
+      event: "console.warn",
+      message: 'warning-value {"count":2}',
     }),
     expect.objectContaining({
       level: "error",
@@ -29,6 +31,7 @@ it("captures console output and uncaught renderer failures", () => {
   ]);
 
   stop();
-  debug.mockRestore();
+  info.mockRestore();
+  warn.mockRestore();
   error.mockRestore();
 });

@@ -59,6 +59,11 @@ differs from unavailable; any incomplete requested path yields partial when some
 authorized query completed, even with no hits. All allowed reads failing yields
 unavailable. Safe fixed reason codes only; no private candidate counts/errors.
 
+`used_characters` counts Unicode code points, matching Python's `len()`. It is
+not an encoding length and not a UTF-16 code-unit count, so a client in another
+language must not compare it against `String.length`: an emoji outside the BMP
+is one character here and two there.
+
 ## Ownership and Verification
 
 Main owns models/API/external route guard/TS and integration. Workers own new

@@ -266,7 +266,13 @@ def serve(*, maintenance: bool = False, reader: bool = False) -> None:
         )
         application = create_reader_app(reader_settings)
         print(f"reader_port:{port}", file=sys.stderr, flush=True)
-        uvicorn.run(application, host=settings.host, port=port, reload=False)
+        uvicorn.run(
+            application,
+            host=settings.host,
+            port=port,
+            reload=False,
+            access_log=False,
+        )
         return
 
     from one_memory.api import create_app
@@ -297,9 +303,21 @@ def serve(*, maintenance: bool = False, reader: bool = False) -> None:
     )
     if maintenance:
         with CoreRuntime(settings, publish_receipt=False):
-            uvicorn.run(application, host=settings.host, port=settings.port, reload=False)
+            uvicorn.run(
+                application,
+                host=settings.host,
+                port=settings.port,
+                reload=False,
+                access_log=False,
+            )
     else:
-        uvicorn.run(application, host=settings.host, port=settings.port, reload=False)
+        uvicorn.run(
+            application,
+            host=settings.host,
+            port=settings.port,
+            reload=False,
+            access_log=False,
+        )
 
 
 if __name__ == "__main__":

@@ -160,7 +160,9 @@ class MatterDiscovery:
         task_by_id: dict[str, MemoryTask] = {}
         for chunk in chunks:
             for record in chunk:
-                task = await asyncio.to_thread(processor.tasks.task_for_evidence, record.evidence_id)
+                task = await asyncio.to_thread(
+                    processor.tasks.task_for_evidence, record.evidence_id
+                )
                 if task is not None and task.status is MemoryTaskStatus.COMPLETED:
                     task_by_id[task.task_id] = task
         tasks = tuple(sorted(task_by_id.values(), key=lambda task: (task.created_at, task.task_id)))

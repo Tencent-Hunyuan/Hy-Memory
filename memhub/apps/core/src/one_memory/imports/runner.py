@@ -199,7 +199,7 @@ class ImportRunner:
             raise ValueError("Import job source does not match adapter source")
         job, runner_token = await in_the_background(self.job_store.claim, job_id)
         diagnostic_event(
-            level="info",
+            level="debug",
             component="import.parser",
             event="import.parse.started",
             outcome="started",
@@ -310,7 +310,7 @@ class ImportRunner:
                 if event.kind == "progress" and str(event.phase) != last_phase:
                     phase = str(event.phase)
                     diagnostic_event(
-                        level="info",
+                        level="debug",
                         component="import.parser",
                         event="import.phase_changed",
                         outcome="changed",
@@ -516,7 +516,7 @@ class ImportRunner:
     async def _emit_parse_result(self, job: ImportJob, started: float) -> None:
         succeeded = job.status is ImportStatus.COMPLETED
         diagnostic_event(
-            level="info" if succeeded else "warn",
+            level="debug" if succeeded else "warn",
             component="import.parser",
             event="import.parse.completed",
             outcome="succeeded" if succeeded else str(job.status),

@@ -30,7 +30,7 @@ from uuid import uuid4
 from one_memory.background_work import in_the_background
 from one_memory.database_access import main_database
 from one_memory.diagnostic_log import diagnostic_event
-from one_memory.imports.models import EvidenceRecord
+from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import WriteRequest
 from one_memory.memory_server.data_safety import MIN_FREE_BYTES  # noqa: F401 - re-exported
@@ -249,6 +249,7 @@ MODEL_NOT_READY_CODES = frozenset(
 #: nothing was sent and retrying the same intent changes nothing — a terminal
 #: `failed`, not `unknown` (which would wrongly imply a possibly-applied
 #: write) and not a retry (which would fail identically).
+#:
 PRE_SEND_REFUSAL_CODES = frozenset(
     {
         "hy_memory_input_exceeds_window",
@@ -282,11 +283,6 @@ _VALID_JOB_STATES = frozenset(
 #: A row in one of these states can never be moved back to a live one.
 _TERMINAL_WRITE_STATES = frozenset({COMPLETED, FAILED, DEAD, CANCELLED})
 
-#: A job in one of these states can never run again, so its payload is dead
-#: weight. `unknown` is deliberately absent: it is non-terminal and still needs
-#: its intent for reconciliation. `running` is obviously still live.
-TERMINAL_PAYLOAD_STATES = (COMPLETED, FAILED, DEAD, CANCELLED)
-
 #: Columns a current schema declares but an older `memory_write_jobs` may lack.
 #: `CREATE TABLE IF NOT EXISTS` is a no-op for an existing table, so without
 #: this an upgraded install would keep an older queue that every claim/lease
@@ -304,9 +300,12 @@ LEGACY_MEMORY_WRITE_JOB_COLUMNS = (
     ("lease_expires_at", "TEXT"),
     ("hy_invoked", "INTEGER NOT NULL DEFAULT 0"),
     ("last_error", "TEXT"),
+    ("event_at", "TEXT"),
+    ("time_quality", "TEXT NOT NULL DEFAULT 'approximate'"),
 )
 
 _FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
+EVENT_TIME_WINDOW = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -393,6 +392,42 @@ def _matches_payload_except_priority(stored: str, payload: str) -> bool:
     return old == new
 
 
+def _matches_legacy_reference_replay(stored: str, payload: str) -> bool:
+    """Match an old id-only caller to the same job's frozen payload."""
+    try:
+        old = json.loads(stored)
+        new = json.loads(payload)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    old_inputs = old.get("input_records")
+    new_inputs = new.get("input_records")
+    if bool(old_inputs) == bool(new_inputs):
+        return False
+    old.pop("input_records", None)
+    new.pop("input_records", None)
+    return old == new
+
+
+def _matches_reaped_legacy_payload(stored: str, payload: str) -> bool:
+    """Compare a current frozen request with a pre-snapshot reaped payload."""
+    try:
+        old = json.loads(stored)
+        current = json.loads(payload)
+    except (TypeError, ValueError):
+        return False
+    if (
+        not isinstance(old, dict)
+        or not isinstance(current, dict)
+        or not isinstance(old.get(REAPED_PAYLOAD_MARKER), str)
+    ):
+        return False
+    current.pop("input_records", None)
+    legacy_payload = json.dumps(current, sort_keys=True)
+    return bool(old[REAPED_PAYLOAD_MARKER] == _payload_digest(legacy_payload))
+
+
 class DurableQueueSchemaUnavailableError(RuntimeError):
     """The durable queue schema has not been created yet.
 
@@ -445,6 +480,7 @@ class DurableWriteQueue:
         if not initialize:
             return
         with main_database(database_path).write() as connection, connection:
+            connection.row_factory = sqlite3.Row
             # First create the base table if absent. Then widen an older table
             # before replaying indexes that reference the new columns; a bare
             # CREATE INDEX would fail on a pre-priority queue.
@@ -455,6 +491,7 @@ class DurableWriteQueue:
             for statement in memory_write_jobs_sqlite_schema()[1:]:
                 connection.execute(statement)
             self._backfill_legacy_references(connection)
+            self._backfill_legacy_event_times(connection)
         # A process that died while holding a lease cannot run its own
         # recovery. Opening the queue is the first safe point to recover any
         # rows it left behind, before any new worker claims them.
@@ -479,8 +516,7 @@ class DurableWriteQueue:
             "UPDATE memory_write_jobs SET source_key=session_key WHERE source_key=''"
         )
         legacy_rows = connection.execute(
-            "SELECT job_id FROM memory_write_jobs WHERE queue_seq=0 "
-            "ORDER BY created_at, rowid"
+            "SELECT job_id FROM memory_write_jobs WHERE queue_seq=0 ORDER BY created_at, rowid"
         ).fetchall()
         next_seq = int(
             connection.execute(
@@ -513,6 +549,49 @@ class DurableWriteQueue:
         ]
         if columns and columns != ["state", "priority", "created_at"]:
             connection.execute("DROP INDEX idx_write_jobs_claim")
+
+    @staticmethod
+    def _backfill_legacy_event_times(connection: sqlite3.Connection) -> None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence'"
+            ).fetchone()
+            is None
+        ):
+            connection.execute(
+                "UPDATE memory_write_jobs SET event_at=created_at WHERE event_at IS NULL"
+            )
+            return
+        evidence_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(evidence)").fetchall()
+        }
+        if not {"created_at", "imported_at", "role"} <= evidence_columns:
+            connection.execute(
+                "UPDATE memory_write_jobs SET event_at=created_at WHERE event_at IS NULL"
+            )
+            return
+        connection.execute(
+            """
+            UPDATE memory_write_jobs
+            SET event_at = COALESCE(
+                (
+                    SELECT MAX(COALESCE(e.created_at, e.imported_at))
+                    FROM memory_write_job_evidence AS linked
+                    JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                    WHERE linked.job_id = memory_write_jobs.job_id
+                      AND e.role = 'user'
+                ),
+                (
+                    SELECT MIN(COALESCE(e.created_at, e.imported_at))
+                    FROM memory_write_job_evidence AS linked
+                    JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                    WHERE linked.job_id = memory_write_jobs.job_id
+                ),
+                created_at
+            )
+            WHERE event_at IS NULL
+            """
+        )
 
     @staticmethod
     def _backfill_legacy_references(connection: sqlite3.Connection) -> None:
@@ -610,8 +689,20 @@ class DurableWriteQueue:
         replacing the earlier intent.
         """
         self._refuse_if_below_reserve()
-        payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+        request = self._freeze_request_inputs(request)
+        payload = json.dumps(
+            request.model_dump(
+                mode="json",
+                exclude={"event_at", "time_quality"},
+            ),
+            sort_keys=True,
+        )
         now = datetime.now(UTC).isoformat()
+        resolved_event, resolved_quality = self._event_time_for_request(request)
+        event = request.event_at or resolved_event or datetime.fromisoformat(now)
+        if event.tzinfo is None:
+            event = event.replace(tzinfo=UTC)
+        event_at = event.astimezone(UTC).isoformat()
         key = request.request_key
         with (
             main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
@@ -624,16 +715,22 @@ class DurableWriteQueue:
                 (key,),
             ).fetchone()
             if existing is not None:
-                # A replay of work that already finished is a hit, not a
-                # conflict. Terminal rows store a reaped digest instead of the
-                # original payload, and the caller's key is derived from the
-                # evidence's revision, which can move on between replays while
-                # the payload's evidence ids stay the same. Refusing that pair
-                # turned every startup replay of one settled job into an
-                # exception: 236 of them in a single afternoon, all one key.
                 already_settled = (
                     str(existing["state"]) == COMPLETED and int(existing["hy_invoked"]) == 1
                 )
+                stored_payload = str(existing["payload_json"])
+                priority_replay = _matches_payload_except_priority(stored_payload, payload)
+                legacy_reaped_match = bool(
+                    already_settled
+                    and _matches_reaped_legacy_payload(stored_payload, payload)
+                )
+                if (
+                    not _matches_stored_payload(stored_payload, payload)
+                    and not priority_replay
+                    and not _matches_legacy_reference_replay(stored_payload, payload)
+                    and not legacy_reaped_match
+                ):
+                    raise ValueError(f"idempotency key {key} already exists with different content")
                 if already_settled:
                     return DurableWriteRecord(
                         job_id=str(existing["job_id"]),
@@ -644,14 +741,6 @@ class DurableWriteQueue:
                         updated_at=str(existing["updated_at"]),
                         detail="already completed; replay treated as a hit",
                     )
-                priority_replay = _matches_payload_except_priority(
-                    str(existing["payload_json"]), payload
-                )
-                if (
-                    not _matches_stored_payload(str(existing["payload_json"]), payload)
-                    and not priority_replay
-                ):
-                    raise ValueError(f"idempotency key {key} already exists with different content")
                 if priority_replay and request.priority == "live":
                     connection.execute(
                         "UPDATE memory_write_jobs SET priority='live', updated_at=? "
@@ -711,11 +800,13 @@ class DurableWriteQueue:
             )
             connection.execute(
                 "INSERT INTO memory_write_jobs ("
-                " job_id, queue_seq, session_key, source_key, batch_id, idempotency_key, payload_json,"
+                " job_id, queue_seq, session_key, source_key, batch_id,"
+                " idempotency_key, payload_json,"
                 " evidence_ids_json,"
                 " state, priority, attempts, max_attempts, lease_owner,"
-                " lease_expires_at, hy_invoked, last_error, created_at, updated_at"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " lease_expires_at, hy_invoked, last_error, event_at, time_quality,"
+                " created_at, updated_at"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     job_id,
                     queue_seq,
@@ -733,6 +824,8 @@ class DurableWriteQueue:
                     None,
                     0,
                     None,
+                    event_at,
+                    request.time_quality if request.event_at is not None else resolved_quality,
                     now,
                     now,
                 ),
@@ -741,6 +834,18 @@ class DurableWriteQueue:
                 "INSERT INTO memory_write_job_evidence (job_id, evidence_id) VALUES (?,?)",
                 ((job_id, str(evidence_id)) for evidence_id in request.evidence_ids),
             )
+        diagnostic_event(
+            level="info",
+            component="memory.write_queue",
+            event="memory_write_job.queued",
+            outcome="queued",
+            job_id=job_id,
+            details={
+                "source_id": request.source_id or request.internal_session_id,
+                "mode": request.priority,
+                "count": len(request.evidence_ids),
+            },
+        )
         return DurableWriteRecord(
             job_id=job_id,
             request_id=key,
@@ -749,6 +854,45 @@ class DurableWriteQueue:
             created_at=now,
             updated_at=now,
         )
+
+    def _freeze_request_inputs(self, request: WriteRequest) -> WriteRequest:
+        if request.input_records or self.evidence is None:
+            return request
+        records: list[EvidenceRecord] = []
+        for evidence_id in request.evidence_ids:
+            record = self.evidence.get(evidence_id)
+            if record is None:
+                return request
+            records.append(record)
+        return request.model_copy(update={"input_records": tuple(records)})
+
+    def _event_time_for_request(self, request: WriteRequest) -> tuple[datetime | None, str]:
+        records = list(request.input_records)
+        if not records and self.evidence is not None:
+            records = [
+                record
+                for evidence_id in request.evidence_ids
+                if (record := self.evidence.get(evidence_id)) is not None
+            ]
+        if not records:
+            return None, "approximate"
+        opener = next(
+            (record for record in records if record.role == "user"),
+            records[0],
+        )
+        if opener.created_at is None:
+            return opener.imported_at, "approximate"
+        origin = opener.origin_meta.get(EvidenceOrigin.FILE)
+        basis = origin.raw_meta.get("time_basis") if origin is not None else None
+        turn_event_at = origin.raw_meta.get("turn_event_at") if origin is not None else None
+        if isinstance(turn_event_at, str):
+            try:
+                return datetime.fromisoformat(turn_event_at), "exact"
+            except ValueError:
+                pass
+        if basis == "file_mtime":
+            return opener.created_at, "session"
+        return opener.created_at, "exact"
 
     def repair_pre_send_identity_failures(self, *, limit: int = 128) -> int:
         """Refresh stale Evidence journals and requeue only provably unsent jobs."""
@@ -859,11 +1003,55 @@ class DurableWriteQueue:
                 raise ReconcileSchemaUnavailableError(
                     "evidence table is unavailable; run migrations before reconcile"
                 )
-            where = (
-                "WHERE evidence.imported_at IS NOT NULL "
-                "AND NOT EXISTS (SELECT 1 FROM memory_write_job_evidence ref "
-                "WHERE ref.evidence_id=evidence.evidence_id)"
+            has_versions = (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='evidence_versions'"
+                ).fetchone()
+                is not None
             )
+            evidence_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(evidence)").fetchall()
+            }
+            if {"revision", "content_hash", "updated_at"} <= evidence_columns:
+                revision_time = (
+                    "COALESCE((SELECT version.changed_at FROM evidence_versions version "
+                    "WHERE version.evidence_id=evidence.evidence_id "
+                    "AND version.revision=evidence.revision),"
+                    "evidence.updated_at,evidence.imported_at)"
+                    if has_versions
+                    else "COALESCE(evidence.updated_at,evidence.imported_at)"
+                )
+                where = (
+                    "WHERE evidence.imported_at IS NOT NULL "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_job_evidence linked "
+                    "JOIN memory_write_jobs job ON job.job_id=linked.job_id, "
+                    "json_each(job.payload_json,'$.input_records') frozen "
+                    "WHERE linked.evidence_id=evidence.evidence_id "
+                    "AND json_extract(frozen.value,'$.evidence_id')=evidence.evidence_id "
+                    "AND json_extract(frozen.value,'$.revision')=evidence.revision "
+                    "AND json_extract(frozen.value,'$.content_hash')=evidence.content_hash"
+                    ") "
+                    # Pre-snapshot builds only recorded an Evidence id. Treat
+                    # that as coverage only when its Job was created after this
+                    # exact revision.
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_job_evidence legacy "
+                    "JOIN memory_write_jobs legacy_job ON legacy_job.job_id=legacy.job_id "
+                    "WHERE legacy.evidence_id=evidence.evidence_id "
+                    "AND COALESCE(json_array_length("
+                    "json_extract(legacy_job.payload_json,'$.input_records')),0)=0 "
+                    f"AND legacy_job.created_at>=({revision_time}))"
+                )
+            else:
+                # A genuinely old/minimal schema has no revision identity.
+                where = (
+                    "WHERE evidence.imported_at IS NOT NULL "
+                    "AND NOT EXISTS (SELECT 1 FROM memory_write_job_evidence legacy "
+                    "WHERE legacy.evidence_id=evidence.evidence_id)"
+                )
             params: tuple[Any, ...] = ()
             cursor_clause = ""
             if after_cursor is not None:
@@ -1095,6 +1283,7 @@ class DurableWriteQueue:
         with main_database(self.database_path).write() as connection, connection:
             updated = connection.execute(
                 "UPDATE memory_write_jobs SET state=?,lease_owner=NULL,"
+                "attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,"
                 "lease_expires_at=NULL,updated_at=? WHERE " + where,
                 (PENDING, now, *params),
             )
@@ -1162,45 +1351,10 @@ class DurableWriteQueue:
         return state
 
     def clear_terminal_payloads(self, *, limit: int = 512) -> int:
-        """Replace terminal rows' request bodies with a content digest.
-
-        A completed/failed/dead/cancelled row can never run again, so the full
-        serialized `WriteRequest` is unbounded dead weight. A digest keeps the
-        idempotency contract intact: a replay of the same intent still resolves
-        to the same row, while the same key with different content still
-        conflicts. `unknown` is left alone because it is non-terminal and its
-        intent is needed for reconciliation.
-
-        Bounded by `limit` so a large backlog drains over several calls instead
-        of one long write on the single writer.
-        """
+        """Deprecated compatibility hook; durable inputs are immutable audit data."""
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be positive")
-        placeholders = ",".join("?" for _ in TERMINAL_PAYLOAD_STATES)
-        with (
-            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
-            connection,
-        ):
-            rows = connection.execute(
-                "SELECT job_id, payload_json FROM memory_write_jobs "
-                f"WHERE state IN ({placeholders}) "
-                "AND instr(payload_json, ?) = 0 "
-                "LIMIT ?",
-                (*TERMINAL_PAYLOAD_STATES, REAPED_PAYLOAD_MARKER, limit),
-            ).fetchall()
-            if not rows:
-                return 0
-            for row in rows:
-                connection.execute(
-                    "UPDATE memory_write_jobs SET payload_json=? "
-                    f"WHERE job_id=? AND state IN ({placeholders})",
-                    (
-                        _reaped_payload(_payload_digest(str(row["payload_json"]))),
-                        str(row["job_id"]),
-                        *TERMINAL_PAYLOAD_STATES,
-                    ),
-                )
-        return len(rows)
+        return 0
 
     def readmit_parked(self, *, states: tuple[str, ...] = PARKED_STATES) -> int:
         """Move parked jobs back to `pending` for a fresh claim.
@@ -1402,7 +1556,13 @@ class DurableWriteQueue:
         cross back to pending, so this cannot duplicate a possibly-sent write.
         """
         now = datetime.now(UTC).isoformat()
-        payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+        payload = json.dumps(
+            request.model_dump(
+                mode="json",
+                exclude={"event_at", "time_quality"},
+            ),
+            sort_keys=True,
+        )
         with (
             main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
             connection,
@@ -1741,9 +1901,12 @@ class DurableWriteRegistry:
 def evidence_for_request(store: EvidenceStore, request: WriteRequest) -> tuple[EvidenceRecord, ...]:
     """The Evidence a stored write points at, in the request's own order.
 
-    A write may only point at Evidence that still exists; a missing id is a
-    rejection rather than a silent partial send.
+    Current jobs are self-contained: their immutable records are the model
+    input even if a Harness later rewinds or edits its live transcript. The
+    store lookup remains only for payloads written by pre-upgrade builds.
     """
+    if request.input_records:
+        return request.input_records
     records = []
     for evidence_id in request.evidence_ids:
         record = store.get(evidence_id)
@@ -1850,7 +2013,14 @@ async def execute_job(
         # Never persist the raw message: it may be a provider response or the
         # user's own text, and `last_error` is shown over HTTP as `detail`.
         code = safe_error_code(error)
-        if code == "model_content_source_disabled" and not hy_invoked:
+        if (
+            code
+            in {
+                "model_content_source_disabled",
+                "model_sedimentation_disabled",
+            }
+            and not hy_invoked
+        ):
             await in_the_background(queue.release_unstarted, job_id, owner=owner)
             return
         # The task layer classifies these before any bridge is opened, so HY
@@ -1861,7 +2031,11 @@ async def execute_job(
         # - transient model/provider trouble -> waiting_for_model (parked).
         # Everything else may have crossed into HY, and HY has no idempotency
         # key, so it is `unknown` rather than a blind retry.
-        if hy_invoked:
+        if code in PRE_SEND_REFUSAL_CODES:
+            # The frozen input window is checked before the payload reaches
+            # HY. This one refusal therefore has a proven pre-send boundary.
+            state, invoked_marker = FAILED, False
+        elif hy_invoked:
             # Error names do not prove execution phase: permission and
             # evidence rechecks also run after HY returns. Once the durable
             # marker is set, every failure is possibly-sent and must stay out
@@ -1873,10 +2047,6 @@ async def execute_job(
             state, invoked_marker = WAITING_FOR_PERMISSION, False
         elif code in MODEL_NOT_READY_CODES:
             state, invoked_marker = WAITING_FOR_MODEL, False
-        elif code in PRE_SEND_REFUSAL_CODES:
-            # Provably before the bridge: the frozen input is stale or too
-            # large. Nothing was sent, so this is terminal rather than unknown.
-            state, invoked_marker = FAILED, False
         elif code == "model_content_transport_request_failed":
             # The generation or embedding HTTP exchange can fail after HY has
             # already persisted a node. Treating that as a pre-send failure
@@ -1965,7 +2135,6 @@ class DurableWriteDrain:
         #: sustained backlog must not keep finished rows' request bodies in the
         #: business database indefinitely. Its own gate so neither interval can
         #: starve the other.
-        self._last_terminal_reap: datetime | None = None
         #: `waiting_for_model` re-admission is also time-based recoverability:
         #: a model outage clears on its own, and a queue that never goes idle
         #: must still re-admit the write once the wait has elapsed.
@@ -2016,7 +2185,7 @@ class DurableWriteDrain:
         now: datetime | None = None,
         budget_ms: int | None = None,
     ) -> tuple[str, ...]:
-        """Claim at most one FIFO head per enabled Harness."""
+        """Claim event-time heads, with one running job per enabled Harness."""
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be positive")
         now = now or datetime.now(UTC)
@@ -2058,9 +2227,7 @@ class DurableWriteDrain:
                     (PENDING,),
                 ).fetchall()
             enabled_sources = {
-                str(row[0])
-                for row in source_rows
-                if self.source_writes_permitted(str(row[0]))
+                str(row[0]) for row in source_rows if self.source_writes_permitted(str(row[0]))
             }
             if not enabled_sources:
                 return ()
@@ -2079,38 +2246,142 @@ class DurableWriteDrain:
                 placeholders = ",".join("?" for _ in enabled_sources)
                 source_clause = f"AND candidate.source_key IN ({placeholders}) "
                 source_params = tuple(sorted(enabled_sources))
+            window = connection.execute(
+                "SELECT window_anchor,window_end FROM memory_write_schedule_state WHERE singleton=1"
+            ).fetchone()
+            if window is not None:
+                anchor_text, end_text = str(window[0]), str(window[1])
+                active_source_clause = ""
+                active_source_params: tuple[Any, ...] = ()
+                if enabled_sources is not None:
+                    placeholders = ",".join("?" for _ in enabled_sources)
+                    active_source_clause = f"AND active.source_key IN ({placeholders}) "
+                    active_source_params = tuple(sorted(enabled_sources))
+                # The contract retires a window when every *eligible*
+                # pending/running job in it has settled or parked. A pending row
+                # that scheduling already holds back (an unexpired lease, a
+                # busy Harness, or an earlier event in its Session) is not eligible, so it
+                # must not keep the anchor alive: those blockers usually sit
+                # outside this ten-minute range and can never be claimed from
+                # inside it, which pinned the anchor and starved the whole
+                # queue. Reuse the claim's own predicate so "the window is
+                # busy" and "the window can still be worked" agree.
+                active = connection.execute(
+                    "SELECT 1 FROM memory_write_jobs AS active "
+                    "WHERE active.event_at>=? AND active.event_at<? AND ("
+                    "active.state=? OR (active.state=? "
+                    "AND (active.lease_expires_at IS NULL "
+                    "OR active.lease_expires_at < ?) " + active_source_clause + "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS held "
+                    "WHERE held.source_key=active.source_key AND held.state=? "
+                    "AND held.lease_owner IS NOT NULL "
+                    "AND held.lease_expires_at>=?) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS earlier "
+                    "WHERE earlier.session_key=active.session_key "
+                    f"AND earlier.state IN ({blocking}) "
+                    "AND (earlier.event_at<active.event_at OR "
+                    "(earlier.event_at=active.event_at "
+                    "AND earlier.queue_seq<active.queue_seq))) "
+                    ")) LIMIT 1",
+                    (
+                        anchor_text,
+                        end_text,
+                        RUNNING,
+                        PENDING,
+                        now.isoformat(),
+                        *active_source_params,
+                        RUNNING,
+                        now.isoformat(),
+                        *_FIFO_BLOCKING_STATES,
+                    ),
+                ).fetchone()
+                if active is None:
+                    connection.execute("DELETE FROM memory_write_schedule_state WHERE singleton=1")
+                    window = None
+            if window is None:
+                anchor = connection.execute(
+                    "SELECT candidate.event_at "
+                    "FROM memory_write_jobs AS candidate "
+                    "WHERE candidate.state=? "
+                    "AND (candidate.lease_expires_at IS NULL "
+                    "OR candidate.lease_expires_at < ?) " + source_clause + "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS held "
+                    "WHERE held.source_key=candidate.source_key AND held.state=? "
+                    "AND held.lease_owner IS NOT NULL "
+                    "AND held.lease_expires_at>=?) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS earlier "
+                    "WHERE earlier.session_key=candidate.session_key "
+                    f"AND earlier.state IN ({blocking}) "
+                    "AND (earlier.event_at<candidate.event_at OR "
+                    "(earlier.event_at=candidate.event_at "
+                    "AND earlier.queue_seq<candidate.queue_seq))) "
+                    "ORDER BY candidate.event_at,candidate.queue_seq LIMIT 1",
+                    (
+                        PENDING,
+                        now.isoformat(),
+                        *source_params,
+                        RUNNING,
+                        now.isoformat(),
+                        *_FIFO_BLOCKING_STATES,
+                    ),
+                ).fetchone()
+                if anchor is None:
+                    return ()
+                anchor_at = datetime.fromisoformat(str(anchor[0]))
+                if anchor_at.tzinfo is None:
+                    anchor_at = anchor_at.replace(tzinfo=UTC)
+                anchor_text = anchor_at.astimezone(UTC).isoformat()
+                end_text = (anchor_at + EVENT_TIME_WINDOW).astimezone(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO memory_write_schedule_state "
+                    "(singleton,window_anchor,window_end,updated_at) "
+                    "VALUES (1,?,?,?)",
+                    (anchor_text, end_text, now.isoformat()),
+                )
             rows = connection.execute(
                 "SELECT candidate.job_id,candidate.source_key "
                 "FROM memory_write_jobs AS candidate "
                 "WHERE candidate.state=? "
                 "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
-                + source_clause +
+                + source_clause
+                + "AND candidate.event_at>=? AND candidate.event_at<? "
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM memory_write_jobs AS held "
                 "WHERE held.source_key=candidate.source_key AND held.state=? "
                 "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM memory_write_jobs AS earlier "
-                "WHERE earlier.source_key=candidate.source_key "
+                "WHERE earlier.session_key=candidate.session_key "
                 f"AND earlier.state IN ({blocking}) "
-                "AND earlier.queue_seq<candidate.queue_seq) "
-                "ORDER BY candidate.queue_seq",
+                "AND (earlier.event_at<candidate.event_at OR "
+                "(earlier.event_at=candidate.event_at "
+                "AND earlier.queue_seq<candidate.queue_seq))) "
+                "ORDER BY candidate.event_at,candidate.queue_seq",
                 (
                     PENDING,
                     now.isoformat(),
                     *source_params,
+                    anchor_text,
+                    end_text,
                     RUNNING,
                     now.isoformat(),
                     *_FIFO_BLOCKING_STATES,
                 ),
             ).fetchall()
             selected: list[str] = []
+            selected_sources: set[str] = set()
             for row in rows:
+                source_key = str(row["source_key"])
+                if source_key in selected_sources:
+                    continue
                 if self.source_claim_enabled is not None and not self.source_claim_enabled(
-                    str(row["source_key"])
+                    source_key
                 ):
                     continue
                 selected.append(str(row["job_id"]))
+                selected_sources.add(source_key)
                 if len(selected) == min(limit, self.max_concurrent_sources):
                     break
             if not selected:
@@ -2338,19 +2609,6 @@ class DurableWriteDrain:
                     await self._run_idle_maintenance(
                         self.queue.reclaim_expired,
                         operation_name="reclaim_expired",
-                    )
-                # Terminal-payload reaping is a bounded retention write: a
-                # finished row's full request body must not sit in the business
-                # database forever just because the queue never went idle. Its
-                # own interval keeps it off every poll.
-                if (
-                    self._last_terminal_reap is None
-                    or tick_started - self._last_terminal_reap >= self._reap_interval
-                ):
-                    self._last_terminal_reap = tick_started
-                    await self._run_idle_maintenance(
-                        self.queue.clear_terminal_payloads,
-                        operation_name="clear_terminal_payloads",
                     )
                 # A model outage clears on its own, so `waiting_for_model` jobs
                 # are re-admitted on a timer. That must not depend on idleness: a

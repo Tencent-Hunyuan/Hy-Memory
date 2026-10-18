@@ -161,7 +161,7 @@ it("tracks diagnostic JSONL across rotation without rereading the old prefix", a
   ]);
 });
 
-it("tracks service output from the launch offset across rotation", async () => {
+it("keeps only actionable raw service output across rotation", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "om-debug-service-"));
   roots.push(dataDir);
   const logs = path.join(dataDir, "logs");
@@ -177,18 +177,16 @@ it("tracks service output from the launch offset across rotation", async () => {
   const snapshot = await readDebugLogSnapshot(dataDir, startedAt, cursor);
 
   expect(snapshot.entries.map((entry) => entry.message)).toEqual([
-    "INFO current request",
     "WARNING after rotation",
     "ERROR failed request",
   ]);
   expect(snapshot.entries.map((entry) => entry.level)).toEqual([
-    "info",
     "warn",
     "error",
   ]);
 });
 
-it("includes core.log lines from this launch and classifies their level", async () => {
+it("filters raw Core INFO and DEBUG while preserving warnings and errors", async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "om-debug-core-log-"));
   roots.push(dataDir);
   const logs = path.join(dataDir, "logs");
@@ -200,6 +198,7 @@ it("includes core.log lines from this launch and classifies their level", async 
   await appendFile(
     target,
     "2026-10-14 10:30:30 DEBUG hy pipeline queued\n" +
+      '2026-10-14 10:30:45 INFO: 127.0.0.1:54000 - "GET /health HTTP/1.1" 200 OK\n' +
       "2026-10-14 10:31:00 WARNING database wait\n" +
       "2026-10-14 10:32:00 ERROR worker failed\n",
   );
@@ -207,12 +206,10 @@ it("includes core.log lines from this launch and classifies their level", async 
   const snapshot = await readDebugLogSnapshot(dataDir, startedAt, cursor);
 
   expect(snapshot.entries.map((entry) => entry.message)).toEqual([
-    "2026-10-14 10:30:30 DEBUG hy pipeline queued",
     "2026-10-14 10:31:00 WARNING database wait",
     "2026-10-14 10:32:00 ERROR worker failed",
   ]);
   expect(snapshot.entries.map((entry) => entry.level)).toEqual([
-    "debug",
     "warn",
     "error",
   ]);
@@ -221,7 +218,7 @@ it("includes core.log lines from this launch and classifies their level", async 
   ).toBe(true);
 });
 
-it("shows HY pipeline stages with the complete original JSON line", async () => {
+it("shows HY pipeline metrics without exposing model content", async () => {
   const dataDir = await mkdtemp(
     path.join(os.tmpdir(), "om-debug-hy-pipeline-"),
   );
@@ -265,7 +262,7 @@ it("shows HY pipeline stages with the complete original JSON line", async () => 
       service: "hy-memory",
       component: "hy.pipeline",
       event: "hy.pipeline.extract",
-      message: expect.stringContaining('"prompt":"private prompt"'),
+      message: "EXTRACT · 42 tokens · 124 ms",
       duration_ms: 123.5,
       trace_id: "request-safe-1",
       details: { phase: "EXTRACT", count: 42 },
@@ -281,7 +278,7 @@ it("shows HY pipeline stages with the complete original JSON line", async () => 
     "private-agent",
     "private-session",
   ]) {
-    expect(serialized).toContain(secret);
+    expect(serialized).not.toContain(secret);
   }
 });
 

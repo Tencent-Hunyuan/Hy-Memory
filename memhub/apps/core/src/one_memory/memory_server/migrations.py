@@ -151,6 +151,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             lease_expires_at TEXT,
             hy_invoked INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
+            event_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            time_quality TEXT NOT NULL DEFAULT 'approximate',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -164,6 +166,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
         ON memory_write_jobs(source_key, state, queue_seq);
         CREATE INDEX IF NOT EXISTS idx_write_jobs_fifo
         ON memory_write_jobs(queue_seq);
+        CREATE INDEX IF NOT EXISTS idx_write_jobs_event_claim
+        ON memory_write_jobs(state, event_at, queue_seq);
         CREATE INDEX IF NOT EXISTS idx_write_jobs_source_recent
         ON memory_write_jobs(source_key, updated_at DESC);
         CREATE TABLE IF NOT EXISTS memory_write_job_evidence (
@@ -172,7 +176,13 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             PRIMARY KEY (job_id, evidence_id)
         );
         CREATE INDEX IF NOT EXISTS idx_write_job_evidence_evidence
-        ON memory_write_job_evidence(evidence_id)
+        ON memory_write_job_evidence(evidence_id);
+        CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            window_anchor TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
         """
     return """
         CREATE TABLE IF NOT EXISTS memory_write_jobs (
@@ -192,6 +202,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             lease_expires_at DATETIME(6) NULL,
             hy_invoked TINYINT(1) NOT NULL DEFAULT 0,
             last_error TEXT NULL,
+            event_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            time_quality VARCHAR(32) NOT NULL DEFAULT 'approximate',
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                 ON UPDATE CURRENT_TIMESTAMP(6),
@@ -201,6 +213,7 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             KEY idx_write_jobs_source_claim (state, source_key, priority, created_at),
             KEY idx_write_jobs_source_fifo (source_key, state, queue_seq),
             KEY idx_write_jobs_fifo (queue_seq),
+            KEY idx_write_jobs_event_claim (state, event_at, queue_seq),
             KEY idx_write_jobs_source_recent (source_key, updated_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -209,6 +222,13 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             evidence_id VARCHAR(128) NOT NULL,
             PRIMARY KEY (job_id, evidence_id),
             KEY idx_write_job_evidence_evidence (evidence_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+            singleton INT PRIMARY KEY CHECK (singleton = 1),
+            window_anchor DATETIME(6) NOT NULL,
+            window_end DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
 
@@ -1231,6 +1251,68 @@ CREATE TABLE IF NOT EXISTS model_request_budget_events (
 """
 
 
+def model_request_audit_ddl(dialect: str = "mysql") -> str:
+    """Content-free accounting for physical precipitation model requests."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS model_request_audit (
+    audit_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    profile_revision INTEGER NOT NULL,
+    provider_kind TEXT NOT NULL,
+    model TEXT NOT NULL,
+    request_kind TEXT NOT NULL,
+    prompt_stage TEXT NOT NULL DEFAULT 'other',
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    outcome TEXT NOT NULL CHECK(outcome IN ('in_flight','succeeded','failed')),
+    http_status INTEGER,
+    error_type TEXT,
+    provider_request_id TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    cached_prompt_tokens INTEGER,
+    reasoning_tokens INTEGER
+);
+CREATE INDEX IF NOT EXISTS model_request_audit_request
+ON model_request_audit(request_id, started_at);
+CREATE INDEX IF NOT EXISTS model_request_audit_started
+ON model_request_audit(started_at);
+"""
+    return """
+CREATE TABLE IF NOT EXISTS model_request_audit (
+    audit_id VARCHAR(128) PRIMARY KEY,
+    request_id VARCHAR(512) NOT NULL,
+    profile_id VARCHAR(128) NOT NULL,
+    profile_revision INT NOT NULL,
+    provider_kind VARCHAR(64) NOT NULL,
+    model VARCHAR(512) NOT NULL,
+    request_kind VARCHAR(64) NOT NULL,
+    prompt_stage VARCHAR(128) NOT NULL DEFAULT 'other',
+    started_at DATETIME(6) NOT NULL,
+    completed_at DATETIME(6) NULL,
+    outcome VARCHAR(32) NOT NULL CHECK(outcome IN ('in_flight','succeeded','failed')),
+    http_status INT NULL,
+    error_type VARCHAR(128) NULL,
+    provider_request_id VARCHAR(512) NULL,
+    prompt_tokens BIGINT NULL,
+    completion_tokens BIGINT NULL,
+    total_tokens BIGINT NULL,
+    cached_prompt_tokens BIGINT NULL,
+    reasoning_tokens BIGINT NULL,
+    KEY model_request_audit_request (request_id, started_at),
+    KEY model_request_audit_started (started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _052_model_request_audit(cursor: Any) -> None:
+    for statement in _split_statements(model_request_audit_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def model_probe_operations_ddl(dialect: str = "mysql") -> str:
     """Probe operations; `state` is CHECKed to a known set.
 
@@ -1412,6 +1494,97 @@ async def _026_hy_node_permissions(cursor: Any) -> None:
 
 async def _051_drop_hy_node_permissions(cursor: Any) -> None:
     await cursor.execute("DROP TABLE IF EXISTS hy_node_permissions")
+
+
+async def _053_memory_write_event_time(cursor: Any) -> None:
+    """Add event-time scheduling without re-keying any existing write."""
+
+    dialect = _dialect(cursor)
+    columns = await cursor.columns("memory_write_jobs")
+    added_event_at = "event_at" not in columns
+    if added_event_at:
+        await cursor.execute(
+            "ALTER TABLE memory_write_jobs ADD COLUMN event_at "
+            + ("TEXT" if dialect == "sqlite" else "DATETIME(6) NULL")
+        )
+    if "time_quality" not in columns:
+        await cursor.execute(
+            "ALTER TABLE memory_write_jobs ADD COLUMN time_quality "
+            + (
+                "TEXT NOT NULL DEFAULT 'approximate'"
+                if dialect == "sqlite"
+                else "VARCHAR(32) NOT NULL DEFAULT 'approximate'"
+            )
+        )
+    await cursor.execute(
+        """
+        UPDATE memory_write_jobs
+        SET event_at = COALESCE(
+            (
+                SELECT MAX(COALESCE(e.created_at, e.imported_at))
+                FROM memory_write_job_evidence AS linked
+                JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                WHERE linked.job_id = memory_write_jobs.job_id
+                  AND e.role = 'user'
+            ),
+            (
+                SELECT MIN(COALESCE(e.created_at, e.imported_at))
+                FROM memory_write_job_evidence AS linked
+                JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                WHERE linked.job_id = memory_write_jobs.job_id
+            ),
+            created_at
+        )
+        WHERE event_at IS NULL
+        """
+    )
+    if dialect == "sqlite":
+        await cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_write_jobs_event_claim "
+            "ON memory_write_jobs(state, event_at, queue_seq)"
+        )
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                window_anchor TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    else:
+        if added_event_at:
+            await cursor.execute(
+                "CREATE INDEX idx_write_jobs_event_claim "
+                "ON memory_write_jobs(state, event_at, queue_seq)"
+            )
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+                singleton INT PRIMARY KEY CHECK (singleton = 1),
+                window_anchor DATETIME(6) NOT NULL,
+                window_end DATETIME(6) NOT NULL,
+                updated_at DATETIME(6) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+
+
+async def _054_legacy_possibly_sent_tasks(cursor: Any) -> None:
+    """Preserve the old sent marker before removing its retired permission table."""
+    columns = await cursor.columns("memory_task_continuous_permissions")
+    if "task_id" not in columns:
+        return
+    await cursor.execute(
+        """
+        UPDATE memory_tasks
+        SET hy_invocation_count=CASE
+            WHEN hy_invocation_count<1 THEN 1 ELSE hy_invocation_count END
+        WHERE task_id IN (SELECT task_id FROM memory_task_continuous_permissions)
+        """
+    )
+    await cursor.execute("DROP TABLE memory_task_continuous_permissions")
 
 
 def model_profiles_ddl(dialect: str = "mysql") -> str:
@@ -2680,7 +2853,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         2,
         "memory_write_jobs",
         _002_write_jobs,
-        ("memory_write_jobs", "memory_write_job_evidence"),
+        (
+            "memory_write_jobs",
+            "memory_write_job_evidence",
+            "memory_write_schedule_state",
+        ),
     ),
     Migration(3, "source_file_cursors", _003_scanner_cursors, ("source_file_cursors",)),
     Migration(4, "change_outbox", _004_change_outbox, ("change_outbox",)),
@@ -2849,4 +3026,21 @@ MIGRATIONS: tuple[Migration, ...] = (
         _050_model_probe_operations_reserved_at,
     ),
     Migration(51, "drop_hy_node_permissions", _051_drop_hy_node_permissions),
+    Migration(
+        52,
+        "model_request_audit",
+        _052_model_request_audit,
+        ("model_request_audit",),
+    ),
+    Migration(
+        53,
+        "memory_write_event_time",
+        _053_memory_write_event_time,
+        ("memory_write_schedule_state",),
+    ),
+    Migration(
+        54,
+        "legacy_possibly_sent_tasks",
+        _054_legacy_possibly_sent_tasks,
+    ),
 )

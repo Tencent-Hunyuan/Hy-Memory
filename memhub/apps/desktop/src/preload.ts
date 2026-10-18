@@ -30,7 +30,16 @@ import type {
   SyncHookStatus,
 } from "./sync-hook";
 
+declare const __ONE_MEMORY_VERSION__: string;
+declare const __ONE_MEMORY_BUILD_NUMBER__: string;
+declare const __ONE_MEMORY_COMMIT__: string;
+
 contextBridge.exposeInMainWorld("oneMemory", {
+  getBuildInfo: () => ({
+    version: __ONE_MEMORY_VERSION__,
+    buildNumber: __ONE_MEMORY_BUILD_NUMBER__,
+    commit: __ONE_MEMORY_COMMIT__,
+  }),
   getDebugLogs: (): Promise<DebugLogSnapshot> =>
     ipcRenderer.invoke("one-memory:get-debug-logs"),
   logUiTrace: (input: {

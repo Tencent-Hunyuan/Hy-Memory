@@ -1148,6 +1148,56 @@ export async function setDiagnosticLogLevel(
   return value.log_level as DiagnosticLogLevel;
 }
 
+export interface ModelUsageSummary {
+  request_count: number;
+  succeeded: number;
+  failed: number;
+  in_flight: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_prompt_tokens: number;
+  reasoning_tokens: number;
+  avg_prompt_tokens: number;
+  avg_completion_tokens: number;
+}
+
+export interface ModelUsageMinute {
+  minute: string;
+  prompt_stage: string;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  avg_prompt_tokens: number;
+  avg_completion_tokens: number;
+}
+
+export interface ModelUsageReport {
+  schema_version: 1;
+  summary: ModelUsageSummary;
+  by_minute: ModelUsageMinute[];
+  requests: Array<Record<string, unknown>>;
+}
+
+export async function getModelUsage(
+  since: string,
+  limit = 200,
+): Promise<ModelUsageReport> {
+  const response = await client.get<ModelUsageReport>(
+    "/api/v1/diagnostics/model-usage",
+    { params: { since, limit } },
+  );
+  const value = response.data;
+  if (
+    value.schema_version !== 1 ||
+    !Array.isArray(value.by_minute) ||
+    typeof value.summary?.request_count !== "number"
+  )
+    throw new Error("model_usage_invalid");
+  return value;
+}
+
 export async function retryUnknownMemoryProcessing(
   traceId?: string,
 ): Promise<{ requeued: number }> {
@@ -1181,6 +1231,35 @@ export async function setExtractionWindow(
   const receipt = parseExtractionSettingsReceipt(response.data, windowPreset);
   if (receipt === null) throw new Error("extraction_settings_receipt_invalid");
   return receipt;
+}
+
+export type SedimentationState = {
+  enabled: boolean;
+  pending_retained: boolean;
+  imports_unaffected: boolean;
+};
+
+export async function getSedimentation(): Promise<SedimentationState> {
+  const response = await client.get<SedimentationState>(
+    "/api/v1/sedimentation",
+  );
+  return response.data;
+}
+
+export async function setSedimentation(
+  enabled: boolean,
+  traceId?: string,
+): Promise<SedimentationState> {
+  const response = await client.put<SedimentationState>(
+    "/api/v1/sedimentation",
+    { enabled },
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+  );
+  // The switch is a cost control: a 200 that did not save the choice would
+  // leave the model running while the app shows it stopped.
+  if (typeof response.data?.enabled !== "boolean")
+    throw new Error("sedimentation_receipt_invalid");
+  return response.data;
 }
 
 export async function manualExtract(

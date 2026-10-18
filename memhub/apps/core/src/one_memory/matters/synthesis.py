@@ -270,7 +270,7 @@ async def reconcile_current(
         (
             r
             for r in records
-            if r.written_by == "person"
+            if r.role == "user"
             and r.created_at
             and (r.source_id, r.conversation_id) in related
         ),

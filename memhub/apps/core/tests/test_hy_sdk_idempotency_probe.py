@@ -69,7 +69,7 @@ def test_no_idempotency_key_means_unknown_must_remain() -> None:
 
 
 def test_measured_sdk_verdict_is_recorded() -> None:
-    """Pin the measured answer for `hy-memory==2.0.3`.
+    """Pin the measured answer for `hy-memory==2.0.4`.
 
     The finding: `add()` takes a `request_id` but nothing de-duplicates on it,
     while `MemoryInspector.get_pipeline_logs(request_id=...)` can look the

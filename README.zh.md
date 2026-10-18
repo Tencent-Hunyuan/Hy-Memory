@@ -32,7 +32,8 @@
 
 ## 最新动态
 
-* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **正式发布** **Hy Memory 2.0 (`hy-memory==2.0.3`)**（已上线 [PyPI](https://pypi.org/project/hy-memory/2.0.3/)），并开源 **Hy-Memory** monorepo 与 **[MemHub](memhub/README.md)**！
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **正式发布 [MemHub v1.0.4](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.4)** 与 **[memhub-cli 1.0.5](https://www.npmjs.com/package/memhub-cli/v/1.0.5)**，提供已签名的 macOS 桌面应用及经过验证的 macOS/Linux Runtime！
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **正式发布** **Hy Memory 2.0 (`hy-memory==2.0.4`)**（已上线 [PyPI](https://pypi.org/project/hy-memory/2.0.4/)），并开源 **Hy-Memory** monorepo 与 **[MemHub](memhub/README.md)**！
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **模型开源** 在 Hugging Face 发布 **[Hy-Memory-30B-A3B](https://huggingface.co/tencent/Hy-Memory-30B-A3B)** 长期记忆写入模型及[技术报告](https://arxiv.org/abs/2610.22196)！
 * *<mark>[new]</mark>* 🔥🔥 **[2026-09]**: 📊 **基准与方法发布** 推出长周期与交错式编程记忆评测基准 **[CMB: A Coding Memory Benchmark for Long-Horizon and Interleaved Coding Agents](docs/papers/CMB_A_Coding_Memory_Benchmark_for_Long_Horizon_and_Interleaved_Coding_Agents.pdf)**（已投稿 **ICLR 2027**）。
 * *<mark>[new]</mark>* 🔥🔥 **[2026-08]**: 🎉 **论文录用** 双系统认知记忆架构论文 **[Memory Beyond Recall: A Dual-Process Cognitive Memory System for Self-Evolving LLM Agents](https://arxiv.org/abs/2606.09483)** 被 **EMNLP 2026** 接收！

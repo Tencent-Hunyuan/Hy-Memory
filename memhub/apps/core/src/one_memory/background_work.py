@@ -175,6 +175,22 @@ async def in_interactive_read[T](
     return await in_read_pool(interactive_read_pool(), work, *args, **kwargs)
 
 
+def _retrieve[T](future: "asyncio.Future[T]") -> None:
+    """Mark a shielded read's outcome as seen.
+
+    `in_read_pool` shields the wrapped worker, so a caller that gives up and
+    cancels leaves the read running to completion. When that read then fails,
+    nothing awaits the future any more: asyncio reports the orphan at GC as
+    "Future exception was never retrieved", the loop handler turns it into a
+    `core.loop.task_exception` error diagnostic, and a lane that degraded on
+    its own budget -- correctly, and already reported -- looks like a crashed
+    task on top of it. Retrieving here keeps the diagnostics honest. Awaiting
+    still raises for callers that are still there, so no failure is hidden.
+    """
+    if not future.cancelled():
+        future.exception()
+
+
 async def in_read_pool[T](
     pool: ThreadPoolExecutor,
     work: Callable[..., T],
@@ -193,7 +209,9 @@ async def in_read_pool[T](
             _interactive_reads -= 1
 
     worker.add_done_callback(released)
-    return await asyncio.shield(asyncio.wrap_future(worker))
+    pending = asyncio.wrap_future(worker)
+    pending.add_done_callback(_retrieve)
+    return await asyncio.shield(pending)
 
 
 async def wait_for_interactive_reads() -> None:

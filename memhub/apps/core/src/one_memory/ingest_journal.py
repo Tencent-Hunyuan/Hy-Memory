@@ -85,15 +85,14 @@ def _state(connection: sqlite3.Connection, evidence_id: str) -> dict[str, str | 
     value = evidence.model_dump(mode="json")
     # The stored normalized content_hash is insufficient for exact-content leases.
     content = _digest(value["verbatim"])
-    material = _digest(
-        {key: value[key] for key in ("verbatim", "role", "written_by", "content_kind")}
-    )
+    material = _digest({key: value[key] for key in ("verbatim", "role", "content_kind")})
     origins = _digest(value["origin_meta"])
     identity = _digest(
         {
             key: item
             for key, item in value.items()
-            if key not in {"verbatim", "origin_meta", "imported_at", "updated_at"}
+            if key
+            not in {"verbatim", "written_by", "origin_meta", "imported_at", "updated_at"}
         }
     )
     return dict(

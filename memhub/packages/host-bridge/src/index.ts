@@ -24,6 +24,15 @@ export {
   writeDiscovery,
 } from "./discovery.js";
 export {
+  DOMAIN_CODES,
+  type DomainCode,
+  DomainError,
+  diagnosticDomainError,
+  domainCodeOf,
+  isDomainCode,
+  isDomainError,
+} from "./domain-error.js";
+export {
   type HostGrantApproval,
   HostGrantError,
   type HostGrantErrorCode,

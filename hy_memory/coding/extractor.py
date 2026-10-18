@@ -919,6 +919,7 @@ class CodingMemoryExtractor:
             resp = await self.llm_provider.complete(
                 prompt=prompt,
                 max_tokens=self.max_tokens,
+                audit_stage="coding_extract",
             )
         except Exception as e:
             logger.warning(f"[coding-extract] LLM call failed: {e}")

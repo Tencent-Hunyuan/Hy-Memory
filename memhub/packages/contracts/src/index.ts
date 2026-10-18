@@ -89,12 +89,28 @@ export interface SourceImportReceipt {
   }>;
 }
 
+/** Why a source cannot be read right now.
+ *
+ * `authorized: false` alone could not be acted on: a grant that was never
+ * made, one that was revoked, and a history directory that moved all need a
+ * different thing from the user, and used to get the same advice. Absent on a
+ * Core that does not report it, which then means "not measured".
+ */
+export type SourceAuthorizationState =
+  | "ok"
+  | "missing_grant"
+  | "revoked_grant"
+  | "source_identity_changed"
+  | "source_root_unavailable"
+  | "candidate_changed";
+
 export interface SourceResponse {
   source_id: string;
   display_name: string;
   storage_kinds: string[];
   available: boolean;
   authorized: boolean;
+  authorization_state?: SourceAuthorizationState;
   detected: boolean | null;
   root_label: string | null;
   candidate_path: string;

@@ -13,6 +13,7 @@ L7_INTENTION 层去重（0805 事故修复 · v2）单测。
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -54,7 +55,9 @@ class _FakeEmbedByHash:
 
     def vec_for(self, text: str) -> List[float]:
         v = [0.0] * self.dims
-        v[abs(hash(text)) % self.dims] = 1.0
+        # 确定性哈希：内建 hash() 每个进程随机化，会让不同文案偶发撞格、
+        # 被误判成复本，测试随 PYTHONHASHSEED 变 flaky。
+        v[int(hashlib.md5(text.encode()).hexdigest(), 16) % self.dims] = 1.0
         return v
 
     async def embed_batch(self, texts):

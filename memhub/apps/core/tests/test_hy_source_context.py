@@ -59,6 +59,35 @@ def test_bound_context_rejects_a_same_named_conversation_in_another_workspace(tm
         HyWriteBindings(HySourceContext(current=(current,), history=(other_workspace,)))
 
 
+def test_bound_context_accepts_a_user_turn_the_host_left_unattributed(tmp_path):
+    """A missing author is not a scope violation.
+
+    WorkBuddy records real user turns with `written_by=unknown` — 1078 of them
+    across 1002 conversations on this machine. Refusing the write over that
+    failed the whole conversation: the task ended `model_content_outcome_unknown`
+    after two attempts, so a memory that may well have been written could never
+    be confirmed, and the turn was never sedimented again.
+    """
+    from one_memory.hy_source_context import HySourceContext, HyWriteBindings
+
+    store = EvidenceStore(tmp_path / "evidence.db")
+    current = store.put(
+        EvidenceInput(
+            source_id="workbuddy",
+            conversation_id="atlas",
+            message_id="now",
+            role="user",
+            written_by=WrittenBy.UNKNOWN,
+            verbatim="帮我看下这个报错。",
+            origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+        )
+    ).record
+
+    bound = HyWriteBindings(HySourceContext(current=(current,)))
+
+    assert bound.sources[0]["role"] == "user"
+
+
 def test_bound_context_rejects_a_duplicated_evidence_id(tmp_path):
     """The same Evidence must not be cited twice in one HY context.
 
@@ -219,18 +248,8 @@ def test_profile_rendering_keeps_per_field_evidence_without_dropping_native_prof
     assert bindings.profile_support("The user's name is 陈.", {"name": "陈"}) == ()
 
 
-def test_bound_context_refuses_a_turn_with_a_wrong_author_pair(tmp_path):
-    """The author must match the role: only user/person, assistant/agent, tool/tool.
-
-    The objective requires 作者 to be truthful. The other scope tests only ever
-    build well-formed pairs, so this pins the pair check itself: an assistant
-    turn attributed to a person, or a tool turn attributed to one, must be
-    refused with `context_scope` rather than silently trusted.
-
-    `user` + AGENT is deliberately accepted since D98: the host parser marks a
-    sub agent's question that way, and that turn is sent like any other. What
-    is refused is the pair that cannot occur, not the one we now allow.
-    """
+def test_bound_context_uses_protocol_role_not_author_guess(tmp_path):
+    """Host author guesses never reject a valid user/assistant/tool message."""
     from one_memory.hy_source_context import HySourceContext, HyWriteBindings
 
     store = EvidenceStore(tmp_path / "evidence.db")
@@ -239,8 +258,7 @@ def test_bound_context_refuses_a_turn_with_a_wrong_author_pair(tmp_path):
 
     assistant = source(store, "reply", "assistant", "好的，继续推进。")
     wrong_author = assistant.model_copy(update={"written_by": WrittenBy.PERSON})
-    with pytest.raises(ValueError, match="context_scope"):
-        HyWriteBindings(HySourceContext(current=(wrong_author,)))
+    HyWriteBindings(HySourceContext(current=(wrong_author,)))
 
     # `source()` maps non-user roles to AGENT, so a tool turn needs its own build.
     tool = store.put(
@@ -255,7 +273,10 @@ def test_bound_context_refuses_a_turn_with_a_wrong_author_pair(tmp_path):
             origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
         )
     ).record
-    assert HyWriteBindings(HySourceContext(current=(tool,)))  # valid tool/tool pair
+    assert HyWriteBindings(HySourceContext(current=(tool,)))
     wrong_tool = tool.model_copy(update={"written_by": WrittenBy.PERSON})
+    HyWriteBindings(HySourceContext(current=(wrong_tool,)))
+
+    unsupported = assistant.model_copy(update={"role": "system"})
     with pytest.raises(ValueError, match="context_scope"):
-        HyWriteBindings(HySourceContext(current=(wrong_tool,)))
+        HyWriteBindings(HySourceContext(current=(unsupported,)))

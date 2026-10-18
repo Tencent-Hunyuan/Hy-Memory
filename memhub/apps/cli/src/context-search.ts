@@ -181,9 +181,9 @@ function validateContextResponse(
     items.push(item);
     characters +=
       item.kind === "memory"
-        ? String(item.content).length
+        ? characterCount(item.content)
         : (item.messages as Array<Record<string, unknown>>).reduce(
-            (sum, message) => sum + String(message.text).length,
+            (sum, message) => sum + characterCount(message.text),
             0,
           );
   }
@@ -328,6 +328,17 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Count characters the way Core does. Python's len() counts Unicode code
+ * points; String.prototype.length counts UTF-16 code units, so an emoji outside
+ * the BMP is one character to Core and two here. Comparing the two totals made
+ * every response containing an emoji fail the used_characters cross-check and
+ * surface as response_invalid.
+ */
+function characterCount(value: unknown): number {
+  return Array.from(String(value)).length;
 }
 
 function boundedText(

@@ -310,6 +310,7 @@ def test_ollama_profile_ignores_ambient_remote_storage_and_models(
     monkeypatch.setenv("MEMORY_VECTOR_HOST", "remote.example.com")
     monkeypatch.setenv("MEMORY_COLLECTION_NAME", "hostile-collection")
     monkeypatch.setenv("MEMORY_EMBEDDING_DIMS", "99")
+    monkeypatch.delenv("MEMORY_CODING_TOOL_RESULT_MAX_BYTES", raising=False)
     profile = snapshot(
         ProviderKind.OLLAMA,
         base_url="http://127.0.0.1:11434",
@@ -333,6 +334,20 @@ def test_ollama_profile_ignores_ambient_remote_storage_and_models(
     assert config.vector_store.embedding_dims == 768
     assert config.graph_store.provider == "kuzu"
     assert str(tmp_path) in config.graph_store.db_path
+    assert config.coding.tool_result_max_bytes == 512
+
+
+def test_memhub_coding_tool_result_ceiling_is_configurable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MEMORY_CODING_TOOL_RESULT_MAX_BYTES", "1024")
+    profile = snapshot(
+        ProviderKind.OLLAMA,
+        base_url="http://127.0.0.1:11434",
+        has_api_key=False,
+    )
+
+    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+
+    assert config.coding.tool_result_max_bytes == 1024
 
 
 def _kuzu_graph_with_embedding_width(db_path: Path, width: int) -> None:
@@ -1326,7 +1341,7 @@ def test_hy_runtime_matches_public_sdk_without_reranker_or_service_backends(
     config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
 
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.3"
+    assert HY_MEMORY_VERSION == "2.0.4"
     assert HY_MEMORY_MODE == "ultra"
     assert HY_MEMORY_READER == "hybrid"
     assert os.environ["MEMORY_MODE"] == "ultra"

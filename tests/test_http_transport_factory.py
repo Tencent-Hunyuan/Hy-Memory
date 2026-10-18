@@ -7,6 +7,7 @@ import openai
 from hy_memory.agent.llm_provider import LLMProvider
 from hy_memory.config import MemoryConfig
 from hy_memory.core.embed_service import EmbedService
+from hy_memory.utils.model_call_context import current_model_call_stage
 
 
 class _Transport(httpx.AsyncBaseTransport):
@@ -82,3 +83,26 @@ def test_llm_provider_uses_runtime_transport_factory(monkeypatch) -> None:
     assert len(transports) == 1
     assert isinstance(captured["http_client"], httpx.AsyncClient)
     asyncio.run(provider.close())
+
+
+def test_llm_provider_exposes_audit_stage_during_physical_call(monkeypatch) -> None:
+    config = MemoryConfig()
+    provider = LLMProvider(config)
+    observed = []
+
+    async def call(**_kwargs):
+        observed.append(current_model_call_stage())
+        return SimpleNamespace(
+            content="ok",
+            tokens_used=3,
+            prompt_tokens=2,
+            completion_tokens=1,
+            tool_calls=[],
+        )
+
+    monkeypatch.setattr(provider, "_call_llm", call)
+
+    asyncio.run(provider.complete("hello", audit_stage="coding_judge"))
+
+    assert observed == ["coding_judge"]
+    assert current_model_call_stage() == "other"

@@ -125,8 +125,7 @@ def test_write_job_state_covers_unknown_and_terminal() -> None:
     } == {state for state in WriteJobState if not state.is_terminal}
 
 
-def test_canonical_message_requires_author_and_ordinal() -> None:
-    """A message without a known author or position cannot be ordered later."""
+def test_canonical_message_requires_a_nonnegative_ordinal() -> None:
     with pytest.raises(ValueError):
         CanonicalMessage(
             harness_id="cursor",
@@ -134,6 +133,5 @@ def test_canonical_message_requires_author_and_ordinal() -> None:
             message_id=None,
             ordinal=-1,
             role="user",
-            written_by="person",
             content="hello",
         )

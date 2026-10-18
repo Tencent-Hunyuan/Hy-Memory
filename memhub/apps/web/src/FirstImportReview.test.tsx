@@ -174,20 +174,20 @@ it("continues to step3 while sample GET is pending without calling completion AP
   expect(screen.queryByText(/^已生成.*记忆/)).toBeNull();
 });
 it.each([
-  "pending",
-  "paused",
-  "interrupted",
-  "failed",
-  "cancelled",
-  "completed",
+  ["pending", "已扫描 100 条，正在筛选"],
+  ["paused", "已扫描 100 条，尚未保存"],
+  ["interrupted", "已扫描 100 条，尚未保存"],
+  ["failed", "已扫描 100 条，尚未保存"],
+  ["cancelled", "已扫描 100 条，尚未保存"],
+  ["completed", "已扫描 100 条，本次没有可保存的对话"],
 ] as const)(
   "shows %s without mutating jobs or fetching missing content",
-  (status) => {
+  (status, expected) => {
     setup({
       jobs: [{ ...job, status, stored: 0 }],
       sources: [{ ...source, imported_messages: 0 }],
     });
-    expect(screen.getByText("已扫描 100 条，正在保存")).toBeTruthy();
+    expect(screen.getByText(expected)).toBeTruthy();
     expect(api.receipt).not.toHaveBeenCalled();
   },
 );

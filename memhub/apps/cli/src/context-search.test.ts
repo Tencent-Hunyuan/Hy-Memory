@@ -384,6 +384,101 @@ describe("unified context search", () => {
     expect(streams.stdout()).not.toContain("must-not-print");
   });
 
+  it("counts characters as code points so an emoji hit stays grounded", async () => {
+    // Core reports used_characters with Python's len(), which counts code
+    // points: this text is 10 characters there and 12 UTF-16 units here.
+    const text = "消费保 📍 扩展 📡";
+    expect(text.length).toBe(12);
+    expect(Array.from(text).length).toBe(10);
+    transport.post.mockResolvedValue({
+      status: 200,
+      data: {
+        ...RESPONSE,
+        paths: {
+          ...RESPONSE.paths,
+          memory: {
+            ...RESPONSE.paths.memory,
+            status: "empty",
+            returned_count: 0,
+          },
+        },
+        items: [
+          {
+            ...(RESPONSE.items[0] as Record<string, unknown>),
+            messages: [
+              {
+                ...(
+                  RESPONSE.items[0] as {
+                    messages: Array<Record<string, unknown>>;
+                  }
+                ).messages[0],
+                text,
+              },
+            ],
+          },
+        ],
+        used_characters: 10,
+      },
+    });
+    const streams = captureStreams();
+    try {
+      expect(await run(["recall", "test", "--json"])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    expect(JSON.parse(streams.stdout())).toMatchObject({
+      state: "grounded",
+      used_characters: 10,
+      items: [{ kind: "raw", messages: [{ text }] }],
+    });
+  });
+
+  it("still rejects a response whose character total does not match", async () => {
+    // The same text counted as UTF-16 units is exactly what Core does not mean,
+    // so the cross-check must keep failing instead of accepting both totals.
+    const text = "消费保 📍 扩展 📡";
+    transport.post.mockResolvedValue({
+      status: 200,
+      data: {
+        ...RESPONSE,
+        paths: {
+          ...RESPONSE.paths,
+          memory: {
+            ...RESPONSE.paths.memory,
+            status: "empty",
+            returned_count: 0,
+          },
+        },
+        items: [
+          {
+            ...(RESPONSE.items[0] as Record<string, unknown>),
+            messages: [
+              {
+                ...(
+                  RESPONSE.items[0] as {
+                    messages: Array<Record<string, unknown>>;
+                  }
+                ).messages[0],
+                text,
+              },
+            ],
+          },
+        ],
+        used_characters: 12,
+      },
+    });
+    const streams = captureStreams();
+    try {
+      expect(await run(["recall", "test", "--json"])).toBe(1);
+    } finally {
+      streams.restore();
+    }
+    expect(JSON.parse(streams.stdout())).toMatchObject({
+      state: "invalid",
+      code: "response_invalid",
+    });
+  });
+
   it("reports endpoint denial without exposing the response body", async () => {
     transport.post.mockResolvedValue({
       status: 403,

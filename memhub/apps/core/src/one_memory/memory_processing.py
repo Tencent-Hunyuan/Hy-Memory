@@ -45,6 +45,7 @@ from one_memory.hy_memory_bridge import (
     HyMemoryOutput,
     HyMemoryTurn,
     builtin_retrieval_snapshot,
+    coding_tool_result_max_bytes,
     decide_profile_graph_width,
     hy_memory_store_exists,
     inspect_profile_graph_width,
@@ -52,7 +53,7 @@ from one_memory.hy_memory_bridge import (
 from one_memory.hy_runtime_config import hy_memory_version
 from one_memory.hy_source_context import HySourceContext, HySupportedMemory
 from one_memory.imports.access import opaque_workspace_id
-from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.imports.runner import live_sync_arrival
 from one_memory.imports.storage import EvidenceStore
 from one_memory.input_sanitization import sanitize_model_input
@@ -162,7 +163,7 @@ def _report_stale_known_reasons(task_id: str, reasons: Mapping[str, int]) -> Non
     """Emit one schema-valid scalar diagnostic per stale-memory reason."""
     for reason, count in sorted(reasons.items()):
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.context",
             event="known_memory_stale_omitted",
             outcome="omitted",
@@ -173,6 +174,21 @@ def _report_stale_known_reasons(task_id: str, reasons: Mapping[str, int]) -> Non
 
 MEMORY_INGEST_POLICY_VERSION = "hy-native-v23"
 UNIFIED_HY_AGENT_ID = "one-memory"
+#: Deterministic refusals raised before the payload reaches HY, so nothing was
+#: sent even though the invocation marker is already recorded by then: the
+#: write bindings are built inside `ingest` ahead of the call, and the input
+#: window is checked while the request is frozen.
+#:
+#: They are terminal rather than unknown. `unknown` here means "HY may hold a
+#: write we cannot confirm", and that is exactly what did not happen — parking
+#: the task on it hid the reason and stopped the queue behind it (issue #44).
+#: Kept in step with `durable_queue.PRE_SEND_REFUSAL_CODES`, which the durable
+#: write path applies to the same codes.
+PRE_SEND_REFUSAL_CODES = frozenset(
+    {
+        "hy_memory_input_exceeds_window",
+    }
+)
 _BACKFILL_BATCH_SIZE = 8
 _BACKFILL_DRAIN_BUDGET_SECONDS = 330.0
 _HISTORY_MERGE_TURNS = 8
@@ -280,6 +296,7 @@ class MemoryTaskRunner:
         *,
         timeout: float | None = None,
         before_hy_invocation: Callable[[], Awaitable[None]] | None = None,
+        input_records: tuple[EvidenceRecord, ...] | None = None,
     ) -> MemoryTask:
         started = monotonic()
         diagnostic_event(
@@ -290,13 +307,28 @@ class MemoryTaskRunner:
             task_id=task_id,
         )
         try:
-            body = (
-                self._run_without_content_permission(task_id)
-                if before_hy_invocation is None
-                else self._run_without_content_permission(
-                    task_id, before_hy_invocation=before_hy_invocation
+            if input_records is None:
+                body = (
+                    self._run_without_content_permission(task_id)
+                    if before_hy_invocation is None
+                    else self._run_without_content_permission(
+                        task_id,
+                        before_hy_invocation=before_hy_invocation,
+                    )
                 )
-            )
+            else:
+                body = (
+                    self._run_without_content_permission(
+                        task_id,
+                        input_records=input_records,
+                    )
+                    if before_hy_invocation is None
+                    else self._run_without_content_permission(
+                        task_id,
+                        before_hy_invocation=before_hy_invocation,
+                        input_records=input_records,
+                    )
+                )
             # The ceiling bounds how long this task holds its harness's slot:
             # a harness is serial, so one hung task starves every turn behind
             # it. It is insurance against a single bad call, not a way to run
@@ -367,7 +399,7 @@ class MemoryTaskRunner:
     @staticmethod
     def _log_step(task_id: str, step: int, action: str, started: float) -> None:
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.task",
             event="memory_task.step_completed",
             outcome="succeeded",
@@ -381,6 +413,7 @@ class MemoryTaskRunner:
         task_id: str,
         *,
         before_hy_invocation: Callable[[], Awaitable[None]] | None = None,
+        input_records: tuple[EvidenceRecord, ...] | None = None,
     ) -> MemoryTask:
         # Every store call here is synchronous, and several are writes that
         # wait on the write lock for up to five seconds. Made from the loop,
@@ -434,7 +467,9 @@ class MemoryTaskRunner:
         step_started = monotonic()
         frozen = await in_the_background(self.tasks.inputs, task.task_id)
         chunk: tuple[EvidenceRecord, ...] | None
-        if frozen:
+        if input_records is not None:
+            chunk = input_records
+        elif frozen:
             try:
                 chunk = await in_the_background(self._frozen_chunk, task)
             except HyMemoryBridgeError as error:
@@ -467,8 +502,11 @@ class MemoryTaskRunner:
                     self._source_context, task, request.source_context
                 )
                 request = request.model_copy(update={"source_context": context})
+            uses_frozen_input = bool(frozen) or input_records is not None
             grant_token = (
-                await in_the_background(self._grant_token, task, chunk[0]) if frozen else None
+                await in_the_background(self._grant_token, task, chunk[0])
+                if uses_frozen_input
+                else None
             )
             memory_contents = tuple(
                 sanitize_model_input(record.verbatim)
@@ -511,19 +549,24 @@ class MemoryTaskRunner:
                     agent_id=request.agent_id,
                 ),
             )
-            if frozen:
-                await in_the_background(self._frozen_chunk, task)
+            if uses_frozen_input:
+                if input_records is None:
+                    await in_the_background(self._frozen_chunk, task)
                 if grant_token != await in_the_background(self._grant_token, task, chunk[0]):
                     raise HyMemoryBridgeError("hy_memory_source_changed")
             if request.source_context is not None:
-                await in_the_background(self._check_source_context, request.source_context)
+                await in_the_background(
+                    self._check_source_context,
+                    request.source_context,
+                    skip_current=input_records is not None,
+                )
             # One thread hop for the whole batch rather than a dozen writes
             # made from the loop.
             step_started = monotonic()
             await in_the_background(
                 self._record_outputs,
                 task=task,
-                chunk=self._original_records(chunk),
+                chunk=chunk,
                 outputs=outputs,
                 request=request,
                 derivation=derivation,
@@ -533,6 +576,13 @@ class MemoryTaskRunner:
             self._log_step(task_id, 6, "governance", step_started)
         except HyMemoryBridgeError as error:
             code = str(error)
+            if code == "model_sedimentation_disabled" and not hy_invoked:
+                return await in_the_background(
+                    self.tasks.release_unstarted,
+                    task_id,
+                    runner_token=runner_token,
+                    error_code=code,
+                )
             model_wait_errors = {
                 "hy_memory_unavailable",
                 "hy_memory_rate_limit",
@@ -547,6 +597,16 @@ class MemoryTaskRunner:
                 "hy_memory_model_timeout",
             }
             safe_terminal_after_invocation = {"hy_memory_import_no_readable_output"}
+            if code in PRE_SEND_REFUSAL_CODES:
+                # Raised before the call, so the marker only says "about to":
+                # fail with the reason rather than parking on a write HY never
+                # saw. See the constant and issue #44.
+                return await in_the_background(
+                    self.tasks.fail,
+                    task_id,
+                    runner_token=runner_token,
+                    error_code=code,
+                )
             if hy_invoked and (
                 code == "hy_memory_evidence_changed"
                 or (
@@ -744,8 +804,18 @@ class MemoryTaskRunner:
                 raise HyMemoryBridgeError("hy_memory_evidence_changed") from error
         return context
 
-    def _check_source_context(self, context: HySourceContext) -> None:
-        for original in (*context.current, *context.history, *context.supporting):
+    def _check_source_context(
+        self,
+        context: HySourceContext,
+        *,
+        skip_current: bool = False,
+    ) -> None:
+        checked = (
+            (*context.history, *context.supporting)
+            if skip_current
+            else (*context.current, *context.history, *context.supporting)
+        )
+        for original in checked:
             record = self.evidence.get(original.evidence_id)
             if record is None or not matches_evidence_ref(record, evidence_ref(original)):
                 raise HyMemoryBridgeError("hy_memory_evidence_changed")
@@ -846,7 +916,7 @@ class MemoryTaskRunner:
             # HY's own attribution. An undecided memory counts as the person's:
             # HY's prompt defaults that way.
             from_agent = output.owner == "agent" or all(
-                record.written_by is WrittenBy.AGENT
+                record.role == "assistant"
                 and record.content_kind is EvidenceContentKind.RAW_CONVERSATION
                 for record in support
             )
@@ -1016,15 +1086,20 @@ class MemoryTaskRunner:
         task: MemoryTask,
         chunk: tuple[EvidenceRecord, ...],
     ) -> HyMemoryIngestRequest:
+        if not chunk:
+            # A task with no inputs has nothing to name the request after and
+            # nothing to attribute an answer to. Left alone this reached
+            # `chunk[0]` below and came out as IndexError, which no caller can
+            # read: a reconcile pass catches domain errors per task and moves
+            # on, so one such task ended the whole pass and left every other
+            # unknown task unreconciled. On this machine 68 of 303 unknown
+            # tasks had no inputs, and the pass raised on the first of them.
+            raise HyMemoryBridgeError("hy_memory_task_without_inputs")
         has_raw = any(
             record.content_kind is EvidenceContentKind.RAW_CONVERSATION for record in chunk
         )
         source = next(
-            (
-                record
-                for record in chunk
-                if record.role == "user" and record.written_by is WrittenBy.PERSON
-            ),
+            (record for record in chunk if record.role == "user"),
             chunk[0],
         )
         request_turns = tuple(
@@ -1033,12 +1108,9 @@ class MemoryTaskRunner:
             if (
                 record.content_kind is EvidenceContentKind.RAW_CONVERSATION
                 and (
-                    # D98: any `user` message goes, whoever the parser says
-                    # wrote it. A sub agent's question is ordinary
-                    # user-assistant data; the author field cannot tell who
-                    # wrote a message, and filtering on it dropped the sub
-                    # agent's turns. `written_by` still labels the display and
-                    # decides owner — it no longer decides what is sent.
+                    # Protocol role is authoritative. A sub-agent question is
+                    # an ordinary user message regardless of a host parser's
+                    # former author guess.
                     record.role == "user"
                     # The assistant's side goes too. Without it 「就按你说的那个来」
                     # arrives with nothing to resolve it against, and HY's own
@@ -1049,7 +1121,7 @@ class MemoryTaskRunner:
                     or record.role == "assistant"
                     # Tool calls go as they happened; whether they make the
                     # turn a coding turn is HY's call, not ours.
-                    or (record.role == "tool" and record.written_by is WrittenBy.TOOL)
+                    or record.role == "tool"
                 )
             )
             or (not has_raw and record.content_kind is EvidenceContentKind.MEMORY_CONTENT)
@@ -1218,6 +1290,7 @@ class MemoryProcessingSupervisor:
         max_concurrent_tasks: int | None = None,
         source_writes_permitted: Callable[[str], bool] | None = None,
         service_levels: ServiceLevelScheduler | None = None,
+        sedimentation_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self.tasks = tasks
         self.profiles = profiles
@@ -1230,6 +1303,12 @@ class MemoryProcessingSupervisor:
         #: absent every source is treated as writable, which is what the
         #: product did before the switch existed.
         self.source_writes_permitted = source_writes_permitted
+        #: User-level "stop turning conversations into memories" switch. Optional
+        #: so tests and a Core without a config file keep their current
+        #: behaviour; when absent sedimentation is on, which is what the product
+        #: did before the switch existed. Read per decision rather than cached,
+        #: so stopping takes effect on the next dispatch without a restart.
+        self.sedimentation_enabled = sedimentation_enabled
         self.service_levels = service_levels or ServiceLevelScheduler()
         self.extraction_settings = extraction_settings or ExtractionSettingsStore(
             data_dir / "one-memory.sqlite3"
@@ -1283,12 +1362,26 @@ class MemoryProcessingSupervisor:
         self._orphan_reclaimer: asyncio.Task[None] | None = None
         self._diagnostic_idle_reason: str | None = None
 
+    def _sedimentation_stopped(self) -> bool:
+        """Whether the user stopped model-driven sedimentation.
+
+        Stopping must not look like a broken pipeline: nothing is sent to the
+        model, so the pending count stays as it is and the scheduler reports
+        why it is idle. Starting again picks the same work up.
+        """
+        if self.sedimentation_enabled is None:
+            return False
+        if self.sedimentation_enabled():
+            return False
+        self._record_idle("sedimentation_stopped")
+        return True
+
     def _record_idle(self, reason: str) -> None:
         if self._diagnostic_idle_reason == reason:
             return
         self._diagnostic_idle_reason = reason
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.scheduler",
             event="memory_scheduler.idle",
             outcome="idle",
@@ -1310,7 +1403,8 @@ class MemoryProcessingSupervisor:
     ) -> tuple[MemoryTask, ...]:
         """Process a bounded, authorized snapshot through the existing HY runner."""
         async with self._explicit_processing_lock(records):
-            records = await in_the_background(self._original_records, records)
+            if self._sedimentation_stopped():
+                raise HyMemoryBridgeError("model_sedimentation_disabled")
             active = await in_the_background(self.profiles.active, self.secrets)
             if active is None or (profile_id is not None and profile_id != active.profile_id):
                 raise HyMemoryBridgeError("model_profile_not_active")
@@ -1325,13 +1419,6 @@ class MemoryProcessingSupervisor:
                 raise HyMemoryBridgeError("hy_memory_source_disabled")
             conversations: dict[tuple[str, str, str | None], list[EvidenceRecord]] = {}
             for record in records:
-                stored = await in_the_background(self.evidence.get, record.evidence_id)
-                if (
-                    stored is None
-                    or stored.revision != record.revision
-                    or stored.content_hash != record.content_hash
-                ):
-                    raise ValueError("hy_memory_evidence_changed")
                 conversations.setdefault(
                     (record.source_id, record.conversation_id, record.workspace), []
                 ).append(record)
@@ -1348,7 +1435,7 @@ class MemoryProcessingSupervisor:
                 for conversation in conversations.values()
                 for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True)
             ]
-            prepared = []
+            prepared: list[tuple[MemoryTask, tuple[EvidenceRecord, ...]]] = []
             for chunk in chunks:
                 task = await in_the_background(
                     self._enqueue_chunk,
@@ -1356,12 +1443,12 @@ class MemoryProcessingSupervisor:
                     active,
                     freeze_inputs=True,
                 )
-                prepared.append(task)
+                prepared.append((task, chunk))
             runner = self.runner_factory()
             completed = []
             if on_progress:
-                on_progress(tuple(prepared), 0)
-            for task in prepared:
+                on_progress(tuple(task for task, _chunk in prepared), 0)
+            for task, chunk in prepared:
                 if task.status is not MemoryTaskStatus.COMPLETED:
                     # Another importer may already own this task. Never race its claim.
                     task = await in_the_background(self.tasks.require, task.task_id)
@@ -1390,23 +1477,41 @@ class MemoryProcessingSupervisor:
                                 work_id=task.task_id,
                                 scope_key=chunk[0].source_id,
                             ):
-                                task = (
-                                    await runner.run(task.task_id, timeout=timeout)
-                                    if before_hy_invocation is None
-                                    else await runner.run(
-                                        task.task_id,
-                                        timeout=timeout,
-                                        before_hy_invocation=before_hy_invocation,
+                                if isinstance(runner, MemoryTaskRunner):
+                                    task = (
+                                        await runner.run(
+                                            task.task_id,
+                                            timeout=timeout,
+                                            input_records=chunk,
+                                        )
+                                        if before_hy_invocation is None
+                                        else await runner.run(
+                                            task.task_id,
+                                            timeout=timeout,
+                                            before_hy_invocation=before_hy_invocation,
+                                            input_records=chunk,
+                                        )
                                     )
-                                )
+                                else:
+                                    task = (
+                                        await runner.run(task.task_id, timeout=timeout)
+                                        if before_hy_invocation is None
+                                        else await runner.run(
+                                            task.task_id,
+                                            timeout=timeout,
+                                            before_hy_invocation=before_hy_invocation,
+                                        )
+                                    )
                         finally:
                             _unmark_direct_task(self.tasks.database_path, task.task_id)
                 if task.status is not MemoryTaskStatus.COMPLETED:
                     raise HyMemoryBridgeError(task.last_error_code or "hy_memory_incomplete")
-                await in_the_background(runner._frozen_chunk, task)
                 completed.append(task)
                 if on_progress:
-                    on_progress(tuple(prepared), len(completed))
+                    on_progress(
+                        tuple(prepared_task for prepared_task, _chunk in prepared),
+                        len(completed),
+                    )
             expected = {record.evidence_id for record in records if _is_hy_turn_record(record)}
             actual = {
                 row["evidence_id"] for task in completed for row in self.tasks.inputs(task.task_id)
@@ -1667,6 +1772,8 @@ class MemoryProcessingSupervisor:
     def enqueue_evidence(self, record: EvidenceRecord) -> MemoryTask | None:
         if self._shutting_down:
             return None
+        if self._sedimentation_stopped():
+            return None
         if (
             record.role not in {"user", "assistant"}
             and record.content_kind is not EvidenceContentKind.MEMORY_CONTENT
@@ -1699,6 +1806,8 @@ class MemoryProcessingSupervisor:
         should_stop: Callable[[], bool] = lambda: False,
     ) -> list[QueuedWork]:
         """Synchronous compatibility entry; preparation never starts a model."""
+        if self._sedimentation_stopped():
+            return []
         work = [item for batch in self._prepare_backfill_batches(should_stop) for item in batch]
         return [] if should_stop() or self._shutting_down else work
 
@@ -1707,7 +1816,7 @@ class MemoryProcessingSupervisor:
         should_stop: Callable[[], bool] = lambda: False,
     ) -> Generator[list[QueuedWork], None, None]:
         """Read bodies as needed; yield the first task before the next conversation."""
-        if should_stop() or self._shutting_down:
+        if should_stop() or self._shutting_down or self._sedimentation_stopped():
             return
         active = self.profiles.active(self.secrets)
         if active is None:
@@ -1718,7 +1827,7 @@ class MemoryProcessingSupervisor:
         visited = 0
         seed_ids = self.evidence.list_conversation_seed_ids()
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.scheduler",
             event="memory_scheduler.scan_inventory",
             outcome="observed",
@@ -1788,7 +1897,7 @@ class MemoryProcessingSupervisor:
         started = monotonic()
         prepared_count = 0
         diagnostic_event(
-            level="info",
+            level="debug",
             component="memory.scheduler",
             event="memory_scheduler.scan_started",
             outcome="started",
@@ -1800,6 +1909,7 @@ class MemoryProcessingSupervisor:
         stop = threading.Event()
         batches = self._prepare_backfill_batches(stop.is_set)
         exhausted = False
+        stopped_saturated = False
         rounds = 0
         scan_error: BaseException | None = None
         try:
@@ -1815,20 +1925,21 @@ class MemoryProcessingSupervisor:
                             >= self._backfill_round_budget_seconds
                         ):
                             break
-                        while (
+                        if (
                             cohort_size is not None
                             and len(self._queue) + len(self._in_flight) >= cohort_size
                         ):
-                            if self._shutting_down:
-                                return
-                            if (
-                                handled_batch
-                                and self._backfill_clock() - round_started
-                                >= self._backfill_round_budget_seconds
-                            ):
-                                break
-                            self._record_idle("queue_saturated")
-                            await asyncio.sleep(0.1)
+                            # A bounded scan stops at its ceiling instead of
+                            # waiting for the queue to drain. Waiting here slept
+                            # inside the scan lock, so whoever asked for the
+                            # scan — a switch toggle, over HTTP — waited with
+                            # it, and on a saturated backlog that is not a
+                            # moment but the whole backlog. The caller's
+                            # timeout then reported a failure for work that had
+                            # already been accepted.
+                            stopped_saturated = True
+                            exhausted = True
+                            break
                         if (
                             handled_batch
                             and self._backfill_clock() - round_started
@@ -1847,7 +1958,7 @@ class MemoryProcessingSupervisor:
                             on_first_scheduled()
                 if not exhausted and not self._shutting_down:
                     diagnostic_event(
-                        level="info",
+                        level="debug",
                         component="memory.scheduler",
                         event="memory_scheduler.scan_yielded",
                         outcome="yielded",
@@ -1877,14 +1988,18 @@ class MemoryProcessingSupervisor:
             stop.set()
             batches.close()
             if prepared_count == 0 and not self._shutting_down:
-                if scan_error is None:
+                if stopped_saturated:
+                    # Parked behind a full queue, not out of work: the status
+                    # must not read "no_tasks" while hundreds wait.
+                    self._record_idle("queue_saturated")
+                elif scan_error is None:
                     self._record_idle("no_tasks")
                 else:
                     self._record_idle("scan_failed")
             elif prepared_count:
                 self._diagnostic_idle_reason = None
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="memory.scheduler",
                 event="memory_scheduler.scan_completed",
                 outcome=(
@@ -2092,6 +2207,8 @@ class MemoryProcessingSupervisor:
         Work that falls outside the extraction window is marked deferred so
         the pending count stops pretending it is about to run.
         """
+        if self._sedimentation_stopped():
+            return []
         now = datetime.now(UTC)
         window = self._extraction_window() if within_window else None
         exempt_all_apps_from_window = True
@@ -2174,7 +2291,7 @@ class MemoryProcessingSupervisor:
         if work:
             self._diagnostic_idle_reason = None
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="memory.scheduler",
                 event="memory_scheduler.tasks_queued",
                 outcome="succeeded",
@@ -2239,7 +2356,7 @@ class MemoryProcessingSupervisor:
         return self.HARNESS_SERIAL
 
     def _ensure_workers(self) -> None:
-        if self._shutting_down:
+        if self._shutting_down or self._sedimentation_stopped():
             return
         load = self._harness_load()
         background_capacity = (
@@ -2317,6 +2434,8 @@ class MemoryProcessingSupervisor:
         """
         looked_for_older = False
         while not self._shutting_down:
+            if self._sedimentation_stopped():
+                return
             # The harness cap is recomputed from what is running, so a worker
             # that just finished frees its harness's slot immediately.
             work = self._queue.take(
@@ -2370,7 +2489,16 @@ class MemoryProcessingSupervisor:
                         scope_key=scope_key,
                     ),
                 ):
-                    finished = await runner.run(work.task_id, timeout=self._profile_timeout)
+
+                    async def require_sedimentation() -> None:
+                        if self._sedimentation_stopped():
+                            raise HyMemoryBridgeError("model_sedimentation_disabled")
+
+                    finished = await runner.run(
+                        work.task_id,
+                        timeout=self._profile_timeout,
+                        before_hy_invocation=require_sedimentation,
+                    )
                 if finished.status is MemoryTaskStatus.COMPLETED:
                     self._request_read_bridge_refresh(finished.profile_snapshot)
                 elif (
@@ -3049,7 +3177,7 @@ class MemoryProcessingSupervisor:
             self._read_bridges_ready.add(key)
             self._read_bridge_generations[key] = generation
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="memory.semantic",
                 event="semantic_read_bridge.refreshed",
                 outcome="succeeded",
@@ -3172,9 +3300,7 @@ class MemoryProcessingSupervisor:
         if not tail:
             return False
         last = tail[-1]
-        return bool(
-            last.role == "user" and last.written_by is WrittenBy.PERSON and _opens_turn(last)
-        )
+        return bool(last.role == "user" and _opens_turn(last))
 
     def _admitted_chunks(
         self,
@@ -3519,7 +3645,6 @@ def _is_memory_note(record: EvidenceRecord) -> bool:
     meta = record.origin_meta.get(EvidenceOrigin.MANUAL_IMPORT)
     return (
         record.source_id == "one-memory-manual"
-        and record.written_by is WrittenBy.PERSON
         and meta is not None
         and meta.raw_meta.get("input_mode") == "direct_memory_note"
     )
@@ -3595,7 +3720,7 @@ _HOST_ENVELOPE = re.compile(
 #: before HY chose a path cut long answers mid-way and sent tool-heavy turns as
 #: dozens of calls. ONE_MEMORY_SPLIT_TURNS=1 restores the 12,000 / 24 split.
 _WHOLE_TURN_CHARACTERS = 60_000
-_HY_TOOL_CHARACTERS = 2_048
+_HY_TOOL_CHARACTERS = coding_tool_result_max_bytes()
 #: Hard ceiling on the UTF-8 bytes one window may hold, whatever HY counts.
 #: HY reads the payload in-process, so a turn made of enormous raw tool
 #: records is held in memory even though HY will cut each one down. Cut by
@@ -3814,14 +3939,12 @@ def _merge_historical_chunks(
 
 
 def _chunk_input_ref(chunk: tuple[EvidenceRecord, ...]) -> str:
-    person_records = tuple(
-        item for item in chunk if item.role == "user" and item.written_by is WrittenBy.PERSON
-    )
-    return person_records[-1].evidence_id if person_records else chunk[-1].evidence_id
+    user_records = tuple(item for item in chunk if item.role == "user")
+    return user_records[-1].evidence_id if user_records else chunk[-1].evidence_id
 
 
 def _opens_turn(record: EvidenceRecord) -> bool:
-    return record.role == "user" and record.written_by is WrittenBy.PERSON
+    return record.role == "user"
 
 
 def _trailing_user_turn_is_open(turn: list[EvidenceRecord]) -> bool:
@@ -3838,10 +3961,8 @@ def _trailing_user_turn_is_open(turn: list[EvidenceRecord]) -> bool:
 def _is_hy_turn_record(record: EvidenceRecord) -> bool:
     """What HY receives of a turn: the input turns and the tool calls made in it."""
     if record.role == "tool":
-        return (
-            record.written_by is WrittenBy.TOOL
-            and record.content_kind is EvidenceContentKind.RAW_CONVERSATION
-            and bool(record.verbatim.strip())
+        return record.content_kind is EvidenceContentKind.RAW_CONVERSATION and bool(
+            record.verbatim.strip()
         )
     return _is_hy_input_turn(record)
 
@@ -3858,11 +3979,8 @@ def _is_hy_input_turn(record: EvidenceRecord) -> bool:
     # from a model.
     if record.role == "assistant":
         return True
-    # D98: the author no longer decides. A sub agent's question arrives as a
-    # `user` message marked written by the agent — it is ordinary
-    # user-assistant data, and dropping it sent Claude Code transcripts to HY
-    # with every question but the first missing. `written_by` labels the
-    # display and decides owner; it cannot tell who actually wrote a message.
+    # A sub-agent question is still a protocol `user` message. Host-specific
+    # author guesses do not decide whether it reaches HY.
     if record.role != "user":
         return False
     if source.casefold().startswith(_HARNESS_PREFIXES):

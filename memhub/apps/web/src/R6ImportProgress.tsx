@@ -3,6 +3,21 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { AppMark } from "./app-mark";
 import "./r6-import-progress.css";
 
+function progressText(job: ImportJob): string | null {
+  if (job.stored > 0) return `已保存 ${job.stored.toLocaleString()} 条消息`;
+  if (job.discovered <= 0) return null;
+  const scanned = `已扫描 ${job.discovered.toLocaleString()} 条`;
+  if (job.status === "completed")
+    return job.history_after
+      ? `${scanned}，本次没有符合时间范围的对话`
+      : `${scanned}，本次没有可保存的对话`;
+  if (job.status === "pending" || job.status === "running")
+    return job.history_after
+      ? `${scanned}，正在筛选最近 3 天`
+      : `${scanned}，正在筛选`;
+  return `${scanned}，尚未保存`;
+}
+
 export function R6ImportProgress({
   sourceIds,
   sources,
@@ -86,8 +101,9 @@ export function R6ImportProgress({
           interrupted: "已中断",
           failed: "导入遇到问题",
           cancelled: "已取消",
-          completed: "已保存",
+          completed: "导入完成",
         };
+        const progress = job ? progressText(job) : null;
         return (
           <article
             className="r6-import-progress-card"
@@ -102,10 +118,8 @@ export function R6ImportProgress({
               </div>
             </div>
             <h2>{source?.display_name ?? id}</h2>
-            {job && job.stored > 0 ? (
-              <p>{`已保存 ${job.stored.toLocaleString()} 条消息`}</p>
-            ) : job && job.discovered > 0 ? (
-              <p>{`已扫描 ${job.discovered.toLocaleString()} 条，正在保存`}</p>
+            {progress ? (
+              <p>{progress}</p>
             ) : noImportedHistory ? (
               <p>没有可保存的历史对话</p>
             ) : null}

@@ -39,7 +39,11 @@ def record(
         source_id=source,
         conversation_id=f"c{index % 2}",
         message_id=str(index),
-        role="assistant" if author == WrittenBy.AGENT else "user",
+        role=(
+            "assistant"
+            if author == WrittenBy.AGENT
+            else ("tool" if author == WrittenBy.TOOL else "user")
+        ),
         written_by=author,
         created_at=time,
         verbatim=text or f"original {index}",
@@ -83,8 +87,8 @@ def test_receipt_counts_saved_records_without_inventing_dates_or_other_sources(t
             data = response.json()
             assert data["source_id"] == "claude-code"
             assert data["messages"] == 5 and data["conversations"] == 2
-            assert data["person_messages"] == 2 and data["agent_messages"] == 1
-            assert data["unknown_author_messages"] == 1 and data["tool_messages"] == 1
+            assert data["person_messages"] == 3 and data["agent_messages"] == 1
+            assert data["unknown_author_messages"] == 0 and data["tool_messages"] == 1
             assert data["unknown_time_messages"] == 4
             assert len(data["examples"]) == 3
             assert "excluded-source" not in response.text and "excluded-user" not in response.text

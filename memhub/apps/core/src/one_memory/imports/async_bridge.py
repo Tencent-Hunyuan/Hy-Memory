@@ -105,7 +105,7 @@ async def iterate_in_worker[T](
         # was unwinding with, and a diagnostic is not worth an import.
         try:
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="import.async_bridge",
                 event="import.source_read_finished",
                 outcome="succeeded",

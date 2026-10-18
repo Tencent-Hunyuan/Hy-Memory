@@ -11,6 +11,7 @@ export default defineConfig({
     __ONE_MEMORY_BUILD_NUMBER__: JSON.stringify("unknown"),
     __ONE_MEMORY_COMMIT__: JSON.stringify("unknown"),
     __MEMHUB_DEFAULT_RELEASE_MANIFEST_URL_TEMPLATE__: JSON.stringify(""),
+    __MEMHUB_DEFAULT_RUNTIME_VERSION__: JSON.stringify(version),
   },
   test: {
     testTimeout: 120_000,

@@ -23,10 +23,13 @@ import hashlib
 import hmac
 import os
 import uuid
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+from one_memory.imports.models import EvidenceRecord
 
 #: Bumped when a derivation rule changes, so old and new ids never compare equal.
 SCHEMA_VERSION: Final[str] = "ms1"
@@ -166,7 +169,6 @@ class CanonicalMessage(BaseModel):
     message_id: str | None = Field(default=None, min_length=1, max_length=512)
     ordinal: int = Field(ge=0)
     role: str = Field(min_length=1, max_length=128)
-    written_by: str = Field(min_length=1, max_length=64)
     content: str = Field(min_length=1)
     workspace: str | None = Field(default=None, max_length=1024)
 
@@ -213,8 +215,13 @@ class WriteRequest(BaseModel):
     source_id: str | None = Field(default=None, min_length=1, max_length=128)
     batch_identity: BatchIdentity
     evidence_ids: list[str] = Field(min_length=1)
+    # New jobs freeze the complete input in their own payload. The default is
+    # solely for reading pre-upgrade rows whose payload only carried ids.
+    input_records: tuple[EvidenceRecord, ...] = ()
     idempotency_key: str = Field(min_length=1, max_length=256)
     priority: Literal["live", "normal"] = "normal"
+    event_at: datetime | None = None
+    time_quality: Literal["exact", "anchored", "session", "approximate"] = "approximate"
 
     @field_validator("evidence_ids")
     @classmethod
@@ -225,6 +232,16 @@ class WriteRequest(BaseModel):
             raise ValueError("evidence_ids must not contain empty ids")
         if len(set(value)) != len(value):
             raise ValueError("evidence_ids must be unique")
+        return value
+
+    @field_validator("input_records")
+    @classmethod
+    def _input_records_match_ids(
+        cls, value: tuple[EvidenceRecord, ...], info: ValidationInfo
+    ) -> tuple[EvidenceRecord, ...]:
+        evidence_ids = info.data.get("evidence_ids")
+        if value and evidence_ids != [record.evidence_id for record in value]:
+            raise ValueError("input_records must match evidence_ids in order")
         return value
 
     @property

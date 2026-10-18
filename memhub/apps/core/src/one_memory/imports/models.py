@@ -79,6 +79,8 @@ class EvidenceInput(BaseModel):
     source_ordinal: str | None = Field(default=None, min_length=1, max_length=256)
     content_kind: EvidenceContentKind = EvidenceContentKind.RAW_CONVERSATION
     role: str = Field(min_length=1, max_length=128)
+    # Legacy import/storage metadata only. Protocol `role` is authoritative;
+    # this value must not affect identity, admission, scheduling or ownership.
     written_by: WrittenBy
     created_at: datetime | None = None
     verbatim: str = Field(min_length=1, max_length=MAX_VERBATIM_CHARACTERS)
@@ -149,17 +151,22 @@ class EvidenceInput(BaseModel):
                 )
             )
         else:
+            # `role` is the protocol-level speaker identity. `written_by` was a
+            # parser guess and differed between two imports of the same host
+            # message (notably sub-agent/user and unknown/user), minting two
+            # Evidence rows. Keep it out of every new identity.
+            #
             # No workspace and no source_ordinal in the derived key: the hook
             # lane has neither (it reports no workspace and a constant ordinal),
             # so including either gave the same message a different key per lane
             # and stored it twice. Both are record metadata here, not identity.
             identity = "\0".join(
                 (
-                    "derived-v3",
+                    "derived-v4",
                     self.user_id,
                     self.source_id,
                     self.conversation_id,
-                    self.written_by,
+                    self.role,
                     self.content_hash,
                 )
             )
@@ -167,6 +174,54 @@ class EvidenceInput(BaseModel):
             # fired, so the same message captured twice got two identities and
             # two rows. The capture time is record metadata, not identity.
         return hashlib.sha256(identity.encode()).hexdigest()
+
+    @property
+    def written_by_derived_v3_idempotency_key(self) -> str:
+        """The last identity that treated the parser's author guess as canonical.
+
+        New builds key by protocol role. During an upgrade this key lets a
+        rescan find and reuse the row already stored by derived-v3 instead of
+        inserting the same host message under a second Evidence id.
+        """
+        identity = "\0".join(
+            (
+                "derived-v3",
+                self.user_id,
+                self.source_id,
+                self.conversation_id,
+                self.written_by,
+                self.content_hash,
+            )
+        )
+        return hashlib.sha256(identity.encode()).hexdigest()
+
+    @property
+    def written_by_derived_v3_idempotency_keys(self) -> tuple[str, ...]:
+        """Every legacy author guess this protocol role may have carried."""
+        guesses = {
+            "user": (
+                WrittenBy.PERSON,
+                WrittenBy.AGENT,
+                WrittenBy.UNKNOWN,
+            ),
+            "assistant": (WrittenBy.AGENT, WrittenBy.UNKNOWN, WrittenBy.PERSON),
+            "tool": (WrittenBy.TOOL, WrittenBy.UNKNOWN),
+        }.get(self.role, tuple(WrittenBy))
+        ordered = (self.written_by, *guesses)
+        keys: list[str] = []
+        for written_by in dict.fromkeys(ordered):
+            identity = "\0".join(
+                (
+                    "derived-v3",
+                    self.user_id,
+                    self.source_id,
+                    self.conversation_id,
+                    written_by,
+                    self.content_hash,
+                )
+            )
+            keys.append(hashlib.sha256(identity.encode()).hexdigest())
+        return tuple(keys)
 
     @property
     def legacy_message_idempotency_key(self) -> str | None:
@@ -212,7 +267,13 @@ class EvidenceInput(BaseModel):
         """
         return self.derived_v2_idempotency_key("derived-v2", workspace_agnostic=False)
 
-    def derived_v2_idempotency_key(self, label: str, *, workspace_agnostic: bool) -> str:
+    def derived_v2_idempotency_key(
+        self,
+        label: str,
+        *,
+        workspace_agnostic: bool,
+        written_by: WrittenBy | None = None,
+    ) -> str:
         identity = "\0".join(
             (
                 label,
@@ -220,7 +281,7 @@ class EvidenceInput(BaseModel):
                 self.source_id,
                 *([] if workspace_agnostic else [self.workspace or "\uffffnull"]),
                 self.conversation_id,
-                self.written_by,
+                written_by or self.written_by,
                 self.created_at.isoformat() if self.created_at else "",
                 self.source_ordinal or "",
                 # v2 hashed the cleaned body; v1 predates raw_verbatim entirely,
@@ -229,6 +290,26 @@ class EvidenceInput(BaseModel):
             )
         )
         return hashlib.sha256(identity.encode()).hexdigest()
+
+    @property
+    def older_written_by_idempotency_keys(self) -> tuple[str, ...]:
+        keys: list[str] = []
+        for written_by in WrittenBy:
+            keys.append(
+                self.derived_v2_idempotency_key(
+                    "derived-v1",
+                    workspace_agnostic=True,
+                    written_by=written_by,
+                )
+            )
+            keys.append(
+                self.derived_v2_idempotency_key(
+                    "derived-v2",
+                    workspace_agnostic=False,
+                    written_by=written_by,
+                )
+            )
+        return tuple(keys)
 
     @property
     def evidence_id(self) -> str:
@@ -249,6 +330,7 @@ class EvidenceRecord(BaseModel):
     source_ordinal: str | None
     content_kind: EvidenceContentKind
     role: str
+    # Retained while old databases and export formats still carry the column.
     written_by: WrittenBy
     created_at: datetime | None
     verbatim: str

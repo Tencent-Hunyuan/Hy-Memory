@@ -48,7 +48,11 @@ describe("publish manifest is production-safe", () => {
     execFileSync("node", ["scripts/prepare-publish-manifest.mjs"], {
       cwd: root,
       stdio: "pipe",
-      env: { ...process.env, MEMHUB_NPM_PACKAGE: "@example/memhub-cli" },
+      env: {
+        ...process.env,
+        MEMHUB_NPM_PACKAGE: "@example/memhub-cli",
+        MEMHUB_NPM_VERSION: "1.0.5",
+      },
     });
     const published = JSON.parse(
       readFileSync(path.join(root, "dist-publish", "package.json"), "utf8"),
@@ -56,6 +60,7 @@ describe("publish manifest is production-safe", () => {
     expect(published.dependencies).toBeUndefined();
     expect(published.private).toBe(false);
     expect(published.name).toBe("@example/memhub-cli");
+    expect(published.version).toBe("1.0.5");
     expect(published.bin).toMatchObject({
       memhub: "dist/one-memory.cjs",
       "memhub-cli": "dist/one-memory.cjs",

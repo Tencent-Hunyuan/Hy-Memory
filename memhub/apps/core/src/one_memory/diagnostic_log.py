@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import re
 import sys
@@ -139,6 +140,10 @@ _DETAIL_KEYS = frozenset(
         "accounted_ms",
         "unaccounted_ms",
         "conversation_hash",
+        # The sedimentation switch: a bounded boolean, the same shape as
+        # `spawned` and `index_complete`. Left out of this list it did not
+        # drop a log line, it turned the switch's own request into a 500.
+        "enabled",
     }
 )
 _trace_id: ContextVar[str | None] = ContextVar("one_memory_trace_id", default=None)
@@ -649,11 +654,23 @@ def diagnostic_event(**values: object) -> None:
     active = _active
     if active is None:
         return
+    if values.get("level") == "debug" and not logging.getLogger().isEnabledFor(
+        logging.DEBUG
+    ):
+        return
     try:
         active.write(**values)  # type: ignore[arg-type]
     except OSError:
         # Diagnostics must not become a new product outage when a disk is full
         # or the log directory is temporarily unavailable.
+        return
+    except ValueError:
+        # Same promise, same reason, for a rejected payload instead of a failed
+        # write. An unlisted `details` key once turned every external recall
+        # into a 500 and then killed the process, and the sedimentation switch
+        # into a permanent failure. The payload itself is still wrong and is
+        # still caught in CI by tests/test_diagnostic_payload_keys.py; what
+        # must not happen is the caller paying for it.
         return
 
 

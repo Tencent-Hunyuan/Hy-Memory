@@ -1,6 +1,6 @@
 {
   "name": "@one-memory/cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "MemHub bootstrap CLI for installing and managing the local-first shared memory runtime",
   "license": "Apache-2.0",
   "repository": {

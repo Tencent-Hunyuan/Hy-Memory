@@ -33,6 +33,7 @@ from one_memory.hy_runtime_config import (
 from one_memory.hy_source_context import HySourceContext, HyWriteBindings
 from one_memory.hy_store_concurrency import native_store_read_slot
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind, attach_disable_thinking
+from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.semantic_deadline import SemanticMemoryHit
 
 #: D102: how relevant HY has to call a hit before it counts. Raised from 0.25
@@ -141,6 +142,22 @@ async def _joined_thread[**P, T](call: Callable[P, T], *args: P.args, **kwargs: 
 
 class HyMemoryBridgeError(RuntimeError):
     pass
+
+
+MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES = 512
+
+
+def coding_tool_result_max_bytes() -> int:
+    """Return the per-tool payload ceiling used by MemHub's HY client."""
+
+    raw = os.environ.get("MEMORY_CODING_TOOL_RESULT_MAX_BYTES")
+    if raw is None:
+        return MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+    return value if value > 0 else MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
 
 
 def _exclusive[**P, T](
@@ -414,8 +431,9 @@ class HyMemoryBridge:
 
     @_exclusive
     async def ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
-        async with self._write_lock:
-            return await self._ingest(request)
+        with audit_precipitation_request(request.request_id):
+            async with self._write_lock:
+                return await self._ingest(request)
 
     async def _ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         started = monotonic()
@@ -431,9 +449,7 @@ class HyMemoryBridge:
         guards = getattr(client, "_one_memory_write_guards", ())
         from one_memory.hy_response_guard import HyReconcileGuard
 
-        reconcile_guards = tuple(
-            guard for guard in guards if isinstance(guard, HyReconcileGuard)
-        )
+        reconcile_guards = tuple(guard for guard in guards if isinstance(guard, HyReconcileGuard))
         for guard in reconcile_guards:
             guard.begin_write()
         before = [len(guard.failures) for guard in guards]
@@ -544,8 +560,9 @@ class HyMemoryBridge:
         request: HyMemoryIngestRequest,
         contents: Sequence[str],
     ) -> HyMemoryIngestResult:
-        async with self._write_lock:
-            return await self._ingest_extracted(request, contents)
+        with audit_precipitation_request(request.request_id):
+            async with self._write_lock:
+                return await self._ingest_extracted(request, contents)
 
     async def _ingest_extracted(
         self,
@@ -1110,7 +1127,7 @@ class HyMemoryBridge:
                                 self.profile,
                                 api_key=self.api_key,
                                 data_dir=self.data_dir,
-                        http_transport_factory=self._http_transport_factory,
+                                http_transport_factory=self._http_transport_factory,
                             )
 
                     await _joined_thread(initialize)
@@ -1137,7 +1154,7 @@ class HyMemoryBridge:
                     )
                     raise HyMemoryBridgeError("hy_memory_init_failed") from error
                 diagnostic_event(
-                    level="info",
+                    level="debug",
                     component="hy.client",
                     event="hy.client_initialization.completed",
                     outcome="succeeded",
@@ -1328,9 +1345,7 @@ async def _with_native_mutation_delta(
     """
 
     retired = set(result.retired_memory_ids)
-    superseded = {
-        key: tuple(values) for key, values in result.superseded_memory_ids.items()
-    }
+    superseded = {key: tuple(values) for key, values in result.superseded_memory_ids.items()}
     chat_targets = {
         key
         for guard in reconcile_guards
@@ -1338,7 +1353,8 @@ async def _with_native_mutation_delta(
         if isinstance(key, str) and key
     }
 
-    for item in raw.get("ops", ()) if isinstance(raw.get("ops"), list) else ():
+    operations = raw.get("ops")
+    for item in operations if isinstance(operations, list) else ():
         if not isinstance(item, Mapping):
             continue
         if item.get("action") == "DELETE":
@@ -1346,7 +1362,8 @@ async def _with_native_mutation_delta(
             if isinstance(key, str) and key:
                 retired.add(key)
 
-    for item in raw.get("fact_ops", ()) if isinstance(raw.get("fact_ops"), list) else ():
+    fact_operations = raw.get("fact_ops")
+    for item in fact_operations if isinstance(fact_operations, list) else ():
         if not isinstance(item, Mapping) or item.get("action") != "SUPERSEDE":
             continue
         old, new = item.get("fact_id"), item.get("superseded_by")
@@ -1367,9 +1384,7 @@ async def _with_native_mutation_delta(
         if isinstance(replacement, str) and replacement:
             superseded[key] = (replacement,)
         elif isinstance(replacement, list):
-            values = tuple(
-                value for value in replacement if isinstance(value, str) and value
-            )
+            values = tuple(value for value in replacement if isinstance(value, str) and value)
             if values:
                 superseded[key] = values
 
@@ -1697,6 +1712,7 @@ def build_hy_memory_config(
     config.history.db_path = str(memory_root / "history.sqlite3")
     config.coding.enable = True
     config.coding.db_path = str(memory_root / "coding.sqlite3")
+    config.coding.tool_result_max_bytes = coding_tool_result_max_bytes()
     config.recall.episode_recall_enabled = True
     config.recall.episode_summary_enabled = False
     config.recall.dynamic_episode_enabled = True

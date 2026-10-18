@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -87,6 +88,9 @@ def _segment_at_the_legacy_window(monkeypatch):
 
 def test_stale_known_reason_diagnostics_never_fail_dispatch(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path)
     try:
         _report_stale_known_reasons(
@@ -95,6 +99,7 @@ def test_stale_known_reason_diagnostics_never_fail_dispatch(tmp_path, monkeypatc
         )
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
 
     records = [json.loads(line) for line in receipt.path.read_text().splitlines()]
     assert [(row["details"]["reason"], row["details"]["count"]) for row in records] == [
@@ -306,16 +311,23 @@ def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
         content=marker,
     )
     task = _task(tasks, profile, record)
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path)
     try:
         asyncio.run(_runner(tmp_path, stores, FakeBridge()).run(task.task_id))
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
     written = receipt.path.read_text()
     events = [json.loads(line) for line in written.splitlines()]
+    started = next(event for event in events if event["event"] == "memory_task.started")
+    assert started["level"] == "info"
     steps = [event for event in events if event["event"] == "memory_task.step_completed"]
     assert [event["details"]["phase"] for event in steps] == ["1", "2", "3", "4", "5", "6"]
     finished = next(event for event in events if event["event"] == "memory_task.finished")
+    assert finished["level"] == "info"
     assert finished["details"] == {
         "attempt": 1,
         "pending_count": 0,
@@ -1390,6 +1402,9 @@ def test_backfill_scan_logs_inventory_and_queue_without_content(tmp_path) -> Non
             conversation_id=f"conversation-{index}",
             content_kind=EvidenceContentKind.MEMORY_CONTENT,
         )
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path / "logs")
 
     async def exercise() -> None:
@@ -1409,6 +1424,7 @@ def test_backfill_scan_logs_inventory_and_queue_without_content(tmp_path) -> Non
         asyncio.run(exercise())
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
 
     written = receipt.path.read_text()
     events = [json.loads(line) for line in written.splitlines()]
@@ -1764,7 +1780,7 @@ def test_process_records_bounds_a_hung_model_call_by_the_profile_timeout(
     with sqlite3.connect(tmp_path / "one-memory.sqlite3") as db:
         db.executescript(
             """
-            CREATE TABLE source_grants (
+            CREATE TABLE IF NOT EXISTS source_grants (
                 user_id TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 root_path TEXT NOT NULL,
@@ -2020,6 +2036,126 @@ def test_oversized_single_turn_segments_are_each_processed(tmp_path) -> None:
     sent = [request.turns[0].content for request in bridge.requests]
     assert "".join(sent) == original
     assert len(governance.list(user_id="local")) == 2
+
+
+def test_direct_processing_uses_the_supplied_frozen_revision(tmp_path) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    old_user = _put(
+        evidence,
+        message_id="rewound-user",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="old branch",
+    )
+    reply = _put(
+        evidence,
+        message_id="rewound-reply",
+        role="assistant",
+        written_by=WrittenBy.AGENT,
+        content="old reply",
+    )
+    revised = _put(
+        evidence,
+        message_id="rewound-user",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="new branch",
+    )
+    assert revised.evidence_id == old_user.evidence_id
+    assert revised.revision == old_user.revision + 1
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.execute(
+            """
+            CREATE TABLE source_grants (
+                user_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                requested_path TEXT NOT NULL,
+                root_identity TEXT NOT NULL,
+                candidate_kind TEXT NOT NULL,
+                granted_at TEXT NOT NULL,
+                revoked_at TEXT,
+                revision INTEGER NOT NULL,
+                PRIMARY KEY (user_id, source_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO source_grants (
+                user_id,source_id,root_path,requested_path,root_identity,
+                candidate_kind,granted_at,revoked_at,revision
+            ) VALUES (?,?,?,?,?,?,?,NULL,1)
+            """,
+            (
+                "local",
+                "cursor",
+                "/authorized",
+                "/authorized",
+                "test-root",
+                "default",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+    bridge = FakeBridge(outputs=())
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        runner_factory=lambda: _runner(tmp_path, stores, bridge),
+    )
+
+    completed = asyncio.run(supervisor.process_records((old_user, reply)))
+
+    assert len(completed) == 1
+    assert [turn.content for turn in bridge.requests[0].turns] == [
+        "old branch",
+        "old reply",
+    ]
+
+
+def test_frozen_current_still_revalidates_history_after_the_model_call(tmp_path) -> None:
+    from one_memory.hy_source_context import HySourceContext
+
+    stores = _setup(tmp_path)
+    evidence, _profiles, tasks, _governance, _secrets, _profile = stores
+    current = _put(
+        evidence,
+        message_id="frozen-current",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="old current",
+    )
+    history = _put(
+        evidence,
+        message_id="frozen-history",
+        role="assistant",
+        written_by=WrittenBy.AGENT,
+        content="stable history",
+    )
+    _put(
+        evidence,
+        message_id="frozen-current",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="new current",
+    )
+    runner = _runner(tmp_path, stores, FakeBridge(outputs=()))
+    context = HySourceContext(current=(current,), history=(history,))
+
+    runner._check_source_context(context, skip_current=True)
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.execute(
+            "DELETE FROM evidence WHERE evidence_id=?",
+            (history.evidence_id,),
+        )
+
+    with pytest.raises(HyMemoryBridgeError, match="hy_memory_evidence_changed"):
+        runner._check_source_context(context, skip_current=True)
 
 
 def test_oversized_assistant_segments_keep_the_question_as_context(tmp_path) -> None:
@@ -2376,6 +2512,105 @@ def test_unknown_task_is_reconciled_from_exact_hy_output_without_model_retry(tmp
     assert tasks.require(task.task_id).status is MemoryTaskStatus.COMPLETED
     assert [memory.memory_id for memory in governance.list(user_id="local")] == ["hy-recovered"]
     assert bridge.closed is True
+
+
+def test_an_unknown_task_without_inputs_does_not_end_the_reconcile_pass(tmp_path) -> None:
+    """One task with nothing to send must not strand the other unknown tasks.
+
+    An unknown task whose inputs are gone yields an empty chunk, and building a
+    request from that reached `chunk[0]` and came out as IndexError. A
+    reconcile pass skips a task that raises a domain error, so IndexError did
+    not skip anything -- it ended the pass. On this machine 68 of 303 unknown
+    tasks had no inputs, and while the retry backed off to 128 and gave up, the
+    235 that could have been reconciled stayed unknown with them.
+    """
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, profile = stores
+    stranded = _put(
+        evidence,
+        message_id="reconcile-without-inputs",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="这条任务的输入已经不在了。",
+    )
+    record = _put(
+        evidence,
+        message_id="reconcile-with-inputs",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="用户偏好每周日上午攀岩。",
+    )
+    empty = tasks.create(
+        request_id="reconcile-empty-request",
+        user_id=stranded.user_id,
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=stranded.evidence_id,
+        profile=profile,
+        input_records=(stranded,),
+    )
+    task = tasks.create(
+        request_id="reconcile-kept-request",
+        user_id=record.user_id,
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=record.evidence_id,
+        profile=profile,
+        input_records=(record,),
+    )
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.execute(
+            """
+            CREATE TABLE source_grants (
+                user_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                root_path TEXT NOT NULL, candidate_kind TEXT NOT NULL,
+                granted_at TEXT NOT NULL, revoked_at TEXT,
+                PRIMARY KEY (user_id, source_id)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO source_grants VALUES (?,?,?,?,?,NULL)",
+            (
+                record.user_id,
+                record.source_id,
+                "/authorized",
+                "default",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        for task_id in (empty.task_id, task.task_id):
+            connection.execute(
+                "UPDATE memory_tasks SET status='unknown', last_error_code=? WHERE task_id=?",
+                ("model_content_outcome_unknown", task_id),
+            )
+        # What the field data actually looks like: the task is there, its
+        # inputs are not.
+        connection.execute("DELETE FROM memory_task_inputs WHERE task_id=?", (empty.task_id,))
+    bridge = FakeBridge(
+        outputs=(
+            HyMemoryOutput(
+                memory_id="hy-recovered",
+                content="用户偏好每周日上午攀岩。",
+                layer="L2_FACT",
+                owner="user",
+                evidence_ids=(record.evidence_id,),
+            ),
+        )
+    )
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        runner_factory=lambda: _runner(tmp_path, stores, FakeBridge()),
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+    )
+
+    # The task with inputs is reconciled; the one without is passed over.
+    assert asyncio.run(supervisor.reconcile_unknown_outputs()) == 1
+    assert tasks.require(task.task_id).status is MemoryTaskStatus.COMPLETED
+    assert [memory.memory_id for memory in governance.list(user_id="local")] == ["hy-recovered"]
 
 
 def test_two_workspaces_with_one_conversation_id_prepare_apart(tmp_path) -> None:

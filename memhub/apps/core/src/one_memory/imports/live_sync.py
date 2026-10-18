@@ -106,7 +106,7 @@ class PollingLiveSyncSupervisor:
             level=(
                 "warn"
                 if value.state in {LiveSyncState.DEGRADED, LiveSyncState.UNAVAILABLE}
-                else "info"
+                else "debug"
             ),
             component="import.live_sync",
             event="live_sync.state_changed",
@@ -282,11 +282,24 @@ class PollingLiveSyncSupervisor:
                 and job.status
                 in {ImportStatus.PENDING, ImportStatus.RUNNING, ImportStatus.INTERRUPTED}
             ]
+            bounded_history_incomplete = any(
+                job.source_id == source_id
+                and job.operation == "history"
+                and job.history_after is not None
+                and job.status is not ImportStatus.COMPLETED
+                for job in source_jobs
+            )
             # Establish the realtime EOF independently even while history owns
             # this source. Otherwise the P1 job starts from the P2 checkpoint
             # (or from zero) and becomes a second full-history scan.
             adapter = self.import_supervisor.adapters[source_id]
-            await self._live_cursors(source_id, adapter)
+            live_cursors = await self._live_cursors(source_id, adapter)
+            # A bounded onboarding history is the authority for everything up
+            # to its EOF. An adapter without a native live baseline has no safe
+            # realtime cursor until that history finishes; starting a sync from
+            # zero here would bypass `history_after` and import the old corpus.
+            if bounded_history_incomplete and not live_cursors:
+                return None
             # Only one scan of a source may be in flight: they share the
             # cursor, and two readers means every file read twice. With a
             # catch-up still holding the source there is no free moment to ask

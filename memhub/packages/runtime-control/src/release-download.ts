@@ -38,6 +38,10 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const SAFE_FILE_NAME = /^[0-9A-Za-z][0-9A-Za-z._-]{0,255}$/;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+const GITHUB_RELEASE_REDIRECT_HOSTS = [
+  "release-assets.githubusercontent.com",
+  "objects.githubusercontent.com",
+] as const;
 
 export type ReleaseChannel = "stable" | "prerelease";
 export type RuntimeReleasePlatform = "darwin" | "linux";
@@ -330,8 +334,12 @@ export async function resolveRuntimeRelease(options: {
   maxRedirects?: number;
 }): Promise<ResolvedRuntimeRelease> {
   const manifestUrl = trustedUrl(options.manifestUrl);
+  const defaultHosts =
+    normalizedHost(manifestUrl.hostname) === "github.com"
+      ? [manifestUrl.hostname, ...GITHUB_RELEASE_REDIRECT_HOSTS]
+      : [manifestUrl.hostname];
   const allowedHosts = new Set(
-    (options.allowedHosts ?? [manifestUrl.hostname]).map(normalizedHost),
+    (options.allowedHosts ?? defaultHosts).map(normalizedHost),
   );
   if (!allowedHosts.has(normalizedHost(manifestUrl.hostname))) {
     throw new Error("release_url_untrusted");

@@ -250,6 +250,7 @@
 | `test_model_profile_identity.py` | `contract` | Stable model editing and configured-vs-available credentials; no Keychain/network. |
 | `test_model_profile_queue_handover.py` | `contract` | Queued work when the model changes or its configuration is deleted (D75). |
 | `test_model_profiles.py` | `contract` | 覆盖 profile uses one model and keeps key out of database、api key updates reuse one stable secret reference、startup cleanup removes only secrets not referenced by current profiles 等 15 个场景。 |
+| `test_model_request_audit.py` | `contract` | 覆盖 failure is recorded without error message、missing usage stays unknown in detail and zero in summary、records one physical request with provider usage and no content 等 5 个场景。 |
 | `test_model_request_budget.py` | `contract` | 覆盖 persists failed request reservations without content、parallel leases cannot exceed request limit、unknown or excessive output and body are denied 等 6 个场景。 |
 | `test_mysql_lifecycle.py` | `contract` | A1-07: the decisions Runtime makes around the bundled MySQL. |
 | `test_mysql_platform.py` | `contract` | A1-07: the machine-facing half of managing the bundled MySQL. |
@@ -327,6 +328,7 @@
 | `test_secret_store_error_codes.py` | `integration` | 3925a kernel item 3: keychain failure classification and backoff that heals. |
 | `test_secure_storage.py` | `integration` | 覆盖 isolated keychain service namespace、custom keychain service is refused outside isolated tests、packaged keychain budget covers loaded process startup 等 20 个场景。 |
 | `test_sedimentation_concurrency.py` | `contract` | Sedimentation runs several harnesses at once, but one harness at a time. |
+| `test_sedimentation_switch.py` | `contract` | Stopping model-driven sedimentation without losing the configuration. |
 | `test_service_level_pressure_acceptance.py` | `contract` | 覆盖 workbuddy recall remains available during 100k import 场景。 |
 | `test_service_levels.py` | `contract` | 覆盖 background never consumes the realtime reservation、realtime is next for the same source after background yields、import history gets one slice after nine realtime admissions 等 8 个场景。 |
 | `test_session_inbox.py` | `contract` | A session inbox is not a shared mailbox and a pull is not adoption. |
@@ -336,6 +338,7 @@
 | `test_snapshot_pool.py` | `contract` | A whole-directory snapshot must not hold a thread everything else is waiting for. |
 | `test_soak_probe_effectiveness.py` | `integration` | The soak probe must observe the load it reports on. |
 | `test_source_access.py` | `contract` | 覆盖 source root requires explicit user grant、sensitive home directory is rejected without requesting os access、authorized file cannot escape root through a symlink 等 24 个场景。 |
+| `test_source_authorization_state.py` | `unit` | Why a source cannot be read, named separately from whether it can. |
 | `test_source_candidate_api.py` | `integration` | Candidate location changes must not implicitly grant or import anything. |
 | `test_source_candidate_connections.py` | `contract` | 覆盖 empty candidate revisions preserve default fingerprint、persisted candidate requires exact revision、connection resolves candidate in transaction and prior replay never regrants 等 7 个场景。 |
 | `test_source_candidates.py` | `contract` | 覆盖 preview is metadata only and cancel changes nothing、select persists only candidate and restarts with revision、compare and swap and aba cannot reuse old preview 等 9 个场景。 |
@@ -386,4 +389,4 @@
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 | `test_zcode_source.py` | `contract` | The ZCode source registration: a card and a recall target, no history yet. |
 
-共 381 个测试文件。
+共 384 个测试文件。

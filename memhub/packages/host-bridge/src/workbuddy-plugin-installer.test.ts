@@ -361,20 +361,122 @@ describe("WorkBuddy plugin recall installer", () => {
     ).toEqual(before);
   });
 
-  it("refuses to overwrite registry bytes changed after installation", async () => {
-    const { layout, hostDir } = await fixture({ populated: true });
+  it("removes its own registry key while keeping a change the host made after", async () => {
+    const { layout, hostDir, plugin } = await fixture({ populated: true });
     const settingsPath = path.join(hostDir, "settings.json");
     await applyRecallInstall(await planRecallInstall(layout, runtime()));
     const current = JSON.parse(await readFile(settingsPath, "utf8"));
     current.userChangeAfterInstall = true;
     await writeFile(settingsPath, JSON.stringify(current));
 
-    await expect(planRecallUninstall(layout)).rejects.toThrow(
-      "MemHub files changed after installation; rollback refused",
+    // The whole file moving is not the key we own moving. Uninstall used to
+    // refuse here, which is how a host that rewrites its own registries left
+    // an install that could not be taken off at all (issue #29).
+    await applyRecallUninstall(await planRecallUninstall(layout));
+
+    const after = JSON.parse(await readFile(settingsPath, "utf8"));
+    expect(after).toMatchObject({ userChangeAfterInstall: true });
+    expect(after.enabledPlugins).not.toHaveProperty(
+      `${plugin.pluginName}@${plugin.marketplaceName}`,
+    );
+  });
+
+  it("uninstalls after the host re-formats a registry it shares", async () => {
+    const { layout, hostDir } = await fixture({ populated: true });
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+    for (const target of registryPaths(hostDir)) {
+      const current = JSON.parse(await readFile(target, "utf8"));
+      await writeFile(target, `${JSON.stringify(current)}\n`);
+    }
+
+    await applyRecallUninstall(await planRecallUninstall(layout));
+
+    for (const target of registryPaths(hostDir)) {
+      expect(JSON.parse(await readFile(target, "utf8"))).not.toBeNull();
+    }
+  });
+
+  it("asks for review rather than removing a managed entry somebody changed", async () => {
+    const { layout, hostDir, plugin } = await fixture({ populated: true });
+    const settingsPath = path.join(hostDir, "settings.json");
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+    const current = JSON.parse(await readFile(settingsPath, "utf8"));
+    current.enabledPlugins[`${plugin.pluginName}@${plugin.marketplaceName}`] =
+      false;
+    await writeFile(settingsPath, JSON.stringify(current));
+
+    const plan = await planRecallUninstall(layout);
+    expect(plan.review?.map((finding) => finding.path)).toContain(settingsPath);
+    await expect(applyRecallUninstall(plan)).rejects.toThrow(
+      "host_uninstall_needs_review",
     );
     expect(JSON.parse(await readFile(settingsPath, "utf8"))).toMatchObject({
-      userChangeAfterInstall: true,
+      enabledPlugins: {
+        [`${plugin.pluginName}@${plugin.marketplaceName}`]: false,
+      },
     });
+  });
+
+  it("migrates a v1 journal whose whole-file hash no longer matches", async () => {
+    const { layout, hostDir } = await fixture({ populated: true });
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+    // A journal from the build that compared whole files: no managed digest,
+    // and a hash that stopped matching the moment the host rewrote anything.
+    const journal = JSON.parse(await readFile(layout.journalPath, "utf8"));
+    journal.plugin_registries = journal.plugin_registries.map(
+      (entry: {
+        installed_hash: string;
+        installed_managed?: string | null;
+      }) => {
+        const { installed_managed: _dropped, ...legacy } = entry;
+        return { ...legacy, installed_hash: "not-the-file-any-more" };
+      },
+    );
+    await writeFile(layout.journalPath, JSON.stringify(journal));
+
+    await applyRecallUninstall(await planRecallUninstall(layout));
+
+    const settings = JSON.parse(
+      await readFile(path.join(hostDir, "settings.json"), "utf8"),
+    );
+    expect(settings.enabledPlugins).not.toHaveProperty(
+      "one-memory-recall@one-memory",
+    );
+  });
+
+  it("keeps a registry it created once the host has put something else in it", async () => {
+    const { layout, hostDir } = await fixture();
+    const settingsPath = path.join(hostDir, "settings.json");
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+    const current = JSON.parse(await readFile(settingsPath, "utf8"));
+    current.sandbox = { extraAllowWrite: ["~/.tencent-cloudq"] };
+    await writeFile(settingsPath, JSON.stringify(current));
+
+    await applyRecallUninstall(await planRecallUninstall(layout));
+
+    // The file did not exist before we installed, but it is no longer only
+    // ours, so the key goes and the file stays.
+    const after = JSON.parse(await readFile(settingsPath, "utf8"));
+    expect(after.sandbox).toEqual({ extraAllowWrite: ["~/.tencent-cloudq"] });
+    expect(after.enabledPlugins).toEqual({});
+  });
+
+  it("installs over a registry change made after the plan was shown", async () => {
+    const { layout, hostDir, plugin } = await fixture({ populated: true });
+    const settingsPath = path.join(hostDir, "settings.json");
+    const plan = await planRecallInstall(layout, runtime());
+    const current = JSON.parse(await readFile(settingsPath, "utf8"));
+    current.anotherPluginEnabled = true;
+    await writeFile(settingsPath, JSON.stringify(current));
+
+    await applyRecallInstall(plan);
+
+    const after = JSON.parse(await readFile(settingsPath, "utf8"));
+    expect(after.anotherPluginEnabled).toBe(true);
+    expect(after.enabledPlugins).toHaveProperty(
+      `${plugin.pluginName}@${plugin.marketplaceName}`,
+      true,
+    );
   });
 
   it("leaves no directory of its own behind, empty or otherwise", async () => {
