@@ -39,3 +39,23 @@ it("keeps a newer switch receipt when an older read lands later", async () => {
   expect(await olderRead).toEqual(paused);
   expect(queryClient.getQueryData(["sedimentation"])).toEqual(paused);
 });
+
+it("keeps the newest read when concurrent reads finish out of order", async () => {
+  let finishFirst: ((value: typeof enabled) => void) | undefined;
+  getSedimentation
+    .mockImplementationOnce(
+      () =>
+        new Promise<typeof enabled>((resolve) => {
+          finishFirst = resolve;
+        }),
+    )
+    .mockResolvedValueOnce(paused);
+
+  const first = refreshSedimentation();
+  const second = refreshSedimentation();
+  expect(await second).toEqual(paused);
+
+  finishFirst?.(enabled);
+  expect(await first).toEqual(paused);
+  expect(queryClient.getQueryData(["sedimentation"])).toEqual(paused);
+});

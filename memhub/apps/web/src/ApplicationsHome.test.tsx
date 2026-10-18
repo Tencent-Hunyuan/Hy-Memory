@@ -18,6 +18,7 @@ import * as api from "./api";
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { queryClient, resetClient } from "./query-client";
+import { commitSedimentation } from "./sedimentation-state";
 
 const {
   summary,
@@ -698,6 +699,28 @@ it("shows a paused switch immediately even when task rows still say running", as
   expect(await screen.findAllByText("已暂停")).toHaveLength(2);
   expect(screen.getByText("已停止生成新记忆")).toBeTruthy();
   expect(screen.queryByText("新的对话正在整理")).toBeNull();
+});
+
+it("updates an already mounted home as soon as settings commits the switch receipt", async () => {
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+  expect(await screen.findAllByText("整理中")).toHaveLength(2);
+
+  act(() => {
+    commitSedimentation({
+      enabled: false,
+      pending_retained: true,
+      imports_unaffected: true,
+    });
+  });
+
+  await waitFor(() => expect(screen.getAllByText("已暂停")).toHaveLength(2));
 });
 
 it("keeps the import-in-progress empty state stable without a progress link", async () => {
