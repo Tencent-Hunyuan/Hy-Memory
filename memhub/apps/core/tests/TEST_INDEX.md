@@ -384,5 +384,6 @@
 | `test_workbuddy_prompt_backfill.py` | `contract` | When the prompt hook's capture fails, the transcript file is what brings the words in. |
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
+| `test_zcode_source.py` | `contract` | The ZCode source registration: a card and a recall target, no history yet. |
 
-共 380 个测试文件。
+共 381 个测试文件。

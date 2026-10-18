@@ -53,6 +53,10 @@ from one_memory.imports.sources.workbuddy import (
     WORKBUDDY_DESCRIPTOR,
     create_workbuddy_adapter,
 )
+from one_memory.imports.sources.zcode import (
+    ZCODE_DESCRIPTOR,
+    create_zcode_adapter,
+)
 
 
 class RootCandidateKind(StrEnum):
@@ -277,6 +281,30 @@ def build_source_catalog(
             create_adapter=create_openclaw_adapter,
             capabilities=with_recall_install_target(
                 polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
+            ),
+        ),
+        SourceRegistration(
+            descriptor=ZCODE_DESCRIPTOR,
+            # ZCode's home directory is the whole install — config, skills,
+            # and the rollout transcripts all live under ~/.zcode — so its
+            # existence is what "installed here" means.
+            candidate=SourceRootCandidate(
+                path=home / ".zcode",
+                kind=RootCandidateKind.DEFAULT,
+            ),
+            create_adapter=create_zcode_adapter,
+            # Recall and the installer ship for ZCode in this build and were
+            # verified against the live host: install, capture in both
+            # directions, and prompt-time injection. Live sync is delivered
+            # by those capture hooks rather than by the scanner: the rollout
+            # stream's record shape is unmapped, so a scan reads its files
+            # and skips every record by name, and the sync flag's other job —
+            # gating the hooks' capture writes — is why the switch has to be
+            # available at all.
+            capabilities=with_recall_install_target(
+                polling_live_sync_capabilities(
+                    verification=VerificationLevel.FIXTURE_ONLY
+                )
             ),
         ),
     )
