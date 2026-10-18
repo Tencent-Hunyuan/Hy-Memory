@@ -1597,7 +1597,9 @@ class HyMemoryClient:
             session_id:   Session ID（三级隔离 key）
             source:       调用来源，例如 openclaw / cursor / codex；与 agent_id 正交。
                           写入前执行 strip().lower()，默认 "default"。
-            metadata:     自定义元数据
+            metadata:     旧版 SDK 处理选项，会并入内部 WriteRequest.extra。
+                          不保证持久化或随查询返回；调用方需要保存并读回的业务字段
+                          请使用 meta。
             memory_at:    记忆时间戳（不传则用当前时间），用于导入历史记忆
             scene:        显式指定写入路由，跳过 LLM 自动判定。
                           - None（默认）：含 tool 时 LLM 判 chat/working/coding；
@@ -1623,8 +1625,8 @@ class HyMemoryClient:
             branch:       Coding memory 路径专用。分支名。同 workspace_id。chat 路径忽略。
             meta:         调用方自定义业务 meta，随本次产出的记忆存储、查询时原样返回。
                           不 embed、不参与召回、不作过滤条件。
-                          与 metadata 不同：metadata 会并入 extra（含 SDK 内部控制键），
-                          meta 独立存放，只做透传。
+                          与 metadata 不同：metadata 是旧版内部处理选项，
+                          meta 独立持久化，只做业务透传。
                           语义为「该次 write 时刻的上下文」，故存为 list——同一节点被
                           多次写入合并时会追加而非覆盖，详见 get() 返回的 meta 字段。
 
@@ -1791,17 +1793,26 @@ class HyMemoryClient:
             query_embedding=query_embedding,
         ))
 
-    def get(self, memory_id: str) -> Optional[Dict[str, Any]]:
+    def get(
+        self,
+        memory_id: str,
+        *,
+        include_raw: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """
         获取单条记忆。
 
         Args:
             memory_id: 记忆 ID
+            include_raw: 是否允许返回 L1_RAW 原始记忆。默认 False，保持原有隐藏行为；
+                         lite 模式的记忆均为 L1_RAW，需显式设为 True 才能按 ID 读取。
 
         Returns:
             {"memory_id", "content", "layer", "request_id", "elapsed_ms"} 或 None（不存在时）
         """
-        return self._loop_thread.run(self.async_get(memory_id))
+        return self._loop_thread.run(
+            self.async_get(memory_id, include_raw=include_raw)
+        )
 
     def update(
         self,
@@ -3650,11 +3661,20 @@ class HyMemoryClient:
     # ================================================================
 
     @_ensure_internal_loop
-    async def async_get(self, memory_id: str) -> Optional[Dict[str, Any]]:
+    async def async_get(
+        self,
+        memory_id: str,
+        *,
+        include_raw: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """
         获取单条记忆（异步）。
 
         VDB + Graph 双路并行查询，哪个有结果返回哪个。
+
+        Args:
+            memory_id: 记忆 ID
+            include_raw: 是否允许返回 L1_RAW 原始记忆，默认 False。
 
         Returns:
             {"memory_id", "content", "layer", "source", "request_id", "elapsed_ms"} 或 None
@@ -3683,17 +3703,24 @@ class HyMemoryClient:
 
         vdb_node, graph_node = await _asyncio_get.gather(_get_vdb(), _get_graph())
 
-        # L1_RAW 不对外可见：按 ID 直取走主键查询、绕过向量库的 layer filter，
-        # 故在此统一挡掉。async_get 是 GET /v1/memories/{id} 与
-        # /v1/memories/batch 两个对外接口的共同必经处，而内部写链路不经过它
-        # （writer 写后校验直接调 vector_store.get_by_id），挡在此处不影响内部。
+        # L1_RAW 默认不对外可见：按 ID 直取走主键查询、绕过向量库的 layer
+        # filter，故在此统一挡掉。SDK 调用方可通过 include_raw=True 显式读取；
+        # HTTP 接口不传该参数，继续保持隐藏。内部写链路不经过此方法。
         #
         # 置于 gather 之后、埋点之前：命中 raw 仍照常落 GET 埋点（保留可观测性，
         # 便于发现有调用方拿 raw id 试探），只是不把内容返回给调用方。
         # 对调用方的表现与"该 id 不存在"完全一致，不额外暴露"存在但被挡"的信息。
-        if vdb_node is not None and vdb_node.layer == MemoryLayer.L1_RAW:
+        if (
+            not include_raw
+            and vdb_node is not None
+            and vdb_node.layer == MemoryLayer.L1_RAW
+        ):
             vdb_node = None
-        if graph_node is not None and getattr(graph_node, "layer", None) == MemoryLayer.L1_RAW:
+        if (
+            not include_raw
+            and graph_node is not None
+            and getattr(graph_node, "layer", None) == MemoryLayer.L1_RAW
+        ):
             graph_node = None
 
         elapsed = round((time.perf_counter() - t0) * 1000, 2)

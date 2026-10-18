@@ -106,6 +106,15 @@ result = client.add(
 )
 ```
 
+`metadata` 与 `meta` 不是同一字段：
+
+- `metadata` 是兼容旧调用方保留的 SDK 处理选项，会进入内部
+  `WriteRequest.extra`，不保证持久化或随查询结果返回。
+- `meta` 是调用方的业务上下文，会持久化并在 `search()`、`get()` 等结果中返回。
+  同一记忆被多次合并时，各次 `meta` 会按写入顺序保存在列表中。
+
+需要以后读回的数据必须放在 `meta`，不要放在 `metadata`。
+
 `scene` 的公开取值：
 
 - `None`：普通文本直接走 chat；messages 含 tool 时执行快速场景判断。
@@ -263,6 +272,8 @@ catalog 也可以在没有基础 L0 时形成只读的合成画像。
 
 ```python
 memory = client.get("memory_id")
+# lite 模式写入的是 L1_RAW；按 ID 读取时必须显式选择返回原文。
+raw_memory = client.get("memory_id", include_raw=True)
 result = client.update("memory_id", "更新后的内容")
 result = client.delete("memory_id")
 result = client.delete_all(user_id="user_001")
@@ -281,6 +292,10 @@ result = client.clone_user("user_001", "user_002", agent_id=None)
 
 对应异步方法为 `async_get()`、`async_update()`、`async_delete()`、
 `async_delete_all()`、`async_list_memories()`、`async_clone_user()`。
+
+`get()` / `async_get()` 默认继续隐藏 `L1_RAW`，因此不会改变现有调用方的原文访问
+边界。只有显式传入 `include_raw=True` 才返回该层；这也是 lite 模式按 ID 读取
+写入内容及其 `meta` 的方式。MemHub 的 HTTP 读取接口不开放此参数。
 
 普通 `list_memories()` 返回 `vdb` 桶，并在 Graph 有结果时附带 `graph`；传入
 `workspace_id` 时返回生产力记忆的 `scene="productivity"` 和 `experiences`。

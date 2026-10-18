@@ -14,6 +14,11 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Clarified that `add(metadata=...)` carries legacy SDK processing options,
+  while persistent caller business context belongs in `meta`.
+- Added an opt-in `get(..., include_raw=True)` path for reading `L1_RAW`
+  memories, including memories written in lite mode. The default remains
+  hidden for backward compatibility.
 - Removed MemHub's task-scoped HyPermission store wrappers and global
   model-content consent switch. The trusted embedded Hy Memory SDK now uses
   its native local stores directly.
