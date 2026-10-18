@@ -37,7 +37,7 @@ dependencies = [
 qdrant = ["qdrant-client", "fastembed"]
 faiss = ["faiss-cpu"]
 graph = ["neo4j"]
-mysql = ["aiomysql"]
+mysql = ["aiomysql", "PyMySQL[rsa]"]
 rerank = ["torch", "transformers"]
 all = [
     "chromadb>=1.5.9",
@@ -47,6 +47,7 @@ all = [
     "kuzu",
     "neo4j",
     "aiomysql",
+    "PyMySQL[rsa]",
     "torch",
     "transformers",
 ]

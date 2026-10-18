@@ -10,6 +10,13 @@ from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
 
 
+def _normalize_storage_backend(value: Any, kind: str) -> str:
+    backend = str(value).strip().lower()
+    if backend not in ("sqlite", "mysql"):
+        raise ValueError(f"Unsupported {kind} backend; must be sqlite / mysql")
+    return backend
+
+
 def _load_dotenv():
     """加载 .env 文件（如果存在），向上逐级查找"""
     # 从当前文件向上逐级查找 .env
@@ -1102,13 +1109,18 @@ class APIConfig:
 
 @dataclass
 class HistoryConfig:
-    """历史记录配置（SQLite 审计追踪）"""
+    """历史记录配置（SQLite 或 MySQL 审计追踪）"""
 
     enable: bool = None  # 是否启用历史记录
     db_path: str = None  # SQLite 数据库路径
     record_searches: bool = None  # 是否记录搜索操作
 
+    backend: str = None  # sqlite (default) | mysql
+
     def __post_init__(self):
+        if self.backend is None:
+            self.backend = os.getenv("MEMORY_HISTORY_BACKEND", "sqlite")
+        self.backend = _normalize_storage_backend(self.backend, "history")
         if self.enable is None:
             self.enable = _get_env_bool("MEMORY_HISTORY_ENABLE", True)
         if self.db_path is None:
@@ -1298,6 +1310,17 @@ class MemoryConfig:
                     if hasattr(sub, key):
                         setattr(sub, key, value)
 
+        # from_dict mutates already-initialized dataclasses, so apply the same
+        # validation/normalization used by environment construction.
+        if "cache" in config_dict and "backend" in config_dict["cache"]:
+            config.cache.backend = _normalize_storage_backend(
+                config.cache.backend, "cache"
+            )
+        if "history" in config_dict and "backend" in config_dict["history"]:
+            config.history.backend = _normalize_storage_backend(
+                config.history.backend, "history"
+            )
+
         # basic_profile: fields 是 Dict[str, str]，整体替换（非空时）
         if "basic_profile" in config_dict:
             bp = config_dict["basic_profile"] or {}
@@ -1363,6 +1386,7 @@ class MemoryConfig:
                 "business_version_map": self.pipeline.business_version_map,
             },
             "history": {
+                "backend": self.history.backend,
                 "enable": self.history.enable,
                 "db_path": self.history.db_path,
                 "record_searches": self.history.record_searches,
