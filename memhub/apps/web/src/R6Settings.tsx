@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { getModelProfiles, getSedimentation, setSedimentation } from "./api";
+import { getModelProfiles, setSedimentation } from "./api";
 import { ConnectionFallback } from "./ConnectionFallback";
 import { exportDiagnosticsFile } from "./diagnostics-export";
 import { ModelSettings, type ModelSettingsActions } from "./ModelSettings";
@@ -18,6 +18,11 @@ import {
   setLoginPreference,
   useLoginPreference,
 } from "./runtime-state";
+import {
+  commitSedimentation,
+  refreshSedimentation,
+  useSedimentation,
+} from "./sedimentation-state";
 import "./r6-settings.css";
 
 type Group = "model" | "connections" | "help";
@@ -72,7 +77,8 @@ export function R6Settings({
         commit: "unknown",
       },
   );
-  const [sedimentation, setSedimentationState] = useState<boolean | null>(null);
+  const sedimentationState = useSedimentation();
+  const sedimentation = sedimentationState?.enabled ?? null;
   const [sedimentationPending, setSedimentationPending] = useState(false);
   const [sedimentationError, setSedimentationError] = useState("");
   const [sedimentationUnavailable, setSedimentationUnavailable] =
@@ -119,13 +125,11 @@ export function R6Settings({
 
   const readSedimentation = useCallback(async () => {
     try {
-      const state = await getSedimentation();
-      setSedimentationState(state.enabled === true);
+      await refreshSedimentation();
       setSedimentationUnavailable(false);
     } catch {
-      // Left unknown rather than assumed on: showing "已停止" when the switch
-      // could not be read would hide a running model.
-      setSedimentationState(null);
+      // Keep the last confirmed state visible, but disable writes until the
+      // server can confirm it again.
       setSedimentationUnavailable(true);
     }
   }, []);
@@ -141,7 +145,7 @@ export function R6Settings({
     setSedimentationError("");
     try {
       const state = await setSedimentation(enabled);
-      setSedimentationState(state.enabled === true);
+      commitSedimentation(state);
     } catch {
       setSedimentationError(
         enabled

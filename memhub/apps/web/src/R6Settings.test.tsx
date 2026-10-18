@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import type { Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { getModelProfiles, getSedimentation, setSedimentation } from "./api";
+import { queryClient, resetClient } from "./query-client";
 import { R6Settings } from "./R6Settings";
 
 vi.mock("./api", () => ({
@@ -54,6 +55,7 @@ vi.mock("./diagnostics-export", () => ({
 }));
 afterEach(() => {
   cleanup();
+  resetClient();
   vi.clearAllMocks();
   window.oneMemory = undefined;
 });
@@ -94,6 +96,11 @@ it("stops model sedimentation on one switch flip without touching the model conf
   await user.click(toggle);
 
   expect(setSedimentation).toHaveBeenCalledExactlyOnceWith(false);
+  expect(queryClient.getQueryData(["sedimentation"])).toEqual({
+    enabled: false,
+    pending_retained: true,
+    imports_unaffected: true,
+  });
   await screen.findByText(/停止后不再调用模型/);
 });
 

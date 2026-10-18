@@ -40,6 +40,7 @@ import {
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { prefetchDataRuntime } from "./runtime-state";
+import { refreshSedimentation, useSedimentation } from "./sedimentation-state";
 import type { useImportSources } from "./use-import-sources";
 import "./applications-home.css";
 
@@ -192,6 +193,7 @@ export function ApplicationsHome({
   // A failed poll keeps the last answer on screen; the page must say it is old.
   const hostStale = hostQuery.isError && hostQuery.data !== undefined;
   const auto = useAutoConnect();
+  const sedimentation = useSedimentation();
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
@@ -554,6 +556,7 @@ export function ApplicationsHome({
         getMemoryProcessing(),
         getLiveSyncHealth(),
         getRecentConversations({ limit: 1, recentActivity: true }),
+        refreshSedimentation(),
       ]);
       busy = false;
       if (stopped) return;
@@ -651,19 +654,18 @@ export function ApplicationsHome({
   const apps = imports.sources.filter(
     (s) => s.authorized || s.detected === true || s.location_state === "found",
   );
-  const stateLabel = processing?.running
-    ? "整理中"
-    : processing?.blocked_stages?.some((stage) => stage.count > 0)
-      ? "排队处理中"
-      : processing?.waiting_for_model
-        ? "等待模型"
-        : processing?.failed
-          ? "需要处理"
-          : processing?.pending
-            ? "准备中"
-            : processing
-              ? "一切就绪"
-              : "待核对";
+  const stateLabel =
+    sedimentation?.enabled === true
+      ? "整理中"
+      : sedimentation?.enabled === false
+        ? "已暂停"
+        : "待核对";
+  const stateDetail =
+    sedimentation?.enabled === false
+      ? "已停止生成新记忆"
+      : sedimentation?.enabled === true
+        ? "新的对话正在整理"
+        : "正在核对整理状态";
   const latestClock = latest ? clockParts(latest.updated_at) : null;
   const time = latestClock?.clock ?? (latest ? "时间未知" : null);
   const checked = visible ? clockParts(visible.observed_at) : null;
@@ -835,13 +837,7 @@ export function ApplicationsHome({
               <div>
                 <p>沉淀状态</p>
                 <strong className="r6-home-word">{stateLabel}</strong>
-                <small>
-                  {processing?.running
-                    ? "新的对话正在整理"
-                    : processing?.pending
-                      ? "等待队列开始处理"
-                      : "以当前处理状态为准"}
-                </small>
+                <small>{stateDetail}</small>
               </div>
               <div>
                 <p>最近更新</p>
