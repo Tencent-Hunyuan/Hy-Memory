@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -1369,24 +1370,30 @@ def test_a_machine_error_code_is_preserved(tmp_path) -> None:
     assert safe_error_code(ValueError("some sentence with spaces")) == "ValueError"
 
 
-def test_an_inactive_profile_parks_for_model_before_any_send(tmp_path) -> None:
+def test_an_inactive_profile_parks_without_error_logging(tmp_path, caplog) -> None:
     """A pre-bridge model-not-ready code parks and keeps the intent."""
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     record = queue.submit(_request())
     _claim_through_drain(queue, record.job_id)
 
-    asyncio.run(
-        execute_job(
-            record.job_id,
-            queue=queue,
-            supervisor=_Recorder(error=RuntimeError("model_profile_not_active")),
-            evidence=_EvidenceStore({"e1"}),
+    with caplog.at_level(
+        logging.DEBUG,
+        logger="one_memory.memory_server.durable_queue",
+    ):
+        asyncio.run(
+            execute_job(
+                record.job_id,
+                queue=queue,
+                supervisor=_Recorder(error=RuntimeError("model_profile_not_active")),
+                evidence=_EvidenceStore({"e1"}),
+            )
         )
-    )
 
     assert _state(path, record.job_id) == WAITING_FOR_MODEL
     assert _rows(path)[0]["hy_invoked"] == 0
+    assert "durable_write_job_failed" not in caplog.text
+    assert "durable_write_job_parked" in caplog.text
 
 
 def test_an_authorization_stop_cancels_instead_of_failing(tmp_path) -> None:
@@ -1546,7 +1553,7 @@ def test_parking_does_not_burn_the_retry_budget(tmp_path) -> None:
     assert queue.get("idem-1").state == PENDING
 
 
-def test_a_model_waiter_is_readmitted_once_its_wait_elapses(tmp_path) -> None:
+def test_a_transient_model_waiter_is_readmitted_once_its_wait_elapses(tmp_path) -> None:
     """A model outage clears on its own; nothing re-admits it otherwise.
 
     `waiting_for_permission` needs a grant event, but `waiting_for_model` is
@@ -1564,7 +1571,7 @@ def test_a_model_waiter_is_readmitted_once_its_wait_elapses(tmp_path) -> None:
     queue.settle(
         record.job_id,
         state=WAITING_FOR_MODEL,
-        error_code="model_profile_not_active",
+        error_code="model_secret_unavailable",
         hy_invoked=False,
     )
 
@@ -1581,8 +1588,8 @@ def test_a_model_waiter_is_readmitted_once_its_wait_elapses(tmp_path) -> None:
     assert _rows(path)[0]["attempts"] == 0
 
 
-def test_readmitting_a_model_waiter_clears_its_stale_detail(tmp_path) -> None:
-    """The timer readmission path must clear the old blocking reason too."""
+def test_no_profile_waiter_is_readmitted_only_after_activation(tmp_path) -> None:
+    """No timer can create a model profile; activation owns this transition."""
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     record = queue.submit(_request())
@@ -1594,11 +1601,48 @@ def test_readmitting_a_model_waiter_clears_its_stale_detail(tmp_path) -> None:
     )
     now = datetime.now(UTC)
 
-    assert queue.readmit_model_waiters(now=now + timedelta(minutes=2)) == 1
+    assert queue.readmit_model_waiters(now=now + timedelta(minutes=2)) == 0
+    parked = queue.get("idem-1")
+    assert parked.state == WAITING_FOR_MODEL
+    assert parked.detail == "model_profile_not_active"
 
+    assert queue.readmit_model_profile_waiters() == 1
     readmitted = queue.get("idem-1")
     assert readmitted.state == PENDING
     assert readmitted.detail == ""
+
+
+def test_no_profile_backlog_stays_parked_across_maintenance_cycles(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    for index in range(100):
+        record = queue.submit(_request(key=f"no-profile-{index}"))
+        queue.settle(
+            record.job_id,
+            state=WAITING_FOR_MODEL,
+            error_code="model_profile_not_active",
+            hy_invoked=False,
+        )
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_write_jobs SET attempts=1,"
+            "updated_at='2000-01-01T00:00:00+00:00'"
+        )
+
+    first = datetime.now(UTC)
+    assert queue.readmit_model_waiters(now=first, after=timedelta(0)) == 0
+    assert (
+        queue.readmit_model_waiters(
+            now=first + timedelta(minutes=2),
+            after=timedelta(0),
+        )
+        == 0
+    )
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT state,attempts,COUNT(*) FROM memory_write_jobs "
+            "GROUP BY state,attempts"
+        ).fetchall() == [(WAITING_FOR_MODEL, 1, 100)]
 
 
 def test_readmit_parked_cannot_resurrect_a_terminal_row(tmp_path) -> None:

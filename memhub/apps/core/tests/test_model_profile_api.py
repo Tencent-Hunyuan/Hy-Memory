@@ -259,12 +259,17 @@ def test_activation_survives_a_corpus_already_imported(tmp_path) -> None:
                 ),
                 secrets=secrets,
             )
+            readmissions: list[bool] = []
+            app.state.memory_write_queue.readmit_model_profile_waiters = (
+                lambda: readmissions.append(True) or 0
+            )
 
             activated = await client.post(f"/api/v1/model-profiles/{profile_id}/activate")
 
             assert activated.status_code == 200
             assert activated.json()["is_active"] is True
             assert API_KEY not in activated.text
+            assert readmissions == [True]
             # Started, not waited for: the walk reads every conversation.
             assert not app.state.memory_backfill.done()
 

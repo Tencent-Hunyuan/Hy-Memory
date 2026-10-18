@@ -2793,6 +2793,12 @@ def create_app(
         # D75: work queued for the previous model continues with this one.
         # Only tasks that never reached the model are re-bound.
         await asyncio.to_thread(app.state.memory_task_store.rebind_unstarted_profile, profile)
+        # A missing profile is an event-driven wait, not a provider outage.
+        # Release those durable rows only now that activation has changed the
+        # condition; the ordinary drain poll will claim them without a restart.
+        await asyncio.to_thread(
+            app.state.memory_write_queue.readmit_model_profile_waiters
+        )
         # Not awaited: the catch-up reads every conversation ever imported, and
         # the answer to "which profile is active" does not depend on it.
         _start_backfill(app)
@@ -5062,10 +5068,11 @@ def _source_writes_on(app: FastAPI, source_id: str) -> bool:
 
 
 def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
-    """Claim queued model work only while both global and source gates allow it."""
+    """Claim queued model work only when policy, source and model all admit it."""
 
     return (
         _config_store(app).sedimentation_enabled()
+        and _model_profile_store(app).active_identity() is not None
         and _history_import_gate_released(app)
         and _source_writes_on(app, source_id)
     )

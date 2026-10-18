@@ -1404,11 +1404,12 @@ class DurableWriteQueue:
     ) -> int:
         """Re-admit `waiting_for_model` jobs whose wait has elapsed.
 
-        A model outage clears on its own, so this state is retried on a timer
+        A model outage clears on its own, so transient waiters retry on a timer
         rather than waiting for a grant event like `waiting_for_permission`.
-        Keyed on `updated_at` so repeated calls while a job is still parked do
-        not reset its own clock; the attempt consumed by the parking claim is
-        returned, the same way `readmit_parked` does.
+        `model_profile_not_active` is excluded: only explicit activation can
+        change that condition. Keyed on `updated_at` so repeated calls while a
+        job is still parked do not reset its own clock; the attempt consumed by
+        the parking claim is returned, the same way `readmit_parked` does.
         """
         now = now or datetime.now(UTC)
         threshold = (now - after).isoformat()
@@ -1417,8 +1418,33 @@ class DurableWriteQueue:
                 "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
                 "lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
                 "THEN attempts-1 ELSE 0 END, last_error=NULL, updated_at=? "
-                "WHERE state=? AND updated_at <= ? AND hy_invoked=0",
-                (PENDING, now.isoformat(), WAITING_FOR_MODEL, threshold),
+                "WHERE state=? AND updated_at <= ? AND hy_invoked=0 "
+                "AND (last_error IS NULL OR last_error<>?)",
+                (
+                    PENDING,
+                    now.isoformat(),
+                    WAITING_FOR_MODEL,
+                    threshold,
+                    "model_profile_not_active",
+                ),
+            )
+        return changed.rowcount
+
+    def readmit_model_profile_waiters(self) -> int:
+        """Re-admit no-profile work only after model activation changes the condition."""
+        now = datetime.now(UTC).isoformat()
+        with main_database(self.database_path).write() as connection, connection:
+            changed = connection.execute(
+                "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
+                "lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
+                "THEN attempts-1 ELSE 0 END, last_error=NULL, updated_at=? "
+                "WHERE state=? AND last_error=? AND hy_invoked=0",
+                (
+                    PENDING,
+                    now,
+                    WAITING_FOR_MODEL,
+                    "model_profile_not_active",
+                ),
             )
         return changed.rowcount
 
@@ -2071,7 +2097,12 @@ async def execute_job(
         # Never `logger.exception` here: it prints the exception's message,
         # which may be a provider response or the user's own text. Log the
         # already-sanitised code instead, matching `hy-failure-classification`.
-        logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
+        if code == "model_profile_not_active":
+            logger.debug("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
+        elif state in PARKED_STATES:
+            logger.info("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
+        else:
+            logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
         return
     await in_the_background(queue.settle, job_id, state=COMPLETED, owner=owner)
 
