@@ -25,7 +25,6 @@ def _message(
         message_id=message_id or f"m{ordinal}",
         ordinal=ordinal,
         role=role,
-        written_by="person" if role == "user" else "model",
         content=content,
     )
 

@@ -141,11 +141,18 @@ def parse_codex_record(
     if role == "user":
         written_by = _user_author(record, payload, session)
         # Machine inputs may quote a whole transcript, including user_query tags.
-        # Session provenance is not proof of who wrote any particular future turn.
-        if written_by is WrittenBy.PERSON:
+        # Protocol role is authoritative; host author metadata does not change
+        # how a user message is cleaned.
+        if not (
+            content.startswith(
+                "The following is the Codex agent history whose request action you are assessing."
+            )
+            and ">>> TRANSCRIPT START" in content
+            and ">>> TRANSCRIPT END" in content
+        ):
             content = strip_host_wrappers(content)
-            if not content:
-                return ParsedSkip(ScanIssueCode.NO_TEXT)
+        if not content:
+            return ParsedSkip(ScanIssueCode.NO_TEXT)
     return ParsedMessage(
         conversation_id=conversation_from_relative_path(context.relative_path),
         message_id=first_string(payload.get("id"), record.get("id")),

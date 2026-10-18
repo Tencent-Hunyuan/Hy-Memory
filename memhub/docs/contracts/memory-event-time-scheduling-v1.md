@@ -16,12 +16,12 @@ The row stores:
 
 - `event_at`: UTC event time used for scheduling;
 - `time_quality`: `exact`, `anchored`, `session`, or `approximate`;
-- `queue_seq`: the existing monotonic tie-breaker and replay order;
+- `queue_seq`: a deterministic tie-breaker only when event times are equal;
 - `session_key` and `source_key`: the existing session/Harness identities.
 
 Time selection is:
 
-1. the person-authored user turn timestamp;
+1. the protocol `user` turn timestamp;
 2. the nearest session timestamp anchor;
 3. the session/file timestamp;
 4. `imported_at` or write creation time.
@@ -58,8 +58,10 @@ Within one window:
 - different Harnesses may run concurrently, up to the existing concurrency
   limit;
 - one Harness still has at most one running job;
-- earlier `queue_seq` values within a Harness block later values;
-- jobs are selected by `(event_at, queue_seq, job_id)`;
+- each Session is ordered by `(event_at, queue_seq)`;
+- different Sessions from one Harness never block each other's event order;
+- `source_key` limits one running job per Harness but does not define FIFO;
+- jobs are selected globally by `(event_at, queue_seq, job_id)`;
 - `live` affects service admission only and does not jump the time window.
 
 When the active window is empty, the next oldest eligible pending job becomes
@@ -91,16 +93,31 @@ batch are not held.
 - Claimed but not invoked: return to pending without consuming an attempt.
 - Already invoked: the current provider call may finish; it is never blindly
   cancelled or retried.
-- Unknown outcomes retain the existing reconcile-before-retry contract.
+- Unknown outcomes retain their complete frozen input, never block another
+  Session or Harness, and follow the bounded reconcile-before-retry contract.
+
+## Immutable job input and branches
+
+Every new `memory_write_jobs.payload_json` stores the complete immutable
+Evidence records used by the write, not only references to another table.
+Execution and unknown reconciliation use that snapshot. Terminal jobs retain
+it as audit data.
+
+When a Harness rewinds and continues from an earlier point, already stored
+Evidence and jobs are not deleted. Shared unchanged messages deduplicate;
+changed or new branch records append new jobs. A later revision of a reused
+host message id receives a new write id while the earlier job keeps its
+original content.
 
 ## Upgrade compatibility
 
 Legacy jobs are assigned:
 
-1. the latest person-user Evidence time linked to the job;
+1. the latest `role=user` Evidence time linked to the job;
 2. otherwise the earliest linked Evidence time;
 3. otherwise the original job creation time.
 
 They are marked `approximate` and retain `queue_seq` as a deterministic
-tie-breaker. No payload, Evidence identity, or idempotency key is rewritten.
+tie-breaker. Old id-only payloads remain readable; all newly submitted jobs
+are self-contained.
 

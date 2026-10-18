@@ -15,7 +15,7 @@ fixed ten-minute event-time window.
    - Parse native Harness timestamps.
    - Parse Cursor `<timestamp>` envelopes before stripping them.
    - Mark fallback quality explicitly.
-   - Derive each chunk's time from its person-authored user opener.
+   - Derive each chunk's time from its protocol `user` opener.
 
 2. **Durable schema**
    - Add `event_at` and `time_quality` to `memory_write_jobs`.
@@ -25,7 +25,8 @@ fixed ten-minute event-time window.
 3. **Windowed Drain**
    - Anchor at the oldest eligible pending event.
    - Admit only `[anchor, anchor + 10 minutes)`.
-   - Keep one running job per Harness and FIFO by `queue_seq`.
+   - Keep one running job per Harness; order globally by `event_at`.
+   - Use `queue_seq` only to break equal-time ties within one Session.
    - Advance only after the current window has no eligible pending/running
      work.
 

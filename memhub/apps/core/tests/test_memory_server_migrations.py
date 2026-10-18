@@ -2103,7 +2103,7 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50, 51, 52, 53)
+    assert result.applied == (49, 50, 51, 52, 53, 54)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
@@ -2136,7 +2136,7 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (51, 52, 53)
+    assert result.applied == (51, 52, 53, 54)
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]
@@ -2217,3 +2217,55 @@ def test_migration_53_backfills_write_job_event_time_from_person_turn(
             "SELECT 1 FROM sqlite_master "
             "WHERE type='table' AND name='memory_write_schedule_state'"
         ).fetchone() == (1,)
+
+
+def test_migration_54_preserves_legacy_possibly_sent_tasks(tmp_path) -> None:
+    import sqlite3
+
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore
+
+    path = tmp_path / "one-memory.sqlite3"
+    through_53 = tuple(item for item in MIGRATIONS if item.version <= 53)
+    asyncio.run(migrate(SqliteMigrationStore(path), through_53))
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO memory_tasks (
+                task_id,request_id,user_id,kind,input_ref,status,
+                profile_id,profile_revision,profile_snapshot_json,
+                attempts,created_at,updated_at,hy_invocation_count
+            ) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,0)
+            """,
+            (
+                "legacy-sent",
+                "legacy-sent-request",
+                "local",
+                "extract",
+                "evidence",
+                "running",
+                "profile",
+                1,
+                "{}",
+                "2026-10-18T00:00:00+00:00",
+                "2026-10-18T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "CREATE TABLE memory_task_continuous_permissions "
+            "(task_id TEXT PRIMARY KEY)"
+        )
+        connection.execute(
+            "INSERT INTO memory_task_continuous_permissions VALUES (?)",
+            ("legacy-sent",),
+        )
+
+    asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT hy_invocation_count FROM memory_tasks WHERE task_id='legacy-sent'"
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='memory_task_continuous_permissions'"
+        ).fetchone() is None

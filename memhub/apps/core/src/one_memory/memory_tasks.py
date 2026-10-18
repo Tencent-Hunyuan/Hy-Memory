@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.database import take_the_write_lock_first
 from one_memory.database_access import main_database
-from one_memory.imports.models import EvidenceRecord
+from one_memory.imports.models import EvidenceRecord, WrittenBy
 from one_memory.memory_server.migrations import memory_tasks_ddl
 from one_memory.model_profiles import ModelProfile, ModelProfileSnapshot
 
@@ -174,13 +174,35 @@ def evidence_ref(record: EvidenceRecord) -> TaskEvidenceRef:
             "segment_end": int(marker["end"]),
             "segment_hash": str(marker["hash"]),
         }
-    identity = record.model_dump(mode="json", exclude={"origin_meta", "imported_at", "updated_at"})
     return {
         "evidence_id": record.evidence_id,
         "revision": record.revision,
         "content_hash": record.content_hash,
-        "identity_hash": sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
+        "identity_hash": _evidence_identity_hash(record, include_written_by=False),
     }
+
+
+def _evidence_identity_hash(record: EvidenceRecord, *, include_written_by: bool) -> str:
+    excluded = {"origin_meta", "imported_at", "updated_at"}
+    if not include_written_by:
+        excluded.add("written_by")
+    identity = record.model_dump(mode="json", exclude=excluded)
+    return sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def _identity_hash_matches(record: EvidenceRecord, expected: object) -> bool:
+    candidates = {_evidence_identity_hash(record, include_written_by=False)}
+    # Tasks created by pre-role-only builds keep their original proof. The
+    # legacy metadata could also have changed in place without a revision, so
+    # accept the old hash under every historical author guess.
+    for written_by in WrittenBy:
+        candidates.add(
+            _evidence_identity_hash(
+                record.model_copy(update={"written_by": written_by}),
+                include_written_by=True,
+            )
+        )
+    return expected in candidates
 
 
 def matches_evidence_ref(record: EvidenceRecord, ref: TaskEvidenceRef) -> bool:
@@ -188,15 +210,24 @@ def matches_evidence_ref(record: EvidenceRecord, ref: TaskEvidenceRef) -> bool:
         base = evidence_ref(record)
         if any(
             base.get(key) != ref.get(key)
-            for key in ("evidence_id", "revision", "content_hash", "identity_hash")
+            for key in ("evidence_id", "revision", "content_hash")
         ):
+            return False
+        if not _identity_hash_matches(record, ref.get("identity_hash")):
             return False
         start, end = ref.get("segment_start"), ref.get("segment_end")
         if not isinstance(start, int) or not isinstance(end, int) or not (0 <= start < end):
             return False
         return sha256(record.verbatim[start:end].encode()).hexdigest() == ref["segment_hash"]
     current = evidence_ref(record)
-    return all(current.get(key) == value for key, value in ref.items())
+    return all(
+        (
+            _identity_hash_matches(record, value)
+            if key == "identity_hash"
+            else current.get(key) == value
+        )
+        for key, value in ref.items()
+    )
 
 
 def segment_evidence_record(

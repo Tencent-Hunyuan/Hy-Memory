@@ -133,7 +133,7 @@ from one_memory.imports.jobs import (
 from one_memory.imports.live_sync import LiveSyncHealth, PollingLiveSyncSupervisor
 from one_memory.imports.live_watch import WATCH_MODE, FileWatchLiveSync
 from one_memory.imports.locations import SourceLocation, inspect_source_location
-from one_memory.imports.models import EvidenceOrigin, EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
 from one_memory.imports.runner import live_sync_arrival
 from one_memory.imports.sources.common import SourceInstallState
 from one_memory.imports.sources.registry import (
@@ -1159,9 +1159,7 @@ def create_app(
                 # write gate admits it by its grant. Every manual note's job was
                 # therefore skipped on every drain tick — the note stayed
                 # "saved, waiting" with no task behind it, forever.
-                source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(
-                    app, source_id
-                ),
+                source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
             )
             app.state.memory_write_drain = memory_write_drain
             app.state.memory_write_drain_task = watched_task(
@@ -1190,10 +1188,7 @@ def create_app(
                 for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True):
                     if (
                         record not in chunk
-                        or not any(
-                            item.role == "user" and item.written_by.value == "person"
-                            for item in chunk
-                        )
+                        or not any(item.role == "user" for item in chunk)
                         or not any(item.role == "assistant" for item in chunk)
                     ):
                         continue
@@ -3690,9 +3685,7 @@ def create_app(
         async with app.state.sedimentation_lock:
             previous = store.sedimentation_enabled()
             if previous is not request.enabled:
-                await asyncio.to_thread(
-                    store.set_sedimentation_enabled, request.enabled
-                )
+                await asyncio.to_thread(store.set_sedimentation_enabled, request.enabled)
                 changed = True
                 diagnostic_event(
                     level="info",
@@ -4068,6 +4061,7 @@ async def _authorize_answer_generation(
     # The explicit question is this operation's input, not a standing permission for history.
     if not question.strip() or not grounding:
         raise MemoryAnswerError("memory_answer_generation_not_authorized")
+
     def check() -> None:
         if _model_profile_store(app).active_identity() != (
             profile.profile_id,
@@ -4090,6 +4084,7 @@ async def _authorize_answer_generation(
 
     await recheck()
     return recheck
+
 
 class _LazyASGIApp:
     """Compatibility ASGI app that is built only when a server imports it.
@@ -4473,7 +4468,7 @@ async def _has_large_old_history(adapter: SourceAdapter, *, cutoff: datetime) ->
             if observed.tzinfo is None:
                 observed = observed.replace(tzinfo=UTC)
             has_old_data = has_old_data or observed.astimezone(UTC) < cutoff
-        if event.evidence.role == "user" and event.evidence.written_by is WrittenBy.PERSON:
+        if event.evidence.role == "user":
             user_turns += 1
         if user_turns > ONBOARDING_LARGE_HISTORY_USER_TURNS and has_old_data:
             return True
@@ -5095,10 +5090,7 @@ def _history_import_gate_released(app: FastAPI) -> bool:
         for job in jobs.list_jobs()
         if job.operation == "history"
         and job.source_id in selected
-        and (
-            state.started_at is None
-            or job.created_at >= state.started_at
-        )
+        and (state.started_at is None or job.created_at >= state.started_at)
     ]
     if {job.source_id for job in matching} != selected:
         return False

@@ -53,7 +53,7 @@ from one_memory.hy_memory_bridge import (
 from one_memory.hy_runtime_config import hy_memory_version
 from one_memory.hy_source_context import HySourceContext, HySupportedMemory
 from one_memory.imports.access import opaque_workspace_id
-from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.imports.runner import live_sync_arrival
 from one_memory.imports.storage import EvidenceStore
 from one_memory.input_sanitization import sanitize_model_input
@@ -187,7 +187,6 @@ UNIFIED_HY_AGENT_ID = "one-memory"
 PRE_SEND_REFUSAL_CODES = frozenset(
     {
         "hy_memory_input_exceeds_window",
-        "hy_memory_write_verification_context_scope",
     }
 )
 _BACKFILL_BATCH_SIZE = 8
@@ -297,6 +296,7 @@ class MemoryTaskRunner:
         *,
         timeout: float | None = None,
         before_hy_invocation: Callable[[], Awaitable[None]] | None = None,
+        input_records: tuple[EvidenceRecord, ...] | None = None,
     ) -> MemoryTask:
         started = monotonic()
         diagnostic_event(
@@ -307,13 +307,28 @@ class MemoryTaskRunner:
             task_id=task_id,
         )
         try:
-            body = (
-                self._run_without_content_permission(task_id)
-                if before_hy_invocation is None
-                else self._run_without_content_permission(
-                    task_id, before_hy_invocation=before_hy_invocation
+            if input_records is None:
+                body = (
+                    self._run_without_content_permission(task_id)
+                    if before_hy_invocation is None
+                    else self._run_without_content_permission(
+                        task_id,
+                        before_hy_invocation=before_hy_invocation,
+                    )
                 )
-            )
+            else:
+                body = (
+                    self._run_without_content_permission(
+                        task_id,
+                        input_records=input_records,
+                    )
+                    if before_hy_invocation is None
+                    else self._run_without_content_permission(
+                        task_id,
+                        before_hy_invocation=before_hy_invocation,
+                        input_records=input_records,
+                    )
+                )
             # The ceiling bounds how long this task holds its harness's slot:
             # a harness is serial, so one hung task starves every turn behind
             # it. It is insurance against a single bad call, not a way to run
@@ -398,6 +413,7 @@ class MemoryTaskRunner:
         task_id: str,
         *,
         before_hy_invocation: Callable[[], Awaitable[None]] | None = None,
+        input_records: tuple[EvidenceRecord, ...] | None = None,
     ) -> MemoryTask:
         # Every store call here is synchronous, and several are writes that
         # wait on the write lock for up to five seconds. Made from the loop,
@@ -451,7 +467,9 @@ class MemoryTaskRunner:
         step_started = monotonic()
         frozen = await in_the_background(self.tasks.inputs, task.task_id)
         chunk: tuple[EvidenceRecord, ...] | None
-        if frozen:
+        if input_records is not None:
+            chunk = input_records
+        elif frozen:
             try:
                 chunk = await in_the_background(self._frozen_chunk, task)
             except HyMemoryBridgeError as error:
@@ -484,8 +502,11 @@ class MemoryTaskRunner:
                     self._source_context, task, request.source_context
                 )
                 request = request.model_copy(update={"source_context": context})
+            uses_frozen_input = bool(frozen) or input_records is not None
             grant_token = (
-                await in_the_background(self._grant_token, task, chunk[0]) if frozen else None
+                await in_the_background(self._grant_token, task, chunk[0])
+                if uses_frozen_input
+                else None
             )
             memory_contents = tuple(
                 sanitize_model_input(record.verbatim)
@@ -528,19 +549,24 @@ class MemoryTaskRunner:
                     agent_id=request.agent_id,
                 ),
             )
-            if frozen:
-                await in_the_background(self._frozen_chunk, task)
+            if uses_frozen_input:
+                if input_records is None:
+                    await in_the_background(self._frozen_chunk, task)
                 if grant_token != await in_the_background(self._grant_token, task, chunk[0]):
                     raise HyMemoryBridgeError("hy_memory_source_changed")
             if request.source_context is not None:
-                await in_the_background(self._check_source_context, request.source_context)
+                await in_the_background(
+                    self._check_source_context,
+                    request.source_context,
+                    skip_current=input_records is not None,
+                )
             # One thread hop for the whole batch rather than a dozen writes
             # made from the loop.
             step_started = monotonic()
             await in_the_background(
                 self._record_outputs,
                 task=task,
-                chunk=self._original_records(chunk),
+                chunk=chunk,
                 outputs=outputs,
                 request=request,
                 derivation=derivation,
@@ -778,8 +804,18 @@ class MemoryTaskRunner:
                 raise HyMemoryBridgeError("hy_memory_evidence_changed") from error
         return context
 
-    def _check_source_context(self, context: HySourceContext) -> None:
-        for original in (*context.current, *context.history, *context.supporting):
+    def _check_source_context(
+        self,
+        context: HySourceContext,
+        *,
+        skip_current: bool = False,
+    ) -> None:
+        checked = (
+            (*context.history, *context.supporting)
+            if skip_current
+            else (*context.current, *context.history, *context.supporting)
+        )
+        for original in checked:
             record = self.evidence.get(original.evidence_id)
             if record is None or not matches_evidence_ref(record, evidence_ref(original)):
                 raise HyMemoryBridgeError("hy_memory_evidence_changed")
@@ -880,7 +916,7 @@ class MemoryTaskRunner:
             # HY's own attribution. An undecided memory counts as the person's:
             # HY's prompt defaults that way.
             from_agent = output.owner == "agent" or all(
-                record.written_by is WrittenBy.AGENT
+                record.role == "assistant"
                 and record.content_kind is EvidenceContentKind.RAW_CONVERSATION
                 for record in support
             )
@@ -1063,11 +1099,7 @@ class MemoryTaskRunner:
             record.content_kind is EvidenceContentKind.RAW_CONVERSATION for record in chunk
         )
         source = next(
-            (
-                record
-                for record in chunk
-                if record.role == "user" and record.written_by is WrittenBy.PERSON
-            ),
+            (record for record in chunk if record.role == "user"),
             chunk[0],
         )
         request_turns = tuple(
@@ -1076,12 +1108,9 @@ class MemoryTaskRunner:
             if (
                 record.content_kind is EvidenceContentKind.RAW_CONVERSATION
                 and (
-                    # D98: any `user` message goes, whoever the parser says
-                    # wrote it. A sub agent's question is ordinary
-                    # user-assistant data; the author field cannot tell who
-                    # wrote a message, and filtering on it dropped the sub
-                    # agent's turns. `written_by` still labels the display and
-                    # decides owner — it no longer decides what is sent.
+                    # Protocol role is authoritative. A sub-agent question is
+                    # an ordinary user message regardless of a host parser's
+                    # former author guess.
                     record.role == "user"
                     # The assistant's side goes too. Without it 「就按你说的那个来」
                     # arrives with nothing to resolve it against, and HY's own
@@ -1092,7 +1121,7 @@ class MemoryTaskRunner:
                     or record.role == "assistant"
                     # Tool calls go as they happened; whether they make the
                     # turn a coding turn is HY's call, not ours.
-                    or (record.role == "tool" and record.written_by is WrittenBy.TOOL)
+                    or record.role == "tool"
                 )
             )
             or (not has_raw and record.content_kind is EvidenceContentKind.MEMORY_CONTENT)
@@ -1376,7 +1405,6 @@ class MemoryProcessingSupervisor:
         async with self._explicit_processing_lock(records):
             if self._sedimentation_stopped():
                 raise HyMemoryBridgeError("model_sedimentation_disabled")
-            records = await in_the_background(self._original_records, records)
             active = await in_the_background(self.profiles.active, self.secrets)
             if active is None or (profile_id is not None and profile_id != active.profile_id):
                 raise HyMemoryBridgeError("model_profile_not_active")
@@ -1391,13 +1419,6 @@ class MemoryProcessingSupervisor:
                 raise HyMemoryBridgeError("hy_memory_source_disabled")
             conversations: dict[tuple[str, str, str | None], list[EvidenceRecord]] = {}
             for record in records:
-                stored = await in_the_background(self.evidence.get, record.evidence_id)
-                if (
-                    stored is None
-                    or stored.revision != record.revision
-                    or stored.content_hash != record.content_hash
-                ):
-                    raise ValueError("hy_memory_evidence_changed")
                 conversations.setdefault(
                     (record.source_id, record.conversation_id, record.workspace), []
                 ).append(record)
@@ -1414,7 +1435,7 @@ class MemoryProcessingSupervisor:
                 for conversation in conversations.values()
                 for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True)
             ]
-            prepared = []
+            prepared: list[tuple[MemoryTask, tuple[EvidenceRecord, ...]]] = []
             for chunk in chunks:
                 task = await in_the_background(
                     self._enqueue_chunk,
@@ -1422,12 +1443,12 @@ class MemoryProcessingSupervisor:
                     active,
                     freeze_inputs=True,
                 )
-                prepared.append(task)
+                prepared.append((task, chunk))
             runner = self.runner_factory()
             completed = []
             if on_progress:
-                on_progress(tuple(prepared), 0)
-            for task in prepared:
+                on_progress(tuple(task for task, _chunk in prepared), 0)
+            for task, chunk in prepared:
                 if task.status is not MemoryTaskStatus.COMPLETED:
                     # Another importer may already own this task. Never race its claim.
                     task = await in_the_background(self.tasks.require, task.task_id)
@@ -1456,23 +1477,41 @@ class MemoryProcessingSupervisor:
                                 work_id=task.task_id,
                                 scope_key=chunk[0].source_id,
                             ):
-                                task = (
-                                    await runner.run(task.task_id, timeout=timeout)
-                                    if before_hy_invocation is None
-                                    else await runner.run(
-                                        task.task_id,
-                                        timeout=timeout,
-                                        before_hy_invocation=before_hy_invocation,
+                                if isinstance(runner, MemoryTaskRunner):
+                                    task = (
+                                        await runner.run(
+                                            task.task_id,
+                                            timeout=timeout,
+                                            input_records=chunk,
+                                        )
+                                        if before_hy_invocation is None
+                                        else await runner.run(
+                                            task.task_id,
+                                            timeout=timeout,
+                                            before_hy_invocation=before_hy_invocation,
+                                            input_records=chunk,
+                                        )
                                     )
-                                )
+                                else:
+                                    task = (
+                                        await runner.run(task.task_id, timeout=timeout)
+                                        if before_hy_invocation is None
+                                        else await runner.run(
+                                            task.task_id,
+                                            timeout=timeout,
+                                            before_hy_invocation=before_hy_invocation,
+                                        )
+                                    )
                         finally:
                             _unmark_direct_task(self.tasks.database_path, task.task_id)
                 if task.status is not MemoryTaskStatus.COMPLETED:
                     raise HyMemoryBridgeError(task.last_error_code or "hy_memory_incomplete")
-                await in_the_background(runner._frozen_chunk, task)
                 completed.append(task)
                 if on_progress:
-                    on_progress(tuple(prepared), len(completed))
+                    on_progress(
+                        tuple(prepared_task for prepared_task, _chunk in prepared),
+                        len(completed),
+                    )
             expected = {record.evidence_id for record in records if _is_hy_turn_record(record)}
             actual = {
                 row["evidence_id"] for task in completed for row in self.tasks.inputs(task.task_id)
@@ -3261,9 +3300,7 @@ class MemoryProcessingSupervisor:
         if not tail:
             return False
         last = tail[-1]
-        return bool(
-            last.role == "user" and last.written_by is WrittenBy.PERSON and _opens_turn(last)
-        )
+        return bool(last.role == "user" and _opens_turn(last))
 
     def _admitted_chunks(
         self,
@@ -3608,7 +3645,6 @@ def _is_memory_note(record: EvidenceRecord) -> bool:
     meta = record.origin_meta.get(EvidenceOrigin.MANUAL_IMPORT)
     return (
         record.source_id == "one-memory-manual"
-        and record.written_by is WrittenBy.PERSON
         and meta is not None
         and meta.raw_meta.get("input_mode") == "direct_memory_note"
     )
@@ -3903,14 +3939,12 @@ def _merge_historical_chunks(
 
 
 def _chunk_input_ref(chunk: tuple[EvidenceRecord, ...]) -> str:
-    person_records = tuple(
-        item for item in chunk if item.role == "user" and item.written_by is WrittenBy.PERSON
-    )
-    return person_records[-1].evidence_id if person_records else chunk[-1].evidence_id
+    user_records = tuple(item for item in chunk if item.role == "user")
+    return user_records[-1].evidence_id if user_records else chunk[-1].evidence_id
 
 
 def _opens_turn(record: EvidenceRecord) -> bool:
-    return record.role == "user" and record.written_by is WrittenBy.PERSON
+    return record.role == "user"
 
 
 def _trailing_user_turn_is_open(turn: list[EvidenceRecord]) -> bool:
@@ -3927,10 +3961,8 @@ def _trailing_user_turn_is_open(turn: list[EvidenceRecord]) -> bool:
 def _is_hy_turn_record(record: EvidenceRecord) -> bool:
     """What HY receives of a turn: the input turns and the tool calls made in it."""
     if record.role == "tool":
-        return (
-            record.written_by is WrittenBy.TOOL
-            and record.content_kind is EvidenceContentKind.RAW_CONVERSATION
-            and bool(record.verbatim.strip())
+        return record.content_kind is EvidenceContentKind.RAW_CONVERSATION and bool(
+            record.verbatim.strip()
         )
     return _is_hy_input_turn(record)
 
@@ -3947,11 +3979,8 @@ def _is_hy_input_turn(record: EvidenceRecord) -> bool:
     # from a model.
     if record.role == "assistant":
         return True
-    # D98: the author no longer decides. A sub agent's question arrives as a
-    # `user` message marked written by the agent — it is ordinary
-    # user-assistant data, and dropping it sent Claude Code transcripts to HY
-    # with every question but the first missing. `written_by` labels the
-    # display and decides owner; it cannot tell who actually wrote a message.
+    # A sub-agent question is still a protocol `user` message. Host-specific
+    # author guesses do not decide whether it reaches HY.
     if record.role != "user":
         return False
     if source.casefold().startswith(_HARNESS_PREFIXES):

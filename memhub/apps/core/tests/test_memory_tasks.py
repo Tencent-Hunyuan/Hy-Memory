@@ -1500,14 +1500,8 @@ def test_restart_splits_a_sent_continuous_task_from_an_unsent_one(tmp_path) -> N
         input_ref="evidence-unsent",
         profile=profile,
     )
-    with sqlite3.connect(store.database_path) as connection, connection:
-        connection.execute(
-            "CREATE TABLE memory_task_continuous_permissions (task_id TEXT PRIMARY KEY)"
-        )
-        connection.execute(
-            "INSERT INTO memory_task_continuous_permissions VALUES (?)", (sent.task_id,)
-        )
-    store.claim(sent.task_id)
+    _sent_task, sent_token = store.claim(sent.task_id)
+    store.record_hy_invocation(sent.task_id, runner_token=sent_token)
     store.claim(unsent.task_id)
 
     recovered = store.recover_running()

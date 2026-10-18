@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from one_memory.imports.models import EvidenceContentKind, EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceContentKind, EvidenceRecord
 from one_memory.imports.sources.parsing import is_host_generated_user_turn, strip_host_wrappers
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_processing import _is_hy_input_turn
@@ -15,10 +15,7 @@ def identity_content_ready(record: EvidenceRecord) -> bool:
     # cleaning requires a source map and remains explicitly uncovered for now.
     return (
         record.content_kind is EvidenceContentKind.RAW_CONVERSATION
-        and (
-            (record.role == "user" and record.written_by is WrittenBy.PERSON)
-            or (record.role == "assistant" and record.written_by is WrittenBy.AGENT)
-        )
+        and record.role in {"user", "assistant"}
         and _is_hy_input_turn(record)
         and not is_host_generated_user_turn(record.verbatim)
         and strip_host_wrappers(record.verbatim) == record.verbatim.strip()

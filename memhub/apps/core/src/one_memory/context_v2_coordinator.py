@@ -345,7 +345,7 @@ def _lexical_raw_rows(
         if context_raw._prefers_declared_facts(query.query)
         else "1"
     )
-    person_authored = "CASE WHEN e.written_by='person' THEN 1 ELSE 0 END"
+    person_authored = "CASE WHEN e.role='user' THEN 1 ELSE 0 END"
     query_echo = (
         "CASE WHEN trim(e.verbatim)=? OR trim(e.verbatim)=? THEN 0 ELSE 1 END"
         if context_raw._prefers_declared_facts(query.query)
@@ -507,7 +507,7 @@ def _raw_item(row: sqlite3.Row, start1: int, matched_by: tuple[str, ...]) -> Raw
             "source_id": row["source_id"],
             "conversation_id": row["conversation_id"],
             "role": row["role"],
-            "written_by": "person" if row["written_by"] == "person" else "agent",
+            "written_by": "person" if row["role"] == "user" else "agent",
             "event_time": event_time.isoformat() if event_time else None,
             "spans": [{"start_cp": start, "end_cp": start + len(text), "text": text}],
             "matched_by": list(matched_by),

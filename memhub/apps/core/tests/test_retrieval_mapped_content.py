@@ -132,17 +132,20 @@ def test_raw_authors_keep_exact_body_and_do_not_mutate_evidence(role, author):
 @pytest.mark.parametrize(
     "change",
     [
-        {"role": "user", "written_by": WrittenBy.AGENT},
-        {"role": "assistant", "written_by": WrittenBy.PERSON},
         {"role": "tool", "written_by": WrittenBy.TOOL},
         {"role": "system"},
-        {"written_by": WrittenBy.UNKNOWN},
         {"content_kind": EvidenceContentKind.MEMORY_CONTENT},
     ],
 )
-def test_raw_and_author_qualification_rejects_without_tokenizing(change):
+def test_raw_role_qualification_rejects_without_tokenizing(change):
     with pytest.raises(MappedContentError, match="mapped_content_ineligible"):
         prepare_mapped_content(record("ordinary body", **change))
+
+
+@pytest.mark.parametrize("author", list(WrittenBy))
+def test_host_author_guess_does_not_change_protocol_role_qualification(author):
+    content = prepare_mapped_content(record("ordinary body", role="user", written_by=author))
+    assert content.state == "ready"
 
 
 @pytest.mark.parametrize(

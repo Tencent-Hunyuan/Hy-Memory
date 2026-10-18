@@ -51,14 +51,19 @@ def validate_claim(claim: Claim, records: Mapping[str, EvidenceRecord | SampleRe
         text = record.text if isinstance(record, SampleRecord) else record.verbatim
         if not citation.quote.strip() or citation.quote not in text:
             raise ValueError("citation quote is not in the source")
-        authors.add(str(record.written_by))
+        author = {
+            "user": "person",
+            "assistant": "agent",
+            "tool": "tool",
+        }.get(record.role, "unknown")
+        authors.add(author)
         created = record.created_at
         citations.append(
             citation.model_copy(
                 update={
                     "revision": record.revision,
                     "source_id": record.source_id,
-                    "written_by": str(record.written_by),
+                    "written_by": author,
                     "created_at": created.isoformat() if isinstance(created, datetime) else created,
                 }
             )

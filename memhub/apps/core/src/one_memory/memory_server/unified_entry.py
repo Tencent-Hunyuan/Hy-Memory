@@ -22,7 +22,7 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Literal
 
-from one_memory.imports.models import EvidenceOrigin, EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
 from one_memory.memory_server.contracts import (
     BatchIdentity,
     WriteRequest,
@@ -126,6 +126,11 @@ class UnifiedWriteIntake:
     ) -> WriteRequest:
         session_id = internal_session_id_for(record.conversation_id, record.source_id)
         event_at, time_quality = _job_time((record,))
+        request_key = (
+            f"entry:{record.evidence_id}"
+            if record.revision == 1
+            else (f"entry:v2:{record.evidence_id}:{record.revision}:{record.content_hash}")
+        )
         return WriteRequest(
             internal_session_id=session_id,
             source_id=record.source_id,
@@ -135,7 +140,8 @@ class UnifiedWriteIntake:
                 last_round=last_round,
             ),
             evidence_ids=[record.evidence_id],
-            idempotency_key=f"entry:{record.evidence_id}",
+            input_records=(record,),
+            idempotency_key=request_key,
             priority=priority,
             event_at=event_at,
             time_quality=time_quality,
@@ -176,6 +182,7 @@ class UnifiedWriteIntake:
                     last_round=1,
                 ),
                 evidence_ids=[record.evidence_id for record in records],
+                input_records=records,
                 idempotency_key=request_id,
                 priority=priority,
                 event_at=event_at,
@@ -204,20 +211,14 @@ def _job_time(
     """Use the turn opener's wall clock, with an explicit fallback quality."""
 
     opener = next(
-        (
-            record
-            for record in records
-            if record.role == "user" and record.written_by is WrittenBy.PERSON
-        ),
+        (record for record in records if record.role == "user"),
         records[0],
     )
     if opener.created_at is None:
         return opener.imported_at, "approximate"
     file_origin = opener.origin_meta.get(EvidenceOrigin.FILE)
     basis = file_origin.raw_meta.get("time_basis") if file_origin is not None else None
-    turn_event_at = (
-        file_origin.raw_meta.get("turn_event_at") if file_origin is not None else None
-    )
+    turn_event_at = file_origin.raw_meta.get("turn_event_at") if file_origin is not None else None
     if isinstance(turn_event_at, str):
         try:
             return datetime.fromisoformat(turn_event_at), "exact"

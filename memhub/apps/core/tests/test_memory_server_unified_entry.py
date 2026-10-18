@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime
 
@@ -9,13 +11,23 @@ import pytest
 
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
-from one_memory.memory_server.durable_queue import DurableWriteQueue
+from one_memory.memory_server.durable_queue import (
+    DurableWriteDrain,
+    DurableWriteQueue,
+    execute_job,
+)
 from one_memory.memory_server.unified_entry import (
     UnifiedWriteIntake,
 )
 
 
-def _record(store: EvidenceStore, *, conversation_id: str = "c1", message_id: str = "m1"):
+def _record(
+    store: EvidenceStore,
+    *,
+    conversation_id: str = "c1",
+    message_id: str = "m1",
+    verbatim: str = "durable intake",
+):
     return store.put(
         EvidenceInput(
             source_id="cursor",
@@ -24,7 +36,7 @@ def _record(store: EvidenceStore, *, conversation_id: str = "c1", message_id: st
             role="user",
             written_by=WrittenBy.PERSON,
             created_at=datetime.now(UTC),
-            verbatim="durable intake",
+            verbatim=verbatim,
             origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
         )
     ).record
@@ -170,6 +182,136 @@ def test_replaying_the_same_evidence_does_not_create_a_second_row(tmp_path) -> N
 
     assert first.record.job_id == replay.record.job_id
     assert replay.enqueued is False
+
+
+def test_rewound_harness_revision_appends_a_job_with_immutable_input(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    intake = UnifiedWriteIntake(DurableWriteQueue(path, evidence=store))
+    old = _record(store, verbatim="old branch")
+    old_job = intake.submit_evidence(old, first_round=1, last_round=1)
+
+    revised = _record(store, verbatim="new branch")
+    new_job = intake.submit_evidence(revised, first_round=1, last_round=1)
+
+    assert revised.evidence_id == old.evidence_id
+    assert revised.revision == old.revision + 1
+    assert new_job.record.job_id != old_job.record.job_id
+    assert intake.queue.payload_for(old_job.record.job_id).input_records[0].verbatim == "old branch"
+    assert intake.queue.payload_for(new_job.record.job_id).input_records[0].verbatim == "new branch"
+    assert intake.queue.unsubmitted_evidence_ids() == ()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM memory_write_jobs").fetchone()[0] == 2
+
+
+def test_revision_committed_before_job_crash_is_discovered_for_reconcile(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    queue = DurableWriteQueue(path, evidence=store)
+    intake = UnifiedWriteIntake(queue)
+    old = _record(store, verbatim="old branch")
+    intake.submit_evidence(old, first_round=1, last_round=1)
+
+    revised = _record(store, verbatim="new branch")
+
+    assert revised.evidence_id == old.evidence_id
+    assert revised.revision == old.revision + 1
+    assert queue.unsubmitted_evidence_ids() == (revised.evidence_id,)
+
+
+def test_late_old_revision_snapshot_does_not_cover_the_current_revision(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    queue = DurableWriteQueue(path, evidence=store)
+    intake = UnifiedWriteIntake(queue)
+    old = _record(store, verbatim="old branch")
+    revised = _record(store, verbatim="new branch")
+
+    intake.submit_evidence(old, first_round=1, last_round=1)
+
+    assert revised.evidence_id == old.evidence_id
+    assert revised.revision == old.revision + 1
+    assert queue.unsubmitted_evidence_ids() == (revised.evidence_id,)
+
+
+def test_old_branch_job_executes_its_frozen_revision_after_harness_rewind(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    queue = DurableWriteQueue(path, evidence=store)
+    intake = UnifiedWriteIntake(queue)
+    old = _record(store, verbatim="old branch")
+    old_job = intake.submit_evidence(old, first_round=1, last_round=1)
+    revised = _record(store, verbatim="new branch")
+    intake.submit_evidence(revised, first_round=1, last_round=1)
+    drain = DurableWriteDrain(queue, execute=lambda _job_id: asyncio.sleep(0), owner="frozen")
+    assert drain.claim(limit=1) == (old_job.record.job_id,)
+
+    captured = []
+
+    class Supervisor:
+        async def process_records(self, records, *, before_hy_invocation):
+            captured.extend(records)
+            await before_hy_invocation()
+
+    asyncio.run(
+        execute_job(
+            old_job.record.job_id,
+            queue=queue,
+            supervisor=Supervisor(),
+            evidence=store,
+            owner="frozen",
+        )
+    )
+
+    assert [record.verbatim for record in captured] == ["old branch"]
+    assert queue.get(old_job.request_id).state == "completed"
+
+
+def test_reopening_reads_an_old_id_only_job_without_rewriting_it(tmp_path) -> None:
+    from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    record = _record(store)
+    queue = DurableWriteQueue(path, evidence=store)
+    legacy = queue.submit(
+        WriteRequest(
+            internal_session_id=record.conversation_id,
+            source_id=record.source_id,
+            batch_identity=BatchIdentity(
+                internal_session_id=record.conversation_id,
+                first_round=1,
+                last_round=1,
+            ),
+            evidence_ids=[record.evidence_id],
+            idempotency_key="legacy-id-only",
+        )
+    )
+    with sqlite3.connect(path) as connection, connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM memory_write_jobs WHERE job_id=?",
+                (legacy.job_id,),
+            ).fetchone()[0]
+        )
+        payload.pop("input_records", None)
+        connection.execute(
+            "UPDATE memory_write_jobs SET payload_json=? WHERE job_id=?",
+            (json.dumps(payload, sort_keys=True), legacy.job_id),
+        )
+    assert queue.payload_for(legacy.job_id).input_records == ()
+
+    reopened = DurableWriteQueue(path, evidence=store)
+
+    assert reopened.payload_for(legacy.job_id).input_records == ()
+    with sqlite3.connect(path) as connection:
+        persisted = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM memory_write_jobs WHERE job_id=?",
+                (legacy.job_id,),
+            ).fetchone()[0]
+        )
+    assert "input_records" not in persisted
 
 
 def test_committed_evidence_without_submit_is_the_red_state(tmp_path) -> None:

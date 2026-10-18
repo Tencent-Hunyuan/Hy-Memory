@@ -210,7 +210,8 @@ def record_capture_rejection(
         payload: dict[str, object] = {"source_id": source_id, "reason": reason.value}
         if marker.exists() and now - marker.stat().st_mtime < window_seconds:
             payload = json.loads(marker.read_text(encoding="utf8"))
-            payload["count"] = int(payload.get("count", 1)) + 1
+            previous = payload.get("count", 1)
+            payload["count"] = int(previous) + 1 if isinstance(previous, (str, int, float)) else 2
         else:
             payload["count"] = 1
             payload["window_started_at"] = datetime.fromtimestamp(now, UTC).isoformat()
@@ -235,7 +236,7 @@ def _submit_live_memory(store: EvidenceStore, record: EvidenceRecord, *, changed
     ):
         if (
             record in chunk
-            and any(item.role == "user" and item.written_by is WrittenBy.PERSON for item in chunk)
+            and any(item.role == "user" for item in chunk)
             and any(item.role == "assistant" for item in chunk)
         ):
             intake.submit_records(chunk, priority="live")

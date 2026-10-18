@@ -449,9 +449,7 @@ class HyMemoryBridge:
         guards = getattr(client, "_one_memory_write_guards", ())
         from one_memory.hy_response_guard import HyReconcileGuard
 
-        reconcile_guards = tuple(
-            guard for guard in guards if isinstance(guard, HyReconcileGuard)
-        )
+        reconcile_guards = tuple(guard for guard in guards if isinstance(guard, HyReconcileGuard))
         for guard in reconcile_guards:
             guard.begin_write()
         before = [len(guard.failures) for guard in guards]
@@ -1129,7 +1127,7 @@ class HyMemoryBridge:
                                 self.profile,
                                 api_key=self.api_key,
                                 data_dir=self.data_dir,
-                        http_transport_factory=self._http_transport_factory,
+                                http_transport_factory=self._http_transport_factory,
                             )
 
                     await _joined_thread(initialize)
@@ -1347,9 +1345,7 @@ async def _with_native_mutation_delta(
     """
 
     retired = set(result.retired_memory_ids)
-    superseded = {
-        key: tuple(values) for key, values in result.superseded_memory_ids.items()
-    }
+    superseded = {key: tuple(values) for key, values in result.superseded_memory_ids.items()}
     chat_targets = {
         key
         for guard in reconcile_guards
@@ -1357,7 +1353,8 @@ async def _with_native_mutation_delta(
         if isinstance(key, str) and key
     }
 
-    for item in raw.get("ops", ()) if isinstance(raw.get("ops"), list) else ():
+    operations = raw.get("ops")
+    for item in operations if isinstance(operations, list) else ():
         if not isinstance(item, Mapping):
             continue
         if item.get("action") == "DELETE":
@@ -1365,7 +1362,8 @@ async def _with_native_mutation_delta(
             if isinstance(key, str) and key:
                 retired.add(key)
 
-    for item in raw.get("fact_ops", ()) if isinstance(raw.get("fact_ops"), list) else ():
+    fact_operations = raw.get("fact_ops")
+    for item in fact_operations if isinstance(fact_operations, list) else ():
         if not isinstance(item, Mapping) or item.get("action") != "SUPERSEDE":
             continue
         old, new = item.get("fact_id"), item.get("superseded_by")
@@ -1386,9 +1384,7 @@ async def _with_native_mutation_delta(
         if isinstance(replacement, str) and replacement:
             superseded[key] = (replacement,)
         elif isinstance(replacement, list):
-            values = tuple(
-                value for value in replacement if isinstance(value, str) and value
-            )
+            values = tuple(value for value in replacement if isinstance(value, str) and value)
             if values:
                 superseded[key] = values
 

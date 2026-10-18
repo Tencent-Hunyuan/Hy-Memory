@@ -1525,7 +1525,7 @@ async def _053_memory_write_event_time(cursor: Any) -> None:
                 FROM memory_write_job_evidence AS linked
                 JOIN evidence AS e ON e.evidence_id = linked.evidence_id
                 WHERE linked.job_id = memory_write_jobs.job_id
-                  AND e.role = 'user' AND e.written_by = 'person'
+                  AND e.role = 'user'
             ),
             (
                 SELECT MIN(COALESCE(e.created_at, e.imported_at))
@@ -1569,6 +1569,22 @@ async def _053_memory_write_event_time(cursor: Any) -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
         )
+
+
+async def _054_legacy_possibly_sent_tasks(cursor: Any) -> None:
+    """Preserve the old sent marker before removing its retired permission table."""
+    columns = await cursor.columns("memory_task_continuous_permissions")
+    if "task_id" not in columns:
+        return
+    await cursor.execute(
+        """
+        UPDATE memory_tasks
+        SET hy_invocation_count=CASE
+            WHEN hy_invocation_count<1 THEN 1 ELSE hy_invocation_count END
+        WHERE task_id IN (SELECT task_id FROM memory_task_continuous_permissions)
+        """
+    )
+    await cursor.execute("DROP TABLE memory_task_continuous_permissions")
 
 
 def model_profiles_ddl(dialect: str = "mysql") -> str:
@@ -3021,5 +3037,10 @@ MIGRATIONS: tuple[Migration, ...] = (
         "memory_write_event_time",
         _053_memory_write_event_time,
         ("memory_write_schedule_state",),
+    ),
+    Migration(
+        54,
+        "legacy_possibly_sent_tasks",
+        _054_legacy_possibly_sent_tasks,
     ),
 )

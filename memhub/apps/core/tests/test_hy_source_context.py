@@ -248,18 +248,8 @@ def test_profile_rendering_keeps_per_field_evidence_without_dropping_native_prof
     assert bindings.profile_support("The user's name is 陈.", {"name": "陈"}) == ()
 
 
-def test_bound_context_refuses_a_turn_with_a_wrong_author_pair(tmp_path):
-    """The author must match the role: only user/person, assistant/agent, tool/tool.
-
-    The objective requires 作者 to be truthful. The other scope tests only ever
-    build well-formed pairs, so this pins the pair check itself: an assistant
-    turn attributed to a person, or a tool turn attributed to one, must be
-    refused with `context_scope` rather than silently trusted.
-
-    `user` + AGENT is deliberately accepted since D98: the host parser marks a
-    sub agent's question that way, and that turn is sent like any other. What
-    is refused is the pair that cannot occur, not the one we now allow.
-    """
+def test_bound_context_uses_protocol_role_not_author_guess(tmp_path):
+    """Host author guesses never reject a valid user/assistant/tool message."""
     from one_memory.hy_source_context import HySourceContext, HyWriteBindings
 
     store = EvidenceStore(tmp_path / "evidence.db")
@@ -268,8 +258,7 @@ def test_bound_context_refuses_a_turn_with_a_wrong_author_pair(tmp_path):
 
     assistant = source(store, "reply", "assistant", "好的，继续推进。")
     wrong_author = assistant.model_copy(update={"written_by": WrittenBy.PERSON})
-    with pytest.raises(ValueError, match="context_scope"):
-        HyWriteBindings(HySourceContext(current=(wrong_author,)))
+    HyWriteBindings(HySourceContext(current=(wrong_author,)))
 
     # `source()` maps non-user roles to AGENT, so a tool turn needs its own build.
     tool = store.put(
@@ -284,7 +273,10 @@ def test_bound_context_refuses_a_turn_with_a_wrong_author_pair(tmp_path):
             origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
         )
     ).record
-    assert HyWriteBindings(HySourceContext(current=(tool,)))  # valid tool/tool pair
+    assert HyWriteBindings(HySourceContext(current=(tool,)))
     wrong_tool = tool.model_copy(update={"written_by": WrittenBy.PERSON})
+    HyWriteBindings(HySourceContext(current=(wrong_tool,)))
+
+    unsupported = assistant.model_copy(update={"role": "system"})
     with pytest.raises(ValueError, match="context_scope"):
-        HyWriteBindings(HySourceContext(current=(wrong_tool,)))
+        HyWriteBindings(HySourceContext(current=(unsupported,)))

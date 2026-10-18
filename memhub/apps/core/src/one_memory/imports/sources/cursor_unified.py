@@ -421,10 +421,7 @@ class CursorUnifiedSourceAdapter:
             if (
                 isinstance(event, ScannedEvidence)
                 and event.evidence.conversation_id in transcript_ids
-                and not (
-                    event.evidence.written_by is WrittenBy.AGENT
-                    and is_host_generated_user_turn(event.evidence.verbatim)
-                )
+                and not is_host_generated_user_turn(event.evidence.verbatim)
             ):
                 yield ScanSkip(
                     cursor=event.cursor,
@@ -449,10 +446,7 @@ def _shadowed_by_transcript(event: ScanEvent, transcript_ids: set[str]) -> ScanE
     if (
         isinstance(event, ScannedEvidence)
         and event.evidence.conversation_id in transcript_ids
-        and not (
-            event.evidence.written_by is WrittenBy.AGENT
-            and is_host_generated_user_turn(event.evidence.verbatim)
-        )
+        and not is_host_generated_user_turn(event.evidence.verbatim)
     ):
         return ScanSkip(
             cursor=event.cursor,

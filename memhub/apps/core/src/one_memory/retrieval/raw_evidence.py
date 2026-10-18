@@ -11,7 +11,7 @@ from datetime import UTC
 
 from one_memory import ingest_journal as journal
 from one_memory.context_raw import _check, _connection
-from one_memory.imports.models import EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceRecord
 from one_memory.imports.storage import EvidenceStore
 from one_memory.retrieval.index_store import RetrievalIndexStore
 from one_memory.retrieval.models import EvidenceSpan, RawEvidence
@@ -166,7 +166,7 @@ def materialize_raw_candidates(
                         source_id=record.source_id,
                         conversation_id=record.conversation_id,
                         role=record.role,
-                        written_by="person" if record.written_by is WrittenBy.PERSON else "agent",
+                        written_by="person" if record.role == "user" else "agent",
                         event_time=event_time,
                         spans=tuple(spans),
                         matched_by=("semantic",),

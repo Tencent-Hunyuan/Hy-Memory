@@ -1780,7 +1780,7 @@ def test_process_records_bounds_a_hung_model_call_by_the_profile_timeout(
     with sqlite3.connect(tmp_path / "one-memory.sqlite3") as db:
         db.executescript(
             """
-            CREATE TABLE source_grants (
+            CREATE TABLE IF NOT EXISTS source_grants (
                 user_id TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 root_path TEXT NOT NULL,
@@ -2036,6 +2036,126 @@ def test_oversized_single_turn_segments_are_each_processed(tmp_path) -> None:
     sent = [request.turns[0].content for request in bridge.requests]
     assert "".join(sent) == original
     assert len(governance.list(user_id="local")) == 2
+
+
+def test_direct_processing_uses_the_supplied_frozen_revision(tmp_path) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    old_user = _put(
+        evidence,
+        message_id="rewound-user",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="old branch",
+    )
+    reply = _put(
+        evidence,
+        message_id="rewound-reply",
+        role="assistant",
+        written_by=WrittenBy.AGENT,
+        content="old reply",
+    )
+    revised = _put(
+        evidence,
+        message_id="rewound-user",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="new branch",
+    )
+    assert revised.evidence_id == old_user.evidence_id
+    assert revised.revision == old_user.revision + 1
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.execute(
+            """
+            CREATE TABLE source_grants (
+                user_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                requested_path TEXT NOT NULL,
+                root_identity TEXT NOT NULL,
+                candidate_kind TEXT NOT NULL,
+                granted_at TEXT NOT NULL,
+                revoked_at TEXT,
+                revision INTEGER NOT NULL,
+                PRIMARY KEY (user_id, source_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO source_grants (
+                user_id,source_id,root_path,requested_path,root_identity,
+                candidate_kind,granted_at,revoked_at,revision
+            ) VALUES (?,?,?,?,?,?,?,NULL,1)
+            """,
+            (
+                "local",
+                "cursor",
+                "/authorized",
+                "/authorized",
+                "test-root",
+                "default",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+    bridge = FakeBridge(outputs=())
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        runner_factory=lambda: _runner(tmp_path, stores, bridge),
+    )
+
+    completed = asyncio.run(supervisor.process_records((old_user, reply)))
+
+    assert len(completed) == 1
+    assert [turn.content for turn in bridge.requests[0].turns] == [
+        "old branch",
+        "old reply",
+    ]
+
+
+def test_frozen_current_still_revalidates_history_after_the_model_call(tmp_path) -> None:
+    from one_memory.hy_source_context import HySourceContext
+
+    stores = _setup(tmp_path)
+    evidence, _profiles, tasks, _governance, _secrets, _profile = stores
+    current = _put(
+        evidence,
+        message_id="frozen-current",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="old current",
+    )
+    history = _put(
+        evidence,
+        message_id="frozen-history",
+        role="assistant",
+        written_by=WrittenBy.AGENT,
+        content="stable history",
+    )
+    _put(
+        evidence,
+        message_id="frozen-current",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="new current",
+    )
+    runner = _runner(tmp_path, stores, FakeBridge(outputs=()))
+    context = HySourceContext(current=(current,), history=(history,))
+
+    runner._check_source_context(context, skip_current=True)
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.execute(
+            "DELETE FROM evidence WHERE evidence_id=?",
+            (history.evidence_id,),
+        )
+
+    with pytest.raises(HyMemoryBridgeError, match="hy_memory_evidence_changed"):
+        runner._check_source_context(context, skip_current=True)
 
 
 def test_oversized_assistant_segments_keep_the_question_as_context(tmp_path) -> None:
