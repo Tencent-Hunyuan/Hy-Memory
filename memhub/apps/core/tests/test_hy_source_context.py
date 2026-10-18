@@ -59,6 +59,35 @@ def test_bound_context_rejects_a_same_named_conversation_in_another_workspace(tm
         HyWriteBindings(HySourceContext(current=(current,), history=(other_workspace,)))
 
 
+def test_bound_context_accepts_a_user_turn_the_host_left_unattributed(tmp_path):
+    """A missing author is not a scope violation.
+
+    WorkBuddy records real user turns with `written_by=unknown` — 1078 of them
+    across 1002 conversations on this machine. Refusing the write over that
+    failed the whole conversation: the task ended `model_content_outcome_unknown`
+    after two attempts, so a memory that may well have been written could never
+    be confirmed, and the turn was never sedimented again.
+    """
+    from one_memory.hy_source_context import HySourceContext, HyWriteBindings
+
+    store = EvidenceStore(tmp_path / "evidence.db")
+    current = store.put(
+        EvidenceInput(
+            source_id="workbuddy",
+            conversation_id="atlas",
+            message_id="now",
+            role="user",
+            written_by=WrittenBy.UNKNOWN,
+            verbatim="帮我看下这个报错。",
+            origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+        )
+    ).record
+
+    bound = HyWriteBindings(HySourceContext(current=(current,)))
+
+    assert bound.sources[0]["role"] == "user"
+
+
 def test_bound_context_rejects_a_duplicated_evidence_id(tmp_path):
     """The same Evidence must not be cited twice in one HY context.
 

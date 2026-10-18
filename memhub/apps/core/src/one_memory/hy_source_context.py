@@ -68,6 +68,14 @@ class HyWriteBindings:
                     # agent; excluding it here would make the source context
                     # disagree with what was actually sent.
                     ("user", WrittenBy.PERSON),
+                    # A host that leaves the author blank still sent a turn.
+                    # WorkBuddy records 1078 of them across 1002 conversations,
+                    # and refusing the write over that answered every one of
+                    # those tasks with `model_content_outcome_unknown` on the
+                    # second attempt: a memory that may have been written and
+                    # can never be confirmed. The author is missing, not the
+                    # turn; scope is still checked above.
+                    ("user", WrittenBy.UNKNOWN),
                     ("user", WrittenBy.AGENT),
                     ("assistant", WrittenBy.AGENT),
                     ("tool", WrittenBy.TOOL),
