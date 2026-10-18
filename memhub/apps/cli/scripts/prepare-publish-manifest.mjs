@@ -12,7 +12,6 @@
  * It is generated rather than hand-written so the two cannot drift: this reads
  * the real package.json and only strips what is provably not needed at runtime.
  */
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -20,12 +19,14 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
-const repositoryRoot = resolve(root, "../..");
 const require = createRequire(import.meta.url);
-const { resolveBuildVersion } = require("../../../scripts/release-version.cjs");
-const releaseVersion = resolveBuildVersion(process.env, repositoryRoot);
+const { assertSemver } = require("../../../scripts/release-version.cjs");
 const pkgPath = resolve(root, "package.json");
 const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+const publishVersion = assertSemver(
+  process.env.MEMHUB_NPM_VERSION?.trim() || pkg.version,
+  "MEMHUB_NPM_VERSION",
+);
 const publishName = process.env.MEMHUB_NPM_PACKAGE?.trim();
 if (!publishName || !/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(publishName)) {
   throw new Error(
@@ -53,7 +54,7 @@ mkdirSync(outDir, { recursive: true });
 
 const published = { ...pkg };
 published.name = publishName;
-published.version = releaseVersion;
+published.version = publishVersion;
 for (const section of ["dependencies", "devDependencies", "peerDependencies"]) {
   if (!published[section]) continue;
   published[section] = Object.fromEntries(

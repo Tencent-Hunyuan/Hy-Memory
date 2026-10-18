@@ -331,7 +331,7 @@ import {
   renderVersion,
   renderVersionDocument,
 } from "./usage.js";
-import { CLI_VERSION, PRODUCT } from "./version.js";
+import { CLI_VERSION, PRODUCT, RUNTIME_RELEASE_VERSION } from "./version.js";
 import { runWatchLoop, type WatchEvent, type WatchRead } from "./watch-loop.js";
 
 export interface RunControls {
@@ -417,7 +417,8 @@ async function selectInstallSource(
     throw new Error("release_manifest_url_unavailable");
   }
   const manifestUrl =
-    explicitManifestUrl ?? template.replaceAll("{version}", CLI_VERSION);
+    explicitManifestUrl ??
+    template.replaceAll("{version}", RUNTIME_RELEASE_VERSION);
   const allowedHosts = parseAllowedReleaseHosts(
     environment.MEMHUB_RELEASE_ALLOWED_HOSTS,
   );
@@ -462,7 +463,7 @@ async function resolveRemoteInstallPreview(
 ): Promise<ResolvedRuntimeRelease> {
   return (controls.resolveRuntimeRelease ?? resolveRuntimeRelease)({
     manifestUrl: selection.manifestUrl,
-    expectedVersion: CLI_VERSION,
+    expectedVersion: RUNTIME_RELEASE_VERSION,
     channel: selection.channel,
     platform: process.platform,
     arch: process.arch,
@@ -476,7 +477,7 @@ async function acquireRemoteInstallSource(
 ): Promise<AcquiredRuntimeDistribution> {
   return (controls.acquireRuntimeDistribution ?? acquireRuntimeDistribution)({
     manifestUrl: selection.manifestUrl,
-    expectedVersion: CLI_VERSION,
+    expectedVersion: RUNTIME_RELEASE_VERSION,
     channel: selection.channel,
     platform: process.platform,
     arch: process.arch,
@@ -6520,7 +6521,7 @@ function parseInstallOptions(
         ...(releaseManifestUrl ? { releaseManifestUrl } : {}),
         releaseChannel:
           releaseChannel ??
-          (CLI_VERSION.includes("-") ? "prerelease" : "stable"),
+          (RUNTIME_RELEASE_VERSION.includes("-") ? "prerelease" : "stable"),
         installRoot: resolvedInstallRoot,
         home: resolvedHome,
         uid: uid ?? process.getuid?.(),

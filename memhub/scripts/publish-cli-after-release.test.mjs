@@ -6,6 +6,9 @@ import test from "node:test";
 
 import { publishCliAfterRelease } from "./publish-cli-after-release.mjs";
 
+const CLI_VERSION = "0.1.1";
+const RUNTIME_VERSION = "0.1.0-internal.1";
+
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "memhub-publish-gate-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -15,10 +18,10 @@ async function fixture(t) {
   await mkdir(output, { recursive: true });
   await writeFile(
     path.join(publish, "package.json"),
-    `${JSON.stringify({ name: "@example/memhub-cli", version: "0.1.0-internal.1", private: false })}\n`,
+    `${JSON.stringify({ name: "@example/memhub-cli", version: CLI_VERSION, private: false })}\n`,
   );
   await writeFile(
-    path.join(output, "example-memhub-cli-0.1.0-internal.1.tgz"),
+    path.join(output, `example-memhub-cli-${CLI_VERSION}.tgz`),
     "tarball",
   );
   return root;
@@ -26,10 +29,11 @@ async function fixture(t) {
 
 const options = {
   manifestUrl: "https://releases.example.test/release-manifest.json",
-  version: "0.1.0-internal.1",
+  version: CLI_VERSION,
+  runtimeVersion: RUNTIME_VERSION,
   gitCommit: "a".repeat(40),
   channel: "prerelease",
-  tag: "v0.1.0-internal.1",
+  tag: `v${RUNTIME_VERSION}`,
   buildNumber: 1,
   platform: "linux",
   arch: "x64",
@@ -49,15 +53,24 @@ test("verifies the Runtime before building and publishing the CLI", async (t) =>
     {
       verifyVersion: async () => {
         events.push("version");
-        return { version: options.version, build_number: 1, tag: options.tag };
+        return {
+          version: options.runtimeVersion,
+          build_number: 1,
+          tag: options.tag,
+        };
       },
       verifyRelease: async (verifyOptions) => {
         events.push("release");
         assert.equal(verifyOptions.gitCommit, options.gitCommit);
-        return { version: options.version, sha256: "a".repeat(64) };
+        assert.equal(verifyOptions.version, options.runtimeVersion);
+        return { version: options.runtimeVersion, sha256: "a".repeat(64) };
       },
       runCommand: (command, arguments_, commandOptions) => {
-        assert.equal(commandOptions.env.ONE_MEMORY_VERSION, options.version);
+        assert.equal(commandOptions.env.MEMHUB_NPM_VERSION, options.version);
+        assert.equal(
+          commandOptions.env.MEMHUB_DEFAULT_RUNTIME_VERSION,
+          options.runtimeVersion,
+        );
         assert.equal(
           commandOptions.env.ONE_MEMORY_BUILD_NUMBER,
           String(options.buildNumber),
@@ -74,6 +87,8 @@ test("verifies the Runtime before building and publishing the CLI", async (t) =>
   assert.match(events[3], /--access public/);
   assert.match(events[3], /--provenance/);
   assert.equal(receipt.npm_package, "@example/memhub-cli");
+  assert.equal(receipt.version, CLI_VERSION);
+  assert.equal(receipt.runtime_version, RUNTIME_VERSION);
   assert.equal(receipt.dry_run, true);
   assert.equal(receipt.npm_access, "public");
   assert.equal(receipt.provenance, true);
@@ -87,7 +102,7 @@ test("never builds or invokes npm when the Runtime release is unavailable", asyn
       { ...options, root },
       {
         verifyVersion: async () => ({
-          version: options.version,
+          version: options.runtimeVersion,
           build_number: 1,
           tag: options.tag,
         }),
@@ -115,11 +130,11 @@ test("rejects a package identity that differs from the configured publish name",
       },
       {
         verifyVersion: async () => ({
-          version: options.version,
+          version: options.runtimeVersion,
           build_number: 1,
           tag: options.tag,
         }),
-        verifyRelease: async () => ({ version: options.version }),
+        verifyRelease: async () => ({ version: options.runtimeVersion }),
         runCommand: () => undefined,
       },
     ),
