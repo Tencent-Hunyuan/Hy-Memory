@@ -1024,6 +1024,15 @@ class MemoryTaskRunner:
         task: MemoryTask,
         chunk: tuple[EvidenceRecord, ...],
     ) -> HyMemoryIngestRequest:
+        if not chunk:
+            # A task with no inputs has nothing to name the request after and
+            # nothing to attribute an answer to. Left alone this reached
+            # `chunk[0]` below and came out as IndexError, which no caller can
+            # read: a reconcile pass catches domain errors per task and moves
+            # on, so one such task ended the whole pass and left every other
+            # unknown task unreconciled. On this machine 68 of 303 unknown
+            # tasks had no inputs, and the pass raised on the first of them.
+            raise HyMemoryBridgeError("hy_memory_task_without_inputs")
         has_raw = any(
             record.content_kind is EvidenceContentKind.RAW_CONVERSATION for record in chunk
         )
@@ -2415,11 +2424,10 @@ class MemoryProcessingSupervisor:
                         scope_key=scope_key,
                     ),
                 ):
+
                     async def require_sedimentation() -> None:
                         if self._sedimentation_stopped():
-                            raise HyMemoryBridgeError(
-                                "model_sedimentation_disabled"
-                            )
+                            raise HyMemoryBridgeError("model_sedimentation_disabled")
 
                     finished = await runner.run(
                         work.task_id,

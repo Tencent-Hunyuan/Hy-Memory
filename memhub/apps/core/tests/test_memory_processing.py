@@ -2394,6 +2394,105 @@ def test_unknown_task_is_reconciled_from_exact_hy_output_without_model_retry(tmp
     assert bridge.closed is True
 
 
+def test_an_unknown_task_without_inputs_does_not_end_the_reconcile_pass(tmp_path) -> None:
+    """One task with nothing to send must not strand the other unknown tasks.
+
+    An unknown task whose inputs are gone yields an empty chunk, and building a
+    request from that reached `chunk[0]` and came out as IndexError. A
+    reconcile pass skips a task that raises a domain error, so IndexError did
+    not skip anything -- it ended the pass. On this machine 68 of 303 unknown
+    tasks had no inputs, and while the retry backed off to 128 and gave up, the
+    235 that could have been reconciled stayed unknown with them.
+    """
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, profile = stores
+    stranded = _put(
+        evidence,
+        message_id="reconcile-without-inputs",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="这条任务的输入已经不在了。",
+    )
+    record = _put(
+        evidence,
+        message_id="reconcile-with-inputs",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="用户偏好每周日上午攀岩。",
+    )
+    empty = tasks.create(
+        request_id="reconcile-empty-request",
+        user_id=stranded.user_id,
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=stranded.evidence_id,
+        profile=profile,
+        input_records=(stranded,),
+    )
+    task = tasks.create(
+        request_id="reconcile-kept-request",
+        user_id=record.user_id,
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=record.evidence_id,
+        profile=profile,
+        input_records=(record,),
+    )
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.execute(
+            """
+            CREATE TABLE source_grants (
+                user_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                root_path TEXT NOT NULL, candidate_kind TEXT NOT NULL,
+                granted_at TEXT NOT NULL, revoked_at TEXT,
+                PRIMARY KEY (user_id, source_id)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO source_grants VALUES (?,?,?,?,?,NULL)",
+            (
+                record.user_id,
+                record.source_id,
+                "/authorized",
+                "default",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        for task_id in (empty.task_id, task.task_id):
+            connection.execute(
+                "UPDATE memory_tasks SET status='unknown', last_error_code=? WHERE task_id=?",
+                ("model_content_outcome_unknown", task_id),
+            )
+        # What the field data actually looks like: the task is there, its
+        # inputs are not.
+        connection.execute("DELETE FROM memory_task_inputs WHERE task_id=?", (empty.task_id,))
+    bridge = FakeBridge(
+        outputs=(
+            HyMemoryOutput(
+                memory_id="hy-recovered",
+                content="用户偏好每周日上午攀岩。",
+                layer="L2_FACT",
+                owner="user",
+                evidence_ids=(record.evidence_id,),
+            ),
+        )
+    )
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        runner_factory=lambda: _runner(tmp_path, stores, FakeBridge()),
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+    )
+
+    # The task with inputs is reconciled; the one without is passed over.
+    assert asyncio.run(supervisor.reconcile_unknown_outputs()) == 1
+    assert tasks.require(task.task_id).status is MemoryTaskStatus.COMPLETED
+    assert [memory.memory_id for memory in governance.list(user_id="local")] == ["hy-recovered"]
+
+
 def test_two_workspaces_with_one_conversation_id_prepare_apart(tmp_path) -> None:
     """Cursor can reuse a conversation id across projects.
 
