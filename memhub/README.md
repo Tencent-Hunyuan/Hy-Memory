@@ -1,8 +1,20 @@
-# MemHub / One Memory
+# MemHub
 
-MemHub 是一个本地优先的共享记忆产品：把用户授权的多个 AI 产品中的历史对话和新增内容
-汇总到同一份记忆，并让这些 AI 在独立授权后复用它。Hy Memory 是 MemHub 使用的 Python
-SDK 和记忆引擎。One Memory / `one-memory` 是历史模块、数据目录、服务和兼容命令名称。
+MemHub是一个本地优先的共享记忆产品。它把用户明确授权的AI对话和编码记录汇总到一份本地记忆中，再由用户分别授权给支持的AI工具调用。你可以继续使用熟悉的客户端，同时保留跨工具延续的上下文。Hy Memory是MemHub使用的Python SDK和记忆引擎。
+
+# 💡❤️ MemHub 刚刚开源，欢迎一起优化共建！ ❤️💡 
+
+**# 💭 MemHub处于preview阶段，当前公开版本可以下载和体验，部分平台制品、安装路径与宿主体验仍在持续优化验证。安装前请先查看Release里的实际制品和版本说明。**
+
+> 🙋 如果你遇到问题/有建议：欢迎提交Issue，并附上MemHub版本、操作系统与芯片架构、复现步骤、预期结果、实际结果和经过脱敏的日志。请不要上传APIKey、真实对话、个人路径或其他敏感信息。
+
+> 我们会公开跟进可复现的问题，持续发布修复，并根据真实反馈完善安装、同步和召回体验。
+
+**# 感谢每一条反馈，期待你和我们一起打磨MemHub的体验 ：）**
+
+> 💗 MemHub has just been open-sourced and is under active development. The current public release is available for download andevaluation. Some platform packages, installation paths, and host integrations are still being completed and verified. Check the assets
+and release notes before installing.
+If you run into a problem, please open an Issue with the version, platform,reproduction steps, and sanitized logs, We wilreviewreports, publish fixes, and keep the support matrix up to date.
 
 ## 发行与平台合同
 
