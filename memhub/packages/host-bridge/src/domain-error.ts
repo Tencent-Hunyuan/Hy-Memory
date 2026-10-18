@@ -66,6 +66,48 @@ export function domainCodeOf(error: unknown): DomainCode | null {
   return null;
 }
 
+const SAFE_STACK_PREFIXES = ["apps/", "packages/", "scripts/"] as const;
+
+function isSafeStackCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    "_./-:".includes(character)
+  );
+}
+
+function isAsciiDigits(value: string): boolean {
+  if (!value.length) return false;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 48 || code > 57) return false;
+  }
+  return true;
+}
+
+/** Extract one repo-relative `path:line:column` in linear time. */
+function safeStackLocation(line: string): string | null {
+  for (const prefix of SAFE_STACK_PREFIXES) {
+    const start = line.indexOf(prefix);
+    if (start < 0) continue;
+    let end = start;
+    while (end < line.length && isSafeStackCharacter(line[end] ?? "")) end += 1;
+    const candidate = line.slice(start, end);
+    const columnSeparator = candidate.lastIndexOf(":");
+    const lineSeparator = candidate.lastIndexOf(":", columnSeparator - 1);
+    if (
+      lineSeparator > prefix.length &&
+      columnSeparator > lineSeparator + 1 &&
+      isAsciiDigits(candidate.slice(lineSeparator + 1, columnSeparator)) &&
+      isAsciiDigits(candidate.slice(columnSeparator + 1))
+    )
+      return candidate;
+  }
+  return null;
+}
+
 /** The diagnostic fields for a failure, keeping the code when there is one.
  *
  * Only `error_type` and a repo-relative stack survive. `Error.message` is
@@ -85,10 +127,8 @@ export function diagnosticDomainError(error: unknown): {
   const stack = (error.stack ?? "")
     .split("\n")
     .flatMap((line) => {
-      const match = line.match(
-        /((?:apps|packages|scripts)\/[A-Za-z0-9_./-]+:\d+:\d+)/,
-      );
-      return match?.[1] ? [match[1]] : [];
+      const location = safeStackLocation(line);
+      return location ? [location] : [];
     })
     .slice(0, 16);
   return {

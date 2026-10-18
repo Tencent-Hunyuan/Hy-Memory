@@ -52,4 +52,21 @@ describe("domain errors", () => {
     expect(isDomainCode("")).toBe(false);
     expect(isDomainCode(undefined)).toBe(false);
   });
+
+  it("keeps only validated repo-relative stack locations", () => {
+    const error = new DomainError("grant_required");
+    error.stack = [
+      "DomainError: private message",
+      "    at private (/Users/someone/private.ts:1:2)",
+      "    at safe (packages/host-bridge/src/domain-error.ts:88:10)",
+      `    at noisy (${`${"apps/".repeat(2_000)}bad`})`,
+    ].join("\n");
+
+    const diagnostic = diagnosticDomainError(error);
+
+    expect(diagnostic.safe_stack).toEqual([
+      "packages/host-bridge/src/domain-error.ts:88:10",
+    ]);
+    expect(JSON.stringify(diagnostic)).not.toContain("/Users/someone");
+  });
 });
