@@ -9,6 +9,8 @@ so starting again resumes it instead of beginning from nothing.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -65,6 +67,74 @@ def test_sedimentation_route_persists_and_resumes_without_restart(tmp_path) -> N
         assert stopped.status_code == 200
         assert stopped.json()["enabled"] is False
         assert client.get("/api/v1/sedimentation").json()["enabled"] is False
+        resumed = client.put("/api/v1/sedimentation", json={"enabled": True})
+        assert resumed.status_code == 200
+        assert resumed.json()["enabled"] is True
+
+
+def test_switch_answers_before_the_resume_finishes(tmp_path, monkeypatch) -> None:
+    """The PUT is a decision; the walk over the backlog happens after it.
+
+    Awaiting that walk is what turned "turn sedimentation back on" into a
+    request that never returned. The renderer gave up at its thirty-second
+    timeout and reported a failure for a switch that had in fact been saved,
+    which is the worst of both: the user believes the model is still stopped
+    while it is already running.
+    """
+    app = create_app(
+        Settings(
+            _env_file=None,
+            data_dir=tmp_path / "data",
+            source_home=tmp_path / "home",
+            api_token=SecretStr("test"),
+            imports_enabled=False,
+            automatic_memory_processing=False,
+            live_sync_enabled=False,
+        ),
+        source_catalog={},
+    )
+    released = threading.Event()
+    finished = threading.Event()
+
+    with TestClient(app, headers={"Authorization": "Bearer test"}) as client:
+        supervisor = app.state.memory_processing_supervisor
+
+        async def slow_resume() -> None:
+            await asyncio.get_running_loop().run_in_executor(None, released.wait, 10.0)
+            finished.set()
+
+        monkeypatch.setattr(supervisor, "resume_allowed", slow_resume)
+        assert client.put("/api/v1/sedimentation", json={"enabled": False}).status_code == 200
+        resumed = client.put("/api/v1/sedimentation", json={"enabled": True})
+        assert resumed.status_code == 200
+        assert resumed.json()["enabled"] is True
+        # Answered while the resume is still walking the backlog.
+        assert finished.is_set() is False
+        released.set()
+
+
+def test_a_failing_resume_does_not_fail_the_switch(tmp_path, monkeypatch) -> None:
+    """Resuming is opportunistic; the user's choice is already stored."""
+    app = create_app(
+        Settings(
+            _env_file=None,
+            data_dir=tmp_path / "data",
+            source_home=tmp_path / "home",
+            api_token=SecretStr("test"),
+            imports_enabled=False,
+            automatic_memory_processing=False,
+            live_sync_enabled=False,
+        ),
+        source_catalog={},
+    )
+    with TestClient(app, headers={"Authorization": "Bearer test"}) as client:
+        supervisor = app.state.memory_processing_supervisor
+
+        async def broken_resume() -> None:
+            raise RuntimeError("hy_memory_processing_unavailable")
+
+        monkeypatch.setattr(supervisor, "resume_allowed", broken_resume)
+        assert client.put("/api/v1/sedimentation", json={"enabled": False}).status_code == 200
         resumed = client.put("/api/v1/sedimentation", json={"enabled": True})
         assert resumed.status_code == 200
         assert resumed.json()["enabled"] is True
@@ -278,6 +348,27 @@ def test_stopping_does_not_disturb_the_model_configuration(tmp_path) -> None:
     assert supervisor.prepare_backfill() == []
     # Still configured: starting again is a switch, not a re-entry of a key.
     assert profiles.active(secrets) is not None
+
+
+def test_bounded_backfill_returns_when_the_queue_is_already_full(tmp_path) -> None:
+    """A full queue means nothing to add, not "wait until it drains".
+
+    The wait used to sleep inside the scan lock, so whoever asked for the scan
+    — the resume behind a switch toggle, and through it an HTTP request —
+    waited for the whole backlog to clear. A saturated queue never clears by
+    waiting, so that request never came back.
+    """
+    flag = _Flag(True)
+    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(tmp_path, flag)
+    for index in range(8):
+        task = _task(evidence, tasks, active, index=index)
+        supervisor._queue.add(supervisor._classify([task])[0])
+
+    started = time.monotonic()
+    asyncio.run(
+        asyncio.wait_for(supervisor.backfill_off_thread(cohort_size=8), timeout=3)
+    )
+    assert time.monotonic() - started < 3
 
 
 if __name__ == "__main__":

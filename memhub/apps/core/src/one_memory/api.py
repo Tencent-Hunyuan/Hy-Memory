@@ -3703,8 +3703,9 @@ def create_app(
                 )
         if changed and request.enabled:
             # Work parked by the stop is picked up again rather than waiting
-            # for the next natural dispatch.
-            await _memory_processing_supervisor(app).resume_allowed()
+            # for the next natural dispatch, but not on this request's time:
+            # see _resume_sedimentation.
+            _resume_sedimentation(app)
         return SedimentationState(enabled=store.sedimentation_enabled())
 
     @app.post(
@@ -4792,6 +4793,33 @@ def _start_backfill(app: FastAPI) -> None:
         asyncio.get_running_loop(),
         lambda: _run_backfill(app),
         name="one-memory-memory-backfill",
+    )
+
+
+def _resume_sedimentation(app: FastAPI) -> None:
+    """Pick the work parked by a stop back up, off the caller's clock.
+
+    Turning the switch back on is a decision, not a job the caller waits for:
+    the choice is already stored, and what follows it is maintenance over every
+    unfinished task followed by a scan of the whole queue. On a real backlog
+    that runs for many minutes, so awaiting it here left the PUT unanswered
+    until the client gave up — the renderer showed "启用未能确认" for a switch
+    that had in fact been saved, and the switch only appeared to turn on once
+    the follow-up read came back. Measured: one toggle, twenty-plus minutes,
+    no response, client timeout at thirty seconds.
+
+    Repeated toggles reuse the running walk; it reads the switch as it goes, so
+    a stop part-way through is honoured on the next batch instead of needing a
+    cancel.
+    """
+    running = cast("asyncio.Task[None] | None", getattr(app.state, "sedimentation_resume", None))
+    if running is not None and not running.done():
+        return
+    app.state.sedimentation_resume = watched_task(
+        asyncio.get_running_loop(),
+        lambda: _memory_processing_supervisor(app).resume_allowed(),
+        component="memory.sedimentation",
+        name="one-memory-sedimentation-resume",
     )
 
 

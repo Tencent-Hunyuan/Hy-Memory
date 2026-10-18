@@ -1835,6 +1835,7 @@ class MemoryProcessingSupervisor:
         stop = threading.Event()
         batches = self._prepare_backfill_batches(stop.is_set)
         exhausted = False
+        stopped_saturated = False
         rounds = 0
         scan_error: BaseException | None = None
         try:
@@ -1850,20 +1851,21 @@ class MemoryProcessingSupervisor:
                             >= self._backfill_round_budget_seconds
                         ):
                             break
-                        while (
+                        if (
                             cohort_size is not None
                             and len(self._queue) + len(self._in_flight) >= cohort_size
                         ):
-                            if self._shutting_down:
-                                return
-                            if (
-                                handled_batch
-                                and self._backfill_clock() - round_started
-                                >= self._backfill_round_budget_seconds
-                            ):
-                                break
-                            self._record_idle("queue_saturated")
-                            await asyncio.sleep(0.1)
+                            # A bounded scan stops at its ceiling instead of
+                            # waiting for the queue to drain. Waiting here slept
+                            # inside the scan lock, so whoever asked for the
+                            # scan — a switch toggle, over HTTP — waited with
+                            # it, and on a saturated backlog that is not a
+                            # moment but the whole backlog. The caller's
+                            # timeout then reported a failure for work that had
+                            # already been accepted.
+                            stopped_saturated = True
+                            exhausted = True
+                            break
                         if (
                             handled_batch
                             and self._backfill_clock() - round_started
@@ -1912,7 +1914,11 @@ class MemoryProcessingSupervisor:
             stop.set()
             batches.close()
             if prepared_count == 0 and not self._shutting_down:
-                if scan_error is None:
+                if stopped_saturated:
+                    # Parked behind a full queue, not out of work: the status
+                    # must not read "no_tasks" while hundreds wait.
+                    self._record_idle("queue_saturated")
+                elif scan_error is None:
                     self._record_idle("no_tasks")
                 else:
                     self._record_idle("scan_failed")
