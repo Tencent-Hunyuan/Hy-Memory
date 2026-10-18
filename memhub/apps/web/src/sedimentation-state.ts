@@ -11,8 +11,12 @@ queryClient.setQueryDefaults(SEDIMENTATION_KEY, {
 });
 
 let revision = 0;
+let readsStarted = 0;
+let readsLanded = 0;
 onClientReset(() => {
   revision = 0;
+  readsStarted = 0;
+  readsLanded = 0;
 });
 
 /**
@@ -20,11 +24,14 @@ onClientReset(() => {
  * newer PUT receipt committed by the settings page.
  */
 export async function refreshSedimentation(): Promise<SedimentationState> {
+  const order = ++readsStarted;
   const startedAtRevision = revision;
   const next = await getSedimentation();
   const current =
     queryClient.getQueryData<SedimentationState>(SEDIMENTATION_KEY);
   if (startedAtRevision !== revision && current) return current;
+  if (order < readsLanded && current) return current;
+  readsLanded = order;
   queryClient.setQueryData(SEDIMENTATION_KEY, next);
   return next;
 }
