@@ -249,9 +249,17 @@ MODEL_NOT_READY_CODES = frozenset(
 #: nothing was sent and retrying the same intent changes nothing — a terminal
 #: `failed`, not `unknown` (which would wrongly imply a possibly-applied
 #: write) and not a retry (which would fail identically).
+#:
+#: `hy_memory_write_verification_context_scope` belongs here for the same
+#: reason: `HyWriteBindings` is built inside `ingest` *before* the payload
+#: reaches HY, and it is the only thing that raises this code. The durable
+#: marker is already set by then, so classifying it as `unknown` claimed a
+#: write may have landed when HY was never called — a sticky row that blocked
+#: the queue behind it and left no reason to act on. See issue #44.
 PRE_SEND_REFUSAL_CODES = frozenset(
     {
         "hy_memory_input_exceeds_window",
+        "hy_memory_write_verification_context_scope",
     }
 )
 
@@ -1985,7 +1993,17 @@ async def execute_job(
         # - transient model/provider trouble -> waiting_for_model (parked).
         # Everything else may have crossed into HY, and HY has no idempotency
         # key, so it is `unknown` rather than a blind retry.
-        if hy_invoked:
+        if code in PRE_SEND_REFUSAL_CODES:
+            # Provably before the bridge, even though the marker is already
+            # set: the write bindings are built — and the input window
+            # checked — before the payload reaches HY, and this code is raised
+            # from that construction alone. Nothing was sent, so this is
+            # terminal rather than unknown, and the marker is cleared so
+            # reclaim does not treat a row HY never saw as possibly-sent.
+            # Otherwise a refused source context pinned the queue behind it
+            # with no reason shown and no way forward. See issue #44.
+            state, invoked_marker = FAILED, False
+        elif hy_invoked:
             # Error names do not prove execution phase: permission and
             # evidence rechecks also run after HY returns. Once the durable
             # marker is set, every failure is possibly-sent and must stay out
@@ -1997,10 +2015,6 @@ async def execute_job(
             state, invoked_marker = WAITING_FOR_PERMISSION, False
         elif code in MODEL_NOT_READY_CODES:
             state, invoked_marker = WAITING_FOR_MODEL, False
-        elif code in PRE_SEND_REFUSAL_CODES:
-            # Provably before the bridge: the frozen input is stale or too
-            # large. Nothing was sent, so this is terminal rather than unknown.
-            state, invoked_marker = FAILED, False
         elif code == "model_content_transport_request_failed":
             # The generation or embedding HTTP exchange can fail after HY has
             # already persisted a node. Treating that as a pre-send failure

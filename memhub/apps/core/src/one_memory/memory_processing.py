@@ -174,6 +174,22 @@ def _report_stale_known_reasons(task_id: str, reasons: Mapping[str, int]) -> Non
 
 MEMORY_INGEST_POLICY_VERSION = "hy-native-v23"
 UNIFIED_HY_AGENT_ID = "one-memory"
+#: Deterministic refusals raised before the payload reaches HY, so nothing was
+#: sent even though the invocation marker is already recorded by then: the
+#: write bindings are built inside `ingest` ahead of the call, and the input
+#: window is checked while the request is frozen.
+#:
+#: They are terminal rather than unknown. `unknown` here means "HY may hold a
+#: write we cannot confirm", and that is exactly what did not happen — parking
+#: the task on it hid the reason and stopped the queue behind it (issue #44).
+#: Kept in step with `durable_queue.PRE_SEND_REFUSAL_CODES`, which the durable
+#: write path applies to the same codes.
+PRE_SEND_REFUSAL_CODES = frozenset(
+    {
+        "hy_memory_input_exceeds_window",
+        "hy_memory_write_verification_context_scope",
+    }
+)
 _BACKFILL_BATCH_SIZE = 8
 _BACKFILL_DRAIN_BUDGET_SECONDS = 330.0
 _HISTORY_MERGE_TURNS = 8
@@ -555,6 +571,16 @@ class MemoryTaskRunner:
                 "hy_memory_model_timeout",
             }
             safe_terminal_after_invocation = {"hy_memory_import_no_readable_output"}
+            if code in PRE_SEND_REFUSAL_CODES:
+                # Raised before the call, so the marker only says "about to":
+                # fail with the reason rather than parking on a write HY never
+                # saw. See the constant and issue #44.
+                return await in_the_background(
+                    self.tasks.fail,
+                    task_id,
+                    runner_token=runner_token,
+                    error_code=code,
+                )
             if hy_invoked and (
                 code == "hy_memory_evidence_changed"
                 or (

@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from one_memory.database_access import main_database
+from one_memory.hy_memory_bridge import HyMemoryBridgeError
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import (
     CANCELLED,
@@ -4812,6 +4813,84 @@ def test_readmit_paths_never_requeue_a_possibly_sent_row(tmp_path) -> None:
     assert rows["parked"]["state"] == WAITING_FOR_PERMISSION
     assert rows["model"]["state"] == WAITING_FOR_MODEL
     assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=5) == ()
+
+
+def test_a_refused_source_context_fails_instead_of_parking_as_unknown(
+    tmp_path,
+) -> None:
+    """A refusal raised before the call must not read as a possibly-sent write.
+
+    Issue #44: an OpenCode import carried `role=user, written_by=unknown`, so
+    `HyWriteBindings` — built inside `ingest`, ahead of the payload reaching HY
+    — refused the batch. The invocation marker is recorded before that call, so
+    the row was parked as `unknown`: a state that says "HY may hold a write we
+    cannot confirm" about a request that was never sent. It kept the reason off
+    the row and stopped the queue behind it.
+    """
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request(key="refused-scope", source="opencode"))
+    claimer = DurableWriteDrain(queue, execute=_never_execute, owner="refused-owner")
+    assert claimer.claim(limit=1) == (record.job_id,)
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Recorder(
+                error=HyMemoryBridgeError("hy_memory_write_verification_context_scope"),
+                invoke_hy=True,
+            ),
+            evidence=_EvidenceStore({"e1"}),
+            owner="refused-owner",
+        )
+    )
+
+    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
+        state, invoked, last_error = db.execute(
+            "SELECT state, hy_invoked, last_error FROM memory_write_jobs "
+            "WHERE job_id=?",
+            (record.job_id,),
+        ).fetchone()
+
+    assert state == FAILED
+    # Nothing was sent, so reclaim must not treat this as possibly-sent.
+    assert invoked == 0
+    assert last_error == "hy_memory_write_verification_context_scope"
+    assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=1) == ()
+
+
+def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
+    """The fix must not widen: a post-call refusal is still possibly-sent."""
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request(key="after-call", source="opencode"))
+    claimer = DurableWriteDrain(queue, execute=_never_execute, owner="after-call-owner")
+    assert claimer.claim(limit=1) == (record.job_id,)
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Recorder(
+                error=HyMemoryBridgeError(
+                    "hy_memory_write_verification_authority_invalid"
+                ),
+                invoke_hy=True,
+            ),
+            evidence=_EvidenceStore({"e1"}),
+            owner="after-call-owner",
+        )
+    )
+
+    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
+        state, invoked = db.execute(
+            "SELECT state, hy_invoked FROM memory_write_jobs WHERE job_id=?",
+            (record.job_id,),
+        ).fetchone()
+
+    assert state == UNKNOWN
+    assert invoked == 1
 
 
 def test_a_window_holding_only_blocked_rows_advances_instead_of_starving(
