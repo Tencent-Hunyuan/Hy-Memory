@@ -151,6 +151,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             lease_expires_at TEXT,
             hy_invoked INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
+            event_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            time_quality TEXT NOT NULL DEFAULT 'approximate',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -164,6 +166,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
         ON memory_write_jobs(source_key, state, queue_seq);
         CREATE INDEX IF NOT EXISTS idx_write_jobs_fifo
         ON memory_write_jobs(queue_seq);
+        CREATE INDEX IF NOT EXISTS idx_write_jobs_event_claim
+        ON memory_write_jobs(state, event_at, queue_seq);
         CREATE INDEX IF NOT EXISTS idx_write_jobs_source_recent
         ON memory_write_jobs(source_key, updated_at DESC);
         CREATE TABLE IF NOT EXISTS memory_write_job_evidence (
@@ -172,7 +176,13 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             PRIMARY KEY (job_id, evidence_id)
         );
         CREATE INDEX IF NOT EXISTS idx_write_job_evidence_evidence
-        ON memory_write_job_evidence(evidence_id)
+        ON memory_write_job_evidence(evidence_id);
+        CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            window_anchor TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
         """
     return """
         CREATE TABLE IF NOT EXISTS memory_write_jobs (
@@ -192,6 +202,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             lease_expires_at DATETIME(6) NULL,
             hy_invoked TINYINT(1) NOT NULL DEFAULT 0,
             last_error TEXT NULL,
+            event_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            time_quality VARCHAR(32) NOT NULL DEFAULT 'approximate',
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                 ON UPDATE CURRENT_TIMESTAMP(6),
@@ -201,6 +213,7 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             KEY idx_write_jobs_source_claim (state, source_key, priority, created_at),
             KEY idx_write_jobs_source_fifo (source_key, state, queue_seq),
             KEY idx_write_jobs_fifo (queue_seq),
+            KEY idx_write_jobs_event_claim (state, event_at, queue_seq),
             KEY idx_write_jobs_source_recent (source_key, updated_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -209,6 +222,13 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             evidence_id VARCHAR(128) NOT NULL,
             PRIMARY KEY (job_id, evidence_id),
             KEY idx_write_job_evidence_evidence (evidence_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+            singleton INT PRIMARY KEY CHECK (singleton = 1),
+            window_anchor DATETIME(6) NOT NULL,
+            window_end DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
 
@@ -1474,6 +1494,81 @@ async def _026_hy_node_permissions(cursor: Any) -> None:
 
 async def _051_drop_hy_node_permissions(cursor: Any) -> None:
     await cursor.execute("DROP TABLE IF EXISTS hy_node_permissions")
+
+
+async def _053_memory_write_event_time(cursor: Any) -> None:
+    """Add event-time scheduling without re-keying any existing write."""
+
+    dialect = _dialect(cursor)
+    columns = await cursor.columns("memory_write_jobs")
+    added_event_at = "event_at" not in columns
+    if added_event_at:
+        await cursor.execute(
+            "ALTER TABLE memory_write_jobs ADD COLUMN event_at "
+            + ("TEXT" if dialect == "sqlite" else "DATETIME(6) NULL")
+        )
+    if "time_quality" not in columns:
+        await cursor.execute(
+            "ALTER TABLE memory_write_jobs ADD COLUMN time_quality "
+            + (
+                "TEXT NOT NULL DEFAULT 'approximate'"
+                if dialect == "sqlite"
+                else "VARCHAR(32) NOT NULL DEFAULT 'approximate'"
+            )
+        )
+    await cursor.execute(
+        """
+        UPDATE memory_write_jobs
+        SET event_at = COALESCE(
+            (
+                SELECT MAX(COALESCE(e.created_at, e.imported_at))
+                FROM memory_write_job_evidence AS linked
+                JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                WHERE linked.job_id = memory_write_jobs.job_id
+                  AND e.role = 'user' AND e.written_by = 'person'
+            ),
+            (
+                SELECT MIN(COALESCE(e.created_at, e.imported_at))
+                FROM memory_write_job_evidence AS linked
+                JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                WHERE linked.job_id = memory_write_jobs.job_id
+            ),
+            created_at
+        )
+        WHERE event_at IS NULL
+        """
+    )
+    if dialect == "sqlite":
+        await cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_write_jobs_event_claim "
+            "ON memory_write_jobs(state, event_at, queue_seq)"
+        )
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                window_anchor TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    else:
+        if added_event_at:
+            await cursor.execute(
+                "CREATE INDEX idx_write_jobs_event_claim "
+                "ON memory_write_jobs(state, event_at, queue_seq)"
+            )
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+                singleton INT PRIMARY KEY CHECK (singleton = 1),
+                window_anchor DATETIME(6) NOT NULL,
+                window_end DATETIME(6) NOT NULL,
+                updated_at DATETIME(6) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
 
 
 def model_profiles_ddl(dialect: str = "mysql") -> str:
@@ -2742,7 +2837,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         2,
         "memory_write_jobs",
         _002_write_jobs,
-        ("memory_write_jobs", "memory_write_job_evidence"),
+        (
+            "memory_write_jobs",
+            "memory_write_job_evidence",
+            "memory_write_schedule_state",
+        ),
     ),
     Migration(3, "source_file_cursors", _003_scanner_cursors, ("source_file_cursors",)),
     Migration(4, "change_outbox", _004_change_outbox, ("change_outbox",)),
@@ -2916,5 +3015,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         "model_request_audit",
         _052_model_request_audit,
         ("model_request_audit",),
+    ),
+    Migration(
+        53,
+        "memory_write_event_time",
+        _053_memory_write_event_time,
+        ("memory_write_schedule_state",),
     ),
 )

@@ -916,6 +916,7 @@ def create_app(
             )
             app.state.import_job_store = ImportJobStore(database_path)
             app.state.onboarding_store = OnboardingStore(database_path)
+            app.state.history_import_gate_released = False
             app.state.extraction_settings_store = ExtractionSettingsStore(database_path)
             app.state.source_grant_store = SourceGrantStore(
                 database_path,
@@ -2496,6 +2497,8 @@ def create_app(
     async def connect_sources(
         request: ConnectSourcesRequest,
     ) -> ConnectSourcesResponse:
+        if request.onboarding:
+            app.state.history_import_gate_released = False
         source_ids = tuple(dict.fromkeys(request.source_ids))
         registrations = [_require_registration(app, source_id) for source_id in source_ids]
         if request.request_id is None:
@@ -5038,9 +5041,49 @@ def _source_writes_on(app: FastAPI, source_id: str) -> bool:
 def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
     """Claim queued model work only while both global and source gates allow it."""
 
-    return _config_store(app).sedimentation_enabled() and _source_writes_on(
-        app, source_id
+    return (
+        _config_store(app).sedimentation_enabled()
+        and _history_import_gate_released(app)
+        and _source_writes_on(app, source_id)
     )
+
+
+def _history_import_gate_released(app: FastAPI) -> bool:
+    """Hold first sedimentation until every accepted history import is terminal."""
+
+    if getattr(app.state, "history_import_gate_released", False):
+        return True
+    onboarding = getattr(app.state, "onboarding_store", None)
+    jobs = getattr(app.state, "import_job_store", None)
+    if onboarding is None or jobs is None:
+        return True
+    state = onboarding.get()
+    if state.status != "importing" or not state.selected_source_ids:
+        app.state.history_import_gate_released = True
+        return True
+    selected = set(state.selected_source_ids)
+    matching = [
+        job
+        for job in jobs.list_jobs()
+        if job.operation == "history"
+        and job.source_id in selected
+        and (
+            state.started_at is None
+            or job.created_at >= state.started_at
+        )
+    ]
+    if {job.source_id for job in matching} != selected:
+        return False
+    active = {
+        ImportStatus.PENDING,
+        ImportStatus.RUNNING,
+        ImportStatus.PAUSED,
+        ImportStatus.INTERRUPTED,
+    }
+    released = all(job.status not in active for job in matching)
+    if released:
+        app.state.history_import_gate_released = True
+    return released
 
 
 def _model_prober(app: FastAPI) -> ModelProber:

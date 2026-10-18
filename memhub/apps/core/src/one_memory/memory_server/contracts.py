@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import os
 import uuid
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Final, Literal
 
@@ -215,6 +216,10 @@ class WriteRequest(BaseModel):
     evidence_ids: list[str] = Field(min_length=1)
     idempotency_key: str = Field(min_length=1, max_length=256)
     priority: Literal["live", "normal"] = "normal"
+    event_at: datetime | None = None
+    time_quality: Literal["exact", "anchored", "session", "approximate"] = (
+        "approximate"
+    )
 
     @field_validator("evidence_ids")
     @classmethod

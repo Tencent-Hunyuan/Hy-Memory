@@ -102,6 +102,22 @@ details.prepared_count > 0
 
 这表示导入的数据已经进入记忆沉淀队列。
 
+Write Job 不是按 Harness 各自抢跑。Drain 以全局最老的 `event_at`
+建立固定十分钟窗口：
+
+- 窗口内不同 Harness 可以并发；
+- 同一 Harness 仍按 `queue_seq` 串行；
+- `time_quality=exact` 来自真实 turn 时间；
+- `session/approximate` 表示缺少 turn 时间，使用 session/file/import
+  回退；
+- 首次多来源历史导入完成前，Write Job 可以积压，但模型调用应为 0；
+- 沉淀开关关闭时 pending 可以增加，`hy_invoked` 不应增加。
+
+如果出现明显的新对话先于十分钟窗口之外的旧对话完成，检查
+`memory_write_jobs.event_at/time_quality/queue_seq` 和
+`memory_write_schedule_state`；完整合同见
+`contracts/memory-event-time-scheduling-v1.md`。
+
 ### D. SDK 正在沉淀
 
 ```text

@@ -7,7 +7,7 @@ import sqlite3
 import stat
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from functools import partial
 
 from pydantic import JsonValue
@@ -82,6 +82,11 @@ _CURSOR_HOST_CONTEXT_START = re.compile(
 )
 _CURSOR_USER_QUERY = re.compile(r"<user_query\b")
 _CURSOR_TIMESTAMP_PREFIX = re.compile(r"<timestamp>[\s\S]*?</timestamp>\s*")
+_CURSOR_TIMESTAMP_VALUE = re.compile(
+    r"<timestamp>\s*"
+    r"([A-Za-z]+,\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}\s+[AP]M)"
+    r"\s+\(UTC([+-]\d{1,2})(?::(\d{2}))?\)\s*</timestamp>",
+)
 _CURSOR_IMAGE_FILES_PREFIX = re.compile(r"\[Image\]\s*<image_files>[\s\S]*?</image_files>\s*")
 _CURSOR_BARE_IMAGE_PREFIX = re.compile(r"(?:\[Image\]\s*)+")
 
@@ -121,6 +126,24 @@ def strip_thinking(content: str) -> str:
 
 def _strip_cursor_timestamp(content: str | None) -> str | None:
     return _CURSOR_TIMESTAMP_PREFIX.sub("", content, count=1) if content else None
+
+
+def _cursor_host_timestamp(content: str | None) -> datetime | None:
+    """Parse Cursor's user-visible timestamp envelope into UTC."""
+    if not content:
+        return None
+    match = _CURSOR_TIMESTAMP_VALUE.search(content)
+    if match is None:
+        return None
+    try:
+        local = datetime.strptime(match[1], "%A, %b %d, %Y, %I:%M %p")
+        hours = int(match[2])
+        minutes = int(match[3] or "0")
+        sign = -1 if hours < 0 else 1
+        offset = timedelta(hours=hours, minutes=sign * minutes)
+        return local.replace(tzinfo=timezone(offset)).astimezone(UTC)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _strip_cursor_host_prefix(content: str | None) -> str | None:
@@ -703,6 +726,7 @@ def _parse_transcript_record(
     project_name = path_parts[path_parts.index("projects") + 1] if "projects" in path_parts else ""
     session_name = context.relative_path.rsplit("/", 1)[-1].removesuffix(".jsonl")
     is_subagent = f"{project_name}\0{session_name}" in subagent_ids
+    host_timestamp = _cursor_host_timestamp(content) if role == "user" else None
     created_at = _transcript_fallback_time(context)
     native_message_id = record.get("id") or message.get("id")
     message_id = (
@@ -728,7 +752,16 @@ def _parse_transcript_record(
             created_at=created_at,
             workspace=workspace,
             record_type="cursor_transcript",
-            origin_metadata=OriginMetadata(raw_meta={"time_basis": "file_mtime"}),
+            origin_metadata=OriginMetadata(
+                raw_meta={
+                    "time_basis": "file_mtime",
+                    **(
+                        {"turn_event_at": host_timestamp.isoformat()}
+                        if host_timestamp is not None
+                        else {}
+                    ),
+                }
+            ),
         ),
         tool_blocks_evidence(message.get("content"), block_types=TOOL_BLOCKS),
     )
@@ -819,6 +852,13 @@ def _read_store_messages(
                         reason_code=ScanIssueCode.UNKNOWN_RECORD,
                     )
                     continue
+                host_timestamp = (
+                    _cursor_host_timestamp(content) if role == "user" else None
+                )
+                fallback_timestamp = datetime.fromtimestamp(
+                    source_file.modified_ns / 1_000_000_000,
+                    tz=UTC,
+                ) + timedelta(microseconds=rowid)
                 parsed = ParsedMessage(
                     conversation_id=conversation_id,
                     message_id=str(record.get("id") or row["id"]),
@@ -829,8 +869,19 @@ def _read_store_messages(
                         else written_by_user
                     ),
                     verbatim=cleaned,
+                    created_at=fallback_timestamp,
                     workspace=_store_workspace(source_file),
                     record_type="cursor_store_blob",
+                    origin_metadata=OriginMetadata(
+                        raw_meta={
+                            "time_basis": "file_mtime",
+                            **(
+                                {"turn_event_at": host_timestamp.isoformat()}
+                                if host_timestamp is not None
+                                else {}
+                            ),
+                        }
+                    ),
                 )
                 yield ScannedEvidence(
                     cursor=cursor,

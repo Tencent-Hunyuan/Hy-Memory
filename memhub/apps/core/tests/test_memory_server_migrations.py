@@ -2103,7 +2103,7 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50, 51, 52)
+    assert result.applied == (49, 50, 51, 52, 53)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
@@ -2136,7 +2136,7 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (51, 52)
+    assert result.applied == (51, 52, 53)
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]
@@ -2147,3 +2147,73 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
     assert "hy_node_permissions" not in tables
     assert "governed_memories" in tables
     assert "evidence" in tables
+
+
+def test_migration_53_backfills_write_job_event_time_from_person_turn(
+    tmp_path,
+) -> None:
+    import sqlite3
+
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore
+
+    path = tmp_path / "legacy-write-jobs.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE memory_write_jobs (
+                job_id TEXT PRIMARY KEY,
+                queue_seq INTEGER NOT NULL,
+                session_key TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                batch_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                payload_json TEXT NOT NULL,
+                evidence_ids_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                attempts INTEGER NOT NULL,
+                max_attempts INTEGER NOT NULL,
+                lease_owner TEXT,
+                lease_expires_at TEXT,
+                hy_invoked INTEGER NOT NULL,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE evidence (
+                evidence_id TEXT PRIMARY KEY,
+                role TEXT NOT NULL,
+                written_by TEXT NOT NULL,
+                created_at TEXT,
+                imported_at TEXT NOT NULL
+            );
+            CREATE TABLE memory_write_job_evidence (
+                job_id TEXT NOT NULL,
+                evidence_id TEXT NOT NULL,
+                PRIMARY KEY (job_id, evidence_id)
+            );
+            INSERT INTO memory_write_jobs VALUES (
+                'job-1',1,'session','cursor','batch','idem','{}','[]',
+                'pending','normal',0,3,NULL,NULL,0,NULL,
+                '2026-10-18T08:00:00+00:00','2026-10-18T08:00:00+00:00'
+            );
+            INSERT INTO evidence VALUES (
+                'user-1','user','person','2026-10-16T01:02:03+00:00',
+                '2026-10-18T08:00:00+00:00'
+            );
+            INSERT INTO memory_write_job_evidence VALUES ('job-1','user-1');
+            """
+        )
+
+    migration = next(item for item in MIGRATIONS if item.version == 53)
+    result = asyncio.run(migrate(SqliteMigrationStore(path), (migration,)))
+
+    assert result.applied == (53,)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT event_at,time_quality FROM memory_write_jobs"
+        ).fetchone() == ("2026-10-16T01:02:03+00:00", "approximate")
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='memory_write_schedule_state'"
+        ).fetchone() == (1,)

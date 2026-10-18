@@ -30,7 +30,7 @@ from uuid import uuid4
 from one_memory.background_work import in_the_background
 from one_memory.database_access import main_database
 from one_memory.diagnostic_log import diagnostic_event
-from one_memory.imports.models import EvidenceRecord
+from one_memory.imports.models import EvidenceOrigin, EvidenceRecord, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import WriteRequest
 from one_memory.memory_server.data_safety import MIN_FREE_BYTES  # noqa: F401 - re-exported
@@ -304,9 +304,12 @@ LEGACY_MEMORY_WRITE_JOB_COLUMNS = (
     ("lease_expires_at", "TEXT"),
     ("hy_invoked", "INTEGER NOT NULL DEFAULT 0"),
     ("last_error", "TEXT"),
+    ("event_at", "TEXT"),
+    ("time_quality", "TEXT NOT NULL DEFAULT 'approximate'"),
 )
 
 _FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
+EVENT_TIME_WINDOW = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -455,6 +458,7 @@ class DurableWriteQueue:
             for statement in memory_write_jobs_sqlite_schema()[1:]:
                 connection.execute(statement)
             self._backfill_legacy_references(connection)
+            self._backfill_legacy_event_times(connection)
         # A process that died while holding a lease cannot run its own
         # recovery. Opening the queue is the first safe point to recover any
         # rows it left behind, before any new worker claims them.
@@ -513,6 +517,50 @@ class DurableWriteQueue:
         ]
         if columns and columns != ["state", "priority", "created_at"]:
             connection.execute("DROP INDEX idx_write_jobs_claim")
+
+    @staticmethod
+    def _backfill_legacy_event_times(connection: sqlite3.Connection) -> None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence'"
+            ).fetchone()
+            is None
+        ):
+            connection.execute(
+                "UPDATE memory_write_jobs SET event_at=created_at WHERE event_at IS NULL"
+            )
+            return
+        evidence_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(evidence)").fetchall()
+        }
+        if not {"created_at", "imported_at", "role", "written_by"} <= evidence_columns:
+            connection.execute(
+                "UPDATE memory_write_jobs SET event_at=created_at WHERE event_at IS NULL"
+            )
+            return
+        connection.execute(
+            """
+            UPDATE memory_write_jobs
+            SET event_at = COALESCE(
+                (
+                    SELECT MAX(COALESCE(e.created_at, e.imported_at))
+                    FROM memory_write_job_evidence AS linked
+                    JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                    WHERE linked.job_id = memory_write_jobs.job_id
+                      AND e.role = 'user' AND e.written_by = 'person'
+                ),
+                (
+                    SELECT MIN(COALESCE(e.created_at, e.imported_at))
+                    FROM memory_write_job_evidence AS linked
+                    JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                    WHERE linked.job_id = memory_write_jobs.job_id
+                ),
+                created_at
+            )
+            WHERE event_at IS NULL
+            """
+        )
 
     @staticmethod
     def _backfill_legacy_references(connection: sqlite3.Connection) -> None:
@@ -610,8 +658,19 @@ class DurableWriteQueue:
         replacing the earlier intent.
         """
         self._refuse_if_below_reserve()
-        payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+        payload = json.dumps(
+            request.model_dump(
+                mode="json",
+                exclude={"event_at", "time_quality"},
+            ),
+            sort_keys=True,
+        )
         now = datetime.now(UTC).isoformat()
+        resolved_event, resolved_quality = self._event_time_for_request(request)
+        event = request.event_at or resolved_event or datetime.fromisoformat(now)
+        if event.tzinfo is None:
+            event = event.replace(tzinfo=UTC)
+        event_at = event.astimezone(UTC).isoformat()
         key = request.request_key
         with (
             main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
@@ -715,8 +774,9 @@ class DurableWriteQueue:
                 " idempotency_key, payload_json,"
                 " evidence_ids_json,"
                 " state, priority, attempts, max_attempts, lease_owner,"
-                " lease_expires_at, hy_invoked, last_error, created_at, updated_at"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " lease_expires_at, hy_invoked, last_error, event_at, time_quality,"
+                " created_at, updated_at"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     job_id,
                     queue_seq,
@@ -734,6 +794,10 @@ class DurableWriteQueue:
                     None,
                     0,
                     None,
+                    event_at,
+                    request.time_quality
+                    if request.event_at is not None
+                    else resolved_quality,
                     now,
                     now,
                 ),
@@ -762,6 +826,43 @@ class DurableWriteQueue:
             created_at=now,
             updated_at=now,
         )
+
+    def _event_time_for_request(
+        self, request: WriteRequest
+    ) -> tuple[datetime | None, str]:
+        if self.evidence is None:
+            return None, "approximate"
+        records = [
+            record
+            for evidence_id in request.evidence_ids
+            if (record := self.evidence.get(evidence_id)) is not None
+        ]
+        if not records:
+            return None, "approximate"
+        opener = next(
+            (
+                record
+                for record in records
+                if record.role == "user"
+                and record.written_by is WrittenBy.PERSON
+            ),
+            records[0],
+        )
+        if opener.created_at is None:
+            return opener.imported_at, "approximate"
+        origin = opener.origin_meta.get(EvidenceOrigin.FILE)
+        basis = origin.raw_meta.get("time_basis") if origin is not None else None
+        turn_event_at = (
+            origin.raw_meta.get("turn_event_at") if origin is not None else None
+        )
+        if isinstance(turn_event_at, str):
+            try:
+                return datetime.fromisoformat(turn_event_at), "exact"
+            except ValueError:
+                pass
+        if basis == "file_mtime":
+            return opener.created_at, "session"
+        return opener.created_at, "exact"
 
     def repair_pre_send_identity_failures(self, *, limit: int = 128) -> int:
         """Refresh stale Evidence journals and requeue only provably unsent jobs."""
@@ -1416,7 +1517,13 @@ class DurableWriteQueue:
         cross back to pending, so this cannot duplicate a possibly-sent write.
         """
         now = datetime.now(UTC).isoformat()
-        payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+        payload = json.dumps(
+            request.model_dump(
+                mode="json",
+                exclude={"event_at", "time_quality"},
+            ),
+            sort_keys=True,
+        )
         with (
             main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
             connection,
@@ -2096,12 +2203,87 @@ class DurableWriteDrain:
                 placeholders = ",".join("?" for _ in enabled_sources)
                 source_clause = f"AND candidate.source_key IN ({placeholders}) "
                 source_params = tuple(sorted(enabled_sources))
+            window = connection.execute(
+                "SELECT window_anchor,window_end FROM memory_write_schedule_state "
+                "WHERE singleton=1"
+            ).fetchone()
+            if window is not None:
+                anchor_text, end_text = str(window[0]), str(window[1])
+                active_source_clause = ""
+                active_source_params: tuple[Any, ...] = ()
+                if enabled_sources is not None:
+                    placeholders = ",".join("?" for _ in enabled_sources)
+                    active_source_clause = (
+                        f"AND active.source_key IN ({placeholders}) "
+                    )
+                    active_source_params = tuple(sorted(enabled_sources))
+                active = connection.execute(
+                    "SELECT 1 FROM memory_write_jobs AS active "
+                    "WHERE active.event_at>=? AND active.event_at<? AND ("
+                    "active.state=? OR (active.state=? "
+                    + active_source_clause
+                    + ")) LIMIT 1",
+                    (
+                        anchor_text,
+                        end_text,
+                        RUNNING,
+                        PENDING,
+                        *active_source_params,
+                    ),
+                ).fetchone()
+                if active is None:
+                    connection.execute(
+                        "DELETE FROM memory_write_schedule_state WHERE singleton=1"
+                    )
+                    window = None
+            if window is None:
+                anchor = connection.execute(
+                    "SELECT candidate.event_at "
+                    "FROM memory_write_jobs AS candidate "
+                    "WHERE candidate.state=? "
+                    "AND (candidate.lease_expires_at IS NULL "
+                    "OR candidate.lease_expires_at < ?) "
+                    + source_clause
+                    + "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS held "
+                    "WHERE held.source_key=candidate.source_key AND held.state=? "
+                    "AND held.lease_owner IS NOT NULL "
+                    "AND held.lease_expires_at>=?) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS earlier "
+                    "WHERE earlier.source_key=candidate.source_key "
+                    f"AND earlier.state IN ({blocking}) "
+                    "AND earlier.queue_seq<candidate.queue_seq) "
+                    "ORDER BY candidate.event_at,candidate.queue_seq LIMIT 1",
+                    (
+                        PENDING,
+                        now.isoformat(),
+                        *source_params,
+                        RUNNING,
+                        now.isoformat(),
+                        *_FIFO_BLOCKING_STATES,
+                    ),
+                ).fetchone()
+                if anchor is None:
+                    return ()
+                anchor_at = datetime.fromisoformat(str(anchor[0]))
+                if anchor_at.tzinfo is None:
+                    anchor_at = anchor_at.replace(tzinfo=UTC)
+                anchor_text = anchor_at.astimezone(UTC).isoformat()
+                end_text = (anchor_at + EVENT_TIME_WINDOW).astimezone(UTC).isoformat()
+                connection.execute(
+                    "INSERT INTO memory_write_schedule_state "
+                    "(singleton,window_anchor,window_end,updated_at) "
+                    "VALUES (1,?,?,?)",
+                    (anchor_text, end_text, now.isoformat()),
+                )
             rows = connection.execute(
                 "SELECT candidate.job_id,candidate.source_key "
                 "FROM memory_write_jobs AS candidate "
                 "WHERE candidate.state=? "
                 "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
                 + source_clause +
+                "AND candidate.event_at>=? AND candidate.event_at<? "
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM memory_write_jobs AS held "
                 "WHERE held.source_key=candidate.source_key AND held.state=? "
@@ -2111,11 +2293,13 @@ class DurableWriteDrain:
                 "WHERE earlier.source_key=candidate.source_key "
                 f"AND earlier.state IN ({blocking}) "
                 "AND earlier.queue_seq<candidate.queue_seq) "
-                "ORDER BY candidate.queue_seq",
+                "ORDER BY candidate.event_at,candidate.queue_seq",
                 (
                     PENDING,
                     now.isoformat(),
                     *source_params,
+                    anchor_text,
+                    end_text,
                     RUNNING,
                     now.isoformat(),
                     *_FIFO_BLOCKING_STATES,

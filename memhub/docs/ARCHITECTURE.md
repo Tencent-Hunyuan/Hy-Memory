@@ -109,9 +109,10 @@ authorized source
   -> Evidence
   -> import job / complete conversation turn
   -> memory_write_jobs
+  -> persisted event-time window
   -> durable drain
   -> memory_tasks internal execution record
-  -> model-content permission lease
+  -> sedimentation and source gates
   -> Hy Memory bridge
   -> write verification and Governance
   -> search / recall / UI
@@ -124,11 +125,18 @@ notifications, manual memory input, and Matter discovery all submit to the
 same durable `memory_write_jobs` table. They do not invoke HY directly.
 
 `memory_write_jobs` is the sole production intake and scheduling queue. Every
-row receives a persistent monotonic `queue_seq`. The drain enforces strict FIFO
-within each Harness by `queue_seq`; live priority metadata never moves a later
-job ahead of an earlier job. It claims at most one job per Harness and runs at
-most ten Harnesses concurrently. A single drain owns these ten source lanes;
-there is not one drain process per Harness.
+row receives the complete turn's `event_at`, a `time_quality`, and a persistent
+monotonic `queue_seq`. The drain anchors a fixed ten-minute window at the
+oldest eligible event time. Different Harnesses may run concurrently inside
+that window, while each Harness remains FIFO by `queue_seq`; live priority
+metadata never jumps the event-time window. The persisted anchor prevents a
+restart or a chain of nearby jobs from sliding the window forward.
+
+First onboarding imports are a barrier: accepted Harnesses finish importing
+the shared history cutoff and submit their chunks before the drain begins
+model work. Failed or explicitly disabled sources are excluded rather than
+blocking the user's whole timeline. See
+[`contracts/memory-event-time-scheduling-v1.md`](contracts/memory-event-time-scheduling-v1.md).
 
 `memory_tasks` remains as an internal execution, lease, input, output, and
 reconciliation record created while a claimed write job runs through HY. It is
@@ -136,8 +144,8 @@ not independently recovered or scheduled by the production composition root.
 The legacy `ProcessingCoordinator` and supervisor backfill/resume scheduler are
 not started by Core; history recovery writes durable jobs instead.
 
-The synchronization API and the first HY-call boundary use the same per-source
-async lock. If pause commits first, the job cannot cross into HY and returns to
+The synchronization API and the first HY-call boundary use the same
+sedimentation/source locks. If pause commits first, the job cannot cross into HY and returns to
 `pending`. If the job records its first HY invocation first, pause does not
 interrupt that in-progress job. Lease expiry after a possible HY call remains
 `unknown`, never a blind retry.
@@ -155,7 +163,7 @@ write. Retrieval results are checked against current Governance and access
 scope before being returned to the UI or an authorized host.
 
 The currently pinned SDK is the public PyPI distribution
-`hy-memory==2.0.3`. Runtime configuration and permission boundaries are
+`hy-memory==2.0.4`. Runtime configuration and permission boundaries are
 documented in [`../MEMORY.md`](../MEMORY.md).
 
 ## Permission Boundaries

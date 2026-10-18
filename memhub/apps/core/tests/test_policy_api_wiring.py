@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from one_memory.api import (
+    _history_import_gate_released,
     _run_backfill,
     _sedimentation_claim_enabled,
     _source_writes_on,
@@ -122,3 +123,35 @@ def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> No
     assert _sedimentation_claim_enabled(app, "one-memory-manual") is True
     config.set_sedimentation_enabled(False)
     assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
+
+
+def test_first_import_gate_waits_for_every_selected_history_job() -> None:
+    state = SimpleNamespace(
+        status="importing",
+        selected_source_ids=("cursor", "codex"),
+        started_at=datetime(2026, 10, 18, tzinfo=UTC),
+    )
+    jobs = [
+        SimpleNamespace(
+            operation="history",
+            source_id="cursor",
+            created_at=datetime(2026, 10, 18, tzinfo=UTC),
+            status="completed",
+        ),
+        SimpleNamespace(
+            operation="history",
+            source_id="codex",
+            created_at=datetime(2026, 10, 18, tzinfo=UTC),
+            status="running",
+        ),
+    ]
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            onboarding_store=SimpleNamespace(get=lambda: state),
+            import_job_store=SimpleNamespace(list_jobs=lambda: jobs),
+        )
+    )
+
+    assert _history_import_gate_released(app) is False
+    jobs[1].status = "failed"
+    assert _history_import_gate_released(app) is True

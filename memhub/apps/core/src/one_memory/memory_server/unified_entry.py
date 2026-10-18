@@ -18,10 +18,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 from typing import Literal
 
-from one_memory.imports.models import EvidenceRecord
+from one_memory.imports.models import EvidenceOrigin, EvidenceRecord, WrittenBy
 from one_memory.memory_server.contracts import (
     BatchIdentity,
     WriteRequest,
@@ -124,6 +125,7 @@ class UnifiedWriteIntake:
         priority: WritePriority,
     ) -> WriteRequest:
         session_id = internal_session_id_for(record.conversation_id, record.source_id)
+        event_at, time_quality = _job_time((record,))
         return WriteRequest(
             internal_session_id=session_id,
             source_id=record.source_id,
@@ -135,6 +137,8 @@ class UnifiedWriteIntake:
             evidence_ids=[record.evidence_id],
             idempotency_key=f"entry:{record.evidence_id}",
             priority=priority,
+            event_at=event_at,
+            time_quality=time_quality,
         )
 
     def submit_records(
@@ -161,6 +165,7 @@ class UnifiedWriteIntake:
         )
         request_id = f"turn:v1:{sha256(material.encode()).hexdigest()}"
         session_id = internal_session_id_for(first.conversation_id, first.source_id)
+        event_at, time_quality = _job_time(records)
         durable = self.queue.submit(
             WriteRequest(
                 internal_session_id=session_id,
@@ -173,6 +178,8 @@ class UnifiedWriteIntake:
                 evidence_ids=[record.evidence_id for record in records],
                 idempotency_key=request_id,
                 priority=priority,
+                event_at=event_at,
+                time_quality=time_quality,
             )
         )
         return UnifiedWriteReceipt(
@@ -189,3 +196,35 @@ class SourceWriteDisabledError(RuntimeError):
     def __init__(self, evidence_id: str) -> None:
         super().__init__("model_content_source_disabled")
         self.evidence_id = evidence_id
+
+
+def _job_time(
+    records: tuple[EvidenceRecord, ...],
+) -> tuple[datetime, Literal["exact", "anchored", "session", "approximate"]]:
+    """Use the turn opener's wall clock, with an explicit fallback quality."""
+
+    opener = next(
+        (
+            record
+            for record in records
+            if record.role == "user" and record.written_by is WrittenBy.PERSON
+        ),
+        records[0],
+    )
+    if opener.created_at is None:
+        return opener.imported_at, "approximate"
+    file_origin = opener.origin_meta.get(EvidenceOrigin.FILE)
+    basis = file_origin.raw_meta.get("time_basis") if file_origin is not None else None
+    turn_event_at = (
+        file_origin.raw_meta.get("turn_event_at") if file_origin is not None else None
+    )
+    if isinstance(turn_event_at, str):
+        try:
+            return datetime.fromisoformat(turn_event_at), "exact"
+        except ValueError:
+            pass
+    if basis == "file_mtime":
+        return opener.created_at, "session"
+    if EvidenceOrigin.HOOK in opener.origins:
+        return opener.created_at, "exact"
+    return opener.created_at, "exact"

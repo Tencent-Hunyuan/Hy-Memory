@@ -37,6 +37,7 @@ def _request(
     evidence: tuple[str, ...] = ("e1",),
     key: str = "idem-1",
     source: str | None = None,
+    event_at: datetime | None = None,
 ) -> WriteRequest:
     batch = BatchIdentity(internal_session_id="sess-1", first_round=1, last_round=5)
     return WriteRequest(
@@ -45,6 +46,7 @@ def _request(
         evidence_ids=list(evidence),
         idempotency_key=key,
         source_id=source,
+        event_at=event_at,
     )
 
 
@@ -149,6 +151,7 @@ def test_submit_accepts_a_write_whose_evidence_exists(tmp_path) -> None:
 
     path = tmp_path / "one-memory.sqlite3"
     store = EvidenceStore(path)
+    occurred_at = datetime(2026, 10, 17, 23, 45, tzinfo=UTC)
     created = store.put(
         EvidenceInput(
             source_id="test",
@@ -156,6 +159,7 @@ def test_submit_accepts_a_write_whose_evidence_exists(tmp_path) -> None:
             message_id="m1",
             role="user",
             written_by=WrittenBy.PERSON,
+            created_at=occurred_at,
             verbatim="present evidence",
             origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
         )
@@ -166,6 +170,8 @@ def test_submit_accepts_a_write_whose_evidence_exists(tmp_path) -> None:
 
     assert record.enqueued is True
     assert len(_rows(path)) == 1
+    assert datetime.fromisoformat(_rows(path)[0]["event_at"]) == occurred_at
+    assert _rows(path)[0]["time_quality"] == "exact"
 
 
 def test_a_replay_is_idempotent_even_after_its_evidence_is_removed(tmp_path) -> None:
@@ -484,6 +490,8 @@ def test_an_older_queue_backfills_evidence_refs_from_the_intact_payload(tmp_path
     queue = DurableWriteQueue(path)
 
     assert _rows(path)[0]["evidence_ids_json"] == '["legacy-evidence"]'
+    assert _rows(path)[0]["event_at"] == "2026-09-01T00:00:00+00:00"
+    assert _rows(path)[0]["time_quality"] == "approximate"
     assert queue.unsubmitted_evidence_ids() == ()
 
 
@@ -4271,6 +4279,100 @@ def test_pause_before_hy_releases_an_already_claimed_job(tmp_path) -> None:
             "SELECT attempts,hy_invoked FROM memory_write_jobs WHERE job_id=?",
             (record.job_id,),
         ).fetchone() == (0, 0)
+
+
+def test_event_time_window_claims_cross_harness_jobs_within_ten_minutes(
+    tmp_path,
+) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    anchor = datetime(2026, 10, 18, 8, 0, tzinfo=UTC)
+    first = queue.submit(
+        _request(key="window-a", source="cursor", event_at=anchor)
+    )
+    inside = queue.submit(
+        _request(
+            key="window-b",
+            source="codex",
+            event_at=anchor + timedelta(minutes=9, seconds=59),
+        )
+    )
+    boundary = queue.submit(
+        _request(
+            key="window-c",
+            source="claude-code",
+            event_at=anchor + timedelta(minutes=10),
+        )
+    )
+    drain = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        owner="window-owner",
+        max_concurrent_sources=10,
+    )
+
+    assert drain.claim(limit=10) == (first.job_id, inside.job_id)
+    queue.settle(
+        first.job_id,
+        state=COMPLETED,
+        hy_invoked=True,
+        owner="window-owner",
+    )
+    queue.settle(
+        inside.job_id,
+        state=COMPLETED,
+        hy_invoked=True,
+        owner="window-owner",
+    )
+    assert drain.claim(limit=10) == (boundary.job_id,)
+
+
+def test_event_time_window_anchor_does_not_slide_while_a_job_is_running(
+    tmp_path,
+) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    anchor = datetime(2026, 10, 18, 8, 0, tzinfo=UTC)
+    first = queue.submit(
+        _request(key="fixed-a", source="cursor", event_at=anchor)
+    )
+    inside = queue.submit(
+        _request(
+            key="fixed-b",
+            source="codex",
+            event_at=anchor + timedelta(minutes=9),
+        )
+    )
+    chained = queue.submit(
+        _request(
+            key="fixed-c",
+            source="claude-code",
+            event_at=anchor + timedelta(minutes=18),
+        )
+    )
+    drain = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        owner="fixed-window-owner",
+        max_concurrent_sources=10,
+    )
+
+    assert drain.claim(limit=2) == (first.job_id, inside.job_id)
+    queue.settle(
+        first.job_id,
+        state=COMPLETED,
+        hy_invoked=True,
+        owner="fixed-window-owner",
+    )
+    assert drain.claim(limit=1) == ()
+    assert queue.get(chained.request_id).state == PENDING
+    queue.settle(
+        inside.job_id,
+        state=COMPLETED,
+        hy_invoked=True,
+        owner="fixed-window-owner",
+    )
+    assert drain.claim(limit=1) == (chained.job_id,)
 
 
 def test_sedimentation_pause_releases_claim_without_spending_an_attempt(tmp_path) -> None:

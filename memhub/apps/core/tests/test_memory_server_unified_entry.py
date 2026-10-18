@@ -42,6 +42,51 @@ def test_evidence_submission_creates_one_durable_row(tmp_path) -> None:
     assert receipt.evidence_id == record.evidence_id
     assert receipt.request_id == f"entry:{record.evidence_id}"
     assert intake.queue.get(receipt.request_id) is not None
+    with sqlite3.connect(path) as connection:
+        event_at, quality = connection.execute(
+            "SELECT event_at,time_quality FROM memory_write_jobs WHERE job_id=?",
+            (receipt.record.job_id,),
+        ).fetchone()
+    assert datetime.fromisoformat(event_at) == record.created_at
+    assert quality == "exact"
+
+
+def test_cursor_turn_timestamp_orders_job_without_reordering_evidence(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    file_mtime = datetime(2026, 10, 18, 8, 0, tzinfo=UTC)
+    turn_time = datetime(2026, 10, 16, 0, 24, tzinfo=UTC)
+    record = store.put(
+        EvidenceInput(
+            source_id="cursor",
+            conversation_id="cursor-session",
+            message_id="cursor-user",
+            role="user",
+            written_by=WrittenBy.PERSON,
+            created_at=file_mtime,
+            verbatim="timestamped Cursor turn",
+            origin_meta={
+                EvidenceOrigin.FILE: OriginMetadata(
+                    raw_meta={
+                        "time_basis": "file_mtime",
+                        "turn_event_at": turn_time.isoformat(),
+                    }
+                )
+            },
+        )
+    ).record
+    intake = UnifiedWriteIntake(DurableWriteQueue(path, evidence=store))
+
+    receipt = intake.submit_evidence(record, first_round=1, last_round=1)
+
+    with sqlite3.connect(path) as connection:
+        event_at, quality = connection.execute(
+            "SELECT event_at,time_quality FROM memory_write_jobs WHERE job_id=?",
+            (receipt.record.job_id,),
+        ).fetchone()
+    assert record.created_at == file_mtime
+    assert datetime.fromisoformat(event_at) == turn_time
+    assert quality == "exact"
 
 
 def test_a_long_branch_conversation_id_still_enqueues(tmp_path) -> None:
