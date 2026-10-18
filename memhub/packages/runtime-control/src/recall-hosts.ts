@@ -13,6 +13,7 @@ import {
   qwenCodeLayout,
   type RecallHostLayout,
   workbuddyLayout,
+  zcodeLayout,
 } from "@one-memory/host-bridge/installer";
 
 export interface RecallHostDescriptor {
@@ -51,6 +52,7 @@ export async function recallHosts(
   // presence is what says the host is set up here.
   const opencodeDir = path.join(home, ".config", "opencode");
   const qwenDir = path.join(home, ".qwen");
+  const zcodeDir = path.join(home, ".zcode");
   const openclawDir = path.join(home, ".openclaw");
   const hermesDir = path.join(home, ".hermes");
   // Pi keeps everything a level down, under `agent`, and that is also where
@@ -121,6 +123,12 @@ export async function recallHosts(
       label: "Pi",
       layout: piLayout(piDir),
       presencePath: piDir,
+    },
+    {
+      hostId: "zcode",
+      label: "ZCode",
+      layout: zcodeLayout(zcodeDir),
+      presencePath: zcodeDir,
     },
     ...(await deepseekHarnessProfiles(dshHome)),
   ];

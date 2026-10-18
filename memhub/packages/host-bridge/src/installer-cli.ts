@@ -20,6 +20,7 @@ import {
   verifyRecallInstall,
   workbuddyLayout,
   workbuddyScatteredLayout,
+  zcodeLayout,
 } from "./recall-installer.js";
 import { probeRecallInstall } from "./recall-probe.js";
 import { planRecallRepoint } from "./recall-repoint.js";
@@ -36,6 +37,7 @@ const HOSTS = [
   "hermes",
   "deepseek-harness",
   "pi",
+  "zcode",
 ] as const;
 type HostId = (typeof HOSTS)[number];
 /** Arguments that stand alone rather than taking a value. */
@@ -196,6 +198,9 @@ function resolveLayout(values: Map<string, string>): RecallHostLayout {
   }
   if (host === "qwen-code") {
     return qwenCodeLayout(hostDir);
+  }
+  if (host === "zcode") {
+    return zcodeLayout(hostDir);
   }
   if (host === "openclaw") {
     return openclawLayout(hostDir);

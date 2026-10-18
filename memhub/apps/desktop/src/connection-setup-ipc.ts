@@ -69,6 +69,7 @@ const SOURCE_HOST: Readonly<Record<string, string>> = {
   "qwen-code": "qwen-code",
   hermes: "hermes",
   pi: "pi",
+  zcode: "zcode",
 };
 
 export function connectionHostId(sourceId: string): string | null {

@@ -217,6 +217,7 @@ export interface RecallHostLayout {
     | "dsh"
     | "opencode"
     | "openclaw"
+    | "zcode"
     | "codebuddy-plugin"
     | "none";
   /** Set for a host installed as a self-contained plugin rather than as an
@@ -609,6 +610,34 @@ export function qwenCodeLayout(qwenDir: string): RecallHostLayout {
     hostLabel: "Qwen Code",
     configPath: path.join(root, "settings.json"),
     format: "json",
+    channel: "mcp",
+    ...looseSkill(root),
+    journalPath: path.join(root, ".one-memory", "recall-install.json"),
+    containmentRoot: root,
+  };
+}
+
+/** ZCode keeps `mcp.servers` in `~/.zcode/cli/config.json` and loads Skills.
+ *
+ * Both facts come from the installed client rather than its marketing: the
+ * configuration guide shipped with it documents the `mcp.servers` nesting (one
+ * level deeper than Cursor's `mcpServers`) and a strict server schema — an
+ * entry carrying an unknown key is dropped at load. The plain
+ * `{command, args, env}` we already emit satisfies it, with `type` inferred
+ * as stdio from `command`, and user skills load from
+ * `~/.zcode/skills/<name>/SKILL.md` one level deep, like Qwen Code.
+ *
+ * `cli/config.json` holds every user setting, not just servers — MCP entries,
+ * hooks, plugin state — so this is a merge into a file we do not own, which
+ * the JSON path already handles.
+ */
+export function zcodeLayout(zcodeDir: string): RecallHostLayout {
+  const root = path.resolve(zcodeDir);
+  return {
+    hostId: "zcode",
+    hostLabel: "ZCode",
+    configPath: path.join(root, "cli", "config.json"),
+    format: "zcode",
     channel: "mcp",
     ...looseSkill(root),
     journalPath: path.join(root, ".one-memory", "recall-install.json"),
@@ -2328,15 +2357,17 @@ function readInstalledServer(
 
 /** Where in the document this host keeps its servers.
  *
- * Four JSON hosts, three answers, each read off the installed binary: Cursor,
+ * Five JSON hosts, three answers, each read off the installed binary: Cursor,
  * Claude Code, WorkBuddy and Qwen Code use a top-level `mcpServers`; OpenCode
- * uses `mcp`; OpenClaw nests one deeper under `mcp.servers`. Keeping this as a
- * path rather than a branch per host is what stops the next host from adding a
- * fourth copy of the merge and rollback logic.
+ * uses `mcp`; OpenClaw and ZCode nest one deeper under `mcp.servers`. Keeping
+ * this as a path rather than a branch per host is what stops the next host
+ * from adding a fourth copy of the merge and rollback logic.
  */
 function serverPath(layout: RecallHostLayout): string[] {
   if (layout.format === "opencode") return ["mcp"];
-  if (layout.format === "openclaw") return ["mcp", "servers"];
+  if (layout.format === "openclaw" || layout.format === "zcode") {
+    return ["mcp", "servers"];
+  }
   return ["mcpServers"];
 }
 

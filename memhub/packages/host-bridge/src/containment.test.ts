@@ -42,6 +42,7 @@ import {
   refuseDisabledHostOperation,
   verifyRecallInstall,
   workbuddyLayout,
+  zcodeLayout,
 } from "./recall-installer.js";
 
 let base: string;
@@ -209,6 +210,7 @@ describe("all writing layouts refuse a symlinked ancestor", () => {
         deepseekHarnessLayout({ dshHome: dir, profile: "headless" }),
     },
     { name: "workbuddy plugins", link: "plugins", layout: workbuddyLayout },
+    { name: "zcode skills", link: "skills", layout: zcodeLayout },
   ];
 
   for (const testCase of cases) {
