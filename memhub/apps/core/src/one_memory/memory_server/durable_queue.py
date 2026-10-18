@@ -2217,18 +2217,43 @@ class DurableWriteDrain:
                         f"AND active.source_key IN ({placeholders}) "
                     )
                     active_source_params = tuple(sorted(enabled_sources))
+                # The contract retires a window when every *eligible*
+                # pending/running job in it has settled or parked. A pending row
+                # that FIFO already holds back (an unexpired lease, a busy
+                # Harness, or an earlier unsent sibling) is not eligible, so it
+                # must not keep the anchor alive: those blockers usually sit
+                # outside this ten-minute range and can never be claimed from
+                # inside it, which pinned the anchor and starved the whole
+                # queue. Reuse the claim's own predicate so "the window is
+                # busy" and "the window can still be worked" agree.
                 active = connection.execute(
                     "SELECT 1 FROM memory_write_jobs AS active "
                     "WHERE active.event_at>=? AND active.event_at<? AND ("
                     "active.state=? OR (active.state=? "
+                    "AND (active.lease_expires_at IS NULL "
+                    "OR active.lease_expires_at < ?) "
                     + active_source_clause
-                    + ")) LIMIT 1",
+                    + "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS held "
+                    "WHERE held.source_key=active.source_key AND held.state=? "
+                    "AND held.lease_owner IS NOT NULL "
+                    "AND held.lease_expires_at>=?) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS earlier "
+                    "WHERE earlier.source_key=active.source_key "
+                    f"AND earlier.state IN ({blocking}) "
+                    "AND earlier.queue_seq<active.queue_seq) "
+                    ")) LIMIT 1",
                     (
                         anchor_text,
                         end_text,
                         RUNNING,
                         PENDING,
+                        now.isoformat(),
                         *active_source_params,
+                        RUNNING,
+                        now.isoformat(),
+                        *_FIFO_BLOCKING_STATES,
                     ),
                 ).fetchone()
                 if active is None:

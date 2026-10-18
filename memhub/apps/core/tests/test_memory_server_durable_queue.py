@@ -4812,3 +4812,83 @@ def test_readmit_paths_never_requeue_a_possibly_sent_row(tmp_path) -> None:
     assert rows["parked"]["state"] == WAITING_FOR_PERMISSION
     assert rows["model"]["state"] == WAITING_FOR_MODEL
     assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=5) == ()
+
+
+def test_a_window_holding_only_blocked_rows_advances_instead_of_starving(
+    tmp_path,
+) -> None:
+    """A window whose remaining rows FIFO holds back must be retired.
+
+    Live shape: the anchor sat on 2026-10-07T03:24Z while the four pending rows
+    inside it were each blocked by 900+ earlier siblings of the same Harness
+    whose own event times sat outside the range (the earliest was 2026-03-12).
+    None of them could ever be claimed from inside that window, and because the
+    window only asked whether the range still held *some* pending row it never
+    retired: 3.8k queued turns sat at zero completions until restart, which
+    does not help because the anchor is persisted.
+    """
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    anchor = datetime(2026, 10, 18, 8, 0, tzinfo=UTC)
+
+    # The anchor itself: another Harness, claimable, inside the range.
+    opener = queue.submit(
+        _request(key="starve-opener", source="codex", event_at=anchor)
+    )
+    # Same Harness as the blocked row but an hour later: outside the range, and
+    # it sorts earlier in queue_seq, so FIFO holds the row below behind it.
+    older_seq_newer_time = queue.submit(
+        _request(
+            key="starve-head",
+            source="workbuddy",
+            event_at=anchor + timedelta(hours=1),
+        )
+    )
+    blocked = queue.submit(
+        _request(
+            key="starve-blocked",
+            source="workbuddy",
+            event_at=anchor + timedelta(minutes=5),
+        )
+    )
+
+    drain = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        owner="starve-owner",
+        max_concurrent_sources=10,
+    )
+
+    # The blocked row is inside the window but FIFO-refused, so it is not
+    # claimed alongside the opener.
+    assert drain.claim(limit=10) == (opener.job_id,)
+    queue.settle(
+        opener.job_id,
+        state=COMPLETED,
+        hy_invoked=True,
+        owner="starve-owner",
+    )
+
+    # The window now holds exactly one row and that row can never be claimed
+    # from inside it. Retire the window and re-anchor on the blocker.
+    assert drain.claim(limit=10) == (older_seq_newer_time.job_id,)
+
+    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
+        window = db.execute(
+            "SELECT window_anchor FROM memory_write_schedule_state "
+            "WHERE singleton=1"
+        ).fetchone()
+    assert window is not None
+    assert str(window[0]) == (
+        anchor + timedelta(hours=1)
+    ).astimezone(UTC).isoformat()
+
+    queue.settle(
+        older_seq_newer_time.job_id,
+        state=COMPLETED,
+        hy_invoked=True,
+        owner="starve-owner",
+    )
+    # Once the blocker is gone the deferred row keeps its original event time
+    # and is reached on the next pass.
+    assert drain.claim(limit=10) == (blocked.job_id,)
