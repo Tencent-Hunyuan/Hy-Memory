@@ -21,7 +21,17 @@ const HOST_WRITTEN_CONFIG = JSON.stringify({
       "fixture-existing-server": { command: "keep-me" },
     },
   },
-  hooks: { enabled: true, events: { SessionStart: [] } },
+  hooks: {
+    enabled: true,
+    events: {
+      SessionStart: [
+        {
+          matcher: "startup",
+          hooks: [{ type: "command", command: "user-own" }],
+        },
+      ],
+    },
+  },
 });
 
 describe("ZCode recall installer", () => {
@@ -41,9 +51,11 @@ describe("ZCode recall installer", () => {
     // ZCode drops a server entry that carries a key it does not know, so the
     // entry has to be exactly the stdio triple — no marker keys smuggled in
     // alongside the ones the host understands.
-    expect(
-      Object.keys(merged.mcp.servers["one-memory"]).sort(),
-    ).toEqual(["args", "command", "env"]);
+    expect(Object.keys(merged.mcp.servers["one-memory"]).sort()).toEqual([
+      "args",
+      "command",
+      "env",
+    ]);
     // The server map is nested under `mcp.servers` beside the user's own
     // servers, and the file holds the host's hooks state too. A merge that
     // rebuilt either container from our entry alone would take the user's
@@ -51,10 +63,20 @@ describe("ZCode recall installer", () => {
     expect(merged.mcp.servers["fixture-existing-server"]).toEqual({
       command: "keep-me",
     });
-    expect(merged.hooks).toEqual({
-      enabled: true,
-      events: { SessionStart: [] },
-    });
+    // Without a recall command the install degrades to capture only, so the
+    // user's SessionStart entry stands alone and our single addition is the
+    // Stop group.
+    expect(merged.hooks.events.SessionStart).toEqual([
+      {
+        matcher: "startup",
+        hooks: [{ type: "command", command: "user-own" }],
+      },
+    ]);
+    expect(merged.hooks.events.Stop).toHaveLength(1);
+    expect(merged.hooks.events.Stop[0].hooks[0].command).toContain(
+      "capture zcode",
+    );
+    expect(merged.hooks.enabled).toBe(true);
     expect(await readFile(String(layout.skillPath), "utf8")).toContain(
       "MemHub_recall",
     );
@@ -89,6 +111,92 @@ describe("ZCode recall installer", () => {
     expect(created.mcp.servers["one-memory"].command).toBe(
       "/opt/one-memory/bin/one-memory",
     );
+  });
+
+  it("installs prefetch and capture hooks beside the server in one file", async () => {
+    const { layout, configPath } = await fixture();
+    await writeHostConfig(layout);
+
+    await applyRecallInstall(
+      await planRecallInstall(layout, runtimeWithHooks()),
+    );
+    await verifyRecallInstall(layout);
+
+    const merged = JSON.parse(await readFile(configPath, "utf8"));
+    // The one invariant this host adds: hooks and the MCP entry share
+    // cli/config.json, and apply writes the file twice — server first, hooks
+    // second. A hooks plan built from the pre-install text would have dropped
+    // the server the first write had just landed.
+    expect(merged.mcp.servers["one-memory"].command).toBe(
+      "/opt/one-memory/bin/one-memory",
+    );
+    expect(merged.mcp.servers["fixture-existing-server"]).toEqual({
+      command: "keep-me",
+    });
+    const commands = (event: string) =>
+      merged.hooks.events[event].flatMap(
+        (group: { hooks: Array<{ command: string }> }) =>
+          group.hooks.map((hook) => hook.command),
+      );
+    // UserPromptSubmit and SessionStart run the recall injection entry, which
+    // hands the prompt to capture itself; Stop carries the capture command.
+    // SessionStart also keeps the user's own entry from the fixture.
+    expect(commands("UserPromptSubmit")).toHaveLength(1);
+    expect(commands("UserPromptSubmit")[0]).toContain("--inject zcode");
+    expect(commands("SessionStart")).toEqual([
+      "user-own",
+      expect.stringContaining("--inject zcode"),
+    ]);
+    expect(commands("Stop")).toHaveLength(1);
+    expect(commands("Stop")[0]).toContain("capture zcode");
+    expect(commands("Stop")[0]).not.toContain("--inject zcode");
+  });
+
+  it("gives back the same config with hooks and server removed together", async () => {
+    const { layout, configPath } = await fixture();
+    await writeHostConfig(layout);
+
+    await applyRecallInstall(
+      await planRecallInstall(layout, runtimeWithHooks()),
+    );
+    await rollbackRecallInstall(layout);
+
+    const restored = JSON.parse(await readFile(configPath, "utf8"));
+    // The two removals are one edit, because each rebuilds the same file from
+    // the same starting text: applied separately, the second write would
+    // resurrect what the first removed.
+    expect(restored).toEqual(JSON.parse(HOST_WRITTEN_CONFIG));
+  });
+
+  it("enables config-file hooks, which ZCode requires for ours to run", async () => {
+    const { layout, configPath } = await fixture();
+    await writeHostConfig(layout);
+    const disabled = JSON.parse(await readFile(configPath, "utf8"));
+    disabled.hooks.enabled = false;
+    await writeFile(configPath, JSON.stringify(disabled, null, 2));
+
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+
+    // A named side effect rather than an accident: flipping the flag starts
+    // the user's own config-file hooks too, and the alternative — hooks the
+    // host never executes — silently captures nothing.
+    expect(JSON.parse(await readFile(configPath, "utf8")).hooks.enabled).toBe(
+      true,
+    );
+  });
+
+  it("degrades to a Stop capture hook when the runtime ships no recall command", async () => {
+    const { layout, configPath } = await fixture();
+    await writeHostConfig(layout);
+
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+
+    const merged = JSON.parse(await readFile(configPath, "utf8"));
+    expect(Object.keys(merged.hooks.events).sort()).toEqual([
+      "SessionStart",
+      "Stop",
+    ]);
+    expect(merged.hooks.events.UserPromptSubmit).toBeUndefined();
   });
 
   it("takes its skills directory with it when it created one", async () => {
@@ -138,5 +246,17 @@ function runtime() {
     runtimeCommand: "/opt/one-memory/bin/one-memory",
     mcpEntryPath: "/opt/one-memory/mcp/entry.mjs",
     discoveryPath: "/opt/one-memory/runtime.json",
+  };
+}
+
+/** The runtime as the desktop ships it once recall-cli is packed: capture
+ * binary, data directory, and the recall command the injection hook runs. */
+function runtimeWithHooks() {
+  return {
+    ...runtime(),
+    captureCommand: "/opt/one-memory/core/one-memory",
+    dataDir: "/Users/someone/Library/Application Support/one-memory",
+    recallCliPath: "/opt/one-memory/recall/recall-cli.cjs",
+    credentialFile: "/opt/one-memory/credentials/zcode.json",
   };
 }

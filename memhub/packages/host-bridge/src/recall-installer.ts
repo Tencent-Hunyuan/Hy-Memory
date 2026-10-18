@@ -28,8 +28,10 @@ import {
   resolveCaptureCommand,
   stripCaptureCommand,
   strippedCaptureIsEmpty,
+  stripZcodeManagedHooks,
   UNPARSEABLE_HOOKS,
   UNREADABLE,
+  zcodeCaptureReview,
 } from "./capture-hooks.js";
 
 export type { RemovalFinding } from "./capture-hooks.js";
@@ -1343,7 +1345,10 @@ async function plannedFiles(plan: RecallInstallPlan): Promise<PlannedFiles> {
     };
   }
   const { registries, trees } = await plannedPluginFiles(plan);
-  const captures = await plannedCaptures(plan);
+  const captures = await plannedCaptures(
+    plan,
+    mcp === null ? null : { path: mcp.path, content: mcp.after },
+  );
   if (plan.paths.skill === null || plan.next.skill === null) {
     return { mcp, skill: null, registries, trees, captures };
   }
@@ -1365,8 +1370,19 @@ async function plannedFiles(plan: RecallInstallPlan): Promise<PlannedFiles> {
 
 async function plannedCaptures(
   plan: RecallInstallPlan,
+  mcpFile: { path: string; content: string } | null = null,
 ): Promise<PlannedCapture[]> {
-  const files = await planCaptureFiles(plan.layout, plan.runtime, readOptional);
+  // ZCode keeps its hooks in the same file as its MCP entry, and apply writes
+  // that file for the server before it writes it for the hooks. Planning the
+  // hooks from the disk state would then produce a whole-file text that still
+  // lacks the server, and the second write would drop what the first landed.
+  // Reading the hooks' base through the server-merged text keeps the two
+  // writes a sequence rather than a race.
+  const readFile = (target: string): Promise<string | null> =>
+    mcpFile !== null && target === mcpFile.path
+      ? Promise.resolve(mcpFile.content)
+      : readOptional(target);
+  const files = await planCaptureFiles(plan.layout, plan.runtime, readFile);
   return files.map((file) => ({
     path: file.path,
     owner: file.kind === "owned" ? "one-memory" : "host",
@@ -2018,6 +2034,17 @@ export async function planRecallUninstall(
   if (capture.review.length)
     return { layout, files: [], removedRoots: [], review: capture.review };
   files.push(...capture.files);
+  if (layout.hostId === "zcode" && layout.configPath !== null) {
+    // The server removal and the hook strip each rebuild ZCode's one config
+    // file from the same starting text; applied as two writes, whichever ran
+    // second would resurrect what the first removed. One edit does both:
+    // the server out, then our hooks out of what remains. A config the
+    // install created is deleted whole, hooks included.
+    const configEntry = files.find((file) => file.path === layout.configPath);
+    if (configEntry !== undefined && configEntry.after !== null) {
+      configEntry.after = stripZcodeManagedHooks(configEntry.after);
+    }
+  }
   return { layout, files, removedRoots, review: [] };
 }
 
@@ -2028,6 +2055,25 @@ async function captureRemovalFiles(
   const recorded = journal.capture_hooks ?? [];
   const files: PlannedRemoval[] = [];
   const review: RemovalFinding[] = [];
+  if (layout.hostId === "zcode") {
+    // ZCode's hooks share the MCP config file, so their removal is composed
+    // with the server removal by the caller (planRecallUninstall). Here only
+    // the safety review runs: a file that cannot be parsed, or commands that
+    // still name us after stripping, must stop for a person rather than be
+    // written around.
+    for (const hook of recorded) {
+      let current: string | null;
+      try {
+        current = await readOptional(hook.path);
+      } catch {
+        review.push({ path: hook.path, where: UNREADABLE });
+        continue;
+      }
+      if (current === null) continue;
+      review.push(...zcodeCaptureReview(current, hook.path));
+    }
+    return { files: [], review };
+  }
   for (const hook of recorded) {
     let current: string | null;
     try {
