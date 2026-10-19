@@ -1271,6 +1271,52 @@ def test_unavailable_hy_keeps_task_waiting_for_same_model_snapshot(tmp_path) -> 
     assert governance.list(user_id="local") == []
 
 
+def test_a_task_the_runner_raises_out_of_is_settled_not_left_running(tmp_path) -> None:
+    """A task claimed as `running` must not outlive the worker that gave up on it.
+
+    The durable drain settles the write job around this call, but nothing
+    settled the task. An unclassified failure — here a duplicate key writing
+    into governance — left the row `running` for the life of the process, where
+    it reads as work in progress that never ends and keeps its harness's slot.
+    """
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    record = _put(
+        evidence,
+        message_id="settle-on-failure",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="记住这段对话。",
+        content_kind=EvidenceContentKind.MEMORY_CONTENT,
+    )
+
+    class RunnerThatDiesMidTask:
+        """Claims the task, calls HY, then raises something unclassified."""
+
+        async def run(self, task_id, **_kwargs):
+            _claimed, token = tasks.claim(task_id)
+            tasks.record_hy_invocation(task_id, runner_token=token)
+            raise sqlite3.IntegrityError(
+                "UNIQUE constraint failed: governed_memories.memory_id"
+            )
+
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        runner_factory=RunnerThatDiesMidTask,
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        asyncio.run(supervisor.process_records((record,)))
+
+    [task] = tasks.list()
+    assert task.status is not MemoryTaskStatus.RUNNING
+
+
 def test_backfill_creates_native_tasks_for_all_conversations(tmp_path) -> None:
     stores = _setup(tmp_path)
     evidence, profiles, tasks, governance, secrets, _profile = stores

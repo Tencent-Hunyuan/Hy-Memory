@@ -1502,6 +1502,23 @@ class MemoryProcessingSupervisor:
                                             before_hy_invocation=before_hy_invocation,
                                         )
                                     )
+                        except Exception as error:
+                            # The runner claims a task as `running` before
+                            # anything slow happens, and only the timeout branch
+                            # inside it repairs that. Any other exception it
+                            # raises leaves the row `running`; the durable drain
+                            # around this call settles the *job*, not the task,
+                            # so nothing else moves the row. It then holds its
+                            # harness's slot for the life of the process and
+                            # reads as work in progress that never ends. Settle
+                            # it here the same way `_record_dispatch_failure`
+                            # settles one the scheduler loses.
+                            await in_the_background(
+                                self.tasks.fail_unsettled,
+                                task.task_id,
+                                error_code="memory_task_execution_failed",
+                            )
+                            raise
                         finally:
                             _unmark_direct_task(self.tasks.database_path, task.task_id)
                 if task.status is not MemoryTaskStatus.COMPLETED:
