@@ -675,3 +675,20 @@ class TestInstrumentation:
         assert logged[1]["count"] == 5, "累计条数要落下来"
         assert logged[2]["reused"] is False
         assert all(r["gap"] == 1800.0 for r in logged)
+
+
+def test_series_memory_at_round_trips_local_wall_clock(monkeypatch):
+    """Series timestamps must not shift by the machine's UTC offset."""
+    import time as _time
+
+    from hy_memory.agent.episode_summary import _series_memory_at
+
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    _time.tzset()
+    try:
+        expected = datetime(2026, 1, 1, 12, 0)
+        assert _series_memory_at([int(expected.timestamp())]) == expected
+        assert _series_memory_at([]) is None
+    finally:
+        monkeypatch.delenv("TZ", raising=False)
+        _time.tzset()
