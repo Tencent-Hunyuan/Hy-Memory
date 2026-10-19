@@ -45,7 +45,19 @@ DEEPSEEK_HARNESS_DESCRIPTOR = SourceDescriptor(
 #: the published on-disk contract, not a variant to skip. The desktop profile
 #: this was verified against writes v3/v4 exclusively, and the earlier literal
 #: match imported none of those sessions.
+#:
+#: Discovery is deliberately wider than parsing: a `vN` file is found and then
+#: judged by its header (see `SUPPORTED_SESSION_VERSIONS`), so an unknown
+#: generation is reported as skipped instead of silently vanishing.
 SESSION_FILE = re.compile(r"^session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$")
+
+#: Session generations this parser has been verified against: the
+#: pre-versioning first format, v3 and v4. Harness writes the generation into
+#: the file name and into the session header. A future generation may change
+#: field semantics, and importing it with today's rules would store evidence
+#: that is harder to undo than a missed import — so an unknown version is
+#: skipped as `unsupported_schema` and left for a parser that knows it.
+SUPPORTED_SESSION_VERSIONS = frozenset({0, 3, 4})
 
 
 def create_deepseek_harness_adapter(
@@ -59,9 +71,7 @@ def create_deepseek_harness_adapter(
         grant=grant,
         parser=parse_deepseek_harness_record,
         source_version=source_version,
-        file_predicate=lambda source_file: bool(
-            SESSION_FILE.match(source_file.relative_path.name)
-        ),
+        file_predicate=lambda source_file: bool(SESSION_FILE.match(source_file.relative_path.name)),
         suffixes=frozenset({".jsonl", ".zstd"}),
         header_selector=_is_session_header,
     )
@@ -78,6 +88,23 @@ def _is_session_header(record: dict[str, JsonValue]) -> bool:
     return record.get("type") == "session"
 
 
+def _supported_session(header: dict[str, JsonValue] | None) -> bool:
+    """Whether the session's declared format generation is one we can read.
+
+    The header states the generation (`version`), and the file name repeats it.
+    Both are read: a missing header or a header without `version` is the first
+    format, which predates the field and which this adapter already read. Any
+    declared version outside `SUPPORTED_SESSION_VERSIONS` is refused rather
+    than interpreted with today's field rules.
+    """
+    if header is None or header.get("type") != "session":
+        return True
+    version = header.get("version")
+    if version is None:
+        return True
+    return isinstance(version, int) and version in SUPPORTED_SESSION_VERSIONS
+
+
 def parse_deepseek_harness_record(
     record: dict[str, JsonValue],
     context: SourceRecordContext,
@@ -88,6 +115,11 @@ def parse_deepseek_harness_record(
         or relative.parent.name
         or relative.name.split(".", maxsplit=1)[0]
     )
+    if not _supported_session(context.header):
+        return ParsedSkip(
+            reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA,
+            conversation_id=conversation_id,
+        )
     event_type = record.get("type")
     data = as_record(record.get("data"))
     if event_type == "session":
@@ -161,15 +193,16 @@ def _tool_message(
     only the event is read, so it is stored once.
 
     The result's content blocks are `tool-result` in the first session format
-    and plain `text` from v3 on; both carry the output, so both are evidence.
-    A block of any other type (image, resource) is not.
+    and plain `text` in v4, the only version this shape was verified against;
+    both carry the output, so both are evidence. A block of any other type
+    (image, resource) is not.
     """
     message = as_record(data.get("message"))
     if record.get("type") == "tool/result" and message is not None:
         blocks = message.get("content")
         text = tool_blocks_evidence(blocks, block_types=frozenset({"tool-result"}))
         if text is None:
-            # v3+ writes the output as plain text blocks. Wrapping them in the
+            # v4 writes the output as plain text blocks. Wrapping them in the
             # shape the helper reads keeps the same clipping and credential
             # scrubbing instead of writing a second extraction path.
             text = tool_blocks_evidence(

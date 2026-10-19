@@ -6,6 +6,10 @@ The version segment is part of the published file name: the first format wrote
 nothing else. The importer therefore has to read both shapes, while still
 leaving a browser-side export that was merely dropped into `sessions/` alone:
 that one has no `type=session` envelope, so the record parser rejects it.
+
+The name is discovery only; the header's `version` decides whether this parser
+is allowed to read the file, so a future generation is skipped instead of being
+interpreted with today's rules.
 """
 
 import asyncio
@@ -19,6 +23,7 @@ from one_memory.imports.jobs import ImportJobStore, ImportStatus
 from one_memory.imports.sources.registry import RootCandidateKind, build_source_catalog
 from one_memory.imports.storage import EvidenceStore
 from one_memory.imports.supervisor import ImportSupervisor
+
 
 def v4_records(identity: str) -> list[dict]:
     """One v4 session: the header carries id/cwd once, records carry `data`."""
@@ -44,6 +49,7 @@ def v4_records(identity: str) -> list[dict]:
             },
         },
     ]
+
 
 HEADLESS_RECORDS = [
     {"type": "session", "id": "s", "cwd": "/private/project"},
@@ -172,7 +178,12 @@ def test_the_adapter_has_two_independent_layers(tmp_path):
     assert predicate(listed_headless) is True
     versioned = fixture.write_zstd("headless-run/session.v4.jsonl.zstd", v4_records("v4"))
     assert predicate(adapter.grant.listed_file(versioned)) is True
-    assert predicate(adapter.grant.listed_file(fixture.write("x/session.v4.jsonl", v4_records("named")))) is True
+    assert (
+        predicate(
+            adapter.grant.listed_file(fixture.write("x/session.v4.jsonl", v4_records("named")))
+        )
+        is True
+    )
     assert predicate(listed_web) is False, (
         "the file predicate must exclude a web-style export by name"
     )
@@ -222,3 +233,51 @@ def test_a_mixed_sessions_tree_imports_every_version_and_nothing_else(tmp_path):
     assert "headless person turn" in stored
     assert sum("v4 person turn" in text for text in stored) == 2
     assert not any("web export" in text for text in stored)
+
+
+def test_a_rescan_after_upgrade_picks_up_unmatched_versions_without_duplicates(tmp_path):
+    """The upgrade path: old evidence stays, versioned files arrive later.
+
+    Before this fix the predicate matched only the first format, so a real
+    `$DSH_HOME/sessions` tree imported almost nothing. A scan after the fix has
+    to discover the versioned files that were never imported and leave the
+    evidence already stored alone.
+    """
+    fixture = Source(tmp_path)
+    fixture.write("old-run/session.jsonl", HEADLESS_RECORDS)
+    first = fixture.run()
+    assert first.status is ImportStatus.COMPLETED
+    assert first.stored == 1
+
+    fixture.write_zstd("new-run/session.v3.jsonl.zstd", v4_records("v3"))
+    fixture.write_zstd("newer-run/session.v4.jsonl.zstd", v4_records("v4"))
+
+    second = fixture.run()
+    assert second.status is ImportStatus.COMPLETED
+    stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
+    assert "headless person turn" in stored
+    assert sum("v4 person turn" in text for text in stored) == 2
+
+
+def test_an_unknown_session_version_imports_nothing(tmp_path):
+    """A v5 file is discovered and refused, not read as v4."""
+    future = [
+        {"type": "session", "version": 5, "id": "future", "cwd": "/private/project"},
+        {
+            "type": "user/message",
+            "seq": 1,
+            "data": {
+                "id": "future-a",
+                "role": "user",
+                "source": {"kind": "user"},
+                "content": [{"type": "text", "text": "future person turn"}],
+            },
+        },
+    ]
+    fixture = Source(tmp_path)
+    fixture.write("future-run/session.v5.jsonl", future)
+
+    result = fixture.run()
+    assert result.status is ImportStatus.COMPLETED
+    assert result.stored == 0
+    assert fixture.evidence.count() == 0

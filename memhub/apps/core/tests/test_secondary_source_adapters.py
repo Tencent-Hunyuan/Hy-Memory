@@ -998,6 +998,51 @@ def test_deepseek_v4_tool_result_text_blocks_are_tool_evidence(tmp_path: Path) -
     assert TOOL_SECRET not in result.evidence.verbatim
 
 
+def test_deepseek_unknown_session_version_is_skipped_not_guessed(
+    tmp_path: Path,
+) -> None:
+    """A generation this parser was not written for must not be read as v4.
+
+    The file name says v5 and the header repeats it. Discovery still finds the
+    file — so it shows up as a skip with a reason rather than disappearing —
+    and the parser refuses it: reading unknown fields with v4 rules would store
+    wrong evidence, which is harder to undo than a missed import.
+    """
+    root = tmp_path / "dsh-v5"
+    session = root / "run-v5"
+    session.mkdir(parents=True)
+    _write_jsonl(
+        session / "session.v5.jsonl",
+        [
+            {
+                "type": "session",
+                "version": 5,
+                "id": "run-v5",
+                "cwd": "/private/project",
+            },
+            {
+                "type": "user/message",
+                "seq": 1,
+                "data": {
+                    "id": "future-a",
+                    "role": "user",
+                    "source": {"kind": "user"},
+                    "content": [{"type": "text", "text": "future person turn"}],
+                },
+            },
+        ],
+    )
+
+    events = _scan(
+        create_deepseek_harness_adapter(
+            _grant(DEEPSEEK_HARNESS_DESCRIPTOR.source_id, root, tmp_path)
+        )
+    )
+
+    assert _evidence(events) == []
+    assert ScanIssueCode.UNSUPPORTED_SCHEMA in _skip_codes(events)
+
+
 def test_pi_a_scan_stopped_between_a_reply_and_its_call_resumes_with_the_call(
     tmp_path: Path,
 ) -> None:
