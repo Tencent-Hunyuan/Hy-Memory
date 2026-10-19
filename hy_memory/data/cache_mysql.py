@@ -464,24 +464,67 @@ class MysqlCache(CacheBase):
     # ================================================================
 
     async def store_metrics_minute(self, minute_ts: str, data: dict) -> None:
+        import aiomysql
+
         try:
             now = datetime.now().isoformat()
-            # 尝试 UPSERT
-            existing = await self._fetchone(
-                "SELECT data FROM system_metrics WHERE minute_ts = %s", (minute_ts,)
-            )
-            if existing:
-                old_data = json.loads(existing["data"])
-                merged = self._merge_metric_buckets(old_data, data)
-                await self._execute(
-                    "UPDATE system_metrics SET data = %s, created_at = %s WHERE minute_ts = %s",
-                    (json.dumps(merged, default=str), now, minute_ts),
-                )
-            else:
-                await self._execute(
-                    "INSERT INTO system_metrics (minute_ts, data, created_at) VALUES (%s, %s, %s)",
-                    (minute_ts, json.dumps(data, default=str), now),
-                )
+            # Read-merge-write must be one transaction: two instances flushing
+            # the same minute used to overwrite each other's counters, and a
+            # concurrent insert could lose the whole batch to a duplicate key.
+            for attempt in range(2):
+                try:
+                    async with self._pool.acquire() as conn:
+                        await conn.begin()
+                        try:
+                            async with conn.cursor(aiomysql.DictCursor) as cur:
+                                await cur.execute(
+                                    "SELECT data FROM system_metrics "
+                                    "WHERE minute_ts = %s FOR UPDATE",
+                                    (minute_ts,),
+                                )
+                                row = await cur.fetchone()
+                                if row is not None:
+                                    old_raw = (
+                                        row["data"]
+                                        if isinstance(row, dict)
+                                        else row[0]
+                                    )
+                                    merged = self._merge_metric_buckets(
+                                        json.loads(old_raw), data,
+                                    )
+                                    await cur.execute(
+                                        "UPDATE system_metrics SET data = %s, "
+                                        "created_at = %s WHERE minute_ts = %s",
+                                        (
+                                            json.dumps(merged, default=str),
+                                            now,
+                                            minute_ts,
+                                        ),
+                                    )
+                                else:
+                                    await cur.execute(
+                                        "INSERT INTO system_metrics "
+                                        "(minute_ts, data, created_at) "
+                                        "VALUES (%s, %s, %s)",
+                                        (
+                                            minute_ts,
+                                            json.dumps(data, default=str),
+                                            now,
+                                        ),
+                                    )
+                            await conn.commit()
+                            return
+                        except Exception:
+                            await conn.rollback()
+                            raise
+                except (aiomysql.IntegrityError, aiomysql.OperationalError) as error:
+                    code = error.args[0] if error.args else None
+                    deadlock = code in (1205, 1213)
+                    if attempt or (isinstance(error, aiomysql.OperationalError) and not deadlock):
+                        raise
+                    # A competing writer inserted the row, or InnoDB chose us
+                    # as the deadlock victim. Retry so this batch merges.
+                    continue
         except Exception as e:
             logger.warning(f"store_metrics_minute failed: {e}")
 
