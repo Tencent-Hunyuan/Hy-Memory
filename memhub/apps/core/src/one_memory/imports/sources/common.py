@@ -44,6 +44,7 @@ from one_memory.imports.discovery import (
     discovered_off_loop,
 )
 from one_memory.imports.models import (
+    MAX_VERBATIM_CHARACTERS,
     EvidenceContentKind,
     EvidenceInput,
     EvidenceOrigin,
@@ -64,6 +65,20 @@ from one_memory.imports.readers import (
 from one_memory.imports.sources.parsing import parse_timestamp
 
 _log = logging.getLogger(__name__)
+
+
+def _clamp_verbatim(text: str) -> str:
+    """Keep one pathological record from violating EvidenceInput's limit.
+
+    A single pasted dump larger than MAX_VERBATIM_CHARACTERS used to fail
+    validation, retry, and then wedge the whole history import on the same
+    record. Keep the head and make the truncation explicit and actionable.
+    """
+    if len(text) <= MAX_VERBATIM_CHARACTERS:
+        return text
+    marker = f"\n…[truncated: original {len(text)} chars]"
+    keep = max(0, MAX_VERBATIM_CHARACTERS - len(marker))
+    return text[:keep] + marker
 
 #: At most one read heartbeat per second. Faster would be more writes than the
 #: counts are worth; slower leaves the job's visible state stale.
@@ -1076,8 +1091,11 @@ def to_evidence(
         role=parsed.role,
         written_by=parsed.written_by,
         created_at=parsed.created_at,
-        verbatim=parsed.verbatim,
-        raw_verbatim=parsed.raw_verbatim,
+        verbatim=_clamp_verbatim(parsed.verbatim),
+        raw_verbatim=(
+            None if parsed.raw_verbatim is None
+            else _clamp_verbatim(parsed.raw_verbatim)
+        ),
         origin_meta={
             EvidenceOrigin.FILE: OriginMetadata(
                 source_version=origin.source_version or source_version,
