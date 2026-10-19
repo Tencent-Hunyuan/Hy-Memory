@@ -254,6 +254,7 @@
 | `test_model_request_budget.py` | `contract` | 覆盖 persists failed request reservations without content、parallel leases cannot exceed request limit、unknown or excessive output and body are denied 等 6 个场景。 |
 | `test_mysql_lifecycle.py` | `contract` | A1-07: the decisions Runtime makes around the bundled MySQL. |
 | `test_mysql_platform.py` | `contract` | A1-07: the machine-facing half of managing the bundled MySQL. |
+| `test_native_store_write_lock.py` | `contract` | HY writes must publish the native-store write lock readers check. |
 | `test_obs03_health_probe.py` | `contract` | OBS-03: '/health' answered with the web app instead of a health payload. |
 | `test_observation_gate.py` | `contract` | A7-02: the gate that stops "nothing changed" from being certified blind. |
 | `test_onboarding_profile.py` | `integration` | R-09：首次安装引导把画像录下来，不问用户一句话。 |
@@ -388,4 +389,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 383 个测试文件。
+共 384 个测试文件。

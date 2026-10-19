@@ -31,7 +31,10 @@ from one_memory.hy_runtime_config import (
     diagnostic_log_level,
 )
 from one_memory.hy_source_context import HySourceContext, HyWriteBindings
-from one_memory.hy_store_concurrency import native_store_read_slot
+from one_memory.hy_store_concurrency import (
+    native_store_read_slot,
+    native_store_write_lock,
+)
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind, attach_disable_thinking
 from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.semantic_deadline import SemanticMemoryHit
@@ -433,7 +436,8 @@ class HyMemoryBridge:
     async def ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         with audit_precipitation_request(request.request_id):
             async with self._write_lock:
-                return await self._ingest(request)
+                async with native_store_write_lock():
+                    return await self._ingest(request)
 
     async def _ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         started = monotonic()
@@ -562,7 +566,8 @@ class HyMemoryBridge:
     ) -> HyMemoryIngestResult:
         with audit_precipitation_request(request.request_id):
             async with self._write_lock:
-                return await self._ingest_extracted(request, contents)
+                async with native_store_write_lock():
+                    return await self._ingest_extracted(request, contents)
 
     async def _ingest_extracted(
         self,
@@ -880,14 +885,15 @@ class HyMemoryBridge:
         caller told the write went through would go on to report an index that
         matches when it does not.
         """
-        client = await self._get_client()
-        try:
-            result = await _joined_thread(client.update, memory_id, content)
-        except Exception as error:
-            raise HyMemoryBridgeError("hy_memory_update_failed") from error
-        if not result.get("success"):
-            raise HyMemoryBridgeError("hy_memory_update_rejected")
-        return dict(result)
+        async with native_store_write_lock():
+            client = await self._get_client()
+            try:
+                result = await _joined_thread(client.update, memory_id, content)
+            except Exception as error:
+                raise HyMemoryBridgeError("hy_memory_update_failed") from error
+            if not result.get("success"):
+                raise HyMemoryBridgeError("hy_memory_update_rejected")
+            return dict(result)
 
     @_exclusive
     async def delete(self, memory_id: str) -> dict[str, object]:
@@ -898,28 +904,29 @@ class HyMemoryBridge:
         True` does not promise anything was deleted. So done means HY no
         longer holds it, read back from each of its stores after every delete.
         """
-        client = await self._get_client()
-        result: dict[str, object] = {"success": False}
-        failure: Exception | None = None
-        try:
-            result = dict(await _joined_thread(client.delete, memory_id))
-        except Exception as error:
-            # Read back anyway: HY failing to delete what it no longer holds
-            # leaves nothing to retry.
-            failure = error
-        try:
-            presence = await _joined_thread(confirm_deleted, client, memory_id)
-        except Exception as error:
-            raise HyMemoryBridgeError("hy_memory_delete_failed") from (failure or error)
-        if presence is HyPresence.ABSENT:
-            return result
-        if failure is not None:
-            raise HyMemoryBridgeError("hy_memory_delete_failed") from failure
-        if presence is HyPresence.PRESENT:
-            raise HyMemoryBridgeError("hy_memory_delete_rejected")
-        if presence is HyPresence.UNKNOWN:
-            raise HyMemoryBridgeError("hy_memory_delete_unconfirmed")
-        return dict(result)
+        async with native_store_write_lock():
+            client = await self._get_client()
+            result: dict[str, object] = {"success": False}
+            failure: Exception | None = None
+            try:
+                result = dict(await _joined_thread(client.delete, memory_id))
+            except Exception as error:
+                # Read back anyway: HY failing to delete what it no longer holds
+                # leaves nothing to retry.
+                failure = error
+            try:
+                presence = await _joined_thread(confirm_deleted, client, memory_id)
+            except Exception as error:
+                raise HyMemoryBridgeError("hy_memory_delete_failed") from (failure or error)
+            if presence is HyPresence.ABSENT:
+                return result
+            if failure is not None:
+                raise HyMemoryBridgeError("hy_memory_delete_failed") from failure
+            if presence is HyPresence.PRESENT:
+                raise HyMemoryBridgeError("hy_memory_delete_rejected")
+            if presence is HyPresence.UNKNOWN:
+                raise HyMemoryBridgeError("hy_memory_delete_unconfirmed")
+            return dict(result)
 
     def lifecycle_now(self, user_id: str, ids: Collection[str] | None = None) -> HyLifecycle | None:
         """HY's set-aside memories, or None while this bridge has not opened HY.
