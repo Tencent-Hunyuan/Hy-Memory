@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -377,6 +378,14 @@ class _LoopThread:
             return await await_concurrent_future_guarded(future, self._loop)
 
     def stop(self):
+        if self._loop.is_closed():
+            return
+        if threading.current_thread() is self._thread:
+            # Called from inside the loop: stopping and joining ourselves would
+            # deadlock. Just ask run_forever() to return.
+            self._loop.stop()
+            return
+
         def _stop():
             if self._lag_handle is not None:
                 self._lag_handle.cancel()
@@ -386,6 +395,8 @@ class _LoopThread:
 
         self._loop.call_soon_threadsafe(_stop)
         self._thread.join(timeout=5)
+        if not self._thread.is_alive() and not self._loop.is_closed():
+            self._loop.close()
 
 
 class HyMemoryClient:
@@ -2147,14 +2158,33 @@ class HyMemoryClient:
         from .metrics import MetricsCollector
         return await MetricsCollector.get().get_snapshot(minutes=minutes)
 
+    def _stop_owned_loops(self) -> None:
+        """Stop every event-loop thread this client owns.
+
+        Solo clients create both a write loop and a search loop. Stopping only
+        the write loop left the search thread (and a self-wakeup timer every
+        50ms) alive for the process lifetime. Shared runtimes own their loops
+        and manage them through ``SharedRuntime.aclose()``.
+        """
+        if not getattr(self, "_owns_runtime", False):
+            return
+        seen = set()
+        for loop_thread in (
+            getattr(self, "_loop_thread", None),
+            getattr(self, "_search_loop_thread", None),
+        ):
+            if loop_thread is None or id(loop_thread) in seen:
+                continue
+            seen.add(id(loop_thread))
+            loop_thread.stop()
+
     def close(self):
         """关闭客户端，释放所有资源"""
-        if self._registry is not None:
-            self._loop_thread.run(self._close_async())
-        # solo 模式：本 client 拥有 loop_thread，可以安全 stop
-        # shared 模式：loop_thread 由 runtime 管，留给 runtime.aclose() 关
-        if hasattr(self, '_loop_thread') and self._owns_runtime:
-            self._loop_thread.stop()
+        try:
+            if self._registry is not None:
+                self._loop_thread.run(self._close_async())
+        finally:
+            self._stop_owned_loops()
 
     def history(self, memory_id: str) -> List[Dict[str, Any]]:
         """
@@ -6124,4 +6154,7 @@ class HyMemoryClient:
         return self
 
     async def __aexit__(self, *args):
-        await self._close_async()
+        try:
+            await self._close_async()
+        finally:
+            self._stop_owned_loops()
