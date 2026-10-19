@@ -25,6 +25,59 @@ from one_memory.imports.storage import EvidenceStore
 from one_memory.imports.supervisor import ImportSupervisor
 
 
+def v3_records(identity: str) -> list[dict]:
+    """One v3 session, as the desktop profile actually wrote it.
+
+    Same envelope as v4; the difference is the tool result, which is still a
+    `tool-result` block here while v4 switched it to plain `text`.
+    """
+    return [
+        {
+            "type": "session",
+            "version": 3,
+            "id": identity,
+            "createdAt": 1789066432158,
+            "cwd": "/private/project",
+        },
+        {
+            "type": "user/message",
+            "seq": 1,
+            "time": 1789066432158,
+            "data": {
+                "id": f"{identity}-a",
+                "role": "user",
+                "source": {"kind": "user"},
+                "content": [{"type": "text", "text": "v3 person turn"}],
+            },
+        },
+        {
+            "type": "tool/call",
+            "seq": 2,
+            "time": 1789066433129,
+            "data": {"callId": "call-1", "name": "bash", "arguments": '{"command": "ls"}'},
+        },
+        {
+            "type": "tool/result",
+            "seq": 3,
+            "time": 1789066433153,
+            "data": {
+                "message": {
+                    "id": "result-1",
+                    "role": "user",
+                    "source": {"kind": "tool", "callId": "call-1"},
+                    "content": [
+                        {
+                            "type": "tool-result",
+                            "toolCallId": "call-1",
+                            "content": [{"type": "text", "text": "v3 tool output"}],
+                        }
+                    ],
+                }
+            },
+        },
+    ]
+
+
 def v4_records(identity: str) -> list[dict]:
     """One v4 session: the header carries id/cwd once, records carry `data`."""
     return [
@@ -222,16 +275,18 @@ def test_a_mixed_sessions_tree_imports_every_version_and_nothing_else(tmp_path):
     """Old and new session files in one root both import; exports still do not."""
     fixture = Source(tmp_path)
     fixture.write("first/session.jsonl", HEADLESS_RECORDS)
-    fixture.write_zstd("second/session.v3.jsonl.zstd", v4_records("v3"))
+    fixture.write_zstd("second/session.v3.jsonl.zstd", v3_records("v3"))
     fixture.write_zstd("third/session.v4.jsonl.zstd", v4_records("v4"))
     fixture.write("fourth/transcript.jsonl", WEB_EXPORT_RECORDS)
 
     result = fixture.run()
     assert result.status is ImportStatus.COMPLETED
-    assert result.stored == 3
+    # v0: one message; v3: person + tool call + tool result; v4: one message.
+    assert result.stored == 5
     stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
     assert "headless person turn" in stored
-    assert sum("v4 person turn" in text for text in stored) == 2
+    assert "v3 person turn" in stored
+    assert sum("v4 person turn" in text for text in stored) == 1
     assert not any("web export" in text for text in stored)
 
 
@@ -249,14 +304,16 @@ def test_a_rescan_after_upgrade_picks_up_unmatched_versions_without_duplicates(t
     assert first.status is ImportStatus.COMPLETED
     assert first.stored == 1
 
-    fixture.write_zstd("new-run/session.v3.jsonl.zstd", v4_records("v3"))
+    fixture.write_zstd("new-run/session.v3.jsonl.zstd", v3_records("v3"))
     fixture.write_zstd("newer-run/session.v4.jsonl.zstd", v4_records("v4"))
 
     second = fixture.run()
     assert second.status is ImportStatus.COMPLETED
     stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
     assert "headless person turn" in stored
-    assert sum("v4 person turn" in text for text in stored) == 2
+    assert second.stored == 4
+    assert "v3 person turn" in stored
+    assert "v4 person turn" in stored
 
 
 def test_an_unknown_session_version_imports_nothing(tmp_path):

@@ -91,13 +91,14 @@ def _is_session_header(record: dict[str, JsonValue]) -> bool:
 def _supported_session(header: dict[str, JsonValue] | None) -> bool:
     """Whether the session's declared format generation is one we can read.
 
-    The header states the generation (`version`), and the file name repeats it.
-    Both are read: a missing header or a header without `version` is the first
-    format, which predates the field and which this adapter already read. Any
-    declared version outside `SUPPORTED_SESSION_VERSIONS` is refused rather
-    than interpreted with today's field rules.
+    The file name only selects the file for reading; the header states the
+    generation this parser would have to interpret. A missing header or a
+    header without `version` is the first format, which predates the field and
+    which this adapter already read. Any declared version outside
+    `SUPPORTED_SESSION_VERSIONS` is refused rather than interpreted with
+    today's field rules.
     """
-    if header is None or header.get("type") != "session":
+    if header is None:
         return True
     version = header.get("version")
     if version is None:
