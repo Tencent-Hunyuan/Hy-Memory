@@ -190,8 +190,8 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_link
         AFTER INSERT ON governed_memory_evidence
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id) ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -200,10 +200,10 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_link_update
         AFTER UPDATE ON governed_memory_evidence
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (OLD.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id) ON CONFLICT(memory_id) DO NOTHING;
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (OLD.memory_id) ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -294,10 +294,31 @@ def install_triggers(db: sqlite3.Connection) -> None:
         str(row["name"])
         for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    for table, statement in _trigger_sql():
-        if table not in present:
-            continue
-        cursor.execute(statement)
+    # An outer citation UPSERT overrides a trigger's INSERT OR IGNORE policy.
+    # Upgrade the released link triggers too: CREATE IF NOT EXISTS alone would
+    # leave existing libraries broken. Row-level DO NOTHING keeps its policy.
+    legacy_links = [
+        str(row["name"])
+        for row in cursor.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name IN (?,?)",
+            ("memory_visibility_dirty_on_link", "memory_visibility_dirty_on_link_update"),
+        )
+        if "INSERT OR IGNORE INTO MEMORY_VISIBILITY_DIRTY"
+        in " ".join(str(row["sql"]).split()).upper()
+    ]
+    cursor.execute("SAVEPOINT visibility_trigger_install")
+    try:
+        for name in legacy_links:
+            cursor.execute(f'DROP TRIGGER "{name}"')
+        for table, statement in _trigger_sql():
+            if table not in present:
+                continue
+            cursor.execute(statement)
+    except BaseException:
+        cursor.execute("ROLLBACK TO visibility_trigger_install")
+        raise
+    finally:
+        cursor.execute("RELEASE visibility_trigger_install")
 
 
 def startup(database_path: Path) -> None:
