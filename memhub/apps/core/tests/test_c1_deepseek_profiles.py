@@ -1,21 +1,49 @@
-"""DeepSeek Harness has two profiles; only the headless session form is importable.
+"""DeepSeek Harness writes one session file per session, named after its format.
 
-The source matrix states it plainly: headless is `<session>/session.jsonl` with a
-`type=session` header; web is not a Harness session file and must go through the
-`*-export` family instead. That distinction was prose with no test behind it, so
-this pins the observable boundary: a headless session imports, while a web-style
-export dropped into the same `sessions/` tree imports nothing.
+The version segment is part of the published file name: the first format wrote
+`session.jsonl` / `session.jsonl.zstd`, v3 and v4 write
+`session.v3.jsonl.zstd` / `session.v4.jsonl.zstd` and a desktop profile carries
+nothing else. The importer therefore has to read both shapes, while still
+leaving a browser-side export that was merely dropped into `sessions/` alone:
+that one has no `type=session` envelope, so the record parser rejects it.
 """
 
 import asyncio
 import json
 from pathlib import Path
 
+import zstandard
+
 from one_memory.imports.grants import SourceGrantStore
 from one_memory.imports.jobs import ImportJobStore, ImportStatus
 from one_memory.imports.sources.registry import RootCandidateKind, build_source_catalog
 from one_memory.imports.storage import EvidenceStore
 from one_memory.imports.supervisor import ImportSupervisor
+
+def v4_records(identity: str) -> list[dict]:
+    """One v4 session: the header carries id/cwd once, records carry `data`."""
+    return [
+        {
+            "type": "session",
+            "version": 4,
+            "id": identity,
+            "createdAt": 1792229393257,
+            "cwd": "/private/project",
+            "delegationDepth": 0,
+            "agentPreset": "standard",
+        },
+        {
+            "type": "user/message",
+            "seq": 1,
+            "time": 1792229393257,
+            "data": {
+                "id": f"{identity}-a",
+                "role": "user",
+                "source": {"kind": "user"},
+                "content": [{"type": "text", "text": "v4 person turn"}],
+            },
+        },
+    ]
 
 HEADLESS_RECORDS = [
     {"type": "session", "id": "s", "cwd": "/private/project"},
@@ -64,6 +92,13 @@ class Source:
         with path.open("w", encoding="utf-8") as stream:
             for record in records:
                 stream.write(json.dumps(record) + "\n")
+        return path
+
+    def write_zstd(self, relative: str, records: list[dict]) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = "".join(json.dumps(record) + "\n" for record in records)
+        path.write_bytes(zstandard.ZstdCompressor().compress(body.encode("utf-8")))
         return path
 
     def run(self):
@@ -129,11 +164,15 @@ def test_the_adapter_has_two_independent_layers(tmp_path):
     headless = fixture.write("headless-run/session.jsonl", HEADLESS_RECORDS)
     web = fixture.write("web-export/transcript.jsonl", WEB_EXPORT_RECORDS)
 
-    # Layer 1: the file predicate accepts only the headless session filename.
+    # Layer 1: the file predicate accepts the session file names and rejects a
+    # web-style export by name.
     predicate = adapter.file_predicate
     listed_headless = adapter.grant.listed_file(headless)
     listed_web = adapter.grant.listed_file(web)
     assert predicate(listed_headless) is True
+    versioned = fixture.write_zstd("headless-run/session.v4.jsonl.zstd", v4_records("v4"))
+    assert predicate(adapter.grant.listed_file(versioned)) is True
+    assert predicate(adapter.grant.listed_file(fixture.write("x/session.v4.jsonl", v4_records("named")))) is True
     assert predicate(listed_web) is False, (
         "the file predicate must exclude a web-style export by name"
     )
@@ -153,3 +192,33 @@ def test_the_adapter_has_two_independent_layers(tmp_path):
     assert not hasattr(parsed, "verbatim"), (
         "a record without the Harness data envelope must not become Evidence"
     )
+
+
+def test_versioned_session_files_import_with_the_same_parser(tmp_path):
+    """A v4 desktop session imports; the version is in the file name only."""
+    fixture = Source(tmp_path)
+    fixture.write_zstd("desktop-run/session.v4.jsonl.zstd", v4_records("v4"))
+
+    result = fixture.run()
+    assert result.status is ImportStatus.COMPLETED
+    assert result.stored == 1
+    assert fixture.evidence.count() == 1
+    stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
+    assert "v4 person turn" in stored
+
+
+def test_a_mixed_sessions_tree_imports_every_version_and_nothing_else(tmp_path):
+    """Old and new session files in one root both import; exports still do not."""
+    fixture = Source(tmp_path)
+    fixture.write("first/session.jsonl", HEADLESS_RECORDS)
+    fixture.write_zstd("second/session.v3.jsonl.zstd", v4_records("v3"))
+    fixture.write_zstd("third/session.v4.jsonl.zstd", v4_records("v4"))
+    fixture.write("fourth/transcript.jsonl", WEB_EXPORT_RECORDS)
+
+    result = fixture.run()
+    assert result.status is ImportStatus.COMPLETED
+    assert result.stored == 3
+    stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
+    assert "headless person turn" in stored
+    assert sum("v4 person turn" in text for text in stored) == 2
+    assert not any("web export" in text for text in stored)

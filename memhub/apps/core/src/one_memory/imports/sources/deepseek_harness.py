@@ -1,3 +1,4 @@
+import re
 from pathlib import PurePosixPath
 
 from pydantic import JsonValue
@@ -38,6 +39,15 @@ DEEPSEEK_HARNESS_DESCRIPTOR = SourceDescriptor(
 )
 
 
+#: One session is one file. Harness names the file after the format version it
+#: wrote — `session.jsonl.zstd` for the first format, `session.v3.jsonl.zstd`
+#: and `session.v4.jsonl.zstd` after that — so the version segment is part of
+#: the published on-disk contract, not a variant to skip. The desktop profile
+#: this was verified against writes v3/v4 exclusively, and the earlier literal
+#: match imported none of those sessions.
+SESSION_FILE = re.compile(r"^session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$")
+
+
 def create_deepseek_harness_adapter(
     grant: AuthorizedSourceRoot,
     *,
@@ -49,8 +59,8 @@ def create_deepseek_harness_adapter(
         grant=grant,
         parser=parse_deepseek_harness_record,
         source_version=source_version,
-        file_predicate=lambda source_file: (
-            source_file.relative_path.name in {"session.jsonl", "session.jsonl.zstd"}
+        file_predicate=lambda source_file: bool(
+            SESSION_FILE.match(source_file.relative_path.name)
         ),
         suffixes=frozenset({".jsonl", ".zstd"}),
         header_selector=_is_session_header,
@@ -149,10 +159,23 @@ def _tool_message(
 
     The same call also appears as a `tool-call` block in `assistant/message`;
     only the event is read, so it is stored once.
+
+    The result's content blocks are `tool-result` in the first session format
+    and plain `text` from v3 on; both carry the output, so both are evidence.
+    A block of any other type (image, resource) is not.
     """
     message = as_record(data.get("message"))
     if record.get("type") == "tool/result" and message is not None:
-        text = tool_blocks_evidence(message.get("content"), block_types=frozenset({"tool-result"}))
+        blocks = message.get("content")
+        text = tool_blocks_evidence(blocks, block_types=frozenset({"tool-result"}))
+        if text is None:
+            # v3+ writes the output as plain text blocks. Wrapping them in the
+            # shape the helper reads keeps the same clipping and credential
+            # scrubbing instead of writing a second extraction path.
+            text = tool_blocks_evidence(
+                [{"type": "tool-result", "content": blocks}],
+                block_types=frozenset({"tool-result"}),
+            )
         message_id = first_string(message.get("id"), data.get("callId"))
     else:
         text = tool_evidence_text(data)
