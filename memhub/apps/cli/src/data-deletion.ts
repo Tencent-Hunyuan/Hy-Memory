@@ -18,6 +18,8 @@
 import { lstat, readdir, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 
+import type { RuntimeLockState } from "./runtime-lock-guard.js";
+
 export interface DataDeletionPlan {
   schema_version: 1;
   product: string;
@@ -42,14 +44,15 @@ export interface DataDeletionReceipt {
 }
 
 /** Markers that prove a directory is a One Memory Home, not an arbitrary path.
- * At least one must exist; a lone directory name is not evidence. */
-const HOME_MARKERS = [
+ *
+ * Only artifacts that this product alone creates count. Generic directory names
+ * such as `logs/` or `integrations/` are not evidence: a normal project can
+ * contain them, and accepting one would let a mistyped --data-dir recursively
+ * delete unrelated files.
+ */
+const STRONG_HOME_MARKERS = [
   "one-memory.sqlite3",
   "runtime-service.json",
-  "host-permissions",
-  "hy-memory",
-  "integrations",
-  "logs",
 ] as const;
 
 async function directoryInfo(target: string) {
@@ -61,6 +64,10 @@ export async function planDataDeletion(options: {
   dataDir: string;
   home: string;
   runtimeRunning: boolean;
+  /** Result of the service-lease check. A missing receipt is not proof that
+   * no Runtime owns the directory, so the caller must pass this independently
+   * of `runtimeRunning`. */
+  runtimeLock?: RuntimeLockState;
 }): Promise<DataDeletionPlan> {
   const base = (): Pick<
     DataDeletionPlan,
@@ -107,11 +114,18 @@ export async function planDataDeletion(options: {
       "指向 One Memory Home（默认 ~/.one-memory）后重试。",
     );
   }
-  if (options.runtimeRunning) {
+  if (options.runtimeRunning || options.runtimeLock === "live") {
     return blocked(
       "runtime_still_running",
       "Runtime 仍在运行，Core 正持有数据库文件。",
       "先运行 memhub stop 停止 Runtime，再执行 delete-data。",
+    );
+  }
+  if (options.runtimeLock === "unknown") {
+    return blocked(
+      "runtime_state_unknown",
+      "无法确认 Runtime 是否已退出（服务锁不可读或格式异常）。",
+      "先运行 memhub stop，确认进程已退出后重试。",
     );
   }
   const info = await directoryInfo(resolved);
@@ -131,7 +145,7 @@ export async function planDataDeletion(options: {
   }
   const names = await readdir(resolved).catch(() => [] as string[]);
   const markers = names.filter((name) =>
-    (HOME_MARKERS as readonly string[]).includes(name),
+    (STRONG_HOME_MARKERS as readonly string[]).includes(name),
   );
   if (markers.length === 0) {
     return blocked(
