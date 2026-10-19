@@ -51,12 +51,13 @@ DEEPSEEK_HARNESS_DESCRIPTOR = SourceDescriptor(
 #: generation is reported as skipped instead of silently vanishing.
 SESSION_FILE = re.compile(r"^session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$")
 
-#: Session generations this parser has been verified against: the
-#: pre-versioning first format, v3 and v4. Harness writes the generation into
-#: the file name and into the session header. A future generation may change
-#: field semantics, and importing it with today's rules would store evidence
-#: that is harder to undo than a missed import — so an unknown version is
-#: skipped as `unsupported_schema` and left for a parser that knows it.
+#: Session generations this parser has been verified against: the first format
+#: (header `version: 0`; its file name carries no `.vN` segment), v3 and v4.
+#: The header states the generation, and the file name repeats it from v3 on.
+#: A future generation may change field semantics, and importing it with
+#: today's rules would store evidence that is harder to undo than a missed
+#: import — so an unknown version is skipped as `unsupported_schema` and left
+#: for a parser that knows it.
 SUPPORTED_SESSION_VERSIONS = frozenset({0, 3, 4})
 
 
@@ -92,9 +93,9 @@ def _supported_session(header: dict[str, JsonValue] | None) -> bool:
     """Whether the session's declared format generation is one we can read.
 
     The file name only selects the file for reading; the header states the
-    generation this parser would have to interpret. A missing header or a
-    header without `version` is the first format, which predates the field and
-    which this adapter already read. Any declared version outside
+    generation this parser would have to interpret. A missing header, or a
+    header without `version`, is treated as the first format — the earliest
+    files this adapter already read. Any declared version outside
     `SUPPORTED_SESSION_VERSIONS` is refused rather than interpreted with
     today's field rules.
     """
