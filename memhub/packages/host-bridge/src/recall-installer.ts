@@ -2644,7 +2644,10 @@ function removeInstalledServer(
   return `${JSON.stringify(config, null, 2)}\n`;
 }
 
-function managedServer(runtime: RecallRuntime): ManagedServer {
+function managedServer(
+  runtime: RecallRuntime,
+  genericLocalMcp = false,
+): ManagedServer {
   return {
     command: runtime.runtimeCommand,
     args: [runtime.mcpEntryPath],
@@ -2655,6 +2658,7 @@ function managedServer(runtime: RecallRuntime): ManagedServer {
       ...(runtime.credentialFile === undefined
         ? {}
         : { ONE_MEMORY_HOST_CREDENTIAL_FILE: runtime.credentialFile }),
+      ...(genericLocalMcp ? { ONE_MEMORY_GENERIC_LOCAL_MCP: "1" } : {}),
     },
   };
 }
@@ -2811,14 +2815,17 @@ function shellLiteral(value: string): string {
 /** The MCP entry to paste into a host we do not ship a layout for.
  *
  * Serialises the same `managedServer` the installer writes, under the same
- * server name, so an unlisted host ends up with a byte-identical entry to a
- * listed one. The wrapper key is `mcpServers`, which is the common shape; the
- * published contract names the hosts that nest it differently rather than
- * this function guessing which one the reader has.
+ * server name. Generic connection material adds only its explicit MCP session
+ * flag; ordinary host installs remain unchanged. The wrapper key is
+ * `mcpServers`, which is the common shape; the published contract names the
+ * hosts that nest it differently rather than guessing here.
  */
-export function renderMcpInstallSnippet(runtime: RecallRuntime): string {
+export function renderMcpInstallSnippet(
+  runtime: RecallRuntime,
+  genericLocalMcp = false,
+): string {
   return `${JSON.stringify(
-    { mcpServers: { [SERVER_NAME]: managedServer(runtime) } },
+    { mcpServers: { [SERVER_NAME]: managedServer(runtime, genericLocalMcp) } },
     null,
     2,
   )}\n`;
@@ -2845,7 +2852,7 @@ export function renderConnectionMaterial(runtime: RecallRuntime): {
   shell: string | null;
   prompt: string;
 } {
-  const mcp = renderMcpInstallSnippet(runtime);
+  const mcp = renderMcpInstallSnippet(runtime, true);
   const shell = renderShellInstallSnippet(runtime);
   return {
     mcp,

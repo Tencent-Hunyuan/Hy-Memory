@@ -1,3 +1,4 @@
+import path from "node:path";
 import { codexLayout } from "@one-memory/host-bridge/installer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionClient } from "./connection-client.js";
@@ -76,6 +77,54 @@ beforeEach(() => {
 });
 
 describe("host permission remote adapter", () => {
+  it("prepares the shared identity with fixed zero-argument input and returns only its private path", async () => {
+    const credentialFile = path.join(
+      "/synthetic/data/host-permissions/installations",
+      "a".repeat(64),
+      "credential",
+    );
+    fake.host.mockResolvedValue({ credentialFile });
+    const client = createHostPermissionClient({ dataDir: "/synthetic/data" });
+    await expect(client.prepareGenericLocalConnection()).resolves.toEqual({
+      credentialFile,
+    });
+    expect(fake.host).toHaveBeenCalledExactlyOnceWith({
+      hostId: "generic-local-mcp",
+      operation: "prepareGenericLocalConnection",
+      args: [],
+    });
+  });
+
+  it.each([
+    { credentialFile: "/synthetic/data/credential" },
+    {
+      credentialFile:
+        "/synthetic/data/host-permissions/installations/other/credential",
+    },
+    {
+      credentialFile: `/elsewhere/installations/${"a".repeat(64)}/credential`,
+    },
+    {
+      credentialFile: `/synthetic/data/host-permissions/installations/${"a".repeat(64)}/credential`,
+      secret: "unexpected",
+    },
+  ])("rejects an invalid shared credential response: %j", async (response) => {
+    fake.host.mockResolvedValue(response);
+    const client = createHostPermissionClient({ dataDir: "/synthetic/data" });
+    await expect(client.prepareGenericLocalConnection()).rejects.toThrow(
+      "connection_client_invalid_response",
+    );
+  });
+
+  it("never retries the prepare write after an uncertain transport failure", async () => {
+    fake.host.mockRejectedValue(Error("connection_client_unavailable"));
+    const client = createHostPermissionClient({ dataDir: "/synthetic/data" });
+    await expect(client.prepareGenericLocalConnection()).rejects.toThrow(
+      "connection_client_unavailable",
+    );
+    expect(fake.host).toHaveBeenCalledTimes(1);
+  });
+
   it.each(cases)(
     "forwards %s with exact args and only the layout host ID",
     async (operation, args) => {
@@ -98,7 +147,10 @@ describe("host permission remote adapter", () => {
       });
       expect(JSON.stringify(fake.host.mock.calls)).not.toContain("/synthetic/");
       expect(Object.keys(client).sort()).toEqual(
-        cases.map(([name]) => name).sort(),
+        [
+          ...cases.map(([name]) => name),
+          "prepareGenericLocalConnection",
+        ].sort(),
       );
     },
   );

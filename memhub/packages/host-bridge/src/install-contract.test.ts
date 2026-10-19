@@ -110,6 +110,21 @@ describe("shell install snippet", () => {
 });
 
 describe("connection prompt", () => {
+  it("marks only the generic copyable MCP connection, not legacy host installs", () => {
+    const withCredential = runtime({ credentialFile: "/fixture/credential" });
+    const generic = JSON.parse(renderConnectionMaterial(withCredential).mcp)
+      .mcpServers[SERVER_NAME];
+    const legacy = JSON.parse(renderMcpInstallSnippet(withCredential))
+      .mcpServers[SERVER_NAME];
+    expect(generic.env).toMatchObject({
+      ONE_MEMORY_GENERIC_LOCAL_MCP: "1",
+      ONE_MEMORY_HOST_CREDENTIAL_FILE: "/fixture/credential",
+    });
+    expect(legacy.env.ONE_MEMORY_GENERIC_LOCAL_MCP).toBeUndefined();
+    expect(generic.command).toBe(legacy.command);
+    expect(generic.args).toEqual(legacy.args);
+  });
+
   it("reuses runtime snippets and distinguishes configuration from actual recall", () => {
     const material = renderConnectionMaterial(runtime());
     expect(material.prompt).toContain(material.mcp);

@@ -93,6 +93,9 @@ async function fixture() {
   };
   const permissions = {
     ...methods,
+    prepareGenericLocalConnection: vi.fn(async () => ({
+      credentialFile: path.join(root, "private", "credential"),
+    })),
     runtimeFor: vi.fn(() => runtime),
     recordLinkCheck: vi.fn(async () => ({
       link: { state: "wired" },
@@ -132,6 +135,31 @@ async function fixture() {
     }),
   };
 }
+it("permits only the reserved no-argument generic prepare operation", async () => {
+  const f = await fixture();
+  const request = {
+    hostId: "generic-local-mcp",
+    operation: "prepareGenericLocalConnection",
+    args: [],
+  };
+  expect(await f.service.handle(request)).toEqual({
+    credentialFile: path.join(f.root, "private", "credential"),
+  });
+  expect(
+    f.permissions.prepareGenericLocalConnection,
+  ).toHaveBeenCalledExactlyOnceWith();
+  for (const invalid of [
+    { ...request, args: [true] },
+    { ...request, operation: "getPermission" },
+    { ...request, hostId: "cursor" },
+    { ...request, path: "/untrusted" },
+  ]) {
+    await expect(f.service.handle(invalid)).rejects.toThrow(
+      "host_control_invalid_input",
+    );
+  }
+  expect(f.permissions.prepareGenericLocalConnection).toHaveBeenCalledTimes(1);
+});
 it.each(Object.entries(operations))(
   "dispatches %s exactly once with only the mapped layout and approved arguments",
   async (operation, args) => {

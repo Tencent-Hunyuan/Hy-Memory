@@ -294,7 +294,7 @@ declare global {
       getApiToken(): Promise<string>;
       getApiBaseUrl(): Promise<string>;
       /** Optional while a dev renderer is attached to an older desktop shell. */
-      getConnectionMaterial?(): Promise<{
+      prepareConnectionMaterial?(): Promise<{
         mcp: string;
         shell: string | null;
         prompt: string;

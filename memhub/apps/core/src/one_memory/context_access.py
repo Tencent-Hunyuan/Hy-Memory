@@ -20,6 +20,9 @@ from one_memory.memory_server.store_binding import store_for
 REVOKED_SOURCES_SQL = (
     "SELECT source_id FROM source_grants WHERE user_id='local' AND revoked_at IS NOT NULL"
 )
+ACTIVE_SOURCES_SQL = (
+    "SELECT source_id FROM source_grants WHERE user_id='local' AND revoked_at IS NULL"
+)
 
 
 @dataclass(frozen=True)
@@ -52,13 +55,16 @@ def resolve_context_authority(
     declared_sources = frozenset(
         scope.removeprefix("source:") for scope in access.scopes if scope.startswith("source:")
     )
+    generic_raw = access.host_id == "generic-local-mcp" and "raw-imported-all" in access.scopes
     raw_allowed = (
         raw_requested
         and "om_conversations" in access.tools
         and "all-apps" in access.scopes
-        and bool(declared_sources)
+        and (generic_raw if access.host_id == "generic-local-mcp" else bool(declared_sources))
     )
-    if explicit is not None and (not raw_allowed or not explicit <= declared_sources):
+    if explicit is not None and (
+        not raw_allowed or (not generic_raw and not explicit <= declared_sources)
+    ):
         raise HTTPException(403, "external_context_scope_denied")
 
     raw_sources: frozenset[str] = frozenset()
@@ -70,10 +76,13 @@ def resolve_context_authority(
             # the same code runs on both engines without a branch per engine.
             if hasattr(db, "set_progress_handler"):
                 db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-            revoked = frozenset(str(row[0]) for row in db.execute(REVOKED_SOURCES_SQL))
+            sources = frozenset(
+                str(row[0])
+                for row in db.execute(ACTIVE_SOURCES_SQL if generic_raw else REVOKED_SOURCES_SQL)
+            )
         if time.monotonic() >= deadline:
             raise TimeoutError
-        raw_sources = declared_sources - revoked
+        raw_sources = sources if generic_raw else declared_sources - sources
         if explicit is not None:
             if not explicit <= raw_sources:
                 raise HTTPException(403, "external_context_scope_denied")

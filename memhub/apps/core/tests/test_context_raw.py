@@ -46,7 +46,11 @@ def put(
 
 def revoke(db, source, *, user="local"):
     db.execute(
-        "INSERT INTO source_grants VALUES (?,?,'/synthetic','default','2026-09-19','revoked')",
+        "INSERT INTO source_grants "
+        "(user_id,source_id,root_path,requested_path,root_identity,candidate_kind,"
+        "granted_at,revoked_at,revision) "
+        "VALUES (?,?,'/synthetic','/synthetic','synthetic','default',"
+        "'2026-09-19','revoked',1)",
         (user, source),
     )
 
@@ -486,6 +490,45 @@ def test_final_revalidation_drops_changed_items_without_replacement(database, ch
     final = revalidate(database, initial)
     assert [item.anchor_evidence_id for item in final] == ([] if change == "revoked" else ["b"])
     assert all(item in initial for item in final)
+
+
+def test_generic_finalizer_rechecks_each_result_against_current_positive_grant(database):
+    with closing(sqlite3.connect(database)) as db, db:
+        for source in ("cursor", "workbuddy", "missing", "revoked"):
+            put(db, source, f"needle {source}", source=source)
+        put(db, "foreign", "needle foreign", source="foreign", user="other")
+        db.executemany(
+            "INSERT INTO source_grants "
+            "(user_id,source_id,root_path,requested_path,root_identity,candidate_kind,"
+            "granted_at,revision) "
+            "VALUES (?,?,'/synthetic','/synthetic','synthetic','default','2026-09-19',1)",
+            (("local", "cursor"), ("local", "workbuddy"), ("other", "foreign")),
+        )
+        revoke(db, "revoked")
+    initial = read(database).items
+    assert {item.source_id for item in initial} == {"cursor", "workbuddy", "missing"}
+
+    def positive():
+        return revalidate_raw_context(
+            database,
+            initial,
+            source_ids=frozenset({"cursor", "workbuddy", "missing", "foreign", "revoked"}),
+            deadline=time.monotonic() + 5,
+            require_active_grant=True,
+        )
+
+    assert {item.source_id for item in positive()} == {"cursor", "workbuddy"}
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("DELETE FROM source_grants WHERE user_id='local' AND source_id='cursor'")
+    assert {item.source_id for item in positive()} == {"workbuddy"}
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute(
+            "UPDATE source_grants SET revoked_at='2026-09-20' "
+            "WHERE user_id='local' AND source_id='workbuddy'"
+        )
+    assert positive() == ()
+    # Trusted internal reads retain their existing missing-grant semantics.
+    assert {item.source_id for item in revalidate(database, initial)} == {"cursor", "missing"}
 
 
 def test_neighbor_revision_change_drops_group_and_empty_authority_reads_nothing(

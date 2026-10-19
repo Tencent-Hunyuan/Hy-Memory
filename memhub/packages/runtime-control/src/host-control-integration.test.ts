@@ -1,21 +1,28 @@
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
   realpath,
   rm,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { RecallBroker, readHostCredentialFile } from "@one-memory/host-bridge";
+import {
+  HostGrantStore,
+  RecallBroker,
+  readHostCredentialFile,
+} from "@one-memory/host-bridge";
 import {
   codexLayout,
   piLayout,
   type RecallInstallPreview,
+  renderConnectionMaterial,
 } from "@one-memory/host-bridge/installer";
 import axios from "axios";
 import { afterEach, expect, it, vi } from "vitest";
@@ -197,6 +204,165 @@ async function fixture() {
   };
 }
 
+it("prepares a real generic grant on the first explicit control request", async () => {
+  const f = await fixture();
+  const installations = path.join(
+    f.dataDir,
+    "host-permissions",
+    "installations",
+  );
+  expect(await f.owner.hostGrantStore.listInstallations()).toEqual([]);
+  expect(await readdir(installations)).toEqual([]);
+
+  const first = await f.client.prepareGenericLocalConnection();
+  expect(first.credentialFile).toMatch(
+    /\/host-permissions\/installations\/[a-f0-9]{64}\/credential$/,
+  );
+  expect(await readdir(installations)).toEqual([
+    path.basename(path.dirname(first.credentialFile)),
+  ]);
+  expect((await lstat(first.credentialFile)).mode & 0o777).toBe(0o600);
+  expect((await lstat(path.dirname(first.credentialFile))).mode & 0o777).toBe(
+    0o700,
+  );
+
+  const persisted = await HostGrantStore.open(
+    path.join(f.dataDir, "host-permissions", "grants"),
+  );
+  const receipts = await persisted.listInstallations();
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({
+    hostId: "generic-local-mcp",
+    revision: 2,
+    status: "approved",
+    allowedTools: ["om_recall", "om_conversations"],
+    allowedScopes: ["all-apps", "raw-imported-all"],
+  });
+  expect(await f.owner.hostGrantStore.listInstallations()).toEqual(receipts);
+  const secret = await readHostCredentialFile(first.credentialFile);
+  expect(JSON.stringify(first)).not.toContain(secret);
+  await expect(persisted.authenticate(secret)).resolves.toMatchObject(
+    receipts[0],
+  );
+  await expect(
+    persisted.authorize(secret, {
+      tool: "om_recall",
+      scopes: ["all-apps"],
+    }),
+  ).resolves.toMatchObject(receipts[0]);
+  await expect(
+    persisted.authorize(secret, {
+      tool: "om_conversations",
+      scopes: ["all-apps", "raw-imported-all"],
+    }),
+  ).resolves.toMatchObject(receipts[0]);
+  await expect(
+    persisted.authorize(secret, { tool: "om_ask", scopes: ["all-apps"] }),
+  ).rejects.toMatchObject({ code: "host_grant_tool_denied" });
+  expect(f.open).not.toHaveBeenCalled();
+  expect(f.dispatched).toContain("host:prepareGenericLocalConnection");
+});
+
+it("reuses one real grant and credential across concurrent local and broker requests", async () => {
+  const f = await fixture();
+  const [first, second, third] = await Promise.all([
+    f.client.prepareGenericLocalConnection(),
+    f.owner.prepareGenericLocalConnection(),
+    f.client.prepareGenericLocalConnection(),
+  ]);
+  expect(third).toEqual(first);
+  expect(second).toEqual(first);
+  expect((await lstat(first.credentialFile)).mode & 0o777).toBe(0o600);
+  expect((await lstat(path.dirname(first.credentialFile))).mode & 0o777).toBe(
+    0o700,
+  );
+  expect(first.credentialFile).toMatch(
+    /\/host-permissions\/installations\/[a-f0-9]{64}\/credential$/,
+  );
+  expect(JSON.stringify(first)).not.toContain("omhg_v1_");
+  const material = renderConnectionMaterial({
+    runtimeCommand: "/synthetic/installed/runtime",
+    mcpEntryPath: "/synthetic/installed/mcp.cjs",
+    recallCliPath: "/synthetic/installed/recall-cli.cjs",
+    discoveryPath: path.join(f.dataDir, "integrations", "cursor-broker.json"),
+    credentialFile: first.credentialFile,
+  });
+  const config = JSON.parse(material.mcp) as {
+    mcpServers: Record<string, { env: Record<string, string> }>;
+  };
+  expect(
+    config.mcpServers["one-memory"].env.ONE_MEMORY_HOST_CREDENTIAL_FILE,
+  ).toBe(first.credentialFile);
+  expect(material.shell).toContain(first.credentialFile);
+  expect(JSON.stringify(material)).not.toContain("omhg_v1_");
+  const remote = await f.client.prepareGenericLocalConnection();
+  expect(remote).toEqual(first);
+  expect(await (await f.reopen()).prepareGenericLocalConnection()).toEqual(
+    first,
+  );
+  const stored = await HostGrantStore.open(
+    path.join(f.dataDir, "host-permissions", "grants"),
+  );
+  const receipts = await stored.listInstallations();
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({
+    hostId: "generic-local-mcp",
+    status: "approved",
+    allowedTools: ["om_recall", "om_conversations"],
+    allowedScopes: ["all-apps", "raw-imported-all"],
+  });
+  expect(await f.owner.hostGrantStore.listInstallations()).toEqual(receipts);
+  const secret = await readHostCredentialFile(first.credentialFile);
+  await expect(stored.authenticate(secret)).resolves.toMatchObject(receipts[0]);
+  expect(JSON.stringify(material)).not.toContain(secret);
+  expect(await readHostCredentialFile(first.credentialFile)).toBe(secret);
+  expect(f.open).not.toHaveBeenCalled();
+});
+
+it("fails closed on missing, changed, or public generic credentials without reissuing", async () => {
+  const f = await fixture();
+  const first = await f.client.prepareGenericLocalConnection();
+  const store = await HostGrantStore.open(
+    path.join(f.dataDir, "host-permissions", "grants"),
+  );
+  const receipts = await store.listInstallations();
+  const secret = await readHostCredentialFile(first.credentialFile);
+
+  await chmod(first.credentialFile, 0o644);
+  await expect(f.client.prepareGenericLocalConnection()).rejects.toThrow(
+    "host_permission_relink_required",
+  );
+  expect(await store.listInstallations()).toEqual(receipts);
+  await chmod(first.credentialFile, 0o600);
+
+  await unlink(first.credentialFile);
+  await expect(f.client.prepareGenericLocalConnection()).rejects.toThrow(
+    "host_permission_relink_required",
+  );
+  expect(await store.listInstallations()).toEqual(receipts);
+  await writeFile(first.credentialFile, `${secret}\n`, { mode: 0o600 });
+
+  await writeFile(
+    first.credentialFile,
+    `${secret.slice(0, -1)}${secret.endsWith("a") ? "b" : "a"}\n`,
+  );
+  await expect(f.client.prepareGenericLocalConnection()).rejects.toThrow(
+    "host_permission_relink_required",
+  );
+  expect(await store.listInstallations()).toEqual(receipts);
+  await writeFile(first.credentialFile, `${secret}\n`);
+
+  await writeFile(
+    path.join(path.dirname(first.credentialFile), "installation.json"),
+    "{invalid",
+  );
+  await expect(f.client.prepareGenericLocalConnection()).rejects.toThrow(
+    "host_permission_storage_unsafe",
+  );
+  expect(await store.listInstallations()).toEqual(receipts);
+  expect(f.open).not.toHaveBeenCalled();
+});
+
 it("remote preview is read-only, exact approval installs one real Codex identity without usable-link claims", async () => {
   const f = await fixture();
   expect(await f.client.getPermission(f.layout)).toMatchObject({
@@ -308,34 +474,52 @@ it("a host credential cannot enter management transport and caller layout cannot
   expect(
     preview.files.some((file) => file.path === redirected.configPath),
   ).toBe(false);
-  await f.client.install(redirected, preview.fingerprint);
+  const installed = await f.client.install(redirected, preview.fingerprint);
   await expect(readFile(redirected.configPath)).rejects.toMatchObject({
     code: "ENOENT",
+  });
+  const receipt = installed.permission.receipt;
+  if (!receipt) throw Error("fixture missing receipt");
+  await f.client.setPermission(f.layout, {
+    installationId: receipt.installationId,
+    expectedRevision: receipt.revision,
+    allowedTools: ["om_recall"],
+    allowedScopes: ["all-apps"],
+    userConfirmed: true,
   });
   const credential = await readHostCredentialFile(
     f.owner.runtimeFor(f.layout).credentialFile,
   );
+  await expect(
+    f.owner.hostGrantStore.authenticate(credential),
+  ).resolves.toMatchObject({ hostId: "codex", status: "approved" });
+  const receipts = await f.owner.hostGrantStore.listInstallations();
   const before = [...f.dispatched];
-  const response = await axios.post(
-    `http://127.0.0.1:${f.broker.port}/control/connections`,
+  for (const input of [
+    { hostId: "codex", operation: "getPermission", args: [] },
     {
-      schema_version: 1,
-      instance_id: INSTANCE,
-      action: "host",
-      input: { hostId: "codex", operation: "getPermission", args: [] },
+      hostId: "generic-local-mcp",
+      operation: "prepareGenericLocalConnection",
+      args: [],
     },
-    {
-      headers: { Authorization: `Bearer ${credential}` },
-      proxy: false,
-      maxRedirects: 0,
-      timeout: 2000,
-      validateStatus: () => true,
-    },
-  );
-  expect(response.status).toBe(403);
-  expect(f.dispatched).toEqual(before);
-  expect(JSON.stringify(response.data)).not.toContain(credential);
-  expect(await f.owner.hostGrantStore.listInstallations()).toHaveLength(1);
+  ]) {
+    const response = await axios.post(
+      `http://127.0.0.1:${f.broker.port}/control/connections`,
+      { schema_version: 1, instance_id: INSTANCE, action: "host", input },
+      {
+        headers: { Authorization: `Bearer ${credential}` },
+        proxy: false,
+        maxRedirects: 0,
+        timeout: 2000,
+        validateStatus: () => true,
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(JSON.stringify(response.data)).not.toContain(credential);
+    expect(f.dispatched).toEqual(before);
+  }
+  expect(await f.owner.hostGrantStore.listInstallations()).toEqual(receipts);
+  expect(receipts).toMatchObject([{ hostId: "codex" }]);
   expect(f.open).not.toHaveBeenCalled();
 });
 

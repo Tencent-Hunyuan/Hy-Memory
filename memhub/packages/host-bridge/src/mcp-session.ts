@@ -129,6 +129,7 @@ export class McpSession {
      * was rather than empty it: a list that hides a tool the host may in fact
      * use is a worse answer than one that shows a tool a call later refuses. */
     private readonly grantedTools: GrantedTools = async () => null,
+    private readonly genericLocalMcp = false,
   ) {}
 
   async handle(request: JsonRpcRequest): Promise<JsonRpcResponse | null> {
@@ -188,6 +189,10 @@ export class McpSession {
       memoryWriteStatusToolDefinition(),
       diagnosticTraceToolDefinition(),
     ];
+    if (this.genericLocalMcp)
+      return definitions.filter((definition) =>
+        ["MemHub_recall", "MemHub_context"].includes(definition.name),
+      );
     let granted: readonly string[] | null;
     try {
       granted = await this.grantedTools(this.discoveryPath);
@@ -214,6 +219,20 @@ export class McpSession {
         jsonrpc: "2.0",
         id,
         error: { code: -32602, message: parsed.message },
+      };
+    }
+    if (
+      this.genericLocalMcp &&
+      parsed.tool !== "om_recall" &&
+      parsed.tool !== "om_context"
+    ) {
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32602,
+          message: "Tool not available for this connection",
+        },
       };
     }
     try {

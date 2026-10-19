@@ -153,6 +153,7 @@ def external_access(headers: Mapping[str, str]) -> ExternalMemoryAccess | None:
             not isinstance(item, str)
             or (
                 item != "all-apps"
+                and not (item == "raw-imported-all" and host_id == "generic-local-mcp")
                 and not re.fullmatch(
                     r"workspace:v1:[0-9a-f]{64}|source:[a-z0-9][a-z0-9-]{0,127}", item
                 )
@@ -174,7 +175,13 @@ def require_external_endpoint(request: Request) -> None:
     access = external_access(request.headers)
     if access is None:
         return
-    if (request.method, request.url.path) == ("POST", "/api/v1/context/search"):
+    route = (request.method, request.url.path)
+    if access.host_id == "generic-local-mcp" and route not in {
+        ("POST", "/api/v1/recall"),
+        ("POST", "/api/v1/context/search"),
+    }:
+        raise HTTPException(403, "external_endpoint_denied")
+    if route == ("POST", "/api/v1/context/search"):
         # The route resolves each requested lane against its original grant.
         # Passing this envelope gate does not authorize either lane by itself.
         if access.tools.isdisjoint({"om_recall", "om_conversations"}):

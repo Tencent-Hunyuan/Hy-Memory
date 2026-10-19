@@ -1078,6 +1078,8 @@ export class RecallBroker {
         "om_conversations",
         "all-apps",
       );
+      if (authorized.identity?.hostId === "generic-local-mcp")
+        throw new HostGrantError("host_grant_tool_denied");
       const coreResponse = await axios.get<ConversationSearchResponse>(
         `${this.options.coreBaseUrl}/api/v1/conversations/search`,
         {

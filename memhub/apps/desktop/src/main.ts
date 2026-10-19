@@ -788,11 +788,21 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       return { opened: true as const, reason: null };
     },
   );
-  ipcMain.handle("one-memory:connection-material", (event) => {
+  ipcMain.handle("one-memory:prepare-connection-material", async (event) => {
     assertAllowedRenderer(event.senderFrame?.url);
     if (hostRuntimeSelection?.state === "blocked")
       throw new Error(hostRuntimeSelection.code);
-    return renderConnectionMaterial(recallRuntime);
+    const { credentialFile } =
+      await hostPermissions.prepareGenericLocalConnection();
+    const { mcp } = renderConnectionMaterial({
+      ...recallRuntime,
+      credentialFile,
+    });
+    return {
+      mcp,
+      shell: null,
+      prompt: `请帮助我把当前工具连接到本机 MemHub。仅在此电脑支持本机 stdio MCP 时使用；纯网页聊天和远端环境不能使用这些本机路径，不要创建公网代理。此配置在同一数据目录的多个工具间共用连接身份，只开放 MemHub_recall（已沉淀记忆）和 MemHub_context（已沉淀记忆及已导入原文片段）；不自动导入或同步宿主历史，也不允许写入。配置只包含本机私有凭据文件路径，不含密钥，不要索取或复制密钥。\n\n先展示拟修改的 MCP 配置位置和差异，保留已有服务，等我确认后再安装；不能把复制或写入配置当作已接通。MCP 配置：\n\n\`\`\`json\n${mcp}\`\`\`\n\n安装后实际调用 MemHub_context 的 query 参数，用可核对的已导入合成样本分别验证记忆和原文片段，并报告工具可见性、授权结果、来源和是否有真实命中。若被拒或不可用，如实说明，不要换工具、扩大授权或尝试直调其他端点绕过。`,
+    };
   });
   ipcMain.handle("one-memory:get-login-preference", (event) => {
     assertAllowedRenderer(event.senderFrame?.url);

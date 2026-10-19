@@ -404,6 +404,61 @@ it.each([
   },
 );
 
+it("uses the fixed generic identity for raw and governed memory without per-source grants", async () => {
+  const f = await fixture(
+    ["om_recall", "om_conversations"],
+    ["all-apps", "raw-imported-all"],
+    false,
+    "generic-local-mcp",
+  );
+  f.respond(mixed);
+  const result = await f.post({ query: "original", raw_source_ids: ["codex"] });
+  expect(result.status).toBe(200);
+  expect(result.data.items).toEqual([raw, memory]);
+  const defaultResult = await f.post();
+  expect(defaultResult.status).toBe(200);
+  expect(defaultResult.data.items).toEqual([raw, memory]);
+  expect(f.calls).toHaveLength(2);
+  expect(f.calls[0].headers["x-one-memory-host-id"]).toBe("generic-local-mcp");
+  expect(
+    JSON.parse(f.calls[0].headers["x-one-memory-allowed-scopes"] as string),
+  ).toEqual(["all-apps", "raw-imported-all"]);
+});
+
+it("keeps Core's active-source denial for an explicit generic raw source", async () => {
+  const f = await fixture(
+    ["om_recall", "om_conversations"],
+    ["all-apps", "raw-imported-all"],
+    false,
+    "generic-local-mcp",
+  );
+  f.respond({ detail: "inactive source" }, 403);
+  const result = await f.post({
+    query: "original",
+    raw_source_ids: ["inactive"],
+  });
+  expect(result.status).toBe(403);
+  expect(JSON.stringify(result.data)).not.toContain("inactive source");
+  expect(f.calls).toHaveLength(1);
+  expect(f.calls[0].body).toEqual({
+    query: "original",
+    raw_source_ids: ["inactive"],
+  });
+});
+
+it("never releases a generic raw item outside explicitly requested sources", async () => {
+  const f = await fixture(
+    ["om_recall", "om_conversations"],
+    ["all-apps", "raw-imported-all"],
+    false,
+    "generic-local-mcp",
+  );
+  f.respond(receiptFor([{ ...raw, source_id: "cursor" }]));
+  const result = await f.post({ query: "original", raw_source_ids: ["codex"] });
+  expect(result.status).toBe(502);
+  expect(JSON.stringify(result.data)).not.toContain("original");
+});
+
 it.each([
   { tools: [], scopes: ["all-apps"], body: { query: "x" } },
   { tools: ["om_ask"], scopes: ["all-apps"], body: { query: "x" } },
@@ -806,70 +861,95 @@ it("shipped CLI bundle performs authenticated raw+memory lookup", async () => {
   expect(f.calls.map((call) => call.url)).toEqual(["/api/v1/context/search"]);
 });
 
-it("shipped MCP bundle passes its installed credential and preserves both paths", async () => {
-  const f = await fixture();
-  f.respond(mixed);
-  const env = await nativeEnvironment(f);
-  const result = await new Promise<string>((resolve, reject) => {
-    const child = spawn(process.execPath, [path.resolve("dist/mcp.cjs")], {
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
+it.each([false, true])(
+  "shipped MCP bundle preserves both paths and restricts generic session: %s",
+  async (generic) => {
+    const f = generic
+      ? await fixture(
+          ["om_recall", "om_conversations"],
+          ["all-apps", "raw-imported-all"],
+          false,
+          "generic-local-mcp",
+        )
+      : await fixture();
+    f.respond(mixed);
+    const env = {
+      ...(await nativeEnvironment(f)),
+      ONE_MEMORY_GENERIC_LOCAL_MCP: generic ? "1" : "0",
+    };
+    const result = await new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, [path.resolve("dist/mcp.cjs")], {
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let closedInput = false;
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("fixture MCP timeout"));
+      }, 6000);
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+        if (
+          !closedInput &&
+          stdout.split("\n").some((line) => {
+            try {
+              return JSON.parse(line).id === (generic ? 4 : 3);
+            } catch {
+              return false;
+            }
+          })
+        ) {
+          closedInput = true;
+          child.stdin.end();
+        }
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on("close", () => {
+        clearTimeout(timer);
+        resolve(stdout);
+      });
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`,
+      );
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`,
+      );
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "om_context", arguments: { query: "original" } } })}\n`,
+      );
+      if (generic)
+        child.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "MemHub_conversations", arguments: { query: "original" } } })}\n`,
+        );
     });
-    let stdout = "";
-    let closedInput = false;
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("fixture MCP timeout"));
-    }, 6000);
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-      if (
-        !closedInput &&
-        stdout.split("\n").some((line) => {
-          try {
-            return JSON.parse(line).id === 3;
-          } catch {
-            return false;
-          }
-        })
-      ) {
-        closedInput = true;
-        child.stdin.end();
-      }
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", () => {
-      clearTimeout(timer);
-      resolve(stdout);
-    });
-    child.stdin.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`,
-    );
-    child.stdin.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`,
-    );
-    child.stdin.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "om_context", arguments: { query: "original" } } })}\n`,
-    );
-  });
-  const messages = result
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  expect(
-    messages
+    const messages = result
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const names = messages
       .find((m) => m.id === 2)
-      .result.tools.some(
-        (tool: { name: string }) => tool.name === "MemHub_context",
-      ),
-  ).toBe(true);
-  expect(messages.find((m) => m.id === 3).result.structuredContent).toEqual(
-    mixed,
-  );
-});
+      .result.tools.map((tool: { name: string }) => tool.name);
+    if (generic) {
+      expect(names).toEqual(["MemHub_recall", "MemHub_context"]);
+      expect(messages.find((m) => m.id === 4)).toMatchObject({
+        error: {
+          code: -32602,
+          message: "Tool not available for this connection",
+        },
+      });
+    } else {
+      expect(names).toContain("MemHub_context");
+      expect(names).toContain("MemHub_conversations");
+    }
+    expect(messages.find((m) => m.id === 3).result.structuredContent).toEqual(
+      mixed,
+    );
+  },
+);
 
 it.each([403, 404])(
   "shipped CLI reports %i without a legacy fallback",

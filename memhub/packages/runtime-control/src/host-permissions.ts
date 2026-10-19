@@ -94,11 +94,15 @@ interface InstallationBinding {
 }
 
 const CREDENTIAL_ENV = "ONE_MEMORY_HOST_CREDENTIAL_FILE";
+const GENERIC_HOST_ID = "generic-local-mcp";
+const GENERIC_TOOLS = ["om_recall", "om_conversations"] as const;
+const GENERIC_SCOPES = ["all-apps", "raw-imported-all"] as const;
 const locks = new Map<string, Promise<void>>();
 
 export const LOCAL_EXPERIENCE_UNAVAILABLE = "体验版暂不支持";
 
-/** Trusted local Runtime control plane. Never exposed through MCP or the Core API.
+/** Trusted local Runtime control plane. Not exposed as an MCP tool or Core API route;
+ * the standalone Desktop reaches it through the authenticated broker management route.
  * POSIX local storage, with a trusted owner-controlled data root; same-user
  * adversaries and broader ACLs require OS-level isolation, not this store.
  */
@@ -223,7 +227,13 @@ export class HostPermissions {
     layout: RecallHostLayout,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const key = this.hostDirectory(layout);
+    return this.withLock(this.hostDirectory(layout), operation);
+  }
+
+  private async withLock<T>(
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const previous = locks.get(key) ?? Promise.resolve();
     let release!: () => void;
     const current = new Promise<void>((resolve) => {
@@ -238,6 +248,84 @@ export class HostPermissions {
       release();
       if (locks.get(key) === tail) locks.delete(key);
     }
+  }
+
+  /** Explicit, shared local install. Never called by a read tool or on view/open. */
+  async prepareGenericLocalConnection(): Promise<{ credentialFile: string }> {
+    const directory = path.join(
+      this.directory,
+      "installations",
+      digest(JSON.stringify([GENERIC_HOST_ID, "shared"])),
+    );
+    return this.withLock(directory, async () => {
+      await this.checkStorage();
+      const credentialFile = path.join(directory, "credential");
+      const binding = await this.readBindingAt(directory, GENERIC_HOST_ID);
+      const receipts = (await this.hostGrantStore.listInstallations()).filter(
+        (item) => item.hostId === GENERIC_HOST_ID,
+      );
+      if (
+        binding !== null ||
+        receipts.length ||
+        (await optionalStat(directory))
+      ) {
+        if (
+          !binding?.complete ||
+          receipts.length !== 1 ||
+          receipts[0]?.installationId !== binding.installationId ||
+          receipts[0].status !== "approved" ||
+          !sameRights(receipts[0].allowedTools, GENERIC_TOOLS) ||
+          !sameRights(receipts[0].allowedScopes, GENERIC_SCOPES)
+        )
+          throw new Error("host_permission_relink_required");
+        let secret: string;
+        try {
+          secret = await readHostCredentialFile(credentialFile);
+          if (digest(secret) !== binding.credentialDigest)
+            throw new Error("host_permission_relink_required");
+          const identity = await this.hostGrantStore.authenticate(secret);
+          if (
+            identity.hostId !== GENERIC_HOST_ID ||
+            identity.installationId !== binding.installationId ||
+            identity.revision !== receipts[0].revision
+          )
+            throw new Error("host_permission_relink_required");
+        } catch {
+          throw new Error("host_permission_relink_required");
+        }
+        return { credentialFile };
+      }
+
+      const issued = await this.hostGrantStore.createInstallation({
+        hostId: GENERIC_HOST_ID,
+      });
+      const approved = await this.hostGrantStore.approveGrants({
+        installationId: issued.receipt.installationId,
+        expectedRevision: issued.receipt.revision,
+        allowedTools: GENERIC_TOOLS,
+        allowedScopes: GENERIC_SCOPES,
+      });
+      if (
+        approved.status !== "approved" ||
+        !sameRights(approved.allowedTools, GENERIC_TOOLS) ||
+        !sameRights(approved.allowedScopes, GENERIC_SCOPES)
+      )
+        throw new Error("host_permission_unavailable");
+      await storageGuard(() => createPrivateDirectory(directory));
+      const next: InstallationBinding = {
+        schemaVersion: 1,
+        hostId: GENERIC_HOST_ID,
+        installationId: issued.receipt.installationId,
+        credentialDigest: digest(issued.secret),
+        complete: false,
+        deletions: [],
+      };
+      await this.writeBindingAt(directory, next);
+      await privateWrite(credentialFile, `${issued.secret}\n`);
+      next.complete = true;
+      await this.writeBindingAt(directory, next);
+      return { credentialFile };
+    });
   }
 
   async getPermission(
@@ -788,8 +876,14 @@ export class HostPermissions {
   private async readBinding(
     layout: RecallHostLayout,
   ): Promise<InstallationBinding | null> {
+    return this.readBindingAt(this.hostDirectory(layout), layout.hostId);
+  }
+
+  private async readBindingAt(
+    directory: string,
+    hostId: string,
+  ): Promise<InstallationBinding | null> {
     return storageGuard(async () => {
-      const directory = this.hostDirectory(layout);
       if ((await optionalStat(directory)) === null) return null;
       checkPrivate(await lstat(directory), true);
       const file = path.join(directory, "installation.json");
@@ -799,7 +893,7 @@ export class HostPermissions {
       if (
         !isObject(value) ||
         value.schemaVersion !== 1 ||
-        value.hostId !== layout.hostId ||
+        value.hostId !== hostId ||
         typeof value.installationId !== "string" ||
         !/^[a-f0-9-]{36}$/.test(value.installationId) ||
         !isDigest(value.credentialDigest) ||
@@ -821,9 +915,16 @@ export class HostPermissions {
     layout: RecallHostLayout,
     binding: InstallationBinding,
   ): Promise<void> {
+    return this.writeBindingAt(this.hostDirectory(layout), binding);
+  }
+
+  private async writeBindingAt(
+    directory: string,
+    binding: InstallationBinding,
+  ): Promise<void> {
     await storageGuard(() =>
       privateWrite(
-        path.join(this.hostDirectory(layout), "installation.json"),
+        path.join(directory, "installation.json"),
         `${JSON.stringify(binding)}\n`,
       ),
     );
@@ -1245,6 +1346,16 @@ function isDigest(value: unknown): value is string {
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function sameRights(
+  actual: readonly string[],
+  expected: readonly string[],
+): boolean {
+  return (
+    actual.length === expected.length &&
+    expected.every((value, index) => actual[index] === value)
+  );
 }
 
 async function storageGuard<T>(operation: () => Promise<T>): Promise<T> {

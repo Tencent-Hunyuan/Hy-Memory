@@ -12,6 +12,7 @@ import { isHostPresent, type RecallHostDescriptor } from "./recall-hosts.js";
 import { syncHookInput } from "./sync-hook.js";
 
 const ARITY = {
+  prepareGenericLocalConnection: 0,
   getPermission: 0,
   getSyncHookStatus: 0,
   previewSyncHook: 1,
@@ -154,6 +155,7 @@ export function createHostControlService(options: {
   const hosts = new Map<string, RecallHostDescriptor>();
   for (const source of options.hosts) {
     if (source.hostId === "openclaw") continue;
+    if (source.hostId === "generic-local-mcp") fail();
     if (source.hostId !== source.layout.hostId || hosts.has(source.hostId))
       fail();
     hosts.set(source.hostId, structuredClone(source));
@@ -169,9 +171,11 @@ export function createHostControlService(options: {
         !Array.isArray(request.args)
       )
         fail();
-      const host = hosts.get(request.hostId);
-      if (!host) fail();
+      const generic = request.hostId === "generic-local-mcp";
       const operation = request.operation as HostControlOperation;
+      if (generic !== (operation === "prepareGenericLocalConnection")) fail();
+      const host = generic ? null : hosts.get(request.hostId);
+      if (!generic && !host) fail();
       if (
         request.args.length !== ARITY[operation] ||
         Reflect.ownKeys(request.args).length !== request.args.length + 1
@@ -193,9 +197,13 @@ export function createHostControlService(options: {
       } catch {
         return fail();
       }
-      const layout = structuredClone(host.layout);
       try {
+        if (generic) return await permissions.prepareGenericLocalConnection();
+        if (!host) fail();
+        const layout = structuredClone(host.layout);
         switch (operation) {
+          case "prepareGenericLocalConnection":
+            return fail();
           case "getPermission":
             return await permissions.getPermission(layout);
           case "getSyncHookStatus":

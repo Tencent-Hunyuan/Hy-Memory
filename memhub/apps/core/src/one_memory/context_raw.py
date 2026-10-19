@@ -433,12 +433,18 @@ def revalidate_raw_context(
     *,
     source_ids: frozenset[str] | None,
     deadline: float,
+    require_active_grant: bool = False,
 ) -> tuple[RawContextItem, ...]:
     if not items or source_ids == frozenset():
         return ()
     if len(items) > 21:
         raise ValueError("raw_context_candidate_limit")
     readable, authority = _readable(source_ids)
+    if require_active_grant:
+        readable += """ AND EXISTS (
+            SELECT 1 FROM source_grants g
+            WHERE g.user_id=e.user_id AND g.source_id=e.source_id AND g.revoked_at IS NULL
+        )"""
     retained: list[RawContextItem] = []
     with _connection(database_path, deadline) as db:
         for item in items:
@@ -470,8 +476,9 @@ def revalidate_raw_context(
                     )
                 except (ValueError, TypeError):
                     break
-                if (row["role"], created) != (
+                if (row["role"], row["written_by"], created) != (
                     message.role,
+                    message.written_by,
                     message.created_at,
                 ):
                     break

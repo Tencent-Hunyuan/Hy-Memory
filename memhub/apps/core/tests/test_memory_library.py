@@ -73,8 +73,9 @@ def put(
 def grant(db, source, *, user="local", revoked=NOW):
     db.execute(
         """INSERT OR REPLACE INTO source_grants
-        (user_id,source_id,root_path,candidate_kind,granted_at,revoked_at)
-        VALUES (?,?, '/synthetic', 'default', ?, ?)""",
+        (user_id,source_id,root_path,requested_path,root_identity,candidate_kind,
+         granted_at,revoked_at,revision)
+        VALUES (?,?, '/synthetic', '/synthetic', 'synthetic', 'default', ?, ?, 1)""",
         (user, source, NOW, revoked),
     )
 

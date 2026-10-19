@@ -154,6 +154,69 @@ def test_revocation_during_other_lane_is_rechecked_before_response(app, database
     assert response.json()["state"] == "partial"
 
 
+def test_generic_context_tracks_active_local_sources_without_per_source_scopes(app, database):
+    generic = headers(
+        ["om_recall", "om_conversations"], scopes=("all-apps", "raw-imported-all")
+    ) | {"x-one-memory-host-id": "generic-local-mcp"}
+    with closing(sqlite3.connect(database)) as db, db:
+        grant(db, "cursor", revoked=None)
+        grant(db, "workbuddy", user="other", revoked=None)
+    response = post(app, auth=generic)
+    assert response.status_code == 200, response.text
+    assert {item["source_id"] for item in response.json()["items"] if item["kind"] == "raw"} == {
+        "cursor"
+    }
+    assert response.json()["paths"]["memory"]["status"] != "not_authorized"
+    for source in ("workbuddy", "missing"):
+        denied = post(app, {"query": "needle", "raw_source_ids": [source]}, generic)
+        assert denied.status_code == 403
+
+    with closing(sqlite3.connect(database)) as db, db:
+        grant(db, "workbuddy", revoked=None)
+    response = post(app, auth=generic)
+    assert {item["source_id"] for item in response.json()["items"] if item["kind"] == "raw"} == {
+        "cursor",
+        "workbuddy",
+    }
+    with closing(sqlite3.connect(database)) as db, db:
+        grant(db, "cursor", revoked="2026-09-20")
+    response = post(app, auth=generic)
+    assert {item["source_id"] for item in response.json()["items"] if item["kind"] == "raw"} == {
+        "workbuddy"
+    }
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("DELETE FROM source_grants WHERE user_id='local' AND source_id='workbuddy'")
+    response = post(app, auth=generic)
+    assert response.status_code == 200
+    assert response.json()["paths"]["raw"]["status"] == "not_authorized"
+    assert response.json()["paths"]["memory"]["status"] != "not_authorized"
+
+
+def test_generic_raw_grant_removed_after_read_is_dropped(app, database, monkeypatch):
+    from one_memory import context_routes
+
+    with closing(sqlite3.connect(database)) as db, db:
+        grant(db, "cursor", revoked=None)
+    generic = headers(
+        ["om_recall", "om_conversations"], scopes=("all-apps", "raw-imported-all")
+    ) | {"x-one-memory-host-id": "generic-local-mcp"}
+    original = context_routes.read_raw_indexed_context
+
+    def remove_grant_after_read(*args, **kwargs):
+        found = original(*args, **kwargs)
+        assert any(item.source_id == "cursor" for item in found.items)
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("DELETE FROM source_grants WHERE user_id='local' AND source_id='cursor'")
+        return found
+
+    monkeypatch.setattr(context_routes, "read_raw_indexed_context", remove_grant_after_read)
+    response = post(app, {"query": "needle", "kinds": ["raw"]}, generic)
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+    assert response.json()["paths"]["raw"]["status"] == "degraded"
+    assert response.json()["paths"]["raw"]["reason"] == "evidence_changed"
+
+
 def test_missing_storage_is_unavailable_not_empty(app, tmp_path):
     app.state.evidence_store.database_path = tmp_path / "missing.sqlite3"
     response = post(app)

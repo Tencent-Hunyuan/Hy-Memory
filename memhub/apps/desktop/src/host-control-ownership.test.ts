@@ -362,9 +362,95 @@ describe("packaged Desktop host-control ownership", () => {
         },
       }),
     );
-    await expect(invoke("connection-material")).rejects.toThrow(
+    await expect(invoke("prepare-connection-material")).rejects.toThrow(
       "host_runtime_current_unavailable",
     );
+  });
+
+  it("prepares only through standalone Runtime and hands the renderer a path, never a secret", async () => {
+    await startup();
+    fake.host.mockClear();
+    const credentialFile = path.join(
+      fake.dataDir,
+      "host-permissions",
+      "installations",
+      "a".repeat(64),
+      "credential",
+    );
+    fake.host.mockResolvedValueOnce({ credentialFile });
+    fake.localRead.mockImplementationOnce(
+      (runtime: { credentialFile: string }) => ({
+        mcp: JSON.stringify({
+          env: { ONE_MEMORY_HOST_CREDENTIAL_FILE: runtime.credentialFile },
+        }),
+        shell: null,
+        prompt: "synthetic path only",
+      }),
+    );
+    expect(fake.host).not.toHaveBeenCalled();
+    const result = (await invoke("prepare-connection-material")) as {
+      mcp: string;
+      shell: string | null;
+      prompt: string;
+    };
+    expect(fake.host).toHaveBeenCalledExactlyOnceWith({
+      hostId: "generic-local-mcp",
+      operation: "prepareGenericLocalConnection",
+      args: [],
+    });
+    expect(result).toMatchObject({ shell: null });
+    expect(result.prompt).toContain("MemHub_recall");
+    expect(result.prompt).toContain("MemHub_context");
+    expect(result.prompt).not.toContain("MemHub_conversations");
+    expect(result.prompt).not.toContain("MemHub_ask");
+    expect(JSON.stringify(result)).toContain(credentialFile);
+    expect(JSON.stringify(result)).not.toContain("omhg_v1_");
+    expect(fake.open).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Runtime material instead of rendering an untrusted credential path", async () => {
+    await startup();
+    fake.host.mockClear();
+    fake.host.mockResolvedValueOnce({ credentialFile: "/outside/credential" });
+    await expect(invoke("prepare-connection-material")).rejects.toThrow(
+      "connection_client_invalid_response",
+    );
+    expect(fake.localRead).not.toHaveBeenCalled();
+    expect(fake.open).not.toHaveBeenCalled();
+  });
+
+  it("uses the embedded permission owner and never dispatches a standalone control call", async () => {
+    vi.stubEnv("ONE_MEMORY_DESKTOP_RUNTIME_MODE", "embedded");
+    fake.missingBroker = true;
+    const credentialFile = path.join(
+      fake.dataDir,
+      "host-permissions",
+      "installations",
+      "a".repeat(64),
+      "credential",
+    );
+    const prepare = vi.fn(async () => ({ credentialFile }));
+    fake.open.mockResolvedValue({
+      hostGrantStore: {},
+      repairInstalledCommand: vi.fn(async () => []),
+      prepareGenericLocalConnection: prepare,
+    });
+    await startup();
+    fake.localRead.mockImplementationOnce(
+      (runtime: { credentialFile: string }) => ({
+        mcp: JSON.stringify({
+          env: { ONE_MEMORY_HOST_CREDENTIAL_FILE: runtime.credentialFile },
+        }),
+        shell: null,
+        prompt: "synthetic path only",
+      }),
+    );
+    expect(await invoke("prepare-connection-material")).toMatchObject({
+      shell: null,
+      prompt: expect.stringContaining("MemHub_context"),
+    });
+    expect(prepare).toHaveBeenCalledExactlyOnceWith();
+    expect(fake.host).not.toHaveBeenCalled();
   });
 
   it("does not open local HostPermissions for a blocked embedded hourly path", async () => {

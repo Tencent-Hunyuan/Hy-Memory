@@ -16,8 +16,10 @@ def database(tmp_path):
     path = tmp_path / "context.sqlite3"
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("CREATE TABLE source_grants(user_id TEXT, source_id TEXT, revoked_at TEXT)")
+        db.execute("INSERT INTO source_grants VALUES('local','cursor',NULL)")
         db.execute("INSERT INTO source_grants VALUES('local','revoked','2026-09-19')")
         db.execute("INSERT INTO source_grants VALUES('other','cursor','2026-09-19')")
+        db.execute("INSERT INTO source_grants VALUES('other','foreign',NULL)")
     return path
 
 
@@ -108,6 +110,53 @@ def test_implicit_revoked_raw_path_can_be_reported_beside_allowed_memory(databas
     result = resolve(
         database, access(["om_recall", "om_conversations"], ["all-apps", "source:revoked"])
     )
+    assert result.memory_allowed and not result.raw_allowed
+
+
+def test_generic_raw_uses_only_current_local_positive_grants(database):
+    generic = ExternalMemoryAccess(
+        "00000000-0000-0000-0000-000000000001",
+        1,
+        frozenset({"all-apps", "raw-imported-all"}),
+        frozenset({"om_recall", "om_conversations"}),
+        "generic-local-mcp",
+    )
+    result = resolve(database, generic)
+    assert result.raw_allowed and result.raw_sources == frozenset({"cursor"})
+    assert result.memory_allowed and result.memory_scopes == frozenset({"all-apps"})
+    assert resolve(database, generic, raw_source_ids=("cursor",)).raw_sources == {"cursor"}
+    for source in ("revoked", "foreign", "missing"):
+        with pytest.raises(HTTPException) as error:
+            resolve(database, generic, raw_source_ids=(source,))
+        assert error.value.status_code == 403
+
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("DELETE FROM source_grants WHERE user_id='local' AND source_id='cursor'")
+    result = resolve(database, generic)
+    assert result.memory_allowed and not result.raw_allowed and result.raw_sources == frozenset()
+    with pytest.raises(HTTPException) as error:
+        resolve(database, generic, raw_source_ids=("cursor",))
+    assert error.value.status_code == 403
+    with pytest.raises(HTTPException):
+        resolve(database, generic, kinds=("raw",))
+
+
+def test_existing_per_source_authority_is_not_replaced_by_generic_grants(database):
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("DELETE FROM source_grants WHERE user_id='local' AND source_id='cursor'")
+    result = resolve(database, access(["om_conversations"], ["all-apps", "source:cursor"]))
+    assert result.raw_allowed and result.raw_sources == frozenset({"cursor"})
+
+
+def test_generic_raw_needs_its_dedicated_scope(database):
+    generic = ExternalMemoryAccess(
+        "00000000-0000-0000-0000-000000000001",
+        1,
+        frozenset({"all-apps", "source:cursor"}),
+        frozenset({"om_recall", "om_conversations"}),
+        "generic-local-mcp",
+    )
+    result = resolve(database, generic)
     assert result.memory_allowed and not result.raw_allowed
 
 

@@ -34,8 +34,9 @@ import { inspect } from "node:util";
  * must still enforce source/content permissions. Do not cache these receipts as
  * authority: recheck before publishing long-running results after grant changes.
  * Exact source:<source_id> scopes are independent of all-apps and tool grants.
- * Core requires om_conversations + all-apps + explicitly approved source IDs
- * for raw reads and filters records there; this store never infers all sources.
+ * Core requires om_conversations + all-apps + exact source grants for ordinary
+ * raw reads. Only the fixed generic-local-mcp grant may use raw-imported-all;
+ * Core still checks active sources before releasing raw content.
  * No secret belongs in tool arguments, prompts, URLs, discovery, or logs.
  */
 export type HostReadTool =
@@ -137,6 +138,12 @@ const LOCK_NAME = ".mutation-lock";
 const MAX_STORE_BYTES = 4 * 1024 * 1024;
 const MAX_INSTALLATIONS = 1024;
 const MAX_SCOPES = 128;
+const GENERIC_LOCAL_MCP_HOST_ID = "generic-local-mcp";
+const GENERIC_LOCAL_MCP_TOOLS: readonly HostReadTool[] = [
+  "om_recall",
+  "om_conversations",
+];
+const GENERIC_LOCAL_MCP_SCOPES = ["all-apps", "raw-imported-all"];
 const TOOL_IDS = new Set<HostReadTool>([
   "om_recall",
   "om_ask",
@@ -272,6 +279,8 @@ export class HostGrantStore {
         expectedRevision,
       });
       if (item.status === "revoked") fail("host_grant_revoked");
+      if (!validApprovedGrant(item.hostId, tools, scopes))
+        fail("host_grant_invalid_input");
       item.allowedTools = tools;
       item.allowedScopes = scopes;
       item.status = "approved";
@@ -356,6 +365,11 @@ export class HostGrantStore {
     const identity = await this.authenticate(secret);
     if (!identity.allowedTools.includes(tool)) fail("host_grant_tool_denied");
     if (!scopes.every((scope) => identity.allowedScopes.includes(scope)))
+      fail("host_grant_scope_denied");
+    if (
+      scopes.includes("raw-imported-all") &&
+      (tool !== "om_conversations" || !isGenericLocalMcpGrant(identity))
+    )
       fail("host_grant_scope_denied");
     return identity;
   }
@@ -615,6 +629,36 @@ function validTools(value: unknown): value is HostReadTool[] {
   );
 }
 
+export function isGenericLocalMcpGrant(
+  identity: Pick<HostGrantReceipt, "hostId" | "allowedTools" | "allowedScopes">,
+): boolean {
+  return (
+    identity.hostId === GENERIC_LOCAL_MCP_HOST_ID &&
+    identity.allowedTools.length === GENERIC_LOCAL_MCP_TOOLS.length &&
+    GENERIC_LOCAL_MCP_TOOLS.every((tool) =>
+      identity.allowedTools.includes(tool),
+    ) &&
+    identity.allowedScopes.length === GENERIC_LOCAL_MCP_SCOPES.length &&
+    GENERIC_LOCAL_MCP_SCOPES.every((scope) =>
+      identity.allowedScopes.includes(scope),
+    )
+  );
+}
+
+function validApprovedGrant(
+  hostId: string,
+  tools: readonly HostReadTool[],
+  scopes: readonly string[],
+): boolean {
+  if (hostId === GENERIC_LOCAL_MCP_HOST_ID)
+    return isGenericLocalMcpGrant({
+      hostId,
+      allowedTools: tools,
+      allowedScopes: scopes,
+    });
+  return !scopes.includes("raw-imported-all");
+}
+
 function validScopes(value: unknown): value is string[] {
   return (
     Array.isArray(value) &&
@@ -624,6 +668,7 @@ function validScopes(value: unknown): value is string[] {
       (scope) =>
         typeof scope === "string" &&
         (scope === "all-apps" ||
+          scope === "raw-imported-all" ||
           (scope.length === 77 && /^workspace:v1:[0-9a-f]{64}$/.test(scope)) ||
           (scope.length >= 8 &&
             scope.length <= 135 &&
@@ -704,7 +749,11 @@ function parseStore(raw: string): StoreData {
     )
       fail("host_grant_store_corrupt");
     if (item.status === "approved") {
-      if (!validTools(item.allowedTools) || !validScopes(item.allowedScopes))
+      if (
+        !validTools(item.allowedTools) ||
+        !validScopes(item.allowedScopes) ||
+        !validApprovedGrant(item.hostId, item.allowedTools, item.allowedScopes)
+      )
         fail("host_grant_store_corrupt");
     } else if (item.status === "install-only" || item.status === "revoked") {
       if (

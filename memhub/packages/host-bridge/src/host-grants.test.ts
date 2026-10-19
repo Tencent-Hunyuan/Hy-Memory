@@ -174,6 +174,110 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
     ).rejects.toMatchObject({ code: "host_grant_tool_denied" });
   });
 
+  it("accepts only the exact generic-local-mcp grant, including after restart", async () => {
+    const { store, directory, file } = await fixture();
+    const generic = await store.createInstallation({
+      hostId: "generic-local-mcp",
+    });
+    const cursor = await store.createInstallation({ hostId: "cursor" });
+    const tools = ["om_recall", "om_conversations"] as const;
+    const scopes = ["all-apps", "raw-imported-all"];
+    for (const allowedTools of [
+      ["om_recall"],
+      ["om_conversations"],
+      [...tools, "om_ask"],
+    ] as const) {
+      await expect(
+        store.approveGrants({
+          installationId: generic.receipt.installationId,
+          expectedRevision: 1,
+          allowedTools,
+          allowedScopes: scopes,
+        }),
+      ).rejects.toMatchObject({ code: "host_grant_invalid_input" });
+    }
+    for (const allowedScopes of [
+      ["all-apps"],
+      ["raw-imported-all"],
+      [...scopes, "source:codex"],
+    ]) {
+      await expect(
+        store.approveGrants({
+          installationId: generic.receipt.installationId,
+          expectedRevision: 1,
+          allowedTools: tools,
+          allowedScopes,
+        }),
+      ).rejects.toMatchObject({ code: "host_grant_invalid_input" });
+    }
+    await expect(
+      store.approveGrants({
+        installationId: cursor.receipt.installationId,
+        expectedRevision: 1,
+        allowedTools: tools,
+        allowedScopes: scopes,
+      }),
+    ).rejects.toMatchObject({ code: "host_grant_invalid_input" });
+    const receipt = await store.approveGrants({
+      installationId: generic.receipt.installationId,
+      expectedRevision: 1,
+      allowedTools: tools,
+      allowedScopes: scopes,
+    });
+    await store.approveGrants({
+      installationId: cursor.receipt.installationId,
+      expectedRevision: 1,
+      allowedTools: ["om_recall"],
+      allowedScopes: ["all-apps"],
+    });
+    const restarted = await HostGrantStore.open(directory);
+    expect(await restarted.authenticate(generic.secret)).toMatchObject(receipt);
+    await expect(
+      restarted.authorize(generic.secret, {
+        tool: "om_conversations",
+        scopes: ["all-apps", "raw-imported-all"],
+      }),
+    ).resolves.toMatchObject(receipt);
+    await expect(
+      restarted.authorize(generic.secret, {
+        tool: "om_recall",
+        scopes: ["raw-imported-all"],
+      }),
+    ).rejects.toMatchObject({ code: "host_grant_scope_denied" });
+    await expect(
+      restarted.authorize(generic.secret, {
+        tool: "om_conversations",
+        scopes: ["source:codex"],
+      }),
+    ).rejects.toMatchObject({ code: "host_grant_scope_denied" });
+    await expect(
+      restarted.authorize(cursor.secret, {
+        tool: "om_recall",
+        scopes: ["raw-imported-all"],
+      }),
+    ).rejects.toMatchObject({ code: "host_grant_scope_denied" });
+
+    const original = JSON.parse(await readFile(file, "utf8"));
+    for (const change of [
+      { hostId: "cursor" },
+      { allowedTools: ["om_recall", "om_conversations", "om_ask"] },
+      { allowedScopes: [...scopes, "source:codex"] },
+    ]) {
+      const forged = structuredClone(original);
+      Object.assign(forged.installations[0], change);
+      await writeFile(file, JSON.stringify(forged));
+      await expect(HostGrantStore.open(directory)).rejects.toMatchObject({
+        code: "host_grant_store_corrupt",
+      });
+    }
+    const forgedOrdinary = structuredClone(original);
+    forgedOrdinary.installations[1].allowedScopes.push("raw-imported-all");
+    await writeFile(file, JSON.stringify(forgedOrdinary));
+    await expect(HostGrantStore.open(directory)).rejects.toMatchObject({
+      code: "host_grant_store_corrupt",
+    });
+  });
+
   it.each([
     "cursor",
     "claude-code",

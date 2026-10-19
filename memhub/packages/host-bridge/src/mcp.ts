@@ -51,6 +51,7 @@ const session = new McpSession(
   // Unreadable means every tool stays listed; a call is still refused on
   // arrival if the grant does not allow it.
   (discovery) => grantedToolsThroughBroker(discovery, clientOptions),
+  process.env.ONE_MEMORY_GENERIC_LOCAL_MCP === "1",
 );
 const lines = createInterface({
   input: process.stdin,

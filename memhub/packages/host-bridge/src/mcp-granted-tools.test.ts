@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { type GrantedTools, McpSession } from "./mcp-session.js";
 
-function sessionWith(granted: GrantedTools): McpSession {
+function sessionWith(
+  granted: GrantedTools,
+  genericLocalMcp = false,
+): McpSession {
   return new McpSession(
     "/fixture/discovery.json",
     undefined,
@@ -15,6 +18,7 @@ function sessionWith(granted: GrantedTools): McpSession {
     undefined,
     undefined,
     granted,
+    genericLocalMcp,
   );
 }
 
@@ -81,5 +85,74 @@ describe("BUG-15: the listed tools follow what the grant allows", () => {
     const names = await listedNames(sessionWith(async () => null));
     expect(names).toContain("MemHub_recall");
     expect(names).toContain("MemHub_conversations");
+  });
+
+  it.each(["failed", "missing", "overbroad"])(
+    "lists only the two generic tools when the grant query is %s",
+    async (mode) => {
+      const granted: GrantedTools = async () => {
+        if (mode === "failed") throw new Error("broker unavailable");
+        return mode === "missing" ? null : ["om_conversations", "om_ask"];
+      };
+      expect(await listedNames(sessionWith(granted, true))).toEqual([
+        "MemHub_recall",
+        "MemHub_context",
+      ]);
+    },
+  );
+
+  it("refuses hidden generic tools on calls without invoking their handlers", async () => {
+    const conversations = vi.fn(async () => {
+      throw new Error("called");
+    });
+    const memoryWrite = vi.fn(async () => {
+      throw new Error("called");
+    });
+    const session = new McpSession(
+      "/fixture/discovery.json",
+      undefined,
+      undefined,
+      undefined,
+      conversations,
+      undefined,
+      undefined,
+      memoryWrite,
+      undefined,
+      undefined,
+      async () => null,
+      true,
+    );
+    for (const [name, args] of [
+      ["MemHub_conversations", { query: "original" }],
+      ["om_conversations", { query: "original" }],
+      [
+        "MemHub_memory_write",
+        {
+          internal_session_id: "fixture",
+          first_round: 1,
+          last_round: 1,
+          evidence_ids: ["e1"],
+        },
+      ],
+      ["MemHub_memory_write_status", { request_id: "fixture" }],
+      ["MemHub_ask", { question: "fixture" }],
+      ["MemHub_matters", { query: "fixture" }],
+      ["MemHub_diagnostic_trace", { request_id: "fixture" }],
+    ] as const) {
+      const response = await session.handle({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name, arguments: args },
+      });
+      expect(response).toMatchObject({
+        error: {
+          code: -32602,
+          message: "Tool not available for this connection",
+        },
+      });
+    }
+    expect(conversations).not.toHaveBeenCalled();
+    expect(memoryWrite).not.toHaveBeenCalled();
   });
 });

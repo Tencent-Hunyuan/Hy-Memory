@@ -308,6 +308,9 @@ def context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     tuple(item for item in items if isinstance(item, RawContextItem)),
                     source_ids=authority.raw_sources,
                     deadline=end,
+                    require_active_grant=(
+                        access is not None and access.host_id == "generic-local-mcp"
+                    ),
                 )
             return await in_interactive_read(
                 revalidate_memory_context,

@@ -81,6 +81,32 @@ describe("context response authority", () => {
     ).toBe(true);
   });
 
+  it("accepts generic raw from active sources, but not a forged identity or grant combination", () => {
+    const generic = identity({
+      hostId: "generic-local-mcp",
+      allowedScopes: ["all-apps", "raw-imported-all"],
+    });
+    expect(isContextResponseAuthorized(response([raw("codex")]), generic)).toBe(
+      true,
+    );
+    expect(
+      isContextResponseAuthorized(
+        response([raw("codex")]),
+        identity({ hostId: "cursor", allowedScopes: generic.allowedScopes }),
+      ),
+    ).toBe(false);
+    expect(
+      isContextResponseAuthorized(
+        response([raw("codex")]),
+        identity({
+          hostId: "generic-local-mcp",
+          allowedTools: ["om_conversations", "om_recall", "om_ask"],
+          allowedScopes: generic.allowedScopes,
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("rejects a raw item from a source the host was not granted", () => {
     // This is the symmetry rule: granted for one source, shown another's rows
     // is a silent leak rather than an error anyone would notice.

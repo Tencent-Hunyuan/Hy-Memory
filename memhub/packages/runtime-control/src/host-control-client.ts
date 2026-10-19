@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createConnectionClient } from "./connection-client.js";
 import type { HostPermissions } from "./host-permissions.js";
 
@@ -16,7 +17,10 @@ type Method =
   | "previewUninstall"
   | "uninstall";
 
-export type HostPermissionClient = Pick<HostPermissions, Method>;
+export type HostPermissionClient = Pick<
+  HostPermissions,
+  Method | "prepareGenericLocalConnection"
+>;
 
 /** Desktop keeps only host IDs; native layouts and permission writes stay in Runtime. */
 export function createHostPermissionClient(options: {
@@ -49,6 +53,39 @@ export function createHostPermissionClient(options: {
     return work as ReturnType<HostPermissions[K]>;
   }
   return {
+    prepareGenericLocalConnection: () => {
+      const work = pending.then(async () => {
+        if (!client.host)
+          throw Error("connection_client_capability_unavailable");
+        const result = await client.host({
+          hostId: "generic-local-mcp",
+          operation: "prepareGenericLocalConnection",
+          args: [],
+        });
+        if (
+          !result ||
+          typeof result !== "object" ||
+          Object.keys(result).length !== 1 ||
+          !("credentialFile" in result) ||
+          typeof result.credentialFile !== "string" ||
+          !path.isAbsolute(result.credentialFile) ||
+          path.basename(result.credentialFile) !== "credential" ||
+          path.dirname(path.dirname(result.credentialFile)) !==
+            path.resolve(
+              options.dataDir,
+              "host-permissions",
+              "installations",
+            ) ||
+          !/^[a-f0-9]{64}$/.test(
+            path.basename(path.dirname(result.credentialFile)),
+          )
+        )
+          throw Error("connection_client_invalid_response");
+        return { credentialFile: result.credentialFile };
+      });
+      pending = work.catch(() => undefined);
+      return work;
+    },
     getPermission: (...input) => invoke("getPermission", input),
     getSyncHookStatus: (...input) => invoke("getSyncHookStatus", input),
     previewSyncHook: (...input) => invoke("previewSyncHook", input),

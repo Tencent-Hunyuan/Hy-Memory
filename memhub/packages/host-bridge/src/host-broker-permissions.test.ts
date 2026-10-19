@@ -98,6 +98,7 @@ function corePayload(url: string | undefined): unknown {
 async function fixture(
   options: {
     legacy?: boolean;
+    hostId?: string;
     allowedTools?: HostReadTool[];
     allowedScopes?: string[];
     onCore?: (call: CoreCall, response: ServerResponse) => Promise<void>;
@@ -107,7 +108,9 @@ async function fixture(
   roots.push(root);
   const directory = path.join(root, "grants");
   const store = await HostGrantStore.initialize(directory);
-  const issued = await store.createInstallation({ hostId: "cursor" });
+  const issued = await store.createInstallation({
+    hostId: options.hostId ?? "cursor",
+  });
   const receipt = await store.approveGrants({
     installationId: issued.receipt.installationId,
     expectedRevision: issued.receipt.revision,
@@ -211,6 +214,25 @@ function clientCall(
 describe.skipIf(process.platform === "win32")(
   "host capability broker transport",
   () => {
+    it("denies standalone conversations and other tools for the authenticated generic host", async () => {
+      const f = await fixture({
+        hostId: "generic-local-mcp",
+        allowedTools: ["om_recall", "om_conversations"],
+        allowedScopes: ["all-apps", "raw-imported-all"],
+      });
+      for (const endpoint of ["conversations", "ask", "matters"] as const) {
+        const response = await f.post(endpoint, f.issued.secret);
+        expect(response.status).toBe(403);
+      }
+      expect(f.calls).toEqual([]);
+      const recalled = await f.post("recall", f.issued.secret);
+      expect(recalled.status).toBe(200);
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0].headers["x-one-memory-host-id"]).toBe(
+        "generic-local-mcp",
+      );
+    });
+
     it.each(endpoints)(
       "forwards verified grants, not caller headers, for %s",
       async (endpoint) => {

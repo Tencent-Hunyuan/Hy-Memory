@@ -8,7 +8,11 @@ from one_memory.external_memory_access import require_external_endpoint
 
 
 def request(
-    tools, scopes=("all-apps", "source:cursor"), method="POST", path="/api/v1/context/search"
+    tools,
+    scopes=("all-apps", "source:cursor"),
+    method="POST",
+    path="/api/v1/context/search",
+    host_id=None,
 ):
     headers = {
         "x-one-memory-read-context": "external",
@@ -17,6 +21,8 @@ def request(
         "x-one-memory-allowed-scopes": json.dumps(scopes),
         "x-one-memory-allowed-tools": json.dumps(tools),
     }
+    if host_id is not None:
+        headers["x-one-memory-host-id"] = host_id
     return Request(
         {
             "type": "http",
@@ -54,6 +60,60 @@ def test_composite_read_does_not_open_other_routes(method, path):
         require_external_endpoint(
             request(["om_recall", "om_conversations"], method=method, path=path)
         )
+
+
+def test_generic_scope_requires_exact_host_identity():
+    from one_memory.external_memory_access import external_access
+
+    scopes = ("all-apps", "raw-imported-all")
+    generic = request(["om_recall", "om_conversations"], scopes=scopes, host_id="generic-local-mcp")
+    assert external_access(generic.headers).scopes == frozenset(scopes)
+    for host_id in (None, "cursor", "generic-local-mcp-other"):
+        with pytest.raises(HTTPException) as error:
+            require_external_endpoint(
+                request(["om_recall", "om_conversations"], scopes=scopes, host_id=host_id)
+            )
+        assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/api/v1/conversations/search"),
+        ("POST", "/api/v1/memories/ask"),
+        ("POST", "/api/v1/matters/context/search"),
+        ("POST", "/api/v1/diagnostics/trace"),
+        ("POST", "/api/v1/boundary/peek"),
+        ("POST", "/api/v1/call-events/123e4567-e89b-42d3-a456-426614174000/delivery"),
+        ("GET", "/api/v1/context/search"),
+        ("POST", "/api/v1/memories"),
+    ],
+)
+def test_generic_host_rejects_all_non_recall_and_context_routes(method, path):
+    with pytest.raises(HTTPException) as error:
+        require_external_endpoint(
+            request(
+                ["om_recall", "om_conversations"],
+                scopes=("all-apps", "raw-imported-all"),
+                method=method,
+                path=path,
+                host_id="generic-local-mcp",
+            )
+        )
+    assert error.value.status_code == 403
+    assert error.value.detail == "external_endpoint_denied"
+
+
+@pytest.mark.parametrize("path", ["/api/v1/recall", "/api/v1/context/search"])
+def test_generic_host_allows_only_its_read_routes(path):
+    require_external_endpoint(
+        request(
+            ["om_recall", "om_conversations"],
+            scopes=("all-apps", "raw-imported-all"),
+            path=path,
+            host_id="generic-local-mcp",
+        )
+    )
 
 
 def test_legacy_recall_still_requires_its_own_tool():
