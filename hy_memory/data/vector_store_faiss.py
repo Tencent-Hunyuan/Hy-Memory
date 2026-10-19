@@ -462,14 +462,39 @@ class FaissVectorStore(VectorStoreBase):
             return None
 
     async def get_embeddings(self, node_ids: List[str]) -> Dict[str, List[float]]:
-        """批量取向量（in-memory _data 直接读 embedding），供去重算 cosine。"""
-        out: Dict[str, List[float]] = {}
-        for nid in node_ids:
-            point_id = self._node_id_to_point_id(nid)
-            entry = self._data.get(point_id)
-            if entry and entry.get("embedding"):
-                out[nid] = list(entry["embedding"])
-        return out
+        """批量取向量，供去重 / episode 摘要计算 cosine。
+
+        ``_data`` 只保存 payload 与 FAISS 内部下标；普通 upsert 不额外存一份
+        embedding，向量本体在 FAISS index 里。这里按当前有效下标 reconstruct，
+        并用 ``_idx_to_id`` 校验，避免读到已被替换的旧下标。
+        """
+
+        def _get() -> Dict[str, List[float]]:
+            out: Dict[str, List[float]] = {}
+            with self._lock:
+                for nid in node_ids:
+                    point_id = self._node_id_to_point_id(nid)
+                    entry = self._data.get(point_id)
+                    if entry is None:
+                        continue
+                    embedding = entry.get("embedding")
+                    if embedding:
+                        out[nid] = list(embedding)
+                        continue
+                    idx = entry.get("idx")
+                    if (
+                        idx is None
+                        or self._index is None
+                        or self._idx_to_id.get(int(idx)) != point_id
+                    ):
+                        continue
+                    try:
+                        out[nid] = self._index.reconstruct(int(idx)).tolist()
+                    except Exception:
+                        continue
+            return out
+
+        return await _run_in_vdb_pool(_get)
 
     # ================================================================
     # 删除
