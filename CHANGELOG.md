@@ -14,6 +14,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Serialized each SDK SQLite store's shared connection lifecycle so concurrent
+  history/cache operations cannot race with `close()` and crash the process.
 - Clarified that `add(metadata=...)` carries legacy SDK processing options,
   while persistent caller business context belongs in `meta`.
 - Added an opt-in `get(..., include_raw=True)` path for reading `L1_RAW`

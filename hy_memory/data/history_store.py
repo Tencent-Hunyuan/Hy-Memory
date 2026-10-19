@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
@@ -89,6 +90,10 @@ class HistoryStore:
         """
         self._db_path = config.history.db_path
         self._conn: Optional[sqlite3.Connection] = None
+        # sqlite3.Connection.close() must never race with an execute() on the
+        # same connection. The lock also serializes operations on this shared
+        # connection; separate HistoryStore instances remain independent.
+        self._conn_lock = threading.RLock()
 
     async def initialize(self) -> None:
         """创建表和索引（如果不存在）"""
@@ -97,20 +102,21 @@ class HistoryStore:
 
     def _init_sync(self) -> None:
         """同步初始化：创建目录、连接数据库、建表建索引"""
-        # 确保目录存在
-        db_dir = os.path.dirname(self._db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
+        with self._conn_lock:
+            # 确保目录存在
+            db_dir = os.path.dirname(self._db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
 
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        # 开启 WAL 模式，提高并发读写性能
-        self._conn.execute("PRAGMA journal_mode=WAL;")
+            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            # 开启 WAL 模式，提高并发读写性能
+            self._conn.execute("PRAGMA journal_mode=WAL;")
 
-        self._conn.execute(_CREATE_TABLE_SQL)
-        for idx_sql in _CREATE_INDEXES_SQL:
-            self._conn.execute(idx_sql)
-        self._conn.commit()
+            self._conn.execute(_CREATE_TABLE_SQL)
+            for idx_sql in _CREATE_INDEXES_SQL:
+                self._conn.execute(idx_sql)
+            self._conn.commit()
 
     # ================================================================
     # 记录操作
@@ -218,13 +224,14 @@ class HistoryStore:
         return await _run_in_sqlite_pool(self._get_history_sync, memory_id)
 
     def _get_history_sync(self, memory_id: str) -> List[Dict[str, Any]]:
-        if self._conn is None:
-            return []
-        cursor = self._conn.execute(
-            "SELECT * FROM memory_history WHERE memory_id = ? ORDER BY created_at ASC",
-            (memory_id,),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        with self._conn_lock:
+            if self._conn is None:
+                return []
+            cursor = self._conn.execute(
+                "SELECT * FROM memory_history WHERE memory_id = ? ORDER BY created_at ASC",
+                (memory_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     async def get_recent(
         self,
@@ -244,14 +251,15 @@ class HistoryStore:
         return await _run_in_sqlite_pool(self._get_recent_sync, isolation_key, limit)
 
     def _get_recent_sync(self, isolation_key: str, limit: int) -> List[Dict[str, Any]]:
-        if self._conn is None:
-            return []
-        cursor = self._conn.execute(
-            "SELECT * FROM memory_history WHERE isolation_key = ? "
-            "ORDER BY created_at DESC LIMIT ?",
-            (isolation_key, limit),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        with self._conn_lock:
+            if self._conn is None:
+                return []
+            cursor = self._conn.execute(
+                "SELECT * FROM memory_history WHERE isolation_key = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (isolation_key, limit),
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     async def count(self, isolation_key: str = "") -> int:
         """
@@ -266,16 +274,17 @@ class HistoryStore:
         return await _run_in_sqlite_pool(self._count_sync, isolation_key)
 
     def _count_sync(self, isolation_key: str) -> int:
-        if self._conn is None:
-            return 0
-        if isolation_key:
-            cursor = self._conn.execute(
-                "SELECT COUNT(*) FROM memory_history WHERE isolation_key = ?",
-                (isolation_key,),
-            )
-        else:
-            cursor = self._conn.execute("SELECT COUNT(*) FROM memory_history")
-        return cursor.fetchone()[0]
+        with self._conn_lock:
+            if self._conn is None:
+                return 0
+            if isolation_key:
+                cursor = self._conn.execute(
+                    "SELECT COUNT(*) FROM memory_history WHERE isolation_key = ?",
+                    (isolation_key,),
+                )
+            else:
+                cursor = self._conn.execute("SELECT COUNT(*) FROM memory_history")
+            return cursor.fetchone()[0]
 
     async def close(self) -> None:
         """关闭数据库连接"""
@@ -284,9 +293,10 @@ class HistoryStore:
             logger.info("[HistoryStore] closed")
 
     def _close_sync(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._conn_lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
     # ================================================================
     # 内部
@@ -339,33 +349,34 @@ class HistoryStore:
         role: str = "",
         extra: Optional[Dict[str, Any]] = None,
     ) -> int:
-        if self._conn is None:
-            return -1
-        now = _now_iso()
-        extra_json = json.dumps(extra or {}, ensure_ascii=False)
-        cursor = self._conn.execute(
-            """INSERT INTO memory_history
-               (memory_id, isolation_key, event,
-                old_memory, new_memory, old_status, new_status,
-                change_reason, layer, actor_id, role, extra,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                memory_id,
-                isolation_key,
-                event,
-                old_memory,
-                new_memory,
-                old_status,
-                new_status,
-                change_reason,
-                layer,
-                actor_id,
-                role,
-                extra_json,
-                now,
-                now,
-            ),
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+        with self._conn_lock:
+            if self._conn is None:
+                return -1
+            now = _now_iso()
+            extra_json = json.dumps(extra or {}, ensure_ascii=False)
+            cursor = self._conn.execute(
+                """INSERT INTO memory_history
+                   (memory_id, isolation_key, event,
+                    old_memory, new_memory, old_status, new_status,
+                    change_reason, layer, actor_id, role, extra,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    memory_id,
+                    isolation_key,
+                    event,
+                    old_memory,
+                    new_memory,
+                    old_status,
+                    new_status,
+                    change_reason,
+                    layer,
+                    actor_id,
+                    role,
+                    extra_json,
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+            return cursor.lastrowid
