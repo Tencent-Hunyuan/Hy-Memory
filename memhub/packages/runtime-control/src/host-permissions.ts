@@ -10,6 +10,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import path from "node:path";
+import { isHostId } from "@one-memory/contracts";
 import {
   createClaudeCodeRemovalTarget,
   createClaudeCodeTarget,
@@ -1055,20 +1056,19 @@ function status(
   };
 }
 
-/** Opaque host label, optionally scoped to one profile (`host:<profile>`).
+/** Whether a layout can hold a revocable credential.
  *
- * The installation directory is a digest of this value, never the value
- * itself, so the colon cannot act as a path separator. Profile scoping is what
- * DeepSeek Harness needs: it configures recall per profile
- * (`deepseek-harness:desktop`, `deepseek-harness:web`), and the CLI already
- * lists those IDs.
+ * The id grammar lives in `@one-memory/contracts` so that this layer, the
+ * grant store and the CLI cannot drift: a host id `host list` prints has to be
+ * one `host install` accepts. Profile scoping is what DeepSeek Harness needs —
+ * it configures recall per profile (`deepseek-harness:desktop`) — and the
+ * installation directory is a digest of the whole id, so the colon never
+ * becomes a path component.
  */
-const HOST_ID = /^[a-z][a-z0-9-]{0,63}(?::[a-z0-9][a-z0-9-]{0,31})?$/;
-
 function supported(layout: RecallHostLayout): boolean {
   return (
     (layout.channel === "mcp" || layout.channel === "cli") &&
-    HOST_ID.test(layout.hostId) &&
+    isHostId(layout.hostId) &&
     layout.hostId !== "openclaw"
   );
 }

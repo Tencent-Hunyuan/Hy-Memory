@@ -17,6 +17,7 @@ import {
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { inspect } from "node:util";
+import { isHostId } from "@one-memory/contracts";
 
 /**
  * Trusted local control plane, not an MCP tool or an HTTP authentication route.
@@ -572,16 +573,12 @@ function validMutation(input: HostGrantMutation): boolean {
 }
 
 function validHostId(value: unknown): value is string {
-  // One optional profile segment. A grant is keyed by installation UUID, and
-  // the installation directory is a digest of the host ID, so the colon never
-  // becomes part of a path. DeepSeek Harness is configured per profile and
-  // reports `deepseek-harness:<profile>` as its host ID.
-  return (
-    typeof value === "string" &&
-    value.length <= 96 &&
-    value === value.trim() &&
-    /^[a-z][a-z0-9-]{0,63}(?::[a-z0-9][a-z0-9-]{0,31})?$/.test(value)
-  );
+  // Same grammar as the permission layer and the CLI: a host id is an opaque
+  // label, one optional `:<profile>` segment included, and the grant store
+  // must not reject an id the other two accept. Grants are keyed by
+  // installation UUID and the installation directory is a digest of the host
+  // id, so the colon never becomes part of a path.
+  return isHostId(value);
 }
 
 function isUuid(value: unknown): value is string {

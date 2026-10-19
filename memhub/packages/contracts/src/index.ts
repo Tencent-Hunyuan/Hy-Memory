@@ -1,4 +1,47 @@
 export const CORE_SERVICE = "one-memory-core" as const;
+
+/**
+ * The one host-id grammar.
+ *
+ * A host id is an opaque label for the app a recall grant belongs to. It is
+ * never a path component: the permission layer keys an installation by a
+ * digest of the whole id, so a colon is a label separator, not a directory
+ * separator.
+ *
+ * One app can be configured per profile, which is the reason for the single
+ * optional `:<profile>` segment — DeepSeek Harness reports
+ * `deepseek-harness:<profile>` and `host list` prints those ids.
+ *
+ * The CLI, the permission layer and the grant store all have to read the same
+ * shape: an id that `host list` prints must be an id `host install` accepts.
+ * There is one definition here rather than three regexes that drift.
+ */
+const HOST_SEGMENT_MAX = 64;
+const PROFILE_SEGMENT_MAX = 32;
+
+/**
+ * Lower-case letters, digits and hyphens; first character alphanumeric; at
+ * most one `:` followed by an alphanumeric-first profile segment.
+ *
+ * The trailing `(?![\s\S])` is "end of input". `$` alone would also match
+ * before a final newline, so `"codex\n"` would pass a pattern a caller reads
+ * as an exact match.
+ */
+export const HOST_ID_PATTERN = new RegExp(
+  `^[a-z0-9][a-z0-9-]{0,${HOST_SEGMENT_MAX - 1}}(?::[a-z0-9][a-z0-9-]{0,${PROFILE_SEGMENT_MAX - 1}})?(?![\\s\\S])`,
+);
+
+/** Longest id the grammar can produce: host + ":" + profile. */
+export const HOST_ID_MAX_LENGTH = HOST_SEGMENT_MAX + 1 + PROFILE_SEGMENT_MAX;
+
+export function isHostId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= HOST_ID_MAX_LENGTH &&
+    HOST_ID_PATTERN.test(value)
+  );
+}
+
 export type {
   ConnectionSetupCapability,
   ConnectionSetupExecute,

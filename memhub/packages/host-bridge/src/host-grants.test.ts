@@ -861,7 +861,9 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
 it("accepts one profile segment in a host id and still rejects malformed ones", async () => {
   // DeepSeek Harness is configured per profile and reports
   // `deepseek-harness:<profile>`; the installation directory is a digest of the
-  // id, so the colon is a label rather than a path component.
+  // id, so the colon is a label rather than a path component. The boundary
+  // cases themselves live in `@one-memory/contracts`; this tests that the grant
+  // store reads the same grammar and revalidates it on load.
   const context = await fixture();
   const issued = await context.store.createInstallation({
     hostId: "deepseek-harness:desktop",
@@ -872,6 +874,11 @@ it("accepts one profile segment in a host id and still rejects malformed ones", 
   expect(
     (await reopened.listInstallations()).map((row) => row.hostId),
   ).toContain("deepseek-harness:desktop");
+  for (const hostId of ["9lives", "a:b", `a:${"b".repeat(32)}`]) {
+    await expect(
+      context.store.createInstallation({ hostId }),
+    ).resolves.toMatchObject({ receipt: { hostId } });
+  }
   for (const hostId of [
     "deepseek-harness:",
     "deepseek-harness:a:b",

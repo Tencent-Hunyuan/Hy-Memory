@@ -300,6 +300,20 @@ it("accepts a profile-scoped DeepSeek Harness host id instead of calling the tra
   expect(await f.owner.hostGrantStore.listInstallations()).toEqual([]);
 });
 
+it("reads the same host-id grammar the CLI uses, including a digit-leading id", async () => {
+  // The CLI has always accepted `9codex`; the permission layer used to require
+  // a leading letter, so `host list` could print an id `host install` refused.
+  // Both import `isHostId` from `@one-memory/contracts` now.
+  const f = await fixture();
+  const layout = { ...f.layout, hostId: "9codex" };
+  expect(await f.owner.getPermission(layout)).toMatchObject({
+    state: "not-installed",
+    receipt: null,
+  });
+  const preview = await f.owner.previewInstall(layout);
+  expect(preview.hostId).toBe("9codex");
+});
+
 it("remote explicit revoke changes the original owner receipt and rejects stale or false confirmation", async () => {
   const f = await fixture();
   const preview = await f.client.previewInstall(f.layout);
