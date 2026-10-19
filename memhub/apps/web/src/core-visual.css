@@ -39,6 +39,14 @@ body {
   line-height: 1.6;
   font-size: 13px;
 }
+.custom-harness-name {
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+  margin: 12px 0;
+  color: var(--tx2);
+  font-size: 13px;
+}
 .connection-modes {
   display: flex;
   flex-wrap: wrap;

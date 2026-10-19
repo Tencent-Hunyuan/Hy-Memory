@@ -45,11 +45,19 @@ const DELIVERY_BINDING_TTL_MS = 60_000;
 const CALL_EVENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HOST_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/;
+const PAIRING_FAILURE_WINDOW_MS = 60_000;
+const MAX_PAIRING_FAILURES_PER_WINDOW = 10;
 
 export interface ConnectionControlRequest {
   schema_version: 1;
   instance_id: string;
-  action: "capability" | "preview" | "execute" | "receipt" | "host";
+  action:
+    | "capability"
+    | "preview"
+    | "execute"
+    | "receipt"
+    | "host"
+    | "pairing";
   input: Record<string, unknown>;
 }
 
@@ -109,6 +117,8 @@ export class RecallBroker {
   >();
 
   private readerCircuitOpenUntil = 0;
+  private pairingFailureWindowStartedAt = 0;
+  private pairingFailureCount = 0;
 
   constructor(options: RecallBrokerOptions) {
     this.options = Object.freeze({ ...options });
@@ -335,6 +345,10 @@ export class RecallBroker {
       await this.controlConnections(request, response);
       return;
     }
+    if (request.url === "/pair") {
+      await this.exchangePairing(request, response);
+      return;
+    }
     if (request.url === "/source-changed") {
       await this.notifySourceChanged(request, response);
       return;
@@ -504,6 +518,71 @@ export class RecallBroker {
     }
   }
 
+  private async exchangePairing(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const store = this.options.hostGrantStore;
+    if (store === undefined) {
+      sendJson(response, 404, { error: "host_pairing_unavailable" });
+      return;
+    }
+    if (
+      request.headers.origin !== undefined ||
+      Object.keys(request.headers).some((key) => key.startsWith("sec-fetch-")) ||
+      request.headers["content-type"]?.split(";", 1)[0]?.trim() !==
+        "application/json"
+    ) {
+      sendJson(response, 415, { error: "host_pairing_invalid" });
+      return;
+    }
+    const now = Date.now();
+    if (now - this.pairingFailureWindowStartedAt >= PAIRING_FAILURE_WINDOW_MS) {
+      this.pairingFailureWindowStartedAt = now;
+      this.pairingFailureCount = 0;
+    }
+    if (this.pairingFailureCount >= MAX_PAIRING_FAILURES_PER_WINDOW) {
+      sendJson(response, 429, { error: "host_pairing_rate_limited" });
+      return;
+    }
+    try {
+      const body = await readJsonBody(request, 10_000);
+      if (
+        !body ||
+        typeof body !== "object" ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        !("code" in body) ||
+        typeof body.code !== "string" ||
+        !/^\d{6}$/.test(body.code)
+      ) {
+        this.pairingFailureCount++;
+        sendJson(response, 400, { error: "host_pairing_invalid" });
+        return;
+      }
+      const issued = await store.exchangePairing(body.code);
+      this.pairingFailureCount = 0;
+      sendJson(response, 200, {
+        schema_version: 1,
+        host_id: issued.receipt.hostId,
+        installation_id: issued.receipt.installationId,
+        credential_type: "bearer",
+        credential: issued.secret,
+      });
+    } catch (error) {
+      this.pairingFailureCount++;
+      if (error instanceof HostGrantError && error.code === "host_pairing_invalid") {
+        sendJson(response, 401, { error: "host_pairing_invalid" });
+        return;
+      }
+      if (error instanceof BodyReadError) {
+        sendJson(response, error.status, { error: "host_pairing_invalid" });
+        return;
+      }
+      sendJson(response, 500, { error: "host_pairing_unavailable" });
+    }
+  }
+
   private async controlConnections(
     request: IncomingMessage,
     response: ServerResponse,
@@ -555,9 +634,14 @@ export class RecallBroker {
         !("instance_id" in body) ||
         body.instance_id !== this.options.instanceId ||
         !("action" in body) ||
-        !["capability", "preview", "execute", "receipt", "host"].includes(
-          String(body.action),
-        ) ||
+        ![
+          "capability",
+          "preview",
+          "execute",
+          "receipt",
+          "host",
+          "pairing",
+        ].includes(String(body.action)) ||
         !("input" in body) ||
         !body.input ||
         typeof body.input !== "object" ||

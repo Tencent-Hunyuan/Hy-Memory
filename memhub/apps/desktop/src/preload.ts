@@ -129,11 +129,10 @@ contextBridge.exposeInMainWorld("oneMemory", {
     ipcRenderer.invoke("one-memory:get-api-token"),
   getApiBaseUrl: (): Promise<string> =>
     ipcRenderer.invoke("one-memory:get-api-base-url"),
-  getConnectionMaterial: (): Promise<{
-    mcp: string;
-    shell: string | null;
-    prompt: string;
-  }> => ipcRenderer.invoke("one-memory:connection-material"),
+  createCustomHarnessSkill: (
+    displayName: string,
+  ): Promise<{ displayName: string; expiresAt: string; skill: string }> =>
+    ipcRenderer.invoke("one-memory:create-custom-harness-skill", displayName),
   copyText: (text: string): Promise<void> =>
     ipcRenderer.invoke("one-memory:copy-text", text),
   getRecallHosts: (): Promise<

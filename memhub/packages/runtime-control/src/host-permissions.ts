@@ -16,6 +16,7 @@ import {
   HostGrantError,
   type HostGrantReceipt,
   HostGrantStore,
+  type HostPairingReceipt,
   type HostReadTool,
   isPluginCacheBookkeeping,
   readHostCredentialFile,
@@ -151,6 +152,10 @@ export class HostPermissions {
       ...this.runtime,
       credentialFile: path.join(this.hostDirectory(layout), "credential"),
     };
+  }
+
+  createCustomPairing(displayName: string): Promise<HostPairingReceipt> {
+    return this.hostGrantStore.createPairing({ displayName });
   }
 
   /** Whether the host's entry was installed from this data directory.

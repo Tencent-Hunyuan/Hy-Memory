@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { isConnectionControlError } from "@one-memory/host-bridge";
+import type { HostPairingReceipt } from "@one-memory/host-bridge";
 import axios from "axios";
 import { inspectRecallBrokerStatus } from "./broker-status.js";
 import type { BatchJournal, BatchResult } from "./connection-batch.js";
@@ -30,13 +31,20 @@ export interface ConnectionClient {
     signal?: AbortSignal,
   ): Promise<ConnectionClientResult>;
   receipt(operationId: string): Promise<BatchJournal | null>;
+  createPairing?(displayName: string): Promise<HostPairingReceipt>;
   host?(input: {
     hostId: string;
     operation: string;
     args: unknown[];
   }): Promise<unknown>;
 }
-type Action = "capability" | "preview" | "execute" | "receipt" | "host";
+type Action =
+  | "capability"
+  | "preview"
+  | "execute"
+  | "receipt"
+  | "host"
+  | "pairing";
 type Root = { path: string; dev: number; ino: number; uid: number };
 
 /** Trusted local CLI control client, not a renderer API. Never initializes a
@@ -268,6 +276,33 @@ export function createConnectionClient(options: {
     }
   }
   return {
+    async createPairing(displayName) {
+      if (
+        typeof displayName !== "string" ||
+        displayName !== displayName.trim() ||
+        displayName.length < 1 ||
+        displayName.length > 80 ||
+        /[\0\r\n]/.test(displayName)
+      )
+        fail("invalid_input");
+      const { value } = await call("pairing", { displayName });
+      const result = exact(value, [
+        "hostId",
+        "displayName",
+        "pairingCode",
+        "expiresAt",
+      ]);
+      if (
+        typeof result.hostId !== "string" ||
+        typeof result.displayName !== "string" ||
+        typeof result.pairingCode !== "string" ||
+        !/^\d{6}$/.test(result.pairingCode) ||
+        typeof result.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(result.expiresAt))
+      )
+        fail("invalid_response");
+      return result as unknown as HostPairingReceipt;
+    },
     async host(input) {
       exact(input, ["hostId", "operation", "args"], "invalid_input");
       if (

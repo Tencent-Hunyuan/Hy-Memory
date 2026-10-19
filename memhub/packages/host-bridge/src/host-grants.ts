@@ -1,6 +1,7 @@
 import {
   createHash,
   randomBytes,
+  randomInt,
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
@@ -83,6 +84,14 @@ export interface HostGrantApproval extends HostGrantMutation {
 
 export interface HostGrantStoreOptions {
   lockTimeoutMs?: number;
+  now?: () => number;
+}
+
+export interface HostPairingReceipt {
+  readonly hostId: string;
+  readonly displayName: string;
+  readonly pairingCode: string;
+  readonly expiresAt: string;
 }
 
 export type HostGrantErrorCode =
@@ -102,7 +111,8 @@ export type HostGrantErrorCode =
   | "host_grant_store_busy"
   | "host_grant_store_conflict"
   | "host_grant_store_full"
-  | "host_grant_platform_unsupported";
+  | "host_grant_platform_unsupported"
+  | "host_pairing_invalid";
 
 export class HostGrantError extends Error {
   readonly code: HostGrantErrorCode;
@@ -125,11 +135,22 @@ interface StoredInstallation {
   secretHash: string;
 }
 
+interface StoredPairing {
+  pairingId: string;
+  installationId: string;
+  hostId: string;
+  displayName: string;
+  codeHash: string;
+  credential: string;
+  expiresAt: number;
+}
+
 interface StoreData {
   schemaVersion: 1;
   storeId: string;
   revision: number;
   installations: StoredInstallation[];
+  pairings: StoredPairing[];
 }
 
 const FILE_NAME = "host-grants.json";
@@ -137,6 +158,8 @@ const LOCK_NAME = ".mutation-lock";
 const MAX_STORE_BYTES = 4 * 1024 * 1024;
 const MAX_INSTALLATIONS = 1024;
 const MAX_SCOPES = 128;
+const MAX_PAIRINGS = 1024;
+const PAIRING_TTL_MS = 10 * 60 * 1000;
 const TOOL_IDS = new Set<HostReadTool>([
   "om_recall",
   "om_ask",
@@ -148,6 +171,7 @@ const TOOL_IDS = new Set<HostReadTool>([
 export class HostGrantStore {
   readonly #directory: string;
   readonly #lockTimeoutMs: number;
+  readonly #now: () => number;
   #directoryIdentity: { dev: number; ino: number } | undefined;
   #storeId: string | undefined;
   #observedRevision = -1;
@@ -170,6 +194,7 @@ export class HostGrantStore {
     }
     this.#directory = path.resolve(directory);
     this.#lockTimeoutMs = timeout;
+    this.#now = options.now ?? Date.now;
   }
 
   /** Explicit first setup only. An existing directory, even empty, is not reset. */
@@ -192,6 +217,7 @@ export class HostGrantStore {
         storeId: randomUUID(),
         revision: 0,
         installations: [],
+        pairings: [],
       });
       return store;
     });
@@ -246,6 +272,93 @@ export class HostGrantStore {
       data.installations.push(item);
       return issuedCredential(item, secret);
     });
+  }
+
+  /** Creates an approved custom host whose credential can only be claimed once. */
+  async createPairing(input: {
+    displayName: string;
+  }): Promise<HostPairingReceipt> {
+    if (!hasKeys(input, ["displayName"]) || !validDisplayName(input.displayName)) {
+      fail("host_grant_invalid_input");
+    }
+    const displayName = input.displayName;
+    const now = this.#now();
+    if (!Number.isSafeInteger(now) || now < 0) fail("host_grant_store_unavailable");
+    return this.#mutate((data) => {
+      pruneExpiredPairings(data, now);
+      if (
+        data.installations.length >= MAX_INSTALLATIONS ||
+        data.pairings.length >= MAX_PAIRINGS
+      )
+        fail("host_grant_store_full");
+      const installationId = randomUUID();
+      const hostId = `custom-${randomUUID().replaceAll("-", "")}`;
+      const secret = newSecret(data);
+      const item: StoredInstallation = {
+        installationId,
+        hostId,
+        revision: 1,
+        status: "approved",
+        allowedTools: ["om_recall", "om_ask", "om_conversations", "om_matters"],
+        allowedScopes: ["all-apps"],
+        secretHash: hashSecret(secret),
+      };
+      let pairingCode: string;
+      let codeHash: string;
+      do {
+        pairingCode = String(randomInt(0, 1_000_000)).padStart(6, "0");
+        codeHash = hashPairingCode(data.storeId, pairingCode);
+      } while (data.pairings.some((entry) => entry.codeHash === codeHash));
+      const expiresAt = now + PAIRING_TTL_MS;
+      data.installations.push(item);
+      data.pairings.push({
+        pairingId: randomUUID(),
+        installationId,
+        hostId,
+        displayName,
+        codeHash,
+        credential: secret,
+        expiresAt,
+      });
+      return Object.freeze({
+        hostId,
+        displayName,
+        pairingCode,
+        expiresAt: new Date(expiresAt).toISOString(),
+      });
+    });
+  }
+
+  /** Atomically consumes a short code and returns the existing host credential once. */
+  async exchangePairing(code: string): Promise<IssuedHostCredential> {
+    if (typeof code !== "string" || !/^\d{6}$/.test(code)) {
+      fail("host_pairing_invalid");
+    }
+    const now = this.#now();
+    if (!Number.isSafeInteger(now) || now < 0) fail("host_grant_store_unavailable");
+    const issued = await this.#mutate((data) => {
+      const codeHash = hashPairingCode(data.storeId, code);
+      const pairingIndex = data.pairings.findIndex(
+        (entry) => entry.codeHash === codeHash,
+      );
+      if (pairingIndex < 0) fail("host_pairing_invalid");
+      const pairing = data.pairings[pairingIndex];
+      if (pairing.expiresAt < now) {
+        removePendingPairing(data, pairingIndex);
+        return null;
+      }
+      const item = data.installations.find(
+        (entry) =>
+          entry.installationId === pairing.installationId &&
+          entry.hostId === pairing.hostId,
+      );
+      if (!item || item.status !== "approved") fail("host_pairing_invalid");
+      const secret = pairing.credential;
+      data.pairings.splice(pairingIndex, 1);
+      return issuedCredential(item, secret);
+    });
+    if (issued === null) fail("host_pairing_invalid");
+    return issued;
   }
 
   /** Initial approval or full replacement, never an implicit union of rights. */
@@ -532,6 +645,27 @@ function hashSecret(secret: string): string {
   return createHash("sha256").update(secret).digest("hex");
 }
 
+function hashPairingCode(storeId: string, code: string): string {
+  return createHash("sha256").update(`${storeId}:${code}`).digest("hex");
+}
+
+function pruneExpiredPairings(data: StoreData, now: number): void {
+  for (let index = data.pairings.length - 1; index >= 0; index--) {
+    if (data.pairings[index].expiresAt < now) removePendingPairing(data, index);
+  }
+}
+
+function removePendingPairing(data: StoreData, index: number): void {
+  const [pairing] = data.pairings.splice(index, 1);
+  if (!pairing) return;
+  const installationIndex = data.installations.findIndex(
+    (item) =>
+      item.installationId === pairing.installationId &&
+      item.hostId === pairing.hostId,
+  );
+  if (installationIndex >= 0) data.installations.splice(installationIndex, 1);
+}
+
 function newSecret(data: StoreData): string {
   let secret: string;
   do {
@@ -577,6 +711,16 @@ function validHostId(value: unknown): value is string {
     value.length <= 64 &&
     value === value.trim() &&
     /^[a-z][a-z0-9-]*$/.test(value)
+  );
+}
+
+function validDisplayName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value === value.trim() &&
+    value.length >= 1 &&
+    value.length <= 80 &&
+    !/[\0\r\n]/.test(value)
   );
 }
 
@@ -670,7 +814,16 @@ function parseStore(raw: string): StoreData {
   )
     fail("host_grant_store_version_unsupported");
   if (
-    !hasKeys(data, ["schemaVersion", "storeId", "revision", "installations"]) ||
+    !hasOnlyKeys(data, [
+      "schemaVersion",
+      "storeId",
+      "revision",
+      "installations",
+      "pairings",
+    ]) ||
+    !["schemaVersion", "storeId", "revision", "installations"].every((key) =>
+      Object.hasOwn(data, key),
+    ) ||
     data.schemaVersion !== 1 ||
     !isUuid(data.storeId) ||
     !isRevision(data.revision, 0) ||
@@ -678,6 +831,9 @@ function parseStore(raw: string): StoreData {
     data.installations.length > MAX_INSTALLATIONS ||
     data.installations.length > data.revision
   )
+    fail("host_grant_store_corrupt");
+  const pairings = Object.hasOwn(data, "pairings") ? data.pairings : [];
+  if (!Array.isArray(pairings) || pairings.length > MAX_PAIRINGS)
     fail("host_grant_store_corrupt");
   const ids = new Set<string>();
   const hashes = new Set<string>();
@@ -720,7 +876,53 @@ function parseStore(raw: string): StoreData {
     ids.add(item.installationId);
     hashes.add(item.secretHash);
   }
-  return data as unknown as StoreData;
+  const pairingIds = new Set<string>();
+  const activeCodeHashes = new Set<string>();
+  for (const pairing of pairings) {
+    if (!isObject(pairing)) fail("host_grant_store_corrupt");
+    const pairingId = pairing.pairingId;
+    const installationId = pairing.installationId;
+    const hostId = pairing.hostId;
+    const displayName = pairing.displayName;
+    const codeHash = pairing.codeHash;
+    const credential = pairing.credential;
+    const expiresAt = pairing.expiresAt;
+    if (
+      !hasKeys(pairing, [
+        "pairingId",
+        "installationId",
+        "hostId",
+        "displayName",
+        "codeHash",
+        "credential",
+        "expiresAt",
+      ]) ||
+      !isUuid(pairingId) ||
+      pairingIds.has(pairingId) ||
+      !isUuid(installationId) ||
+      !validHostId(hostId) ||
+      !validDisplayName(displayName) ||
+      typeof expiresAt !== "number" ||
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt < 0 ||
+      !data.installations.some(
+        (item) =>
+          item.installationId === installationId && item.hostId === hostId,
+      )
+    )
+      fail("host_grant_store_corrupt");
+    if (
+      typeof codeHash !== "string" ||
+      !/^[0-9a-f]{64}$/.test(codeHash) ||
+      activeCodeHashes.has(codeHash) ||
+      typeof credential !== "string" ||
+      !/^omhg_v1_[A-Za-z0-9_-]{43}$/.test(credential)
+    )
+      fail("host_grant_store_corrupt");
+    pairingIds.add(pairingId);
+    activeCodeHashes.add(codeHash);
+  }
+  return { ...(data as unknown as StoreData), pairings };
 }
 
 function checkPrivate(info: Stats, kind: "directory" | "file"): void {
