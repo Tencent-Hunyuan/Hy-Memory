@@ -66,6 +66,11 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards so a user id is matched literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class HistoryStore:
     """
     SQLite 历史存储 - 记录所有内存操作的审计日志。
@@ -258,6 +263,34 @@ class HistoryStore:
                 "SELECT * FROM memory_history WHERE isolation_key = ? "
                 "ORDER BY created_at DESC LIMIT ?",
                 (isolation_key, limit),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    async def get_recent_for_user(
+        self,
+        user_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """获取某 user 下所有 agent 的最近操作。
+
+        isolation_key 形如 ``"{user_id}:{agent_id}"``。user_id 里的 LIKE
+        通配符会被转义，保证只匹配这个 user，不会漏到 ``u1`` 之外。
+        """
+        prefix = _escape_like(f"{user_id}:") + "%"
+        return await _run_in_sqlite_pool(
+            self._get_recent_prefix_sync, prefix, limit,
+        )
+
+    def _get_recent_prefix_sync(
+        self, pattern: str, limit: int,
+    ) -> List[Dict[str, Any]]:
+        with self._conn_lock:
+            if self._conn is None:
+                return []
+            cursor = self._conn.execute(
+                "SELECT * FROM memory_history WHERE isolation_key LIKE ? ESCAPE '\\' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (pattern, limit),
             )
             return [dict(row) for row in cursor.fetchall()]
 

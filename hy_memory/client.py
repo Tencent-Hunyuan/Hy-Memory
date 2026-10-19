@@ -6096,9 +6096,10 @@ class HyMemoryClient:
         effective_agent_ids = agent_ids if agent_ids is not None else []
 
         if not effective_agent_ids:
-            # 查所有 agent 的历史：用 "user_id:" 前缀匹配
-            isolation_key = self._build_isolation_key(uid, "default")
-            return await self._history_store.get_recent(isolation_key, limit=limit)
+            # 查所有 agent 的历史：isolation_key 前缀匹配。
+            # 不能退回 "u:default" —— add() 的默认 agent 是 "default_agent"，
+            # 默认用法下会查空。
+            return await self._history_store.get_recent_for_user(uid, limit=limit)
         else:
             # 查指定 agent 的历史
             all_results = []
