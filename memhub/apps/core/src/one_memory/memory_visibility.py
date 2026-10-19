@@ -309,11 +309,15 @@ def install_triggers(db: sqlite3.Connection) -> None:
 def startup(database_path: Path) -> None:
     """Idempotent: create the derived tables and triggers. No version change.
 
-    Runs through the write connection because the triggers are schema. It is
-    one short transaction and happens once per start.
+    Runs through the write connection because the triggers are schema. The
+    trigger replacement is one short transaction and happens once per start.
     """
-    with main_database(database_path).write() as db:
+    with main_database(database_path).write() as db, db:
         ensure_tables(db)
+        # ensure_tables uses executescript(), which commits any pending legacy
+        # transaction. Begin only afterward so replacing the installed trigger
+        # is one atomic schema change and a failed CREATE restores the old one.
+        db.execute("BEGIN IMMEDIATE")
         install_triggers(db)
 
 

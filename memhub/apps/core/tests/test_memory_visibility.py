@@ -425,13 +425,36 @@ def test_hy_revise_and_repeated_link_reuse_the_same_evidence(library, monkeypatc
             assert created.memory_id not in pending(db)
 
 
-def test_startup_replaces_the_legacy_link_update_trigger_without_a_schema_bump(tmp_path):
+def test_startup_atomically_replaces_the_legacy_link_update_trigger(tmp_path, monkeypatch):
+    import one_memory.memory_visibility as visibility_module
     from one_memory.schema_gate import guard_schema_version
 
     database = tmp_path / "one-memory.sqlite3"
     expected_version = guard_schema_version(database)
-    EvidenceStore(database)
-    MemoryGovernanceStore(database)
+    evidence = EvidenceStore(database)
+    governance = MemoryGovernanceStore(database)
+    record = evidence.put(
+        EvidenceInput(
+            source_id="cursor",
+            conversation_id="legacy-trigger",
+            message_id="legacy-trigger",
+            correlation_id="legacy-trigger",
+            role="user",
+            written_by=WrittenBy.PERSON,
+            verbatim="升级失败不能改变这条原文。",
+            origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+        )
+    ).record
+    memory = as_person(governance).create(
+        MemoryDraft(
+            user_id="local",
+            kind=MemoryKind.CHAT,
+            content="升级失败不能改变这条记忆。",
+            scopes=("all-apps",),
+            evidence_ids=(record.evidence_id,),
+        ),
+        request_id="legacy-trigger-memory",
+    )
     startup(database)
     with sqlite3.connect(database) as db:
         db.execute("DROP TRIGGER memory_visibility_dirty_on_link_update")
@@ -445,10 +468,50 @@ def test_startup_replaces_the_legacy_link_update_trigger_without_a_schema_bump(t
                 INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
                 VALUES (OLD.memory_id);
             END;
-            INSERT INTO memory_visibility (memory_id, visible, reason, computed_at)
-            VALUES ('kept', 1, 'ok', '2026-10-19T00:00:00+00:00');
-            INSERT INTO memory_visibility_dirty (memory_id) VALUES ('kept');
             """
+        )
+        db.execute(
+            "INSERT INTO memory_visibility (memory_id, visible, reason, computed_at) "
+            "VALUES (?, 1, 'ok', '2026-10-19T00:00:00+00:00')",
+            (memory.memory_id,),
+        )
+        db.execute(
+            "INSERT INTO memory_visibility_dirty (memory_id) VALUES (?)",
+            (memory.memory_id,),
+        )
+        legacy_trigger = db.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='trigger' AND name='memory_visibility_dirty_on_link_update'"
+        ).fetchone()[0]
+        before = tuple(db.iterdump())
+
+    real_trigger_sql = visibility_module._trigger_sql
+
+    def fail_after_drop() -> list[tuple[str, str]]:
+        statements = real_trigger_sql()
+        return [
+            (table, "CREATE TRIGGER")
+            if "CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_link_update" in statement
+            else (table, statement)
+            for table, statement in statements
+        ]
+
+    with monkeypatch.context() as failure:
+        failure.setattr(visibility_module, "_trigger_sql", fail_after_drop)
+        with pytest.raises(sqlite3.OperationalError):
+            startup(database)
+
+    with sqlite3.connect(database) as db:
+        assert tuple(db.iterdump()) == before
+        assert (
+            db.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='trigger' AND name='memory_visibility_dirty_on_link_update'"
+            ).fetchone()[0]
+            == legacy_trigger
+        )
+        assert db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == (
+            expected_version
         )
 
     startup(database)
@@ -465,9 +528,11 @@ def test_startup_replaces_the_legacy_link_update_trigger_without_a_schema_bump(t
             expected_version
         )
         assert db.execute("SELECT * FROM memory_visibility").fetchall() == [
-            ("kept", 1, "ok", "2026-10-19T00:00:00+00:00")
+            (memory.memory_id, 1, "ok", "2026-10-19T00:00:00+00:00")
         ]
-        assert db.execute("SELECT * FROM memory_visibility_dirty").fetchall() == [("kept",)]
+        assert db.execute("SELECT * FROM memory_visibility_dirty").fetchall() == [
+            (memory.memory_id,)
+        ]
 
 
 def test_the_audit_notices_a_conclusion_that_no_longer_holds(library):
