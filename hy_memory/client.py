@@ -1213,6 +1213,8 @@ class HyMemoryClient:
         target_query: str,
         *,
         user_ids: List[str],
+        agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
         workspace_id: Optional[str],
         branch: Optional[str],
         limit: int,
@@ -1346,6 +1348,7 @@ class HyMemoryClient:
         try:
             fact_hits = await _store.search_facts(
                 embedding, user_id=primary_user,
+                agent_ids=agent_ids, session_ids=session_ids,
                 workspace_id=workspace_id, branch=branch,
                 top=max(limit, 5),
                 # 词面通道 + 把下面那道闸门下移到重排之前：先砍掉过不了闸的候选再重排，
@@ -1425,6 +1428,8 @@ class HyMemoryClient:
             hits = await _store.search_by_query_embedding(
                 embedding,
                 user_id=primary_user,
+                agent_ids=agent_ids,
+                session_ids=session_ids,
                 workspace_id=workspace_id,
                 branch=branch,
                 top=max(limit * 4, 8),  # 过采样为 dedup 留余量
@@ -3401,6 +3406,8 @@ class HyMemoryClient:
                 return await self._search_coding(
                     effective_target_query,
                     user_ids=effective_user_ids,
+                    agent_ids=effective_agent_ids,
+                    session_ids=effective_session_ids,
                     workspace_id=workspace_id,
                     branch=branch,
                     limit=limit,

@@ -209,6 +209,14 @@ def _scope_where(
     return sql, params
 
 
+def _in_clause(column: str, values: Optional[List[str]]) -> Tuple[str, List[Any]]:
+    """SQL ``column IN (...)`` + parameters; empty values mean no condition."""
+    if not values:
+        return "", []
+    placeholders = ",".join("?" for _ in values)
+    return f"{column} IN ({placeholders})", list(values)
+
+
 def _scope_matches(
     row_workspace_id: Optional[str],
     row_branch: Optional[str],
@@ -683,6 +691,8 @@ class CodingMemoryStore:
         *,
         agent_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         top: int = 40,
@@ -700,21 +710,27 @@ class CodingMemoryStore:
                 },
                 ...
             ]
-        agent_id / session_id 是写授权作用域，传入时精确匹配；workspace_id / branch
-        的规则见 _scope_where。不传任何作用域则维持纯语义召回；传了则只保留 SQLite
-        里落在作用域内的经验，并按选择率放大向量取数，避免"先取 top-N 再过滤"把
-        召回吃掉。
+        agent_id / session_id（或 agent_ids / session_ids）是写授权作用域，
+        传入时精确匹配；workspace_id / branch 的规则见 _scope_where。
+        不传任何作用域则维持纯语义召回；传了则只保留 SQLite 里落在作用域内的经验，
+        并按选择率放大向量取数，避免"先取 top-N 再过滤"把召回吃掉。
         """
         if self._vec is None:
             return []
 
+        effective_agent_ids = list(agent_ids) if agent_ids else (
+            [agent_id] if agent_id else []
+        )
+        effective_session_ids = list(session_ids) if session_ids else (
+            [session_id] if session_id else []
+        )
         allowed: Optional[Set[str]] = None
-        if agent_id or session_id or workspace_id:
+        if effective_agent_ids or effective_session_ids or workspace_id:
             allowed, total = await _run_in_pool(
                 self._authority_scoped_experience_ids_sync,
                 user_id,
-                agent_id,
-                session_id,
+                effective_agent_ids,
+                effective_session_ids,
                 workspace_id,
                 branch,
             )
@@ -799,6 +815,8 @@ class CodingMemoryStore:
         *,
         agent_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         top: int = 5,
@@ -812,9 +830,9 @@ class CodingMemoryStore:
         SUPERSEDE 时向量行已被删掉，理论上召不到 superseded；这里再按 SQLite 的
         status 过一道，避免两边不一致时把过期结论放出去。
 
-        agent_id / session_id 是写授权作用域，传入时精确匹配；workspace_id / branch
-        的规则见 _scope_where。不传任何作用域则不过滤，传了按 SQLite 里的值筛，并
-        按选择率放大向量取数。
+        agent_id / session_id（或 agent_ids / session_ids）是写授权作用域，
+        传入时精确匹配；workspace_id / branch 的规则见 _scope_where。
+        不传任何作用域则不过滤，传了按 SQLite 里的值筛，并按选择率放大向量取数。
 
         向量库按 top 的 4 倍过采样：向量行和 SQLite 行不是一个事务里写的，中间挂掉
         就会留下"向量还在、SQLite 没了"的孤儿，软删时删向量失败也会留下 superseded
@@ -830,20 +848,27 @@ class CodingMemoryStore:
         if self._fact_vec is None:
             return []
 
+        effective_agent_ids = list(agent_ids) if agent_ids else (
+            [agent_id] if agent_id else []
+        )
+        effective_session_ids = list(session_ids) if session_ids else (
+            [session_id] if session_id else []
+        )
         fetch = top * 4
-        if agent_id or session_id or workspace_id:
+        if effective_agent_ids or effective_session_ids or workspace_id:
             scoped, total = await _run_in_pool(
                 self._count_active_facts_sync,
                 user_id,
-                agent_id,
-                session_id,
+                effective_agent_ids,
+                effective_session_ids,
                 workspace_id,
                 branch,
             )
             if not scoped:
                 logger.info(
                     f"[coding-store] no active fact in scope: "
-                    f"agent_id={agent_id!r} session_id={session_id!r} "
+                    f"agent_ids={effective_agent_ids!r} "
+                    f"session_ids={effective_session_ids!r} "
                     f"workspace_id={workspace_id!r} branch={branch!r} "
                     f"(user has {total}); skip fact vdb search"
                 )
@@ -880,8 +905,8 @@ class CodingMemoryStore:
         alive = [
             (f, scores[f.fact_id]) for f in facts
             if f.status == "active"
-            and (not agent_id or f.agent_id == agent_id)
-            and (not session_id or f.session_id == session_id)
+            and (not effective_agent_ids or f.agent_id in effective_agent_ids)
+            and (not effective_session_ids or f.session_id in effective_session_ids)
             and _scope_matches(f.workspace_id, f.branch, workspace_id, branch)
         ]
         kept = [(f, s) for f, s in alive if s >= min_score]
@@ -1083,22 +1108,25 @@ class CodingMemoryStore:
     def _authority_scoped_experience_ids_sync(
         self,
         user_id: str,
-        agent_id: Optional[str],
-        session_id: Optional[str],
+        agent_ids: Optional[List[str]],
+        session_ids: Optional[List[str]],
         workspace_id: Optional[str],
         branch: Optional[str],
     ) -> Tuple[Set[str], int]:
         """返回 (落在授权作用域内的 experience_id 集合, 该 user 的经验总数)。
 
         一次查询同时拿到过滤结果和选择率分母：前者供向量命中做交集，后者定放大倍数。
+        agent_ids / session_ids 为空表示该维度不筛；非空按 IN 精确匹配。
         """
         scope_sql, scope_params = _scope_where(workspace_id, branch)
-        if agent_id:
-            scope_sql = f"agent_id = ? AND ({scope_sql})"
-            scope_params = [agent_id, *scope_params]
-        if session_id:
-            scope_sql = f"session_id = ? AND ({scope_sql})"
-            scope_params = [session_id, *scope_params]
+        agent_sql, agent_params = _in_clause("agent_id", agent_ids)
+        if agent_sql:
+            scope_sql = f"({agent_sql}) AND ({scope_sql})"
+            scope_params = [*agent_params, *scope_params]
+        session_sql, session_params = _in_clause("session_id", session_ids)
+        if session_sql:
+            scope_sql = f"({session_sql}) AND ({scope_sql})"
+            scope_params = [*session_params, *scope_params]
         with self._lock:
             assert self._conn is not None
             cur = self._conn.execute(
@@ -1112,22 +1140,25 @@ class CodingMemoryStore:
     def _count_active_facts_sync(
         self,
         user_id: str,
-        agent_id: Optional[str],
-        session_id: Optional[str],
+        agent_ids: Optional[List[str]],
+        session_ids: Optional[List[str]],
         workspace_id: Optional[str],
         branch: Optional[str],
     ) -> Tuple[int, int]:
         """返回 (作用域内 active 事实数, 该 user 的 active 事实总数)。
 
         事实层的过滤在 get_facts 拿到对象之后用 _scope_matches 做，这里只要选择率。
+        agent_ids / session_ids 为空表示该维度不筛；非空按 IN 精确匹配。
         """
         scope_sql, scope_params = _scope_where(workspace_id, branch)
-        if agent_id:
-            scope_sql = f"agent_id = ? AND ({scope_sql})"
-            scope_params = [agent_id, *scope_params]
-        if session_id:
-            scope_sql = f"session_id = ? AND ({scope_sql})"
-            scope_params = [session_id, *scope_params]
+        agent_sql, agent_params = _in_clause("agent_id", agent_ids)
+        if agent_sql:
+            scope_sql = f"({agent_sql}) AND ({scope_sql})"
+            scope_params = [*agent_params, *scope_params]
+        session_sql, session_params = _in_clause("session_id", session_ids)
+        if session_sql:
+            scope_sql = f"({session_sql}) AND ({scope_sql})"
+            scope_params = [*session_params, *scope_params]
         with self._lock:
             assert self._conn is not None
             row = self._conn.execute(
