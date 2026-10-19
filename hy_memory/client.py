@@ -4152,6 +4152,21 @@ class HyMemoryClient:
             if ephemeral:
                 await gs.close()
 
+    async def _list_user_agent_ids(self, user_id: str) -> List[str]:
+        """Distinct agent ids the user currently has in the vector store."""
+        try:
+            nodes = await self._vector_store.list_by_user(
+                user_id=user_id,
+                limit=100_000,
+                only_latest=False,
+                with_vectors=False,
+                allow_raw_layer=True,
+            )
+        except Exception as e:
+            logger.warning(f"[delete_all] list user agents failed: {e}")
+            return []
+        return sorted({node.agent_id for node in nodes if node.agent_id})
+
     @_ensure_internal_loop
     async def async_delete_all(
         self,
@@ -4270,7 +4285,14 @@ class HyMemoryClient:
                 await _do_round(aid=aid)
 
         else:
-            a_ids = effective_agent_ids or ["default_agent"]
+            # session_ids without agent_ids means "this session for every
+            # agent". Enumerate the user's agents first; narrowing to
+            # default_agent silently left other agents' data behind. When the
+            # user has no VDB rows, a single None round still lets the VDB
+            # delete the session across every agent.
+            a_ids = effective_agent_ids or await self._list_user_agent_ids(uid)
+            if not a_ids:
+                a_ids = [None]
             for aid in a_ids:
                 for sid in effective_session_ids:
                     logger.info(f"[delete_all] deleting user={uid} agent={aid} session={sid}")
