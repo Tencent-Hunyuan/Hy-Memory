@@ -10,8 +10,8 @@ HY Memory - Intention (L7) 召回 + 惰性过期转换 + 复本判定
     节点的 layer 改写为 l2_fact（持久化 update_payload），并从意图结果里剔除——
     过期意图变成普通历史事实，下次走 normal 召回；
   - **判重（重点）**：对幸存意图按下述规则分组，同组只留一条本次返回：
-        同 user_id + 同一天 memory_at + valid_until 相同（都为 None 或都相等）
-        + cosine 相似度 ≥ MEMORY_DEDUP_THRESHOLD (默认 0.95)
+        同 user_id + 同 agent_id + 同一天 memory_at + valid_until 相同
+        （都为 None 或都相等）+ cosine 相似度 ≥ MEMORY_DEDUP_THRESHOLD (默认 0.95)
     → 视为同一个意图的复本（extractor 复读机 / 多 session 重复表达）。
     保留组里 `gmt_created` 最早的（老的先来先得，稳定 id）；
   - **异步删库**：其余复本 fire-and-forget 从 VDB 删除，不影响本次调用 RT。
@@ -112,11 +112,19 @@ def _partition_duplicates(
     if len(hits) < 2:
         return list(hits), []
 
-    # 1. 按 (memory_at day, valid_until day) 分桶
-    buckets: Dict[Tuple[Any, Any], List[int]] = {}
+    # 1. 按 (user_id, agent_id, memory_at day, valid_until day) 分桶。
+    #    user_id / agent_id 必须进键：多用户检索时不同用户的同一天意图可能
+    #    文本、日期都相同，但它们是两个独立的租户数据；只按日期分桶会把其中
+    #    一个判成复本并硬删除。
+    buckets: Dict[Tuple[Any, Any, Any, Any], List[int]] = {}
     for idx, h in enumerate(hits):
         node = h.get("node")
-        key = (_memory_at_day(node), _valid_until_key(node))
+        key = (
+            getattr(node, "user_id", None) if node else None,
+            getattr(node, "agent_id", None) if node else None,
+            _memory_at_day(node),
+            _valid_until_key(node),
+        )
         buckets.setdefault(key, []).append(idx)
 
     def _gmt(h: Dict[str, Any]) -> float:
@@ -229,6 +237,8 @@ async def recall_intentions(
     *,
     user_ids: Optional[List[str]] = None,
     agent_ids: Optional[List[str]] = None,
+    isolation_key: str = "",
+    isolation_keys: Optional[List[str]] = None,
     limit: int = 10,
     now: Optional[datetime] = None,
     stats_out: Optional[Dict[str, Any]] = None,
@@ -243,6 +253,9 @@ async def recall_intentions(
         query_embedding: 查询向量
         user_ids: 用户隔离（单/多用户）
         agent_ids: 可选 agent 过滤
+        isolation_key / isolation_keys: 精确的 (user, agent, session) 隔离键。
+            与其它召回通道一致：调用方在按 session 过滤时只生成这两项，
+            user_ids / agent_ids 为 None；不把它们透传下去就会退化成全库检索。
         limit: 召回上限（返回给上游的条数）
         now: 当前时间（默认 datetime.now()，测试可注入）
         stats_out: 可选 dict，本函数把分段耗时与数量**原地回填**进去，供调用方落
@@ -283,6 +296,8 @@ async def recall_intentions(
             query_embedding=query_embedding,
             user_ids=user_ids or None,
             agent_ids=agent_ids,
+            isolation_key=isolation_key,
+            isolation_keys=isolation_keys,
             layers=[MemoryLayer.L7_INTENTION],
             limit=fetch_limit,
             score_threshold=0.0,  # intention 不设语义门槛
