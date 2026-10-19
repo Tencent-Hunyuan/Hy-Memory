@@ -572,11 +572,15 @@ function validMutation(input: HostGrantMutation): boolean {
 }
 
 function validHostId(value: unknown): value is string {
+  // One optional profile segment. A grant is keyed by installation UUID, and
+  // the installation directory is a digest of the host ID, so the colon never
+  // becomes part of a path. DeepSeek Harness is configured per profile and
+  // reports `deepseek-harness:<profile>` as its host ID.
   return (
     typeof value === "string" &&
-    value.length <= 64 &&
+    value.length <= 96 &&
     value === value.trim() &&
-    /^[a-z][a-z0-9-]*$/.test(value)
+    /^[a-z][a-z0-9-]{0,63}(?::[a-z0-9][a-z0-9-]{0,31})?$/.test(value)
   );
 }
 

@@ -1055,10 +1055,20 @@ function status(
   };
 }
 
+/** Opaque host label, optionally scoped to one profile (`host:<profile>`).
+ *
+ * The installation directory is a digest of this value, never the value
+ * itself, so the colon cannot act as a path separator. Profile scoping is what
+ * DeepSeek Harness needs: it configures recall per profile
+ * (`deepseek-harness:desktop`, `deepseek-harness:web`), and the CLI already
+ * lists those IDs.
+ */
+const HOST_ID = /^[a-z][a-z0-9-]{0,63}(?::[a-z0-9][a-z0-9-]{0,31})?$/;
+
 function supported(layout: RecallHostLayout): boolean {
   return (
     (layout.channel === "mcp" || layout.channel === "cli") &&
-    /^[a-z][a-z0-9-]{0,63}$/.test(layout.hostId) &&
+    HOST_ID.test(layout.hostId) &&
     layout.hostId !== "openclaw"
   );
 }

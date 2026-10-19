@@ -14,6 +14,7 @@ import path from "node:path";
 import { RecallBroker, readHostCredentialFile } from "@one-memory/host-bridge";
 import {
   codexLayout,
+  deepseekHarnessLayout,
   piLayout,
   type RecallInstallPreview,
 } from "@one-memory/host-bridge/installer";
@@ -256,6 +257,47 @@ it("remote preview is read-only, exact approval installs one real Codex identity
   expect(f.open).not.toHaveBeenCalled();
   expect(f.identityReads()).toBeGreaterThan(0);
   expect(f.dispatched).toContain("host:install");
+});
+
+it("accepts a profile-scoped DeepSeek Harness host id instead of calling the transport unsupported", async () => {
+  // A Harness profile is configured by one `cordis.patch.yml`, so the host ID
+  // carries the profile (`deepseek-harness:<profile>`). The installation
+  // directory is a digest of that ID, so the colon is a label, not a path, and
+  // the permission layer has to read it as one. Before this, `supported()`
+  // rejected every Harness profile and `host install` told the caller its
+  // transport was unsupported.
+  const f = await fixture();
+  const dshHome = path.join(f.root, ".dsh");
+  const profileDirectory = path.join(dshHome, "profiles", "desktop");
+  await mkdir(profileDirectory, { recursive: true, mode: 0o700 });
+  await chmod(dshHome, 0o700);
+  await writeFile(path.join(profileDirectory, "cordis.yml"), "[]\n", {
+    mode: 0o600,
+  });
+  await writeFile(path.join(profileDirectory, "cordis.patch.yml"), "[]\n", {
+    mode: 0o600,
+  });
+  const layout = {
+    ...deepseekHarnessLayout({ dshHome, profile: "desktop" }),
+    hostId: "deepseek-harness:desktop",
+    hostLabel: "DeepSeek Harness · desktop",
+  };
+
+  expect(await f.owner.getPermission(layout)).toMatchObject({
+    state: "not-installed",
+    receipt: null,
+  });
+  const preview: RecallInstallPreview = await f.owner.previewInstall(layout);
+  expect(preview.hostId).toBe("deepseek-harness:desktop");
+  expect(preview.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  const patchFile = preview.files[0];
+  if (!patchFile?.hunk) throw Error("preview missing patch hunk");
+  const added = patchFile.hunk.added.join("\n");
+  expect(added).toContain("one-memory-recall");
+  expect(added).toContain("'@deepseek-ai/dsh-mcp-client'");
+  if (layout.configPath === null) throw Error("layout missing config path");
+  expect(await readFile(layout.configPath, "utf8")).toBe("[]\n");
+  expect(await f.owner.hostGrantStore.listInstallations()).toEqual([]);
 });
 
 it("remote explicit revoke changes the original owner receipt and rejects stale or false confirmation", async () => {
