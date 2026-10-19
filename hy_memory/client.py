@@ -2857,6 +2857,81 @@ class HyMemoryClient:
 
         return resp
 
+    @staticmethod
+    def _public_search_views(
+        result_memories: List[Dict[str, Any]],
+        *,
+        wanted_layers: Optional[set],
+        lite_mode: bool,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Build the public search items and the private dedup view together.
+
+        The dedup marker must come from the same source element as its public
+        item. Building the dedup view with a second ``zip(result_memories,
+        all_mems)`` is wrong as soon as one result is dropped by the layer
+        filter: every later kind shifts by one, and a canonical_state can enter
+        fuzzy dedup and be shadowed.
+        """
+        from .models.memory import MemoryLayer
+
+        all_mems: List[Dict[str, Any]] = []
+        dedup_mems: List[Dict[str, Any]] = []
+        for mem in result_memories:
+            if wanted_layers is not None and mem.get("layer", "") not in wanted_layers:
+                continue
+            if lite_mode and mem.get("layer", "") != MemoryLayer.L1_RAW.value:
+                continue
+            score = mem.get("score", 0.0)
+            item = {
+                "memory_id": mem.get("memory_id", ""),
+                "content": mem.get("content", ""),
+                "score": round(score, 4),
+                "layer": mem.get("layer", ""),
+                # 多 user 检索时调用方需据此追溯归属（R1）
+                "user_id": mem.get("user_id", "") or "",
+                "agent_id": mem.get("agent_id", "") or "",
+                "source": mem.get("source", "default") or "default",
+                "retrieval_source": mem.get("retrieval_source", "") or "",
+                "owner": mem.get("owner"),
+                "speculate": mem.get("speculate"),
+                # 不透出 source_raw_memory_id：它指向 L1_RAW 节点，而 raw 对外
+                # 读路径一律不可见，该 id 到手也查不到东西（按 ID 取返回"不存在"），
+                # 留着只会让调用方以为能据此追溯原文。
+                # 节点上仍保留该字段，内部溯源与 clone 重映射不受影响。
+                "tags": mem.get("tags") or [],
+                "memory_at": mem.get("memory_at"),
+                "gmt_created": mem.get("gmt_created"),
+                # 调用方自定义 meta（透传负载）。由 reader 从 custom["meta"] 取出，
+                # 未实现该字段的 reader 下为空列表。
+                "meta": mem.get("meta") or [],
+                "_schema_channel": bool(mem.get("_schema_channel")),
+            }
+            if mem.get("schema_type"):
+                item["schema_type"] = mem["schema_type"]
+            if mem.get("workspace_id"):
+                item["workspace_id"] = mem["workspace_id"]
+            if mem.get("branch"):
+                item["branch"] = mem["branch"]
+            if mem.get("evolution_chain"):
+                item["evolution_chain"] = mem["evolution_chain"]
+            if mem.get("capsule_memories") is not None:
+                item["capsule_memories"] = mem["capsule_memories"]
+            if mem.get("episode_id"):
+                item["episode_id"] = mem["episode_id"]
+            if mem.get("member_ids") is not None:
+                item["member_ids"] = mem["member_ids"]
+            if mem.get("timeline") is not None:
+                item["timeline"] = mem["timeline"]
+            if mem.get("rerank_score") is not None:
+                item["rerank_score"] = mem["rerank_score"]
+            all_mems.append(item)
+
+            dedup_item = dict(item)
+            dedup_item["_memory_kind"] = mem.get("_memory_kind", "")
+            dedup_mems.append(dedup_item)
+
+        return all_mems, dedup_mems
+
     def _spawn_search_dedup(
         self,
         all_mems: List[Dict[str, Any]],
@@ -3490,62 +3565,11 @@ class HyMemoryClient:
             if effective_search_layers else None
         )
 
-        _all_mems = []
-        for mem in result.memories:
-            if _wanted_layers is not None and mem.get("layer", "") not in _wanted_layers:
-                continue
-            if lite_mode and mem.get("layer", "") != MemoryLayer.L1_RAW.value:
-                continue
-            score = mem.get("score", 0.0)
-            item = {
-                "memory_id": mem.get("memory_id", ""),
-                "content": mem.get("content", ""),
-                "score": round(score, 4),
-                "layer": mem.get("layer", ""),
-                # 多 user 检索时调用方需据此追溯归属（R1）
-                "user_id": mem.get("user_id", "") or "",
-                "agent_id": mem.get("agent_id", "") or "",
-                "source": mem.get("source", "default") or "default",
-                "retrieval_source": mem.get("retrieval_source", "") or "",
-                "owner": mem.get("owner"),
-                "speculate": mem.get("speculate"),
-                # 不透出 source_raw_memory_id：它指向 L1_RAW 节点，而 raw 对外
-                # 读路径一律不可见，该 id 到手也查不到东西（按 ID 取返回"不存在"），
-                # 留着只会让调用方以为能据此追溯原文。
-                # 节点上仍保留该字段，内部溯源与 clone 重映射不受影响。
-                "tags": mem.get("tags") or [],
-                "memory_at": mem.get("memory_at"),
-                "gmt_created": mem.get("gmt_created"),
-                # 调用方自定义 meta（透传负载）。由 reader 从 custom["meta"] 取出，
-                # 未实现该字段的 reader 下为空列表。
-                "meta": mem.get("meta") or [],
-                "_schema_channel": bool(mem.get("_schema_channel")),
-            }
-            if mem.get("schema_type"):
-                item["schema_type"] = mem["schema_type"]
-            if mem.get("workspace_id"):
-                item["workspace_id"] = mem["workspace_id"]
-            if mem.get("branch"):
-                item["branch"] = mem["branch"]
-            if mem.get("evolution_chain"):
-                item["evolution_chain"] = mem["evolution_chain"]
-            if mem.get("capsule_memories") is not None:
-                item["capsule_memories"] = mem["capsule_memories"]
-            if mem.get("episode_id"):
-                item["episode_id"] = mem["episode_id"]
-            if mem.get("member_ids") is not None:
-                item["member_ids"] = mem["member_ids"]
-            if mem.get("timeline") is not None:
-                item["timeline"] = mem["timeline"]
-            if mem.get("rerank_score") is not None:
-                item["rerank_score"] = mem["rerank_score"]
-            _all_mems.append(item)
-
-        _dedup_mems = []
-        for source, public in zip(result.memories, _all_mems):
-            copy = dict(public)
-            copy["_memory_kind"] = source.get("_memory_kind", "")
-            _dedup_mems.append(copy)
+        _all_mems, _dedup_mems = self._public_search_views(
+            result.memories,
+            wanted_layers=_wanted_layers,
+            lite_mode=lite_mode,
+        )
 
         # search 链路去重：仅对 L2_FACT + L4_IDENTITY（重复重灾区）判重删库。
         # L0 及其他层不参与。fire-and-forget，不阻塞本次返回（清理面向后续查询）。
