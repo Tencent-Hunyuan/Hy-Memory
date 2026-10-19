@@ -200,10 +200,12 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_link_update
         AFTER UPDATE ON governed_memory_evidence
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (OLD.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (OLD.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -294,6 +296,10 @@ def install_triggers(db: sqlite3.Connection) -> None:
         str(row["name"])
         for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
+    # CREATE TRIGGER IF NOT EXISTS cannot repair the legacy definition. Replace
+    # this derived-cache trigger transactionally on every startup so old
+    # libraries get the row-level conflict handling without a schema migration.
+    cursor.execute("DROP TRIGGER IF EXISTS memory_visibility_dirty_on_link_update")
     for table, statement in _trigger_sql():
         if table not in present:
             continue

@@ -14,6 +14,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Fixed governed-memory revisions and repeated evidence links failing when the
+  visibility dirty-marker trigger encounters the same memory twice. Startup
+  now replaces the affected legacy trigger without changing schema versions
+  or governed and visibility data.
 - Serialized each SDK SQLite store's shared connection lifecycle so concurrent
   history/cache operations cannot race with `close()` and crash the process.
 - Clarified that `add(metadata=...)` carries legacy SDK processing options,
