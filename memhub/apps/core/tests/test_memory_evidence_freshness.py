@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from hashlib import sha256
 
 import pytest
 
@@ -66,6 +67,24 @@ def test_fresh_then_revised_and_identity_only_change(case):
     assert check(path, memory) == 1
     evidence.put(value.model_copy(update={"verbatim": "new statement"}))
     assert check(path, memory) == 0
+
+
+def test_segment_support_ref_is_accepted(case):
+    """A long Evidence split into segments carries segment_* keys.
+
+    Those keys are part of TaskEvidenceRef; rejecting them made the freshness
+    UDF raise, which surfaced as a 503 for the whole memory library.
+    """
+    path, evidence, value, record, memory, tasks, output = case
+    ref = dict(evidence_ref(record))
+    ref.update(
+        segment_index=0,
+        segment_start=0,
+        segment_end=len(record.verbatim),
+        segment_hash=sha256(record.verbatim.encode()).hexdigest(),
+    )
+    tasks.save_output(output.model_copy(update={"support_refs": (ref,)}))
+    assert check(path, memory) == 1
 
 
 def test_any_complete_fresh_proof_wins_over_old_proof(case):
