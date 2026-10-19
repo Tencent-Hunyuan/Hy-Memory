@@ -309,9 +309,12 @@ def test_a_rescan_after_upgrade_picks_up_unmatched_versions_without_duplicates(t
 
     second = fixture.run()
     assert second.status is ImportStatus.COMPLETED
+    # Three rows from the v3 session (person, call, result) plus one from v4;
+    # the first-format row is not stored a second time.
+    assert second.stored == 4
+    assert fixture.evidence.count() == 5
     stored = [row.verbatim for row in fixture.evidence.list_extractable(limit=50)]
     assert "headless person turn" in stored
-    assert second.stored == 4
     assert "v3 person turn" in stored
     assert "v4 person turn" in stored
 
