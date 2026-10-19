@@ -67,7 +67,8 @@ class TestStoreCRUD:
 
     async def test_update_overrides(self, coding_store, mock_embed):
         m = CodingMemory(experience_id="e1", user_id="u1", task="T",
-                         search_keys=["old1", "old2"], solution="old")
+                         search_keys=["old1", "old2"], solution="old",
+                         session_id="conversation-1")
         await coding_store.insert(m)
 
         # 旧 aspect 应可命中
@@ -93,11 +94,13 @@ class TestStoreCRUD:
     async def test_update_rejects_authority_scope_change(self, coding_store):
         await coding_store.insert(CodingMemory(
             experience_id="e1", user_id="u1", agent_id="scope-a",
-            workspace_id="repo-a", task="T", solution="old",
+            workspace_id="repo-a", session_id="conversation-1",
+            task="T", solution="old",
         ))
         replacement = CodingMemory(
             experience_id="e1", user_id="u1", agent_id="scope-b",
-            workspace_id="repo-a", task="T", solution="new",
+            workspace_id="repo-a", session_id="conversation-1",
+            task="T", solution="new",
         )
 
         with pytest.raises(ValueError, match="coding_memory_update_authority_mismatch"):
@@ -107,6 +110,39 @@ class TestStoreCRUD:
         assert stored is not None
         assert stored.agent_id == "scope-a"
         assert stored.solution == "old"
+
+    async def test_update_rejects_conversation_change_and_legacy_empty_session(
+        self, coding_store
+    ):
+        for experience_id, old_session in (
+            ("different-conversation", "conversation-1"),
+            ("legacy-empty-session", None),
+        ):
+            await coding_store.insert(CodingMemory(
+                experience_id=experience_id,
+                user_id="u1",
+                agent_id="scope-a",
+                workspace_id="repo-a",
+                session_id=old_session,
+                task="T",
+                solution="old",
+            ))
+            replacement = CodingMemory(
+                experience_id=experience_id,
+                user_id="u1",
+                agent_id="scope-a",
+                workspace_id="repo-a",
+                session_id="conversation-2",
+                task="T",
+                solution="new",
+            )
+
+            with pytest.raises(ValueError, match="coding_memory_update_authority_mismatch"):
+                await coding_store.update(replacement)
+
+            stored = await coding_store.get_by_id(experience_id, user_id="u1")
+            assert stored is not None
+            assert stored.solution == "old"
 
     async def test_delete(self, coding_store):
         m = CodingMemory(experience_id="e1", user_id="u1", task="T",

@@ -2197,6 +2197,7 @@ class MemoryTaskStore:
         *,
         limit: int = 128,
         after_cursor: tuple[str, str] | None = None,
+        exclude_error_codes: tuple[str, ...] = (),
     ) -> tuple[MemoryTask, ...]:
         """List `unknown` tasks that still need an external inquiry.
 
@@ -2211,6 +2212,9 @@ class MemoryTaskStore:
         """
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be positive")
+        excluded = tuple(dict.fromkeys(exclude_error_codes))
+        if not all(isinstance(code, str) and code for code in excluded):
+            raise ValueError("exclude_error_codes must contain non-empty strings")
         if after_cursor is not None:
             if (
                 not isinstance(after_cursor, tuple)
@@ -2224,13 +2228,19 @@ class MemoryTaskStore:
         else:
             cursor_clause = ""
             params = ()
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            excluded_clause = f"AND COALESCE(last_error_code, '') NOT IN ({placeholders})"
+        else:
+            excluded_clause = ""
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM memory_tasks "
                 "WHERE status=? "
                 f"{cursor_clause} "
+                f"{excluded_clause} "
                 "ORDER BY updated_at, task_id LIMIT ?",
-                (MemoryTaskStatus.UNKNOWN, *params, limit),
+                (MemoryTaskStatus.UNKNOWN, *params, *excluded, limit),
             ).fetchall()
         return tuple(self._to_task(row) for row in rows)
 

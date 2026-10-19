@@ -469,6 +469,7 @@ class WorkingFactReconciler:
             drafts,
             user_id=user_id,
             agent_id=agent_id,
+            session_id=session_id,
             workspace_id=workspace_id,
             branch=branch,
             source=source,
@@ -509,6 +510,7 @@ class WorkingFactReconciler:
         *,
         user_id: str,
         agent_id: str,
+        session_id: Optional[str],
         workspace_id: Optional[str],
         branch: Optional[str],
         source: str,
@@ -524,6 +526,10 @@ class WorkingFactReconciler:
         关掉时整份召回原样交给 LLM。适用于 subject 不是稳定实体名的数据集（自由文本、
         位置标签），那里精确字符串相等会把同实体判成不同主体，反而拦掉真实更新。
         """
+        # Empty/legacy session metadata remains readable, but cannot prove
+        # conversation authority for a destructive SUPERSEDE.
+        if not session_id:
+            return [[] for _ in drafts]
         try:
             embeddings = await self.embed_service.embed_batch(
                 [d.statement for d in drafts]
@@ -538,6 +544,7 @@ class WorkingFactReconciler:
                 hits = await self.store.search_facts(
                     emb, user_id=user_id, top=self.candidates_per_draft,
                     agent_id=agent_id,
+                    session_id=session_id,
                     workspace_id=workspace_id,
                     branch=branch,
                     # 写入侧同样接词面通道：候选选错了 LLM 就没有机会判对。这里不传
@@ -809,7 +816,11 @@ class WorkingFactReconciler:
                 old = await self.store.get_fact(old_id, user_id=user_id)
                 if old is None:
                     continue
-                if old.agent_id != agent_id or old.workspace_id != workspace_id:
+                if (
+                    old.agent_id != agent_id
+                    or old.session_id != session_id
+                    or old.workspace_id != workspace_id
+                ):
                     logger.warning(
                         f"[fact-reconcile] refused cross-authority SUPERSEDE: {old.fact_id}"
                     )

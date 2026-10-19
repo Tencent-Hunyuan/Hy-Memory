@@ -16,13 +16,14 @@ Hy Memory and MemHub are versioned and released independently.
 
 - Serialized each SDK SQLite store's shared connection lifecycle so concurrent
   history/cache operations cannot race with `close()` and crash the process.
-- Scoped Coding reconciliation targets to the current HY authority and
-  workspace, preventing near-duplicate sessions from updating an experience
-  owned by another date-derived scope.
+- Scoped Coding reconciliation targets to the current HY authority,
+  conversation, and workspace, preventing near-duplicate sessions from
+  mutating an experience or working fact owned by another evidence context.
 - Kept post-write authority verification failures available for read-only
   reconciliation while preventing automatic or generic confirmed retries from
-  invoking the model again; linked durable jobs now exclusively own retry
-  scheduling for their memory tasks.
+  invoking the model again. Automatic reconciliation skips those sticky rows
+  before applying its batch limit, and linked durable jobs exclusively own
+  retry scheduling for their memory tasks.
 - Clarified that `add(metadata=...)` carries legacy SDK processing options,
   while persistent caller business context belongs in `meta`.
 - Added an opt-in `get(..., include_raw=True)` path for reading `L1_RAW`

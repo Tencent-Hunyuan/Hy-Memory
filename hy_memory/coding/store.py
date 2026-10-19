@@ -531,7 +531,13 @@ class CodingMemoryStore:
         prev = await self.get_by_id(memory.experience_id, user_id=memory.user_id)
         if prev is None:
             raise ValueError("coding_memory_update_target_missing")
-        if prev.agent_id != memory.agent_id or prev.workspace_id != memory.workspace_id:
+        if (
+            not prev.session_id
+            or not memory.session_id
+            or prev.agent_id != memory.agent_id
+            or prev.session_id != memory.session_id
+            or prev.workspace_id != memory.workspace_id
+        ):
             raise ValueError("coding_memory_update_authority_mismatch")
         prev_key_count = 1 + len(prev.search_keys)
 
@@ -676,6 +682,7 @@ class CodingMemoryStore:
         user_id: str,
         *,
         agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         top: int = 40,
@@ -693,26 +700,29 @@ class CodingMemoryStore:
                 },
                 ...
             ]
-        agent_id 是写授权作用域，传入时精确匹配；workspace_id / branch 的规则见
-        _scope_where。不传任何作用域则维持纯语义召回；传了则只保留 SQLite 里落在
-        作用域内的经验，并按选择率放大向量取数，避免"先取 top-N 再过滤"把召回吃掉。
+        agent_id / session_id 是写授权作用域，传入时精确匹配；workspace_id / branch
+        的规则见 _scope_where。不传任何作用域则维持纯语义召回；传了则只保留 SQLite
+        里落在作用域内的经验，并按选择率放大向量取数，避免"先取 top-N 再过滤"把
+        召回吃掉。
         """
         if self._vec is None:
             return []
 
         allowed: Optional[Set[str]] = None
-        if agent_id or workspace_id:
+        if agent_id or session_id or workspace_id:
             allowed, total = await _run_in_pool(
                 self._authority_scoped_experience_ids_sync,
                 user_id,
                 agent_id,
+                session_id,
                 workspace_id,
                 branch,
             )
             if not allowed:
                 logger.info(
                     f"[coding-store] no experience in scope: "
-                    f"agent_id={agent_id!r} workspace_id={workspace_id!r} branch={branch!r} "
+                    f"agent_id={agent_id!r} session_id={session_id!r} "
+                    f"workspace_id={workspace_id!r} branch={branch!r} "
                     f"(user has {total}); skip vdb search"
                 )
                 return []
@@ -788,6 +798,7 @@ class CodingMemoryStore:
         user_id: str,
         *,
         agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         top: int = 5,
@@ -801,9 +812,9 @@ class CodingMemoryStore:
         SUPERSEDE 时向量行已被删掉，理论上召不到 superseded；这里再按 SQLite 的
         status 过一道，避免两边不一致时把过期结论放出去。
 
-        agent_id 是写授权作用域，传入时精确匹配；workspace_id / branch 的规则见
-        _scope_where。不传任何作用域则不过滤，传了按 SQLite 里的值筛，并按选择率
-        放大向量取数。
+        agent_id / session_id 是写授权作用域，传入时精确匹配；workspace_id / branch
+        的规则见 _scope_where。不传任何作用域则不过滤，传了按 SQLite 里的值筛，并
+        按选择率放大向量取数。
 
         向量库按 top 的 4 倍过采样：向量行和 SQLite 行不是一个事务里写的，中间挂掉
         就会留下"向量还在、SQLite 没了"的孤儿，软删时删向量失败也会留下 superseded
@@ -820,18 +831,20 @@ class CodingMemoryStore:
             return []
 
         fetch = top * 4
-        if agent_id or workspace_id:
+        if agent_id or session_id or workspace_id:
             scoped, total = await _run_in_pool(
                 self._count_active_facts_sync,
                 user_id,
                 agent_id,
+                session_id,
                 workspace_id,
                 branch,
             )
             if not scoped:
                 logger.info(
                     f"[coding-store] no active fact in scope: "
-                    f"agent_id={agent_id!r} workspace_id={workspace_id!r} branch={branch!r} "
+                    f"agent_id={agent_id!r} session_id={session_id!r} "
+                    f"workspace_id={workspace_id!r} branch={branch!r} "
                     f"(user has {total}); skip fact vdb search"
                 )
                 return []
@@ -868,6 +881,7 @@ class CodingMemoryStore:
             (f, scores[f.fact_id]) for f in facts
             if f.status == "active"
             and (not agent_id or f.agent_id == agent_id)
+            and (not session_id or f.session_id == session_id)
             and _scope_matches(f.workspace_id, f.branch, workspace_id, branch)
         ]
         kept = [(f, s) for f, s in alive if s >= min_score]
@@ -1070,6 +1084,7 @@ class CodingMemoryStore:
         self,
         user_id: str,
         agent_id: Optional[str],
+        session_id: Optional[str],
         workspace_id: Optional[str],
         branch: Optional[str],
     ) -> Tuple[Set[str], int]:
@@ -1081,6 +1096,9 @@ class CodingMemoryStore:
         if agent_id:
             scope_sql = f"agent_id = ? AND ({scope_sql})"
             scope_params = [agent_id, *scope_params]
+        if session_id:
+            scope_sql = f"session_id = ? AND ({scope_sql})"
+            scope_params = [session_id, *scope_params]
         with self._lock:
             assert self._conn is not None
             cur = self._conn.execute(
@@ -1095,6 +1113,7 @@ class CodingMemoryStore:
         self,
         user_id: str,
         agent_id: Optional[str],
+        session_id: Optional[str],
         workspace_id: Optional[str],
         branch: Optional[str],
     ) -> Tuple[int, int]:
@@ -1106,6 +1125,9 @@ class CodingMemoryStore:
         if agent_id:
             scope_sql = f"agent_id = ? AND ({scope_sql})"
             scope_params = [agent_id, *scope_params]
+        if session_id:
+            scope_sql = f"session_id = ? AND ({scope_sql})"
+            scope_params = [session_id, *scope_params]
         with self._lock:
             assert self._conn is not None
             row = self._conn.execute(

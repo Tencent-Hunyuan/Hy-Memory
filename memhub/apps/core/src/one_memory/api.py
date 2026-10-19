@@ -185,7 +185,12 @@ from one_memory.memory_queue import (
     resolve_extraction_state,
 )
 from one_memory.memory_server.config_state import ConfigStore
-from one_memory.memory_tasks import MemoryTask, MemoryTaskStatus, MemoryTaskStore
+from one_memory.memory_tasks import (
+    NON_RETRYABLE_POST_WRITE_CODES,
+    MemoryTask,
+    MemoryTaskStatus,
+    MemoryTaskStore,
+)
 from one_memory.model_presets import seed_preset_profile
 from one_memory.model_probe import ModelProber, ModelProbeResult
 from one_memory.model_profiles import (
@@ -1082,8 +1087,14 @@ def create_app(
             drain_budget = production_drain_budget()
 
             async def reconcile_unknown_writes() -> None:
-                await app.state.memory_processing_supervisor.reconcile_unknown_outputs()
-                unknown = await asyncio.to_thread(memory_write_queue.unknown_jobs, limit=128)
+                await app.state.memory_processing_supervisor.reconcile_unknown_outputs(
+                    exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
+                )
+                unknown = await asyncio.to_thread(
+                    memory_write_queue.unknown_jobs,
+                    limit=128,
+                    exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
+                )
                 for job in unknown:
                     await asyncio.to_thread(
                         memory_write_queue.resolve_unknown_from_linked_output,

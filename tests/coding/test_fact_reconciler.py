@@ -107,6 +107,7 @@ class TestSupersede:
     async def _seed_old(self, store, *, derived=None):
         old = WorkingFact(
             fact_id="f_old", user_id="u1",
+            session_id="test-session",
             statement=(
                 "用户要修复 CI 的 npm run build；检查 .github/workflows/ci.yml 后"
                 "定位到 Node 18 报 ERR_OSSL_EVP_UNSUPPORTED，尚未修改。"
@@ -129,7 +130,7 @@ class TestSupersede:
             [_draft(
                 "用户继续修复同一 CI 构建；把 .github/workflows/ci.yml 升到 Node 20，"
                 "npm run build 已通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         new_id = facts[0].fact_id
@@ -152,7 +153,7 @@ class TestSupersede:
             [_draft(
                 "用户继续修复同一 CI 构建；把 .github/workflows/ci.yml 升到 Node 20，"
                 "npm run build 已通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
         new_id = facts[0].fact_id
 
@@ -184,7 +185,9 @@ class TestSupersede:
                 coding_store, mock_embed,
                 _llm([{"draft_idx": 0, "supersedes": [target or prev_id]}]),
             )
-            facts, _ = await rec.reconcile([_draft(stmt)], user_id="u1")
+            facts, _ = await rec.reconcile(
+                [_draft(stmt)], user_id="u1", session_id="test-session"
+            )
             prev_id = facts[0].fact_id
 
         lineage = await coding_store.get_fact_ancestors(prev_id, user_id="u1")
@@ -208,6 +211,7 @@ class TestSupersede:
                 "配置完成但尚未发布。"
             )],
             user_id="u1",
+            session_id="test-session",
         )
 
         prompt = llm.calls[0]["prompt"]
@@ -234,7 +238,9 @@ class TestSupersede:
             coding_store, mock_embed, _llm([{"draft_idx": 0, "supersedes": ["f_old"]}]),
         )
         await rec.reconcile(
-            [_draft("config 位于 /etc/app/config.yaml")], user_id="u1",
+            [_draft("config 位于 /etc/app/config.yaml")],
+            user_id="u1",
+            session_id="test-session",
         )
 
         # 拿旧说法原文去搜，只能落到新事实（靠两者本身相似），
@@ -263,6 +269,7 @@ class TestSupersede:
             fact_id="f_old",
             user_id="u1",
             agent_id="scope:2026-10-18",
+            session_id="conversation-a",
             workspace_id="repo-a",
             statement="CI build now passes after upgrading Node",
         ))
@@ -273,6 +280,7 @@ class TestSupersede:
             [_draft("CI build now passes after upgrading Node")],
             user_id="u1",
             agent_id="scope:2026-10-19",
+            session_id="conversation-b",
             workspace_id="repo-a",
         )
 
@@ -300,6 +308,7 @@ class TestSupersede:
                 _draft("config 位于 /srv/app/config.yaml"),
             ],
             user_id="u1",
+            session_id="test-session",
         )
         assert len(facts) == 2
         assert sum(1 for o in ops if o.action == "SUPERSEDE") == 1
@@ -314,6 +323,7 @@ class TestChainSummary:
     async def _seed_old(self, store):
         await store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1",
+            session_id="test-session",
             statement=(
                 "用户要迁移 app config；确认当前读取 /opt/app/config.yaml，"
                 "尚未修改配置加载逻辑。"
@@ -336,7 +346,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         stored = await coding_store.get_fact(facts[0].fact_id, user_id="u1")
@@ -352,7 +362,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         assert len(llm.calls) == 2, "SUPERSEDE 应触发第二次调用"
@@ -370,7 +380,11 @@ class TestChainSummary:
         llm = _llm([])
         rec = WorkingFactReconciler(coding_store, mock_embed, llm)
 
-        await rec.reconcile([_draft("另一个话题的结论")], user_id="u1")
+        await rec.reconcile(
+            [_draft("另一个话题的结论")],
+            user_id="u1",
+            session_id="test-session",
+        )
         assert len(llm.calls) == 1
 
     async def test_prompt_carries_full_lineage(self, coding_store, mock_embed):
@@ -383,7 +397,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         llm2 = _llm([{"draft_idx": 0, "supersedes": [facts[0].fact_id]}])
@@ -392,7 +406,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续完善同一 config 迁移；改由环境变量 APP_CONFIG 指定路径，"
                 "回归测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         prompt = llm2.calls[1]["prompt"]
@@ -419,7 +433,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         assert sum(1 for o in ops if o.action == "SUPERSEDE") == 1
@@ -452,7 +466,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
         assert facts[0].fact_chain_summary == ""
 
@@ -462,7 +476,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续完善同一 config 迁移；改由环境变量 APP_CONFIG 指定路径，"
                 "回归测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         prompt = llm2.calls[1]["prompt"]
@@ -476,7 +490,8 @@ class TestChainSummary:
         total = MAX_FACT_CHAIN_ENTRIES + 3
         for i in range(total):
             await coding_store.insert_fact(WorkingFact(
-                fact_id=f"g{i}", user_id="u1", statement=f"第 {i} 代结论",
+                fact_id=f"g{i}", user_id="u1", session_id="test-session",
+                statement=f"第 {i} 代结论",
                 created_at=datetime(2026, 1, i + 1),
             ))
             if prev:
@@ -485,7 +500,9 @@ class TestChainSummary:
 
         llm = _llm([{"draft_idx": 0, "supersedes": [prev]}])
         rec = WorkingFactReconciler(coding_store, mock_embed, llm)
-        await rec.reconcile([_draft("最新结论")], user_id="u1")
+        await rec.reconcile(
+            [_draft("最新结论")], user_id="u1", session_id="test-session"
+        )
 
         prompt = llm.calls[1]["prompt"]
         assert "第 0 代结论" not in prompt, "最老的几代该被截掉"
@@ -504,7 +521,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
         entries = llm.calls[1]["prompt"].split(
             "ENTRIES\n═══════════════════════════════════════════════════════════════════\n",
@@ -523,7 +540,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         rec2 = WorkingFactReconciler(
@@ -535,7 +552,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续完善同一 config 迁移；改由环境变量 APP_CONFIG 指定路径，"
                 "回归测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         stored = await coding_store.get_fact(facts2[0].fact_id, user_id="u1")
@@ -552,7 +569,7 @@ class TestChainSummary:
             [_draft(
                 "用户继续迁移 app config；将加载路径改为 /etc/app/config.yaml，"
                 "配置加载测试通过。"
-            )], user_id="u1",
+            )], user_id="u1", session_id="test-session",
         )
 
         assert len(llm.calls) == 1
@@ -590,7 +607,8 @@ class TestFailSafe:
     async def test_llm_failure_still_inserts(self, coding_store, mock_embed):
         """LLM 挂了宁可多留一条过期事实，也不能因为一次调用失败丢结论。"""
         await coding_store.insert_fact(WorkingFact(
-            fact_id="f_old", user_id="u1", statement="config 位于 /opt/app/config.yaml",
+            fact_id="f_old", user_id="u1", session_id="test-session",
+            statement="config 位于 /opt/app/config.yaml",
         ))
         rec = WorkingFactReconciler(coding_store, mock_embed, FailingLLMProvider())
 
@@ -604,7 +622,8 @@ class TestFailSafe:
 
     async def test_unparsable_llm_output(self, coding_store, mock_embed):
         await coding_store.insert_fact(WorkingFact(
-            fact_id="f_old", user_id="u1", statement="config 位于 /opt/app/config.yaml",
+            fact_id="f_old", user_id="u1", session_id="test-session",
+            statement="config 位于 /opt/app/config.yaml",
         ))
         rec = WorkingFactReconciler(
             coding_store, mock_embed, MockLLMProvider("不是 JSON 的一段话")
@@ -618,7 +637,8 @@ class TestFailSafe:
 
     async def test_markdown_fence_parsed(self, coding_store, mock_embed):
         await coding_store.insert_fact(WorkingFact(
-            fact_id="f_old", user_id="u1", statement="config 位于 /opt/app/config.yaml",
+            fact_id="f_old", user_id="u1", session_id="test-session",
+            statement="config 位于 /opt/app/config.yaml",
         ))
         llm = MockLLMProvider([
             "```json\n" + _ops_resp([{"draft_idx": 0, "supersedes": ["f_old"]}]) + "\n```",
@@ -627,7 +647,9 @@ class TestFailSafe:
         rec = WorkingFactReconciler(coding_store, mock_embed, llm)
 
         _, ops = await rec.reconcile(
-            [_draft("config 位于 /etc/app/config.yaml")], user_id="u1",
+            [_draft("config 位于 /etc/app/config.yaml")],
+            user_id="u1",
+            session_id="test-session",
         )
         assert sum(1 for o in ops if o.action == "SUPERSEDE") == 1
 
@@ -644,7 +666,8 @@ class TestSubjectGateSwitch:
 
     async def _seed(self, store, fact_id, subject, statement):
         await store.insert_fact(WorkingFact(
-            fact_id=fact_id, user_id="u1", subject=subject, statement=statement,
+            fact_id=fact_id, user_id="u1", session_id="test-session",
+            subject=subject, statement=statement,
         ))
 
     async def test_gate_on_blocks_cross_subject_supersede(self, coding_store, mock_embed):
@@ -658,6 +681,7 @@ class TestSubjectGateSwitch:
         _, ops = await rec.reconcile(
             [WorkingFactDraft(subject="Bart", statement="Bart 的三日行程已排定，预算待定。")],
             user_id="u1",
+            session_id="test-session",
         )
         assert [o.action for o in ops] == ["INSERT"]
         assert (await coding_store.get_fact("f_emma", user_id="u1")).status == "active"
@@ -673,6 +697,7 @@ class TestSubjectGateSwitch:
         facts, ops = await rec.reconcile(
             [WorkingFactDraft(subject="Bart", statement="Bart 的三日行程已排定，预算待定。")],
             user_id="u1",
+            session_id="test-session",
         )
         assert [o.action for o in ops] == ["SUPERSEDE", "INSERT"]
         old = await coding_store.get_fact("f_emma", user_id="u1")
@@ -693,7 +718,8 @@ class TestSubjectGateSwitch:
             [WorkingFactDraft(subject="Bart", statement="Bart 的行程。")],
             [[old]],
             {0: ["f_emma"]},
-            user_id="u1", agent_id="default_agent", session_id=None, workspace_id=None,
+            user_id="u1", agent_id="default_agent",
+            session_id="test-session", workspace_id=None,
         )
         assert "SUPERSEDE" in [o.action for o in ops]
 
@@ -713,7 +739,8 @@ class TestSubjectGateSwitch:
                 [WorkingFactDraft(subject="deploy.sh", statement="新的部署脚本结论。")],
                 [[old]],
                 {0: [f"f_noneed_{gate}"]},
-                user_id="u1", agent_id="default_agent", session_id=None, workspace_id=None,
+                user_id="u1", agent_id="default_agent",
+                session_id="test-session", workspace_id=None,
             )
             assert "SUPERSEDE" in [o.action for o in ops], f"gate={gate} 时空 subject 被误拦"
 
@@ -740,6 +767,7 @@ class TestDetailsInheritance:
     async def test_ancestor_details_copied_verbatim(self, coding_store, mock_embed):
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1", subject="Emma",
+            session_id="test-session",
             statement="Emma 的行程草案已出，预算待核。",
             details="日均餐费 $32.4-$57.6\n酒店评分 3.2-3.8",
         ))
@@ -752,6 +780,7 @@ class TestDetailsInheritance:
             [WorkingFactDraft(subject="Emma", statement="Emma 的行程已定稿。",
                               details="航班 CA1234")],
             user_id="u1",
+            session_id="test-session",
         )
         stored = await coding_store.get_fact(facts[0].fact_id, user_id="u1")
         # 本代的 details 在，祖先的具体取值也一字不差地在
@@ -768,6 +797,7 @@ class TestDetailsInheritance:
         """
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_g1", user_id="u1", subject="T",
+            session_id="test-session",
             statement="第一代结论。", details="V1=" + "a" * 300,
         ))
         prev = "f_g1"
@@ -782,6 +812,7 @@ class TestDetailsInheritance:
                 [WorkingFactDraft(subject="T", statement=f"第{gen}代结论。",
                                   details=f"V{gen}=" + "a" * 300)],
                 user_id="u1",
+                session_id="test-session",
             )
             prev = facts[0].fact_id
             stored = await coding_store.get_fact(prev, user_id="u1")
@@ -798,6 +829,7 @@ class TestDetailsInheritance:
         """预算是硬的，但被丢掉的代数必须写出来，不静默截断。"""
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1", subject="T",
+            session_id="test-session",
             statement="旧结论。", details="X=" + "b" * 8000,
         ))
         rec = WorkingFactReconciler(
@@ -808,6 +840,7 @@ class TestDetailsInheritance:
         facts, _ = await rec.reconcile(
             [WorkingFactDraft(subject="T", statement="新结论。", details="Y=1")],
             user_id="u1",
+            session_id="test-session",
         )
         stored = await coding_store.get_fact(facts[0].fact_id, user_id="u1")
         assert "…(truncated)" in stored.details
@@ -816,6 +849,7 @@ class TestDetailsInheritance:
     async def test_switch_off_keeps_details_untouched(self, coding_store, mock_embed):
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1", subject="T",
+            session_id="test-session",
             statement="旧结论。", details="祖先取值 Z=9",
         ))
         rec = WorkingFactReconciler(
@@ -826,6 +860,7 @@ class TestDetailsInheritance:
         facts, ops = await rec.reconcile(
             [WorkingFactDraft(subject="T", statement="新结论。", details="Y=1")],
             user_id="u1",
+            session_id="test-session",
         )
         # 覆盖照样发生，只是不过继
         assert "SUPERSEDE" in [o.action for o in ops]
@@ -840,6 +875,7 @@ class TestDetailsInheritance:
         """
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1", subject="T",
+            session_id="test-session",
             statement="旧结论。", details="无关噪声 " + "q" * 2000,
         ))
         rec = WorkingFactReconciler(
@@ -850,6 +886,7 @@ class TestDetailsInheritance:
         facts, _ = await rec.reconcile(
             [WorkingFactDraft(subject="T", statement="新结论。", details="Y=1")],
             user_id="u1",
+            session_id="test-session",
         )
         new_id = facts[0].fact_id
         emb = await coding_store.embed_service.embed("T 新结论。")

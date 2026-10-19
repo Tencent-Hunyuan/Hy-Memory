@@ -1522,14 +1522,24 @@ class MemoryProcessingSupervisor:
                 await self._refresh_read_bridge(completed[-1].profile_snapshot)
             return tuple(completed)
 
-    async def reconcile_unknown_outputs(self, *, limit: int = 128) -> int:
+    async def reconcile_unknown_outputs(
+        self,
+        *,
+        limit: int = 128,
+        exclude_error_codes: tuple[str, ...] = (),
+    ) -> int:
         """Publish HY outputs that can be proven by an unknown task's request id.
 
         This inquiry is read-only on HY and never invokes the model. Rows with
         no exact match remain unknown for the person's explicit retry choice.
         """
         reconciled = 0
-        for task in await in_the_background(self.tasks.unknown_tasks, limit=limit):
+        tasks = await in_the_background(
+            self.tasks.unknown_tasks,
+            limit=limit,
+            exclude_error_codes=exclude_error_codes,
+        )
+        for task in tasks:
             runner = self.runner_factory()
             bridge: MemoryBridgeProtocol | None = None
             try:

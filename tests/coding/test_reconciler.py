@@ -36,7 +36,7 @@ class TestReconcilerActions:
         # 种入 m1
         await coding_store.insert(CodingMemory(
             experience_id="m1", user_id="u1", agent_id="scope-day-1",
-            workspace_id="repo-a", task="T1",
+            workspace_id="repo-a", session_id="conversation-1", task="T1",
             search_keys=["old"], solution="old",
         ))
         llm = MockLLMProvider(_llm_resp([
@@ -46,7 +46,7 @@ class TestReconcilerActions:
         rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
         d = CodingMemoryDraft(task="T1", search_keys=["new1"], solution="new",
                               user_id="u1", agent_id="scope-day-1",
-                              workspace_id="repo-a")
+                              workspace_id="repo-a", session_id="conversation-1")
         ops = await rec.reconcile([d])
         assert len(ops) == 1 and ops[0].action == "UPDATE"
         got = await coding_store.get_by_id("m1", "u1")
@@ -54,10 +54,39 @@ class TestReconcilerActions:
         assert got.search_keys == ["new1"]
 
     @pytest.mark.parametrize(
-        ("old_agent", "old_workspace", "new_agent", "new_workspace"),
+        (
+            "old_agent",
+            "old_workspace",
+            "old_session",
+            "new_agent",
+            "new_workspace",
+            "new_session",
+        ),
         [
-            ("scope:2026-10-18", "repo-a", "scope:2026-10-19", "repo-a"),
-            ("shared-scope", "repo-a", "shared-scope", "repo-b"),
+            (
+                "scope:same-day",
+                "repo-a",
+                "conversation-a",
+                "scope:same-day",
+                "repo-a",
+                "conversation-b",
+            ),
+            (
+                "scope:2026-10-18",
+                "repo-a",
+                "conversation-a",
+                "scope:2026-10-19",
+                "repo-a",
+                "conversation-a",
+            ),
+            (
+                "shared-scope",
+                "repo-a",
+                "conversation-a",
+                "shared-scope",
+                "repo-b",
+                "conversation-a",
+            ),
         ],
     )
     async def test_update_target_must_match_frozen_authority_scope(
@@ -66,13 +95,16 @@ class TestReconcilerActions:
         mock_embed,
         old_agent,
         old_workspace,
+        old_session,
         new_agent,
         new_workspace,
+        new_session,
     ):
-        """Near-duplicate sessions cannot rewrite another day or workspace."""
+        """Near duplicates cannot cross conversation, date, or workspace authority."""
         await coding_store.insert(CodingMemory(
             experience_id="old-target", user_id="u1", agent_id=old_agent,
-            workspace_id=old_workspace, task="fix flaky release", solution="old solution",
+            workspace_id=old_workspace, session_id=old_session,
+            task="fix flaky release", solution="old solution",
         ))
         llm = MockLLMProvider(_llm_resp([
             {
@@ -89,6 +121,7 @@ class TestReconcilerActions:
             user_id="u1",
             agent_id=new_agent,
             workspace_id=new_workspace,
+            session_id=new_session,
         )
 
         ops = await rec.reconcile([draft])
@@ -98,20 +131,60 @@ class TestReconcilerActions:
         assert old.solution == "old solution"
         assert old.agent_id == old_agent
         assert old.workspace_id == old_workspace
+        assert old.session_id == old_session
         assert len(ops) == 1
         assert ops[0].action == "ADD"
         assert ops[0].target_experience_id != "old-target"
 
+    @pytest.mark.parametrize("legacy_agent", ["", "default_agent", "scope:legacy"])
+    async def test_legacy_target_without_conversation_falls_back_to_add(
+        self, coding_store, mock_embed, legacy_agent
+    ):
+        await coding_store.insert(CodingMemory(
+            experience_id="legacy-target",
+            user_id="u1",
+            agent_id=legacy_agent,
+            session_id=None,
+            workspace_id="repo-a",
+            task="upgrade dependency",
+            solution="legacy solution",
+        ))
+        llm = MockLLMProvider(_llm_resp([
+            {
+                "draft_idx": 0,
+                "action": "UPDATE",
+                "target_experience_id": "legacy-target",
+            },
+        ]))
+        rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
+        draft = CodingMemoryDraft(
+            task="upgrade dependency",
+            solution="current solution",
+            user_id="u1",
+            agent_id=legacy_agent,
+            session_id="current-conversation",
+            workspace_id="repo-a",
+        )
+
+        ops = await rec.reconcile([draft])
+
+        legacy = await coding_store.get_by_id("legacy-target", "u1")
+        assert legacy is not None
+        assert legacy.solution == "legacy solution"
+        assert legacy.session_id is None
+        assert [op.action for op in ops] == ["ADD"]
+
     async def test_skip(self, coding_store, mock_embed):
         await coding_store.insert(CodingMemory(
             experience_id="m1", user_id="u1", task="X", solution="Y",
+            session_id="conversation-1",
         ))
         llm = MockLLMProvider(_llm_resp([
             {"draft_idx": 0, "action": "SKIP", "reason": "duplicate"},
         ]))
         rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
         d = CodingMemoryDraft(task="X", solution="Y",
-                              user_id="u1")
+                              user_id="u1", session_id="conversation-1")
         ops = await rec.reconcile([d])
         assert len(ops) == 1 and ops[0].action == "SKIP"
         # store 不变
@@ -122,7 +195,7 @@ class TestReconcilerActions:
         # 旧记忆要被 DELETE
         await coding_store.insert(CodingMemory(
             experience_id="m_dep", user_id="u1", task="use old.sh",
-            solution="old script",
+            solution="old script", session_id="conversation-1",
         ))
         llm = MockLLMProvider(_llm_resp([
             {"draft_idx": 0, "action": "ADD"},
@@ -131,7 +204,7 @@ class TestReconcilerActions:
         ]))
         rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
         d = CodingMemoryDraft(task="use new CLI", solution="new way",
-                              user_id="u1")
+                              user_id="u1", session_id="conversation-1")
         ops = await rec.reconcile([d])
         assert sorted(op.action for op in ops) == ["ADD", "DELETE"]
         # 旧的没了

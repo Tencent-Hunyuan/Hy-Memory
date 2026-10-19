@@ -263,6 +263,12 @@ class CodingMemoryReconciler:
         """
         result: List[List[CodingMemory]] = []
         for d in drafts:
+            # A coding mutation must be attributable to one conversation.
+            # Empty/legacy session metadata stays readable through ordinary
+            # search, but it cannot authorize UPDATE/DELETE.
+            if not d.session_id:
+                result.append([])
+                continue
             try:
                 # task 为主入口，search_keys 为附加入口（去重、去空）
                 queries = [d.task] + [k for k in (d.search_keys or []) if k and k != d.task]
@@ -275,6 +281,7 @@ class CodingMemoryReconciler:
                         emb,
                         user_id=d.user_id,
                         agent_id=d.agent_id,
+                        session_id=d.session_id,
                         workspace_id=d.workspace_id,
                         branch=d.branch,
                         top=self.candidates_per_draft * 4,
