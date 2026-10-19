@@ -8,7 +8,15 @@ import pytest
 from one_memory.imports.grants import GRANT_SCHEMA
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
-from one_memory.memory_governance import MemoryDraft, MemoryGovernanceStore, MemoryKind
+from one_memory.memory_governance import (
+    HyCreate,
+    HyLink,
+    HyRevise,
+    MemoryDraft,
+    MemoryGovernanceStore,
+    MemoryKind,
+    MemoryMutationConflictError,
+)
 from one_memory.memory_tasks import (
     MemoryTaskOutput,
     MemoryTaskStore,
@@ -19,6 +27,7 @@ from one_memory.memory_visibility import (
     install_triggers,
     pending,
     recompute,
+    startup,
 )
 from one_memory.model_profiles import (
     ModelCapabilities,
@@ -172,6 +181,167 @@ def main_database_read(path):
     from one_memory.database_access import main_database
 
     return main_database(path).read()
+
+
+@pytest.mark.parametrize("legacy_triggers", [False, True])
+def test_hy_revision_and_link_upserts_survive_visibility_startup(library, legacy_triggers):
+    """Real HY writeback must tolerate an already-dirty citation on new and old homes."""
+    from one_memory.database_access import close_main_databases
+
+    database, evidence, _tasks, governance, _profile = library
+    records = [
+        evidence.put(
+            EvidenceInput(
+                source_id="codex",
+                conversation_id="visibility-upsert",
+                message_id=f"message-{index}",
+                role="user",
+                written_by=WrittenBy.PERSON,
+                verbatim=f"Synthetic project fact {index}",
+                origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+            )
+        ).record
+        for index in range(2)
+    ]
+    ids = tuple(record.evidence_id for record in records)
+    startup(database)
+    if legacy_triggers:
+        # Existing homes retain these released definitions under CREATE IF NOT EXISTS.
+        with main_database_write(database) as db:
+            for name, event, values in (
+                ("memory_visibility_dirty_on_link", "INSERT", ("NEW",)),
+                ("memory_visibility_dirty_on_link_update", "UPDATE", ("NEW", "OLD")),
+            ):
+                db.execute(f"DROP TRIGGER {name}")
+                body = " ".join(
+                    "INSERT OR IGNORE INTO memory_visibility_dirty(memory_id) "
+                    f"VALUES ({value}.memory_id);"
+                    for value in values
+                )
+                db.execute(
+                    f"CREATE TRIGGER {name} AFTER {event} ON governed_memory_evidence "
+                    f"BEGIN {body} END"
+                )
+    close_main_databases()
+    startup(database)
+    current = governance.write_from_hy(
+        HyCreate(
+            draft=MemoryDraft(
+                user_id="local",
+                kind=MemoryKind.WORKING,
+                content="Initial synthetic project fact",
+                scopes=("all-apps",),
+                evidence_ids=ids[:1],
+            ),
+            request_id="visibility-create",
+            memory_id="visibility-upsert-memory",
+        ),
+        user_id="local",
+        derivation=governance.hy_derivation(ids),
+    )
+    original = current
+    for index, cited in enumerate((ids, ids, ids[1:])):
+        current = governance.write_from_hy(
+            HyRevise(
+                memory_id=current.memory_id,
+                request_id=f"visibility-revise-{index}",
+                expected_revision=current.revision,
+                content=f"Revised synthetic project fact {index}",
+                evidence_ids=cited,
+            ),
+            user_id="local",
+            derivation=governance.hy_derivation(ids),
+        )
+    governance.write_from_hy(
+        HyLink(memory_id=current.memory_id, evidence_id=ids[0]),
+        user_id="local",
+        derivation=governance.hy_derivation(ids),
+    )
+    with pytest.raises(MemoryMutationConflictError):
+        governance.write_from_hy(
+            HyRevise(
+                current.memory_id,
+                "stale-visibility-revision",
+                original.revision,
+                "Must not commit",
+                ids,
+            ),
+            user_id="local",
+            derivation=governance.hy_derivation(ids),
+        )
+    assert governance.get(current.memory_id, user_id="local").content == current.content
+    with main_database_read(database) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM memory_visibility_dirty WHERE memory_id=?",
+                (current.memory_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            db.execute(
+                "SELECT content FROM governed_memory_versions WHERE memory_id=? AND revision=?",
+                (original.memory_id, original.revision),
+            ).fetchone()[0]
+            == original.content
+        )
+        schema_version = db.execute("PRAGMA schema_version").fetchone()[0]
+    close_main_databases()
+    startup(database)
+    with main_database_read(database) as db:
+        assert db.execute("PRAGMA schema_version").fetchone()[0] == schema_version
+    governance.write_from_hy(
+        HyRevise(
+            current.memory_id,
+            "after-visibility-restart",
+            current.revision,
+            "Synthetic fact after restart",
+            ids,
+        ),
+        user_id="local",
+        derivation=governance.hy_derivation(ids),
+    )
+
+
+def test_link_update_marks_both_identities_without_hiding_real_conflicts():
+    with sqlite3.connect(":memory:") as db:
+        db.execute(
+            "CREATE TABLE governed_memory_evidence (memory_id TEXT, evidence_id TEXT, "
+            "active INTEGER, PRIMARY KEY(memory_id,evidence_id))"
+        )
+        ensure_tables(db)
+        install_triggers(db)
+        db.execute("INSERT INTO governed_memory_evidence VALUES ('old-memory','evidence',1)")
+        db.execute("DELETE FROM memory_visibility_dirty")
+        db.execute("UPDATE governed_memory_evidence SET memory_id='new-memory'")
+        assert set(pending(db)) == {"old-memory", "new-memory"}
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO governed_memory_evidence VALUES ('new-memory','evidence',1)")
+
+
+def test_failed_link_trigger_upgrade_keeps_the_existing_trigger(monkeypatch):
+    import one_memory.memory_visibility as visibility
+
+    with sqlite3.connect(":memory:") as db:
+        db.execute("CREATE TABLE governed_memory_evidence (memory_id TEXT, evidence_id TEXT)")
+        ensure_tables(db)
+        old_sql = (
+            "CREATE TRIGGER memory_visibility_dirty_on_link "
+            "AFTER INSERT ON governed_memory_evidence BEGIN "
+            "INSERT OR IGNORE INTO memory_visibility_dirty VALUES (NEW.memory_id); END"
+        )
+        db.execute(old_sql)
+        monkeypatch.setattr(
+            visibility, "_trigger_sql", lambda: [("governed_memory_evidence", "INVALID SQL")]
+        )
+        with pytest.raises(sqlite3.OperationalError):
+            install_triggers(db)
+        assert (
+            db.execute(
+                "SELECT sql FROM sqlite_master WHERE name='memory_visibility_dirty_on_link'"
+            ).fetchone()[0]
+            == old_sql
+        )
 
 
 def test_a_read_uses_the_stored_conclusion_without_rechecking(library):
