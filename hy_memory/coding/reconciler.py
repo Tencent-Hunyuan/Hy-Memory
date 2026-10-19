@@ -240,7 +240,7 @@ class CodingMemoryReconciler:
         )
 
         # 3. 校验 + 执行
-        executed = await self._execute(ops, drafts)
+        executed = await self._execute(ops, drafts, candidates_per_draft)
         logger.info(
             f"[coding-reconcile] drafts={len(drafts)} ops={len(executed)} "
             + ", ".join(f"{a}={sum(1 for o in executed if o.action == a)}"
@@ -263,6 +263,12 @@ class CodingMemoryReconciler:
         """
         result: List[List[CodingMemory]] = []
         for d in drafts:
+            # A coding mutation must be attributable to one conversation.
+            # Empty/legacy session metadata stays readable through ordinary
+            # search, but it cannot authorize UPDATE/DELETE.
+            if not d.session_id:
+                result.append([])
+                continue
             try:
                 # task 为主入口，search_keys 为附加入口（去重、去空）
                 queries = [d.task] + [k for k in (d.search_keys or []) if k and k != d.task]
@@ -274,6 +280,8 @@ class CodingMemoryReconciler:
                     hits = await self.store.search_by_query_embedding(
                         emb,
                         user_id=d.user_id,
+                        agent_id=d.agent_id,
+                        session_id=d.session_id,
                         workspace_id=d.workspace_id,
                         branch=d.branch,
                         top=self.candidates_per_draft * 4,
@@ -415,6 +423,7 @@ class CodingMemoryReconciler:
         self,
         ops: List[ReconcileOp],
         drafts: List[CodingMemoryDraft],
+        candidates_per_draft: List[List[CodingMemory]],
     ) -> List[ReconcileOp]:
         """
         校验 + 执行 ops。返回成功执行的 ops（filter 掉无效 op）。
@@ -454,6 +463,11 @@ class CodingMemoryReconciler:
                 if not op.target_experience_id:
                     logger.warning(f"[coding-reconcile] drop UPDATE missing target: {op.to_dict()}")
                     continue
+                if not self._target_was_offered(op, candidates_per_draft):
+                    logger.warning(
+                        f"[coding-reconcile] drop UPDATE outside authority scope: {op.to_dict()}"
+                    )
+                    continue
                 if op.draft_idx in consumed:
                     logger.warning(f"[coding-reconcile] drop UPDATE on consumed draft: {op.to_dict()}")
                     continue
@@ -475,6 +489,11 @@ class CodingMemoryReconciler:
             elif op.action == "DELETE":
                 if not op.target_experience_id:
                     logger.warning(f"[coding-reconcile] drop DELETE missing target: {op.to_dict()}")
+                    continue
+                if not self._target_was_offered(op, candidates_per_draft):
+                    logger.warning(
+                        f"[coding-reconcile] drop DELETE outside authority scope: {op.to_dict()}"
+                    )
                     continue
                 # DELETE 需要知道 user_id；通过 draft_idx（如有）或第一个 draft 推断
                 user_id = self._infer_user_id(op, drafts)
@@ -511,6 +530,19 @@ class CodingMemoryReconciler:
                 logger.warning(f"[coding-reconcile] fallback ADD failed: {e}")
 
         return executed
+
+    @staticmethod
+    def _target_was_offered(
+        op: ReconcileOp,
+        candidates_per_draft: List[List[CodingMemory]],
+    ) -> bool:
+        """Only mutate a target frozen into this draft's scoped candidate set."""
+        if op.draft_idx is None or not (0 <= op.draft_idx < len(candidates_per_draft)):
+            return False
+        return any(
+            candidate.experience_id == op.target_experience_id
+            for candidate in candidates_per_draft[op.draft_idx]
+        )
 
     @staticmethod
     def _infer_user_id(

@@ -12,8 +12,9 @@ L1_RAW 对外读路径不可见：闸门焊在向量库唯一查询入口。
 hybrid_search_native / list_by_user 四个查询方法的共同必经处，
 上层无法绕开，新增接口自动受保护。
 
-按 ID 直取走主键查询、不经过 filter，故在 `client.async_get` 处单独挡
-（GET /v1/memories/{id} 与 /v1/memories/batch 的共同必经处）。
+按 ID 直取走主键查询、不经过 filter，故在 `client.async_get` 处默认挡住。
+Python SDK 调用方可显式传 `include_raw=True` 读取；HTTP 接口不传该参数，
+继续保持原有隐藏行为。
 
 内部管线需读原始对话时显式 allow_raw_layer=True 放行：
 - `writer._get_recent_dialogue_history`：提取前拼多轮对话历史喂 LLM
@@ -124,28 +125,63 @@ class TestListNoLongerFiltersInProcess:
             "list 又出现进程内过滤 raw 的写法，应交由 vdb 侧 filter 完成"
 
 
-class TestGetByIdPathBlocksRaw:
-    """按 ID 直取：走主键查询不经 filter，须在 async_get 处挡住。"""
+class TestGetByIdRawOptIn:
+    """按 ID 直取默认隐藏 raw，只有 SDK 显式选择时才返回。"""
 
-    def test_async_get_drops_raw_node(self):
+    @staticmethod
+    def _client(node):
+        from hy_memory.client import HyMemoryClient
+
+        class Store:
+            async def get_by_id(self, memory_id):
+                return node if memory_id == node.node_id else None
+
+        async def no_op_log(**kwargs):
+            return None
+
+        client = HyMemoryClient.__new__(HyMemoryClient)
+        client._vector_store = Store()
+        client._graph_store = None
+        client._backend_identity = lambda: {}
+        client._maybe_store_op_log = no_op_log
+        return client
+
+    @staticmethod
+    def _raw_node():
+        return MemoryNode(
+            node_id="raw-1",
+            user_id="u1",
+            agent_id="a1",
+            session_id="s1",
+            content="原始对话",
+            layer=MemoryLayer.L1_RAW,
+            status=MemoryStatus.ACTIVE,
+            custom={"meta": [{"source": "test"}]},
+        )
+
+    def test_default_still_hides_raw(self):
+        from hy_memory.client import HyMemoryClient
+
+        client = self._client(self._raw_node())
+        raw_get = HyMemoryClient.async_get.__wrapped__
+        assert run(raw_get(client, "raw-1")) is None
+
+    def test_explicit_include_raw_returns_lite_memory(self):
+        from hy_memory.client import HyMemoryClient
+
+        client = self._client(self._raw_node())
+        raw_get = HyMemoryClient.async_get.__wrapped__
+        result = run(raw_get(client, "raw-1", include_raw=True))
+
+        assert result["memory_id"] == "raw-1"
+        assert result["content"] == "原始对话"
+        assert result["layer"] == MemoryLayer.L1_RAW.value
+        assert result["meta"] == [{"source": "test"}]
+
+    def test_public_get_exposes_keyword_only_opt_in(self):
         import inspect
         from hy_memory.client import HyMemoryClient
-        src = inspect.getsource(HyMemoryClient.async_get)
-        assert "MemoryLayer.L1_RAW" in src, \
-            "async_get 未挡 raw，batch 与按 ID 单取会漏出原始对话"
 
-    def test_block_happens_before_return(self):
-        """挡的位置必须在两处 return 之前，否则等于没挡。"""
-        import inspect
-        from hy_memory.client import HyMemoryClient
-        lines = inspect.getsource(HyMemoryClient.async_get).splitlines()
-        block_at = next(
-            i for i, l in enumerate(lines)
-            if "MemoryLayer.L1_RAW" in l and "vdb_node" in l
-        )
-        first_return_at = next(
-            i for i, l in enumerate(lines)
-            if l.strip().startswith("return {")
-        )
-        assert block_at < first_return_at, \
-            f"挡 raw 在第 {block_at} 行、首个 return 在第 {first_return_at} 行，顺序错了"
+        param = inspect.signature(HyMemoryClient.get).parameters["include_raw"]
+        assert param.default is False
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY

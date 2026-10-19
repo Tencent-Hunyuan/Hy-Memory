@@ -38,10 +38,11 @@ from one_memory.memory_server.migrations import memory_write_jobs_sqlite_schema
 from one_memory.memory_server.queue import build_reclaim_sqlite_statements
 from one_memory.memory_server.registry import WriteRecord
 from one_memory.memory_tasks import (
-    POLICY_STOPPED_CODES as _TASK_POLICY_STOPPED_CODES,
+    NON_RETRYABLE_POST_WRITE_CODES,
+    MemoryTaskStatus,
 )
 from one_memory.memory_tasks import (
-    MemoryTaskStatus,
+    POLICY_STOPPED_CODES as _TASK_POLICY_STOPPED_CODES,
 )
 from one_memory.service_levels import ServiceLevel, service_level_context
 
@@ -1404,11 +1405,12 @@ class DurableWriteQueue:
     ) -> int:
         """Re-admit `waiting_for_model` jobs whose wait has elapsed.
 
-        A model outage clears on its own, so this state is retried on a timer
+        A model outage clears on its own, so transient waiters retry on a timer
         rather than waiting for a grant event like `waiting_for_permission`.
-        Keyed on `updated_at` so repeated calls while a job is still parked do
-        not reset its own clock; the attempt consumed by the parking claim is
-        returned, the same way `readmit_parked` does.
+        `model_profile_not_active` is excluded: only explicit activation can
+        change that condition. Keyed on `updated_at` so repeated calls while a
+        job is still parked do not reset its own clock; the attempt consumed by
+        the parking claim is returned, the same way `readmit_parked` does.
         """
         now = now or datetime.now(UTC)
         threshold = (now - after).isoformat()
@@ -1417,8 +1419,33 @@ class DurableWriteQueue:
                 "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
                 "lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
                 "THEN attempts-1 ELSE 0 END, last_error=NULL, updated_at=? "
-                "WHERE state=? AND updated_at <= ? AND hy_invoked=0",
-                (PENDING, now.isoformat(), WAITING_FOR_MODEL, threshold),
+                "WHERE state=? AND updated_at <= ? AND hy_invoked=0 "
+                "AND (last_error IS NULL OR last_error<>?)",
+                (
+                    PENDING,
+                    now.isoformat(),
+                    WAITING_FOR_MODEL,
+                    threshold,
+                    "model_profile_not_active",
+                ),
+            )
+        return changed.rowcount
+
+    def readmit_model_profile_waiters(self) -> int:
+        """Re-admit no-profile work only after model activation changes the condition."""
+        now = datetime.now(UTC).isoformat()
+        with main_database(self.database_path).write() as connection, connection:
+            changed = connection.execute(
+                "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
+                "lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
+                "THEN attempts-1 ELSE 0 END, last_error=NULL, updated_at=? "
+                "WHERE state=? AND last_error=? AND hy_invoked=0",
+                (
+                    PENDING,
+                    now,
+                    WAITING_FOR_MODEL,
+                    "model_profile_not_active",
+                ),
             )
         return changed.rowcount
 
@@ -1516,9 +1543,13 @@ class DurableWriteQueue:
             connection,
         ):
             row = connection.execute(
-                "SELECT state FROM memory_write_jobs WHERE job_id=?", (job_id,)
+                "SELECT state,last_error FROM memory_write_jobs WHERE job_id=?", (job_id,)
             ).fetchone()
-            if row is None or str(row["state"]) != UNKNOWN:
+            if (
+                row is None
+                or str(row["state"]) != UNKNOWN
+                or str(row["last_error"]) in NON_RETRYABLE_POST_WRITE_CODES
+            ):
                 return 0
             connection.execute(
                 """
@@ -1675,8 +1706,15 @@ class DurableWriteQueue:
             rows = connection.execute(
                 "SELECT job_id FROM memory_write_jobs "
                 "WHERE state=? AND attempts=1 AND attempts < max_attempts "
+                f"AND COALESCE(last_error, '') NOT IN "
+                f"({','.join('?' for _ in NON_RETRYABLE_POST_WRITE_CODES)}) "
                 "AND updated_at <= ? ORDER BY updated_at, job_id LIMIT ?",
-                (UNKNOWN, older_than.isoformat(), limit),
+                (
+                    UNKNOWN,
+                    *NON_RETRYABLE_POST_WRITE_CODES,
+                    older_than.isoformat(),
+                    limit,
+                ),
             ).fetchall()
             job_ids = tuple(str(row["job_id"]) for row in rows)
             if not job_ids:
@@ -1740,6 +1778,7 @@ class DurableWriteQueue:
         *,
         limit: int = 128,
         after_cursor: tuple[str, str] | None = None,
+        exclude_error_codes: tuple[str, ...] = (),
     ) -> tuple[UnknownWriteJob, ...]:
         """List unknown rows that still need an inquiry, in stable order.
 
@@ -1756,6 +1795,9 @@ class DurableWriteQueue:
         """
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be positive")
+        excluded = tuple(dict.fromkeys(exclude_error_codes))
+        if not all(isinstance(code, str) and code for code in excluded):
+            raise ValueError("exclude_error_codes must contain non-empty strings")
         cursor_clause = ""
         params: tuple[Any, ...] = ()
         if after_cursor is not None:
@@ -1768,14 +1810,20 @@ class DurableWriteQueue:
             updated_at, job_id = after_cursor
             cursor_clause = "AND (updated_at, job_id) > (?, ?)"
             params = (updated_at, job_id)
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            excluded_clause = f"AND COALESCE(last_error, '') NOT IN ({placeholders})"
+        else:
+            excluded_clause = ""
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
             rows = connection.execute(
                 "SELECT job_id, idempotency_key, created_at, updated_at, last_error "
                 "FROM memory_write_jobs "
                 "WHERE state=? "
                 f"{cursor_clause} "
+                f"{excluded_clause} "
                 "ORDER BY updated_at, job_id LIMIT ?",
-                (UNKNOWN, *params, limit),
+                (UNKNOWN, *params, *excluded, limit),
             ).fetchall()
         return tuple(
             UnknownWriteJob(
@@ -2071,7 +2119,12 @@ async def execute_job(
         # Never `logger.exception` here: it prints the exception's message,
         # which may be a provider response or the user's own text. Log the
         # already-sanitised code instead, matching `hy-failure-classification`.
-        logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
+        if code == "model_profile_not_active":
+            logger.debug("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
+        elif state in PARKED_STATES:
+            logger.info("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
+        else:
+            logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
         return
     await in_the_background(queue.settle, job_id, state=COMPLETED, owner=owner)
 

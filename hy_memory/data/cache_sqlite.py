@@ -7,7 +7,7 @@ Agent Memory V2 - SqliteCache
 设计模式跟随 history_store.py:
 - 标准库 sqlite3 + _run_in_sqlite_pool()
 - WAL 模式 + check_same_thread=False
-- threading.Lock 保护写操作
+- 每实例 threading.RLock 保护共享连接的全部操作与关闭
 
 三张表:
 - memory_operations / pipeline_logs / system_metrics: 审计与观测
@@ -122,7 +122,10 @@ class SqliteCache(CacheBase):
     def __init__(self, config: MemoryConfig):
         self.config = config
         self._conn: Optional[sqlite3.Connection] = None
-        self._lock = threading.Lock()
+        # One connection is shared by the executor workers. Use the same lock
+        # for reads, writes, initialization and close so close() cannot free
+        # the connection while another worker is inside sqlite3.
+        self._lock = threading.RLock()
 
         # 读取 db_path
         cache_cfg = getattr(config, "cache", None)
@@ -144,35 +147,37 @@ class SqliteCache(CacheBase):
         logger.debug(f"SqliteCache initialized: {self._db_path}")
 
     def _init_sync(self) -> None:
-        db_dir = os.path.dirname(self._db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL;")
-        self._conn.executescript(_CREATE_TABLES_SQL)
-        self._migrate_pipeline_logs_columns()
-        self._conn.commit()
+        with self._lock:
+            db_dir = os.path.dirname(self._db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL;")
+            self._conn.executescript(_CREATE_TABLES_SQL)
+            self._migrate_pipeline_logs_columns()
+            self._conn.commit()
 
     def _migrate_pipeline_logs_columns(self) -> None:
         """给旧库的 pipeline_logs_v2 补 namespace/session/event time 列。"""
-        try:
-            cols = {
-                row["name"]
-                for row in self._conn.execute("PRAGMA table_info(pipeline_logs_v2)")
-            }
-            _text_cols = ("namespace", "session_id")
-            for col in _text_cols:
-                if col not in cols:
+        with self._lock:
+            try:
+                cols = {
+                    row["name"]
+                    for row in self._conn.execute("PRAGMA table_info(pipeline_logs_v2)")
+                }
+                _text_cols = ("namespace", "session_id")
+                for col in _text_cols:
+                    if col not in cols:
+                        self._conn.execute(
+                            f"ALTER TABLE pipeline_logs_v2 ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+                        )
+                if "event_at_ms" not in cols:
                     self._conn.execute(
-                        f"ALTER TABLE pipeline_logs_v2 ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+                        "ALTER TABLE pipeline_logs_v2 ADD COLUMN event_at_ms INTEGER NOT NULL DEFAULT 0"
                     )
-            if "event_at_ms" not in cols:
-                self._conn.execute(
-                    "ALTER TABLE pipeline_logs_v2 ADD COLUMN event_at_ms INTEGER NOT NULL DEFAULT 0"
-                )
-        except Exception as e:
-            logger.debug(f"[sqlite] pipeline_logs_v2 column migration skipped: {e}")
+            except Exception as e:
+                logger.debug(f"[sqlite] pipeline_logs_v2 column migration skipped: {e}")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -180,9 +185,10 @@ class SqliteCache(CacheBase):
         logger.info("SqliteCache closed")
 
     def _close_sync(self) -> None:
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
 
     # ================================================================
     # 统计
@@ -255,39 +261,40 @@ class SqliteCache(CacheBase):
         """
         try:
             def _query():
-                conditions = []
-                params = []
-                if request_id:
-                    conditions.append("request_id = ?")
-                    params.append(request_id)
-                if memory_id:
-                    conditions.append("memory_id = ?")
-                    params.append(memory_id)
-                if user_id:
-                    conditions.append("user_id = ?")
-                    params.append(user_id)
+                with self._lock:
+                    conditions = []
+                    params = []
+                    if request_id:
+                        conditions.append("request_id = ?")
+                        params.append(request_id)
+                    if memory_id:
+                        conditions.append("memory_id = ?")
+                        params.append(memory_id)
+                    if user_id:
+                        conditions.append("user_id = ?")
+                        params.append(user_id)
 
-                if not conditions:
-                    return []
+                    if not conditions:
+                        return []
 
-                where = " AND ".join(conditions)
-                rows = self._conn.execute(
-                    f"SELECT * FROM memory_operations_v2 WHERE {where} "
-                    f"ORDER BY id DESC LIMIT ?",
-                    params + [limit],
-                ).fetchall()
-                result = []
-                for r in rows:
-                    row = dict(r)
-                    # 反序列化 supersedes JSON 字符串 → list
-                    import json as _json
-                    raw_sup = row.get("supersedes", "")
-                    try:
-                        row["supersedes"] = _json.loads(raw_sup) if raw_sup else []
-                    except Exception:
-                        row["supersedes"] = []
-                    result.append(row)
-                return result
+                    where = " AND ".join(conditions)
+                    rows = self._conn.execute(
+                        f"SELECT * FROM memory_operations_v2 WHERE {where} "
+                        f"ORDER BY id DESC LIMIT ?",
+                        params + [limit],
+                    ).fetchall()
+                    result = []
+                    for r in rows:
+                        row = dict(r)
+                        # 反序列化 supersedes JSON 字符串 → list
+                        import json as _json
+                        raw_sup = row.get("supersedes", "")
+                        try:
+                            row["supersedes"] = _json.loads(raw_sup) if raw_sup else []
+                        except Exception:
+                            row["supersedes"] = []
+                        result.append(row)
+                    return result
 
             return await _run_in_sqlite_pool(_query)
         except Exception as e:
@@ -369,37 +376,38 @@ class SqliteCache(CacheBase):
         """
         try:
             def _query():
-                conditions = []
-                params = []
-                if request_id:
-                    conditions.append("request_id = ?")
-                    params.append(request_id)
-                if user_id:
-                    conditions.append("user_id = ?")
-                    params.append(user_id)
-                if step:
-                    conditions.append("step = ?")
-                    params.append(step)
+                with self._lock:
+                    conditions = []
+                    params = []
+                    if request_id:
+                        conditions.append("request_id = ?")
+                        params.append(request_id)
+                    if user_id:
+                        conditions.append("user_id = ?")
+                        params.append(user_id)
+                    if step:
+                        conditions.append("step = ?")
+                        params.append(step)
 
-                if not conditions:
-                    return []
+                    if not conditions:
+                        return []
 
-                where = " AND ".join(conditions)
-                rows = self._conn.execute(
-                    f"SELECT * FROM pipeline_logs_v2 WHERE {where} "
-                    f"ORDER BY id ASC LIMIT ?",
-                    params + [limit],
-                ).fetchall()
-                out = [dict(r) for r in rows]
-                # 派生可读的 event_at（ISO ms）供查询接口直接用；event_at_ms 为 0 时留空
-                from datetime import datetime as _dt
-                for _r in out:
-                    _ms = _r.get("event_at_ms") or 0
-                    _r["event_at"] = (
-                        _dt.fromtimestamp(_ms / 1000.0).isoformat(timespec="milliseconds")
-                        if _ms else ""
-                    )
-                return out
+                    where = " AND ".join(conditions)
+                    rows = self._conn.execute(
+                        f"SELECT * FROM pipeline_logs_v2 WHERE {where} "
+                        f"ORDER BY id ASC LIMIT ?",
+                        params + [limit],
+                    ).fetchall()
+                    out = [dict(r) for r in rows]
+                    # 派生可读的 event_at（ISO ms）供查询接口直接用；event_at_ms 为 0 时留空
+                    from datetime import datetime as _dt
+                    for _r in out:
+                        _ms = _r.get("event_at_ms") or 0
+                        _r["event_at"] = (
+                            _dt.fromtimestamp(_ms / 1000.0).isoformat(timespec="milliseconds")
+                            if _ms else ""
+                        )
+                    return out
 
             return await _run_in_sqlite_pool(_query)
         except Exception as e:
@@ -414,26 +422,27 @@ class SqliteCache(CacheBase):
         """存储一个分钟桶的增量指标数据（UPSERT: 同一分钟多次写入会合并）"""
         try:
             def _store():
-                now = datetime.now().isoformat()
-                # UPSERT: 如果同一分钟已存在，合并数据
-                existing = self._conn.execute(
-                    "SELECT data FROM system_metrics WHERE minute_ts = ?",
-                    (minute_ts,),
-                ).fetchone()
-                if existing:
-                    import json as _json
-                    old_data = _json.loads(existing["data"])
-                    merged = self._merge_metric_buckets(old_data, data)
-                    self._conn.execute(
-                        "UPDATE system_metrics SET data = ?, created_at = ? WHERE minute_ts = ?",
-                        (_json.dumps(merged, default=str), now, minute_ts),
-                    )
-                else:
-                    self._conn.execute(
-                        "INSERT INTO system_metrics (minute_ts, data, created_at) VALUES (?, ?, ?)",
-                        (minute_ts, json.dumps(data, default=str), now),
-                    )
-                self._conn.commit()
+                with self._lock:
+                    now = datetime.now().isoformat()
+                    # UPSERT: 如果同一分钟已存在，合并数据
+                    existing = self._conn.execute(
+                        "SELECT data FROM system_metrics WHERE minute_ts = ?",
+                        (minute_ts,),
+                    ).fetchone()
+                    if existing:
+                        import json as _json
+                        old_data = _json.loads(existing["data"])
+                        merged = self._merge_metric_buckets(old_data, data)
+                        self._conn.execute(
+                            "UPDATE system_metrics SET data = ?, created_at = ? WHERE minute_ts = ?",
+                            (_json.dumps(merged, default=str), now, minute_ts),
+                        )
+                    else:
+                        self._conn.execute(
+                            "INSERT INTO system_metrics (minute_ts, data, created_at) VALUES (?, ?, ?)",
+                            (minute_ts, json.dumps(data, default=str), now),
+                        )
+                    self._conn.commit()
             await _run_in_sqlite_pool(_store)
         except Exception as e:
             logger.warning(f"store_metrics_minute failed: {e}")
@@ -442,17 +451,18 @@ class SqliteCache(CacheBase):
         """读取指定时间范围内的分钟指标数据"""
         try:
             def _load():
-                rows = self._conn.execute(
-                    "SELECT data FROM system_metrics WHERE minute_ts >= ? AND minute_ts <= ? ORDER BY minute_ts",
-                    (start_ts, end_ts),
-                ).fetchall()
-                results = []
-                for row in rows:
-                    try:
-                        results.append(json.loads(row["data"]))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                return results
+                with self._lock:
+                    rows = self._conn.execute(
+                        "SELECT data FROM system_metrics WHERE minute_ts >= ? AND minute_ts <= ? ORDER BY minute_ts",
+                        (start_ts, end_ts),
+                    ).fetchall()
+                    results = []
+                    for row in rows:
+                        try:
+                            results.append(json.loads(row["data"]))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    return results
             return await _run_in_sqlite_pool(_load)
         except Exception as e:
             logger.warning(f"load_metrics_range failed: {e}")
@@ -462,11 +472,12 @@ class SqliteCache(CacheBase):
         """删除指定时间之前的 metrics 数据"""
         try:
             def _cleanup():
-                self._conn.execute(
-                    "DELETE FROM system_metrics WHERE minute_ts < ?",
-                    (before_ts,),
-                )
-                self._conn.commit()
+                with self._lock:
+                    self._conn.execute(
+                        "DELETE FROM system_metrics WHERE minute_ts < ?",
+                        (before_ts,),
+                    )
+                    self._conn.commit()
             await _run_in_sqlite_pool(_cleanup)
         except Exception as e:
             logger.warning(f"cleanup_old_metrics failed: {e}")

@@ -1113,6 +1113,109 @@ def test_task_only_unknown_is_automatically_retried_only_once(tmp_path) -> None:
     assert store.require(task.task_id).status is MemoryTaskStatus.UNKNOWN
 
 
+def test_authority_invalid_task_is_never_reinvoked(tmp_path) -> None:
+    store, profile = _profile_and_tasks(tmp_path)
+    task = store.create(
+        request_id="authority-invalid",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="authority-evidence",
+        profile=profile,
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?,attempts=1,last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                MemoryTaskStatus.UNKNOWN,
+                "hy_memory_write_verification_authority_invalid",
+                "2026-01-01T00:00:00+00:00",
+                task.task_id,
+            ),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 0
+    assert store.retry_unknown_confirmed() == 0
+    retained = store.require(task.task_id)
+    assert retained.status is MemoryTaskStatus.UNKNOWN
+    assert retained.attempts == 1
+    assert retained.last_error_code == "hy_memory_write_verification_authority_invalid"
+
+
+def test_linked_unknown_is_retried_only_by_the_durable_job(tmp_path) -> None:
+    from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+    from one_memory.memory_server.durable_queue import DurableWriteQueue
+
+    store, profile = _profile_and_tasks(tmp_path)
+    evidence = EvidenceStore(store.database_path)
+    record = evidence.put(
+        EvidenceInput(
+            source_id="cursor",
+            conversation_id="linked-conversation",
+            message_id="linked-message",
+            role="user",
+            written_by=WrittenBy.PERSON,
+            verbatim="linked unknown",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+        )
+    ).record
+    task = store.create(
+        request_id="linked-task",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=record.evidence_id,
+        profile=profile,
+        input_records=(record,),
+    )
+    queue = DurableWriteQueue(store.database_path, evidence=evidence)
+    job = queue.submit(
+        WriteRequest(
+            internal_session_id="linked-session",
+            batch_identity=BatchIdentity(
+                internal_session_id="linked-session",
+                first_round=1,
+                last_round=1,
+            ),
+            evidence_ids=[record.evidence_id],
+            idempotency_key="linked-job",
+            source_id="cursor",
+        )
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?,attempts=1,last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                MemoryTaskStatus.UNKNOWN,
+                "model_content_outcome_unknown",
+                "2026-01-01T00:00:00+00:00",
+                task.task_id,
+            ),
+        )
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+            "last_error='model_content_outcome_unknown',updated_at=? WHERE job_id=?",
+            ("2026-01-01T00:00:00+00:00", job.job_id),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 0
+    assert store.require(task.task_id).status is MemoryTaskStatus.UNKNOWN
+    assert queue.retry_first_unknown_after_reconcile(older_than=cutoff) == 1
+    assert store.require(task.task_id).status is MemoryTaskStatus.PENDING
+    assert queue.get(job.request_id).state == "pending"
+    assert (
+        store.active_window(
+            now=datetime(2026, 1, 2, tzinfo=UTC),
+            fresh_window=timedelta(days=1),
+            extraction_window=None,
+        )
+        == []
+    )
+
+
 def test_orphan_recovery_preserves_active_running_tasks(tmp_path) -> None:
     store, profile = _profile_and_tasks(tmp_path)
     active = store.create(

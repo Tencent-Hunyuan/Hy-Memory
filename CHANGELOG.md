@@ -14,6 +14,25 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Fixed governed-memory revisions and repeated evidence links failing when the
+  visibility dirty-marker trigger encounters the same memory twice. Startup
+  now replaces the affected legacy trigger without changing schema versions
+  or governed and visibility data.
+- Serialized each SDK SQLite store's shared connection lifecycle so concurrent
+  history/cache operations cannot race with `close()` and crash the process.
+- Scoped Coding reconciliation targets to the current HY authority,
+  conversation, and workspace, preventing near-duplicate sessions from
+  mutating an experience or working fact owned by another evidence context.
+- Kept post-write authority verification failures available for read-only
+  reconciliation while preventing automatic or generic confirmed retries from
+  invoking the model again. Automatic reconciliation skips those sticky rows
+  before applying its batch limit, and linked durable jobs exclusively own
+  retry scheduling for their memory tasks.
+- Clarified that `add(metadata=...)` carries legacy SDK processing options,
+  while persistent caller business context belongs in `meta`.
+- Added an opt-in `get(..., include_raw=True)` path for reading `L1_RAW`
+  memories, including memories written in lite mode. The default remains
+  hidden for backward compatibility.
 - Removed MemHub's task-scoped HyPermission store wrappers and global
   model-content consent switch. The trusted embedded Hy Memory SDK now uses
   its native local stores directly.

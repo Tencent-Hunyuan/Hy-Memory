@@ -111,6 +111,9 @@ def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> No
     app = SimpleNamespace(
         state=SimpleNamespace(
             config_store=config,
+            model_profile_store=SimpleNamespace(
+                active_identity=lambda: ("profile", 1)
+            ),
             source_grant_store=SimpleNamespace(
                 receipt=lambda **_kwargs: SimpleNamespace(revoked_at=None)
             ),
@@ -122,6 +125,21 @@ def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> No
 
     assert _sedimentation_claim_enabled(app, "one-memory-manual") is True
     config.set_sedimentation_enabled(False)
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
+
+
+def test_claim_gate_waits_without_polling_when_no_model_is_active(tmp_path) -> None:
+    config = ConfigStore(tmp_path)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config_store=config,
+            model_profile_store=SimpleNamespace(active_identity=lambda: None),
+            source_grant_store=SimpleNamespace(
+                receipt=lambda **_kwargs: SimpleNamespace(revoked_at=None)
+            ),
+        )
+    )
+
     assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
 
 
