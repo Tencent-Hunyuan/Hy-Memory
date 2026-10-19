@@ -466,7 +466,12 @@ class WorkingFactReconciler:
             return [], []
 
         candidates = await self._retrieve_candidates(
-            drafts, user_id=user_id, source=source,
+            drafts,
+            user_id=user_id,
+            agent_id=agent_id,
+            workspace_id=workspace_id,
+            branch=branch,
+            source=source,
         )
 
         try:
@@ -499,7 +504,14 @@ class WorkingFactReconciler:
     # ------------------------------------------------------------
 
     async def _retrieve_candidates(
-        self, drafts: List[WorkingFactDraft], *, user_id: str, source: str
+        self,
+        drafts: List[WorkingFactDraft],
+        *,
+        user_id: str,
+        agent_id: str,
+        workspace_id: Optional[str],
+        branch: Optional[str],
+        source: str,
     ) -> List[List[WorkingFact]]:
         """每条 draft 用 statement 召回同 user 的 top-N active 事实。
 
@@ -525,6 +537,9 @@ class WorkingFactReconciler:
             try:
                 hits = await self.store.search_facts(
                     emb, user_id=user_id, top=self.candidates_per_draft,
+                    agent_id=agent_id,
+                    workspace_id=workspace_id,
+                    branch=branch,
                     # 写入侧同样接词面通道：候选选错了 LLM 就没有机会判对。这里不传
                     # min_score——写入侧要的是"有哪些可能的前身"，让 LLM 看更宽的名单，
                     # 阈值过滤是读取侧的事。
@@ -793,6 +808,11 @@ class WorkingFactReconciler:
             for old_id in targets:
                 old = await self.store.get_fact(old_id, user_id=user_id)
                 if old is None:
+                    continue
+                if old.agent_id != agent_id or old.workspace_id != workspace_id:
+                    logger.warning(
+                        f"[fact-reconcile] refused cross-authority SUPERSEDE: {old.fact_id}"
+                    )
                     continue
                 # 闸门在候选阶段已经拦过一道，这里再拦一次：候选是按 statement 召回的，
                 # 而 LLM 只能覆盖候选名单里的 id，理论上到不了这儿。真到了就说明前面

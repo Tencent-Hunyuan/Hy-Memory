@@ -67,6 +67,12 @@ POLICY_STOPPED_CODES = (
     "hy_memory_evidence_changed",
 )
 
+#: HY completed a write, but Core could not prove that the selected mutation
+#: target belonged to this task's frozen authority. Reconciliation may inspect
+#: HY by request id, but neither automatic nor user-confirmed generic retry may
+#: invoke the model again for these codes.
+NON_RETRYABLE_POST_WRITE_CODES = ("hy_memory_write_verification_authority_invalid",)
+
 
 class MemoryTask(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -114,6 +120,24 @@ PROFILE_STOP_CODES = (
 #: first-run corpus can hold hundreds of thousands of legacy rows; marking
 #: them all while preparing the active window would hold the single writer.
 ACTIVE_WINDOW_DEFER_LIMIT = 2048
+
+
+def _task_only_unknown_clause(connection: sqlite3.Connection) -> str:
+    """Exclude tasks whose Evidence is already owned by the durable queue."""
+    linked_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_write_job_evidence'"
+    ).fetchone()
+    if linked_table is None:
+        return ""
+    return """
+        AND NOT EXISTS (
+            SELECT 1
+            FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+            JOIN memory_write_job_evidence AS linked
+              ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+            WHERE inputs.task_id=memory_tasks.task_id
+        )
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -1314,7 +1338,7 @@ class MemoryTaskStore:
         live_clause = f"task.task_id IN ({live_placeholders})" if live_ids else "0"
         not_live_clause = f"task.task_id NOT IN ({live_placeholders})" if live_ids else "1"
         excluded_clause = f"task.task_id NOT IN ({excluded_placeholders})" if excluded else "1"
-        common = f"""
+        common_base = f"""
             task.status IN (?,?,?,?)
             AND coalesce(task.last_error_code, '') NOT IN (
                 'hy_memory_input_exceeds_window', 'model_content_outcome_unknown'
@@ -1333,7 +1357,33 @@ class MemoryTaskStore:
         """
         moment = "coalesce(evidence.created_at, evidence.imported_at)"
 
+        def common_for(connection: sqlite3.Connection) -> str:
+            has_durable_queue = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                "AND name IN ('memory_write_jobs','memory_write_job_evidence')"
+            ).fetchone()[0]
+            if int(has_durable_queue) != 2:
+                return common_base
+            return (
+                common_base
+                + """
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+                    JOIN memory_write_job_evidence AS linked
+                      ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+                    JOIN memory_write_jobs AS job ON job.job_id=linked.job_id
+                    WHERE inputs.task_id=task.task_id
+                      AND job.state IN (
+                          'pending', 'running', 'unknown',
+                          'waiting_for_permission', 'waiting_for_model'
+                      )
+                )
+            """
+            )
+
         def run(connection: sqlite3.Connection, *, defer: bool) -> list[sqlite3.Row]:
+            common = common_for(connection)
             in_window = (
                 "1"
                 if extraction_since is None
@@ -1430,6 +1480,7 @@ class MemoryTaskStore:
         def has_defer_candidate(connection: sqlite3.Connection) -> bool:
             if extraction_since is None:
                 return False
+            common = common_for(connection)
             row = connection.execute(
                 f"""
                 SELECT 1
@@ -2211,20 +2262,26 @@ class MemoryTaskStore:
         """
         now = datetime.now(UTC).isoformat()
         with self._connect(writing=True) as connection:
+            task_only = _task_only_unknown_clause(connection)
+            blocked = ",".join("?" for _ in NON_RETRYABLE_POST_WRITE_CODES)
             changed = connection.execute(
-                """
+                f"""
                 UPDATE memory_tasks
                 SET status=?, runner_token=NULL, attempts=0,
                     last_error_code='model_content_manual_retry_requested', updated_at=?
                 WHERE task_id IN (
                     SELECT task_id FROM memory_tasks
-                    WHERE status=? ORDER BY updated_at, task_id LIMIT ?
+                    WHERE status=?
+                      AND COALESCE(last_error_code, '') NOT IN ({blocked})
+                      {task_only}
+                    ORDER BY updated_at, task_id LIMIT ?
                 )
                 """,
                 (
                     MemoryTaskStatus.PENDING,
                     now,
                     MemoryTaskStatus.UNKNOWN,
+                    *NON_RETRYABLE_POST_WRITE_CODES,
                     limit,
                 ),
             )
@@ -2246,14 +2303,18 @@ class MemoryTaskStore:
             raise ValueError("limit must be positive")
         now = datetime.now(UTC).isoformat()
         with self._connect(writing=True) as connection:
+            task_only = _task_only_unknown_clause(connection)
+            blocked = ",".join("?" for _ in NON_RETRYABLE_POST_WRITE_CODES)
             changed = connection.execute(
-                """
+                f"""
                 UPDATE memory_tasks
                 SET status=?, runner_token=NULL,
                     last_error_code='model_content_unknown_auto_retry', updated_at=?
                 WHERE task_id IN (
                     SELECT task_id FROM memory_tasks
                     WHERE status=? AND attempts=1 AND updated_at <= ?
+                      AND COALESCE(last_error_code, '') NOT IN ({blocked})
+                      {task_only}
                     ORDER BY updated_at, task_id LIMIT ?
                 )
                 """,
@@ -2262,6 +2323,7 @@ class MemoryTaskStore:
                     now,
                     MemoryTaskStatus.UNKNOWN,
                     older_than.isoformat(),
+                    *NON_RETRYABLE_POST_WRITE_CODES,
                     limit,
                 ),
             )

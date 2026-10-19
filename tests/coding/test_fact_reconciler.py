@@ -256,6 +256,32 @@ class TestSupersede:
         old = await coding_store.get_fact("f_old", user_id="u1")
         assert old.status == "active"
 
+    async def test_near_duplicate_fact_cannot_cross_authority_scope(
+        self, coding_store, mock_embed
+    ):
+        await coding_store.insert_fact(WorkingFact(
+            fact_id="f_old",
+            user_id="u1",
+            agent_id="scope:2026-10-18",
+            workspace_id="repo-a",
+            statement="CI build now passes after upgrading Node",
+        ))
+        llm = _llm([{"draft_idx": 0, "supersedes": ["f_old"]}])
+        rec = WorkingFactReconciler(coding_store, mock_embed, llm)
+
+        _, ops = await rec.reconcile(
+            [_draft("CI build now passes after upgrading Node")],
+            user_id="u1",
+            agent_id="scope:2026-10-19",
+            workspace_id="repo-a",
+        )
+
+        old = await coding_store.get_fact("f_old", user_id="u1")
+        assert old is not None
+        assert old.status == "active"
+        assert [op.action for op in ops] == ["INSERT"]
+        assert len(llm.calls) == 0
+
     async def test_old_fact_superseded_only_once(self, coding_store, mock_embed):
         """两条新事实都声称覆盖同一条旧事实时，只让第一条生效。
 
@@ -667,7 +693,7 @@ class TestSubjectGateSwitch:
             [WorkingFactDraft(subject="Bart", statement="Bart 的行程。")],
             [[old]],
             {0: ["f_emma"]},
-            user_id="u1", agent_id="a1", session_id=None, workspace_id=None,
+            user_id="u1", agent_id="default_agent", session_id=None, workspace_id=None,
         )
         assert "SUPERSEDE" in [o.action for o in ops]
 
@@ -687,7 +713,7 @@ class TestSubjectGateSwitch:
                 [WorkingFactDraft(subject="deploy.sh", statement="新的部署脚本结论。")],
                 [[old]],
                 {0: [f"f_noneed_{gate}"]},
-                user_id="u1", agent_id="a1", session_id=None, workspace_id=None,
+                user_id="u1", agent_id="default_agent", session_id=None, workspace_id=None,
             )
             assert "SUPERSEDE" in [o.action for o in ops], f"gate={gate} 时空 subject 被误拦"
 

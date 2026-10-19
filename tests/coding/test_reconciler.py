@@ -35,7 +35,8 @@ class TestReconcilerActions:
     async def test_update(self, coding_store, mock_embed):
         # 种入 m1
         await coding_store.insert(CodingMemory(
-            experience_id="m1", user_id="u1", task="T1",
+            experience_id="m1", user_id="u1", agent_id="scope-day-1",
+            workspace_id="repo-a", task="T1",
             search_keys=["old"], solution="old",
         ))
         llm = MockLLMProvider(_llm_resp([
@@ -44,12 +45,62 @@ class TestReconcilerActions:
         ]))
         rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
         d = CodingMemoryDraft(task="T1", search_keys=["new1"], solution="new",
-                              user_id="u1")
+                              user_id="u1", agent_id="scope-day-1",
+                              workspace_id="repo-a")
         ops = await rec.reconcile([d])
         assert len(ops) == 1 and ops[0].action == "UPDATE"
         got = await coding_store.get_by_id("m1", "u1")
         assert got.solution == "new"
         assert got.search_keys == ["new1"]
+
+    @pytest.mark.parametrize(
+        ("old_agent", "old_workspace", "new_agent", "new_workspace"),
+        [
+            ("scope:2026-10-18", "repo-a", "scope:2026-10-19", "repo-a"),
+            ("shared-scope", "repo-a", "shared-scope", "repo-b"),
+        ],
+    )
+    async def test_update_target_must_match_frozen_authority_scope(
+        self,
+        coding_store,
+        mock_embed,
+        old_agent,
+        old_workspace,
+        new_agent,
+        new_workspace,
+    ):
+        """Near-duplicate sessions cannot rewrite another day or workspace."""
+        await coding_store.insert(CodingMemory(
+            experience_id="old-target", user_id="u1", agent_id=old_agent,
+            workspace_id=old_workspace, task="fix flaky release", solution="old solution",
+        ))
+        llm = MockLLMProvider(_llm_resp([
+            {
+                "draft_idx": 0,
+                "action": "UPDATE",
+                "target_experience_id": "old-target",
+                "reason": "near duplicate",
+            },
+        ]))
+        rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
+        draft = CodingMemoryDraft(
+            task="fix flaky release",
+            solution="new solution",
+            user_id="u1",
+            agent_id=new_agent,
+            workspace_id=new_workspace,
+        )
+
+        ops = await rec.reconcile([draft])
+
+        old = await coding_store.get_by_id("old-target", "u1")
+        assert old is not None
+        assert old.solution == "old solution"
+        assert old.agent_id == old_agent
+        assert old.workspace_id == old_workspace
+        assert len(ops) == 1
+        assert ops[0].action == "ADD"
+        assert ops[0].target_experience_id != "old-target"
 
     async def test_skip(self, coding_store, mock_embed):
         await coding_store.insert(CodingMemory(

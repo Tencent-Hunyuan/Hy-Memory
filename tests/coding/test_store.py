@@ -90,6 +90,24 @@ class TestStoreCRUD:
         assert got.solution == "new"
         assert got.search_keys == ["new1"]
 
+    async def test_update_rejects_authority_scope_change(self, coding_store):
+        await coding_store.insert(CodingMemory(
+            experience_id="e1", user_id="u1", agent_id="scope-a",
+            workspace_id="repo-a", task="T", solution="old",
+        ))
+        replacement = CodingMemory(
+            experience_id="e1", user_id="u1", agent_id="scope-b",
+            workspace_id="repo-a", task="T", solution="new",
+        )
+
+        with pytest.raises(ValueError, match="coding_memory_update_authority_mismatch"):
+            await coding_store.update(replacement)
+
+        stored = await coding_store.get_by_id("e1", user_id="u1")
+        assert stored is not None
+        assert stored.agent_id == "scope-a"
+        assert stored.solution == "old"
+
     async def test_delete(self, coding_store):
         m = CodingMemory(experience_id="e1", user_id="u1", task="T",
                          search_keys=["k"], solution="S")

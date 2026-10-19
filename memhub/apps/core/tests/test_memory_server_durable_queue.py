@@ -4896,15 +4896,16 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
     record = queue.submit(_request(key="after-call", source="opencode"))
     claimer = DurableWriteDrain(queue, execute=_never_execute, owner="after-call-owner")
     assert claimer.claim(limit=1) == (record.job_id,)
+    recorder = _Recorder(
+        error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
+        invoke_hy=True,
+    )
 
     asyncio.run(
         execute_job(
             record.job_id,
             queue=queue,
-            supervisor=_Recorder(
-                error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
-                invoke_hy=True,
-            ),
+            supervisor=recorder,
             evidence=_EvidenceStore({"e1"}),
             owner="after-call-owner",
         )
@@ -4918,6 +4919,16 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
 
     assert state == UNKNOWN
     assert invoked == 1
+    assert len(recorder.seen) == 1
+    assert (
+        queue.retry_first_unknown_after_reconcile(
+            older_than=datetime.now(UTC) + timedelta(minutes=1)
+        )
+        == 0
+    )
+    assert queue.retry_unknown_confirmed(record.job_id) == 0
+    assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=1) == ()
+    assert len(recorder.seen) == 1
 
 
 def test_event_time_not_enqueue_order_drives_the_window(
