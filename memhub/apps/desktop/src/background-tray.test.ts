@@ -87,6 +87,57 @@ function fixture(
 }
 
 describe("native macOS background tray", () => {
+  it("refreshes localized menu on preference change without changing the login action", async () => {
+    let language: "zh-CN" | "en" = "zh-CN";
+    let changed: (() => void) | undefined;
+    let template: MenuItemConstructorOptions[] = [];
+    const tray = Object.assign(new EventEmitter(), {
+      setToolTip: vi.fn(),
+      setContextMenu: vi.fn(),
+      destroy: vi.fn(),
+    });
+    const image = { isEmpty: () => false, resize: vi.fn() };
+    image.resize.mockReturnValue(image);
+    const dispose = installBackgroundTray({
+      app: { isPackaged: false, quit: vi.fn() },
+      platform: "darwin",
+      resourcesPath: "/bundle",
+      appPath: "/app",
+      createImage: () => image as unknown as NativeImage,
+      createTray: () => tray as unknown as Tray,
+      buildMenu: (items) => {
+        template = items;
+        return {} as Menu;
+      },
+      open: vi.fn(),
+      reportError: vi.fn(),
+      readLoginPreference: vi.fn(async () => ({
+        supported: false,
+        enabled: false,
+        status: "disabled",
+      })),
+      setLoginPreference: vi.fn(async () => ({
+        supported: false,
+        enabled: false,
+        status: "disabled",
+      })),
+      getLanguage: () => language,
+      onLanguageChanged: (listener) => {
+        changed = listener;
+        return () => {
+          changed = undefined;
+        };
+      },
+    });
+    expect(template[0]?.label).toBe("打开 MemHub");
+    language = "en";
+    changed?.();
+    expect(template[0]?.label).toBe("Open MemHub");
+    expect(template[1]?.label).toContain("Start MemHub at login");
+    expect(template[3]?.label).toContain("background service stays running");
+    dispose();
+    expect(changed).toBeUndefined();
+  });
   it("reads and changes the unified Runtime login preference", async () => {
     const f = fixture();
     const dispose = f.install();

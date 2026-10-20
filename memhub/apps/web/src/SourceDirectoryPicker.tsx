@@ -1,12 +1,14 @@
 import type {
   SourceDirectoryCandidate,
   SourceResponse,
+  UiMessage,
 } from "@one-memory/contracts";
 import { ArrowLeft, Check, FolderSearch, RefreshCw, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { previewSourceDirectory } from "./api";
 import { saveSourceRoot } from "./source-state";
+import { useTranslate } from "./ui-language";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteJobRejection } from "./use-import-sources";
 import { useMediaPreference } from "./use-media-preference";
@@ -25,8 +27,9 @@ const prioritySources = new Set([
   "claude-code",
   "codex",
 ]);
-const changedMessage =
+const changedMessage: UiMessage =
   "来源位置或候选版本已变化，请取消后重新选择目录。旧确认不会用于变化后的来源。";
+type PickerError = UiMessage | { key: UiMessage; detail: string };
 type Attempt = {
   source: SourceResponse;
   key: string;
@@ -37,10 +40,11 @@ type Attempt = {
 
 export function SourceDirectoryPicker(props: SourceDirectoryPickerProps) {
   const { source, disabled = false } = props;
+  const t = useTranslate();
   const [picking, setPicking] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<PickerError | null>(null);
+  const [notice, setNotice] = useState<UiMessage | null>(null);
   const mounted = useRef(false);
   const flight = useRef(false);
   const active = useRef(false);
@@ -128,7 +132,9 @@ export function SourceDirectoryPicker(props: SourceDirectoryPickerProps) {
       if (mounted.current && generation.current === token) {
         setError(
           reason instanceof Error
-            ? `目录选择未完成：${reason.message}`
+            ? reason.message === "目录选择未返回有效位置。"
+              ? "目录选择未返回有效位置。"
+              : { key: "目录选择未完成：{detail}", detail: reason.message }
             : "目录选择未完成，请重试。",
         );
         finish();
@@ -137,7 +143,7 @@ export function SourceDirectoryPicker(props: SourceDirectoryPickerProps) {
   }
 
   if (!prioritySources.has(source.source_id)) return null;
-  const explanation = !supported
+  const explanation: UiMessage | null = !supported
     ? "当前桌面版本不支持目录选择，请更新桌面应用。"
     : null;
   return (
@@ -145,28 +151,30 @@ export function SourceDirectoryPicker(props: SourceDirectoryPickerProps) {
       <button
         type="button"
         className="source-directory-trigger"
-        aria-label={`选择 ${source.display_name} 历史目录`}
-        title={`选择 ${source.display_name} 历史目录`}
+        aria-label={t("选择 {name} 历史目录", { name: source.display_name })}
+        title={t("选择 {name} 历史目录", { name: source.display_name })}
         aria-describedby={explanation ? id : undefined}
         disabled={disabled || !!explanation || picking || attempt !== null}
         onClick={(event) => void pick(event.currentTarget)}
       >
         <FolderSearch size={16} aria-hidden="true" />
-        {picking ? "正在选择目录…" : "选择目录"}
+        {picking ? t("正在选择目录…") : t("选择目录")}
       </button>
       {explanation && (
         <p id={id} className="source-directory-meta">
-          {explanation}
+          {t(explanation)}
         </p>
       )}
       {error && (
         <p role="alert" className="source-directory-error">
-          {error}
+          {typeof error === "string"
+            ? t(error)
+            : t(error.key, { detail: error.detail })}
         </p>
       )}
       {notice && (
         <p role="status" className="source-directory-meta">
-          {notice}
+          {t(notice)}
         </p>
       )}
       {attempt && (
@@ -203,6 +211,7 @@ function CandidateSheet({
   onClose(saved: boolean): void;
 }) {
   const id = useId();
+  const t = useTranslate();
   const panel = useRef<HTMLElement>(null);
   const cover = useRef<HTMLDivElement>(null);
   const alive = useRef(false);
@@ -222,7 +231,7 @@ function CandidateSheet({
     | "saved-changed"
   >("preview");
   const [confirmed, setConfirmed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PickerError | null>(null);
   const [stale, setStale] = useState(false);
   const [closing, setClosing] = useState(false);
   const reducedMotion = useMediaPreference("(prefers-reduced-motion: reduce)");
@@ -560,13 +569,13 @@ function CandidateSheet({
       >
         <header className="source-directory-heading">
           <h2 id={`${id}-title`}>
-            保存 {attempt.source.display_name} 的候选位置
+            {t("保存 {name} 的候选位置", { name: attempt.source.display_name })}
           </h2>
           <button
             type="button"
             className="source-directory-icon"
-            aria-label="关闭目录确认"
-            title="关闭目录确认"
+            aria-label={t("关闭目录确认")}
+            title={t("关闭目录确认")}
             disabled={writePending || closing}
             onClick={() => close()}
           >
@@ -575,14 +584,18 @@ function CandidateSheet({
         </header>
         <div className="source-directory-reading">
           <p id={`${id}-description`}>
-            仅保存这个来源的候选目录，不会读取历史、开启持续同步、处理模型内容或安装宿主连接。保存后仍需选择来源，并单独确认历史读取。
+            {t(
+              "仅保存这个来源的候选目录，不会读取历史、开启持续同步、处理模型内容或安装宿主连接。保存后仍需选择来源，并单独确认历史读取。",
+            )}
           </p>
           <strong>{attempt.source.display_name}</strong>
           <code>{preview?.path ?? attempt.path}</code>
-          {phase === "preview" && <p role="status">正在核对目录位置…</p>}
+          {phase === "preview" && <p role="status">{t("正在核对目录位置…")}</p>}
           {writePending && (
             <p role="status">
-              {phase === "saving" ? "正在保存候选位置…" : "正在刷新来源状态…"}
+              {phase === "saving"
+                ? t("正在保存候选位置…")
+                : t("正在刷新来源状态…")}
             </p>
           )}
           {preview && !refreshOnly && (
@@ -593,12 +606,16 @@ function CandidateSheet({
                 disabled={pending || closing || invalid || disabled}
                 onChange={(event) => setConfirmed(event.target.checked)}
               />
-              <span>仅保存此候选位置，不授权读取历史</span>
+              <span>{t("仅保存此候选位置，不授权读取历史")}</span>
             </label>
           )}
           {(invalid || error) && (
             <p role="alert" className="source-directory-error">
-              {invalid ? changedMessage : error}
+              {invalid
+                ? t(changedMessage)
+                : typeof error === "string"
+                  ? t(error)
+                  : error && t(error.key, { detail: error.detail })}
             </p>
           )}
         </div>
@@ -610,7 +627,7 @@ function CandidateSheet({
             onClick={() => close()}
           >
             <ArrowLeft size={16} aria-hidden="true" />
-            取消
+            {t("取消")}
           </button>
           {phase === "saved-changed" ? null : refreshOnly ? (
             <button
@@ -619,7 +636,7 @@ function CandidateSheet({
               onClick={() => void refresh()}
             >
               <RefreshCw size={16} aria-hidden="true" />
-              刷新来源状态
+              {t("刷新来源状态")}
             </button>
           ) : preview ? (
             <button
@@ -628,7 +645,7 @@ function CandidateSheet({
               onClick={() => void save()}
             >
               <Check size={16} aria-hidden="true" />
-              保存候选位置
+              {t("保存候选位置")}
             </button>
           ) : (
             phase !== "preview" && (
@@ -638,7 +655,7 @@ function CandidateSheet({
                 onClick={() => void check()}
               >
                 <RefreshCw size={16} aria-hidden="true" />
-                重新核对目录
+                {t("重新核对目录")}
               </button>
             )
           )}
@@ -649,7 +666,7 @@ function CandidateSheet({
   );
 }
 
-function blockedReason(source: SourceResponse): string | null {
+function blockedReason(source: SourceResponse): UiMessage | null {
   if (
     source.candidate_kind === "environment_override" ||
     source.candidate_change_reason?.includes("environment")
@@ -712,8 +729,11 @@ function validCandidate(
   );
 }
 
-function directoryError(reason: unknown) {
-  return reason instanceof Error
-    ? `目录核对失败：${reason.message}`
-    : "目录核对失败，请重试或重新选择。";
+function directoryError(reason: unknown): PickerError {
+  if (reason instanceof Error) {
+    if (reason.message === "目录核对回执无效或候选版本已变化，请重新选择。")
+      return "目录核对回执无效或候选版本已变化，请重新选择。";
+    return { key: "目录核对失败：{detail}", detail: reason.message };
+  }
+  return "目录核对失败，请重试或重新选择。";
 }

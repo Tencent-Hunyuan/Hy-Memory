@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConversationSearch } from "./ConversationSearch";
+import { setUiLanguage } from "./ui-language";
 
 const {
   searchConversations,
@@ -95,7 +96,11 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = scrollIntoView;
 });
 
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  await setUiLanguage("zh-CN");
+  window.localStorage.removeItem("memhub.ui-language");
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -160,6 +165,56 @@ async function search(
   await user.click(screen.getByRole("button", { name: "搜索" }));
   return user;
 }
+
+it("switches conversation controls to English without translating original messages", async () => {
+  const user = userEvent.setup();
+  render(<ConversationSearch />);
+  await user.type(
+    screen.getByRole("textbox", { name: "搜索历史对话" }),
+    "打包",
+  );
+  await user.click(screen.getByRole("button", { name: "搜索" }));
+  await screen.findByText(found.hits[0].excerpt);
+  await openA(user);
+  expect(await screen.findByText(transcript.messages[1].verbatim)).toBeTruthy();
+
+  await act(async () => setUiLanguage("en"));
+  expect(
+    screen.getByRole("textbox", { name: "Search conversation history" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("region", { name: "Conversation search results" }),
+  ).toBeTruthy();
+  expect(screen.getByText(transcript.messages[1].verbatim)).toBeTruthy();
+  expect(screen.getAllByText(found.hits[0].excerpt)).toHaveLength(2);
+  expect(screen.getByText("Original user message")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Close original conversation" }),
+  ).toBeTruthy();
+});
+
+it("translates an existing search error without exposing its internal code", async () => {
+  const user = userEvent.setup();
+  searchConversations.mockRejectedValueOnce(
+    new Error("conversation_search_unavailable"),
+  );
+  render(<ConversationSearch />);
+  await user.type(
+    screen.getByRole("textbox", { name: "搜索历史对话" }),
+    "打包",
+  );
+  await user.click(screen.getByRole("button", { name: "搜索" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "搜索索引不可用",
+  );
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("alert").textContent).toContain(
+    "search index is unavailable",
+  );
+  expect(screen.getByRole("alert").textContent).not.toContain(
+    "conversation_search_unavailable",
+  );
+});
 
 it("lists recent conversations before the user searches", async () => {
   getConversationBrowser.mockResolvedValue({

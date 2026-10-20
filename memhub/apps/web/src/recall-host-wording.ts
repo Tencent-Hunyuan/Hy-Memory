@@ -1,3 +1,5 @@
+import type { UiMessage } from "@one-memory/contracts";
+
 /** How a host's link and call-rule states are said to the user.
  *
  * Two screens now report the same host — the source list and the health
@@ -11,7 +13,7 @@
  * were installed, and installed was all it said. So none of these three is
  * that word.
  */
-export const LINK_WORDING: Record<string, string> = {
+export const LINK_WORDING: Record<string, UiMessage> = {
   wired: "已接通",
   reachable_but_blind: "已安装，但取不到记忆",
   unreachable: "未接通",
@@ -23,7 +25,7 @@ export const LINK_WORDING: Record<string, string> = {
  * running on yesterday's instructions, and the reverse. Different failure
  * modes, different actions.
  */
-export const SKILL_WORDING: Record<string, string> = {
+export const SKILL_WORDING: Record<string, UiMessage> = {
   in_sync: "最新",
   stale: "需更新",
   modified: "你手动改过",

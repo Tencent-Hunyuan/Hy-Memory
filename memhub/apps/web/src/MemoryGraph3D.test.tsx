@@ -4,9 +4,10 @@ import type {
   MemoryGraphNode,
   MemoryGraphResponse,
 } from "@one-memory/contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemoryGraph3D } from "./MemoryGraph3D";
+import { setUiLanguage } from "./ui-language";
 
 afterEach(cleanup);
 
@@ -48,6 +49,26 @@ function makeGraph(nodeCount: number): MemoryGraphResponse {
 }
 
 describe("MemoryGraph3D", () => {
+  it("图谱降级提示随语言切换，节点标签保持原样", async () => {
+    render(
+      <MemoryGraph3D
+        graph={makeGraph(1)}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+      />,
+    );
+    try {
+      await act(() => setUiLanguage("en"));
+      expect(
+        screen.getByText(
+          "3D view is unavailable on this device. Showing the connections as a list.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "节点 0" })).toBeTruthy();
+    } finally {
+      await act(() => setUiLanguage("zh-CN"));
+    }
+  });
   it("没有 WebGL 时给出可访问降级提示", () => {
     render(
       <MemoryGraph3D

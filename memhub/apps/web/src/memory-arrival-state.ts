@@ -2,6 +2,7 @@ import type {
   MemoryProcessingBlock,
   MemoryProcessingSummary,
   SourceResponse,
+  UiMessage,
 } from "@one-memory/contracts";
 import { modelBlock, splitBlockedStages } from "./memory-processing-labels";
 
@@ -110,7 +111,7 @@ function onlyRetries(blocks: readonly MemoryProcessingBlock[]): boolean {
   return blocks.length > 0 && splitBlockedStages(blocks).named.length === 0;
 }
 
-export function memoryArrivalTitle(arrival: MemoryArrival): string {
+export function memoryArrivalTitle(arrival: MemoryArrival): UiMessage {
   switch (arrival.phase) {
     case "checking":
     case "unavailable":

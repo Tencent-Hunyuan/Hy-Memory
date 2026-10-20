@@ -7,7 +7,10 @@ import type {
   MemoryGraphResponse,
   MemoryProcessingSummary,
   SourceResponse,
+  UiLanguage,
+  UiMessage,
 } from "@one-memory/contracts";
+import { formatUiNumber, translate } from "@one-memory/contracts";
 import {
   ChevronDown,
   ChevronLeft,
@@ -52,6 +55,7 @@ import { MemoryMap } from "./MemoryMap";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { sourceNameOr } from "./source-label";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import { traceUiAction } from "./ui-trace";
 import { useMemoryLibrary } from "./use-memory-library";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
@@ -119,6 +123,8 @@ export function MemorySpace({
   focusDialogue?: boolean;
   onFocusDialogueConsumed?(): void;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const [memories, setMemories] = useState<GovernedMemory[]>([]);
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [detailFreshness, setDetailFreshness] = useState<{
@@ -197,10 +203,16 @@ export function MemorySpace({
   // filter's, and naming the new one would caption the wrong numbers.
   const settledFilterLabel = [
     mapLibrary.settledSource
-      ? `来源 ${sourceNameOr(sources, mapLibrary.settledSource, mapLibrary.settledSource)}`
+      ? t("来源 {name}", {
+          name: sourceNameOr(
+            sources,
+            mapLibrary.settledSource,
+            mapLibrary.settledSource,
+          ),
+        })
       : "",
     mapLibrary.settledQuery.trim()
-      ? `关键词“${mapLibrary.settledQuery.trim()}”`
+      ? t("关键词“{query}”", { query: mapLibrary.settledQuery.trim() })
       : "",
   ]
     .filter(Boolean)
@@ -269,7 +281,15 @@ export function MemorySpace({
     });
   }
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorState] = useState<
+    { text: string; local: false } | { text: UiMessage; local: true } | null
+  >(null);
+  function setError(text: string | null) {
+    setErrorState(text === null ? null : { text, local: false });
+  }
+  const setLocalError = useCallback((text: UiMessage) => {
+    setErrorState({ text, local: true });
+  }, []);
   const [readError, setReadError] = useState<string | null>(null);
   /** A refresh behind an already-drawn list, not the first load. */
   const [refreshing, setRefreshing] = useState(false);
@@ -485,7 +505,7 @@ export function MemorySpace({
           (latest.memory.deleted_at && !selected.memory.deleted_at)
         ) {
           closeDetail();
-          setError("所选记忆已不可读取，请重新读取记忆库。");
+          setLocalError("所选记忆已不可读取，请重新读取记忆库。");
           return;
         }
         // Refresh the read-only projection even when the memory revision did
@@ -532,7 +552,7 @@ export function MemorySpace({
           code === "memory_deleted"
         ) {
           closeDetail();
-          setError("所选记忆已不可读取，请重新读取记忆库。");
+          setLocalError("所选记忆已不可读取，请重新读取记忆库。");
         } else setDetailFreshness({ id: selectedDetailId, state: "failed" });
       } finally {
         inFlight = false;
@@ -564,6 +584,7 @@ export function MemorySpace({
     displayedMode,
     busy,
     closeDetail,
+    setLocalError,
   ]);
 
   // 记忆图谱只读一次很慢（实测同一份数据 1.4s–85s，会拖死渲染进程），
@@ -1013,11 +1034,11 @@ export function MemorySpace({
           ? "memory_action_failed"
           : "memory_action_result_unknown",
       });
-      setError(
-        committed
-          ? "修改已保存，但读取最新列表失败。已停止使用旧回答，请重新读取。"
-          : message(reason),
-      );
+      if (committed)
+        setLocalError(
+          "修改已保存，但读取最新列表失败。已停止使用旧回答，请重新读取。",
+        );
+      else setError(message(reason));
     } finally {
       setBusy(false);
     }
@@ -1170,7 +1191,7 @@ export function MemorySpace({
       try {
         await refresh(query);
       } catch {
-        setError(
+        setLocalError(
           simplified
             ? "批量处理结果已保留，但列表刷新失败，请重新读取记忆库。"
             : "批量处理结果已保留，但列表刷新失败，稍后会自动重新读取。",
@@ -1213,11 +1234,11 @@ export function MemorySpace({
           ? "memory_correct_failed"
           : "memory_correct_result_unknown",
       });
-      setError(
-        committed
-          ? "纠正已保存，但读取最新列表失败。已停止使用旧回答，请重新读取。"
-          : message(reason),
-      );
+      if (committed)
+        setLocalError(
+          "纠正已保存，但读取最新列表失败。已停止使用旧回答，请重新读取。",
+        );
+      else setError(message(reason));
     } finally {
       setBusy(false);
     }
@@ -1272,7 +1293,7 @@ export function MemorySpace({
       try {
         await refresh(query);
       } catch {
-        setError("召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。");
+        setLocalError("召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。");
       }
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
@@ -1344,7 +1365,7 @@ export function MemorySpace({
     if (
       busy ||
       !window.confirm(
-        "重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？",
+        t("重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？"),
       )
     )
       return;
@@ -1416,19 +1437,33 @@ export function MemorySpace({
       </div>
       <header className="memory-instrument-header">
         <div>
-          <h1 id="memory-title">{simplified ? "记忆" : "记忆空间"}</h1>
+          <h1 id="memory-title">{simplified ? t("记忆") : t("记忆空间")}</h1>
           <span className="memory-loaded-count">
             {simplified && !management
               ? mapLibrary.failed
-                ? "记忆读取失败"
+                ? t("记忆读取失败")
                 : mapLibrary.stale
-                  ? "正在导入历史会话，记忆将陆续出现"
+                  ? t("正在导入历史会话，记忆将陆续出现")
                   : mapLibrary.page
-                    ? `已沉淀 ${mapLibrary.page.total} 条${settledFilterLabel ? `（${settledFilterLabel}）` : ""} · 当前展示 ${mapLibrary.page.items.length} 条`
-                    : "正在读取…"
+                    ? t("已沉淀 {count} 条{filter} · 当前展示 {shown} 条", {
+                        count: formatUiNumber(language, mapLibrary.page.total),
+                        filter: settledFilterLabel
+                          ? t("（{filter}）", { filter: settledFilterLabel })
+                          : "",
+                        shown: formatUiNumber(
+                          language,
+                          mapLibrary.page.items.length,
+                        ),
+                      })
+                    : t("正在读取…")
               : loaded
-                ? `已加载 ${memories.filter((m) => m.status !== "deleted").length} 条记忆`
-                : "正在读取…"}
+                ? t("已加载 {count} 条记忆", {
+                    count: formatUiNumber(
+                      language,
+                      memories.filter((m) => m.status !== "deleted").length,
+                    ),
+                  })
+                : t("正在读取…")}
           </span>
         </div>
         <MemoryNoteComposer
@@ -1447,7 +1482,7 @@ export function MemorySpace({
           <div
             className="memory-mode-tabs"
             role="tablist"
-            aria-label="记忆空间模式"
+            aria-label={t("记忆空间模式")}
             onKeyDown={(event) => {
               // A `role="tablist"` is expected to move selection with the arrow
               // keys (WAI-ARIA tabs pattern). Without this the four tabs were
@@ -1504,7 +1539,7 @@ export function MemorySpace({
                 }}
               >
                 <Icon size={16} aria-hidden="true" />
-                {label}
+                {t(label)}
               </button>
             ))}
           </div>
@@ -1517,10 +1552,10 @@ export function MemorySpace({
               className={processingNeedsAttention ? "status-attention" : ""}
             >
               {processingNeedsAttention
-                ? "整理需要处理"
+                ? t("整理需要处理")
                 : processing.running || processing.pending
-                  ? "正在整理记忆"
-                  : "整理状态"}
+                  ? t("正在整理记忆")
+                  : t("整理状态")}
             </span>
             <ChevronDown size={14} aria-hidden="true" />
           </summary>
@@ -1532,16 +1567,25 @@ export function MemorySpace({
                 }
               />
               {processing.running || processing.pending
-                ? `${processing.running} 处理中 · ${queueWaiting(processing)}${queueEta(processing)}`
-                : `${processing.completed} 次整理已完成`}
+                ? t("{count} 处理中 · {queue}{eta}", {
+                    count: processing.running,
+                    queue: queueWaiting(processing),
+                    eta: queueEta(processing),
+                  })
+                : t("{count} 次整理已完成", { count: processing.completed })}
               {processing.outside_window_pending ? (
                 <span className="pipeline-outside-window">
-                  {` · ${processing.outside_window_pending} 条在窗口外（原文可搜）`}
+                  {t(" · {count} 条在窗口外（原文可搜）", {
+                    count: processing.outside_window_pending,
+                  })}
                 </span>
               ) : null}
               {processing.manual_extract_batches_planned ? (
                 <span className="pipeline-manual-batches">
-                  {` · 已规划 ${processing.manual_extract_batches_planned} 批，当前第 ${processing.manual_extract_batches_current} 批`}
+                  {t(" · 已规划 {planned} 批，当前第 {current} 批", {
+                    planned: processing.manual_extract_batches_planned,
+                    current: processing.manual_extract_batches_current ?? 0,
+                  })}
                 </span>
               ) : null}
               {blocked.named.length ? (
@@ -1562,9 +1606,13 @@ export function MemorySpace({
             </p>
             {(processing.unknown ?? 0) > 0 ? (
               <div className="memory-processing-unknown" role="status">
-                <span>{`有 ${processing.unknown} 段对话的整理结果不确定`}</span>
+                <span>
+                  {t("有 {count} 段对话的整理结果不确定", {
+                    count: processing.unknown ?? 0,
+                  })}
+                </span>
                 <R6Button disabled={busy} onClick={() => void retryUnknown()}>
-                  重新整理
+                  {t("重新整理")}
                 </R6Button>
               </div>
             ) : null}
@@ -1596,10 +1644,13 @@ export function MemorySpace({
       />
       {simplified && pendingNote ? (
         <p className="memory-pending-note" role="status">
-          <span>原话已保存，正在等待整理：{pendingNote.text}</span>
+          <span>
+            {t("原话已保存，正在等待整理：")}
+            {pendingNote.text}
+          </span>
           {pendingNote.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
-              配置整理模型
+              {t("配置整理模型")}
             </button>
           ) : null}
         </p>
@@ -1607,18 +1658,18 @@ export function MemorySpace({
 
       {readError && (
         <details className="memory-feedback-details">
-          <summary>查看读取详情</summary>
+          <summary>{t("查看读取详情")}</summary>
           <p>{readError}</p>
         </details>
       )}
       {refreshing ? (
         <p className="memory-refreshing" role="status">
-          正在更新…
+          {t("正在更新…")}
         </p>
       ) : null}
       {error ? (
         <p className="error-banner" role="alert">
-          {error}
+          {error.local ? t(error.text) : error.text}
         </p>
       ) : null}
 
@@ -1670,19 +1721,19 @@ export function MemorySpace({
         }}
       >
         <label htmlFor="memory-query">
-          {displayedMode === "ask" ? "向已确认记忆提问" : "搜索记忆库"}
+          {displayedMode === "ask" ? t("向已确认记忆提问") : t("搜索记忆库")}
         </label>
         <div>
           {displayedMode === "ask" ? (
             <select
-              aria-label="问答记忆范围"
+              aria-label={t("问答记忆范围")}
               value={askScope}
               onChange={(event) =>
                 setAskScope(event.target.value as "all-apps" | "*")
               }
             >
-              <option value="all-apps">只问个人画像</option>
-              <option value="*">问全部记忆（含项目）</option>
+              <option value="all-apps">{t("只问个人画像")}</option>
+              <option value="*">{t("问全部记忆（含项目）")}</option>
             </select>
           ) : null}
           <input
@@ -1694,8 +1745,8 @@ export function MemorySpace({
             maxLength={management ? 512 : undefined}
             placeholder={
               displayedMode === "ask"
-                ? "例如：我对真实数据有什么要求？"
-                : "搜索偏好、决定或经历"
+                ? t("例如：我对真实数据有什么要求？")
+                : t("搜索偏好、决定或经历")
             }
             onChange={(event) => {
               if (bulkInFlight.current) return;
@@ -1708,10 +1759,10 @@ export function MemorySpace({
             disabled={busy || (!management && !query.trim())}
           >
             {busy
-              ? "处理中…"
+              ? t("处理中…")
               : displayedMode === "ask"
-                ? "根据记忆回答"
-                : "搜索"}
+                ? t("根据记忆回答")
+                : t("搜索")}
           </button>
           {management && (query || submittedQuery) ? (
             <R6Button
@@ -1724,7 +1775,7 @@ export function MemorySpace({
                 setSelection(new Set());
               }}
             >
-              清除搜索
+              {t("清除搜索")}
             </R6Button>
           ) : null}
         </div>
@@ -1814,14 +1865,20 @@ export function MemorySpace({
             <p className="answer-label">
               {answer
                 ? answer.mode === "generated"
-                  ? "模型综合"
+                  ? t("模型综合")
                   : answer.mode === "extractive"
-                    ? "原文摘录"
-                    : "没有命中"
+                    ? t("原文摘录")
+                    : t("没有命中")
                 : streaming?.text
-                  ? "正在生成"
-                  : "正在检索记忆"}{" "}
-              · 基于 {(answer ?? streaming)?.memories.length ?? 0} 条已确认记忆
+                  ? t("正在生成")
+                  : t("正在检索记忆")}{" "}
+              ·{" "}
+              {t("基于 {count} 条已确认记忆", {
+                count: formatUiNumber(
+                  language,
+                  (answer ?? streaming)?.memories.length ?? 0,
+                ),
+              })}
             </p>
             <h2 aria-live="polite">
               {answer ? answer.answer : streaming?.text}
@@ -1841,7 +1898,7 @@ export function MemorySpace({
           </article>
         ) : (
           <p className="ask-intro">
-            回答只使用已确认记忆。每个答案都可以回到对应记忆和来源原话。
+            {t("回答只使用已确认记忆。每个答案都可以回到对应记忆和来源原话。")}
           </p>
         )}
         <MemoryInspector
@@ -1871,7 +1928,7 @@ export function MemorySpace({
           <nav
             className="memory-status-tabs"
             data-tour-id="memory-status-tabs"
-            aria-label="记忆治理状态"
+            aria-label={t("记忆治理状态")}
           >
             {(
               [
@@ -1892,7 +1949,7 @@ export function MemorySpace({
                   if (!simplified) setDetail(null);
                 }}
               >
-                {label}{" "}
+                {t(label)}{" "}
                 {!simplified &&
                   memories.filter((memory) => memory.status === value).length}
               </button>
@@ -1901,17 +1958,25 @@ export function MemorySpace({
           {management && (
             <>
               {library.page ? (
-                <nav aria-label="记忆库分页">
-                  <span aria-live="polite">共 {library.page.total} 条</span>{" "}
+                <nav aria-label={t("记忆库分页")}>
+                  <span aria-live="polite">
+                    {t("共 {count} 条", {
+                      count: formatUiNumber(language, library.page.total),
+                    })}
+                  </span>{" "}
                   <span>
-                    第{" "}
-                    {Math.floor(library.page.offset / library.page.limit) + 1}{" "}
-                    页
+                    {t("第 {page} 页", {
+                      page: formatUiNumber(
+                        language,
+                        Math.floor(library.page.offset / library.page.limit) +
+                          1,
+                      ),
+                    })}
                   </span>
                   <R6Button
                     variant="quiet"
-                    title="上一页"
-                    aria-label="上一页"
+                    title={t("上一页")}
+                    aria-label={t("上一页")}
                     disabled={busy || library.page.offset === 0}
                     onClick={() => {
                       if (library.page) {
@@ -1924,8 +1989,8 @@ export function MemorySpace({
                   </R6Button>
                   <R6Button
                     variant="quiet"
-                    title="下一页"
-                    aria-label="下一页"
+                    title={t("下一页")}
+                    aria-label={t("下一页")}
                     disabled={
                       busy ||
                       library.page.offset + library.page.limit >=
@@ -1943,30 +2008,44 @@ export function MemorySpace({
                 </nav>
               ) : null}
               {sourceSnapshotStale ? (
-                <p role="status">来源状态待核对，记忆库暂不可读取。</p>
+                <p role="status">{t("来源状态待核对，记忆库暂不可读取。")}</p>
               ) : library.stale ? (
                 <p role="status">
-                  正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。
+                  {t(
+                    "正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。",
+                  )}
                 </p>
               ) : library.failed ? (
                 <div role="alert">
-                  <p>记忆库读取失败，请重试。</p>
+                  <p>{t("记忆库读取失败，请重试。")}</p>
                   <R6Button
                     onClick={() => {
                       void library.refresh().catch(() => {});
                     }}
                   >
-                    重新读取记忆库
+                    {t("重新读取记忆库")}
                   </R6Button>
                 </div>
               ) : library.loading ? (
-                <p role="status">正在读取记忆库…</p>
+                <p role="status">{t("正在读取记忆库…")}</p>
               ) : null}
             </>
           )}
           {bulkResult ? (
-            <p role="status" aria-label="批量操作结果">
-              {`已${bulkResult.action ? bulkActionLabel(bulkResult.action) : "处理"} ${bulkResult.succeeded} 条${bulkResult.failed ? `，${bulkResult.failed} 条未完成` : ""}`}
+            <p role="status" aria-label={t("批量操作结果")}>
+              {t(
+                bulkResult.action
+                  ? "已删除 {count} 条{failed}"
+                  : "已处理 {count} 条{failed}",
+                {
+                  count: formatUiNumber(language, bulkResult.succeeded),
+                  failed: bulkResult.failed
+                    ? t("，{count} 条未完成", {
+                        count: formatUiNumber(language, bulkResult.failed),
+                      })
+                    : "",
+                },
+              )}
             </p>
           ) : null}
           {visibleFailures.length ? (
@@ -1975,19 +2054,27 @@ export function MemorySpace({
               disabled={busy}
               onClick={() => void runBulk(visibleFailures)}
             >
-              {`重试失败的 ${visibleFailures.length} 条`}
+              {t("重试失败的 {count} 条", {
+                count: formatUiNumber(language, visibleFailures.length),
+              })}
             </button>
           ) : null}
           {selectedCount ? (
-            <fieldset className="memory-bulk-bar" aria-label="批量操作">
-              <span>{`已选 ${selectedCount} 条`}</span>
+            <fieldset className="memory-bulk-bar" aria-label={t("批量操作")}>
+              <span>
+                {t("已选 {count} 条", {
+                  count: formatUiNumber(language, selectedCount),
+                })}
+              </span>
               <button
                 type="button"
                 className="danger"
                 disabled={busy}
                 onClick={() => void bulkAction("delete")}
               >
-                {`删除所选 ${selectedCount} 条`}
+                {t("删除所选 {count} 条", {
+                  count: formatUiNumber(language, selectedCount),
+                })}
               </button>
               <button
                 type="button"
@@ -1997,7 +2084,7 @@ export function MemorySpace({
                   if (!bulkInFlight.current) setSelection(new Set());
                 }}
               >
-                取消选择
+                {t("取消选择")}
               </button>
             </fieldset>
           ) : null}
@@ -2010,7 +2097,9 @@ export function MemorySpace({
                     <input
                       type="checkbox"
                       disabled={busy}
-                      aria-label={`选择：${memory.content}`}
+                      aria-label={t("选择：{content}", {
+                        content: memory.content,
+                      })}
                       checked={selection.has(memory.memory_id)}
                       onChange={() => toggleSelection(memory.memory_id)}
                     />
@@ -2026,22 +2115,32 @@ export function MemorySpace({
                     >
                       <span>{memory.content}</span>
                       <small>
-                        {kindLabel(memory.kind)} · {statusLabel(memory.status)}{" "}
-                        · {memory.evidence_ids.length} 条原话
+                        {kindLabel(memory.kind, language)} ·{" "}
+                        {statusLabel(memory.status, language)} ·{" "}
+                        {t("{count} 条原话", {
+                          count: formatUiNumber(
+                            language,
+                            memory.evidence_ids.length,
+                          ),
+                        })}
                       </small>
                     </button>
                     {failure ? (
                       <fieldset
                         className="memory-bulk-failure"
-                        aria-label={`处理失败：${memory.content}`}
+                        aria-label={t("处理失败：{content}", {
+                          content: memory.content,
+                        })}
                       >
-                        <p>{`未能${bulkActionLabel(failure.action)}：${failure.error}`}</p>
+                        <p>
+                          {t("未能删除：{error}", { error: failure.error })}
+                        </p>
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => void runBulk([failure])}
                         >
-                          {`重试${bulkActionLabel(failure.action)}`}
+                          {t("重试删除")}
                         </button>
                       </fieldset>
                     ) : null}
@@ -2052,10 +2151,18 @@ export function MemorySpace({
           ) : management && !library.page ? null : !loaded && !management ? (
             // Not the same as having none, and it used to read as if it
             // were.
-            <p className="memory-status-empty">正在读取记忆库…</p>
+            <p className="memory-status-empty">{t("正在读取记忆库…")}</p>
           ) : (
             <p className="memory-status-empty">
-              {`没有${statusLabel(statusFilter)}的记忆。`}
+              {t("没有{status}的记忆。", {
+                status: t(
+                  statusFilter === "confirmed"
+                    ? "已确认"
+                    : statusFilter === "deleted"
+                      ? "已删除"
+                      : "已被取代",
+                ),
+              })}
             </p>
           )}
         </div>
@@ -2100,6 +2207,7 @@ function ModelPrompt({
   hasMemories: boolean;
   onConfigureModel(): void;
 }) {
+  const t = useTranslate();
   const blocked = processing ? modelBlock(processing.blocked_stages) : null;
   if (!blocked) return null;
   if (
@@ -2110,12 +2218,15 @@ function ModelPrompt({
   )
     return null;
   return (
-    <p className="model-prompt" role="status" aria-label="记忆未在生成">
+    <p className="model-prompt" role="status" aria-label={t("记忆未在生成")}>
       <span>
-        {`还没有开始生成记忆：${blockReasonLabel(blocked.reason)}（${blocked.count} 条待处理）`}
+        {t("还没有开始生成记忆：{reason}（{count} 条待处理）", {
+          reason: blockReasonLabel(blocked.reason),
+          count: blocked.count,
+        })}
       </span>
       <button type="button" onClick={onConfigureModel}>
-        去配置生成模型
+        {t("去配置生成模型")}
       </button>
     </p>
   );
@@ -2150,36 +2261,39 @@ function MemoryInspector({
   onConfigureModel(): void;
   onOpen(memoryId: string): Promise<void>;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   if (!detail) {
     return (
       <aside
         className="memory-inspector memory-inspector-empty"
         data-tour-id="memory-original-pane"
       >
-        <p>选择一条记忆</p>
-        <small>查看它的来源、使用范围和修改历史。</small>
+        <p>{t("选择一条记忆")}</p>
+        <small>{t("查看它的来源、使用范围和修改历史。")}</small>
       </aside>
     );
   }
   return (
     <aside
       className="memory-inspector"
-      aria-label="记忆详情"
+      aria-label={t("记忆详情")}
       data-tour-id="memory-original-pane"
     >
       <button
         type="button"
         className="drawer-close"
-        aria-label="关闭记忆详情"
+        aria-label={t("关闭记忆详情")}
         onClick={onClose}
       >
         ×
       </button>
       <p className="status-label">
-        {kindLabel(detail.memory.kind)} · {statusLabel(detail.memory.status)} ·
-        r{detail.memory.revision}
+        {kindLabel(detail.memory.kind, language)} ·{" "}
+        {statusLabel(detail.memory.status, language)} · r
+        {detail.memory.revision}
       </p>
-      <p className="map-origin">{memoryProvenanceLabel(detail)}</p>
+      <p className="map-origin">{memoryProvenanceLabel(detail, language)}</p>
       {detail.memory.superseded_by?.length ||
       detail.memory.supersedes?.length ? (
         <p className="memory-supersession">
@@ -2190,7 +2304,7 @@ function MemoryInspector({
               className="quiet"
               onClick={() => void onOpen(memoryId)}
             >
-              查看替代它的记忆
+              {t("查看替代它的记忆")}
             </button>
           ))}
           {(detail.memory.supersedes ?? []).map((memoryId) => (
@@ -2200,7 +2314,7 @@ function MemoryInspector({
               className="quiet"
               onClick={() => void onOpen(memoryId)}
             >
-              查看它取代的旧记忆
+              {t("查看它取代的旧记忆")}
             </button>
           ))}
         </p>
@@ -2220,7 +2334,7 @@ function MemoryInspector({
       {detail.memory.status === "confirmed" ? (
         <form onSubmit={onSave}>
           <label>
-            记忆内容
+            {t("记忆内容")}
             <textarea
               name="memory-content"
               autoComplete="off"
@@ -2233,7 +2347,7 @@ function MemoryInspector({
             />
           </label>
           <button type="submit" disabled={busy}>
-            保存纠正
+            {t("保存纠正")}
           </button>
         </form>
       ) : null}
@@ -2253,7 +2367,7 @@ function MemoryInspector({
             disabled={busy}
             onClick={() => onAction("undo")}
           >
-            撤销上次修改
+            {t("撤销上次修改")}
           </button>
         ) : null}
         {detail.memory.status !== "deleted" ? (
@@ -2263,11 +2377,11 @@ function MemoryInspector({
             disabled={busy}
             onClick={() => onAction("delete")}
           >
-            删除
+            {t("删除")}
           </button>
         ) : null}
       </div>
-      <h3>来源原话</h3>
+      <h3>{t("来源原话")}</h3>
       {detail.evidence.map((item) => (
         <blockquote key={item.evidence_id}>
           {item.available ? (
@@ -2279,11 +2393,11 @@ function MemoryInspector({
               {item.verbatim}
             </>
           ) : (
-            "来源原话已不可读取"
+            t("来源原话已不可读取")
           )}
         </blockquote>
       ))}
-      <h3>修改历史</h3>
+      <h3>{t("修改历史")}</h3>
       <ol>
         {detail.history.map((item) => (
           <li key={item.revision}>
@@ -2395,29 +2509,24 @@ function requestIdFor(requests: Map<string, string>, intent: string): string {
   return requestId;
 }
 
-function kindLabel(kind: string) {
-  const labels: Record<string, string> = {
+function kindLabel(kind: string, language: UiLanguage) {
+  const labels: Record<string, UiMessage> = {
     chat: "对话",
     working: "项目记忆",
     coding: "编码偏好",
     schema: "长期模式",
     intention: "意图",
   };
-  return labels[kind] ?? kind;
+  return labels[kind] ? translate(language, labels[kind]) : kind;
 }
 
-function bulkActionLabel(action: BulkAction): string {
-  const labels = { delete: "删除" };
-  return labels[action];
-}
-
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
+function statusLabel(status: string, language: UiLanguage) {
+  const labels: Record<string, UiMessage> = {
     confirmed: "已确认",
     deleted: "已删除",
     superseded: "已被取代",
   };
-  return labels[status] ?? status;
+  return labels[status] ? translate(language, labels[status]) : status;
 }
 
 function queueWaiting(processing: MemoryProcessingSummary): string {
@@ -2468,6 +2577,7 @@ function ExtractionWindowControls({
   onError(value: string | null): void;
   onRefresh(): Promise<void>;
 }) {
+  const t = useTranslate();
   async function changeWindow(preset: ExtractionWindowPreset) {
     if (preset === processing.extraction_window_preset) return;
     onBusy(true);
@@ -2512,7 +2622,7 @@ function ExtractionWindowControls({
   return (
     <div className="extraction-window-controls">
       <label>
-        自动提炼范围
+        {t("自动提炼范围")}
         <select
           value={processing.extraction_window_preset}
           disabled={busy}
@@ -2533,7 +2643,7 @@ function ExtractionWindowControls({
           disabled={busy}
           onClick={() => void extractNextBatch()}
         >
-          手动提炼下一批
+          {t("手动提炼下一批")}
         </button>
       ) : null}
     </div>

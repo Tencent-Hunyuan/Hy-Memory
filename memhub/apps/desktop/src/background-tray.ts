@@ -1,4 +1,5 @@
 import path from "node:path";
+import { translate, type UiLanguage } from "@one-memory/contracts";
 import type {
   App,
   Menu,
@@ -24,6 +25,8 @@ interface TrayOptions {
   setLoginPreference(enabled: boolean): Promise<LoginPreference>;
   allowLoginStartup?: boolean;
   productName?: string;
+  getLanguage?: () => UiLanguage;
+  onLanguageChanged?: (refresh: () => void) => () => void;
 }
 
 export function installBackgroundTray(options: TrayOptions): () => void {
@@ -44,26 +47,33 @@ export function installBackgroundTray(options: TrayOptions): () => void {
     const current = ++generation;
     let checked = false;
     let enabled = app.isPackaged && options.allowLoginStartup !== false;
-    let label = `登录时启动 ${productName}`;
+    const language = options.getLanguage?.() ?? "zh-CN";
+    const t = (key: Parameters<typeof translate>[1]) =>
+      translate(language, key);
+    let label = translate(language, "登录时启动 {name}", { name: productName });
     if (options.allowLoginStartup === false) {
-      label += "（阶段包不可用）";
+      label += t("（阶段包不可用）");
     } else if (app.isPackaged) {
       try {
         const state = await options.readLoginPreference();
         if (disposed || current !== generation) return;
         checked = state.enabled;
         enabled = state.supported;
-        if (state.status === "managed-by-cli") label += "（由 CLI 管理）";
+        if (state.status === "managed-by-cli") label += t("（由 CLI 管理）");
       } catch {
-        label += "（状态不可用）";
+        if (disposed || current !== generation) return;
+        label += t("（状态不可用）");
         enabled = false;
       }
     } else {
-      label += "（开发模式不可用）";
+      label += t("（开发模式不可用）");
     }
     tray.setContextMenu(
       options.buildMenu([
-        { label: `打开 ${productName}`, click: options.open },
+        {
+          label: translate(language, "打开 {name}", { name: productName }),
+          click: options.open,
+        },
         {
           label,
           type: "checkbox",
@@ -74,14 +84,16 @@ export function installBackgroundTray(options: TrayOptions): () => void {
             void options
               .setLoginPreference(item.checked)
               .catch(() =>
-                options.reportError("无法更改登录启动设置，请重试。"),
+                options.reportError(t("无法更改登录启动设置，请重试。")),
               )
               .finally(() => void refresh());
           },
         },
         { type: "separator" },
         {
-          label: `退出 ${productName}（后台服务继续运行）`,
+          label: translate(language, "退出 {name}（后台服务继续运行）", {
+            name: productName,
+          }),
           click: () => {
             if (!disposed) app.quit();
           },
@@ -89,11 +101,13 @@ export function installBackgroundTray(options: TrayOptions): () => void {
       ]),
     );
   };
+  let unsubscribeLanguage: (() => void) | undefined;
   try {
     void refresh();
     // Refresh before the native menu opens, including changes made in Settings.
     tray.on("mouse-down", () => void refresh());
     tray.on("right-click", () => void refresh());
+    unsubscribeLanguage = options.onLanguageChanged?.(() => void refresh());
   } catch (error) {
     tray.destroy();
     throw error;
@@ -101,6 +115,7 @@ export function installBackgroundTray(options: TrayOptions): () => void {
   return () => {
     if (disposed) return;
     disposed = true;
+    unsubscribeLanguage?.();
     tray.removeAllListeners("mouse-down");
     tray.removeAllListeners("right-click");
     tray.destroy();

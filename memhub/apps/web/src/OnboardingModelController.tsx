@@ -2,14 +2,17 @@ import type {
   ModelProbeResult,
   ModelProfile,
   ModelProfileInput,
+  UiMessage,
 } from "@one-memory/contracts";
 import { useRef, useState } from "react";
 import { getModelProfiles } from "./api";
+import { modelProfileDisplayText } from "./model-error-text";
 import {
   type OnboardingModelDraft,
   OnboardingModelStep,
 } from "./OnboardingModelStep";
 import { PROVIDER_PRESETS } from "./provider-presets";
+import { useTranslate } from "./ui-language";
 import { traceUiAction } from "./ui-trace";
 import { useModelProfiles } from "./use-model-profiles";
 
@@ -65,6 +68,7 @@ export function OnboardingModelController({
   onEnabled?(): void;
   connectionAlreadyApplied?: boolean;
 }) {
+  const t = useTranslate();
   const models = useModelProfiles();
   const [draft, setDraft] = useState(initial);
   const [advanced, setAdvanced] = useState(false);
@@ -72,13 +76,18 @@ export function OnboardingModelController({
   const [phase, setPhase] = useState<
     "idle" | "saving" | "testing" | "enabling"
   >("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiMessage | null>(null);
   const [fields, setFields] = useState<
-    Partial<Record<keyof OnboardingModelDraft, string>>
+    Partial<
+      Record<
+        keyof OnboardingModelDraft,
+        { key: UiMessage; values?: Readonly<Record<string, string | number>> }
+      >
+    >
   >({});
   const [probe, setProbe] = useState<{
     state: "passed" | "failed" | "stale";
-    message: string;
+    message: UiMessage;
   } | null>(null);
   const flight = useRef(false);
 
@@ -106,7 +115,7 @@ export function OnboardingModelController({
   }
 
   function input(): ModelProfileInput | null {
-    const next: Partial<Record<keyof OnboardingModelDraft, string>> = {};
+    const next: typeof fields = {};
     const integer = (
       key: "timeout_seconds" | "max_concurrency" | "context_window",
       min: number,
@@ -119,7 +128,10 @@ export function OnboardingModelController({
         value < min ||
         value > max
       )
-        next[key] = `请输入 ${min} 至 ${max} 的整数。`;
+        next[key] = {
+          key: "请输入 {min} 至 {max} 的整数。",
+          values: { min, max },
+        };
       return value;
     };
     const timeout = integer("timeout_seconds", 1, 600);
@@ -127,8 +139,8 @@ export function OnboardingModelController({
     const context = draft.context_window.trim()
       ? integer("context_window", 1024, 10_000_000)
       : null;
-    if (!draft.name.trim()) next.name = "请填写配置名称。";
-    if (!draft.model.trim()) next.model = "请填写实际可用的模型 ID。";
+    if (!draft.name.trim()) next.name = { key: "请填写配置名称。" };
+    if (!draft.model.trim()) next.model = { key: "请填写实际可用的模型 ID。" };
     try {
       const url = new URL(draft.base_url);
       if (
@@ -138,16 +150,16 @@ export function OnboardingModelController({
       )
         throw new Error();
     } catch {
-      next.base_url = "请填写有效的模型接口地址。";
+      next.base_url = { key: "请填写有效的模型接口地址。" };
     }
     if (
       draft.provider_kind !== "ollama" &&
       !draft.api_key.trim() &&
       !saved?.has_api_key
     )
-      next.api_key = "请填写 API Key。";
+      next.api_key = { key: "请填写 API Key。" };
     if (draft.embedding_mode === "custom" && !draft.embedding_model.trim())
-      next.embedding_model = "请填写向量模型 ID。";
+      next.embedding_model = { key: "请填写向量模型 ID。" };
     if (Object.keys(next).length) {
       setFields(next);
       setAdvanced(true);
@@ -255,7 +267,7 @@ export function OnboardingModelController({
         })),
         {
           id: "custom",
-          label: "自定义兼容服务",
+          label: t("自定义兼容服务"),
           keyRequired: true,
           supported: true,
         },
@@ -269,9 +281,20 @@ export function OnboardingModelController({
       canTest={!models.pendingProbe && !models.probeStorageFailed}
       canSaveDraft={!models.pendingCreation && !models.creationStorageFailed}
       inputsLocked={flight.current}
-      fieldErrors={fields}
-      error={error ?? models.error}
-      probe={probe}
+      fieldErrors={Object.fromEntries(
+        Object.entries(fields).map(([key, message]) => [
+          key,
+          t(message.key, message.values),
+        ]),
+      )}
+      error={
+        error
+          ? t(error)
+          : models.error
+            ? modelProfileDisplayText(models.error, t)
+            : null
+      }
+      probe={probe ? { ...probe, message: t(probe.message) } : null}
       profile={
         saved
           ? {
@@ -286,13 +309,13 @@ export function OnboardingModelController({
       sourceNames={sourceNames}
       importedConversationCount={importedConversationCount}
       connectionSummary={
-        connectionAlreadyApplied ? "所选连接已启用" : "本次未选择应用连接"
+        connectionAlreadyApplied ? t("所选连接已启用") : t("本次未选择应用连接")
       }
-      generationRecipient={draft.base_url || "尚未填写接收方"}
+      generationRecipient={draft.base_url || t("尚未填写接收方")}
       embeddingRecipient={
         draft.embedding_mode === "local"
-          ? "本机内置向量模型"
-          : draft.embedding_base_url || draft.base_url || "尚未填写接收方"
+          ? t("本机内置向量模型")
+          : draft.embedding_base_url || draft.base_url || t("尚未填写接收方")
       }
       onSaveDraft={() => save(false)}
       onTest={() => save(true)}

@@ -1,7 +1,9 @@
-import type {
-  GovernedMemory,
-  MemoryProcessingSummary,
-  SourceResponse,
+import {
+  type GovernedMemory,
+  type MemoryProcessingSummary,
+  type SourceResponse,
+  translate,
+  type UiLanguage,
 } from "@one-memory/contracts";
 
 /** One row of the left column: a topic, with what is actually under it. */
@@ -118,10 +120,12 @@ export function findingsOf({
   memories,
   processing,
   now,
+  language = "zh-CN",
 }: {
   memories: GovernedMemory[];
   processing: MemoryProcessingSummary | null;
   now: Date;
+  language?: UiLanguage;
 }): Finding[] {
   const findings: Finding[] = [];
 
@@ -129,8 +133,17 @@ export function findingsOf({
     findings.push({
       id: `duplicate:${pair[0].memory_id}:${pair[1].memory_id}`,
       kind: "duplicate",
-      label: "出自同一句话",
-      text: `「${clip(pair[0].content)}」和「${clip(pair[1].content)}」是从同一句原话里抽出来的，分别挂在 ${scopesText(pair[0])} 和 ${scopesText(pair[1])} 下。看看是不是一回事。`,
+      label: translate(language, "出自同一句话"),
+      text: translate(
+        language,
+        "「{first}」和「{second}」是从同一句原话里抽出来的，分别挂在 {left} 和 {right} 下。看看是不是一回事。",
+        {
+          first: clip(pair[0].content),
+          second: clip(pair[1].content),
+          left: scopesText(pair[0], language),
+          right: scopesText(pair[1], language),
+        },
+      ),
       memoryIds: [pair[0].memory_id, pair[1].memory_id],
     });
   }
@@ -143,8 +156,12 @@ export function findingsOf({
     findings.push({
       id: "dormant",
       kind: "dormant",
-      label: "很久没动过",
-      text: `${dormant.length} 条记忆两个月没再被改过也没再被提起。可能已经过时，值得回头看一眼。`,
+      label: translate(language, "很久没动过"),
+      text: translate(
+        language,
+        "{count} 条记忆两个月没再被改过也没再被提起。可能已经过时，值得回头看一眼。",
+        { count: dormant.length },
+      ),
       memoryIds: dormant.map((item) => item.memory_id),
     });
   }
@@ -155,8 +172,12 @@ export function findingsOf({
     findings.push({
       id: "blocked",
       kind: "blocked",
-      label: "卡住了",
-      text: `${blockedCount} 段对话排在队里，等的不是时间而是一个条件。原文已经在库里，随时搜得到。`,
+      label: translate(language, "卡住了"),
+      text: translate(
+        language,
+        "{count} 段对话排在队里，等的不是时间而是一个条件。原文已经在库里，随时搜得到。",
+        { count: blockedCount },
+      ),
       memoryIds: [],
     });
   }
@@ -214,10 +235,12 @@ function clip(text: string, limit = 18): string {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
-function scopesText(memory: GovernedMemory): string {
+function scopesText(memory: GovernedMemory, language: UiLanguage): string {
   return memory.scopes.length
-    ? memory.scopes.map(scopeLabel).join("、")
-    : "未归类";
+    ? memory.scopes
+        .map((scope) => scopeLabel(scope, language))
+        .join(language === "en" ? ", " : "、")
+    : translate(language, "未归类");
 }
 
 /** Say where a memory is authorised, in words.
@@ -228,10 +251,12 @@ function scopesText(memory: GovernedMemory): string {
  * project, but it does tell two projects apart, which is what this sentence
  * is for. Printing `v1:0027abad1745330f1b57671635e0e9b3bd0cc3d2…` told the
  * reader nothing and filled the line. */
-function scopeLabel(scope: string): string {
-  if (scope === "all-apps") return "个人画像";
+function scopeLabel(scope: string, language: UiLanguage): string {
+  if (scope === "all-apps") return translate(language, "个人画像");
   if (scope.startsWith("workspace:v1:")) {
-    return `某个项目 ${scope.slice("workspace:v1:".length, "workspace:v1:".length + 8)}`;
+    return translate(language, "某个项目 {id}", {
+      id: scope.slice("workspace:v1:".length, "workspace:v1:".length + 8),
+    });
   }
   const [head, ...rest] = scope.split(":");
   if (rest.length) return rest.join(":");

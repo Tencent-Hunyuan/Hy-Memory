@@ -10,6 +10,7 @@ import type {
   SourceResponse,
 } from "@one-memory/contracts";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -18,8 +19,8 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { Workbench } from "./Workbench";
+import { setUiLanguage } from "./ui-language";
+import { NodeDetail, Workbench } from "./Workbench";
 
 const getConversation = vi.fn();
 
@@ -288,8 +289,9 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await setUiLanguage("zh-CN");
 });
 
 describe("三栏都在，各自装该装的东西", () => {
@@ -439,6 +441,22 @@ describe("图永远不空", () => {
 });
 
 describe("发现条", () => {
+  it("英文发现说明翻译固定句式，但保持原始记忆内容", async () => {
+    mount({
+      memories: [
+        memory("a", { content: "只用用户命名", evidence_ids: ["same"] }),
+        memory("b", { content: "用户原话不翻译", evidence_ids: ["same"] }),
+      ],
+    });
+    await act(() => setUiLanguage("en"));
+    const panel = screen.getByRole("region", {
+      name: "What your records reveal",
+    });
+    expect(panel.textContent).toContain("same original message");
+    expect(panel.textContent).toContain("只用用户命名");
+    expect(panel.textContent).toContain("用户原话不翻译");
+    expect(panel.textContent).not.toContain("是从同一句原话里抽出来的");
+  });
   it("点「在图上看」会打开这条发现依据的记忆", async () => {
     const user = userEvent.setup();
     const { onOpenMemory } = mount({
@@ -685,6 +703,85 @@ describe("事项综述", () => {
     expect(
       screen.queryByRole("button", { name: "读这个事项的综述" }),
     ).toBeNull();
+  });
+});
+
+describe("节点详情双语", () => {
+  it("切换语言后翻译节点关系，保留服务端的主题和记忆标签", async () => {
+    const user = userEvent.setup();
+    mount({
+      graph: {
+        total_memories: 1,
+        projected_memories: 1,
+        hy_graph_available: true,
+        nodes: [
+          {
+            node_id: "topic:user-label",
+            node_type: "topic",
+            label: "用户主题",
+          },
+          {
+            node_id: "memory:original",
+            node_type: "memory",
+            label: "用户记忆",
+          },
+        ],
+        edges: [
+          {
+            edge_id: "link-1",
+            source_node_id: "topic:user-label",
+            target_node_id: "memory:original",
+            relation: "shared_tag",
+            origin: "shared_tag",
+          },
+        ],
+      } as MemoryGraphResponse,
+    });
+    await user.click(screen.getByRole("button", { name: "用户主题" }));
+    await act(() => setUiLanguage("en"));
+    const panel = screen.getByRole("article", { name: "This node" });
+    expect(panel.textContent).toContain("1 direct links");
+    expect(panel.textContent).toContain("Same topic");
+    expect(panel.textContent).toContain("用户主题");
+    expect(panel.textContent).toContain("用户记忆");
+    expect(panel.textContent).not.toContain("两跳可达");
+    await act(() => setUiLanguage("zh-CN"));
+    expect(
+      screen.getByRole("article", { name: "这个节点" }).textContent,
+    ).toContain("同一个主题");
+  });
+  it("切换语言后翻译紧凑记忆详情与来源说明，不改变记忆内容", async () => {
+    render(
+      <NodeDetail
+        node={null}
+        graph={null}
+        detail={{
+          ...detail,
+          memory: { ...detail.memory, origin: "manual" },
+          evidence: [],
+        }}
+        draft={detail.memory.content}
+        scopes=""
+        busy={false}
+        matterLabel="用户主题"
+        onDraft={vi.fn()}
+        onScopes={vi.fn()}
+        onSave={vi.fn()}
+        onAction={vi.fn()}
+        onSyncIndex={vi.fn()}
+        requestIds={{ current: new Map() }}
+        onClose={vi.fn()}
+        compact
+      />,
+    );
+    await act(() => setUiLanguage("en"));
+    const panel = screen.getByRole("article", { name: "This memory" });
+    expect(panel.textContent).toContain("Added manually");
+    expect(panel.textContent).toContain("统一用 axios 封装");
+    expect(screen.getByRole("button", { name: "Correct" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+    await act(() => setUiLanguage("zh-CN"));
+    expect(screen.getByText("手动添加")).toBeTruthy();
   });
 });
 

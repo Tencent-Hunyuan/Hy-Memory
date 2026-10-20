@@ -4,6 +4,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FirstUseGuide, FirstUseInvitation } from "./FirstUseGuide";
+import { setUiLanguage } from "./ui-language";
 
 const getMemories = vi.fn(),
   getMemory = vi.fn(),
@@ -71,6 +72,7 @@ beforeEach(() => {
   copyText.mockResolvedValue(undefined);
   openHandoff.mockResolvedValue({ opened: true });
   window.oneMemory = {
+    setUiLanguage: vi.fn(async (next: "zh-CN" | "en") => next),
     openHandoff,
     getRecallHosts: vi.fn().mockResolvedValue([
       {
@@ -92,9 +94,10 @@ beforeEach(() => {
     ]),
   } as unknown as Window["oneMemory"];
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   delete window.oneMemory;
+  await setUiLanguage("zh-CN");
 });
 function show() {
   return render(
@@ -110,6 +113,54 @@ async function ready() {
 }
 
 describe("first-use guide", () => {
+  it("switches the fixed context prompt without changing the topic, memory or original evidence", async () => {
+    getMemory.mockResolvedValue({
+      ...detail,
+      evidence: [{ ...detail.evidence[0], created_at: "2026-09-01T12:00:00Z" }],
+    });
+    const { container } = render(
+      <FirstUseGuide
+        sources={[{ ...source, imported_messages: 1234 }]}
+        onClose={vi.fn()}
+        onSources={vi.fn()}
+      />,
+    );
+    await ready();
+    const draft = (
+      screen.getByLabelText("开场白完整预览") as HTMLTextAreaElement
+    ).value;
+    expect(draft).toContain("我在新会话里接着之前的工作继续。");
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    expect(
+      screen.getByRole("heading", {
+        name: "Pick up where your last conversation left off",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByText(/1,234 original messages saved/)).toBeTruthy();
+    expect(screen.getByText("建议把周会安排在其他工作日。")).toBeTruthy();
+    expect(
+      container.querySelector(".first-use-evidence header span:last-child")
+        ?.textContent,
+    ).toContain(new Date("2026-09-01T12:00:00Z").toLocaleString("en"));
+    const englishDraft = (
+      screen.getByLabelText("Full opening preview") as HTMLTextAreaElement
+    ).value;
+    expect(englishDraft).not.toBe(draft);
+    expect(englishDraft).toContain(
+      "I am continuing earlier work in a new conversation.",
+    );
+    expect(englishDraft).toContain("Background on “项目周会” from MemHub");
+    expect(englishDraft).toContain("周会避开周五");
+    expect(englishDraft).toContain("Scope (not expanded): all-apps");
+    expect(englishDraft).not.toContain("我在新会话里");
+    expect(copyText).not.toHaveBeenCalled();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Copy opening" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(englishDraft));
+  });
   it("clears an old preview if the current memory read is denied", async () => {
     const user = userEvent.setup();
     show();
@@ -157,6 +208,76 @@ describe("first-use guide", () => {
     await user.click(screen.getByRole("button", { name: "复制开场白" }));
     expect(copyText.mock.calls[0][0]).not.toContain("周五");
     expect(screen.getByText(/尚无本次外部调用回执/)).toBeTruthy();
+  });
+  it("keeps an edited query topic when switching languages and copies only the English query", async () => {
+    const user = userEvent.setup();
+    show();
+    await ready();
+    await user.selectOptions(screen.getByLabelText("在哪个应用试用"), "cursor");
+    await user.click(screen.getByRole("radio", { name: "让应用查询" }));
+    await user.clear(screen.getByLabelText("要接续的主题"));
+    await user.type(screen.getByLabelText("要接续的主题"), "用户自定主题");
+    const chineseDraft = (
+      screen.getByLabelText("开场白完整预览") as HTMLTextAreaElement
+    ).value;
+    expect(chineseDraft).toContain("与「用户自定主题」相关");
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    expect(screen.getByLabelText("Topic to continue")).toHaveProperty(
+      "value",
+      "用户自定主题",
+    );
+    const englishDraft = (
+      screen.getByLabelText("Full opening preview") as HTMLTextAreaElement
+    ).value;
+    expect(englishDraft).toContain("related to “用户自定主题”");
+    expect(englishDraft).toContain("sources and citations actually returned");
+    expect(englishDraft).not.toContain("请先用 MemHub");
+    expect(englishDraft).not.toContain("周会避开周五");
+    expect(englishDraft).not.toContain("建议把周会安排在其他工作日。");
+    await user.click(screen.getByRole("button", { name: "Copy opening" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(englishDraft));
+    expect(openHandoff).not.toHaveBeenCalled();
+    await act(async () => {
+      await setUiLanguage("zh-CN");
+    });
+    expect(screen.getByLabelText("要接续的主题")).toHaveProperty(
+      "value",
+      "用户自定主题",
+    );
+    expect(screen.getByLabelText("开场白完整预览")).toHaveProperty(
+      "value",
+      chineseDraft,
+    );
+  });
+  it("keeps the new draft copyable when language changes during an old recheck", async () => {
+    const user = userEvent.setup();
+    show();
+    await ready();
+    let finishOld: (data: MemoryDetail) => void = () => undefined;
+    getMemory.mockImplementationOnce(
+      () =>
+        new Promise<MemoryDetail>((resolve) => {
+          finishOld = resolve;
+        }),
+    );
+    await user.click(screen.getByRole("button", { name: "复制开场白" }));
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    const englishDraft = (
+      screen.getByLabelText("Full opening preview") as HTMLTextAreaElement
+    ).value;
+    expect(englishDraft).toContain("Scope (not expanded)");
+    expect(screen.getByRole("button", { name: "Copy opening" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    await act(async () => finishOld(detail));
+    expect(copyText).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Copy opening" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(englishDraft));
   });
   it("does not turn copy or user feedback into an automatic adoption pass", async () => {
     const user = userEvent.setup();

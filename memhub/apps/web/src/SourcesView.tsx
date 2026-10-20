@@ -1,3 +1,4 @@
+import { translate, type UiMessage } from "@one-memory/contracts";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionFallback } from "./ConnectionFallback";
@@ -13,6 +14,7 @@ import {
   grantHostPermission,
   hostBridgeAvailable,
   hostCapabilities,
+  hostReasonLabel,
   hostWriteReason,
   installHost,
   previewHostInstall,
@@ -32,6 +34,7 @@ import { SourceImportReceipt } from "./SourceImportReceipt";
 import { SourceJobActions } from "./SourceJobActions";
 import { SourceSnapshotStatus } from "./SourceSnapshotStatus";
 import { SyncHookControl } from "./SyncHookControl";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import { traceUiAction, type UiTrace } from "./ui-trace";
 import {
   isDefiniteAccessRefusal,
@@ -67,6 +70,8 @@ function needsRecallReconnect(host: RecallHostStatus) {
 }
 
 export function SourcesView({ imports }: { imports: ImportState }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const visibleSources = useMemo(
     () =>
       imports.sources.filter(
@@ -109,6 +114,15 @@ export function SourcesView({ imports }: { imports: ImportState }) {
   const connectionFlight = useRef(false);
   const consentPanel = useRef<HTMLElement>(null);
   const consentOpen = consentPhase !== null;
+  const consentConnectionError =
+    connectionError ===
+    "来源状态或路径已变化，请取消后重新核对。未提交本次授权。"
+      ? t("来源状态或路径已变化，请取消后重新核对。未提交本次授权。")
+      : connectionError === "所选来源未获准导入，请核对分项原因后重试。"
+        ? t("所选来源未获准导入，请核对分项原因后重试。")
+        : connectionError === "连接结果尚未确认。所选来源已保留，请核对后重试。"
+          ? t("连接结果尚未确认。所选来源已保留，请核对后重试。")
+          : connectionError;
   const hostRead = useRecallHosts({ read: true });
   // A failed host action shows the list as unreadable until the next read lands.
   const [hostActionFailed, setHostActionFailed] = useState(false);
@@ -285,9 +299,9 @@ export function SourcesView({ imports }: { imports: ImportState }) {
           ...errors,
           [source.source_id]: refused
             ? enabled
-              ? "未能开启处理，请核对后重试。"
-              : "未能冻结处理，请核对后重试。"
-            : "处理开关的结果尚未确认，请刷新核对；不会自动重试。",
+              ? t("未能开启处理，请核对后重试。")
+              : t("未能冻结处理，请核对后重试。")
+            : t("处理开关的结果尚未确认，请刷新核对；不会自动重试。"),
         }));
       } finally {
         setPendingProcessingSource(null);
@@ -321,12 +335,19 @@ export function SourcesView({ imports }: { imports: ImportState }) {
         setAuthorizationErrors((errors) => ({
           ...errors,
           [source.source_id]: failure
-            ? `未能开启处理：${failureLabel(failure)}`
-            : "所选来源未获准导入，请核对后重试。",
+            ? t("未能开启处理：{reason}", {
+                reason: failureLabel(failure, language),
+              })
+            : t("所选来源未获准导入，请核对后重试。"),
         }));
         setConnectionError(
           result.failed_sources[source.source_id]
-            ? `未能开启处理：${failureLabel(result.failed_sources[source.source_id])}`
+            ? t("未能开启处理：{reason}", {
+                reason: failureLabel(
+                  result.failed_sources[source.source_id],
+                  language,
+                ),
+              })
             : "所选来源未获准导入，请核对分项原因后重试。",
         );
       } else {
@@ -337,12 +358,12 @@ export function SourcesView({ imports }: { imports: ImportState }) {
       // log claims a failure the client cannot know about.
       trace.done("unknown", { reason: "connect_result_unknown" });
       setRetryFailedConnection(true);
-      const failure = "连接结果尚未确认，请核对后重试。";
+      const failure = t("连接结果尚未确认，请核对后重试。");
       setAuthorizationErrors((errors) => ({
         ...errors,
         [source.source_id]: failure,
       }));
-      setConnectionError(`未能开启处理：${failure}`);
+      setConnectionError(t("未能开启处理：{reason}", { reason: failure }));
     } finally {
       setAuthorizingSource(null);
       setPendingProcessingSource(null);
@@ -474,8 +495,8 @@ export function SourcesView({ imports }: { imports: ImportState }) {
     <section className="view sources-view" aria-labelledby="sources-title">
       <header className="view-header">
         <div>
-          <h1 id="sources-title">应用</h1>
-          <p className="lede">管理对话来源与记忆使用权限。</p>
+          <h1 id="sources-title">{t("应用")}</h1>
+          <p className="lede">{t("管理对话来源与记忆使用权限。")}</p>
         </div>
         <button
           type="button"
@@ -492,10 +513,10 @@ export function SourcesView({ imports }: { imports: ImportState }) {
         >
           <RefreshCw size={16} aria-hidden="true" />
           {actionBusy
-            ? "正在开始…"
+            ? t("正在开始…")
             : needsConnection
-              ? "逐个开启来源授权"
-              : "同步来源"}
+              ? t("逐个开启来源授权")
+              : t("同步来源")}
         </button>
       </header>
 
@@ -512,50 +533,51 @@ export function SourcesView({ imports }: { imports: ImportState }) {
       </div>
       <div className="coverage-line" aria-live="polite" hidden>
         {snapshotStale && imports.sourceSnapshot?.confirmedAt === null ? (
-          <span>来源状态尚未核对，无法确认已连接、可连接和活动任务。</span>
+          <span>
+            {t("来源状态尚未核对，无法确认已连接、可连接和活动任务。")}
+          </span>
         ) : (
           <>
-            {snapshotStale && <span>最近确认：</span>}
-            <strong>{connected.length}</strong> 个已连接
+            {snapshotStale && <span>{t("最近确认：")}</span>}
+            <span>{t("{count} 个已连接", { count: connected.length })}</span>
             <span>·</span>
-            <strong>{availableUnconnected.length}</strong> 个可连接
+            <span>
+              {t("{count} 个可连接", { count: availableUnconnected.length })}
+            </span>
             <span>·</span>
             {snapshotStale ? (
-              <>
-                <strong>{imports.jobs.filter(isActive).length}</strong>{" "}
-                个待核对的活动任务
-              </>
+              <span>
+                {t("{count} 个待核对的活动任务", {
+                  count: imports.jobs.filter(isActive).length,
+                })}
+              </span>
             ) : (
               <>
                 {imports.jobs.some(
                   (job) => isActive(job) && !isSyncJob(job),
                 ) && (
                   <span>
-                    <strong>
-                      {
-                        imports.jobs.filter(
-                          (job) => isActive(job) && !isSyncJob(job),
-                        ).length
-                      }
-                    </strong>{" "}
-                    个正在导入历史
+                    {t("{count} 个正在导入历史", {
+                      count: imports.jobs.filter(
+                        (job) => isActive(job) && !isSyncJob(job),
+                      ).length,
+                    })}
                   </span>
                 )}
                 {imports.jobs.some(
                   (job) => isActive(job) && isSyncJob(job),
                 ) && (
                   <span>
-                    <strong>
-                      {
-                        imports.jobs.filter(
-                          (job) => isActive(job) && isSyncJob(job),
-                        ).length
-                      }
-                    </strong>{" "}
-                    个正在检查新增
+                    {t("{count} 个正在检查新增", {
+                      count: imports.jobs.filter(
+                        (job) => isActive(job) && isSyncJob(job),
+                      ).length,
+                    })}
                   </span>
                 )}
-                {!imports.jobs.some(isActive) && <span>0 个活动任务</span>}
+                {!imports.jobs.some(isActive) && (
+                  <span>{t("{count} 个活动任务", { count: 0 })}</span>
+                )}
               </>
             )}
           </>
@@ -571,22 +593,25 @@ export function SourcesView({ imports }: { imports: ImportState }) {
       {imports.lastConnectResult ? (
         <section
           className="batch-results"
-          aria-label="批量连接结果"
+          aria-label={t("批量连接结果")}
           aria-live="polite"
         >
-          <strong>本次授权与导入结果</strong>
+          <strong>{t("本次授权与导入结果")}</strong>
           <ul>
             {imports.lastConnectResult.accepted_source_ids.map((sourceId) => (
               <li className="batch-success" key={sourceId}>
                 <span>{sourceName(visibleSources, sourceId)}</span>
-                <span>已授权，导入任务已开始</span>
+                <span>{t("已授权，导入任务已开始")}</span>
               </li>
             ))}
             {Object.entries(imports.lastConnectResult.failed_sources).map(
               ([sourceId, reason]) => (
                 <li className="batch-failure" key={sourceId}>
                   <span>{sourceName(visibleSources, sourceId)}</span>
-                  <span>未能授权：{failureLabel(reason)}</span>
+                  <span>
+                    {t("未能授权：")}
+                    {failureLabel(reason, language)}
+                  </span>
                   <button
                     type="button"
                     className="quiet"
@@ -609,7 +634,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     }}
                   >
                     <RefreshCw size={14} aria-hidden="true" />
-                    重试此来源
+                    {t("重试此来源")}
                   </button>
                 </li>
               ),
@@ -618,7 +643,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
         </section>
       ) : null}
 
-      <h2 className="app-section-title">导入来源</h2>
+      <h2 className="app-section-title">{t("导入来源")}</h2>
       <div className="source-table" aria-busy={imports.loading}>
         {visibleSources
           .slice()
@@ -631,7 +656,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                   <input
                     type="checkbox"
                     name={`source-${source.source_id}`}
-                    aria-label={`处理 ${source.display_name}`}
+                    aria-label={t("处理 {name}", { name: source.display_name })}
                     checked={source.authorized && source.sync_enabled === true}
                     aria-busy={pendingProcessingSource === source.source_id}
                     disabled={
@@ -649,13 +674,13 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     <strong>{source.display_name}</strong>
                     <small>
                       {source.sync_enabled
-                        ? "处理中：历史待办与新会话会继续进入记忆流程"
-                        : "已冻结：待处理 Job 保留，不再扫描新会话"}
+                        ? t("处理中：历史待办与新会话会继续进入记忆流程")
+                        : t("已冻结：待处理 Job 保留，不再扫描新会话")}
                     </small>
                     <small title={source.candidate_path}>
                       {source.candidate_path}
                       {source.candidate_kind === "environment_override"
-                        ? " · 环境变量覆盖路径"
+                        ? t(" · 环境变量覆盖路径")
                         : ""}
                     </small>
                   </span>
@@ -663,18 +688,47 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                 <p
                   className={`source-state state-${snapshotStale ? "neutral" : stateTone(source, job)}`}
                 >
-                  {snapshotStale ? "待核对" : stateLabel(source, job)}
+                  {snapshotStale ? t("待核对") : t(stateLabel(source, job))}
                 </p>
                 <p className="source-counts">
-                  {snapshotStale ? "最近确认：" : ""}
+                  {snapshotStale ? t("最近确认：") : ""}
                   {source.authorized
-                    ? `累计 ${source.imported_conversations} 个会话 · ${source.imported_messages} 条消息${job ? ` · ${isSyncJob(job) ? "本次同步新增" : "本次导入新增"} ${job.stored} 条` : ""} · ${capabilityLabel(source)}`
+                    ? t(
+                        "累计 {conversations} 个会话 · {messages} 条消息{current} · {capability}",
+                        {
+                          conversations: source.imported_conversations,
+                          messages: source.imported_messages,
+                          current: job
+                            ? t(" · {current}", {
+                                current: t(
+                                  isSyncJob(job)
+                                    ? "本次同步新增 {count} 条"
+                                    : "本次导入新增 {count} 条",
+                                  { count: job.stored },
+                                ),
+                              })
+                            : "",
+                          capability: t(capabilityLabel(source)),
+                        },
+                      )
                     : job
-                      ? `${isSyncJob(job) ? "本次同步新增" : "本次导入新增"} ${job.stored} 条 · ${job.merged} 条已存在 · ${job.skipped} 条跳过`
+                      ? t("{current} · {merged} 条已存在 · {skipped} 条跳过", {
+                          current: t(
+                            isSyncJob(job)
+                              ? "本次同步新增 {count} 条"
+                              : "本次导入新增 {count} 条",
+                            { count: job.stored },
+                          ),
+                          merged: job.merged,
+                          skipped: job.skipped,
+                        })
                       : source.available
-                        ? (foundSessionsLabel(source) ?? "已发现保存目录")
-                        : "这台 Mac 上未发现"}
-                  {job && job.errors > 0 ? ` · ${job.errors} 条异常` : ""}
+                        ? (foundSessionsLabel(source, language) ??
+                          t("已发现保存目录"))
+                        : t("这台 Mac 上未发现")}
+                  {job && job.errors > 0
+                    ? t(" · {count} 条异常", { count: job.errors })
+                    : ""}
                 </p>
                 <div className="source-row-actions">
                   {authorizationErrors[source.source_id] ? (
@@ -692,7 +746,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                           void imports.startImport(source.source_id)
                         }
                       >
-                        重新扫描
+                        {t("重新扫描")}
                       </button>
                     )}
                 </div>
@@ -742,8 +796,8 @@ export function SourcesView({ imports }: { imports: ImportState }) {
 
       <section className="host-recall-card" aria-live="polite">
         <div>
-          <h2>使用记忆</h2>
-          <p>各应用的读取连接与导入授权分开管理。</p>
+          <h2>{t("使用记忆")}</h2>
+          <p>{t("各应用的读取连接与导入授权分开管理。")}</p>
           {bulkTargets.length > 0 && (
             <button
               type="button"
@@ -759,19 +813,21 @@ export function SourcesView({ imports }: { imports: ImportState }) {
             >
               <ShieldCheck size={14} aria-hidden="true" />
               {bulkBusy && bulk === null
-                ? "正在准备…"
-                : `一键接入全部 ${bulkTargets.length} 个应用`}
+                ? t("正在准备…")
+                : t("一键接入全部 {count} 个应用", {
+                    count: bulkTargets.length,
+                  })}
             </button>
           )}
         </div>
         {recallHosts === "unavailable" ? (
-          <small>请在 MemHub 桌面 App 中安装。</small>
+          <small>{t("请在 MemHub 桌面 App 中安装。")}</small>
         ) : recallHosts === "checking" ? (
-          <small>正在检查…</small>
+          <small>{t("正在检查…")}</small>
         ) : recallHosts === "error" ? (
-          <small>无法读取安装状态。</small>
+          <small>{t("无法读取安装状态。")}</small>
         ) : recallHosts.length === 0 ? (
-          <small>本机没有检测到支持召回的 App。</small>
+          <small>{t("本机没有检测到支持召回的 App。")}</small>
         ) : (
           <ul className="recall-host-list">
             {recallHosts.map((host) => (
@@ -784,21 +840,26 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     thing that reads as working. */}
                 {needsRecallReconnect(host) ? (
                   <span className="recall-link recall-link-unreachable">
-                    链路：需要重新连接
+                    {t("链路：需要重新连接")}
                   </span>
                 ) : host.installed && host.selfCheck ? (
                   <span
                     className={`recall-link recall-link-${host.selfCheck.state}`}
                   >
-                    链路：{LINK_WORDING[host.selfCheck.state] ?? "状态未知"}
+                    {t("链路：")}
+                    {LINK_WORDING[host.selfCheck.state]
+                      ? t(LINK_WORDING[host.selfCheck.state])
+                      : t("状态未知")}
                   </span>
                 ) : null}
                 {host.installed && host.skillDrift ? (
                   <span
                     className={`recall-skill recall-skill-${host.skillDrift.state}`}
                   >
-                    调用规则：
-                    {SKILL_WORDING[host.skillDrift.state] ?? "状态未知"}
+                    {t("调用规则：")}
+                    {SKILL_WORDING[host.skillDrift.state]
+                      ? t(SKILL_WORDING[host.skillDrift.state])
+                      : t("状态未知")}
                   </span>
                 ) : null}
                 {host.installed &&
@@ -829,12 +890,12 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                       }
                     }}
                   >
-                    更新调用规则
+                    {t("更新调用规则")}
                   </button>
                 ) : null}
                 {skillConflict?.hostId === host.hostId ? (
                   <span className="recall-skill-conflict">
-                    你手动修改过这份调用规则。更新会覆盖你的修改。
+                    {t("你手动修改过这份调用规则。更新会覆盖你的修改。")}
                     <button
                       type="button"
                       disabled={busyHost === host.hostId || bulkBusy}
@@ -856,7 +917,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                         }
                       }}
                     >
-                      仍要覆盖
+                      {t("仍要覆盖")}
                     </button>
                   </span>
                 ) : null}
@@ -883,7 +944,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                       }
                     }}
                   >
-                    诊断
+                    {t("诊断")}
                   </button>
                 ) : null}
                 {linkCheck[host.hostId]?.repoint ? (
@@ -910,7 +971,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                       }
                     }}
                   >
-                    重新指向
+                    {t("重新指向")}
                   </button>
                 ) : null}
                 {linkCheck[host.hostId] !== undefined &&
@@ -961,16 +1022,16 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                   }}
                 >
                   {busyHost === host.hostId
-                    ? "连接中…"
+                    ? t("连接中…")
                     : needsRecallReconnect(host)
-                      ? "一键重新连接"
+                      ? t("一键重新连接")
                       : host.installed
-                        ? "已安装 · 点击断开"
-                        : `一键安装到 ${host.label}`}
+                        ? t("已安装 · 点击断开")
+                        : t("一键安装到 {name}", { name: host.label })}
                 </button>
                 {hostErrors[host.hostId] && (
                   <p className="recall-link-detail" role="alert">
-                    {hostErrors[host.hostId]}
+                    {t("未能读取连接变更预览。可以重试；尚未请求写入。")}
                   </p>
                 )}
                 <RecallPermissionControl
@@ -999,7 +1060,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                 />
                 {hookRemovalRequired === host.hostId && (
                   <p role="alert" className="sync-hook-error">
-                    请先移除同步 Hook，再断开应用连接。
+                    {t("请先移除同步 Hook，再断开应用连接。")}
                   </p>
                 )}
               </li>
@@ -1009,14 +1070,14 @@ export function SourcesView({ imports }: { imports: ImportState }) {
       </section>
       <ConnectionFallback />
       <details className="application-coverage">
-        <summary>来源支持范围</summary>
+        <summary>{t("来源支持范围")}</summary>
         <table>
           <thead>
             <tr>
-              <th>应用 / 数据</th>
-              <th>历史导入</th>
-              <th>新增同步</th>
-              <th>外部读取</th>
+              <th>{t("应用 / 数据")}</th>
+              <th>{t("历史导入")}</th>
+              <th>{t("新增同步")}</th>
+              <th>{t("外部读取")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1030,26 +1091,26 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                   <th>{source.display_name}</th>
                   <td>
                     {file
-                      ? "文件导入"
+                      ? t("文件导入")
                       : source.available
-                        ? "本机已发现"
-                        : "本机未发现"}
+                        ? t("本机已发现")
+                        : t("本机未发现")}
                   </td>
                   <td>
                     {file
-                      ? "一次性快照"
+                      ? t("一次性快照")
                       : source.capabilities.live_sync === "implemented"
-                        ? "文件监听 / 轮询"
-                        : "待接入"}
+                        ? t("文件监听 / 轮询")
+                        : t("待接入")}
                   </td>
                   <td>
                     {file
-                      ? "无桌面 Hook"
+                      ? t("无桌面 Hook")
                       : host?.installed
-                        ? "已安装，需实际验证"
+                        ? t("已安装，需实际验证")
                         : host?.present
-                          ? "可安装"
-                          : "未验证"}
+                          ? t("可安装")
+                          : t("未验证")}
                   </td>
                 </tr>
               );
@@ -1059,7 +1120,9 @@ export function SourcesView({ imports }: { imports: ImportState }) {
       </details>
 
       <p className="privacy-note">
-        不读取屏幕、系统辅助功能、键盘、音频或剪贴板。每个来源的授权可单独撤销。
+        {t(
+          "不读取屏幕、系统辅助功能、键盘、音频或剪贴板。每个来源的授权可单独撤销。",
+        )}
       </p>
 
       {installPreview ? (
@@ -1187,19 +1250,20 @@ export function SourcesView({ imports }: { imports: ImportState }) {
           >
             {consentPhase === "general" ? (
               <>
-                <p className="eyebrow">一次确认</p>
-                <h2 id="consent-title">允许读取所选来源的文本对话？</h2>
+                <p className="eyebrow">{t("一次确认")}</p>
+                <h2 id="consent-title">{t("允许读取所选来源的文本对话？")}</h2>
                 <p>
-                  MemHub 将读取下面来源中已经保存的文本对话，并保留在本机。
-                  模型处理、持续同步和外部应用读取需要另外授权。
+                  {t(
+                    "MemHub 将读取下面来源中已经保存的文本对话，并保留在本机。模型处理、持续同步和外部应用读取需要另外授权。",
+                  )}
                 </p>
                 <ConsentSourceList sources={consentSources} />
                 <p className="consent-exclusion">
-                  不读取屏幕、键盘、音频、剪贴板或其他应用实时内容。
+                  {t("不读取屏幕、键盘、音频、剪贴板或其他应用实时内容。")}
                 </p>
                 {connectionError && (
                   <p className="error-banner" role="alert">
-                    {connectionError}
+                    {consentConnectionError}
                   </p>
                 )}
                 <div className="consent-actions">
@@ -1209,7 +1273,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     disabled={connecting}
                     onClick={() => setConsentPhase(null)}
                   >
-                    取消
+                    {t("取消")}
                   </button>
                   <button
                     type="button"
@@ -1223,25 +1287,28 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     }}
                   >
                     {connecting
-                      ? "正在连接…"
+                      ? t("正在连接…")
                       : connectionError
-                        ? "重试连接"
-                        : "允许并开始导入"}
+                        ? t("重试连接")
+                        : t("允许并开始导入")}
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <p className="eyebrow">二次确认 · 环境变量覆盖</p>
-                <h2 id="override-consent-title">确认读取这些自定义路径？</h2>
+                <p className="eyebrow">{t("二次确认 · 环境变量覆盖")}</p>
+                <h2 id="override-consent-title">
+                  {t("确认读取这些自定义路径？")}
+                </h2>
                 <p>
-                  以下目录由环境变量指定，不是应用的默认保存位置。请确认路径确实属于对应的
-                  AI 应用。
+                  {t(
+                    "以下目录由环境变量指定，不是应用的默认保存位置。请确认路径确实属于对应的 AI 应用。",
+                  )}
                 </p>
                 <ConsentSourceList sources={overrideSources} />
                 {connectionError && (
                   <p className="error-banner" role="alert">
-                    {connectionError}
+                    {consentConnectionError}
                   </p>
                 )}
                 <div className="consent-actions">
@@ -1251,7 +1318,7 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     disabled={connecting}
                     onClick={() => setConsentPhase("general")}
                   >
-                    返回
+                    {t("返回")}
                   </button>
                   <button
                     type="button"
@@ -1259,10 +1326,10 @@ export function SourcesView({ imports }: { imports: ImportState }) {
                     onClick={() => void connectApproved()}
                   >
                     {connecting
-                      ? "正在连接…"
+                      ? t("正在连接…")
                       : connectionError
-                        ? "重试连接"
-                        : "确认路径并授权导入"}
+                        ? t("重试连接")
+                        : t("确认路径并授权导入")}
                   </button>
                 </div>
               </>
@@ -1294,13 +1361,16 @@ function sourceName(sources: ImportState["sources"], sourceId: string): string {
   );
 }
 
-function failureLabel(reason: string): string {
-  const labels: Record<string, string> = {
+function failureLabel(
+  reason: string,
+  language: ReturnType<typeof useUiLanguage>,
+): string {
+  const labels: Record<string, UiMessage> = {
     grant_not_available: "授权记录未建立",
     environment_override_confirmation_required: "自定义路径尚未确认",
     source_not_available: "数据目录当前不可用",
   };
-  return labels[reason] ?? reason;
+  return labels[reason] ? translate(language, labels[reason]) : reason;
 }
 
 function isActive(job: { status: string }) {
@@ -1313,6 +1383,7 @@ function isSyncJob(job: ImportState["jobs"][number]) {
 
 function foundSessionsLabel(
   source: ImportState["sources"][number],
+  language: ReturnType<typeof useUiLanguage>,
 ): string | null {
   // Only print a number the Core actually measured. An absent or null
   // session_count means "not measured", not zero, so it must never turn into a
@@ -1321,10 +1392,12 @@ function foundSessionsLabel(
   // broken scan.
   const count = source.session_count;
   if (count === null || count === undefined) return null;
-  return count > 0 ? `找到 ${count} 个会话` : "已安装，暂未发现会话";
+  return count > 0
+    ? translate(language, "找到 {count} 个会话", { count })
+    : translate(language, "已安装，暂未发现会话");
 }
 
-function capabilityLabel(source: ImportState["sources"][number]) {
+function capabilityLabel(source: ImportState["sources"][number]): UiMessage {
   if (source.sync_completeness === "one_time_snapshot")
     return "一次性快照，不跟随原应用变化";
   // Deliberately no interval here: the poll period is a server setting
@@ -1351,9 +1424,9 @@ function sourceOrder(
 function stateLabel(
   source: ImportState["sources"][number],
   job: ImportState["jobs"][number] | undefined,
-) {
+): UiMessage {
   if (job && isSyncJob(job)) {
-    const labels: Record<ImportState["jobs"][number]["status"], string> = {
+    const labels: Record<ImportState["jobs"][number]["status"], UiMessage> = {
       pending: "等待检查新增",
       running: "正在检查新增",
       paused: "新增同步已暂停",
@@ -1420,6 +1493,7 @@ function InstallPreviewSheet({
   onCancel: () => void;
   onApprove: () => void;
 }) {
+  const t = useTranslate();
   return (
     <div className="consent-backdrop">
       <section
@@ -1431,19 +1505,21 @@ function InstallPreviewSheet({
           if (event.key === "Escape" && !busy) onCancel();
         }}
       >
-        <p className="eyebrow">安装前确认</p>
+        <p className="eyebrow">{t("安装前确认")}</p>
         <h2 id="install-preview-title">
-          将这样修改 {preview.hostLabel} 的配置
+          {t("将这样修改 {name} 的配置", { name: preview.hostLabel })}
         </h2>
         <p>
-          安装召回需要写入 {preview.hostLabel}{" "}
-          自己的配置文件。下面是会改动的行，
-          确认后才会写入；随时可以断开并还原。
+          {t(
+            "安装召回需要写入 {name} 自己的配置文件。下面是会改动的行，确认后才会写入；随时可以断开并还原。",
+            { name: preview.hostLabel },
+          )}
         </p>
         <p className="consent-exclusion">
-          确认后会一并按默认范围允许 {preview.hostLabel}{" "}
-          使用记忆（全部工具与已导入来源），不用再单独点一次授权；
-          想收窄范围，连接完成后在应用行内点「调整范围」即可。
+          {t(
+            "确认后会一并按默认范围允许 {name} 使用记忆（全部工具与已导入来源），不用再单独点一次授权；想收窄范围，连接完成后在应用行内点「调整范围」即可。",
+            { name: preview.hostLabel },
+          )}
         </p>
         <InstallFileList preview={preview} hostLabel={preview.hostLabel} />
         <div className="consent-actions">
@@ -1453,10 +1529,10 @@ function InstallPreviewSheet({
             disabled={busy}
             onClick={onCancel}
           >
-            取消
+            {t("取消")}
           </button>
           <button type="button" disabled={busy} onClick={onApprove}>
-            {busy ? "连接中…" : "连接并允许使用记忆"}
+            {busy ? t("连接中…") : t("连接并允许使用记忆")}
           </button>
         </div>
       </section>
@@ -1477,9 +1553,10 @@ function InstallFileList({
   preview: RecallInstallPreview;
   hostLabel: string;
 }) {
+  const t = useTranslate();
   const changed = preview.files.filter((file) => file.hunk !== null);
   if (!changed.length)
-    return <p className="consent-exclusion">没有需要改动的内容。</p>;
+    return <p className="consent-exclusion">{t("没有需要改动的内容。")}</p>;
   return (
     <ul className="install-preview-files">
       {changed.map((file) => (
@@ -1495,11 +1572,11 @@ function InstallFileList({
             >
               {file.owner === "host"
                 ? file.existed
-                  ? `${hostLabel} 的现有文件 · 合并写入`
-                  : `${hostLabel} 的配置 · 新建`
+                  ? t("{name} 的现有文件 · 合并写入", { name: hostLabel })
+                  : t("{name} 的配置 · 新建", { name: hostLabel })
                 : file.existed
-                  ? "MemHub 的文件 · 替换"
-                  : "MemHub 的文件 · 新建"}
+                  ? t("MemHub 的文件 · 替换")
+                  : t("MemHub 的文件 · 新建")}
             </span>
           </div>
           {/* Lines wrap rather than scroll sideways: the path above already
@@ -1524,6 +1601,18 @@ function InstallFileList({
  * approvals over and over. This shows what each install would write — the same
  * lines as the single-app sheet — and one button that does all of it.
  */
+function bulkReasonLabel(
+  reason: string,
+  language: ReturnType<typeof useUiLanguage>,
+): string {
+  if (reason === "请先移除这个应用的同步 Hook")
+    return translate(language, "请先移除这个应用的同步 Hook");
+  if (reason === "未能读取这个应用的连接变更预览")
+    return translate(language, "未能读取这个应用的连接变更预览");
+  if (reason === "未能完成") return translate(language, "未能完成");
+  return hostReasonLabel(reason, language);
+}
+
 function BulkConnectSheet({
   steps,
   busy,
@@ -1539,11 +1628,20 @@ function BulkConnectSheet({
   onCancel: () => void;
   onApprove: () => void;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const pending = steps.filter((step) => !step.error);
   const skipped = steps.length - pending.length;
   const unfinished = steps.flatMap((step) => {
     const reason = step.error ?? errors[step.hostId];
-    return reason ? [`${step.label}（${reason}）`] : [];
+    return reason
+      ? [
+          t("{name}（{reason}）", {
+            name: step.label,
+            reason: bulkReasonLabel(reason, language),
+          }),
+        ]
+      : [];
   });
   return (
     <div className="consent-backdrop">
@@ -1557,11 +1655,14 @@ function BulkConnectSheet({
           if (event.key === "Escape" && !busy) onCancel();
         }}
       >
-        <p className="eyebrow">一次确认</p>
-        <h2 id="bulk-connect-title">接入 {pending.length} 个应用</h2>
+        <p className="eyebrow">{t("一次确认")}</p>
+        <h2 id="bulk-connect-title">
+          {t("接入 {count} 个应用", { count: pending.length })}
+        </h2>
         <p>
-          每个应用会装上读取连接，并按当前全部可核对的工具与范围允许使用记忆。
-          下面是会写入的内容，确认后才会写入；之后可以逐个断开。
+          {t(
+            "每个应用会装上读取连接，并按当前全部可核对的工具与范围允许使用记忆。下面是会写入的内容，确认后才会写入；之后可以逐个断开。",
+          )}
         </p>
         <ul className="bulk-host-list">
           {steps.map((step) => {
@@ -1574,15 +1675,19 @@ function BulkConnectSheet({
                   <strong>{step.label}</strong>
                   <span>
                     {step.error
-                      ? `跳过：${step.error}`
+                      ? t("跳过：{reason}", {
+                          reason: bulkReasonLabel(step.error, language),
+                        })
                       : step.install
-                        ? "安装连接，并允许使用记忆"
-                        : "已安装，允许使用记忆"}
+                        ? t("安装连接，并允许使用记忆")
+                        : t("已安装，允许使用记忆")}
                   </span>
                 </div>
                 {step.install ? (
                   <details>
-                    <summary>将改动 {changed} 个文件</summary>
+                    <summary>
+                      {t("将改动 {count} 个文件", { count: changed })}
+                    </summary>
                     <InstallFileList
                       preview={step.install}
                       hostLabel={step.label}
@@ -1591,7 +1696,9 @@ function BulkConnectSheet({
                 ) : null}
                 {errors[step.hostId] && (
                   <p className="recall-link-detail" role="alert">
-                    {errors[step.hostId]}。可单独重试或稍后再试。
+                    {t("{reason}。可单独重试或稍后再试。", {
+                      reason: bulkReasonLabel(errors[step.hostId], language),
+                    })}
                   </p>
                 )}
               </li>
@@ -1600,14 +1707,23 @@ function BulkConnectSheet({
         </ul>
         {skipped > 0 && (
           <p className="consent-exclusion">
-            有 {skipped} 个应用无法准备，已跳过，其他应用不受影响。
+            {t("有 {count} 个应用无法准备，已跳过，其他应用不受影响。", {
+              count: skipped,
+            })}
           </p>
         )}
         {done && (
           <p role="status">
             {unfinished.length
-              ? `${done.length} 个应用已接入，${unfinished.length} 个未完成：${unfinished.join("、")}。可在下方逐个重试。`
-              : `${done.length} 个应用已接入。`}
+              ? t(
+                  "{count} 个应用已接入，{unfinished} 个未完成：{names}。可在下方逐个重试。",
+                  {
+                    count: done.length,
+                    unfinished: unfinished.length,
+                    names: unfinished.join(language === "en" ? ", " : "、"),
+                  },
+                )
+              : t("{count} 个应用已接入。", { count: done.length })}
           </p>
         )}
         <div className="consent-actions">
@@ -1617,7 +1733,7 @@ function BulkConnectSheet({
             disabled={busy}
             onClick={onCancel}
           >
-            {done ? "关闭" : "取消"}
+            {done ? t("关闭") : t("取消")}
           </button>
           {done ? null : (
             <button
@@ -1625,7 +1741,9 @@ function BulkConnectSheet({
               disabled={busy || pending.length === 0}
               onClick={onApprove}
             >
-              {busy ? "接入中…" : `确认接入 ${pending.length} 个应用`}
+              {busy
+                ? t("接入中…")
+                : t("确认接入 {count} 个应用", { count: pending.length })}
             </button>
           )}
         </div>
@@ -1652,6 +1770,7 @@ function UninstallPreviewSheet({
   onCancel: () => void;
   onApprove: () => void;
 }) {
+  const t = useTranslate();
   const changed = preview.files.filter(
     (file) => file.hunk !== null || file.deleted,
   );
@@ -1666,16 +1785,17 @@ function UninstallPreviewSheet({
           if (event.key === "Escape" && !busy) onCancel();
         }}
       >
-        <p className="eyebrow">断开前确认</p>
+        <p className="eyebrow">{t("断开前确认")}</p>
         <h2 id="uninstall-preview-title">
-          将这样还原 {preview.hostLabel} 的配置
+          {t("将这样还原 {name} 的配置", { name: preview.hostLabel })}
         </h2>
         <p>
-          断开会撤销安装时写入的内容，恢复安装前的样子。下面是会改动的行，
-          确认后才会写入；之后可以重新安装。
+          {t(
+            "断开会撤销安装时写入的内容，恢复安装前的样子。下面是会改动的行，确认后才会写入；之后可以重新安装。",
+          )}
         </p>
         {changed.length === 0 ? (
-          <p className="consent-exclusion">没有需要改动的内容。</p>
+          <p className="consent-exclusion">{t("没有需要改动的内容。")}</p>
         ) : (
           <ul className="install-preview-files">
             {changed.map((file) => (
@@ -1691,16 +1811,20 @@ function UninstallPreviewSheet({
                   >
                     {file.deleted
                       ? file.owner === "host"
-                        ? `${preview.hostLabel} 的配置 · 删除（安装前不存在）`
-                        : "MemHub 的文件 · 删除"
+                        ? t("{name} 的配置 · 删除（安装前不存在）", {
+                            name: preview.hostLabel,
+                          })
+                        : t("MemHub 的文件 · 删除")
                       : file.owner === "host"
-                        ? `${preview.hostLabel} 的现有文件 · 还原`
-                        : "MemHub 的文件 · 还原"}
+                        ? t("{name} 的现有文件 · 还原", {
+                            name: preview.hostLabel,
+                          })
+                        : t("MemHub 的文件 · 还原")}
                   </span>
                 </div>
                 {file.deleted ? (
                   <p className="consent-exclusion">
-                    整个文件会被移除，不留空目录。
+                    {t("整个文件会被移除，不留空目录。")}
                   </p>
                 ) : (
                   <pre className="install-preview-diff">
@@ -1724,10 +1848,10 @@ function UninstallPreviewSheet({
             disabled={busy}
             onClick={onCancel}
           >
-            取消
+            {t("取消")}
           </button>
           <button type="button" disabled={busy} onClick={onApprove}>
-            {busy ? "还原中…" : "确认断开"}
+            {busy ? t("还原中…") : t("确认断开")}
           </button>
         </div>
       </section>

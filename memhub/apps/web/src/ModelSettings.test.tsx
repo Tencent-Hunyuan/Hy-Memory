@@ -17,10 +17,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ModelSettings,
   type ModelSettingsActions,
+  PresetProfileCard,
   probeLabel,
 } from "./ModelSettings";
 import type { PendingModelProbe } from "./pending-model-probe";
 import { PROVIDER_PRESETS } from "./provider-presets";
+import { setUiLanguage } from "./ui-language";
 
 const create = vi.fn();
 const probeProfile = vi.fn();
@@ -37,6 +39,9 @@ it("explains an insufficient model balance with the required recovery", () => {
 let profiles: ModelProfile[];
 let probes: Record<string, ModelProbeResult> = {};
 let pendingProbe: PendingModelProbe | null = null;
+let hookError: string | null = null;
+let hookRefreshError: string | null = null;
+let hookProbeError: string | null = null;
 
 const profile: ModelProfile = {
   profile_id: "profile-1",
@@ -100,9 +105,10 @@ vi.mock("./use-model-profiles", () => ({
       probes[value.profile_id]?.profile_revision === value.revision
         ? probes[value.profile_id]
         : null,
-    probeErrorFor: () => null,
+    probeErrorFor: () => hookProbeError,
     busy: null,
-    error: null,
+    error: hookError,
+    refreshError: hookRefreshError,
     pendingProbe,
     probeStorageFailed: false,
     create,
@@ -147,9 +153,89 @@ describe("ModelSettings", () => {
     vi.clearAllMocks();
     probes = {};
     pendingProbe = null;
+    hookError = null;
+    hookRefreshError = null;
+    hookProbeError = null;
     profiles = [profile];
     create.mockResolvedValue(profile);
     update.mockResolvedValue({ ...preset, has_api_key: true, revision: 2 });
+  });
+
+  it("translates an open local model notice and refresh warning without changing the pending state", async () => {
+    hookError = "创建结果尚未确认，请核对已保存结果，不要重复提交。";
+    hookRefreshError =
+      "操作已完成，但配置列表暂未刷新。已保留操作回执，请刷新核对，不要重复保存。";
+    const view = render(<ModelSettings />);
+    expect(screen.getByRole("alert").textContent).toContain("创建结果尚未确认");
+    expect(screen.getByText(/操作已完成，但配置列表暂未刷新/)).toBeTruthy();
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(screen.getByRole("alert").textContent).toContain(
+        "The creation result is unconfirmed",
+      );
+      expect(
+        screen.getByText(/The operation completed, but the configuration list/),
+      ).toBeTruthy();
+      expect(hookError).toContain("不要重复提交");
+      expect(probeProfile).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+
+  it("keeps external probe text unchanged rather than treating it as local copy", async () => {
+    hookProbeError = "provider response: model_profile_not_found";
+    const view = render(<ModelSettings />);
+    expect(screen.getAllByText(hookProbeError).length).toBeGreaterThan(0);
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(screen.getAllByText(hookProbeError).length).toBeGreaterThan(0);
+      expect(probeProfile).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+
+  it("switches model form labels without changing inputs or contacting a provider", async () => {
+    profiles = [];
+    const view = render(<ModelSettings />);
+    const input = screen.getByRole("textbox", {
+      name: "生成模型名",
+    }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "my-model-id" } });
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(
+        screen.getByRole("heading", { name: "Memory model" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("textbox", { name: "Generation model name" }),
+      ).toBe(input);
+      expect(input.value).toBe("my-model-id");
+      expect(
+        screen.getByRole("button", { name: "Save, test and enable" }),
+      ).toBeTruthy();
+      expect(create).not.toHaveBeenCalled();
+      expect(probeProfile).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
   });
 
   it("submits a generation-only profile and leaves embedding to the builtin", async () => {
@@ -841,6 +927,47 @@ describe("ModelSettings", () => {
   });
 
   describe("预置档案", () => {
+    it("switches the optional data-recipient disclosure without changing endpoints or sending a request", async () => {
+      const view = render(
+        <PresetProfileCard
+          profile={preset}
+          busy={false}
+          discloseRecipients
+          onSaveKey={vi.fn()}
+          onSaveKeyAndSetup={vi.fn()}
+          onContinue={vi.fn()}
+          onTest={vi.fn()}
+          onActivate={vi.fn()}
+          onRemove={vi.fn()}
+          probe={null}
+          probeError={null}
+        />,
+      );
+      expect(
+        screen.getByText(
+          /生成接收方：https:\/\/models\.example\.com\/v1；向量接收方：本机/,
+        ),
+      ).toBeTruthy();
+      try {
+        await act(async () => {
+          await setUiLanguage("en");
+        });
+        expect(
+          screen.getByText(
+            /Generation endpoint: https:\/\/models\.example\.com\/v1; embedding endpoint: On this device/,
+          ),
+        ).toBeTruthy();
+        expect(screen.queryByText(/生成接收方/)).toBeNull();
+        expect(update).not.toHaveBeenCalled();
+        expect(probeProfile).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+        await act(async () => {
+          await setUiLanguage("zh-CN");
+        });
+      }
+    });
+
     it("只问一个 key，端点与模型名不摆在明面上", async () => {
       profiles = [preset];
       render(<ModelSettings />);
@@ -908,6 +1035,66 @@ describe("ModelSettings", () => {
         ),
       ).toBeTruthy();
       expect(update).not.toHaveBeenCalled();
+    });
+
+    it("translates a rejected URL-shaped key without sending it", async () => {
+      profiles = [preset];
+      const user = userEvent.setup();
+      const view = render(<ModelSettings />);
+      await user.type(
+        screen.getByLabelText("粘贴 API Key"),
+        "https://keys.example/path",
+      );
+      await user.click(screen.getByRole("button", { name: "保存 key" }));
+      try {
+        await act(async () => {
+          await setUiLanguage("en");
+        });
+        expect(
+          screen.getByText(
+            "Enter the API key provided by the service, not a URL.",
+          ),
+        ).toBeTruthy();
+        expect(update).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+        await act(async () => {
+          await setUiLanguage("zh-CN");
+        });
+      }
+    });
+
+    it("translates an open key failure without clearing the key or retrying the write", async () => {
+      profiles = [preset];
+      update.mockResolvedValueOnce(undefined);
+      const user = userEvent.setup();
+      const view = render(<ModelSettings />);
+      const input = screen.getByLabelText("粘贴 API Key") as HTMLInputElement;
+      await user.type(input, "synthetic-key");
+      await user.click(screen.getByRole("button", { name: "保存 key" }));
+      expect(
+        await screen.findByText("密钥尚未保存成功，已填写内容保留，可重试。"),
+      ).toBeTruthy();
+      expect(input.value).toBe("synthetic-key");
+      try {
+        await act(async () => {
+          await setUiLanguage("en");
+        });
+        expect(
+          screen.getByText(
+            "Could not save the key. Your input is retained; you can retry.",
+          ),
+        ).toBeTruthy();
+        expect(input.value).toBe("synthetic-key");
+        expect(update).toHaveBeenCalledTimes(1);
+        expect(probeProfile).not.toHaveBeenCalled();
+        expect(activate).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+        await act(async () => {
+          await setUiLanguage("zh-CN");
+        });
+      }
     });
 
     it("预置档案在场也不让自定义变难", async () => {
@@ -1082,6 +1269,57 @@ describe("把一张预置卡设为当前模型", () => {
       within(card).getByRole("button", { name: "设为当前模型" }),
     );
     expect(activate).toHaveBeenCalledWith("preset-1");
+  });
+
+  it("switches a saved local setup failure without retrying or changing its state", async () => {
+    profiles = [];
+    create.mockResolvedValue({ ...profile, profile_id: "created" });
+    probeProfile.mockResolvedValue(undefined);
+    const view = render(<ModelSettings />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("生成模型名"), "user-model");
+    await user.type(screen.getByLabelText(/^API Key/), "test-key");
+    await user.click(screen.getByRole("button", { name: "保存并测试启用" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("连接测试未通过"),
+    );
+    const calls = probeProfile.mock.calls.length;
+    await act(async () => setUiLanguage("en"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "connection test failed",
+    );
+    expect(probeProfile).toHaveBeenCalledTimes(calls);
+    expect(activate).not.toHaveBeenCalled();
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Generation model name",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("user-model");
+    view.unmount();
+    await act(async () => setUiLanguage("zh-CN"));
+  });
+
+  it("switches a saved local save failure without resubmitting", async () => {
+    profiles = [];
+    create.mockResolvedValue(null);
+    const view = render(<ModelSettings />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("生成模型名"), "user-model");
+    await user.type(screen.getByLabelText(/^API Key/), "test-key");
+    await user.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("配置未保存"),
+    );
+    await act(async () => setUiLanguage("en"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Configuration was not saved",
+    );
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(probeProfile).not.toHaveBeenCalled();
+    view.unmount();
+    await act(async () => setUiLanguage("zh-CN"));
   });
 
   it("activates a tested preset only on the separate activation action", async () => {

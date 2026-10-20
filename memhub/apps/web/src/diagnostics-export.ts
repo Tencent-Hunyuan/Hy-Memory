@@ -4,6 +4,7 @@
 export type DiagnosticsExportResult = {
   ok: boolean;
   message: string;
+  filename?: string | null;
 };
 
 export async function exportDiagnosticsFile(): Promise<DiagnosticsExportResult> {
@@ -15,6 +16,7 @@ export async function exportDiagnosticsFile(): Promise<DiagnosticsExportResult> 
     return {
       ok: true,
       message: `日志已导出：${receipt.filename ?? "诊断文件"}`,
+      filename: receipt.filename,
     };
   } catch {
     return { ok: false, message: "诊断信息未能导出，请重试。" };

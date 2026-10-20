@@ -13,6 +13,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HealthPanel } from "./HealthPanel";
+import { setUiLanguage } from "./ui-language";
 import type { ImportSourcesController } from "./use-import-sources";
 
 const getMemoryProcessing = vi.fn();
@@ -102,10 +103,11 @@ function bridge(hosts: unknown[]) {
 }
 
 describe("HealthPanel", () => {
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
     vi.useRealTimers();
     delete window.oneMemory;
+    await setUiLanguage("zh-CN");
   });
 
   beforeEach(() => {
@@ -146,12 +148,143 @@ describe("HealthPanel", () => {
     });
   });
 
+  it("renders English diagnostics with localized counts, receipts and untouched identifiers after switching", async () => {
+    await setUiLanguage("en");
+    const desktop = bridge([
+      {
+        hostId: "cursor",
+        label: "Cursor",
+        present: true,
+        installed: true,
+        selfCheck: { state: "wired", detail: "", probed_at: "" },
+        skillDrift: null,
+      },
+    ]);
+    desktop.getBackgroundHealth = vi.fn().mockResolvedValue({
+      state: "healthy",
+      code: "background_verified",
+      core: "running",
+      broker: "running",
+      instanceId: "instance-1",
+    });
+    desktop.markDiagnosticIncident = vi.fn().mockResolvedValue({
+      incident_id: "issue-123",
+      session_id: "session-123",
+      timestamp: "2026-09-24T01:00:00Z",
+    });
+    desktop.copyText = vi.fn().mockResolvedValue(undefined);
+    desktop.setUiLanguage = vi
+      .fn()
+      .mockImplementation(async (next: "en" | "zh-CN") => next);
+    desktop.exportDiagnostics = vi.fn().mockResolvedValue({
+      state: "exported",
+      filename: "用户日志.zip",
+      file_count: 1,
+    });
+    vi.spyOn(window, "prompt").mockReturnValue("user's own words");
+    const state = imports({
+      sources: [
+        source("cursor", {
+          imported_conversations: 1761,
+          imported_messages: 81614,
+        }),
+      ],
+      sourceSnapshot: { confirmedAt: "2026-09-19T02:06:00Z", stale: true },
+    });
+    render(<HealthPanel imports={state} />);
+    expect(
+      screen.getByRole("heading", { name: "Health diagnostics" }),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Local service").textContent).toContain(
+      "instance-1",
+    );
+    expect(screen.getByLabelText("Totals by source").textContent).toContain(
+      "1,761 conversations · 81,614 messages",
+    );
+    expect(
+      (await screen.findByLabelText("Memory processing")).textContent,
+    ).toContain("100,000 originals · 50,000 complete turns");
+    expect(screen.getByLabelText("Memory processing").textContent).toContain(
+      "No generation model enabled yet",
+    );
+    expect(
+      (await screen.findByLabelText("Background service")).textContent,
+    ).toContain("Host bridge: Running");
+    expect(
+      (await screen.findByLabelText("AI connections")).textContent,
+    ).toContain("Cursor");
+    expect(screen.getByLabelText("AI connections").textContent).toContain(
+      "Connected",
+    );
+    const stamp = screen.getByLabelText("Local service").querySelector("time");
+    expect(stamp?.dateTime).toBe("2026-09-19T02:06:00Z");
+    expect(stamp?.textContent).not.toContain("2026-09-19T");
+    fireEvent.click(screen.getByRole("button", { name: "Mark issue time" }));
+    expect(window.prompt).toHaveBeenCalledWith(
+      "Briefly describe the issue (optional)",
+      "",
+    );
+    expect(await screen.findByText("Issue ID copied: issue-123")).toBeTruthy();
+    expect(desktop.markDiagnosticIncident).toHaveBeenCalledWith(
+      "user's own words",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Export logs for support" }),
+    );
+    expect(await screen.findByText("Logs exported: 用户日志.zip")).toBeTruthy();
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByRole("heading", { name: "运行诊断" })).toBeTruthy();
+    expect(screen.getByText("日志已导出：用户日志.zip")).toBeTruthy();
+  });
+
+  it("localizes the default diagnostic filename after switching languages", async () => {
+    await setUiLanguage("en");
+    const desktop = bridge([]);
+    desktop.setUiLanguage = vi
+      .fn()
+      .mockImplementation(async (next: "en" | "zh-CN") => next);
+    desktop.exportDiagnostics = vi
+      .fn()
+      .mockResolvedValue({ state: "exported", filename: null, file_count: 0 });
+    render(<HealthPanel imports={imports()} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Export logs for support" }),
+    );
+    expect(
+      await screen.findByText("Logs exported: diagnostics file"),
+    ).toBeTruthy();
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByText("日志已导出：诊断文件")).toBeTruthy();
+  });
+
+  it("shows English read failures without leaking transport details", async () => {
+    await setUiLanguage("en");
+    const desktop = bridge([]);
+    vi.mocked(desktop.getRecallHosts).mockRejectedValue(
+      Error("PRIVATE_TRANSPORT"),
+    );
+    render(<HealthPanel imports={imports({ health: null })} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("AI connections").textContent).toContain(
+        "Temporarily unavailable.",
+      ),
+    );
+    expect(screen.getByLabelText("AI connections").textContent).not.toContain(
+      "PRIVATE_TRANSPORT",
+    );
+    expect(screen.getByLabelText("Local service").textContent).toContain(
+      "Local Core is not connected yet.",
+    );
+  });
+
   it("shows the complete import, HY and WorkBuddy counters", async () => {
     bridge([]);
     render(<HealthPanel imports={imports()} />);
 
     const details = await screen.findByLabelText("导入与整理详情");
-    expect(details.textContent).toContain("100000 条原文 · 50000 个完整 turn");
+    expect(details.textContent).toContain(
+      "100,000 条原文 · 50,000 个完整 turn",
+    );
     expect(details.textContent).toContain(
       "120 次调用 · 100 完成 · 1 结果不确定 · 2 失败 · 3 取消",
     );

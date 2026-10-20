@@ -13,8 +13,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
 import { MemorySpace } from "./MemorySpace";
 import { pollNow } from "./poll-scheduler";
+import { setUiLanguage } from "./ui-language";
 
 // Text queries include hidden retained views by default; assertions target the visible owner.
 const visibleText = { selector: ":not([hidden] *)" };
@@ -161,6 +163,33 @@ function deferred<T>() {
 }
 
 describe("MemorySpace", () => {
+  it("localizes single and bulk delete confirmations without changing the answer", async () => {
+    const onAnswer = vi.fn();
+    const view = render(
+      <MemoryDeleteDialog count={1234} onAnswer={onAnswer} />,
+    );
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    expect(
+      screen.getByRole("heading", { name: "Delete these 1,234 memories?" }),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onAnswer).toHaveBeenCalledWith(false);
+    view.rerender(<MemoryDeleteDialog count={1} onAnswer={onAnswer} />);
+    expect(
+      screen.getByRole("heading", { name: "Delete this memory?" }),
+    ).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Confirm deletion" }),
+    );
+    expect(onAnswer).toHaveBeenLastCalledWith(true);
+    view.unmount();
+    await act(async () => {
+      await setUiLanguage("zh-CN");
+    });
+  });
+
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
@@ -290,6 +319,34 @@ describe("MemorySpace", () => {
         mode: "generated",
       };
     });
+  });
+
+  it("switches memory navigation and search without generating or rewriting memories", async () => {
+    const view = render(<MemorySpace />);
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(
+        screen.getByRole("heading", { name: "Memory space" }),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole("tab", { name: "Memory library" }));
+      expect(
+        screen.getByRole("textbox", { name: "Search memory library" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("navigation", { name: "Memory status" }),
+      ).toBeTruthy();
+      expect(screen.getAllByText("Select a memory").length).toBeGreaterThan(0);
+      await screen.findAllByText("Initial memory");
+      expect(mutateMemory).not.toHaveBeenCalled();
+      expect(askMemoriesStream).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
   });
 
   describe("S1.3 teaching state preservation", () => {
@@ -904,6 +961,29 @@ describe("MemorySpace", () => {
       expect(
         within(inspector).queryByRole("button", { name: /确认|拒绝/ }),
       ).toBeNull();
+    });
+
+    it("切换语言后检查器来源标签随语言切换，记忆正文不变", async () => {
+      getMemory.mockResolvedValue({ ...detail, memory: rows[0] });
+      await openLibrary();
+      await userEvent.click(screen.getByRole("button", { name: /^First/ }));
+      const inspector = await screen.findByRole("complementary", {
+        name: "记忆详情",
+      });
+      await within(inspector).findByText("由原始对话整理");
+      try {
+        await act(() => setUiLanguage("en"));
+        expect(
+          within(inspector).getByText("Created from original conversations"),
+        ).toBeTruthy();
+        expect(
+          within(inspector).getByText(/Conversation · Confirmed/),
+        ).toBeTruthy();
+        expect(within(inspector).getByText("First")).toBeTruthy();
+        expect(within(inspector).queryByText("由原始对话整理")).toBeNull();
+      } finally {
+        await act(() => setUiLanguage("zh-CN"));
+      }
     });
 
     it("S1.3: changing status clears hidden targets from the next batch", async () => {
@@ -2293,6 +2373,14 @@ describe("MemorySpace", () => {
         expect(
           (await screen.findByRole("alert", {}, { timeout: 3500 })).textContent,
         ).toContain("召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。");
+        await act(async () => setUiLanguage("en"));
+        expect(screen.getByRole("alert").textContent).toContain(
+          "Recall scope saved, but the list could not refresh.",
+        );
+        await act(async () => setUiLanguage("zh-CN"));
+        expect(screen.getByRole("alert").textContent).toContain(
+          "召回范围已保存，但列表刷新失败。",
+        );
       }
       expect(
         (

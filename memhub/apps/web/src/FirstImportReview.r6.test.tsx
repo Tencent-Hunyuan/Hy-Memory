@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FirstImportReview } from "./FirstImportReview";
+import { setUiLanguage } from "./ui-language";
 
 const api = vi.hoisted(() => ({ receipt: vi.fn(), conversation: vi.fn() }));
 vi.mock("./api", () => ({
@@ -64,8 +65,9 @@ const job = (
   created_at: "2026-09-19T00:00:00Z",
   updated_at: "2026-09-19T00:00:01Z",
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await setUiLanguage("zh-CN");
   vi.useRealTimers();
   vi.resetAllMocks();
 });
@@ -103,6 +105,43 @@ it("uses step2 frame and withholds unqualified pure-user feed from old receipts"
   ).toBeTruthy();
   expect(
     screen.getByText("后台将持续为你导入，可以放心进入下一步"),
+  ).toBeTruthy();
+});
+
+it("switches first-import copy without changing connection selections or continuation payload", async () => {
+  const update = vi.fn();
+  const next = vi.fn();
+  render(
+    <FirstImportReview
+      sourceIds={["a"]}
+      sources={[{ ...source("a"), display_name: "Original Source" }]}
+      jobs={[job("a")]}
+      connectionDraft={{ hostSourceIds: [] }}
+      onConnectionDraftChange={update}
+      onContinue={next}
+    />,
+  );
+  await act(() => setUiLanguage("en"));
+  expect(
+    screen.getByRole("heading", {
+      name: "Conversations are coming in. Memories start here",
+    }),
+  ).toBeTruthy();
+  expect(screen.getByText("Original Source")).toBeTruthy();
+  expect(screen.getByText("7 messages saved")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: "Connect apps in one step" }),
+  );
+  expect(update).toHaveBeenCalledWith({ hostSourceIds: ["a"] });
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Configure a model to create memories",
+    }),
+  );
+  expect(next).toHaveBeenCalledWith("settings");
+  await act(() => setUiLanguage("zh-CN"));
+  expect(
+    screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
   ).toBeTruthy();
 });
 

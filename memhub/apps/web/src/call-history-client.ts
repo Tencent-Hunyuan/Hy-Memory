@@ -1,4 +1,9 @@
 import {
+  translate,
+  type UiLanguage,
+  type UiMessage,
+} from "@one-memory/contracts";
+import {
   clearAllCallEventsRequest,
   clearCallEventsRequest,
   getCallHistoryRequest,
@@ -47,7 +52,7 @@ export interface CallHistoryPage {
   retention_days: number | null;
   max_events: number | null;
 }
-export const CALL_TOOLS: Record<CallEvent["tool"], string> = {
+export const CALL_TOOLS: Record<CallEvent["tool"], UiMessage> = {
   om_recall: "查记忆",
   om_conversations: "查记忆",
   om_ask: "查记忆",
@@ -64,60 +69,107 @@ export const CALL_HOSTS: Record<string, string> = {
   pi: "Pi",
   "deepseek-harness": "DeepSeek Harness",
 };
-export function callHostName(id: string | null) {
-  return id === null ? "直接调用（诊断）" : (CALL_HOSTS[id] ?? id);
+export function callHostName(
+  id: string | null,
+  language: UiLanguage = "zh-CN",
+) {
+  return id === null
+    ? translate(language, "直接调用（诊断）")
+    : (CALL_HOSTS[id] ?? id);
 }
 export function callEventHeadline(
   item: CallEvent,
   host = callHostName(item.host_id),
+  language: UiLanguage = "zh-CN",
 ) {
-  const count = item.raw_count + item.memory_count;
-  if (item.state === "timed_out") return `${host} 这次没来得及查到记忆`;
-  if (item.state === "unavailable") return `${host} 暂时无法查记忆`;
-  if (item.state === "denied") return `${host} 未获准查记忆`;
-  if (item.state === "empty") return `${host} 没有查到相关记忆`;
-  return `${host} 查到 ${count} 条相关内容`;
-}
-export function callRowHeadline(item: CallEvent) {
-  return callEventHeadline(item);
-}
-export function callRowDetail(item: CallEvent) {
-  const host = callHostName(item.host_id);
+  const values = { host, count: item.raw_count + item.memory_count };
   if (item.state === "timed_out")
-    return "后台正在整理记忆，查询超时，这次回答没有带上记忆";
+    return translate(language, "{host} 这次没来得及查到记忆", values);
   if (item.state === "unavailable")
-    return "One Memory 暂时不可用，这次回答没有带上记忆";
-  if (item.state === "denied") return "当前授权不允许这次查询";
+    return translate(language, "{host} 暂时无法查记忆", values);
+  if (item.state === "denied")
+    return translate(language, "{host} 未获准查记忆", values);
+  if (item.state === "empty")
+    return translate(language, "{host} 没有查到相关记忆", values);
+  return translate(
+    language,
+    values.count === 1
+      ? "{host} 查到 1 条相关内容"
+      : "{host} 查到 {count} 条相关内容",
+    values,
+  );
+}
+export function callRowHeadline(
+  item: CallEvent,
+  language: UiLanguage = "zh-CN",
+) {
+  return callEventHeadline(
+    item,
+    callHostName(item.host_id, language),
+    language,
+  );
+}
+export function callRowDetail(item: CallEvent, language: UiLanguage = "zh-CN") {
+  const host = callHostName(item.host_id, language);
+  if (item.state === "timed_out")
+    return translate(
+      language,
+      "后台正在整理记忆，查询超时，这次回答没有带上记忆",
+    );
+  if (item.state === "unavailable")
+    return translate(language, "One Memory 暂时不可用，这次回答没有带上记忆");
+  if (item.state === "denied")
+    return translate(language, "当前授权不允许这次查询");
   if (item.state === "partial") {
     return item.delivery === "delivered"
-      ? `已提供给 ${host} · 部分内容还在整理中`
-      : "部分内容还在整理中";
+      ? translate(language, "已提供给 {host} · 部分内容还在整理中", { host })
+      : translate(language, "部分内容还在整理中");
   }
-  if (item.delivery === "delivered") return `已提供给 ${host}`;
-  if (item.delivery === "not_delivered") return "没有提供给应用";
-  return item.state === "empty" ? "这次没有找到相关记忆" : "查询成功";
+  if (item.delivery === "delivered")
+    return translate(language, "已提供给 {host}", { host });
+  if (item.delivery === "not_delivered")
+    return translate(language, "没有提供给应用");
+  return translate(
+    language,
+    item.state === "empty" ? "这次没有找到相关记忆" : "查询成功",
+  );
 }
 export function callDetailHeadline(
   item: CallEvent,
   host = callHostName(item.host_id),
+  language: UiLanguage = "zh-CN",
 ) {
-  return callEventHeadline(item, host);
+  return callEventHeadline(item, host, language);
 }
-export function callDeliveryLabel(item: CallEvent) {
+export function callDeliveryLabel(
+  item: CallEvent,
+  language: UiLanguage = "zh-CN",
+) {
   if (item.delivery === "delivered")
-    return `已提供给 ${callHostName(item.host_id)}`;
-  if (item.delivery === "not_delivered") return "没有提供给应用";
+    return translate(language, "已提供给 {host}", {
+      host: callHostName(item.host_id, language),
+    });
+  if (item.delivery === "not_delivered")
+    return translate(language, "没有提供给应用");
   return "";
 }
-export function callReturnDeliveryLabel(item: CallEvent) {
-  const host = callHostName(item.host_id);
+export function callReturnDeliveryLabel(
+  item: CallEvent,
+  language: UiLanguage = "zh-CN",
+) {
+  const host = callHostName(item.host_id, language);
   if (item.state === "timed_out")
-    return `One Memory 正在导入和整理你的记忆，这次没能及时查完，所以 ${host} 这次是在没有记忆的情况下回答的。整理完成后会恢复正常。`;
+    return translate(
+      language,
+      "One Memory 正在导入和整理你的记忆，这次没能及时查完，所以 {host} 这次是在没有记忆的情况下回答的。整理完成后会恢复正常。",
+      { host },
+    );
   if (item.state === "unavailable")
-    return "One Memory 暂时不可用，这次回答没有带上记忆。";
+    return translate(language, "One Memory 暂时不可用，这次回答没有带上记忆。");
   if (item.state === "denied")
-    return "当前授权不允许这次查询，没有向应用提供记忆。";
-  if (item.state === "partial") return "部分内容还在整理中。";
+    return translate(language, "当前授权不允许这次查询，没有向应用提供记忆。");
+  if (item.state === "partial")
+    return translate(language, "部分内容还在整理中。");
   return "";
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

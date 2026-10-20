@@ -1,4 +1,4 @@
-import type { SourceResponse } from "@one-memory/contracts";
+import type { SourceResponse, UiMessage } from "@one-memory/contracts";
 import { RefreshCw, ShieldCheck, ShieldOff, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -18,6 +18,7 @@ import {
   selectionIsValid,
 } from "./recall-grant";
 import "./recall-permission-control.css";
+import { getUiLanguage, useTranslate } from "./ui-language";
 
 export interface RecallPermissionControlProps {
   host: RecallHostStatus;
@@ -42,9 +43,9 @@ type Snapshot = {
   fallbackFocus: HTMLElement | null;
 };
 type Pending = "check" | "write" | "refresh";
-const changedMessage =
+const changedMessage: UiMessage =
   "安装身份、授权版本或所选来源范围已变化，请关闭后重新打开并核对。不会把本次确认用于变化后的授权。";
-const toolNames: Record<RecallPermissionTool, string> = {
+const toolNames: Record<RecallPermissionTool, UiMessage> = {
   om_recall: "检索记忆",
   om_ask: "记忆问答（可选）",
   om_conversations: "读取原始对话",
@@ -69,8 +70,9 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [pending, setPending] = useState(false);
   const [granting, setGranting] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<UiMessage | null>(null);
+  const [error, setError] = useState<UiMessage | null>(null);
+  const t = useTranslate();
   const generation = useRef(0);
   const flight = useRef(false);
   const mounted = useRef(false);
@@ -247,7 +249,7 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
       if (!validMutationResult(saved, picture, review))
         throw new Error("host_permission_invalid_receipt");
       receive(saved);
-      setNotice(`已允许 ${host.label} 使用记忆。`);
+      setNotice("已允许 {name} 使用记忆。");
       // The write already landed: a failed list refresh is reported as such,
       // never as a failed grant, so nobody re-submits an approval that stuck.
       try {
@@ -273,29 +275,29 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
   return (
     <section
       className={`recall-permission-control${compact ? " recall-permission-compact" : ""}`}
-      aria-label={`${host.label} 调用权限`}
+      aria-label={t("{name} 调用权限", { name: host.label })}
       ref={control}
       tabIndex={-1}
     >
       <p className="recall-permission-status" role="status" hidden={compact}>
-        {statusLabel(status, host.hostId)}
+        {t(statusLabel(status, host.hostId))}
       </p>
       {!bridge && (
         <p className="recall-permission-meta">
-          当前桌面连接不支持完整权限管理，不能在此授权或撤回。
+          {t("当前桌面连接不支持完整权限管理，不能在此授权或撤回。")}
         </p>
       )}
       {status?.reason === "installation_incomplete" && (
         <p className="recall-permission-meta">
-          连接安装尚未完成，不能授权使用记忆。
+          {t("连接安装尚未完成，不能授权使用记忆。")}
         </p>
       )}
       {compact ? (
         <label className="recall-permission-switch">
-          <span>允许使用记忆</span>
+          <span>{t("允许使用记忆")}</span>
           <input
             type="checkbox"
-            aria-label="允许使用记忆"
+            aria-label={t("允许使用记忆")}
             checked={receipt?.status === "approved"}
             disabled={
               disabled ||
@@ -323,7 +325,7 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
               onClick={(event) => open("grant", event.currentTarget)}
             >
               <ShieldCheck size={16} aria-hidden="true" />
-              调整调用权限
+              {t("调整调用权限")}
             </button>
           ) : (
             <>
@@ -344,7 +346,7 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
                 onClick={(event) => void grantAll(event.currentTarget)}
               >
                 <ShieldCheck size={16} aria-hidden="true" />
-                {granting ? "正在允许…" : "允许使用记忆"}
+                {t(granting ? "正在允许…" : "允许使用记忆")}
               </button>
               <button
                 type="button"
@@ -359,7 +361,7 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
                 }
                 onClick={(event) => open("grant", event.currentTarget)}
               >
-                调整范围
+                {t("调整范围")}
               </button>
             </>
           )}
@@ -371,14 +373,14 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
               onClick={(event) => open("revoke", event.currentTarget)}
             >
               <ShieldOff size={16} aria-hidden="true" />
-              撤回调用权限
+              {t("撤回调用权限")}
             </button>
           )}
           <button
             type="button"
             className="quiet recall-permission-icon"
-            aria-label="刷新调用权限"
-            title="刷新调用权限"
+            aria-label={t("刷新调用权限")}
+            title={t("刷新调用权限")}
             disabled={disabled || !bridge || pending || granting || !!snapshot}
             onClick={() => void refresh()}
           >
@@ -386,16 +388,20 @@ export function RecallPermissionControl(props: RecallPermissionControlProps) {
           </button>
         </div>
       )}
-      {pending && <p role="status">正在读取调用授权状态…</p>}
-      {granting && <p role="status">正在允许 {host.label} 使用记忆…</p>}
+      {pending && <p role="status">{t("正在读取调用授权状态…")}</p>}
+      {granting && (
+        <p role="status">
+          {t("正在允许 {name} 使用记忆…", { name: host.label })}
+        </p>
+      )}
       {notice && (
         <p className="recall-permission-meta" role="status">
-          {notice}
+          {t(notice, { name: host.label })}
         </p>
       )}
       {error && (
         <p className="recall-permission-error" role="alert">
-          {error}
+          {t(error)}
         </p>
       )}
       {snapshot && (
@@ -437,6 +443,7 @@ function PermissionDialog({
   onChanged(): void;
 }) {
   const id = useId();
+  const t = useTranslate();
   const panel = useRef<HTMLElement>(null);
   const receipt = snapshot.permission.receipt;
   const editing = receipt.status === "approved";
@@ -463,7 +470,7 @@ function PermissionDialog({
   const [pending, setPending] = useState<Pending | null>(null);
   const [stale, setStale] = useState(false);
   const [needsRefresh, setNeedsRefresh] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiMessage | null>(null);
   const [result, setResult] = useState<RecallPermissionStatus | null>(null);
   const committed = useRef(false);
   const mounted = useRef(false);
@@ -799,7 +806,9 @@ function PermissionDialog({
   }
 
   const removed = [
-    ...receipt.allowedTools.filter((tool) => !tools.includes(tool)),
+    ...receipt.allowedTools
+      .filter((tool) => !tools.includes(tool))
+      .map((tool) => t(toolNames[tool])),
     ...receipt.allowedScopes.filter((scope) => !scopes.includes(scope)),
   ];
   const visibleError = stale || changed ? changedMessage : error;
@@ -848,17 +857,17 @@ function PermissionDialog({
       >
         <header className="recall-permission-heading">
           <div>
-            <p className="eyebrow">独立调用授权</p>
+            <p className="eyebrow">{t("独立调用授权")}</p>
             <h2 id={`${id}-title`}>
               {snapshot.label} ·{" "}
-              {snapshot.action === "revoke" ? "撤回调用权限" : "使用记忆"}
+              {t(snapshot.action === "revoke" ? "撤回调用权限" : "使用记忆")}
             </h2>
           </div>
           <button
             type="button"
             className="quiet recall-permission-icon"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t("关闭")}
+            title={t("关闭")}
             disabled={pending === "write"}
             onClick={close}
           >
@@ -867,32 +876,38 @@ function PermissionDialog({
         </header>
         <div className="recall-permission-body">
           <p className="recall-permission-meta">
-            安装：<code>{receipt.installationId}</code> · 授权版本{" "}
+            {t("安装：")}
+            <code>{receipt.installationId}</code>
+            {t(" · 授权版本 ")}
             {result?.receipt?.revision ?? receipt.revision}
           </p>
           {phase === "select" && (
             <>
               <p>
-                连接安装与使用记忆分别授权。所选权限仅用于此应用的这次安装。
+                {t(
+                  "连接安装与使用记忆分别授权。所选权限仅用于此应用的这次安装。",
+                )}
               </p>
               <fieldset
                 className="recall-permission-options"
                 disabled={!!pending || blocked}
               >
-                <legend>允许的工具</legend>
+                <legend>{t("允许的工具")}</legend>
                 {offeredTools.map((tool) => (
                   <label className="recall-permission-choice" key={tool}>
                     <input
                       type="checkbox"
-                      aria-label={toolNames[tool]}
+                      aria-label={t(toolNames[tool])}
                       checked={tools.includes(tool)}
                       onChange={() => toggleTool(tool)}
                     />
                     <span>
-                      {toolNames[tool]}
+                      {t(toolNames[tool])}
                       {tool === "om_ask" && (
                         <small>
-                          可能使用已配置的模型处理。本次只授予此应用的记忆读取范围。
+                          {t(
+                            "可能使用已配置的模型处理。本次只授予此应用的记忆读取范围。",
+                          )}
                         </small>
                       )}
                     </span>
@@ -903,17 +918,19 @@ function PermissionDialog({
                 className="recall-permission-options"
                 disabled={!!pending || blocked}
               >
-                <legend>允许的记忆范围</legend>
+                <legend>{t("允许的记忆范围")}</legend>
                 <label className="recall-permission-choice">
                   <input
                     type="checkbox"
                     checked={scopes.includes("all-apps")}
                     onChange={() => toggleScope("all-apps")}
                   />
-                  <span>跨应用共享记忆（all-apps）</span>
+                  <span>{t("跨应用共享记忆（all-apps）")}</span>
                 </label>
                 <p className="recall-permission-meta">
-                  仅限已允许共享的记忆，不等于全部原始对话，也不扩大来源读取授权。
+                  {t(
+                    "仅限已允许共享的记忆，不等于全部原始对话，也不扩大来源读取授权。",
+                  )}
                 </p>
                 {snapshot.workspaces.map((option) => (
                   <label
@@ -922,12 +939,12 @@ function PermissionDialog({
                   >
                     <input
                       type="checkbox"
-                      aria-label={`工作区：${option.label}`}
+                      aria-label={t("工作区：{name}", { name: option.label })}
                       checked={scopes.includes(option.scope)}
                       onChange={() => toggleScope(option.scope)}
                     />
                     <span>
-                      工作区：{option.label}
+                      {t("工作区：{name}", { name: option.label })}
                       <small>{option.scope}</small>
                     </span>
                   </label>
@@ -937,13 +954,16 @@ function PermissionDialog({
                 className="recall-permission-options"
                 disabled={!!pending || blocked}
               >
-                <legend>原始对话来源</legend>
+                <legend>{t("原始对话来源")}</legend>
                 <p className="recall-permission-meta">
-                  读取原始对话需同时允许原始对话工具、all-apps
-                  和明确选择的已授权来源。不会自动纳入其他来源。
+                  {t(
+                    "读取原始对话需同时允许原始对话工具、all-apps 和明确选择的已授权来源。不会自动纳入其他来源。",
+                  )}
                 </p>
                 {!snapshot.sources.length && (
-                  <p>暂无可核对的已授权来源，不能新增原始对话读取权限。</p>
+                  <p>
+                    {t("暂无可核对的已授权来源，不能新增原始对话读取权限。")}
+                  </p>
                 )}
                 {snapshot.sources.map((source) => (
                   <label
@@ -952,14 +972,17 @@ function PermissionDialog({
                   >
                     <input
                       type="checkbox"
-                      aria-label={`${source.display_name} 原始对话`}
+                      aria-label={t("{name} 原始对话", {
+                        name: source.display_name,
+                      })}
                       checked={scopes.includes(`source:${source.source_id}`)}
                       onChange={() => toggleScope(`source:${source.source_id}`)}
                     />
                     <span>
                       {source.display_name}
                       <small>
-                        source:{source.source_id} · 来源授权版本{" "}
+                        source:{source.source_id}
+                        {t(" · 来源授权版本 ")}
                         {source.grant_revision}
                       </small>
                     </span>
@@ -971,20 +994,23 @@ function PermissionDialog({
                   className="recall-permission-options"
                   disabled={!!pending || blocked}
                 >
-                  <legend>未能核对的已有范围</legend>
+                  <legend>{t("未能核对的已有范围")}</legend>
                   <p>
-                    以下范围不会自动丢弃。继续更新需明确移除，或取消并补齐来源、工作区信息后再打开。
+                    {t(
+                      "以下范围不会自动丢弃。继续更新需明确移除，或取消并补齐来源、工作区信息后再打开。",
+                    )}
                   </p>
                   {unverified.map((scope) => (
                     <label className="recall-permission-choice" key={scope}>
                       <input
                         type="checkbox"
                         checked={!scopes.includes(scope)}
-                        aria-label={`移除未核对范围：${scope}`}
+                        aria-label={t("移除未核对范围：{scope}", { scope })}
                         onChange={() => toggleScope(scope)}
                       />
                       <span>
-                        移除此范围<small>{scope}</small>
+                        {t("移除此范围")}
+                        <small>{scope}</small>
                       </span>
                     </label>
                   ))}
@@ -995,16 +1021,18 @@ function PermissionDialog({
           {editing && phase === "select" && (
             <section
               className="recall-permission-summary"
-              aria-label="当前授权"
+              aria-label={t("当前授权")}
             >
-              <h3>当前授权</h3>
+              <h3>{t("当前授权")}</h3>
               <PermissionSummary
                 tools={receipt.allowedTools}
                 scopes={receipt.allowedScopes}
                 snapshot={snapshot}
               />
               <p>
-                本次确认将替换当前全部工具和范围，不会与旧授权合并。未选中的权限将被移除。
+                {t(
+                  "本次确认将替换当前全部工具和范围，不会与旧授权合并。未选中的权限将被移除。",
+                )}
               </p>
             </section>
           )}
@@ -1014,23 +1042,31 @@ function PermissionDialog({
           {phase === "select" && (
             <section
               className="recall-permission-summary"
-              aria-label="本次授权"
+              aria-label={t("本次授权")}
             >
-              <h3>{editing ? "本次将授权" : "本次将授权（默认全选）"}</h3>
+              <h3>{t(editing ? "本次将授权" : "本次将授权（默认全选）")}</h3>
               <PermissionSummary
                 tools={tools}
                 scopes={scopes}
                 snapshot={snapshot}
               />
-              {removed.length > 0 && <p>本次将移除：{removed.join("、")}</p>}
+              {removed.length > 0 && (
+                <p>
+                  {t("本次将移除：{items}", {
+                    items: removed.join(getUiLanguage() === "en" ? ", " : "、"),
+                  })}
+                </p>
+              )}
             </section>
           )}
           {phase === "revoke" && (
             <>
               <p>
-                这将结束此安装的调用授权，阻止之后的记忆读取。不会删除来源或卸载连接，也不会关闭其他应用的授权。
+                {t(
+                  "这将结束此安装的调用授权，阻止之后的记忆读取。不会删除来源或卸载连接，也不会关闭其他应用的授权。",
+                )}
               </p>
-              <p>不能收回此应用此前已读取的内容。</p>
+              <p>{t("不能收回此应用此前已读取的内容。")}</p>
               <PermissionSummary
                 tools={receipt.allowedTools}
                 scopes={receipt.allowedScopes}
@@ -1046,18 +1082,22 @@ function PermissionDialog({
                 disabled={!!pending || blocked}
                 onChange={(event) => setConfirmed(event.target.checked)}
               />
-              <span>我确认撤回此安装的调用授权</span>
+              <span>{t("我确认撤回此安装的调用授权")}</span>
             </label>
           )}
           {phase === "receipt" && result?.receipt && (
             <>
               <p role="status">
-                {snapshot.action === "revoke"
-                  ? "此安装的调用授权已撤回。"
-                  : "调用授权已保存。"}
+                {t(
+                  snapshot.action === "revoke"
+                    ? "此安装的调用授权已撤回。"
+                    : "调用授权已保存。",
+                )}
               </p>
               <p className="recall-permission-meta">
-                授权版本 {result.receipt.revision}
+                {t("授权版本 {revision}", {
+                  revision: result.receipt.revision,
+                })}
               </p>
               <PermissionSummary
                 tools={result.receipt.allowedTools}
@@ -1068,20 +1108,23 @@ function PermissionDialog({
           )}
           {snapshot.action === "grant" && (
             <p className="recall-permission-meta">
-              本次不会安装连接、导入历史或开启持续同步，也不改变内置 SDK
-              的本地记忆处理。授权不代表应用已实际调用或采用记忆。
+              {t(
+                "本次不会安装连接、导入历史或开启持续同步，也不改变内置 SDK 的本地记忆处理。授权不代表应用已实际调用或采用记忆。",
+              )}
             </p>
           )}
           {pending && (
             <p role="status">
-              {pending === "write"
-                ? "正在提交调用权限…"
-                : "正在核对安装身份与授权版本…"}
+              {t(
+                pending === "write"
+                  ? "正在提交调用权限…"
+                  : "正在核对安装身份与授权版本…",
+              )}
             </p>
           )}
           {visibleError && (
             <p className="recall-permission-error" role="alert">
-              {visibleError}
+              {t(visibleError)}
             </p>
           )}
         </div>
@@ -1092,7 +1135,7 @@ function PermissionDialog({
             disabled={pending === "write"}
             onClick={close}
           >
-            {phase === "receipt" ? "完成" : "取消"}
+            {t(phase === "receipt" ? "完成" : "取消")}
           </button>
           {(needsRefresh || error) && !stale && !changed && (
             <button
@@ -1102,7 +1145,7 @@ function PermissionDialog({
               onClick={() => void refresh()}
             >
               <RefreshCw size={16} aria-hidden="true" />
-              刷新核对
+              {t("刷新核对")}
             </button>
           )}
           {phase === "select" && (
@@ -1112,7 +1155,7 @@ function PermissionDialog({
               onClick={approve}
             >
               <ShieldCheck size={16} aria-hidden="true" />
-              {editing ? "保存这次范围" : "允许并保存"}
+              {t(editing ? "保存这次范围" : "允许并保存")}
             </button>
           )}
           {phase === "revoke" && (
@@ -1122,7 +1165,7 @@ function PermissionDialog({
               onClick={() => void commit(null)}
             >
               <ShieldOff size={16} aria-hidden="true" />
-              确认撤回
+              {t("确认撤回")}
             </button>
           )}
         </footer>
@@ -1141,10 +1184,18 @@ function PermissionSummary({
   scopes: readonly string[];
   snapshot: Snapshot;
 }) {
+  const t = useTranslate();
   return (
     <>
-      <p>工具：{tools.map((tool) => toolNames[tool]).join("、") || "无"}</p>
-      <ul className="recall-permission-scope-list" aria-label="授权范围">
+      <p>
+        {t("工具：{items}", {
+          items:
+            tools
+              .map((tool) => t(toolNames[tool]))
+              .join(getUiLanguage() === "en" ? ", " : "、") || t("无"),
+        })}
+      </p>
+      <ul className="recall-permission-scope-list" aria-label={t("授权范围")}>
         {scopes.length ? (
           scopes.map((scope) => (
             <li key={scope}>
@@ -1153,19 +1204,19 @@ function PermissionSummary({
                 <span>
                   {snapshot.sources.find(
                     (source) => `source:${source.source_id}` === scope,
-                  )?.display_name ?? "来源未能核对"}
+                  )?.display_name ?? t("来源未能核对")}
                 </span>
               )}
               {scope.startsWith("workspace:") && (
                 <span>
                   {snapshot.workspaces.find((option) => option.scope === scope)
-                    ?.label ?? "工作区未能核对"}
+                    ?.label ?? t("工作区未能核对")}
                 </span>
               )}
             </li>
           ))
         ) : (
-          <li>无授权范围</li>
+          <li>{t("无授权范围")}</li>
         )}
       </ul>
     </>
@@ -1240,7 +1291,7 @@ function canApprove(status: RecallPermissionStatus | undefined) {
 function statusLabel(
   status: RecallPermissionStatus | undefined,
   hostId: string,
-) {
+): UiMessage {
   if (!status || status.hostId !== hostId) return "调用授权状态尚未核对";
   if (status.state === "not-installed") return "尚未安装连接，不能授权使用记忆";
   if (status.state === "relink-required") {
@@ -1368,7 +1419,7 @@ function isStaleError(error: unknown) {
   ].some((code) => message.includes(code));
 }
 
-function refreshAfterCommitMessage(action: Snapshot["action"]) {
+function refreshAfterCommitMessage(action: Snapshot["action"]): UiMessage {
   return action === "revoke"
     ? "授权已撤回，但列表刷新失败。刷新核对不会再次撤回。"
     : "授权已保存，但列表刷新失败。刷新核对不会再次授权。";

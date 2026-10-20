@@ -7,6 +7,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SourceImportReceipt } from "./SourceImportReceipt";
+import { setUiLanguage } from "./ui-language";
 
 const getReceipt = vi.fn(),
   getConversation = vi.fn();
@@ -58,9 +59,51 @@ beforeEach(() => {
     ],
   });
 });
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  await setUiLanguage("zh-CN");
+});
 
 describe("source import receipt", () => {
+  it("switches all inspector copy while keeping source names and original text unchanged", async () => {
+    const user = userEvent.setup();
+    render(<SourceImportReceipt source={source} />);
+    await user.click(screen.getByText("查看已读内容"));
+    expect(await screen.findByText("预算<5，不能>5。")).toBeTruthy();
+    await act(() => setUiLanguage("en"));
+    expect(screen.getByText("View saved content")).toBeTruthy();
+    expect(screen.getByText("Saved original text · Cursor")).toBeTruthy();
+    expect(
+      screen.getByText("Original messages").nextElementSibling?.textContent,
+    ).toBe("5");
+    expect(screen.getByText("User · Time unknown")).toBeTruthy();
+    expect(screen.getByText("预算<5，不能>5。")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "View full conversation" }),
+    );
+    expect(await screen.findByText("完整原文预算<5，不能>5。")).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Full conversation" }),
+    ).toBeTruthy();
+    await act(() => setUiLanguage("zh-CN"));
+    expect(screen.getByRole("button", { name: "关闭完整对话" })).toBeTruthy();
+    expect(screen.getByText("完整原文预算<5，不能>5。")).toBeTruthy();
+    expect(getReceipt).toHaveBeenCalledWith("cursor");
+  });
+  it("translates read errors without exposing stale excerpts", async () => {
+    const user = userEvent.setup();
+    render(<SourceImportReceipt source={source} />);
+    await user.click(screen.getByText("查看已读内容"));
+    await screen.findByText("预算<5，不能>5。");
+    getConversation.mockRejectedValue(new Error("revoked"));
+    await user.click(screen.getByRole("button", { name: "查看完整对话" }));
+    await screen.findByRole("alert");
+    await act(() => setUiLanguage("en"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "access may have been revoked",
+    );
+    expect(screen.queryByText("预算<5，不能>5。")).toBeNull();
+  });
   it("clears saved excerpts if opening the original conversation is denied", async () => {
     const user = userEvent.setup();
     render(<SourceImportReceipt source={source} />);

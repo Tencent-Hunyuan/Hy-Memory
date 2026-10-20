@@ -6,6 +6,7 @@ import type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "@one-memory/contracts";
+import { isUiLanguage, type UiLanguage } from "@one-memory/contracts";
 import type {
   RecallInstallPreview,
   RecallUninstallPreview,
@@ -35,6 +36,41 @@ declare const __ONE_MEMORY_BUILD_NUMBER__: string;
 declare const __ONE_MEMORY_COMMIT__: string;
 
 contextBridge.exposeInMainWorld("oneMemory", {
+  getUiLanguage: async (): Promise<UiLanguage> => {
+    const value: unknown = await ipcRenderer.invoke(
+      "one-memory:get-ui-language",
+    );
+    if (!isUiLanguage(value)) throw new Error("invalid_ui_language");
+    return value;
+  },
+  setUiLanguage: async (language: UiLanguage): Promise<UiLanguage> => {
+    if (!isUiLanguage(language)) throw new Error("invalid_ui_language");
+    const value: unknown = await ipcRenderer.invoke(
+      "one-memory:set-ui-language",
+      language,
+    );
+    if (!isUiLanguage(value)) throw new Error("invalid_ui_language");
+    return value;
+  },
+  onUiLanguageChanged: (
+    listener: (language: UiLanguage) => void,
+  ): (() => void) => {
+    if (typeof listener !== "function")
+      throw new Error("invalid_ui_language_listener");
+    const handler = (_event: unknown, payload: unknown) => {
+      if (isUiLanguage(payload)) listener(payload);
+    };
+    let subscribed = true;
+    const unsubscribe = () => {
+      if (!subscribed) return;
+      subscribed = false;
+      ipcRenderer.removeListener("one-memory:ui-language-changed", handler);
+      window.removeEventListener("unload", unsubscribe);
+    };
+    ipcRenderer.on("one-memory:ui-language-changed", handler);
+    window.addEventListener("unload", unsubscribe, { once: true });
+    return unsubscribe;
+  },
   getBuildInfo: () => ({
     version: __ONE_MEMORY_VERSION__,
     buildNumber: __ONE_MEMORY_BUILD_NUMBER__,

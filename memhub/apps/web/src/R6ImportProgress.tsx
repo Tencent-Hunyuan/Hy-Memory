@@ -1,21 +1,28 @@
 import type { ImportJob, SourceResponse } from "@one-memory/contracts";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { AppMark } from "./app-mark";
+import { useTranslate } from "./ui-language";
 import "./r6-import-progress.css";
 
-function progressText(job: ImportJob): string | null {
-  if (job.stored > 0) return `已保存 ${job.stored.toLocaleString()} 条消息`;
+function progressText(
+  job: ImportJob,
+  t: ReturnType<typeof useTranslate>,
+): string | null {
+  if (job.stored > 0)
+    return t("已保存 {count} 条消息", { count: job.stored.toLocaleString() });
   if (job.discovered <= 0) return null;
-  const scanned = `已扫描 ${job.discovered.toLocaleString()} 条`;
+  const scanned = t("已扫描 {count} 条", {
+    count: job.discovered.toLocaleString(),
+  });
   if (job.status === "completed")
     return job.history_after
-      ? `${scanned}，本次没有符合时间范围的对话`
-      : `${scanned}，本次没有可保存的对话`;
+      ? t("{scanned}，本次没有符合时间范围的对话", { scanned })
+      : t("{scanned}，本次没有可保存的对话", { scanned });
   if (job.status === "pending" || job.status === "running")
     return job.history_after
-      ? `${scanned}，正在筛选最近 3 天`
-      : `${scanned}，正在筛选`;
-  return `${scanned}，尚未保存`;
+      ? t("{scanned}，正在筛选最近 3 天", { scanned })
+      : t("{scanned}，正在筛选", { scanned });
+  return t("{scanned}，尚未保存", { scanned });
 }
 
 export function R6ImportProgress({
@@ -29,6 +36,7 @@ export function R6ImportProgress({
   jobs: ImportJob[];
   stale?: boolean;
 }) {
+  const t = useTranslate();
   const scroller = useRef<HTMLElement>(null);
   const userScrollLeft = useRef(0);
   const userScrollIntent = useRef(false);
@@ -56,7 +64,7 @@ export function R6ImportProgress({
   return (
     <section
       className="r6-import-progress"
-      aria-label="本次应用导入进度"
+      aria-label={t("本次应用导入进度")}
       data-count={ids.length <= 2 ? String(ids.length) : "many"}
       ref={scroller}
       onPointerDown={markUserScrollIntent}
@@ -95,20 +103,22 @@ export function R6ImportProgress({
           job.stored === 0 &&
           job.discovered === 0;
         const names: Record<ImportJob["status"], string> = {
-          pending: "正在导入",
-          running: "正在导入",
-          paused: "已暂停",
-          interrupted: "已中断",
-          failed: "导入遇到问题",
-          cancelled: "已取消",
-          completed: "导入完成",
+          pending: t("正在导入"),
+          running: t("正在导入"),
+          paused: t("已暂停"),
+          interrupted: t("已中断"),
+          failed: t("导入遇到问题"),
+          cancelled: t("已取消"),
+          completed: t("导入完成"),
         };
-        const progress = job ? progressText(job) : null;
+        const progress = job ? progressText(job, t) : null;
         return (
           <article
             className="r6-import-progress-card"
             key={id}
-            aria-label={`${source?.display_name ?? id} 导入进度`}
+            aria-label={t("{name} 导入进度", {
+              name: source?.display_name ?? id,
+            })}
             data-running={running ? "true" : "false"}
           >
             <div className="r6-import-progress-orbit" aria-hidden="true">
@@ -121,18 +131,20 @@ export function R6ImportProgress({
             {progress ? (
               <p>{progress}</p>
             ) : noImportedHistory ? (
-              <p>没有可保存的历史对话</p>
+              <p>{t("没有可保存的历史对话")}</p>
             ) : null}
             <small role="status">
               {stale
-                ? "状态待核对"
+                ? t("状态待核对")
                 : source?.authorized !== true
-                  ? "读取授权不可用"
+                  ? t("读取授权不可用")
                   : job
                     ? names[job.status]
-                    : "正在导入"}
+                    : t("正在导入")}
               {job && job.errors > 0
-                ? ` · ${job.errors.toLocaleString()} 条读取异常`
+                ? t(" · {count} 条读取异常", {
+                    count: job.errors.toLocaleString(),
+                  })
                 : ""}
             </small>
           </article>

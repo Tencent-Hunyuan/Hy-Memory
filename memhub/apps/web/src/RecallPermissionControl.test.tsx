@@ -21,10 +21,12 @@ import {
   RecallPermissionControl,
   type RecallPermissionControlProps,
 } from "./RecallPermissionControl";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   delete window.oneMemory;
+  await setUiLanguage("zh-CN");
 });
 
 function baseReceipt(): RecallPermissionReceipt {
@@ -164,6 +166,7 @@ function setup(overrides: Partial<RecallPermissionControlProps> = {}) {
     revokeRecallPermission: revoke,
     installRecall: install,
     probeRecallHost: query,
+    setUiLanguage: vi.fn(async (next: "en" | "zh-CN") => next),
   } as unknown as NonNullable<Window["oneMemory"]>;
   let props: RecallPermissionControlProps = {
     host: host(),
@@ -215,6 +218,182 @@ const defaultScopes = ["all-apps", "source:cursor", "source:workbuddy"];
 const approvedAll = () => approved(defaultTools, defaultScopes);
 
 describe("RecallPermissionControl", () => {
+  it("switches the visible row, status, accessible names and existing notice without changing permission", async () => {
+    const api = setup();
+    expect(
+      screen.getByRole("region", { name: "WorkBuddy 调用权限" }),
+    ).toBeTruthy();
+    await userEvent.click(button("允许使用记忆"));
+    expect(screen.getByText("已允许 WorkBuddy 使用记忆。")).toBeTruthy();
+    await act(async () => setUiLanguage("en"));
+    expect(
+      screen.getByRole("region", { name: "WorkBuddy memory access" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Memory access allowed within the selected scope"),
+    ).toBeTruthy();
+    expect(screen.getByText("Allowed WorkBuddy to use memories.")).toBeTruthy();
+    expect(button("Adjust memory access")).toBeTruthy();
+    expect(button("Revoke memory access")).toBeTruthy();
+    expect(button("Refresh memory access").title).toBe("Refresh memory access");
+    expect(api.set).toHaveBeenCalledTimes(1);
+    expect(api.revoke).not.toHaveBeenCalled();
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(
+      screen.getByRole("region", { name: "WorkBuddy 调用权限" }),
+    ).toBeTruthy();
+    expect(screen.getByText("已允许 WorkBuddy 使用记忆。")).toBeTruthy();
+  });
+
+  it("switches the scope sheet and keeps source names, scope codes and frozen selection unchanged", async () => {
+    const scope = `workspace:v1:${"a".repeat(64)}`;
+    const api = setup({ workspaceScopes: [{ scope, label: "隔离项目" }] });
+    await open();
+    await act(async () => setUiLanguage("en"));
+    const dialog = screen.getByRole("dialog", {
+      name: "WorkBuddy · Use memories",
+    });
+    expect(
+      within(dialog).getByText("Separate memory access permission"),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("Allowed tools")).toBeTruthy();
+    expect(
+      within(dialog).getByText("Original conversation sources"),
+    ).toBeTruthy();
+    expect(check("Ask memories (optional)").checked).toBe(true);
+    expect(check("Workspace: 隔离项目").checked).toBe(true);
+    expect(check("Cursor original conversations").checked).toBe(true);
+    expect(within(dialog).getByText("source:cursor")).toBeTruthy();
+    expect(within(dialog).getAllByText(scope)).toHaveLength(2);
+    expect(button("Allow and save")).toBeTruthy();
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.set).not.toHaveBeenCalled();
+    await userEvent.click(button("Allow and save"));
+    expect(api.set.mock.calls[0][1].allowedScopes).toEqual([
+      ...defaultScopes,
+      scope,
+    ]);
+    expect(screen.getByText("Memory access permission saved.")).toBeTruthy();
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByText("调用授权已保存。")).toBeTruthy();
+  });
+
+  it("switches stale and unknown-write errors without exposing IPC diagnostics", async () => {
+    const api = setup();
+    api.set.mockRejectedValueOnce(new Error("unknown private diagnostic"));
+    await userEvent.click(button("允许使用记忆"));
+    await act(async () => setUiLanguage("en"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Could not confirm this grant",
+    );
+    expect(screen.getByRole("alert").textContent).not.toContain(
+      "private diagnostic",
+    );
+    api.get.mockResolvedValueOnce(
+      permission({ receipt: { ...baseReceipt(), revision: 3 } }),
+    );
+    await userEvent.click(button("Allow memory access"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "installation, permission version or selected sources changed",
+    );
+    expect(api.set).toHaveBeenCalledTimes(1);
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByRole("alert").textContent).toContain("关闭后重新打开");
+  });
+
+  it("localizes compact control and unavailable installation status", async () => {
+    const api = setup({
+      compact: true,
+      host: host(permission({ state: "unsupported" })),
+    });
+    await act(async () => setUiLanguage("en"));
+    expect(check("Allow memory access").disabled).toBe(true);
+    expect(
+      screen.getByRole("region", { name: "WorkBuddy memory access" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This connection does not support memory access management",
+      ).hidden,
+    ).toBe(true);
+    api.update({ compact: false });
+    expect(
+      screen.getByText(
+        "This connection does not support memory access management",
+      ).hidden,
+    ).toBe(false);
+  });
+
+  it.each([
+    [
+      permission({ state: "not-installed" }),
+      "Connection not installed; memory access cannot be granted",
+    ],
+    [
+      permission({ state: "relink-required", reason: "legacy_installation" }),
+      "An older connection was found. Reconnect before allowing memory access",
+    ],
+    [
+      permission({
+        state: "relink-required",
+        reason: "managed_config_changed",
+      }),
+      "Connection settings changed. Review and reconnect before allowing memory access",
+    ],
+    [
+      permission({ state: "unavailable" }),
+      "Memory access service is temporarily unavailable",
+    ],
+    [
+      permission({ receipt: null }),
+      "Memory access information is incomplete; refresh to check",
+    ],
+  ])(
+    "translates known permission state %j without exposing reason codes",
+    async (status, message) => {
+      setup({ host: host(status) });
+      await act(async () => setUiLanguage("en"));
+      expect(screen.getByText(message)).toBeTruthy();
+      expect(button("Allow memory access").disabled).toBe(true);
+    },
+  );
+
+  it("translates read failure and keeps the attempted permission unchanged", async () => {
+    const api = setup();
+    api.get.mockRejectedValueOnce(new Error("host_permission_invalid_receipt"));
+    await act(async () => setUiLanguage("en"));
+    await userEvent.click(button("Refresh memory access"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Could not read memory access status",
+    );
+    expect(screen.getByRole("alert").textContent).not.toContain(
+      "host_permission_invalid_receipt",
+    );
+    expect(api.set).not.toHaveBeenCalled();
+    expect(api.revoke).not.toHaveBeenCalled();
+  });
+
+  it("translates revoke confirmation and receipt without changing revocation semantics", async () => {
+    const api = setup({ host: host(approved()) });
+    await act(async () => setUiLanguage("en"));
+    await userEvent.click(button("Revoke memory access"));
+    expect(
+      screen.getByText(/does not delete sources, uninstall the connection/),
+    ).toBeTruthy();
+    await userEvent.click(
+      check("I confirm revoking memory access for this installation"),
+    );
+    await userEvent.click(button("Confirm revocation"));
+    expect(api.revoke).toHaveBeenCalledExactlyOnceWith("workbuddy", {
+      installationId: "isolated-installation-a",
+      expectedRevision: 2,
+      userConfirmed: true,
+    });
+    expect(
+      screen.getByText("Memory access for this installation was revoked."),
+    ).toBeTruthy();
+  });
+
   it("allows everything in one click from the row, after rechecking the installation identity", async () => {
     const api = setup();
     expect(screen.getByText("已安装，尚未允许使用记忆")).toBeTruthy();

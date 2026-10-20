@@ -1,5 +1,6 @@
 import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import "./source-snapshot-status.css";
 
 export function SourceSnapshotStatus({
@@ -9,6 +10,8 @@ export function SourceSnapshotStatus({
   snapshot?: { confirmedAt: string | null; stale: boolean };
   onRefresh(): Promise<unknown>;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
   const flight = useRef(false);
@@ -54,33 +57,33 @@ export function SourceSnapshotStatus({
   return (
     <div className="source-snapshot-status" data-stale={snapshot.stale}>
       <div className="source-snapshot-copy" role="status" aria-live="polite">
-        {snapshot.stale && <strong>状态待核对</strong>}
+        {snapshot.stale && <strong>{t("状态待核对")}</strong>}
         {confirmed ? (
           <span>
-            {snapshot.stale ? "上次确认 " : "状态确认于 "}
+            {snapshot.stale ? t("上次确认 ") : t("状态确认于 ")}
             <time
               dateTime={confirmed}
-              title={new Date(confirmed).toLocaleString()}
+              title={new Date(confirmed).toLocaleString(language)}
             >
-              {new Date(confirmed).toLocaleString()}
+              {new Date(confirmed).toLocaleString(language)}
             </time>
           </span>
         ) : (
-          <span>尚无已确认状态</span>
+          <span>{t("尚无已确认状态")}</span>
         )}
         {failed && (
           <span role="alert">
             {snapshot.stale
-              ? "尚未取得新状态，已保留上次回执。"
-              : "刷新未成功，仍显示上次确认的状态。"}
+              ? t("尚未取得新状态，已保留上次回执。")
+              : t("刷新未成功，仍显示上次确认的状态。")}
           </span>
         )}
       </div>
       <button
         type="button"
         className="quiet source-snapshot-refresh"
-        title={pending ? "正在核对来源状态" : "刷新来源状态"}
-        aria-label="刷新来源状态"
+        title={pending ? t("正在核对来源状态") : t("刷新来源状态")}
+        aria-label={t("刷新来源状态")}
         aria-busy={pending}
         disabled={pending}
         onClick={() => void refresh()}

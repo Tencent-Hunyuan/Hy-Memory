@@ -535,9 +535,18 @@ describe("packaged Desktop host-control ownership", () => {
     expect(fake.ensureRuntime).toHaveBeenCalledTimes(1);
     expect(fake.coreStart).toHaveBeenCalledTimes(1);
     expect(fake.error).toHaveBeenCalledWith(
-      expect.any(String),
+      "MemHub 无法启动",
+      expect.stringContaining("MemHub 启动失败"),
+    );
+    expect(fake.error.mock.calls[0]?.[1]).not.toContain(
       "runtime_broker_unavailable",
     );
+    expect(
+      await readFile(
+        path.join(fake.dataDir, "logs", "diagnostic-desktop.jsonl"),
+        "utf8",
+      ),
+    ).toContain('"error_code":"runtime_broker_unavailable"');
     expect(fake.quit).toHaveBeenCalledTimes(1);
     // A window exists, but it is the startup placeholder raised before the
     // services were tried. The app window itself was never opened.

@@ -1,4 +1,9 @@
-import type { SourceResponse } from "@one-memory/contracts";
+import {
+  type SourceResponse,
+  translate,
+  type UiLanguage,
+  type UiMessage,
+} from "@one-memory/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppMark } from "./app-mark";
 import { connectionHostId, preferenceHasSource } from "./connection-hosts";
@@ -7,7 +12,7 @@ import {
   writeConnectionPreference,
 } from "./connection-preferences";
 import { noteUserHostChoice } from "./connection-reconcile";
-import type { RecallLinkCheck } from "./global";
+import type { RecallLinkCheck, RecallRemovalFinding } from "./global";
 import {
   disconnectHost,
   enableHostConnection,
@@ -30,6 +35,7 @@ import {
   sourceAuthorizationNote,
   useSource,
 } from "./source-state";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import "./application-detail.css";
 
 const SYNC_UNCONFIRMED = "此应用的处理开关结果未能确认，其他应用不受影响。";
@@ -38,8 +44,57 @@ const SYNC_UNCONFIRMED = "此应用的处理开关结果未能确认，其他应
 // removed — flip this back to restore it without digging through history.
 const MEMORY_PERMISSION_SECTION_VISIBLE = false;
 
-function connectFailure(reason: string | null, rereadFailed = false) {
-  return `此应用的一键接入未完成，其他应用不受影响。${hostFailureNote(reason, rereadFailed)}`;
+type InstallNotice =
+  | {
+      kind: "review";
+      name: string;
+      revoked: boolean;
+      findings: RecallRemovalFinding[];
+    }
+  | { kind: "revoked"; name: string; configEdited: boolean }
+  | {
+      kind: "connect" | "permission";
+      reason: string | null;
+      rereadFailed: boolean;
+    }
+  | {
+      kind: "disconnect";
+      name: string;
+      reason: string | null;
+      rereadFailed: boolean;
+    };
+
+function installNoticeText(
+  notice: InstallNotice,
+  language: UiLanguage,
+): string {
+  const t = (key: UiMessage, values?: Record<string, string>) =>
+    translate(language, key, values);
+  if (notice.kind === "review") {
+    const locations = notice.findings
+      .map((finding) =>
+        language === "en"
+          ? `${finding.path} (${finding.where})`
+          : `${finding.path}（${finding.where}）`,
+      )
+      .join(language === "en" ? "; " : "；");
+    return `${notice.revoked ? t("已撤销记忆权限，{name} 已查不到记忆。但", { name: notice.name }) : ""}${t("无法确认连接已全部移除，需要你手动核对：{findings}。", { findings: locations })}`;
+  }
+  if (notice.kind === "revoked")
+    return `${t("已撤销记忆权限，{name} 已查不到记忆。", { name: notice.name })}${t(
+      notice.configEdited
+        ? "配置文件被改过，MemHub 没有自动删除；请手动移除其中的 MemHub 连接。"
+        : "连接文件没有移除，请重新核对。",
+    )}`;
+  const message =
+    notice.kind === "connect"
+      ? t("此应用的一键接入未完成，其他应用不受影响。")
+      : notice.kind === "disconnect"
+        ? t("连接未能移除，记忆权限也未能撤销，{name} 仍可使用记忆，请重试。", {
+            name: notice.name,
+          })
+        : t("此应用的记忆使用权限未能确认，请重试。");
+  return `${message}${hostFailureNote(notice.reason, notice.rereadFailed, language)}`;
 }
 
 function connectionLabel(input: {
@@ -48,7 +103,7 @@ function connectionLabel(input: {
   pending: boolean;
   failed: boolean;
   probeState: string | null;
-}) {
+}): UiMessage {
   if (input.probeState === "wired") return "已接通";
   if (input.probeState === "reachable_but_blind") return "已安装，但取不到记忆";
   if (input.probeState === "unreachable") return "未接通";
@@ -85,6 +140,8 @@ export function ApplicationDetail({
   refresh(): Promise<{ sources: SourceResponse[] }>;
   onBack(): void;
 }) {
+  const language = useUiLanguage();
+  const t = useTranslate();
   const source = useSource(given);
   const hosts = useRecallHosts().data;
   const [read, setRead] = useState<{
@@ -98,20 +155,24 @@ export function ApplicationDetail({
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
   const [installing, setInstalling] = useState(false);
-  const [installError, setInstallError] = useState("");
+  const [installError, setInstallError] = useState<InstallNotice | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [memoryPending, setMemoryPending] = useState(false);
-  const [hostRestartNotice, setHostRestartNotice] = useState("");
+  const [hostRestartNotice, setHostRestartNotice] = useState<UiMessage | "">(
+    "",
+  );
   const [syncIntent, setSyncIntent] = useState<boolean | null>(null);
   // D97: shown after the switch is turned back on, so the person knows the
   // conversations missed while frozen will be filled in by a backfill import.
   const [backfillNotice, setBackfillNotice] = useState(false);
-  const [appLocationNote, setAppLocationNote] = useState<string | null>(null);
+  const [appLocationNote, setAppLocationNote] = useState<UiMessage | null>(
+    null,
+  );
   const syncChecked = syncIntent ?? source.sync_enabled === true;
   // The sync switch is the source authorization control, so the only note
   // beside it is about the source. Plugin trouble belongs to the other switch.
-  const authorizationNote = sourceAuthorizationNote(source);
+  const authorizationNote = sourceAuthorizationNote(source, language);
   const [insertionIntent, setInsertionIntent] = useState<boolean | null>(null);
   const [memoryIntent, setMemoryIntent] = useState<boolean | null>(null);
   const refreshFlight = useRef<object | null>(null);
@@ -305,11 +366,13 @@ export function ApplicationDetail({
   });
   const hostId =
     host?.hostId ?? connectionHostId(source.source_id) ?? source.source_id;
-  const hostError = installError;
+  const hostError = installError
+    ? installNoticeText(installError, language)
+    : "";
   async function applyInsertion(enabled: boolean) {
     const bridge = window.oneMemory;
     if (!bridge) return;
-    setInstallError("");
+    setInstallError(null);
     if (enabled) {
       await enableHostConnection(source.source_id);
       void probeLink(hostId);
@@ -318,27 +381,23 @@ export function ApplicationDetail({
     const { outcome } = await disconnectHost(hostId);
     if (outcome.state === "failed")
       throw Object.assign(Error("disconnect_failed"), {
-        note: hostFailureNote(outcome.reason, outcome.rereadFailed),
+        reason: outcome.reason,
+        rereadFailed: outcome.rereadFailed,
       });
     setLink(null);
     if (outcome.state === "review")
-      setInstallError(
-        `${
-          outcome.permission?.receipt?.status === "revoked"
-            ? `已撤销记忆权限，${source.display_name} 已查不到记忆。但`
-            : ""
-        }无法确认连接已全部移除，需要你手动核对：${outcome.findings
-          .map((finding) => `${finding.path}（${finding.where}）`)
-          .join("；")}。`,
-      );
+      setInstallError({
+        kind: "review",
+        name: source.display_name,
+        revoked: outcome.permission?.receipt?.status === "revoked",
+        findings: outcome.findings,
+      });
     if (outcome.state === "revoked")
-      setInstallError(
-        `已撤销记忆权限，${source.display_name} 已查不到记忆。${
-          outcome.configEdited
-            ? "配置文件被改过，MemHub 没有自动删除；请手动移除其中的 MemHub 连接。"
-            : "连接文件没有移除，请重新核对。"
-        }`,
-      );
+      setInstallError({
+        kind: "revoked",
+        name: source.display_name,
+        configEdited: outcome.configEdited,
+      });
   }
   async function changeInsertion(enabled: boolean) {
     writeConnectionPreference("host", source.source_id, enabled);
@@ -348,7 +407,7 @@ export function ApplicationDetail({
     if (insertionBusy.current) return;
     insertionBusy.current = true;
     setInstalling(true);
-    setInstallError("");
+    setInstallError(null);
     try {
       while (insertionWanted.current !== null && mounted.current) {
         const wanted = insertionWanted.current;
@@ -364,10 +423,20 @@ export function ApplicationDetail({
           // shows the grant that is really still there after the re-read.
           setInstallError(
             wanted
-              ? connectFailure(hostWriteReason(error), hostRereadFailed(error))
-              : `连接未能移除，记忆权限也未能撤销，${source.display_name} 仍可使用记忆，请重试。${
-                  (error as { note?: string }).note ?? ""
-                }`,
+              ? {
+                  kind: "connect",
+                  reason: hostWriteReason(error),
+                  rereadFailed: hostRereadFailed(error),
+                }
+              : {
+                  kind: "disconnect",
+                  name: source.display_name,
+                  reason:
+                    (error as { reason?: string | null }).reason ??
+                    hostWriteReason(error),
+                  rereadFailed:
+                    (error as { rereadFailed?: boolean }).rereadFailed ?? false,
+                },
           );
         }
       }
@@ -421,11 +490,11 @@ export function ApplicationDetail({
   drainSyncRef.current = drainSync;
   const syncStatus = syncing
     ? syncChecked
-      ? "正在开启处理…"
-      : "正在冻结处理…"
+      ? `${t("正在开启处理")}…`
+      : `${t("正在冻结处理")}…`
     : syncChecked
-      ? "处理中"
-      : "已冻结";
+      ? t("处理中")
+      : t("已冻结");
   async function changeMemoryPermission(enabled: boolean) {
     if (!window.oneMemory) return;
     if (stale) return;
@@ -435,13 +504,13 @@ export function ApplicationDetail({
     if (memoryBusy.current) return;
     memoryBusy.current = true;
     setMemoryPending(true);
-    setInstallError("");
+    setInstallError(null);
     try {
       while (memoryWanted.current !== null && mounted.current) {
         const wanted = memoryWanted.current;
         memoryWanted.current = null;
         try {
-          setInstallError("");
+          setInstallError(null);
           await setHostMemoryPermission({
             hostId,
             sourceId: source.source_id,
@@ -453,12 +522,11 @@ export function ApplicationDetail({
             );
           } else if (!wanted) setHostRestartNotice("");
         } catch (error) {
-          setInstallError(
-            `此应用的记忆使用权限未能确认，请重试。${hostFailureNote(
-              hostWriteReason(error),
-              hostRereadFailed(error),
-            )}`,
-          );
+          setInstallError({
+            kind: "permission",
+            reason: hostWriteReason(error),
+            rereadFailed: hostRereadFailed(error),
+          });
         }
       }
     } finally {
@@ -472,11 +540,11 @@ export function ApplicationDetail({
   return (
     <section
       className="r6-app-detail"
-      aria-label={`${source.display_name} 应用设置`}
+      aria-label={t("{name} 应用设置", { name: source.display_name })}
     >
-      <h1 className="r6-app-detail-title">应用详情</h1>
+      <h1 className="r6-app-detail-title">{t("应用详情")}</h1>
       <R6Button variant="quiet" onClick={onBack}>
-        返回应用
+        {t("返回应用")}
       </R6Button>
       <header>
         <span className="r6-app-detail-icon">
@@ -490,25 +558,33 @@ export function ApplicationDetail({
       <div className="r6-app-settings">
         <section className="r6-app-setting">
           <div>
-            <h2>同步开关</h2>
-            <p>开启后处理历史待办，并持续接收此应用的新会话。</p>
+            <h2>{t("同步开关")}</h2>
+            <p>{t("开启后处理历史待办，并持续接收此应用的新会话。")}</p>
             {syncing && syncChecked && (
               <p role="status">
-                正在读取已有对话，首次开启可能需要一两分钟，请不要重复点击。
+                {t(
+                  "正在读取已有对话，首次开启可能需要一两分钟，请不要重复点击。",
+                )}
               </p>
             )}
             {backfillNotice && (
               <p role="status">
-                将补充冻结期间的新对话；原有 pending Job 继续处理。
+                {t("将补充冻结期间的新对话；原有 pending Job 继续处理。")}
               </p>
             )}
             {!syncing && authorizationNote && (
               <p role="status">{authorizationNote}</p>
             )}
-            {syncError && <p role="alert">{syncError}</p>}
+            {syncError && (
+              <p role="alert">
+                {syncError === SYNC_UNCONFIRMED || language === "en"
+                  ? t(SYNC_UNCONFIRMED)
+                  : syncError}
+              </p>
+            )}
           </div>
           <R6Switch
-            label="同步开关"
+            label={t("同步开关")}
             checked={syncChecked}
             pending={syncing}
             disabled={
@@ -520,19 +596,19 @@ export function ApplicationDetail({
         </section>
         <section className="r6-app-setting">
           <div>
-            <h2>一键插入应用</h2>
-            <p>安装记忆连接，并默认允许此应用使用已授权记忆。</p>
+            <h2>{t("一键插入应用")}</h2>
+            <p>{t("安装记忆连接，并默认允许此应用使用已授权记忆。")}</p>
             {unsupported && (
-              <p>{`${source.display_name} ${UNSUPPORTED_NOTE}`}</p>
+              <p>{`${source.display_name} ${t(UNSUPPORTED_NOTE)}`}</p>
             )}
             {hostError && <p role="alert">{hostError}</p>}
-            {appLocationNote && <p role="status">{appLocationNote}</p>}
+            {appLocationNote && <p role="status">{t(appLocationNote)}</p>}
             {hostRestartNotice ? (
-              <p role="status">{hostRestartNotice}</p>
+              <p role="status">{t(hostRestartNotice)}</p>
             ) : null}
           </div>
           <R6Switch
-            label="一键插入应用"
+            label={t("一键插入应用")}
             checked={insertionChecked}
             pending={installing}
             disabled={
@@ -549,11 +625,15 @@ export function ApplicationDetail({
         {MEMORY_PERMISSION_SECTION_VISIBLE && (
           <section className="r6-app-setting">
             <div>
-              <h2>允许使用记忆</h2>
-              <p>让 {source.display_name} 查询已授权范围内的记忆。</p>
+              <h2>{t("允许使用记忆")}</h2>
+              <p>
+                {t("让 {name} 查询已授权范围内的记忆。", {
+                  name: source.display_name,
+                })}
+              </p>
             </div>
             <R6Switch
-              label="允许使用记忆"
+              label={t("允许使用记忆")}
               checked={memoryChecked}
               pending={memoryPending}
               disabled={
@@ -567,30 +647,43 @@ export function ApplicationDetail({
         )}
         <section className="r6-app-setting">
           <div>
-            <h2>连接状态</h2>
+            <h2>{t("连接状态")}</h2>
             {refreshError && (
               <p role="alert">
-                暂时无法刷新来源状态，请重试；未更改同步或读取权限。
+                {t("暂时无法刷新来源状态，请重试；未更改同步或读取权限。")}
               </p>
             )}
             {readFailed && (
-              <p role="alert">暂时无法读取连接状态，当前状态待核对；请重试。</p>
+              <p role="alert">
+                {t("暂时无法读取连接状态，当前状态待核对；请重试。")}
+              </p>
             )}
             {probeState && probeState !== "wired" && (
               <p>
-                {`记忆工具没有进到 ${source.display_name} 当前对话。完全退出 ${source.display_name} 后重新打开，新对话里才会出现。`}
+                {t(
+                  "记忆工具没有进到 {name} 当前对话。完全退出 {name} 后重新打开，新对话里才会出现。",
+                  { name: source.display_name },
+                )}
               </p>
             )}
             {probeState === "wired" && (
-              <p>已接通。已经打开的对话不会中途出现这个工具，请新开一轮。</p>
+              <p>
+                {t("已接通。已经打开的对话不会中途出现这个工具，请新开一轮。")}
+              </p>
             )}
             {linkFailed && (
               <p role="alert">
-                本次连接探测失败，当前状态待核对；未把上次读取当作本次成功。
+                {t(
+                  "本次连接探测失败，当前状态待核对；未把上次读取当作本次成功。",
+                )}
               </p>
             )}
             {checkedAt && !stale && current?.state === "ready" && (
-              <small>上次读取：{new Date(checkedAt).toLocaleString()}</small>
+              <small>
+                {t("上次读取：{time}", {
+                  time: new Date(checkedAt).toLocaleString(language),
+                })}
+              </small>
             )}
           </div>
           <div className="r6-app-detail-actions">
@@ -600,7 +693,7 @@ export function ApplicationDetail({
               aria-busy={probing || undefined}
               onClick={() => void reread()}
             >
-              <span>{stateText}</span>
+              <span>{t(stateText)}</span>
               {probing ? (
                 <span className="r6-button-spinner" aria-hidden="true" />
               ) : null}

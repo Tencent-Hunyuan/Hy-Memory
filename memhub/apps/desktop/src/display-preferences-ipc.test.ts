@@ -11,7 +11,7 @@ interface FakeFrame {
 
 const fake = vi.hoisted(() => ({
   ready: undefined as (() => Promise<void>) | undefined,
-  handlers: new Map<string, (event: unknown) => unknown>(),
+  handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   windows: [] as FakeWindow[],
   app: undefined as unknown as EventEmitter,
   theme: undefined as unknown as EventEmitter,
@@ -26,6 +26,7 @@ const fake = vi.hoisted(() => ({
   expose: vi.fn(),
   invoke: vi.fn(),
   removeHandler: vi.fn(),
+  language: "zh-CN" as "zh-CN" | "en",
   backgroundInspect: vi.fn(),
   error: vi.fn(),
 }));
@@ -58,6 +59,11 @@ class FakeWindow extends EventEmitter {
   isDestroyed() {
     return this.destroyed;
   }
+  isMinimized() {
+    return false;
+  }
+  restore() {}
+  focus() {}
   show() {}
   destroy() {
     this.destroyed = true;
@@ -77,6 +83,19 @@ vi.mock("node:fs", async (importOriginal) => ({
 vi.mock("./background-tray", () => ({
   LOGIN_SERVICE_NAME: "one-memory-background.plist",
   installBackgroundTray: () => vi.fn(),
+}));
+vi.mock("./ui-language-preference", () => ({
+  UiLanguagePreference: class {
+    get() {
+      return fake.language;
+    }
+    set(value: unknown) {
+      if (value !== "zh-CN" && value !== "en")
+        throw new Error("invalid_ui_language");
+      fake.language = value;
+      return value;
+    }
+  },
 }));
 vi.mock("electron", () => ({
   get app() {
@@ -200,6 +219,7 @@ beforeEach(() => {
   fake.handlers.clear();
   fake.windows.length = 0;
   fake.ready = undefined;
+  fake.language = "zh-CN";
   fake.packaged = true;
   fake.loadFailure = false;
   fake.reduceMotion = false;
@@ -222,13 +242,17 @@ afterEach(() => {
   else Reflect.deleteProperty(process, "resourcesPath");
 });
 
-async function startup() {
+async function startup(allowLoadFailure = false) {
   await import("./main.js");
   if (!fake.ready) throw new Error("Missing app ready callback");
   await fake.ready();
-  if (fake.windows.length === 0 && fake.error.mock.calls.length > 0) {
-    throw new Error(String(fake.error.mock.calls.at(-1)?.[1]));
+  if (!allowLoadFailure) {
+    expect(fake.error).not.toHaveBeenCalled();
+    expect(fake.windows.at(-1)?.frame.url).toBe(
+      fake.packaged ? "one-memory://app/index.html" : "http://127.0.0.1:5173",
+    );
   }
+  if (!fake.windows[0]) throw new Error("Missing startup window");
   return fake.windows[0];
 }
 
@@ -240,6 +264,47 @@ function handler() {
 const eventFor = (window: FakeWindow) => ({
   sender: window.webContents,
   senderFrame: window.frame,
+});
+
+describe("UI language main IPC", () => {
+  it("restores the preference and validates top-level callers before writes", async () => {
+    fake.language = "en";
+    const window = await startup();
+    const get = fake.handlers.get("one-memory:get-ui-language");
+    const set = fake.handlers.get("one-memory:set-ui-language");
+    expect(get).toBeDefined();
+    expect(set).toBeDefined();
+    expect(get?.(eventFor(window))).toBe("en");
+    expect(() =>
+      set?.({ sender: window.webContents, senderFrame: null }, "zh-CN"),
+    ).toThrow();
+    expect(() => set?.(eventFor(window), "../unsafe")).toThrow(
+      "invalid_ui_language",
+    );
+    expect(fake.language).toBe("en");
+    window.frame.url = "https://example.invalid";
+    expect(() => set?.(eventFor(window), "zh-CN")).toThrow();
+    expect(fake.language).toBe("en");
+    window.frame.url = "one-memory://app/index.html";
+    expect(set?.(eventFor(window), "zh-CN")).toBe("zh-CN");
+    expect(window.frame.send).toHaveBeenCalledWith(
+      "one-memory:ui-language-changed",
+      "zh-CN",
+    );
+    fake.app.emit("will-quit");
+    expect(fake.handlers.has("one-memory:get-ui-language")).toBe(false);
+    expect(fake.handlers.has("one-memory:set-ui-language")).toBe(false);
+  });
+
+  it("does not broadcast language changes to a navigated window", async () => {
+    const window = await startup();
+    const foreign = new FakeWindow();
+    const set = fake.handlers.get("one-memory:set-ui-language");
+    window.frame.url = "one-memory://app/index.html";
+    foreign.frame.url = "https://example.invalid";
+    expect(set?.(eventFor(window), "en")).toBe("en");
+    expect(foreign.frame.send).not.toHaveBeenCalled();
+  });
 });
 
 describe("display preference main IPC", () => {
@@ -267,7 +332,7 @@ describe("display preference main IPC", () => {
   });
   it("recreates the window after a failed page load without restarting the runtime", async () => {
     fake.loadFailure = true;
-    const failed = await startup();
+    const failed = await startup(true);
     expect(failed.destroyed).toBe(true);
     fake.loadFailure = false;
     fake.app.emit("activate");

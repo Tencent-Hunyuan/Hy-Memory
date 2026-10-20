@@ -2,9 +2,11 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { MemoryEvidencePanel } from "./MemoryEvidencePanel";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await setUiLanguage("zh-CN");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -81,4 +83,23 @@ it("SYS-01: reduced motion skips animation and does not require animationend", (
     </MemoryEvidencePanel>,
   );
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("translates the inspector label while leaving evidence children untouched", async () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: true,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  render(
+    <MemoryEvidencePanel open onClose={vi.fn()}>
+      <p>用户原话，不翻译</p>
+    </MemoryEvidencePanel>,
+  );
+  expect(screen.getByRole("dialog", { name: "记忆与原文" })).toBeTruthy();
+  await act(() => setUiLanguage("en"));
+  expect(
+    screen.getByRole("dialog", { name: "Memories and original text" }),
+  ).toBeTruthy();
+  expect(screen.getByText("用户原话，不翻译")).toBeTruthy();
 });

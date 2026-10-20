@@ -6,16 +6,24 @@
  * described two different ways on two screens.
  */
 
-import type { MemoryProcessingBlock } from "@one-memory/contracts";
+import {
+  type MemoryProcessingBlock,
+  translate,
+  type UiLanguage,
+  type UiMessage,
+} from "@one-memory/contracts";
 
-export function taskKindLabel(kind: string): string {
-  const labels: Record<string, string> = {
+export function taskKindLabel(
+  kind: string,
+  language: UiLanguage = "zh-CN",
+): string {
+  const labels: Record<string, UiMessage> = {
     extract: "记忆抽取",
     system2: "关系归纳",
     ultra: "深度整理",
     sweeper: "跨域整理",
   };
-  return labels[kind] ?? kind;
+  return labels[kind] ? translate(language, labels[kind]) : kind;
 }
 
 /** What a stall means, in the reader's own language.
@@ -25,16 +33,20 @@ export function taskKindLabel(kind: string): string {
  * the code stays on the task row in Core, which is where it is actually
  * useful. Anything this build does not recognise is described by what it does
  * to the reader, not by what it is called. */
-export function blockReasonLabel(reason: string): string {
+export function blockReasonLabel(
+  reason: string,
+  language: UiLanguage = "zh-CN",
+): string {
   const known = BLOCK_REASON_LABELS[reason];
-  if (known) return known;
-  if (reason.startsWith("hy_memory_write_verification_")) return RETRYING;
-  return "暂时没能整理，稍后会自动重试";
+  if (known) return translate(language, known);
+  if (reason.startsWith("hy_memory_write_verification_"))
+    return translate(language, RETRYING);
+  return translate(language, "暂时没能整理，稍后会自动重试");
 }
 
-const RETRYING = "这次没能整理成功，正在重试";
+const RETRYING = "这次没能整理成功，正在重试" as const;
 
-const BLOCK_REASON_LABELS: Record<string, string> = {
+const BLOCK_REASON_LABELS: Record<string, UiMessage> = {
   // Waiting on the reader, or on something they can go and check.
   waiting_for_model: "等待可用生成模型",
   model_profile_not_active: "还没有启用生成模型",
@@ -133,8 +145,13 @@ export function splitBlockedStages(
 }
 
 /** The one line a reader gets for work the pipeline is handling by itself. */
-export function retryingBlockLabel(count: number): string {
-  return `${count} 条${RETRYING}`;
+export function retryingBlockLabel(
+  count: number,
+  language: UiLanguage = "zh-CN",
+): string {
+  return translate(language, "{count} 条这次没能整理成功，正在重试", {
+    count: new Intl.NumberFormat(language).format(count),
+  });
 }
 
 /** The reasons that mean "no usable model", as the pipeline reports them.
@@ -172,11 +189,14 @@ export function modelBlock(
  * `invalid_json` told them nothing; "format damaged, this record was not read"
  * tells them what it cost. An unrecognised code still gets a sentence rather
  * than itself, for the same reason the block reasons do. */
-export function importIssueLabel(reason: string): string {
-  return SCAN_ISSUE_LABELS[reason] ?? "这条记录没读出来";
+export function importIssueLabel(
+  reason: string,
+  language: UiLanguage = "zh-CN",
+): string {
+  return translate(language, SCAN_ISSUE_LABELS[reason] ?? "这条记录没读出来");
 }
 
-const SCAN_ISSUE_LABELS: Record<string, string> = {
+const SCAN_ISSUE_LABELS: Record<string, UiMessage> = {
   invalid_json: "内容损坏，这条没读出来",
   record_too_large: "内容过长，超出单条上限",
   unknown_record: "记录类型不认识，这条没读出来",

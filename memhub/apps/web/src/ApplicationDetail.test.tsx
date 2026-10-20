@@ -15,6 +15,7 @@ import { ApplicationDetail } from "./ApplicationDetail";
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { commitSources } from "./source-state";
+import { setUiLanguage } from "./ui-language";
 
 vi.mock("./RecallPermissionControl", () => ({
   RecallPermissionControl: ({ host }: { host: { hostId: string } }) => (
@@ -48,9 +49,10 @@ function statusControl() {
     name: /检测中|已接通|未接通|未开启关联|已安装，但取不到记忆/,
   });
 }
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   window.oneMemory = undefined;
+  await setUiLanguage("zh-CN");
   window.localStorage.clear();
   resetConnectionReconcile();
   vi.clearAllMocks();
@@ -59,6 +61,58 @@ beforeEach(() => {
   window.localStorage.clear();
   resetConnectionReconcile();
 });
+it("switches app details, status and accessibility labels without changing app names", async () => {
+  const named = { ...source, display_name: "我的自定义应用" };
+  render(
+    <ApplicationDetail
+      {...props}
+      source={named}
+      sources={[named]}
+      refresh={vi.fn().mockResolvedValue({ sources: [named] })}
+    />,
+  );
+  expect(screen.getByRole("heading", { name: "应用详情" })).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("heading", { name: "App details" })).toBeTruthy();
+  expect(
+    screen.getByRole("region", { name: "我的自定义应用 app settings" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "我的自定义应用" })).toBeTruthy();
+  expect(screen.getByRole("switch", { name: "Sync switch" })).toBeTruthy();
+  expect(
+    screen.getByRole("switch", { name: "One-click app connection" }),
+  ).toBeTruthy();
+  expect(screen.getByText("Processing")).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { name: "Connection status" }),
+  ).toBeTruthy();
+  await act(async () => setUiLanguage("zh-CN"));
+  expect(screen.getByRole("heading", { name: "应用详情" })).toBeTruthy();
+});
+
+it("relocalizes an existing source authorization warning without changing permissions", async () => {
+  const unauthorized = {
+    ...source,
+    authorized: false,
+    authorization_state: "revoked_grant",
+  } as SourceResponse;
+  render(
+    <ApplicationDetail
+      {...props}
+      source={unauthorized}
+      sources={[unauthorized]}
+    />,
+  );
+  expect(screen.getByText("此应用的读取授权已撤销，请重新授权。")).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(
+    screen.getByText(
+      "This app's read permission was revoked. Authorize it again.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/重新插入|Reinstall/)).toBeNull();
+});
+
 it("returns to the application home immediately", () => {
   render(<ApplicationDetail {...props} />);
   fireEvent.click(screen.getByRole("button", { name: "返回应用" }));
@@ -473,6 +527,7 @@ function editedHostBridge(options: { revokeFails: boolean }) {
     getRecallPermission: vi.fn(async () => permission()),
     setRecallPermission: vi.fn(),
     revokeRecallPermission,
+    setUiLanguage: vi.fn(async (language: "zh-CN" | "en") => language),
   } as unknown as NonNullable<typeof window.oneMemory>;
   return { revokeRecallPermission, uninstallRecall };
 }
@@ -515,6 +570,10 @@ it("names the file and place to check when turning an app off cannot be confirme
       "已撤销记忆权限，OpenCode 已查不到记忆。但无法确认连接已全部移除，需要你手动核对：/home/me/.config/opencode/plugin/one-memory-capture.js（文件内容与安装时不同）。",
     ),
   ).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("alert").textContent).toContain(
+    "The connection could not be fully removed. Check these locations manually: /home/me/.config/opencode/plugin/one-memory-capture.js (文件内容与安装时不同).",
+  );
   expect(bridge.uninstallRecall).not.toHaveBeenCalled();
 });
 
@@ -546,6 +605,10 @@ it("revokes an app whose config was edited when its connection cannot be removed
       "已撤销记忆权限，OpenCode 已查不到记忆。配置文件被改过，MemHub 没有自动删除；请手动移除其中的 MemHub 连接。",
     ),
   ).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("alert").textContent).toContain(
+    "Memory access was revoked; OpenCode can no longer look up memories. The configuration was edited",
+  );
   await waitFor(() =>
     expect(insertion.getAttribute("aria-checked")).toBe("false"),
   );
@@ -571,6 +634,13 @@ it("shows insertion still on when neither removal nor revocation succeeded", asy
       "连接未能移除，记忆权限也未能撤销，OpenCode 仍可使用记忆，请重试。原因：应用控制通道暂不可用。",
     ),
   ).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("alert").textContent).toContain(
+    "OpenCode can still use memories; please retry. Reason: The app control channel is unavailable.",
+  );
+  expect(screen.getByRole("alert").textContent).not.toContain(
+    "host_control_unavailable",
+  );
   await waitFor(() =>
     expect(insertion.getAttribute("aria-checked")).toBe("true"),
   );

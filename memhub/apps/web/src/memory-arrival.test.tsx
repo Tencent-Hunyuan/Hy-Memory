@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { MemoryArrivalPanel } from "./memory-arrival";
 import type { MemoryArrivalPhase } from "./memory-arrival-state";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.unstubAllGlobals();
+  await setUiLanguage("zh-CN");
 });
 const base = {
   importing: false,
@@ -15,6 +17,41 @@ const base = {
   importedConversations: 2,
 };
 const noop = () => {};
+
+it("localizes progress and blocked reasons while retaining the underlying phase and counts", async () => {
+  const { container } = render(
+    <MemoryArrivalPanel
+      arrival={{
+        ...base,
+        importedMessages: 1234,
+        phase: "processing",
+        blockedStages: [
+          {
+            kind: "extract",
+            reason: "hy_memory_model_authentication_failed",
+            count: 5,
+          },
+        ],
+      }}
+      onConfigureModel={noop}
+      onConnect={noop}
+    />,
+  );
+  await act(async () => {
+    await setUiLanguage("en");
+  });
+  expect(
+    container.querySelector("[data-phase]")?.getAttribute("data-phase"),
+  ).toBe("processing");
+  expect(screen.getByRole("status").textContent).toBe("Creating memories");
+  expect(container.textContent).toContain("1,234 messages saved");
+  expect(container.querySelector("details")?.textContent).toContain(
+    "affected items: 5",
+  );
+  expect(container.querySelector("details")?.textContent).not.toContain(
+    "模型认证失败",
+  );
+});
 
 it("import-only feedback does not imply HY generation", () => {
   const { container } = render(

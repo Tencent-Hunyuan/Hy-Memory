@@ -13,11 +13,46 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SourcesView } from "./SourcesView";
+import { setUiLanguage } from "./ui-language";
 import type { useImportSources } from "./use-import-sources";
 
 afterEach(cleanup);
 
 describe("SourcesView", () => {
+  it("switches source and connection headings without starting an import", async () => {
+    const imports = {
+      sources: [],
+      jobs: [],
+      latestJobBySource: new Map(),
+      loading: false,
+      busyKey: null,
+      error: null,
+      lastConnectResult: null,
+      refresh: vi.fn(),
+      syncAll: vi.fn(),
+      connectSelected: vi.fn(),
+    } as unknown as ReturnType<typeof useImportSources>;
+    const view = render(<SourcesView imports={imports} />);
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(screen.getByRole("heading", { name: "Apps" })).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Import sources" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Use memories" }),
+      ).toBeTruthy();
+      expect(imports.syncAll).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+
   afterEach(() => {
     cleanup();
     delete window.oneMemory;
@@ -614,6 +649,7 @@ describe("SourcesView", () => {
       installRecall: vi.fn(),
       previewRecallUninstall,
       uninstallRecall,
+      setUiLanguage: vi.fn(async (next) => next),
     };
 
     render(<SourcesView imports={emptyImports()} />);
@@ -630,6 +666,24 @@ describe("SourcesView", () => {
     expect(dialog.textContent).toContain('-     "one-memory": {}');
     // A file that goes away is said to go away, not rendered as a diff.
     expect(dialog.textContent).toContain("整个文件会被移除");
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(
+        screen.getByRole("heading", {
+          name: "This will restore Cursor's configuration",
+        }),
+      ).toBeTruthy();
+      expect(dialog.textContent).toContain("The entire file will be removed");
+      expect(dialog.textContent).toContain('-     "one-memory": {}');
+      expect(dialog.textContent).toContain("/Users/example/.cursor/mcp.json");
+      expect(uninstallRecall).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
 
     await user.click(screen.getByRole("button", { name: "确认断开" }));
 

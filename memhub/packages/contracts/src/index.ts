@@ -1,3 +1,11 @@
+export type { UiLanguage, UiMessage } from "./ui-language.js";
+export {
+  formatUiDate,
+  formatUiNumber,
+  isUiLanguage,
+  translate,
+} from "./ui-language.js";
+
 export const CORE_SERVICE = "one-memory-core" as const;
 export type {
   ConnectionSetupCapability,

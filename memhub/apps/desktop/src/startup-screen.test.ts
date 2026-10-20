@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
 
 describe("startup screen", () => {
+  it("uses the saved language before the web bundle or any IPC is available", () => {
+    expect(startupScreenHtml()).toContain('<html lang="zh-CN">');
+    const english = startupScreenHtml("en");
+    expect(english).toContain('<html lang="en">');
+    expect(english).toContain("Starting and preparing the memory service…");
+    expect(english).not.toContain("正在启动");
+    expect(english).not.toContain("ipcRenderer");
+  });
   it("is a self-contained page that asks the main process for nothing", () => {
     const html = startupScreenHtml();
     expect(html).toContain("MemHub");

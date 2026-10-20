@@ -93,6 +93,23 @@
   font-weight: 600;
   line-height: 43px;
 }
+.onboarding-r6-head > .onboarding-r6-language {
+  position: absolute;
+  top: 7px;
+  right: 36px;
+  width: auto;
+  max-width: none;
+}
+.onboarding-r6-language .ui-language-selector label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 12px;
+}
+.onboarding-r6-language .ui-language-selector select {
+  min-height: 28px;
+}
 .onboarding-r6-head .r6-stepper {
   position: absolute;
   top: 42px;

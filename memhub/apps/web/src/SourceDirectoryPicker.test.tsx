@@ -18,6 +18,7 @@ import {
   SourceDirectoryPicker,
   type SourceDirectoryPickerProps,
 } from "./SourceDirectoryPicker";
+import { setUiLanguage } from "./ui-language";
 
 const api = vi.hoisted(() => ({
   preview: vi.fn(),
@@ -110,7 +111,10 @@ async function review() {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.stubGlobal("oneMemory", { pickSourceDirectory: api.pick });
+  vi.stubGlobal("oneMemory", {
+    pickSourceDirectory: api.pick,
+    setUiLanguage: vi.fn(async (next: "zh-CN" | "en") => next),
+  });
   vi.stubGlobal("matchMedia", () => ({
     matches: true,
     addEventListener: vi.fn(),
@@ -123,14 +127,40 @@ beforeEach(() => {
   api.preview.mockResolvedValue(preview);
   api.save.mockResolvedValue({ ...preview, candidate_revision: 1 });
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
+  await setUiLanguage("zh-CN");
 });
 
 describe("SourceDirectoryPicker COLD04", () => {
+  it("translates directory consent while preserving the chosen path, source name and read-only preview", async () => {
+    setup();
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Choose the history directory for Cursor",
+      }),
+    );
+    expect((await screen.findByRole("dialog")).textContent).toContain(
+      "Save candidate location for Cursor",
+    );
+    expect(screen.getByText(preview.path)).toBeTruthy();
+    expect(
+      await screen.findByRole("checkbox", {
+        name: "Save this candidate location only; do not grant history access",
+      }),
+    ).toBeTruthy();
+    expect(api.preview).toHaveBeenCalledWith(
+      "cursor",
+      "/isolated/custom/../custom/cursor",
+    );
+    expect(api.save).not.toHaveBeenCalled();
+  });
   it("only exposes buttons for the four allowed sources", () => {
     for (const source_id of [
       "workbuddy",

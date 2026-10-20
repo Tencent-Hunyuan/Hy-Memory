@@ -1,3 +1,8 @@
+import {
+  translate,
+  type UiLanguage,
+  type UiMessage,
+} from "@one-memory/contracts";
 import { MutationObserver, useQuery } from "@tanstack/react-query";
 import { connectionHostId, hostMatchesSource } from "./connection-hosts";
 import type {
@@ -224,7 +229,7 @@ export function matchHost(
   );
 }
 
-const REASONS: Record<string, string> = {
+const REASONS: Record<string, UiMessage> = {
   host_unsupported: "它没有 MCP 通道，无法发放可撤销的记忆凭证",
   unsupported_host: "当前安装不支持一键插入",
   connection_client_unavailable: "桌面端的连接组件不可用",
@@ -250,6 +255,11 @@ export function hostWriteReason(error: unknown): string | null {
   return code ? (REASONS[code] ?? null) : null;
 }
 
+export function hostReasonLabel(reason: string, language: UiLanguage): string {
+  const known = Object.values(REASONS).find((message) => message === reason);
+  return known ? translate(language, known) : reason;
+}
+
 const unverified = new WeakSet<object>();
 
 /** The write failed and the one re-read after it failed too. */
@@ -259,9 +269,21 @@ export function hostRereadFailed(error: unknown) {
 
 /** What to add after a failure message: the reason, and whether what is on
  * screen could be re-read afterwards. */
-export function hostFailureNote(reason: string | null, rereadFailed: boolean) {
-  return `${reason ? `原因：${reason}。` : ""}${
-    rereadFailed ? "当前接入状态也未能重新读取，显示的可能不是最新状态。" : ""
+export function hostFailureNote(
+  reason: string | null,
+  rereadFailed: boolean,
+  language: UiLanguage = "zh-CN",
+) {
+  const known = Object.values(REASONS).find((message) => message === reason);
+  const safeReason =
+    language === "en" ? (known ? translate(language, known) : null) : reason;
+  return `${safeReason ? translate(language, "原因：{reason}。", { reason: safeReason }) : ""}${
+    rereadFailed
+      ? translate(
+          language,
+          "当前接入状态也未能重新读取，显示的可能不是最新状态。",
+        )
+      : ""
   }`;
 }
 

@@ -9,12 +9,30 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { OnboardingModelController } from "./OnboardingModelController";
 import {
   OnboardingModelStep,
   type OnboardingModelStepProps,
 } from "./OnboardingModelStep";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(cleanup);
+let modelHookError: string | null = null;
+
+vi.mock("./use-model-profiles", () => ({
+  useModelProfiles: () => ({
+    pendingProbe: null,
+    probeStorageFailed: false,
+    pendingCreation: null,
+    creationStorageFailed: false,
+    error: modelHookError,
+  }),
+}));
+
+afterEach(async () => {
+  cleanup();
+  modelHookError = null;
+  await setUiLanguage("zh-CN");
+});
 function props(): OnboardingModelStepProps {
   return {
     draft: {
@@ -55,6 +73,49 @@ function props(): OnboardingModelStepProps {
     onActionError: vi.fn(),
   };
 }
+it("switches a visible local model hook failure in the first-use guide", async () => {
+  modelHookError = "创建结果尚未确认，请核对已保存结果，不要重复提交。";
+  const view = render(
+    <OnboardingModelController sourceNames={[]} onBack={vi.fn()} />,
+  );
+  expect(screen.getByText(modelHookError)).toBeTruthy();
+  try {
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    expect(
+      screen.getByText(
+        "The creation result is unconfirmed. Review saved results; do not submit again.",
+      ),
+    ).toBeTruthy();
+  } finally {
+    view.unmount();
+  }
+});
+
+it.each([
+  [false, "No app connection selected this time"],
+  [true, "Connection settings saved."],
+])(
+  "switches the connection receipt without changing its meaning (%s)",
+  async (applied, expected) => {
+    const view = render(
+      <OnboardingModelController
+        sourceNames={["User source"]}
+        onBack={vi.fn()}
+        connectionAlreadyApplied={applied}
+      />,
+    );
+    await act(async () => setUiLanguage("en"));
+    expect(
+      document.querySelector(".onboarding-model-connection-receipt")
+        ?.textContent,
+    ).toContain(expected);
+    expect(screen.getByText("User source")).toBeTruthy();
+    view.unmount();
+  },
+);
+
 it("renders step3 without engineering-only recipients, with unavailable enable failing closed", () => {
   const p = props();
   render(<OnboardingModelStep {...p} />);
@@ -334,6 +395,75 @@ it("uses the failure-state title and omits consent and scope-management UI", () 
   expect(screen.getByText("synthetic failure")).toBeTruthy();
   expect(screen.queryByText("调整处理范围")).toBeNull();
   expect(screen.queryByText(/允许发送少量测试内容/)).toBeNull();
+});
+
+it("switches model setup copy while preserving provider values, typed credentials and action gates", async () => {
+  const p = props();
+  p.capability = { saveAndEnable: true };
+  const view = render(
+    <OnboardingModelStep {...p} connectionSummary="本次未选择应用连接" />,
+  );
+  await act(() => setUiLanguage("en"));
+  expect(screen.getByText("No app connection selected this time")).toBeTruthy();
+  expect(
+    screen.getByRole("heading", {
+      name: "Choose a model to start creating memories",
+    }),
+  ).toBeTruthy();
+  expect(screen.getByText("Source A")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Confirm and enable" }),
+  ).toHaveProperty("disabled", true);
+  fireEvent.change(screen.getByLabelText("API Key"), {
+    target: { value: "new-secret" },
+  });
+  expect(p.onDraftChange).toHaveBeenCalledWith({ api_key: "new-secret" });
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Configuration details and advanced settings",
+    }),
+  );
+  expect(p.onAdvancedChange).toHaveBeenCalledWith(true);
+  view.rerender(<OnboardingModelStep {...p} advancedOpen />);
+  expect(screen.getByLabelText("Model name")).toHaveProperty(
+    "value",
+    "user-model",
+  );
+  expect(screen.getByLabelText("Configuration name")).toHaveProperty(
+    "value",
+    "My profile",
+  );
+  expect(screen.getByLabelText("Base URL")).toHaveProperty(
+    "value",
+    "https://example.invalid/v1",
+  );
+  await act(() => setUiLanguage("zh-CN"));
+  expect(
+    screen.getByRole("heading", { name: "配置详情，按需要调整" }),
+  ).toBeTruthy();
+  expect(screen.getByLabelText("模型名称")).toHaveProperty(
+    "value",
+    "user-model",
+  );
+  expect(p.onSaveAndEnable).not.toHaveBeenCalled();
+});
+
+it("retranslates first-run model validation from the controller without changing entered values", async () => {
+  render(<OnboardingModelController sourceNames={[]} onBack={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "配置详情与高级设置" }));
+  fireEvent.change(screen.getByLabelText("超时（秒）"), {
+    target: { value: "0" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "测试模型连通性" }));
+  expect(await screen.findByText("请输入 1 至 600 的整数。")).toBeTruthy();
+  expect(screen.getByText("请填写 API Key。")).toBeTruthy();
+  await act(() => setUiLanguage("en"));
+  expect(screen.getByText("Enter a whole number from 1 to 600.")).toBeTruthy();
+  expect(screen.getByText("Enter an API key.")).toBeTruthy();
+  expect(screen.getByLabelText("Timeout (seconds)")).toHaveProperty(
+    "value",
+    "0",
+  );
 });
 
 it("keeps the first-run model form free of a second consent strip", () => {

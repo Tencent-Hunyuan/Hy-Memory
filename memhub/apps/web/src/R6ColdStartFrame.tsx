@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { LanguageSelector } from "./LanguageSelector";
 import { R6LocalStorage, R6Stepper } from "./R6Controls";
 import "./onboarding-r6.css";
 
@@ -31,7 +32,10 @@ export function R6ColdStartFrame({
               <p>{eyebrow}</p>
               <h1>{title}</h1>
             </div>
-            <R6Stepper active={step} />
+            <div className="onboarding-r6-language">
+              <LanguageSelector />
+              <R6Stepper active={step} />
+            </div>
           </header>
           <div className="onboarding-r6-body">{children}</div>
           <footer className="onboarding-r6-foot">{footer}</footer>

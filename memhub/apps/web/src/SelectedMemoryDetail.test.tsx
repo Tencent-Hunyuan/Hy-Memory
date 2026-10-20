@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { MemoryDetail } from "@one-memory/contracts";
+import type { MemoryDetail, SourceResponse } from "@one-memory/contracts";
 import {
   act,
   cleanup,
@@ -12,6 +12,7 @@ import {
 import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
+import { setUiLanguage } from "./ui-language";
 
 const { correct, read, remove, errorCode } = vi.hoisted(() => ({
   correct: vi.fn(),
@@ -60,8 +61,9 @@ beforeEach(() => {
   errorCode.mockReset();
   trace.done.mockReset();
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await setUiLanguage("zh-CN");
   vi.restoreAllMocks();
 });
 it("OBS-21: names a manually added memory 手动添加, not the internal source id", () => {
@@ -532,4 +534,68 @@ it("stamps today's source time the same way as 06A and 06E", () => {
   fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
   expect(screen.getByRole("heading", { name: "原始对话" })).toBeTruthy();
   expect(screen.getByText(/^workbuddy · 今天 /)).toBeTruthy();
+});
+
+it("translates inspector and editor actions without translating the source or original text", async () => {
+  const source = "我的来源名称";
+  render(
+    <SelectedMemoryDetail
+      detail={detail}
+      sources={[
+        { source_id: "workbuddy", display_name: source } as SourceResponse,
+      ]}
+      onChanged={vi.fn()}
+    />,
+  );
+  await act(() => setUiLanguage("en"));
+  expect(screen.getByText("Created · Version 2")).toBeTruthy();
+  expect(screen.getByText(new RegExp(`Source ${source} ·`))).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { name: "项目发布前先确认范围。" }),
+  ).toBeTruthy();
+  expect(screen.getByText("这次先确认范围。")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByRole("heading", { name: "Edit memory" })).toBeTruthy();
+  expect(
+    screen.getByRole("textbox", { name: "Memory content" }),
+  ).toHaveProperty("value", detail.memory.content);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "View original conversation" }),
+  );
+  expect(
+    screen.getByRole("heading", { name: "Original conversations" }),
+  ).toBeTruthy();
+  expect(screen.getAllByText("这次先确认范围。").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "Back to memory" }));
+  fireEvent.click(screen.getByText("More actions"));
+  fireEvent.click(screen.getByRole("button", { name: "Delete memory" }));
+  expect(
+    screen.getByRole("heading", { name: "Delete this memory?" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      /Original conversations in the source app will not be deleted/,
+    ),
+  ).toBeTruthy();
+});
+
+it("updates an existing save error when the UI language changes, retaining the draft", async () => {
+  correct.mockRejectedValueOnce(new Error("offline"));
+  render(
+    <SelectedMemoryDetail detail={detail} sources={[]} onChanged={vi.fn()} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "记忆内容" }), {
+    target: { value: "我的草稿" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "草稿已保留",
+  );
+  await act(() => setUiLanguage("en"));
+  expect(screen.getByRole("alert").textContent).toContain("draft is retained");
+  expect(
+    screen.getByRole("textbox", { name: "Memory content" }),
+  ).toHaveProperty("value", "我的草稿");
 });

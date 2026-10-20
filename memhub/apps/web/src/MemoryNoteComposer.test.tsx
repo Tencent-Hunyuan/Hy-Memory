@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import type { MemoryNoteReceipt } from "@one-memory/contracts";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MemoryNoteComposer } from "./MemoryNoteComposer";
+import { setUiLanguage } from "./ui-language";
 
 const api = vi.hoisted(() => ({
   getMemoryNotes: vi.fn(),
@@ -37,7 +38,55 @@ beforeEach(() => {
     (reason) => reason?.response?.data?.detail ?? null,
   );
 });
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  await setUiLanguage("zh-CN");
+});
+
+it("translates note status without changing the saved original or scope", async () => {
+  api.getMemoryNotes.mockResolvedValue([note]);
+  page();
+  await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
+  await screen.findByText("原话已保存，等待可用模型");
+  await act(async () => {
+    await setUiLanguage("en");
+  });
+  expect(screen.getByRole("button", { name: "Save original" })).toBeTruthy();
+  expect(
+    screen.getByText("Original saved; waiting for an available model"),
+  ).toBeTruthy();
+  expect(screen.getByText(note.text)).toBeTruthy();
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Write it down" }),
+    "Do not reschedule",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Save original" }));
+  expect(api.saveMemoryNote).toHaveBeenCalledWith(
+    expect.objectContaining({ text: "Do not reschedule", scope: "all-apps" }),
+    expect.anything(),
+  );
+});
+
+it("translates known local verification copy but does not rewrite note content", async () => {
+  api.getMemoryNotes.mockResolvedValue([
+    {
+      ...note,
+      state: "failed",
+      error: "hy_memory_write_verification_historical_support_only",
+    },
+  ]);
+  page();
+  await userEvent.click(screen.getByRole("button", { name: "添加记忆" }));
+  await screen.findByText(note.text);
+  await act(async () => {
+    await setUiLanguage("en");
+  });
+  expect(
+    screen.getByText(/Historical citations are not yet linked/),
+  ).toBeTruthy();
+  expect(screen.getByText(note.text)).toBeTruthy();
+  expect(api.processMemoryNote).not.toHaveBeenCalled();
+});
 
 it("OBS-18: reads the configured model before saying it is not configured", async () => {
   let release: (value: unknown) => void = () => {};

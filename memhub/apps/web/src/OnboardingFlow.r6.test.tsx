@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OnboardingFlow } from "./OnboardingFlow";
+import { setUiLanguage } from "./ui-language";
 import type { ImportSourcesController } from "./use-import-sources";
 
 vi.mock("./api", () => ({ completeOnboarding: vi.fn() }));
@@ -23,10 +24,11 @@ vi.mock("./FirstImportReview", () => ({
 beforeEach(() => {
   delete window.oneMemory;
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   delete window.oneMemory;
   vi.useRealTimers();
+  await setUiLanguage("zh-CN");
 });
 const state = {
   status: "not_started",
@@ -334,6 +336,80 @@ it("custom source cancel does not grant or select and accepted import retains re
   expect(vi.mocked(imports.connectForOnboarding).mock.calls[0]?.[0]).toEqual([
     "workbuddy",
   ]);
+});
+
+it("switches custom location confirmation and aria without changing unchecked consent", async () => {
+  const name = "codex-custom-原样";
+  const path = "/fixture/自定义/codex";
+  const imports = controller([
+    source("codex", {
+      display_name: name,
+      candidate_path: path,
+      candidate_kind: "environment_override",
+    }),
+  ]);
+  mount(imports);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("checkbox", { name: `导入 ${name} 历史` }),
+    ).toHaveProperty("disabled", false),
+  );
+  fireEvent.click(screen.getByRole("checkbox", { name: `导入 ${name} 历史` }));
+  const dialog = screen.getByRole("dialog", { name: "确认自定义位置" });
+  const consent = within(dialog).getByRole("checkbox", {
+    name: `确认这是 ${name} 的历史位置`,
+  });
+  const confirm = within(dialog).getByRole("button", { name: "确认此位置" });
+  expect(consent).toHaveProperty("checked", false);
+  expect(confirm).toHaveProperty("disabled", true);
+  expect(within(dialog).getByText(path).textContent).toBe(path);
+  expect(dialog.getAttribute("aria-describedby")).toBe(
+    "cold-start-custom-description",
+  );
+  expect(imports.connectForOnboarding).not.toHaveBeenCalled();
+
+  await act(() => setUiLanguage("en"));
+  const englishDialog = screen.getByRole("dialog", {
+    name: "Confirm custom location",
+  });
+  expect(
+    within(englishDialog)
+      .getByRole("button", { name: "Close location confirmation" })
+      .getAttribute("title"),
+  ).toBe("Close location confirmation");
+  expect(
+    within(englishDialog).getByText(
+      /Confirming the location does not start reading history/,
+    ),
+  ).toBeTruthy();
+  const englishConsent = within(englishDialog).getByRole("checkbox", {
+    name: `Confirm this is ${name}'s history location`,
+  });
+  expect(englishConsent).toHaveProperty("checked", false);
+  expect(
+    within(englishDialog).getByRole("button", {
+      name: "Confirm this location",
+    }),
+  ).toHaveProperty("disabled", true);
+  expect(within(englishDialog).getByText(path).textContent).toBe(path);
+  expect(imports.connectForOnboarding).not.toHaveBeenCalled();
+
+  fireEvent.click(englishConsent);
+  expect(
+    within(englishDialog).getByRole("button", {
+      name: "Confirm this location",
+    }),
+  ).toHaveProperty("disabled", false);
+  await act(() => setUiLanguage("zh-CN"));
+  expect(
+    screen.getByRole("checkbox", { name: `确认这是 ${name} 的历史位置` }),
+  ).toHaveProperty("checked", true);
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog", { name: "确认自定义位置" })).toBeNull();
+  expect(
+    screen.getByRole("checkbox", { name: `导入 ${name} 历史` }),
+  ).toHaveProperty("checked", false);
+  expect(imports.connectForOnboarding).not.toHaveBeenCalled();
 });
 
 it("does not submit authorization when the first-step owner leaves during final metadata check", async () => {

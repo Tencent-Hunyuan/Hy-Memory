@@ -16,6 +16,7 @@ import type {
   CallHistoryPage,
   ResolvedCallReference,
 } from "./call-history-client";
+import { setUiLanguage } from "./ui-language";
 
 const { getHistory, clearEvents, clearAllEvents, getReferences } = vi.hoisted(
   () => ({
@@ -135,8 +136,10 @@ beforeEach(() => {
     },
   });
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await setUiLanguage("zh-CN");
+  window.localStorage.removeItem("memhub.ui-language");
   vi.restoreAllMocks();
   if (originalShowModal)
     Object.defineProperty(
@@ -145,6 +148,65 @@ afterEach(() => {
       originalShowModal,
     );
   else Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+});
+
+it("switches usage history, details and actions to English without changing original content", async () => {
+  const title = "用户原始对话标题";
+  const original = "用户原始对话内容";
+  getReferences.mockImplementation(async (call: CallEvent) =>
+    call.references.map((reference) => ({
+      ...reference,
+      available: true,
+      title,
+      reason: null,
+    })),
+  );
+  getConversation.mockResolvedValue({
+    messages: [{ evidence_id: "raw-1", verbatim: original }],
+  });
+  mount();
+  await loaded();
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("heading", { name: "Usage history" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Refresh history" })).toBeTruthy();
+  expect(screen.getByText("Cursor found 3 related items")).toBeTruthy();
+  fireEvent.click(row("event-1") as HTMLElement);
+  expect(
+    screen.getByRole("heading", { name: "This memory lookup" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("article", { name: "Call details" })).toBeTruthy();
+  expect(screen.getByText(/Found 2 original passages/)).toBeTruthy();
+  expect(screen.getAllByText("Lookup succeeded")).toHaveLength(2);
+  expect(
+    (await screen.findAllByRole("heading", { level: 4 })).every((heading) =>
+      heading.textContent?.includes(title),
+    ),
+  ).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "View original conversation" }),
+  );
+  expect(await screen.findByText(original)).toBeTruthy();
+  expect(screen.queryByText("用户原始对话内容", { exact: false })).toBeTruthy();
+});
+
+it("retranslates an existing clear failure without echoing an error code", async () => {
+  clearEvents.mockRejectedValue(new Error("call_history_disabled"));
+  mount();
+  await loaded();
+  await openClear();
+  fireEvent.click(screen.getByRole("button", { name: "确认清除" }));
+  expect(
+    await screen.findByText(
+      "清除结果未确认，请核对重新读取的记录。未自动重试清除。",
+    ),
+  ).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(
+    screen.getByText(
+      "Could not confirm the result. Check the reloaded history; clearing was not retried automatically.",
+    ),
+  ).toBeTruthy();
+  expect(document.body.textContent).not.toContain("call_history_disabled");
 });
 
 it("loads a bounded first page and returns to applications", async () => {
@@ -287,9 +349,11 @@ it("shows exact identity, timestamp, result counts and metadata-only references"
   mount();
   fireEvent.click(await loaded());
   const detail = screen.getByRole("article", { name: "调用详情" });
-  expect(
-    within(detail).getByText("2026-09-20T11:03:37.197+08:00"),
-  ).toBeTruthy();
+  const exactTime = within(detail).getByText(
+    new Date(event().occurred_at).toLocaleString("zh-CN", { hour12: false }),
+  );
+  expect(exactTime.getAttribute("datetime")).toBe(event().occurred_at);
+  expect(exactTime.textContent).not.toContain("T11:03:37");
   expect(within(detail).getByText("查记忆")).toBeTruthy();
   expect(within(detail).queryByText("om_recall")).toBeNull();
   // The metadata table must not leak the raw Core state enum next to the
@@ -843,6 +907,8 @@ it("removes titles immediately on refresh and keeps them hidden when rechecking 
   expect(screen.queryByText(/previous-title/)).toBeNull();
   await screen.findByText("正在读取相关内容");
   expect(screen.queryByText(/previous-title/)).toBeNull();
+  await waitFor(() => expect(getReferences).toHaveBeenCalledTimes(2));
+  expect(getReferences.mock.results[1].value).toBe(pending.promise);
   await act(async () => pending.reject(new Error("private error content")));
   await screen.findByText("相关内容暂时无法读取，请刷新重试。");
   expect(screen.queryByText(/previous-title|private error content/)).toBeNull();

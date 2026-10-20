@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { readConnectionPreferences } from "./connection-preferences";
 import { OnboardingFlow, PLUGIN_CONSENT_KEY } from "./OnboardingFlow";
+import { getUiLanguage, setUiLanguage } from "./ui-language";
 import {
   type ImportSourcesController,
   useImportSources,
@@ -219,9 +220,10 @@ describe("OnboardingFlow S1.3", () => {
       status: "completed",
     });
   });
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
     window.oneMemory = undefined;
+    if (getUiLanguage() !== "zh-CN") await setUiLanguage("zh-CN");
     window.localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -245,6 +247,11 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.detect).not.toHaveBeenCalled();
     expect(controller.startImport).not.toHaveBeenCalled();
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
+    await act(async () => setUiLanguage("en"));
+    expect(
+      screen.getByRole("heading", { name: "Bring your context here" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Bring your memories together")).toBeTruthy();
   });
 
   it("D32 keeps file-import sources out of cold start without exposing staging paths", async () => {
@@ -2218,6 +2225,7 @@ describe("OnboardingFlow S1.3", () => {
         available: false,
         reason: "noncanonical_data_dir",
       }),
+      setUiLanguage: vi.fn(async (next: "zh-CN" | "en") => next),
       getRecallPermission: vi.fn(),
       setRecallPermission: vi.fn(),
       previewRecallInstall,
@@ -2240,8 +2248,15 @@ describe("OnboardingFlow S1.3", () => {
     });
     expect(host.disabled).toBe(true);
     expect(host.checked).toBe(false);
+    await act(async () => setUiLanguage("en"));
+    expect(
+      screen.getAllByText("Test instances do not connect to apps").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("测试实例不接入应用")).toBeNull();
     await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
+      screen.getByRole("button", {
+        name: "Configure a model to create memories",
+      }),
     );
     expect(controller.setSync).not.toHaveBeenCalled();
     expect(previewRecallInstall).not.toHaveBeenCalled();
@@ -2268,6 +2283,7 @@ describe("OnboardingFlow S1.3", () => {
         available: false,
         reason: "app_not_in_applications",
       }),
+      setUiLanguage: vi.fn(async (next: "zh-CN" | "en") => next),
       getRecallPermission: vi.fn(),
       setRecallPermission: vi.fn(),
     } as unknown as NonNullable<Window["oneMemory"]>;
@@ -2295,6 +2311,17 @@ describe("OnboardingFlow S1.3", () => {
     });
     expect(host.disabled).toBe(true);
     expect(host.checked).toBe(false);
+    await act(async () => setUiLanguage("en"));
+    expect(
+      within(options).getByText(
+        "Move MemHub to Applications and reopen it from there before connecting apps.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(options).queryByText(
+        "请先把 MemHub 拖到“应用程序”并从那里重新打开，才能接入应用。",
+      ),
+    ).toBeNull();
   });
 
   it("keeps successful one-click app connections when one host fails", async () => {

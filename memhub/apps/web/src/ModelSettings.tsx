@@ -5,6 +5,7 @@ import type {
   ModelProfilePatch,
   ProbeCode,
   ProviderKind,
+  UiMessage,
 } from "@one-memory/contracts";
 import { Check, Pencil, Plus, RefreshCw } from "lucide-react";
 import {
@@ -16,8 +17,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { modelProfileDisplayText } from "./model-error-text";
 import { OptionMenu } from "./OptionMenu";
 import { PROVIDER_PRESETS } from "./provider-presets";
+import { useTranslate } from "./ui-language";
 import { useModelProfiles } from "./use-model-profiles";
 import "./model-setup-next.css";
 
@@ -45,7 +48,7 @@ function applyUrl(baseUrl: string | null): string | null {
   }
 }
 
-function presetKeyLabel(): string {
+function presetKeyLabel(): UiMessage {
   return "粘贴 API Key";
 }
 
@@ -96,7 +99,7 @@ type FieldName =
   | "embedding-model"
   | "embedding-base-url";
 
-function keyError(value: string, required: boolean): string | undefined {
+function keyError(value: string, required: boolean): UiMessage | undefined {
   if (!value.trim()) return required ? "请填写 API Key。" : undefined;
   if (/^(?:[a-z][a-z\d+.-]*:\/\/|www\.|\/\/)/i.test(value.trim()))
     return "这里需要 API Key，不是网址。请填写服务方提供的密钥。";
@@ -231,6 +234,7 @@ export function ModelSettings({
   compactSingle?: boolean;
   onSetupComplete?(): void;
 } = {}) {
+  const t = useTranslate();
   const models = useModelProfiles();
   const [provider, setProvider] = useState<ProviderKind>("openai_compatible");
   const [providerPreset, setProviderPreset] = useState("custom");
@@ -255,12 +259,12 @@ export function ModelSettings({
   const [editing, setEditing] = useState<ModelProfile | null>(null);
   const [saving, setSaving] = useState(false);
   const [fields, setFields] = useState<Partial<Record<FieldName, string>>>({});
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<UiMessage | null>(null);
   const [unknownCreation, setUnknownCreation] = useState(false);
   const [setupPhase, setSetupPhase] = useState<"testing" | "activating" | null>(
     null,
   );
-  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState<UiMessage | null>(null);
   const flight = useRef(false);
   const alive = useRef(true);
   const queuedOpen = useRef<ModelOpenIntent | null>(null);
@@ -698,25 +702,26 @@ export function ModelSettings({
       <div className="section-heading">
         <div>
           <p className="section-index">02</p>
-          <h2 id="models-title">记忆模型</h2>
+          <h2 id="models-title">{t("记忆模型")}</h2>
         </div>
         <p>
-          只需配置生成模型。向量嵌入已内置在本机，不为 System 1、System 2
-          分开选模型。
+          {t(
+            "只需配置生成模型。向量嵌入已内置在本机，不为 System 1、System 2 分开选模型。",
+          )}
         </p>
       </div>
 
       {models.error ? (
         <p className="error-banner" role="alert">
-          {models.error}
+          {modelProfileDisplayText(models.error, t)}
         </p>
       ) : null}
       {(models.pendingProbe || models.probeStorageFailed) && (
         <div role="status" className="model-refresh-notice">
           <p>
             {models.probeStorageFailed
-              ? "无法读取测试恢复记录，暂不发送新的测试。"
-              : "上次模型测试结果待核对，暂不修改或启用配置。"}
+              ? t("无法读取测试恢复记录，暂不发送新的测试。")
+              : t("上次模型测试结果待核对，暂不修改或启用配置。")}
           </p>
           {models.pendingProbe && (
             <button
@@ -731,7 +736,7 @@ export function ModelSettings({
                 if (alive.current) onProfilesChanged?.();
               }}
             >
-              核对测试结果
+              {t("核对测试结果")}
             </button>
           )}
         </div>
@@ -740,8 +745,10 @@ export function ModelSettings({
         <div role="status" className="model-refresh-notice">
           <p>
             {models.creationMissing
-              ? "未找到上次创建记录。确认放弃旧记录后可重新配置；系统不会自动重试。"
-              : "上次模型创建结果待核对，暂不开始新的操作。"}
+              ? t(
+                  "未找到上次创建记录。确认放弃旧记录后可重新配置；系统不会自动重试。",
+                )
+              : t("上次模型创建结果待核对，暂不开始新的操作。")}
           </p>
           <button
             type="button"
@@ -757,7 +764,7 @@ export function ModelSettings({
               onProfilesChanged?.();
             }}
           >
-            核对创建结果
+            {t("核对创建结果")}
           </button>
           {models.pendingCreation && (
             <button
@@ -771,7 +778,7 @@ export function ModelSettings({
                 setSaveError(null);
               }}
             >
-              放弃旧记录，重新配置
+              {t("放弃旧记录，重新配置")}
             </button>
           )}
         </div>
@@ -779,18 +786,18 @@ export function ModelSettings({
       {setupPhase && (
         <p className="model-test-notice" role="status">
           {setupPhase === "testing"
-            ? "配置已保存，正在测试连接…"
-            : "连接通过，正在启用模型…"}
+            ? t("配置已保存，正在测试连接…")
+            : t("连接通过，正在启用模型…")}
         </p>
       )}
       {setupError && (
         <p className="model-save-error" role="alert">
-          {setupError}
+          {t(setupError)}
         </p>
       )}
       {models.refreshError && (
         <div className="model-refresh-notice" role="status">
-          <p>{models.refreshError}</p>
+          <p>{modelProfileDisplayText(models.refreshError, t)}</p>
           <button
             type="button"
             className="secondary"
@@ -798,7 +805,7 @@ export function ModelSettings({
             onClick={() => void models.refreshProfiles()}
           >
             <RefreshCw size={16} aria-hidden="true" />
-            刷新配置列表
+            {t("刷新配置列表")}
           </button>
         </div>
       )}
@@ -837,7 +844,7 @@ export function ModelSettings({
               } else newProfile();
             }}
           >
-            自定义一个模型
+            {t("自定义一个模型")}
           </button>
         </div>
       ) : null}
@@ -845,7 +852,7 @@ export function ModelSettings({
       {!compactSingle && savedProfile && (
         <article
           className="model-saved-card"
-          aria-label="已保存的模型配置"
+          aria-label={t("已保存的模型配置")}
           tabIndex={-1}
           ref={savedCard}
           data-tour-id="model-form"
@@ -854,33 +861,34 @@ export function ModelSettings({
             <Check size={18} aria-hidden="true" />
             <strong>
               {isReady(savedProfile) && savedProfile.is_active
-                ? "已保存，已启用"
+                ? t("已保存，已启用")
                 : isReady(savedProfile)
-                  ? "已保存，连接通过"
+                  ? t("已保存，连接通过")
                   : models.probeFor(savedProfile)
-                    ? "已保存，测试未通过"
-                    : "已保存，待测试"}
+                    ? t("已保存，测试未通过")
+                    : t("已保存，待测试")}
             </strong>
           </div>
           <h3>{savedProfile.name}</h3>
           <p>
-            {savedProfile.model} · {endpointLabel(savedProfile.base_url)} · 版本{" "}
-            {savedProfile.revision}
+            {savedProfile.model} · {endpointLabel(savedProfile.base_url)} ·{" "}
+            {t("版本 {revision}", { revision: savedProfile.revision })}
           </p>
           {savedProfile.credential_state === "unavailable" && (
             <p role="status">
-              需要允许 MemHub
-              访问钥匙串。系统询问时请选择“始终允许”；已保存的配置不会丢失。
+              {t(
+                "需要允许 MemHub 访问钥匙串。系统询问时请选择“始终允许”；已保存的配置不会丢失。",
+              )}
             </p>
           )}
-          <p>测试只向此接口发送测试内容，不发送历史对话。</p>
+          <p>{t("测试只向此接口发送测试内容，不发送历史对话。")}</p>
           <div className="source-actions">
             <button
               type="button"
               disabled={locked}
               onClick={() => void resumeSetup(savedProfile)}
             >
-              {setupError ? "重试测试并启用" : "测试并启用"}
+              {setupError ? t("重试测试并启用") : t("测试并启用")}
             </button>
             <button
               type="button"
@@ -889,7 +897,7 @@ export function ModelSettings({
               onClick={() => editProfile(savedProfile)}
             >
               <Pencil size={16} aria-hidden="true" />
-              编辑配置
+              {t("编辑配置")}
             </button>
             <button
               type="button"
@@ -898,7 +906,7 @@ export function ModelSettings({
               onClick={newProfile}
             >
               <Plus size={16} aria-hidden="true" />
-              新增配置
+              {t("新增配置")}
             </button>
           </div>
           <ProbeFeedback
@@ -920,18 +928,22 @@ export function ModelSettings({
         >
           {editing && (
             <p className="model-test-notice">
-              编辑 {editing.name} · 版本 {editing.revision}
-              。修改后需重新测试并设为当前模型，内容授权不会自动更新。
+              {t(
+                "编辑 {name} · 版本 {revision}。修改后需重新测试并设为当前模型，内容授权不会自动更新。",
+                { name: editing.name, revision: editing.revision },
+              )}
             </p>
           )}
           {editChanged && (
             <p role="alert" className="model-save-error">
-              配置已在其他位置变化，草稿已保留。请取消编辑后重新打开核对。
+              {t(
+                "配置已在其他位置变化，草稿已保留。请取消编辑后重新打开核对。",
+              )}
             </p>
           )}
           {saveError && (
             <p className="model-save-error" role="alert">
-              {saveError}
+              {t(saveError)}
             </p>
           )}
           {unknownCreation && !editing && (
@@ -940,13 +952,13 @@ export function ModelSettings({
               disabled={formLocked}
               onClick={() => void models.refreshProfiles()}
             >
-              刷新配置列表
+              {t("刷新配置列表")}
             </button>
           )}
           <div className="model-form-field">
-            服务商预设
+            {t("服务商预设")}
             <OptionMenu
-              ariaLabel="服务商预设"
+              ariaLabel={t("服务商预设")}
               describedBy="model-preset-help"
               value={providerPreset}
               disabled={formLocked}
@@ -955,7 +967,7 @@ export function ModelSettings({
                   value: item.id,
                   label: item.label,
                 })),
-                { value: "custom", label: "自定义兼容服务" },
+                { value: "custom", label: t("自定义兼容服务") },
               ]}
               onChange={(value) => {
                 const next = PROVIDER_PRESETS.find((item) => item.id === value);
@@ -977,15 +989,16 @@ export function ModelSettings({
               }}
             />
             <small id="model-preset-help">
-              只是帮你填好接口地址和一个模型名，不代表这个模型当前可用。
-              请对照服务商的模型列表核对后再保存。
+              {t(
+                "只是帮你填好接口地址和一个模型名，不代表这个模型当前可用。请对照服务商的模型列表核对后再保存。",
+              )}
             </small>
           </div>
           <label>
-            协议
+            {t("协议")}
             <select
               name="provider"
-              aria-label="协议"
+              aria-label={t("协议")}
               aria-describedby="model-provider-help"
               value={provider}
               disabled={formLocked}
@@ -1006,14 +1019,14 @@ export function ModelSettings({
               ))}
             </select>
             <small id="model-provider-help">
-              与模型服务提供的接口协议保持一致。
+              {t("与模型服务提供的接口协议保持一致。")}
             </small>
           </label>
           <label>
-            配置名称
+            {t("配置名称")}
             <input
               name="name"
-              aria-label="配置名称"
+              aria-label={t("配置名称")}
               aria-describedby="model-name-help"
               autoComplete="off"
               maxLength={128}
@@ -1024,13 +1037,15 @@ export function ModelSettings({
                 setName(event.target.value);
               }}
             />
-            <small id="model-name-help">用于区分配置，不影响模型请求。</small>
+            <small id="model-name-help">
+              {t("用于区分配置，不影响模型请求。")}
+            </small>
           </label>
           <label>
-            生成模型名
+            {t("生成模型名")}
             <input
               name="model"
-              aria-label="生成模型名"
+              aria-label={t("生成模型名")}
               aria-describedby={`model-identifier-help${fields.model ? " model-field-error" : ""}`}
               aria-invalid={!!fields.model}
               autoComplete="off"
@@ -1043,10 +1058,10 @@ export function ModelSettings({
                 setProviderPreset("custom");
                 if (!nameEdited) setName(suggestedName(event.target.value));
               }}
-              placeholder="例如：gpt-4o-mini…"
+              placeholder={t("例如：gpt-4o-mini…")}
             />
             <small id="model-identifier-help">
-              填写服务方提供的完整模型标识。
+              {t("填写服务方提供的完整模型标识。")}
             </small>
             {fields.model && (
               <small id="model-field-error" className="model-field-error">
@@ -1063,12 +1078,12 @@ export function ModelSettings({
               disabled={formLocked}
               onClick={() => setAdvancedEmbedding(!advancedEmbedding)}
             >
-              高级：自行配置向量模型
+              {t("高级：自行配置向量模型")}
             </button>
             {advancedEmbedding ? (
               <>
                 <label>
-                  向量配置模式
+                  {t("向量配置模式")}
                   <select
                     name="embedding-mode"
                     value={embeddingMode}
@@ -1085,14 +1100,14 @@ export function ModelSettings({
                       }));
                     }}
                   >
-                    <option value="local">本地内置</option>
-                    <option value="custom">自定义向量模型</option>
+                    <option value="local">{t("本地内置")}</option>
+                    <option value="custom">{t("自定义向量模型")}</option>
                   </select>
                 </label>
                 {embeddingMode === "custom" ? (
                   <>
                     <label>
-                      向量模型名
+                      {t("向量模型名")}
                       <input
                         name="embedding-model"
                         autoComplete="off"
@@ -1109,7 +1124,7 @@ export function ModelSettings({
                         onChange={(event) =>
                           setEmbeddingModel(event.target.value)
                         }
-                        placeholder="例如：text-embedding-3-small…"
+                        placeholder={t("例如：text-embedding-3-small…")}
                       />
                       {fields["embedding-model"] && (
                         <small
@@ -1121,7 +1136,7 @@ export function ModelSettings({
                       )}
                     </label>
                     <label>
-                      向量模型来源
+                      {t("向量模型来源")}
                       <select
                         name="embedding-provider"
                         value={embeddingProvider}
@@ -1133,14 +1148,14 @@ export function ModelSettings({
                           setEmbeddingProvider(next);
                         }}
                       >
-                        <option value="ollama">本机 Ollama</option>
+                        <option value="ollama">{t("本机 Ollama")}</option>
                         <option value="openai_compatible">
-                          同源 OpenAI-compatible（共用 API Key）
+                          {t("同源 OpenAI-compatible（共用 API Key）")}
                         </option>
                       </select>
                     </label>
                     <label>
-                      向量模型 Base URL
+                      {t("向量模型 Base URL")}
                       <input
                         name="embedding-base-url"
                         type="url"
@@ -1175,21 +1190,22 @@ export function ModelSettings({
                     </label>
                     {embeddingProvider === "openai_compatible" ? (
                       <small>
-                        为避免凭据外泄，向量地址必须与生成模型同源。
+                        {t("为避免凭据外泄，向量地址必须与生成模型同源。")}
                       </small>
                     ) : null}
                   </>
                 ) : (
                   <small>
-                    使用内置本地向量模型；不会发送内容给远程向量服务。
+                    {t("使用内置本地向量模型；不会发送内容给远程向量服务。")}
                   </small>
                 )}
               </>
             ) : null}
             {!advancedEmbedding && embeddingMode === "custom" ? (
               <p className="model-help">
-                自定义向量：{embeddingModel || "尚未填写模型"} ·{" "}
-                {embeddingBaseUrl || "尚未填写地址"}
+                {t("自定义向量：")}
+                {embeddingModel || t("尚未填写模型")} ·{" "}
+                {embeddingBaseUrl || t("尚未填写地址")}
               </p>
             ) : null}
           </div>
@@ -1212,7 +1228,7 @@ export function ModelSettings({
               }}
             />
             <small id="model-url-help">
-              填写服务接口地址，不是聊天网页地址。
+              {t("填写服务接口地址，不是聊天网页地址。")}
             </small>
             {fields["base-url"] && (
               <small id="model-url-error" className="model-field-error">
@@ -1221,10 +1237,10 @@ export function ModelSettings({
             )}
           </label>
           <label>
-            API Key{keyRequired ? "" : "（可选）"}
+            API Key{keyRequired ? "" : t("（可选）")}
             <input
               name="api-key"
-              aria-label={`API Key${keyRequired ? "" : "（可选）"}`}
+              aria-label={`API Key${keyRequired ? "" : t("（可选）")}`}
               aria-describedby={`model-key-help${fields["api-key"] ? " model-key-error" : ""}`}
               aria-invalid={!!fields["api-key"]}
               type="password"
@@ -1233,14 +1249,16 @@ export function ModelSettings({
               value={apiKey}
               disabled={formLocked}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder="保存后不会再次显示…"
+              placeholder={t("保存后不会再次显示…")}
             />
             <small id="model-key-help">
               {editing && !endpointMoved
-                ? "留空保留已保存密钥；填写新密钥后需重新测试和启用。"
+                ? t("留空保留已保存密钥；填写新密钥后需重新测试和启用。")
                 : editing && keyRequired
-                  ? "换了服务商后需要填写新的 API Key，已保存的密钥不会带到新地址。"
-                  : "保存在系统安全存储中，不随安装包分发。"}
+                  ? t(
+                      "换了服务商后需要填写新的 API Key，已保存的密钥不会带到新地址。",
+                    )
+                  : t("保存在系统安全存储中，不随安装包分发。")}
             </small>
             {fields["api-key"] && (
               <small id="model-key-error" className="model-field-error">
@@ -1256,7 +1274,7 @@ export function ModelSettings({
               disabled={formLocked}
               onChange={(event) => setDisableThinking(event.target.checked)}
             />
-            关闭思考链（向支持的厂商下发 thinking-off 参数）
+            {t("关闭思考链（向支持的厂商下发 thinking-off 参数）")}
           </label>
           <div className="form-submit">
             {!compactSingle && (
@@ -1266,7 +1284,7 @@ export function ModelSettings({
                   locked || editChanged || (!editing && unknownCreation)
                 }
               >
-                {editing ? "保存修改" : "保存配置"}
+                {editing ? t("保存修改") : t("保存配置")}
               </button>
             )}
             <button
@@ -1275,12 +1293,12 @@ export function ModelSettings({
               onClick={() => void persist(true)}
             >
               {setupPhase === "testing"
-                ? "正在测试连接…"
+                ? t("正在测试连接…")
                 : setupPhase === "activating"
-                  ? "正在启用配置…"
+                  ? t("正在启用配置…")
                   : compactSingle
-                    ? "测试并完成配置"
-                    : "保存并测试启用"}
+                    ? t("测试并完成配置")
+                    : t("保存并测试启用")}
             </button>
             {editing && (
               <button
@@ -1295,10 +1313,10 @@ export function ModelSettings({
                   setFields({});
                 }}
               >
-                取消编辑
+                {t("取消编辑")}
               </button>
             )}
-            <small>密钥保存在系统安全存储；测试仅发送测试内容。</small>
+            <small>{t("密钥保存在系统安全存储；测试仅发送测试内容。")}</small>
           </div>
         </form>
       ) : null}
@@ -1315,8 +1333,9 @@ export function ModelSettings({
               <article key={profile.profile_id} className="profile-row">
                 {profile.credential_state === "unavailable" && (
                   <p className="error-banner" role="status">
-                    需要允许 MemHub
-                    访问钥匙串。系统询问时请选择“始终允许”；已保存的配置不会丢失。
+                    {t(
+                      "需要允许 MemHub 访问钥匙串。系统询问时请选择“始终允许”；已保存的配置不会丢失。",
+                    )}
                   </p>
                 )}
                 <div>
@@ -1338,10 +1357,11 @@ export function ModelSettings({
                     revision {profile.revision}
                   </p>
                 </div>
-                <span>{profile.is_active ? "当前使用" : "未启用"}</span>
+                <span>{profile.is_active ? t("当前使用") : t("未启用")}</span>
                 <p className="model-test-notice">
-                  测试目标：{endpointLabel(profile.base_url)}
-                  。仅发送测试内容，不发送历史对话。
+                  {t("测试目标：{endpoint}。仅发送测试内容，不发送历史对话。", {
+                    endpoint: endpointLabel(profile.base_url),
+                  })}
                 </p>
                 <div className="source-actions">
                   <button
@@ -1349,7 +1369,7 @@ export function ModelSettings({
                     disabled={locked}
                     onClick={() => void resumeSetup(profile)}
                   >
-                    {setupError ? "重试测试并启用" : "测试并启用"}
+                    {setupError ? t("重试测试并启用") : t("测试并启用")}
                   </button>
                   <button
                     type="button"
@@ -1358,7 +1378,7 @@ export function ModelSettings({
                     onClick={() => editProfile(profile)}
                   >
                     <Pencil size={16} aria-hidden="true" />
-                    编辑配置
+                    {t("编辑配置")}
                   </button>
                   <button
                     type="button"
@@ -1366,7 +1386,7 @@ export function ModelSettings({
                     disabled={locked}
                     onClick={() => models.probeProfile(profile.profile_id)}
                   >
-                    测试连接
+                    {t("测试连接")}
                   </button>
                   {!profile.is_active ? (
                     <>
@@ -1375,7 +1395,7 @@ export function ModelSettings({
                         disabled={locked || !isReady(profile)}
                         onClick={() => models.activate(profile.profile_id)}
                       >
-                        设为当前模型
+                        {t("设为当前模型")}
                       </button>
                       <button
                         type="button"
@@ -1383,7 +1403,7 @@ export function ModelSettings({
                         disabled={locked}
                         onClick={() => models.remove(profile.profile_id)}
                       >
-                        删除
+                        {t("删除")}
                       </button>
                     </>
                   ) : null}
@@ -1408,7 +1428,7 @@ export function ModelSettings({
  * see them assumes they are things to decide, and the whole point of a preset
  * is that they are not.
  */
-function PresetProfileCard({
+export function PresetProfileCard({
   profile,
   busy,
   canEnable = true,
@@ -1435,8 +1455,9 @@ function PresetProfileCard({
   probe: ModelProbeResult | null;
   probeError: string | null;
 }) {
+  const t = useTranslate();
   const [key, setKey] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiMessage | null>(null);
   const [saving, setSaving] = useState(false);
   const flight = useRef(false);
   const alive = useRef(true);
@@ -1449,6 +1470,12 @@ function PresetProfileCard({
   }, []);
   const keyLabel = presetKeyLabel();
   const applyHref = applyUrl(profile.base_url);
+  const recipientLabel = (value: string | null) => {
+    const label = endpointLabel(value);
+    return label === "未提供接口地址" || label === "接口地址待核对"
+      ? t(label)
+      : label;
+  };
 
   /**
    * Submitting stores the key and stops there; the second button is the one
@@ -1483,21 +1510,29 @@ function PresetProfileCard({
     <section className="preset-profile" aria-label={profile.name}>
       <div>
         <strong>{profile.name}</strong>
-        <p>{presetStatus(profile)}</p>
+        <p>{t(presetStatus(profile))}</p>
       </div>
       {discloseRecipients && (
         <p>
-          生成接收方：{endpointLabel(profile.base_url)}；向量接收方：
-          {profile.embedding_provider_kind === BUILTIN_EMBEDDING_KIND
-            ? "本机"
-            : endpointLabel(profile.embedding_base_url ?? profile.base_url)}
-          。启用此配置后按上方选择处理历史及未来允许来源。
+          {t(
+            "生成接收方：{generation}；向量接收方：{embedding}。启用此配置后按上方选择处理历史及未来允许来源。",
+            {
+              generation: recipientLabel(profile.base_url),
+              embedding:
+                profile.embedding_provider_kind === BUILTIN_EMBEDDING_KIND
+                  ? t("本机")
+                  : recipientLabel(
+                      profile.embedding_base_url ?? profile.base_url,
+                    ),
+            },
+          )}
         </p>
       )}
       {profile.credential_state === "unavailable" && (
         <p role="status">
-          需要允许 MemHub
-          访问钥匙串。系统询问时请选择“始终允许”；已保存的配置不会丢失。
+          {t(
+            "需要允许 MemHub 访问钥匙串。系统询问时请选择“始终允许”；已保存的配置不会丢失。",
+          )}
         </p>
       )}
       {profile.has_api_key ? null : (
@@ -1511,7 +1546,7 @@ function PresetProfileCard({
           noValidate
         >
           <label>
-            {keyLabel}
+            {t(keyLabel)}
             <input
               name="preset-api-key"
               type="password"
@@ -1524,7 +1559,7 @@ function PresetProfileCard({
               }
               value={key}
               onChange={(event) => setKey(event.target.value)}
-              placeholder="保存后不会再次显示…"
+              placeholder={t("保存后不会再次显示…")}
             />
             {error && (
               <small
@@ -1532,12 +1567,12 @@ function PresetProfileCard({
                 className="model-field-error"
                 role="alert"
               >
-                {error}
+                {t(error)}
               </small>
             )}
           </label>
           <button type="submit" disabled={busy || saving}>
-            保存 key
+            {t("保存 key")}
           </button>
           <button
             type="button"
@@ -1545,11 +1580,11 @@ function PresetProfileCard({
             disabled={busy || saving || !canEnable}
             onClick={() => void save(true)}
           >
-            保存并测试启用
+            {t("保存并测试启用")}
           </button>
           {applyHref ? (
             <a href={applyHref} target="_blank" rel="noreferrer">
-              还没有 key？去申请
+              {t("还没有 key？去申请")}
             </a>
           ) : null}
         </form>
@@ -1562,21 +1597,22 @@ function PresetProfileCard({
             disabled={busy || !canEnable}
             onClick={onContinue}
           >
-            测试并启用
+            {t("测试并启用")}
           </button>
           <p className="model-test-notice">
-            测试目标：{endpointLabel(profile.base_url)}
-            。仅发送测试内容，不发送历史对话。
+            {t("测试目标：{endpoint}。仅发送测试内容，不发送历史对话。", {
+              endpoint: endpointLabel(profile.base_url),
+            })}
           </p>
           <button type="button" disabled={busy} onClick={onTest}>
-            测试连接
+            {t("测试连接")}
           </button>
           <button
             type="button"
             disabled={busy || !canEnable || !ready(profile, probe, probeError)}
             onClick={onActivate}
           >
-            设为当前模型
+            {t("设为当前模型")}
           </button>
           <button
             type="button"
@@ -1584,7 +1620,7 @@ function PresetProfileCard({
             disabled={busy}
             onClick={onRemove}
           >
-            删除
+            {t("删除")}
           </button>
         </div>
       ) : null}
@@ -1601,7 +1637,7 @@ function PresetProfileCard({
             disabled={busy}
             onClick={onRemove}
           >
-            删除这张卡
+            {t("删除这张卡")}
           </button>
         </div>
       )}
@@ -1615,7 +1651,7 @@ function PresetProfileCard({
  * a profile with no key cannot have been probed, so there is nothing to
  * diagnose yet — only something to paste.
  */
-function presetStatus(profile: ModelProfile): string {
+function presetStatus(profile: ModelProfile): UiMessage {
   if (profile.credential_state === "unavailable")
     return "密钥已配置，当前读取状态待确认。";
   if (!profile.has_api_key) {
@@ -1639,6 +1675,7 @@ function ProbeFeedback({
   result: ModelProbeResult | null;
   error: string | null;
 }) {
+  const t = useTranslate();
   const matching =
     result?.profile_id === profile.profile_id &&
     result.profile_revision === profile.revision
@@ -1648,20 +1685,29 @@ function ProbeFeedback({
   return (
     <section
       className="probe-result"
-      aria-label={`${profile.name} 版本 ${profile.revision} 测试结果`}
+      aria-label={t("{name} 版本 {revision} 测试结果", {
+        name: profile.name,
+        revision: profile.revision,
+      })}
     >
       <strong>
-        {profile.name} · 版本 {profile.revision} · 连接测试
+        {t("{name} · 版本 {revision} · 连接测试", {
+          name: profile.name,
+          revision: profile.revision,
+        })}
       </strong>
       <p>
-        测试目标：{endpointLabel(profile.base_url)} · {profile.model}
+        {t("测试目标：{endpoint} · {model}", {
+          endpoint: endpointLabel(profile.base_url),
+          model: profile.model,
+        })}
       </p>
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{modelProfileDisplayText(error, t)}</p>}
       {matching && (
         <ul>
           {matching.stages.map((stage) => (
             <li key={stage.stage}>
-              {stage.stage}: {probeLabel(stage.code)} · {stage.latency_ms}ms
+              {stage.stage}: {t(probeLabel(stage.code))} · {stage.latency_ms}ms
             </li>
           ))}
         </ul>
@@ -1677,8 +1723,8 @@ function providerLabel(provider: ProviderKind): string {
   return PROVIDERS.find((item) => item.kind === provider)?.label ?? provider;
 }
 
-export function probeLabel(code: ProbeCode): string {
-  const labels: Record<ProbeCode, string> = {
+export function probeLabel(code: ProbeCode): UiMessage {
+  const labels: Record<ProbeCode, UiMessage> = {
     ok: "通过",
     hy_default_unavailable: "HY 托管模型尚不可用",
     missing_api_key: "缺少 API Key",

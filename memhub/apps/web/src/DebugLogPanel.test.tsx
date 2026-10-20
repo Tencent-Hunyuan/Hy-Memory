@@ -15,6 +15,7 @@ import {
   recordRendererDebugLog,
   resetRendererDebugLogsForTest,
 } from "./renderer-debug-log";
+import { setUiLanguage } from "./ui-language";
 
 const diagnosticLevel = vi.hoisted(() => ({
   get: vi.fn(async () => "info" as const),
@@ -93,13 +94,15 @@ beforeEach(() => {
   diagnosticLevel.usage.mockClear();
   window.oneMemory = {
     getDebugLogs: vi.fn().mockResolvedValue(snapshot),
+    setUiLanguage: vi.fn(async (next: "en" | "zh-CN") => next),
   } as unknown as NonNullable<typeof window.oneMemory>;
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   window.oneMemory = undefined;
   vi.useRealTimers();
+  await setUiLanguage("zh-CN");
 });
 
 it("opens from the floating button and filters by text, level and source", async () => {
@@ -254,4 +257,78 @@ it("shows per-minute model usage in a separate tab", async () => {
       name: "按分钟显示各 Prompt 的 Token 花费",
     }),
   ).toBeTruthy();
+});
+
+it("switches diagnostic chrome and usage labels immediately, preserving logs and selected filters", async () => {
+  render(<DebugLogPanel />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "打开 Debug 日志" }),
+  );
+  const panel = await screen.findByRole("complementary", {
+    name: "Debug 日志",
+  });
+  await waitFor(() =>
+    expect(within(panel).getByText(/source\.scanned/)).toBeTruthy(),
+  );
+  await userEvent.selectOptions(
+    within(panel).getByRole("combobox", { name: "日志来源" }),
+    "core",
+  );
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("complementary", { name: "Debug logs" })).toBe(panel);
+  expect(within(panel).getByText("Diagnostics")).toBeTruthy();
+  expect(within(panel).getByText("2 logs from this session")).toBeTruthy();
+  expect(within(panel).getByText(/source\.scanned/)).toBeTruthy();
+  expect(within(panel).queryByText(/sync\.failed/)).toBeNull();
+  expect(
+    within(panel).getByRole("combobox", { name: "Log source" }),
+  ).toHaveProperty("value", "core");
+  expect(
+    within(panel).getByRole("button", { name: "Pause live refresh" }),
+  ).toBeTruthy();
+  await userEvent.click(
+    within(panel).getByRole("tab", { name: "Model usage" }),
+  );
+  await waitFor(() => expect(diagnosticLevel.usage).toHaveBeenCalled());
+  expect(
+    within(panel).getByRole("combobox", { name: "Model usage time range" }),
+  ).toHaveProperty("value", "60");
+  expect(
+    within(panel).getByRole("option", { name: "Last 15 minutes" }),
+  ).toBeTruthy();
+  expect(within(panel).getByText("Requests")).toBeTruthy();
+  expect(
+    within(panel).getByRole("region", { name: "Tokens per minute by prompt" }),
+  ).toBeTruthy();
+  expect(
+    within(panel).getByRole("img", {
+      name: "Token usage per minute by prompt",
+    }),
+  ).toBeTruthy();
+  expect(within(panel).getAllByText("Judge").length).toBeGreaterThan(0);
+  expect(diagnosticLevel.set).not.toHaveBeenCalled();
+});
+
+it("translates empty and failed model usage reads without clearing last report", async () => {
+  const report = await diagnosticLevel.usage();
+  diagnosticLevel.usage.mockResolvedValueOnce({
+    ...report,
+    summary: { ...report.summary, request_count: 0, total_tokens: 0 },
+    by_minute: [],
+  });
+  render(<DebugLogPanel />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "打开 Debug 日志" }),
+  );
+  await userEvent.click(screen.getByRole("tab", { name: "模型用量" }));
+  await waitFor(() => expect(screen.getByText("暂无曲线数据")).toBeTruthy());
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByText("No chart data yet")).toBeTruthy();
+  expect(
+    screen.getByText("No memory processing model calls in this time range"),
+  ).toBeTruthy();
+  diagnosticLevel.usage.mockRejectedValueOnce(new Error("service error"));
+  await userEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+  await waitFor(() => expect(screen.getByText("Could not load")).toBeTruthy());
+  expect(screen.getByText("No chart data yet")).toBeTruthy();
 });
