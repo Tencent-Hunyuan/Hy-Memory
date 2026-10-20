@@ -7,6 +7,11 @@ import pytest
 pytestmark = [pytest.mark.performance, pytest.mark.serial]
 
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "bench_raw_vector_scale.py"
+if not SCRIPT.exists():
+    pytest.skip(
+        f"benchmark script is not part of this checkout: {SCRIPT.name}",
+        allow_module_level=True,
+    )
 spec = importlib.util.spec_from_file_location("bench_raw_vector_scale", SCRIPT)
 benchmark = importlib.util.module_from_spec(spec)
 sys.modules["bench_raw_vector_scale"] = benchmark
