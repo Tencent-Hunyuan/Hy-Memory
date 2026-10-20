@@ -254,6 +254,7 @@ MODEL_NOT_READY_CODES = frozenset(
 PRE_SEND_REFUSAL_CODES = frozenset(
     {
         "hy_memory_input_exceeds_window",
+        "hy_extraction_scope_rule_not_found",  # client configuration, before HY invocation
     }
 )
 
@@ -2079,9 +2080,9 @@ async def execute_job(
         # - transient model/provider trouble -> waiting_for_model (parked).
         # Everything else may have crossed into HY, and HY has no idempotency
         # key, so it is `unknown` rather than a blind retry.
-        if code in PRE_SEND_REFUSAL_CODES:
-            # The frozen input window is checked before the payload reaches
-            # HY. This one refusal therefore has a proven pre-send boundary.
+        if code in PRE_SEND_REFUSAL_CODES and not hy_invoked:
+            # Only a refusal before any invocation has a proven pre-send
+            # boundary. An earlier chunk may already have reached HY.
             state, invoked_marker = FAILED, False
         elif hy_invoked:
             # Error names do not prove execution phase: permission and

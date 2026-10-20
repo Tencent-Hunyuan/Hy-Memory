@@ -765,6 +765,7 @@ class MemoryTaskStore:
             ).fetchone()
             if current is not None and current["last_error_code"] in {
                 "hy_memory_input_exceeds_window",
+                "hy_extraction_scope_rule_not_found",
                 "model_content_outcome_unknown",
             }:
                 raise MemoryTaskOwnershipError("Input requires preparation before it can run")
@@ -1341,7 +1342,8 @@ class MemoryTaskStore:
         common_base = f"""
             task.status IN (?,?,?,?)
             AND coalesce(task.last_error_code, '') NOT IN (
-                'hy_memory_input_exceeds_window', 'model_content_outcome_unknown'
+                'hy_memory_input_exceeds_window',
+                'hy_extraction_scope_rule_not_found', 'model_content_outcome_unknown'
             )
             AND {excluded_clause}
         """

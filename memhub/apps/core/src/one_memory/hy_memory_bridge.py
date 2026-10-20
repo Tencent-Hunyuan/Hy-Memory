@@ -1595,7 +1595,7 @@ def build_hy_memory_config(
     config.llm.enable_intention = False
     config.llm.extra_headers = None
     config.llm.extra_body = attach_disable_thinking(profile, {}) or None
-    _write_memories_in_chinese(config.llm)
+    _configure_extraction_prompts(config.llm)
     # `context_window` describes model input capacity. HY Memory's
     # `max_tokens` fields cap generated output and have safe extraction
     # defaults (1024/2000). Copying a 16K context window into those fields
@@ -1729,81 +1729,54 @@ def build_hy_memory_config(
     return config
 
 
-#: The one rule in HY's extraction system prompts that hands the language of
-#: someone's memories to whatever they happened to paste in. Both language
-#: variants carry it, with this exact wording in the Chinese one.
-_HY_FOLLOWS_THE_INPUT_LANGUAGE = "* 输出语言必须与输入语言一致"
-
-_ALWAYS_CHINESE = (
-    "* 输出语言必须始终是简体中文，即使输入是英文、代码或报错信息\n"
-    "* 记忆语言是用户属性，不随单条输入的语言变化"
+#: HY defaults to user-only extraction. MemHub includes durable assistant
+#: findings, while preserving HY's OWNER and subject attribution rules.
+_HY_READS_ONLY_THE_USER_ZH = "只提取 NEW user messages 中首次出现的新信息。"
+_HY_READS_ONLY_THE_USER_EN = (
+    "Extract ONLY genuinely new information introduced in the NEW user messages."
 )
-
-#: HY's extraction principle reads only the user's messages, although its own
-#: OWNER and subject rules already say how to keep an AI assistant's words
-#: apart from the person's. MemHub records both speakers, so only this line
-#: changes; who said what stays with HY's rules.
-_HY_READS_ONLY_THE_USER = "只提取 NEW user messages 中首次出现的新信息。"
-
-_BOTH_SPEAKERS = (
+_BOTH_SPEAKERS_ZH = (
     "只提取 NEW messages 中首次出现的新信息：既提取用户说的，"
     "也提取 AI 助手提供的有长期价值的信息（推荐、确认、查到的资料、方案与结论），"
     "按下方主体规则与 OWNER 标明是谁说的。"
 )
+_BOTH_SPEAKERS_EN = (
+    "Extract ONLY genuinely new information introduced in the NEW messages: "
+    "from both the user and the AI assistant when it offers durable, useful "
+    "findings (recommendations, confirmations, researched facts, plans, or conclusions). "
+    "Use the subject and OWNER rules below to attribute who said what."
+)
 
 
-def _write_memories_in_chinese(llm_config: Any) -> None:
-    """Ask HY for Chinese memories whichever language it thinks the input is.
+def _configure_extraction_prompts(llm_config: Any) -> None:
+    """Keep HY's native language branches, changing only MemHub's speaker scope.
 
-    HY picks the extraction prompt per call from the content itself:
-    `is_chinese(content)` at `hy_memory/agent/extractor.py:868`, a CJK
-    character ratio with a 0.3 threshold. A Chinese question about a pasted
-    English traceback measures well under it, so it takes the English branch
-    and the memory is written in English — for a user whose library is
-    otherwise Chinese, and who was never asked.
-
-    Two things had to be worked around, both read out of HY's source rather
-    than assumed:
-
-    The lever named for this, `extract_system_prompt_zh`, is read *inside*
-    the `is_chinese(...)` true branch (`extractor.py:891-901`), so it only
-    applies where nothing was wrong. The branch that actually runs reads
-    `extract_system_prompt_en` (`extractor.py:922-930`).
-
-    And HY's own Chinese prompt says "输出语言必须与输入语言一致", so serving
-    it verbatim would leave the model following the input language anyway —
-    a Chinese prompt producing an English memory. So HY's text is kept for
-    everything it defines (schema, owner rules, tags, and the rules that
-    keep terms and code exactly as pasted) and only that single line is
-    replaced. Deriving it at runtime rather than copying the prompt means an
-    SDK bump brings HY's improvements with it; if the line ever moves, the
-    override is appended instead so the language still holds, and the tests
-    pin the line's presence so we hear about it.
-
-    The data-injection template stays HY's built-in English one — the
-    override hook is system-prompt-only (`config.py:166-170`) — and both
-    language variants take the same four fields and carry the same JSON
-    contract, so nothing is lost. The content itself is never touched:
-    prefixing it to push the ratio over the threshold would work, and is
-    exactly what must not happen to a verbatim.
+    The SDK chooses a prompt per extraction with is_chinese(content). Supplying
+    a custom system prompt bypasses its built-in few-shot and intention-removal
+    step; this preserves the previous override behavior rather than changing
+    those unrelated extraction semantics in a language fix.
     """
     try:
         prompts_zh = import_module("hy_memory.agent.prompts_zh")
+        extractor = import_module("hy_memory.agent.extractor")
     except ModuleNotFoundError as error:  # pragma: no cover - SDK guaranteed above
         raise HyMemoryBridgeError("hy_memory_sdk_unavailable") from error
-    hy_prompt = prompts_zh.EXTRACT_SYSTEM_PROMPT_ZH
-    if _HY_FOLLOWS_THE_INPUT_LANGUAGE in hy_prompt:
-        prompt = hy_prompt.replace(_HY_FOLLOWS_THE_INPUT_LANGUAGE, _ALWAYS_CHINESE)
-    else:
-        logging.getLogger(__name__).warning("hy_language_rule_not_found_appending_override")
-        prompt = f"{hy_prompt}\n\n# 语言规则（MemHub）\n\n{_ALWAYS_CHINESE}\n"
-    if _HY_READS_ONLY_THE_USER in prompt:
-        prompt = prompt.replace(_HY_READS_ONLY_THE_USER, _BOTH_SPEAKERS)
-    else:
-        logging.getLogger(__name__).warning("hy_extraction_scope_rule_not_found_appending_override")
-        prompt = f"{prompt}\n\n# 提取范围（MemHub）\n\n{_BOTH_SPEAKERS}\n"
-    llm_config.extract_system_prompt_en = prompt
-    llm_config.extract_system_prompt_zh = prompt
+
+    def with_both_speakers(prompt: str, original: str, replacement: str) -> str:
+        if prompt.count(original) != 1:
+            raise HyMemoryBridgeError("hy_extraction_scope_rule_not_found")
+        return prompt.replace(original, replacement, 1)
+
+    llm_config.extract_system_prompt_zh = with_both_speakers(
+        prompts_zh.EXTRACT_SYSTEM_PROMPT_ZH,
+        _HY_READS_ONLY_THE_USER_ZH,
+        _BOTH_SPEAKERS_ZH,
+    )
+    llm_config.extract_system_prompt_en = with_both_speakers(
+        extractor.EXTRACT_SYSTEM_PROMPT,
+        _HY_READS_ONLY_THE_USER_EN,
+        _BOTH_SPEAKERS_EN,
+    )
 
 
 def _provider_base_url(provider: ProviderKind, value: str | None) -> str:

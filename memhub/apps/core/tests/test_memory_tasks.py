@@ -2016,6 +2016,25 @@ def test_a_failed_task_stops_being_claimed_at_the_retry_ceiling(tmp_path) -> Non
         store.claim("failed-1")
 
 
+def test_extraction_config_refusal_is_not_reclaimed(tmp_path) -> None:
+    store, profile = _profile_and_tasks(tmp_path)
+    task = store.create(
+        request_id="scope-rule-test",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="missing-evidence",
+        profile=profile,
+    )
+    _claimed, token = store.claim(task.task_id)
+    store.fail(
+        task.task_id,
+        runner_token=token,
+        error_code="hy_extraction_scope_rule_not_found",
+    )
+    with pytest.raises(MemoryTaskOwnershipError):
+        store.claim(task.task_id)
+
+
 def test_a_failed_task_below_the_ceiling_is_still_claimable(tmp_path) -> None:
     """The ceiling must not stop legitimate retries."""
     database = tmp_path / "one-memory.sqlite3"

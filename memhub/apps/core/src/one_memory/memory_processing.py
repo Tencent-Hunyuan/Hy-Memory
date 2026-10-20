@@ -187,6 +187,7 @@ UNIFIED_HY_AGENT_ID = "one-memory"
 PRE_SEND_REFUSAL_CODES = frozenset(
     {
         "hy_memory_input_exceeds_window",
+        "hy_extraction_scope_rule_not_found",  # client configuration, before HY invocation
     }
 )
 _BACKFILL_BATCH_SIZE = 8
@@ -597,8 +598,8 @@ class MemoryTaskRunner:
                 "hy_memory_model_timeout",
             }
             safe_terminal_after_invocation = {"hy_memory_import_no_readable_output"}
-            if code in PRE_SEND_REFUSAL_CODES:
-                # Raised before the call, so the marker only says "about to":
+            if code in PRE_SEND_REFUSAL_CODES and not hy_invoked:
+                # No invocation has started, so the refusal is pre-send:
                 # fail with the reason rather than parking on a write HY never
                 # saw. See the constant and issue #44.
                 return await in_the_background(
