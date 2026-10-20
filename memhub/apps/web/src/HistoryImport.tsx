@@ -38,6 +38,13 @@ const errors: Record<string, string> = {
     "已有记忆时间缺少日期或时区，未知时间请保留为 null。",
 };
 
+// Every kind the contract can return is reviewable here. Leaving one out made
+// a directory the person picked themselves ("user_selected") fail with
+// source_identity_unavailable after the file had already been committed.
+const REVIEWABLE_CANDIDATE_KINDS: ReadonlySet<
+  SourceResponse["candidate_kind"]
+> = new Set(["default", "environment_override", "user_selected"]);
+
 export function HistoryImport({
   onConnect,
   onRefresh,
@@ -194,7 +201,7 @@ export function HistoryImport({
       !source.available ||
       !source.candidate_root_id?.trim() ||
       !source.candidate_path?.trim() ||
-      !["default", "environment_override"].includes(source.candidate_kind) ||
+      !REVIEWABLE_CANDIDATE_KINDS.has(source.candidate_kind) ||
       (source.location_state && source.location_state !== "found")
     )
       throw new Error("source_identity_unavailable");

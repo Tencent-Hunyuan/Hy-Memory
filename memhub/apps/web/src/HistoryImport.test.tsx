@@ -294,6 +294,24 @@ it("requires preview, publication, actual directory review and independent sourc
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+it("accepts a directory the user picked themselves after a committed upload", async () => {
+  const selected = {
+    ...candidate,
+    candidate_kind: "user_selected" as const,
+    candidate_path: "/chosen/chatgpt-export",
+  };
+  onRefresh.mockResolvedValue({ sources: [selected] });
+  mount();
+  await upload();
+  await publish();
+
+  expect(await screen.findByText(selected.candidate_path)).toBeTruthy();
+  await authorize();
+  expect(onConnect).toHaveBeenCalledWith([staged.source_id], [selected], {
+    importUploadId: staged.upload_id,
+  });
+});
+
 it.each([
   { sources: [] },
   { sources: [{ ...candidate, candidate_root_id: undefined }] },
