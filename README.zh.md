@@ -65,13 +65,13 @@
 ### 1. 安装
 
 ```bash
-pip install hy-memory==2.0.3              # 核心（含 ChromaDB 与 Kuzu）
-pip install "hy-memory[qdrant]==2.0.3"    # + Qdrant
-pip install "hy-memory[faiss]==2.0.3"     # + FAISS
-pip install "hy-memory[graph]==2.0.3"     # + Neo4j
-pip install "hy-memory[mysql]==2.0.3"     # + MySQL 缓存
-pip install "hy-memory[rerank]==2.0.3"    # + 本地多语言 cross-encoder rerank
-pip install "hy-memory[all]==2.0.3"       # 全部
+pip install hy-memory==2.0.4              # 核心（含 ChromaDB 与 Kuzu）
+pip install "hy-memory[qdrant]==2.0.4"    # + Qdrant
+pip install "hy-memory[faiss]==2.0.4"     # + FAISS
+pip install "hy-memory[graph]==2.0.4"     # + Neo4j
+pip install "hy-memory[mysql]==2.0.4"     # + MySQL 缓存
+pip install "hy-memory[rerank]==2.0.4"    # + 本地多语言 cross-encoder rerank
+pip install "hy-memory[all]==2.0.4"       # 全部
 ```
 
 ### 2. 配置

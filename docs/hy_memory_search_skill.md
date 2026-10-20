@@ -152,7 +152,7 @@ client = HyMemoryClient.from_config({
 安装可选依赖：
 
 ```bash
-pip install 'hy-memory[rerank]==2.0.1'
+pip install 'hy-memory[rerank]==2.0.4'
 ```
 
 启用后，`HyMemoryClient(...)` 构造阶段会完成模型下载/读取、device 放置和一次 dummy

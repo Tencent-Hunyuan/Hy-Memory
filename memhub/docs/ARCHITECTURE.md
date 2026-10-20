@@ -363,7 +363,7 @@ Support is declared per immutable GitHub Release manifest:
 - macOS arm64 and x64 App/Runtime artifacts must carry Developer ID signatures,
   notarization tickets, and native-platform acceptance receipts.
 - Windows is not supported.
-- `hy-memory==2.0.3` is the public Python SDK dependency.
+- `hy-memory==2.0.4` is the public Python SDK dependency.
 
 See [`INSTALLATION.md`](INSTALLATION.md) for the release matrix. A source test,
 fake hosting test, or cross-build does not substitute for a native-platform

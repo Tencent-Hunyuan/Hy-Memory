@@ -65,13 +65,13 @@ Welcome to the **Hy Memory Research Family**, covering cognitive chat memory, lo
 ### 1. Installation
 
 ```bash
-pip install hy-memory==2.0.3              # core (includes ChromaDB and Kuzu)
-pip install "hy-memory[qdrant]==2.0.3"    # + Qdrant
-pip install "hy-memory[faiss]==2.0.3"     # + FAISS
-pip install "hy-memory[graph]==2.0.3"     # + Neo4j
-pip install "hy-memory[mysql]==2.0.3"     # + MySQL cache
-pip install "hy-memory[rerank]==2.0.3"    # + local multilingual cross-encoder rerank
-pip install "hy-memory[all]==2.0.3"       # everything
+pip install hy-memory==2.0.4              # core (includes ChromaDB and Kuzu)
+pip install "hy-memory[qdrant]==2.0.4"    # + Qdrant
+pip install "hy-memory[faiss]==2.0.4"     # + FAISS
+pip install "hy-memory[graph]==2.0.4"     # + Neo4j
+pip install "hy-memory[mysql]==2.0.4"     # + MySQL cache
+pip install "hy-memory[rerank]==2.0.4"    # + local multilingual cross-encoder rerank
+pip install "hy-memory[all]==2.0.4"       # everything
 ```
 
 ### 2. Configuration

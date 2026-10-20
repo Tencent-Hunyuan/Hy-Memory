@@ -5,14 +5,14 @@
 ## 安装与快速开始
 
 ```bash
-pip install hy-memory==2.0.3
+pip install hy-memory==2.0.4
 
 # 可选后端
-pip install 'hy-memory[qdrant]==2.0.1'
-pip install 'hy-memory[faiss]==2.0.1'
-pip install 'hy-memory[graph]==2.0.1'     # Neo4j；Kuzu 已在核心依赖中
-pip install 'hy-memory[mysql]==2.0.1'
-pip install 'hy-memory[rerank]==2.0.1'    # 本地多语言 cross-encoder rerank
+pip install 'hy-memory[qdrant]==2.0.4'
+pip install 'hy-memory[faiss]==2.0.4'
+pip install 'hy-memory[graph]==2.0.4'     # Neo4j；Kuzu 已在核心依赖中
+pip install 'hy-memory[mysql]==2.0.4'
+pip install 'hy-memory[rerank]==2.0.4'    # 本地多语言 cross-encoder rerank
 ```
 
 默认 LLM 和 Embedding 均使用 OpenAI-compatible 接口。使用 OpenAI 时可只设置：
