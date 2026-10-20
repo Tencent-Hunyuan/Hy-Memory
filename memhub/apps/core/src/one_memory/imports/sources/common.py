@@ -1102,6 +1102,11 @@ def discovery_failure_code(
 ) -> ScanIssueCode:
     if failure.reason_code is SourceAccessErrorCode.BUDGET_EXCEEDED:
         return ScanIssueCode.BUDGET_EXCEEDED
+    if failure.reason_code is SourceAccessErrorCode.FILE_TOO_LARGE:
+        # The file is readable and its format is fine; only its size is over
+        # the access gate. Reporting that as `unsupported_schema` sends the
+        # user looking for a parser problem that does not exist.
+        return ScanIssueCode.FILE_TOO_LARGE
     return ScanIssueCode.UNSUPPORTED_SCHEMA
 
 
@@ -1109,6 +1114,8 @@ def _scan_failure_code(code: SourceAccessErrorCode) -> ScanIssueCode:
     """Map a per-file open failure onto a machine code, never onto free text."""
     if code is SourceAccessErrorCode.BUDGET_EXCEEDED:
         return ScanIssueCode.BUDGET_EXCEEDED
+    if code is SourceAccessErrorCode.FILE_TOO_LARGE:
+        return ScanIssueCode.FILE_TOO_LARGE
     if code is SourceAccessErrorCode.SYMLINK_NOT_ALLOWED:
         return ScanIssueCode.UNSUPPORTED_SCHEMA
     if code in {

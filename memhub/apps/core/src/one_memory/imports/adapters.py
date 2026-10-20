@@ -34,10 +34,11 @@ class ScanIssueCode(StrEnum):
     SOURCE_BUSY = "source_busy"
     UNSUPPORTED_SCHEMA = "unsupported_schema"
     BUDGET_EXCEEDED = "budget_exceeded"
-    #: The file is bigger than the import's own per-file ceiling. Skipped with
-    #: a reason rather than read, because one oversized history file can hold
-    #: the import open long enough to take the process with it. Distinct from
-    #: the access layer's `FILE_TOO_LARGE`, which is a per-root limit.
+    #: The file is bigger than a per-file ceiling: either the import's own
+    #: ceiling or the access gate's per-root `max_file_bytes`. Both are skipped
+    #: with this reason rather than read, because one oversized history file
+    #: can hold the import open long enough to take the process with it, and
+    #: the user-facing cause is the same size limit.
     FILE_TOO_LARGE = "file_too_large"
     HISTORY_WINDOW_EXCLUDED = "history_window_excluded"
 
