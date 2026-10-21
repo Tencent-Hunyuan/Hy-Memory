@@ -2335,7 +2335,7 @@
     {
       "SPDXID": "SPDXRef-Package-hy-memory",
       "name": "hy-memory",
-      "versionInfo": "2.0.5.dev1",
+      "versionInfo": "2.0.5.dev2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",

@@ -991,7 +991,7 @@ wheels = [
 
 [[package]]
 name = "hy-memory"
-version = "2.0.5.dev1"
+version = "2.0.5.dev2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "chromadb" },
@@ -1008,9 +1008,9 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "tiktoken" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/52/f8/5c9740d08c7796e654cc49030c54e87178580c659d347293769a6d4daf66/hy_memory-2.0.5.dev1.tar.gz", hash = "sha256:0a43c3a7484ae571f998ba7837697bdd2c5505c4f8e3aa5a983e7432b8da78aa", size = 834908, upload-time = "2026-10-21T08:49:35.226Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/64/a3319bed16074a96a6853f04026f79f9a43ee200959f6f8cbec2bd7db96b/hy_memory-2.0.5.dev2.tar.gz", hash = "sha256:95de72c8490fc23b1327e9d0159e38354d5d9abb9d158e06021030ec4ee43547", size = 835699, upload-time = "2026-10-21T09:07:04.849Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/49/528a28fbf0b3568e8b8f48f1021396feedc60cf8dedca4c7f9feb2d8d8f3/hy_memory-2.0.5.dev1-py3-none-any.whl", hash = "sha256:b3dbf2555255ef741328063af6dcbf55eca6506c460ee26ea6e14b522946bc0d", size = 899479, upload-time = "2026-10-21T08:49:32.700Z" },
+    { url = "https://files.pythonhosted.org/packages/df/a2/be2aa56a39d87d4007f77d6a0d81753f88ced4a1b936de860c3a57281aa0/hy_memory-2.0.5.dev2-py3-none-any.whl", hash = "sha256:b1d344ead37fed956da0b35641c62601b5f671c0fa4be79003599c3209316e0a", size = 900261, upload-time = "2026-10-21T09:06:34.678Z" },
 ]
 
 [[package]]
@@ -1837,7 +1837,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "filelock", specifier = ">=3.32.4" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "hy-memory", specifier = "==2.0.5.dev1" },
+    { name = "hy-memory", specifier = "==2.0.5.dev2" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "numpy", specifier = "==2.5.2" },
     { name = "onnxruntime", specifier = "==1.23.2" },

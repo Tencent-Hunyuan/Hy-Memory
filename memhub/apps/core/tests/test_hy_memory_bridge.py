@@ -148,6 +148,14 @@ class FakeHyMemoryClient:
         self.calls.append({"list_raw": dict(kwargs)})
         return self.raw_list_result
 
+    def import_memory_exact(self, content: str, **kwargs) -> Mapping[str, object]:
+        self.calls.append({"import_memory_exact": content, **kwargs})
+        return {
+            "success": True,
+            "memory_id": kwargs["memory_id"],
+            "request_id": kwargs["request_id"],
+        }
+
     def update(self, memory_id: str, content: str) -> Mapping[str, object]:
         self.calls.append({"update_memory_id": memory_id, "update_content": content})
         return {"success": self.update_succeeds, "memory_id": memory_id}
@@ -818,6 +826,44 @@ def test_bridge_reads_raw_and_write_outcome_through_public_sdk(tmp_path) -> None
     assert rows == (raw,)
 
 
+def test_bridge_imports_legacy_memory_exactly_without_governance(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    result = asyncio.run(
+        bridge.import_sdk_memory_exact(
+            content="old preference",
+            memory_id="memory-1",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="session-1",
+            layer="l2_fact",
+            status="superseded",
+            owner="user",
+            tags=("preference",),
+            supersedes=(),
+            superseded_by=("memory-2",),
+            is_latest=False,
+            request_id="migration-request",
+        )
+    )
+
+    assert result["memory_id"] == "memory-1"
+    call = client.calls[-1]
+    assert call["import_memory_exact"] == "old preference"
+    assert call["status"] == "superseded"
+    assert call["superseded_by"] == ["memory-2"]
+
+
 def test_hy_failure_log_identifies_stage_without_provider_content(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
     receipt = configure_diagnostics(
@@ -1443,7 +1489,7 @@ def test_hy_runtime_matches_public_sdk_without_reranker_or_service_backends(
     config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
 
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.5.dev1"
+    assert HY_MEMORY_VERSION == "2.0.5.dev2"
     assert HY_MEMORY_MODE == "ultra"
     assert HY_MEMORY_READER == "hybrid"
     assert os.environ["MEMORY_MODE"] == "ultra"

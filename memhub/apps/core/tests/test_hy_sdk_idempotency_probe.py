@@ -69,7 +69,7 @@ def test_no_idempotency_key_means_unknown_must_remain() -> None:
 
 
 def test_measured_sdk_verdict_is_recorded() -> None:
-    """Pin the measured answer for `hy-memory==2.0.5.dev1`.
+    """Pin the measured answer for `hy-memory==2.0.5.dev2`.
 
     The SDK claims request_id before invoking the write, folds terminal replays,
     blocks running/unknown replays, and exposes the durable result directly.
