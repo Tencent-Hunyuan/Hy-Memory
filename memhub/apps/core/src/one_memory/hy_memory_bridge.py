@@ -297,6 +297,48 @@ class HyMemoryOutput(BaseModel):
     evidence_ids: tuple[str, ...] = ()
 
 
+class HySdkMemoryRecord(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memory_id: str
+    content: str
+    layer: str
+    status: str
+    is_latest: bool
+    supersedes: tuple[str, ...] = ()
+    superseded_by: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    user_id: str
+    agent_id: str
+    session_id: str | None = None
+    source: str | None = None
+    memory_at: int | None = None
+    gmt_created: int | None = None
+
+
+class HySdkMemoryPage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memories: tuple[HySdkMemoryRecord, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+class HySdkRawRecord(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    raw_id: str
+    content: str
+    user_id: str
+    agent_id: str
+    session_id: str
+    source: str
+    memory_at: int | None = None
+    gmt_created: int | None = None
+    custom: dict[str, object] = Field(default_factory=dict)
+
+
 # HyMemoryIngestResult names HyMemoryOutput before it exists, so pydantic left
 # its schema unbuilt and would have built it on whichever thread first used the
 # model. That thread is the event loop, and building it walks
@@ -363,6 +405,33 @@ class HyMemoryClientProtocol(Protocol):
     def close(self) -> None: ...
 
     def get(self, memory_id: str) -> Mapping[str, object] | None: ...
+
+    def list_memories(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+        statuses: list[str] | None = None,
+    ) -> Mapping[str, object]: ...
+
+    def get_write_outcome(self, request_id: str) -> Mapping[str, object] | None: ...
+
+    def get_raw(self, raw_id: str) -> Mapping[str, object] | None: ...
+
+    def list_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> Mapping[str, object]: ...
 
     def update(self, memory_id: str, content: str) -> Mapping[str, object]: ...
 
@@ -648,6 +717,111 @@ class HyMemoryBridge:
             details={"result_count": len(result.memories)},
         )
         return result
+
+    @_exclusive
+    async def list_sdk_memories(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        statuses: tuple[str, ...] = ("active",),
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> HySdkMemoryPage:
+        """Read the SDK-owned memory library without Governance hydration."""
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                client.list_memories,
+                user_id=user_id,
+                agent_id=agent_id,
+                statuses=list(statuses),
+                limit=limit,
+                offset=offset,
+                order=order,
+            )
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_list_failed") from error
+        return _sdk_memory_page(raw, limit=limit, offset=offset)
+
+    @_exclusive
+    async def get_sdk_memory(self, memory_id: str) -> HySdkMemoryRecord | None:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(client.get, memory_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_get_failed") from error
+        if raw is None:
+            return None
+        return _sdk_memory_record(raw)
+
+    @_exclusive
+    async def get_sdk_write_outcome(
+        self,
+        request_id: str,
+    ) -> dict[str, object] | None:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(client.get_write_outcome, request_id)
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
+        return dict(raw)
+
+    @_exclusive
+    async def get_sdk_raw(self, raw_id: str) -> HySdkRawRecord | None:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(client.get_raw, raw_id)
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_get_failed") from error
+        return _sdk_raw_record(raw) if raw is not None else None
+
+    @_exclusive
+    async def list_sdk_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> tuple[tuple[HySdkRawRecord, ...], int]:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                client.list_raw,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                limit=limit,
+                offset=offset,
+                order=order,
+            )
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_list_failed") from error
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("raw"), list):
+            raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
+        records = tuple(_sdk_raw_record(row) for row in raw["raw"])
+        total = raw.get("total")
+        if not isinstance(total, int) or total < 0:
+            raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
+        return records, total
 
     @_exclusive
     async def list_agent_ids(self, *, user_id: str, limit: int = 1_000) -> tuple[str, ...]:
@@ -1885,6 +2059,96 @@ def _basic_info_memories(raw: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(memories, list):
         raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
     return tuple(memory for memory in memories if isinstance(memory, Mapping))
+
+
+def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_record_shape_unknown")
+    if any(
+        not isinstance(raw.get(key), str) or not str(raw[key]).strip()
+        for key in ("memory_id", "content")
+    ):
+        raise HyMemoryBridgeError("hy_memory_record_shape_unknown")
+    try:
+        return HySdkMemoryRecord(
+            memory_id=str(raw["memory_id"]),
+            content=str(raw["content"]),
+            layer=str(raw.get("layer") or ""),
+            status=str(raw.get("status") or ""),
+            is_latest=bool(raw.get("is_latest", True)),
+            supersedes=_string_tuple(raw.get("supersedes")),
+            superseded_by=_string_tuple(raw.get("superseded_by")),
+            tags=_string_tuple(raw.get("tags")),
+            user_id=str(raw.get("user_id") or ""),
+            agent_id=str(raw.get("agent_id") or ""),
+            session_id=(
+                str(raw["session_id"]) if isinstance(raw.get("session_id"), str) else None
+            ),
+            source=str(raw["source"]) if isinstance(raw.get("source"), str) else None,
+            memory_at=raw.get("memory_at") if isinstance(raw.get("memory_at"), int) else None,
+            gmt_created=(
+                raw.get("gmt_created") if isinstance(raw.get("gmt_created"), int) else None
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise HyMemoryBridgeError("hy_memory_record_shape_unknown") from error
+
+
+def _sdk_memory_page(raw: object, *, limit: int, offset: int) -> HySdkMemoryPage:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_list_shape_unknown")
+    rows: list[object] = []
+    total = 0
+    for bucket_name, rows_name in (("vdb", "memories"), ("graph", "nodes")):
+        bucket = raw.get(bucket_name)
+        if bucket is None and bucket_name == "graph":
+            continue
+        if not isinstance(bucket, Mapping) or not isinstance(bucket.get(rows_name), list):
+            raise HyMemoryBridgeError("hy_memory_list_shape_unknown")
+        bucket_total = bucket.get("total")
+        if not isinstance(bucket_total, int) or bucket_total < 0:
+            raise HyMemoryBridgeError("hy_memory_list_shape_unknown")
+        total += bucket_total
+        rows.extend(bucket[rows_name])
+    deduplicated: dict[str, HySdkMemoryRecord] = {}
+    for row in rows:
+        record = _sdk_memory_record(row)
+        deduplicated.setdefault(record.memory_id, record)
+    return HySdkMemoryPage(
+        memories=tuple(deduplicated.values()),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _sdk_raw_record(raw: object) -> HySdkRawRecord:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_raw_shape_unknown")
+    if any(
+        not isinstance(raw.get(key), str) or not str(raw[key]).strip()
+        for key in ("raw_id", "content", "user_id", "agent_id", "session_id", "source")
+    ):
+        raise HyMemoryBridgeError("hy_memory_raw_shape_unknown")
+    custom = raw.get("custom")
+    if not isinstance(custom, Mapping):
+        custom = {}
+    try:
+        return HySdkRawRecord(
+            raw_id=str(raw["raw_id"]),
+            content=str(raw["content"]),
+            user_id=str(raw["user_id"]),
+            agent_id=str(raw["agent_id"]),
+            session_id=str(raw["session_id"]),
+            source=str(raw["source"]),
+            memory_at=raw.get("memory_at") if isinstance(raw.get("memory_at"), int) else None,
+            gmt_created=(
+                raw.get("gmt_created") if isinstance(raw.get("gmt_created"), int) else None
+            ),
+            custom=dict(custom),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise HyMemoryBridgeError("hy_memory_raw_shape_unknown") from error
 
 
 def _listed_memories(raw: object) -> tuple[Mapping[str, object], ...]:

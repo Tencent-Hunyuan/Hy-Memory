@@ -54,6 +54,9 @@ class FakeHyMemoryClient:
         self.closed = False
         self.deleted: set[str] = set()
         self.list_result: Mapping[str, object] = {"vdb": {"memories": [], "total": 0}}
+        self.write_outcome: Mapping[str, object] | None = None
+        self.raw_result: Mapping[str, object] | None = None
+        self.raw_list_result: Mapping[str, object] = {"raw": [], "total": 0}
 
     def add(
         self,
@@ -112,13 +115,16 @@ class FakeHyMemoryClient:
     def get(self, memory_id: str) -> Mapping[str, object] | None:
         if memory_id in self.deleted:
             return None
-        request_id = self.record_request_id or str(self.calls[-1]["request_id"])
+        last = self.calls[-1] if self.calls else {}
+        request_id = self.record_request_id or str(last.get("request_id") or "read")
         return {
             "memory_id": memory_id,
             "content": "Extracted memory",
-            "layer": "L0_BASIC_INFO",
-            "user_id": self.calls[-1]["user_id"],
-            "agent_id": self.calls[-1]["agent_id"],
+            "layer": "l2_fact",
+            "status": "active",
+            "is_latest": True,
+            "user_id": last.get("user_id") or "local",
+            "agent_id": last.get("agent_id") or "one-memory",
             "custom": {"request_id": request_id},
         }
 
@@ -129,6 +135,18 @@ class FakeHyMemoryClient:
     def list_memories(self, **kwargs) -> Mapping[str, object]:
         self.calls.append({"list_memories": dict(kwargs)})
         return self.list_result
+
+    def get_write_outcome(self, request_id: str) -> Mapping[str, object] | None:
+        self.calls.append({"get_write_outcome": request_id})
+        return self.write_outcome
+
+    def get_raw(self, raw_id: str) -> Mapping[str, object] | None:
+        self.calls.append({"get_raw": raw_id})
+        return self.raw_result
+
+    def list_raw(self, **kwargs) -> Mapping[str, object]:
+        self.calls.append({"list_raw": dict(kwargs)})
+        return self.raw_list_result
 
     def update(self, memory_id: str, content: str) -> Mapping[str, object]:
         self.calls.append({"update_memory_id": memory_id, "update_content": content})
@@ -679,6 +697,91 @@ def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) 
 
     assert [output.memory_id for output in outputs] == ["matched"]
     assert outputs[0].evidence_ids == ("evidence-1",)
+
+
+def test_bridge_reads_sdk_memory_lifecycle_without_governance(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    client.list_result = {
+        "vdb": {
+            "total": 1,
+            "memories": [
+                {
+                    "memory_id": "old-memory",
+                    "content": "Old wording",
+                    "layer": "l2_fact",
+                    "status": "superseded",
+                    "is_latest": False,
+                    "superseded_by": ["new-memory"],
+                    "user_id": "local",
+                    "agent_id": "one-memory",
+                    "session_id": "session-1",
+                    "tags": ["preference"],
+                }
+            ],
+        }
+    }
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    page = asyncio.run(
+        bridge.list_sdk_memories(
+            user_id="local",
+            statuses=("superseded",),
+            limit=20,
+        )
+    )
+
+    assert page.total == 1
+    assert page.memories[0].status == "superseded"
+    assert page.memories[0].superseded_by == ("new-memory",)
+    assert client.calls[-1]["list_memories"]["statuses"] == ["superseded"]
+
+
+def test_bridge_reads_raw_and_write_outcome_through_public_sdk(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    client.write_outcome = {
+        "request_id": "request-1",
+        "status": "succeeded",
+        "result": {"success": True, "memory_ids": ["memory-1"]},
+    }
+    client.raw_result = {
+        "raw_id": "raw-1",
+        "content": "verbatim",
+        "user_id": "local",
+        "agent_id": "one-memory",
+        "session_id": "session-1",
+        "source": "cursor",
+        "custom": {"role": "user"},
+    }
+    client.raw_list_result = {"raw": [client.raw_result], "total": 1}
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    outcome = asyncio.run(bridge.get_sdk_write_outcome("request-1"))
+    raw = asyncio.run(bridge.get_sdk_raw("raw-1"))
+    rows, total = asyncio.run(bridge.list_sdk_raw(user_id="local"))
+
+    assert outcome["status"] == "succeeded"
+    assert raw.content == "verbatim"
+    assert raw.custom == {"role": "user"}
+    assert total == 1
+    assert rows == (raw,)
 
 
 def test_hy_failure_log_identifies_stage_without_provider_content(tmp_path, monkeypatch) -> None:
