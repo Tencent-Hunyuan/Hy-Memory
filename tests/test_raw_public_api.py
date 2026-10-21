@@ -5,7 +5,15 @@ from unittest.mock import AsyncMock
 import pytest
 
 from hy_memory.client import HyMemoryClient
-from hy_memory.models.memory import MemoryLayer, MemoryStatus
+from hy_memory.config import MemoryConfig
+from hy_memory.models.memory import (
+    MemoryLayer,
+    MemoryNode,
+    MemoryStatus,
+    SourceType,
+)
+from hy_memory.pipelines.base import WriteRequest
+from hy_memory.pipelines.writer import MemoryWriter
 
 
 class OutcomeCache:
@@ -40,14 +48,23 @@ class RawStore:
     def __init__(self):
         self.nodes = {}
         self.upserts = 0
+        self.supports_fulltext = False
 
     async def get_by_id(self, node_id):
         return self.nodes.get(node_id)
+
+    async def initialize(self):
+        return None
 
     async def upsert(self, node):
         self.upserts += 1
         self.nodes[node.node_id] = node
         return node.node_id
+
+    async def update_payload(self, node_id, payload):
+        node = self.nodes[node_id]
+        for key, value in payload.items():
+            setattr(node, key, value)
 
     async def list_by_user(
         self,
@@ -141,6 +158,101 @@ async def test_import_raw_request_replay_does_not_write_twice():
 
     assert second == {**first, "replayed": True}
     assert client._vector_store.upserts == 1
+
+
+@pytest.mark.asyncio
+async def test_process_raw_is_idempotent_and_does_not_insert_raw_again():
+    client = _client()
+    for index, role in enumerate(("user", "assistant"), start=1):
+        await HyMemoryClient.async_import_raw.__wrapped__(
+            client,
+            f"turn-{index}",
+            user_id="u1",
+            agent_id="a1",
+            session_id="s1",
+            source="cursor",
+            raw_id=f"raw-{index}",
+            request_id=f"import-{index}",
+            metadata={"role": role, "source_order": index},
+        )
+    client._async_add_impl = AsyncMock(
+        return_value={"success": True, "memory_ids": ["memory-1"]}
+    )
+
+    first = await HyMemoryClient.async_process_raw.__wrapped__(
+        client,
+        ["raw-1", "raw-2"],
+        user_id="u1",
+        agent_id="a1",
+        session_id="s1",
+        source="cursor",
+        request_id="process-1",
+    )
+    second = await HyMemoryClient.async_process_raw.__wrapped__(
+        client,
+        ["raw-1", "raw-2"],
+        user_id="u1",
+        agent_id="a1",
+        session_id="s1",
+        source="cursor",
+        request_id="process-1",
+    )
+
+    assert first["raw_ids"] == ["raw-1", "raw-2"]
+    assert first["memory_ids"] == ["memory-1"]
+    assert second == {**first, "replayed": True}
+    assert client._vector_store.upserts == 2
+    client._async_add_impl.assert_awaited_once()
+    assert client._async_add_impl.await_args.kwargs["_existing_raw_ids"] == [
+        "raw-1",
+        "raw-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_writer_reuses_existing_raw_without_embedding_or_upsert():
+    store = RawStore()
+    raw = MemoryNode(
+        node_id="raw-1",
+        user_id="u1",
+        agent_id="a1",
+        session_id="s1",
+        source="cursor",
+        layer=MemoryLayer.L1_RAW,
+        content="verbatim",
+        source_type=SourceType.EXPLICIT,
+        status=MemoryStatus.ACTIVE,
+        is_latest=True,
+        embedding=[0.1, 0.2],
+    )
+    store.nodes[raw.node_id] = raw
+    embed = AsyncMock()
+    writer = MemoryWriter(
+        MemoryConfig(),
+        embed_service=embed,
+        vector_store=store,
+        cache=None,
+    )
+
+    response = await writer.write(
+        WriteRequest(
+            content="[user]: verbatim",
+            user_id="u1",
+            agent_id="a1",
+            session_id="s1",
+            source="cursor",
+            request_id="process-1",
+            existing_raw_ids=["raw-1"],
+            extra={
+                "agent_mode": "disabled",
+            },
+        )
+    )
+
+    assert response.success is True
+    assert response.memory_id == "raw-1"
+    assert store.upserts == 0
+    embed.embed_queued_with_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio

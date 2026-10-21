@@ -231,6 +231,10 @@ class WriteRequest:
     # 已有记忆 (V1 合并检测用)
     existing_memories: Optional[List[Dict[str, Any]]] = None
 
+    # Public client process_raw() only: reuse these exact L1 nodes as input.
+    # Ordinary add() never populates this field.
+    existing_raw_ids: List[str] = field(default_factory=list)
+
     # 记忆时间戳（不传则用当前时间 datetime.now()）
     memory_at: Optional[datetime] = None
 

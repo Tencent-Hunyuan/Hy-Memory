@@ -2631,6 +2631,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        _existing_raw_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """写入记忆（异步）
 
@@ -2799,6 +2800,7 @@ class HyMemoryClient:
             # 落库 memory_ops / WRITE_SUMMARY / pipeline_logs 的单一真相源。
             request_id=request_id,
             client_meta=meta,
+            existing_raw_ids=list(_existing_raw_ids or []),
         )
 
         # mode → writer:
@@ -2847,7 +2849,10 @@ class HyMemoryClient:
             logger.info(f"[add] done: memory_id={result.memory_id} elapsed={result.elapsed_ms:.0f}ms")
 
             # 记录历史（非阻塞，失败仅 warning）
-            if self._history_store is not None:
+            if (
+                self._history_store is not None
+                and not _existing_raw_ids
+            ):
                 try:
                     isolation_key = self._build_isolation_key(uid, agent_id)
                     # 从 content 或 messages 中提取用于记录的文本
@@ -2974,6 +2979,35 @@ class HyMemoryClient:
                 is_latest=is_latest,
                 memory_at=memory_at,
                 metadata=metadata,
+                request_id=request_id,
+            ),
+            include_runtime_diag=True,
+        )
+
+    def process_raw(
+        self,
+        raw_ids: List[str],
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        scene: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        branch: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Extract/reconcile existing L1 raw records without inserting raw again."""
+        return self._loop_thread.run(
+            self.async_process_raw(
+                raw_ids,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                scene=scene,
+                workspace_id=workspace_id,
+                branch=branch,
                 request_id=request_id,
             ),
             include_runtime_diag=True,
@@ -3265,6 +3299,148 @@ class HyMemoryClient:
         if stored_id != node_id:
             raise RuntimeError("raw import changed the requested identity")
         return {"success": True, "raw_id": node_id, "request_id": request_id}
+
+    @_ensure_internal_loop
+    async def async_process_raw(
+        self,
+        raw_ids: List[str],
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        scene: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        branch: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Process exact raw records through extraction/reconciliation in caller order."""
+        from .models.memory import MemoryLayer
+        from .utils.source_filter import normalize_source
+
+        if (
+            not isinstance(raw_ids, list)
+            or not raw_ids
+            or len(raw_ids) > 100
+            or any(not isinstance(raw_id, str) or not raw_id for raw_id in raw_ids)
+            or len(set(raw_ids)) != len(raw_ids)
+        ):
+            raise ValueError("raw_ids must contain 1-100 unique non-empty ids")
+        if not user_id:
+            raise ValueError("user_id is required")
+        normalized_source = normalize_source(source)
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="process_raw",
+        )
+        if replay is not None:
+            return replay
+        pipeline_invoked = False
+        try:
+            nodes = []
+            for raw_id in raw_ids:
+                node = await self._vector_store.get_by_id(raw_id)
+                if node is None or node.layer != MemoryLayer.L1_RAW:
+                    raise ValueError(f"raw record is unavailable: {raw_id}")
+                if (
+                    node.user_id != user_id
+                    or node.agent_id != agent_id
+                    or node.session_id != session_id
+                    or node.source != normalized_source
+                ):
+                    raise ValueError("raw record is outside the requested write scope")
+                nodes.append(node)
+            source_orders = [(node.custom or {}).get("source_order") for node in nodes]
+            numeric_orders = [value for value in source_orders if type(value) is int]
+            if numeric_orders and (
+                len(numeric_orders) != len(nodes)
+                or numeric_orders != sorted(numeric_orders)
+                or len(set(numeric_orders)) != len(numeric_orders)
+            ):
+                raise ValueError("raw_ids are not in stable source order")
+            roles = [str((node.custom or {}).get("role") or "user") for node in nodes]
+            if any(role not in {"user", "assistant", "system", "tool"} for role in roles):
+                raise ValueError("raw record has an unsupported message role")
+            messages = [
+                {
+                    "role": role,
+                    "content": node.content,
+                    **(
+                        {"name": str((node.custom or {})["name"])}
+                        if (node.custom or {}).get("name")
+                        else {}
+                    ),
+                    **(
+                        {"tool_call_id": str((node.custom or {})["tool_call_id"])}
+                        if (node.custom or {}).get("tool_call_id")
+                        else {}
+                    ),
+                    **(
+                        {"tool_name": str((node.custom or {})["tool_name"])}
+                        if (node.custom or {}).get("tool_name")
+                        else {}
+                    ),
+                }
+                for node, role in zip(nodes, roles)
+            ]
+            pipeline_invoked = True
+            result = await self._async_add_impl(
+                messages,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=normalized_source,
+                _existing_raw_ids=list(raw_ids),
+                memory_at=max(
+                    (node.memory_at for node in nodes if node.memory_at is not None),
+                    default=None,
+                ),
+                scene=scene,
+                workspace_id=workspace_id,
+                branch=branch,
+                request_id=request_id,
+            )
+            memory_ids = list(
+                dict.fromkeys(
+                    result.get("memory_ids")
+                    or [
+                        *(result.get("experience_ids") or []),
+                        *(result.get("fact_ids") or []),
+                    ]
+                )
+            )
+            result = {
+                **result,
+                "raw_ids": list(raw_ids),
+                "memory_ids": memory_ids,
+                "request_id": request_id,
+            }
+        except BaseException:
+            if pipeline_invoked:
+                await self._mark_write_outcome_unknown(request_id)
+            else:
+                await self._finish_write_outcome(
+                    request_id,
+                    "failed",
+                    {
+                        "success": False,
+                        "request_id": request_id,
+                        "raw_ids": list(raw_ids),
+                        "memory_ids": [],
+                        "error_code": "process_raw_invalid",
+                    },
+                )
+            raise
+        await self._finish_write_outcome(
+            request_id,
+            "succeeded" if result.get("success") is True else "failed",
+            result,
+        )
+        return result
 
     @_ensure_internal_loop
     async def async_import_memory_exact(
