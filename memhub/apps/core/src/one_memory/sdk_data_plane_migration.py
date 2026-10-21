@@ -85,7 +85,6 @@ class SdkDataPlaneMigrationStore:
         *,
         migration_id: str,
         source_runtime_build: str,
-        source_sdk_version: str,
         target_sdk_version: str,
         source_schema_version: int,
         namespace_fingerprint: str,
@@ -98,7 +97,6 @@ class SdkDataPlaneMigrationStore:
             "running",
             "preflight",
             source_runtime_build,
-            source_sdk_version,
             target_sdk_version,
             source_schema_version,
             namespace_fingerprint,
@@ -120,17 +118,16 @@ class SdkDataPlaneMigrationStore:
                     """
                     INSERT INTO sdk_data_plane_migrations (
                         migration_id,state,phase,source_runtime_build,
-                        source_sdk_version,target_sdk_version,source_schema_version,
+                        target_sdk_version,source_schema_version,
                         namespace_fingerprint,backend_fingerprint,backup_bundle_id,
                         created_at,updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     values,
                 )
             else:
                 identity = (
                     source_runtime_build,
-                    source_sdk_version,
                     target_sdk_version,
                     source_schema_version,
                     namespace_fingerprint,
@@ -140,7 +137,6 @@ class SdkDataPlaneMigrationStore:
                     existing[key]
                     for key in (
                         "source_runtime_build",
-                        "source_sdk_version",
                         "target_sdk_version",
                         "source_schema_version",
                         "namespace_fingerprint",

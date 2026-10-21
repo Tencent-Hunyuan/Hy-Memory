@@ -31,8 +31,8 @@ The marker, not table existence, selects the authority.
 
 The migration preflight records and validates:
 
-- MemHub Runtime build and management schema version;
-- installed `hy-memory` version and SDK store-format version;
+- source MemHub Runtime tag/build and management schema version;
+- migration Runtime SDK capabilities and the actual on-disk store shape;
 - SDK namespace, vector/graph/cache/history/coding providers and locations;
 - embedding model identity and dimensions;
 - source grants, model profiles, config, queue leases, and pending operations.
@@ -44,8 +44,16 @@ The migration fails closed when the installed SDK lacks:
 - durable request outcome lookup;
 - consistent snapshot/export and restore.
 
-`hy-memory==2.0.4` does not satisfy all of these requirements and cannot perform
-the final cutover.
+MemHub tags `v1.0.0` through `v1.0.4` all use the `governed-v2` namespace and
+the same SDK SQL table families (`memory_operations_v2`, `pipeline_logs_v2`,
+`system_metrics`, `episode_state`, `memory_history`, `coding_memory_meta`,
+`working_fact`, and `coding_trace`). They therefore use one migration selected
+by inspected schema/store capabilities, not one branch per historical SDK pin.
+The old SDK version is informational only and is not a migration discriminator.
+
+The migration Runtime itself must expose the required APIs (currently the
+`2.0.5.dev2` development preview); old data is not rejected merely because an
+earlier App wrote it.
 
 ## 3. Legacy-state classification
 

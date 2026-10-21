@@ -38,7 +38,6 @@ def _start(store, migration_id="m1"):
     return store.start(
         migration_id=migration_id,
         source_runtime_build="build-13",
-        source_sdk_version="2.0.4",
         target_sdk_version="2.0.5",
         source_schema_version=55,
         namespace_fingerprint="namespace",
@@ -64,7 +63,6 @@ def test_start_is_idempotent_but_refuses_identity_change(store):
         store.start(
             migration_id="m1",
             source_runtime_build="different",
-            source_sdk_version="2.0.4",
             target_sdk_version="2.0.5",
             source_schema_version=55,
             namespace_fingerprint="namespace",

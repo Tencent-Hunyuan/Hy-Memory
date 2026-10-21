@@ -76,7 +76,6 @@ def create_sdk_migration_bundle(
     data_dir: Path,
     bundle_id: str,
     runtime_build: str,
-    source_sdk_version: str,
     runtime_stopped: bool,
     now: datetime | None = None,
     snapshotter: Callable[..., object] | None = None,
@@ -92,9 +91,6 @@ def create_sdk_migration_bundle(
         or "\\" in bundle_id
     ):
         raise MigrationBundleRejected("sdk_migration_bundle_id_invalid")
-    if not source_sdk_version or len(source_sdk_version) > 64:
-        raise MigrationBundleRejected("sdk_migration_bundle_source_sdk_invalid")
-
     home = data_dir.resolve()
     database = home / "one-memory.sqlite3"
     if not database.is_file() or database.is_symlink():
@@ -154,7 +150,6 @@ def create_sdk_migration_bundle(
             "bundle_id": bundle_id,
             "created_at": created_at,
             "runtime_build": runtime_build,
-            "source_sdk_version": source_sdk_version,
             "snapshot_sdk_version": HY_MEMORY_VERSION,
             "sdk_namespace": HY_MEMORY_NAMESPACE,
             "management_database": "management/one-memory.sqlite3",
