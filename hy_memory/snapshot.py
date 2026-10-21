@@ -23,6 +23,14 @@ class DataPlaneSnapshot:
     total_bytes: int
 
 
+@dataclass(frozen=True)
+class DataPlaneRestore:
+    restored_root: Path
+    previous_root: Path | None
+    files_restored: int
+    total_bytes: int
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -92,4 +100,51 @@ def snapshot_local_data_plane(
         snapshot_root=target,
         files=tuple(inventory),
         total_bytes=sum(int(item["bytes"]) for item in inventory),
+    )
+
+
+def restore_local_data_plane(
+    *,
+    snapshot_root: Path,
+    target_root: Path,
+    writers_stopped: bool,
+    protective_root: Path | None = None,
+) -> DataPlaneRestore:
+    """Replace one local SDK root from a verified snapshot with rollback."""
+    if not writers_stopped:
+        raise DataPlaneSnapshotRejected("data_plane_restore_writers_running")
+    source = snapshot_root.resolve()
+    target = target_root.resolve()
+    protective = (
+        protective_root.resolve()
+        if protective_root is not None
+        else target.parent / f".{target.name}.pre-restore"
+    )
+    staging = target.parent / f".{target.name}.restore.tmp"
+    if target.is_symlink() or protective.exists() or staging.exists():
+        raise DataPlaneSnapshotRejected("data_plane_restore_target_unsafe")
+
+    copied = snapshot_local_data_plane(
+        source_root=source,
+        target_root=staging,
+        writers_stopped=True,
+    )
+    previous: Path | None = None
+    try:
+        if target.exists():
+            target.replace(protective)
+            previous = protective
+        staging.replace(target)
+    except OSError as error:
+        if previous is not None and previous.exists() and not target.exists():
+            previous.replace(target)
+            previous = None
+        shutil.rmtree(staging, ignore_errors=True)
+        raise DataPlaneSnapshotRejected("data_plane_restore_replace_failed") from error
+
+    return DataPlaneRestore(
+        restored_root=target,
+        previous_root=previous,
+        files_restored=len(copied.files),
+        total_bytes=copied.total_bytes,
     )

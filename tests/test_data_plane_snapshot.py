@@ -6,6 +6,7 @@ import pytest
 
 from hy_memory.snapshot import (
     DataPlaneSnapshotRejected,
+    restore_local_data_plane,
     snapshot_local_data_plane,
 )
 
@@ -83,3 +84,42 @@ def test_snapshot_target_must_not_exist(tmp_path):
             writers_stopped=True,
         )
     assert caught.value.code == "data_plane_snapshot_target_exists"
+
+
+def test_restore_replaces_data_plane_and_keeps_protective_copy(tmp_path):
+    snapshot = tmp_path / "snapshot"
+    target = tmp_path / "live"
+    (snapshot / "vector").mkdir(parents=True)
+    (snapshot / "vector" / "nodes.bin").write_bytes(b"new")
+    (target / "vector").mkdir(parents=True)
+    (target / "vector" / "nodes.bin").write_bytes(b"old")
+    protective = tmp_path / "previous"
+
+    result = restore_local_data_plane(
+        snapshot_root=snapshot,
+        target_root=target,
+        protective_root=protective,
+        writers_stopped=True,
+    )
+
+    assert (target / "vector" / "nodes.bin").read_bytes() == b"new"
+    assert (protective / "vector" / "nodes.bin").read_bytes() == b"old"
+    assert result.previous_root == protective
+    assert result.files_restored == 1
+
+
+def test_restore_refuses_active_writers_without_touching_live_data(tmp_path):
+    snapshot = tmp_path / "snapshot"
+    target = tmp_path / "live"
+    snapshot.mkdir()
+    target.mkdir()
+    (target / "value").write_text("old", encoding="utf-8")
+
+    with pytest.raises(DataPlaneSnapshotRejected) as caught:
+        restore_local_data_plane(
+            snapshot_root=snapshot,
+            target_root=target,
+            writers_stopped=False,
+        )
+    assert caught.value.code == "data_plane_restore_writers_running"
+    assert (target / "value").read_text(encoding="utf-8") == "old"

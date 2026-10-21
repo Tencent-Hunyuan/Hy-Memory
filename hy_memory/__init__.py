@@ -56,8 +56,10 @@ from .client import HyMemoryClient
 from .inspector import MemoryInspector
 from .runtime import SharedRuntime
 from .snapshot import (
+    DataPlaneRestore,
     DataPlaneSnapshot,
     DataPlaneSnapshotRejected,
+    restore_local_data_plane,
     snapshot_local_data_plane,
 )
 
@@ -116,8 +118,10 @@ __all__ = [
     "HyMemoryClient",
     "MemoryInspector",
     "SharedRuntime",
+    "DataPlaneRestore",
     "DataPlaneSnapshot",
     "DataPlaneSnapshotRejected",
+    "restore_local_data_plane",
     "snapshot_local_data_plane",
     # 配置
     "MemoryConfig",
