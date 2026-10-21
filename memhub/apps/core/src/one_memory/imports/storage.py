@@ -1830,6 +1830,33 @@ class EvidenceStore:
             )
         return changed.rowcount
 
+    def release_completed_sdk_staging(self, *, limit: int = 2_048) -> int:
+        """Resume cleanup if Core stopped after job settlement."""
+        if not 1 <= limit <= 100_000:
+            raise ValueError("limit must be between 1 and 100000")
+        with self._connect(writing=True) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if not {
+                "memory_write_jobs",
+                "memory_write_job_evidence",
+            } <= tables:
+                return 0
+            rows = connection.execute(
+                "SELECT DISTINCT linked.evidence_id "
+                "FROM memory_write_jobs job "
+                "JOIN memory_write_job_evidence linked USING(job_id) "
+                "WHERE job.state='completed' "
+                "AND (job.sdk_raw_ids_json!='[]' OR job.sdk_memory_ids_json!='[]') "
+                "ORDER BY linked.evidence_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return self.release_sdk_staging(tuple(str(row[0]) for row in rows))
+
     def stage_memory_dispatch(
         self,
         record: EvidenceRecord,

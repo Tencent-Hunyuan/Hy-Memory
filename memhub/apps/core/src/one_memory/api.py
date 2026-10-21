@@ -931,6 +931,10 @@ def create_app(
             app.state.memory_authority = (
                 app.state.sdk_data_plane_migrations.authority()
             )
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                await asyncio.to_thread(
+                    app.state.evidence_store.release_completed_sdk_staging
+                )
             evidence_store = app.state.evidence_store
             if app.state.memory_authority is MemoryAuthority.SDK:
                 sdk_bridge = _sdk_library_bridge(app)
