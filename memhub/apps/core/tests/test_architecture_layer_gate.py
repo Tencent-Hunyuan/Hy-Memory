@@ -92,9 +92,6 @@ SDK_PRIVATE_ACCESS_DEBT: dict[str, frozenset[str]] = {
     f"{PACKAGE_LABEL}/hy_memory_bridge.py": frozenset(
         {"_coding_store", "_graph_store", "_loop_thread", "_vector_store"}
     ),
-    f"{PACKAGE_LABEL}/hy_presence.py": frozenset(
-        {"_collection", "_graph_store", "_loop_thread", "_vector_store"}
-    ),
     f"{PACKAGE_LABEL}/hy_response_guard.py": frozenset({"_loop_thread", "_registry"}),
 }
 

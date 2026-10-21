@@ -20,7 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.diagnostic_log import diagnostic_event, diagnostic_exception, elapsed_ms
 from one_memory.hy_lifecycle import HyLifecycle, HyLifecycleUnreadable, read_hy_lifecycle
-from one_memory.hy_presence import HyPresence, confirm_deleted
 from one_memory.hy_runtime_config import (
     HY_MEMORY_MODE,
     HY_MEMORY_NAMESPACE,
@@ -432,6 +431,12 @@ class HyMemoryClientProtocol(Protocol):
         order: str = "desc",
     ) -> Mapping[str, object]: ...
 
+    def import_memory_exact(
+        self,
+        content: str,
+        **kwargs: object,
+    ) -> Mapping[str, object]: ...
+
     def update(self, memory_id: str, content: str) -> Mapping[str, object]: ...
 
     def delete(self, memory_id: str) -> Mapping[str, object]: ...
@@ -823,6 +828,52 @@ class HyMemoryBridge:
         return records, total
 
     @_exclusive
+    async def import_sdk_memory_exact(
+        self,
+        *,
+        content: str,
+        memory_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        layer: str,
+        status: str,
+        owner: str | None,
+        tags: tuple[str, ...],
+        supersedes: tuple[str, ...],
+        superseded_by: tuple[str, ...],
+        is_latest: bool,
+        request_id: str,
+    ) -> dict[str, object]:
+        """Backfill one legacy semantic memory without extraction/reconcile."""
+        client = await self._get_client()
+        importer = getattr(client, "import_memory_exact", None)
+        if not callable(importer):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            raw = await _joined_thread(
+                importer,
+                content,
+                memory_id=memory_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                layer=layer,
+                status=status,
+                owner=owner,
+                tags=list(tags),
+                supersedes=list(supersedes),
+                superseded_by=list(superseded_by),
+                is_latest=is_latest,
+                request_id=request_id,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_exact_import_failed") from error
+        if not isinstance(raw, Mapping) or raw.get("success") is not True:
+            raise HyMemoryBridgeError("hy_memory_exact_import_failed")
+        return dict(raw)
+
+    @_exclusive
     async def list_agent_ids(self, *, user_id: str, limit: int = 1_000) -> tuple[str, ...]:
         """Return the HY scopes that actually hold memories for this user.
 
@@ -1022,35 +1073,20 @@ class HyMemoryBridge:
 
     @_exclusive
     async def delete(self, memory_id: str) -> dict[str, object]:
-        """Have HY forget a memory; one it no longer holds counts as forgotten.
-
-        HY's own answer settles nothing: `success: False` comes both when
-        there was no such memory and when removing it failed, and `success:
-        True` does not promise anything was deleted. So done means HY no
-        longer holds it, read back from each of its stores after every delete.
-        """
+        """Physically delete through the SDK's per-store completeness receipt."""
         client = await self._get_client()
-        result: dict[str, object] = {"success": False}
-        failure: Exception | None = None
         try:
             result = dict(await _joined_thread(client.delete, memory_id))
         except Exception as error:
-            # Read back anyway: HY failing to delete what it no longer holds
-            # leaves nothing to retry.
-            failure = error
-        try:
-            presence = await _joined_thread(confirm_deleted, client, memory_id)
-        except Exception as error:
-            raise HyMemoryBridgeError("hy_memory_delete_failed") from (failure or error)
-        if presence is HyPresence.ABSENT:
+            raise HyMemoryBridgeError("hy_memory_delete_failed") from error
+        error_code = result.get("error_code")
+        if error_code or result.get("partial") is True:
+            raise HyMemoryBridgeError(str(error_code or "hy_memory_delete_incomplete"))
+        if result.get("success") is True:
             return result
-        if failure is not None:
-            raise HyMemoryBridgeError("hy_memory_delete_failed") from failure
-        if presence is HyPresence.PRESENT:
-            raise HyMemoryBridgeError("hy_memory_delete_rejected")
-        if presence is HyPresence.UNKNOWN:
-            raise HyMemoryBridgeError("hy_memory_delete_unconfirmed")
-        return dict(result)
+        if result.get("deleted_count") == 0:
+            return {**result, "success": True, "already_absent": True}
+        raise HyMemoryBridgeError("hy_memory_delete_rejected")
 
     def lifecycle_now(self, user_id: str, ids: Collection[str] | None = None) -> HyLifecycle | None:
         """HY's set-aside memories, or None while this bridge has not opened HY.
