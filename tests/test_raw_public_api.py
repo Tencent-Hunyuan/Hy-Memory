@@ -65,6 +65,32 @@ class RawStore:
             and (not include_sources or node.source in include_sources)
         ]
 
+    async def search(
+        self,
+        *,
+        user_ids,
+        agent_ids,
+        include_sources,
+        exclude_sources,
+        layers,
+        limit,
+        **_kwargs,
+    ):
+        rows = []
+        for node in self.nodes.values():
+            if node.user_id not in user_ids:
+                continue
+            if agent_ids and node.agent_id not in agent_ids:
+                continue
+            if include_sources and node.source not in include_sources:
+                continue
+            if exclude_sources and node.source in exclude_sources:
+                continue
+            if node.layer not in layers:
+                continue
+            rows.append({"node": node, "score": 0.9})
+        return rows[:limit]
+
 
 def _client():
     client = HyMemoryClient.__new__(HyMemoryClient)
@@ -225,3 +251,43 @@ async def test_exact_memory_import_rejects_raw_layer():
             layer="l1_raw",
             request_id="request-memory-1",
         )
+
+
+@pytest.mark.asyncio
+async def test_existing_search_contract_can_explicitly_search_raw_with_source_filter():
+    client = _client()
+    for raw_id, session_id, source in (
+        ("raw-1", "s1", "cursor"),
+        ("raw-2", "s2", "claude"),
+    ):
+        await HyMemoryClient.async_import_raw.__wrapped__(
+            client,
+            f"content {raw_id}",
+            user_id="u1",
+            agent_id="a1",
+            session_id=session_id,
+            source=source,
+            raw_id=raw_id,
+            request_id=f"request-{raw_id}",
+        )
+
+    result = await client._search_explicit_raw_layer(
+        "content",
+        user_ids=["u1"],
+        agent_ids=["a1"],
+        session_ids=["s2"],
+        include_sources=["claude"],
+        exclude_sources=["cursor"],
+        limit=5,
+        min_score=0.0,
+        created_after=None,
+        request_id="search-1",
+        t0=0.0,
+        query_embedding=[0.1, 0.2],
+    )
+
+    assert [item["memory_id"] for item in result["memories"]["normal"]] == [
+        "raw-2"
+    ]
+    assert result["memories"]["normal"][0]["layer"] == "l1_raw"
+    assert result["memories"]["normal"][0]["source"] == "claude"

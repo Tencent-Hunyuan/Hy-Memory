@@ -32,6 +32,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- `search(..., layers=["l1_raw"])` now explicitly searches SDK raw records in
+  pro/ultra mode and keeps existing user/agent/session/source filters; default
+  search continues to hide raw.
 - Added `import_memory_exact` for idempotent migration of an existing semantic
   memory with its canonical ID, lifecycle and supersession links, without
   extraction or reconciliation.

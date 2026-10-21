@@ -3469,6 +3469,66 @@ class HyMemoryClient:
             "offset": offset,
         }
 
+    async def _search_explicit_raw_layer(
+        self,
+        query: str,
+        *,
+        user_ids: List[str],
+        agent_ids: List[str],
+        session_ids: List[str],
+        include_sources: List[str],
+        exclude_sources: List[str],
+        limit: int,
+        min_score: float,
+        created_after: Optional[float],
+        request_id: str,
+        t0: float,
+        query_embedding: Optional[List[float]],
+    ) -> Dict[str, Any]:
+        """Implement `search(..., layers=['l1_raw'])` without a second API."""
+        from .models.memory import MemoryLayer, MemoryStatus
+
+        embedding = query_embedding or await self._embed_service.embed(query)
+        fetch = min(max(limit * (10 if session_ids else 2), limit), 10_000)
+        hits = await self._vector_store.search(
+            query_embedding=embedding,
+            user_ids=user_ids,
+            agent_ids=agent_ids,
+            include_sources=include_sources,
+            exclude_sources=exclude_sources,
+            layers=[MemoryLayer.L1_RAW],
+            limit=fetch,
+            score_threshold=min_score,
+            status_filter=[MemoryStatus.ACTIVE],
+            only_latest=False,
+            created_after=created_after,
+        )
+        sessions = set(session_ids)
+        rows: List[Dict[str, Any]] = []
+        for hit in hits:
+            node = hit.get("node")
+            if node is None or node.layer != MemoryLayer.L1_RAW:
+                continue
+            if sessions and node.session_id not in sessions:
+                continue
+            row = self._raw_node_to_public(node)
+            rows.append(
+                {
+                    "memory_id": row.pop("raw_id"),
+                    **row,
+                    "layer": MemoryLayer.L1_RAW.value,
+                    "status": MemoryStatus.ACTIVE.value,
+                    "score": round(float(hit.get("score", 0.0)), 4),
+                }
+            )
+            if len(rows) >= limit:
+                break
+        return {
+            "request_id": request_id,
+            "memories": {"schema": [], "proactive": [], "normal": rows},
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+
     @staticmethod
     def _public_search_views(
         result_memories: List[Dict[str, Any]],
@@ -4129,6 +4189,22 @@ class HyMemoryClient:
         effective_search_layers = [MemoryLayer.L1_RAW] if lite_mode else layers
         effective_schema_limit = 0 if lite_mode else schema_limit
         effective_intention_limit = 0 if lite_mode else intention_limit
+        normalized_search_layers = self._normalize_layers(effective_search_layers)
+        if normalized_search_layers == [MemoryLayer.L1_RAW]:
+            return await self._search_explicit_raw_layer(
+                effective_target_query,
+                user_ids=effective_user_ids,
+                agent_ids=effective_agent_ids,
+                session_ids=effective_session_ids,
+                include_sources=effective_include_sources,
+                exclude_sources=effective_exclude_sources,
+                limit=limit,
+                min_score=min_score,
+                created_after=effective_created_after,
+                request_id=request_id,
+                t0=t0,
+                query_embedding=query_embedding,
+            )
 
         read_req = ReadRequest(
             query=effective_target_query,
@@ -4149,7 +4225,7 @@ class HyMemoryClient:
             layers=(
                 [
                     layer.value
-                    for layer in self._normalize_layers(effective_search_layers)
+                    for layer in normalized_search_layers
                 ]
                 if effective_search_layers else None
             ),
@@ -4174,7 +4250,7 @@ class HyMemoryClient:
         _wanted_layers = (
             {
                 layer.value
-                for layer in self._normalize_layers(effective_search_layers)
+                for layer in normalized_search_layers
             }
             if effective_search_layers else None
         )
