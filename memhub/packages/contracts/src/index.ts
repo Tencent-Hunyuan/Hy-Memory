@@ -514,6 +514,57 @@ export interface MemoryDetail {
   index_sync: MemoryIndexSync | null;
 }
 
+export type SdkMemoryStatus =
+  | "active"
+  | "superseded"
+  | "shadow"
+  | "negated"
+  | "conflicted"
+  | "archived";
+
+export interface SdkMemoryRecord {
+  memory_id: string;
+  content: string;
+  layer: string;
+  status: SdkMemoryStatus;
+  is_latest: boolean;
+  supersedes: string[];
+  superseded_by: string[];
+  tags: string[];
+  user_id: string;
+  agent_id: string;
+  session_id: string | null;
+  source: string | null;
+  memory_at: number | null;
+  gmt_created: number | null;
+}
+
+export interface SdkMemoryPage {
+  memories: SdkMemoryRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SdkRawRecord {
+  raw_id: string;
+  content: string;
+  user_id: string;
+  agent_id: string;
+  session_id: string;
+  source: string;
+  memory_at: number | null;
+  gmt_created: number | null;
+  custom: Record<string, unknown>;
+}
+
+export interface SdkRawPage {
+  items: SdkRawRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface FileImportReceipt {
   upload_id: string;
   filename: string;

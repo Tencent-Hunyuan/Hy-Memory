@@ -86,6 +86,9 @@ from one_memory.hy_memory_bridge import (
     GraphWidthMismatch,
     HyMemoryBridge,
     HyMemoryBridgeError,
+    HySdkMemoryPage,
+    HySdkMemoryRecord,
+    HySdkRawRecord,
     builtin_retrieval_snapshot,
 )
 from one_memory.hy_runtime_config import (
@@ -533,6 +536,21 @@ class MemoryDetail(BaseModel):
     index_sync: MemoryIndexSync | None = None
 
 
+class SdkMemoryUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=200_000)
+
+
+class SdkRawPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[HySdkRawRecord, ...] = ()
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=500)
+
+
 class MemoryProcessingBlock(BaseModel):
     kind: str
     reason: str
@@ -807,6 +825,7 @@ def create_app(
         runtime = CoreRuntime(runtime_settings) if manage_runtime else nullcontext()
         with runtime:
             database_path = runtime_settings.data_dir / "one-memory.sqlite3"
+            app.state.sdk_library_bridge = None
             # Before any store: each one below changes the library as it opens.
             try:
                 # Anti-downgrade: a database a newer build wrote must not be
@@ -1457,6 +1476,9 @@ def create_app(
                 with suppress(asyncio.CancelledError):
                     await app.state.memory_write_drain_task
                 await app.state.memory_processing_supervisor.shutdown()
+                if app.state.sdk_library_bridge is not None:
+                    await app.state.sdk_library_bridge.close()
+                    app.state.sdk_library_bridge = None
                 # HY clients share two process-owned loop threads. Close them
                 # after every bridge is down, while HY's SQLite executor is
                 # still available; interpreter atexit is too late for that.
@@ -2976,6 +2998,92 @@ def create_app(
         except Exception:
             # Stored-data/IO failures are not empty results or invalid client input.
             raise HTTPException(status_code=503, detail="memory_library_unavailable") from None
+
+    @app.get(
+        "/api/v2/memory-library",
+        response_model=HySdkMemoryPage,
+        dependencies=protected,
+    )
+    async def sdk_memory_library(
+        statuses: list[str] = Query(default=["active"]),  # noqa: B008
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> HySdkMemoryPage:
+        try:
+            return await _sdk_library_bridge(app).list_sdk_memories(
+                user_id="local",
+                statuses=tuple(statuses),
+                offset=offset,
+                limit=limit,
+            )
+        except HyMemoryBridgeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+
+    @app.get(
+        "/api/v2/memories/{memory_id}",
+        response_model=HySdkMemoryRecord,
+        dependencies=protected,
+    )
+    async def get_sdk_memory(memory_id: str) -> HySdkMemoryRecord:
+        try:
+            memory = await _sdk_library_bridge(app).get_sdk_memory(memory_id)
+        except HyMemoryBridgeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+        if memory is None:
+            raise HTTPException(status_code=404, detail="memory_not_found")
+        return memory
+
+    @app.put(
+        "/api/v2/memories/{memory_id}",
+        response_model=HySdkMemoryRecord,
+        dependencies=protected,
+    )
+    async def update_sdk_memory(
+        memory_id: str,
+        request: SdkMemoryUpdateRequest,
+    ) -> HySdkMemoryRecord:
+        bridge = _sdk_library_bridge(app)
+        try:
+            await bridge.update(memory_id, request.content)
+            memory = await bridge.get_sdk_memory(memory_id)
+        except HyMemoryBridgeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+        if memory is None:
+            raise HTTPException(status_code=404, detail="memory_not_found")
+        return memory
+
+    @app.delete(
+        "/api/v2/memories/{memory_id}",
+        status_code=204,
+        dependencies=protected,
+    )
+    async def delete_sdk_memory(memory_id: str) -> Response:
+        try:
+            await _sdk_library_bridge(app).delete(memory_id)
+        except HyMemoryBridgeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+        return Response(status_code=204)
+
+    @app.get(
+        "/api/v2/raw",
+        response_model=SdkRawPage,
+        dependencies=protected,
+    )
+    async def sdk_raw_library(
+        source: str | None = Query(default=None, min_length=1),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> SdkRawPage:
+        try:
+            items, total = await _sdk_library_bridge(app).list_sdk_raw(
+                user_id="local",
+                source=source,
+                offset=offset,
+                limit=limit,
+            )
+        except HyMemoryBridgeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+        return SdkRawPage(items=items, total=total, offset=offset, limit=limit)
 
     @app.get(
         "/api/v1/memories",
@@ -5024,6 +5132,18 @@ def _memory_processing_supervisor(app: FastAPI) -> MemoryProcessingSupervisor:
         MemoryProcessingSupervisor,
         app.state.memory_processing_supervisor,
     )
+
+
+def _sdk_library_bridge(app: FastAPI) -> HyMemoryBridge:
+    bridge = cast(HyMemoryBridge | None, app.state.sdk_library_bridge)
+    if bridge is None:
+        bridge = HyMemoryBridge(
+            profile=builtin_retrieval_snapshot(),
+            api_key=None,
+            data_dir=cast(Settings, app.state.settings).data_dir,
+        )
+        app.state.sdk_library_bridge = bridge
+    return bridge
 
 
 class _MatterLifecycleSource:

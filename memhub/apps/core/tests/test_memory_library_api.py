@@ -13,6 +13,11 @@ from pydantic import SecretStr
 
 from one_memory import api
 from one_memory.config import Settings
+from one_memory.hy_memory_bridge import (
+    HySdkMemoryPage,
+    HySdkMemoryRecord,
+    HySdkRawRecord,
+)
 from one_memory.memory_governance import MemoryGovernanceStore
 from one_memory.memory_library import MemoryLibraryPage, read_memory_library
 from one_memory.source_read_access import SourceReadAccess
@@ -50,6 +55,55 @@ def request(app, *, params=None, headers=None, method="GET", url=URL):
     return asyncio.run(run())
 
 
+class _SdkLibrary:
+    def __init__(self):
+        self.memory = HySdkMemoryRecord(
+            memory_id="memory-1",
+            content="body",
+            layer="l2_fact",
+            status="active",
+            is_latest=True,
+            user_id="local",
+            agent_id="one-memory",
+        )
+        self.deleted = []
+
+    async def list_sdk_memories(self, *, limit, offset, **_kwargs):
+        return HySdkMemoryPage(
+            memories=(self.memory,),
+            total=1,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def get_sdk_memory(self, memory_id):
+        return self.memory if memory_id == self.memory.memory_id else None
+
+    async def update(self, memory_id, content):
+        assert memory_id == self.memory.memory_id
+        self.memory = self.memory.model_copy(update={"content": content})
+        return {"success": True, "memory_id": memory_id}
+
+    async def delete(self, memory_id):
+        self.deleted.append(memory_id)
+        return {"success": True, "deleted_count": 1}
+
+    async def list_sdk_raw(self, **_kwargs):
+        return (
+            (
+                HySdkRawRecord(
+                    raw_id="raw-1",
+                    content="verbatim",
+                    user_id="local",
+                    agent_id="one-memory",
+                    session_id="session",
+                    source="cursor",
+                ),
+            ),
+            1,
+        )
+
+
 @pytest.mark.parametrize(
     ("headers", "code"),
     [
@@ -79,6 +133,45 @@ def test_auth_and_external_policy_reject_before_reading(app, monkeypatch, header
     assert response.status_code == code
     if code == 401:
         assert response.headers["www-authenticate"] == "Bearer"
+
+
+def test_sdk_native_library_detail_update_delete_and_raw_routes(app):
+    sdk = _SdkLibrary()
+    app.state.sdk_library_bridge = sdk
+
+    page = request(
+        app,
+        url="/api/v2/memory-library",
+        params=[("statuses", "active"), ("statuses", "superseded")],
+    )
+    assert page.status_code == 200
+    assert page.json()["memories"][0]["memory_id"] == "memory-1"
+
+    detail = request(app, url="/api/v2/memories/memory-1")
+    assert detail.status_code == 200
+    assert detail.json()["content"] == "body"
+
+    async def mutate():
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            put = await client.put(
+                "/api/v2/memories/memory-1",
+                headers=AUTH,
+                json={"content": "changed"},
+            )
+            raw = await client.get("/api/v2/raw", headers=AUTH)
+            deleted = await client.delete("/api/v2/memories/memory-1", headers=AUTH)
+            return put, raw, deleted
+
+    put, raw, deleted = asyncio.run(mutate())
+    assert put.status_code == 200
+    assert put.json()["content"] == "changed"
+    assert raw.status_code == 200
+    assert raw.json()["items"][0]["raw_id"] == "raw-1"
+    assert deleted.status_code == 204
+    assert sdk.deleted == ["memory-1"]
 
 
 @pytest.mark.parametrize(
