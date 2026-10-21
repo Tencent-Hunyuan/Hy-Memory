@@ -1,21 +1,20 @@
-"""A0-01: L0-L4 dependency-direction gate.
+"""Executable dependency and memory-authority gates.
 
-The target architecture (docs/ARCHITECTURE.md, D52) fixes one direction:
+The current target architecture is defined by ``HANDSOFF.md`` and
+``docs/ARCHITECTURE.md``:
 
-    L4 app (CLI/Electron) -> L3 control plane -> L2 write entries
-        -> L1 Memory Server -> L0 HY Memory SDK
+* Hy Memory SDK owns memory/raw/vector/graph/coding data;
+* MemHub owns the management plane and may retain ``memory_id`` references;
+* product code reaches the SDK through ``hy_memory_bridge`` only.
 
-Two things must never happen: an entry point reaching past the Memory Server
-straight to the HY SDK, and a Harness Adapter owning MemHub's own business
-database. This gate is the executable form of that, so the rule survives
-refactors instead of living only in a document.
+The legacy implementation still contains Evidence/Governance writers and a
+small number of private SDK-store accesses.  Those are migration debt, not an
+allowance for new code.  The explicit debt lists below may shrink during the
+refactor; new entries must not be added.
 
-The gate is deliberately NOT a blanket ban on `sqlite3`. D53 says MemHub's own
-authoritative business database must be MySQL, but explicitly keeps an
-Adapter's right to read the host product's own SQLite files. A blanket ban
-would outlaw a documented product decision, so the rule is split by layer
-instead: Adapters may read host files, but only through the read-only access
-module, and may never touch MemHub's store.
+The gate is deliberately not a blanket ban on ``sqlite3``. Adapters may read a
+host product's SQLite through the guarded read-only module; they may not own
+MemHub state or call the SDK directly.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable
 from pathlib import Path
+import re
 
 import pytest
 
@@ -66,6 +66,43 @@ SDK_CALLER = HY_BRIDGE
 
 #: Type-only importers of HY datatypes; they hold no client and write nothing.
 HY_TYPE_ONLY: frozenset[str] = frozenset()
+
+# Frozen migration debt: modules that still write the legacy memory/raw
+# authority.  The target count is zero.  A new module cannot join this set.
+LEGACY_AUTHORITY_WRITERS = frozenset(
+    {
+        f"{PACKAGE_LABEL}/imports/jobs.py",
+        f"{PACKAGE_LABEL}/imports/storage.py",
+        f"{PACKAGE_LABEL}/ingest_journal.py",
+        f"{PACKAGE_LABEL}/memory_governance.py",
+        f"{PACKAGE_LABEL}/memory_server/migrations.py",
+    }
+)
+
+LEGACY_AUTHORITY_WRITE = re.compile(
+    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+"
+    r"(?:governed_[a-z_]+|evidence(?:_[a-z_]+)?)\b",
+    re.IGNORECASE,
+)
+
+# Existing accesses to SDK implementation details.  These are exact file /
+# attribute debts so deleting one is always green, while adding one fails.
+SDK_PRIVATE_ACCESS_DEBT: dict[str, frozenset[str]] = {
+    f"{PACKAGE_LABEL}/hy_lifecycle.py": frozenset({"_collection", "_vector_store"}),
+    f"{PACKAGE_LABEL}/hy_memory_bridge.py": frozenset(
+        {"_coding_store", "_graph_store", "_loop_thread", "_vector_store"}
+    ),
+    f"{PACKAGE_LABEL}/hy_presence.py": frozenset(
+        {"_collection", "_graph_store", "_loop_thread", "_vector_store"}
+    ),
+    f"{PACKAGE_LABEL}/hy_response_guard.py": frozenset({"_loop_thread", "_registry"}),
+}
+
+SDK_PRIVATE_ATTRIBUTES = frozenset(
+    attribute
+    for attributes in SDK_PRIVATE_ACCESS_DEBT.values()
+    for attribute in attributes
+)
 
 
 def _relative(path: Path) -> str:
@@ -203,6 +240,53 @@ def test_only_the_l1_adapter_constructs_a_hy_client() -> None:
                     offenders.append(relative)
                     break
     assert not offenders, f"only the L1 adapter may build a HY client: {offenders}"
+
+
+def test_no_new_module_writes_legacy_memory_authority() -> None:
+    """Freeze Evidence/Governance writers while the SDK cutover removes them."""
+    offenders: list[str] = []
+    for path in _all_module_files():
+        source = path.read_text(encoding="utf-8")
+        if not LEGACY_AUTHORITY_WRITE.search(source):
+            continue
+        relative = _relative(path)
+        if relative not in LEGACY_AUTHORITY_WRITERS:
+            offenders.append(relative)
+    assert not offenders, (
+        "new Evidence/Governance writers are forbidden; write memory/raw via "
+        f"the SDK bridge instead: {offenders}"
+    )
+
+
+def test_no_new_sdk_private_store_access() -> None:
+    """Freeze direct SDK-store access until public client APIs replace it."""
+    offenders: list[str] = []
+    for path in _all_module_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        relative = _relative(path)
+        names = _module_names(tree)
+        if (
+            relative not in SDK_PRIVATE_ACCESS_DEBT
+            and not any(_root(name) in HY_SDK_ROOTS for name in names)
+        ):
+            # Names such as `_registry` and `_collection` are common for
+            # MemHub-owned objects too.  They become SDK-private access only
+            # in a module that imports the SDK (or is frozen debt already).
+            continue
+        used = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in SDK_PRIVATE_ATTRIBUTES
+        }
+        if not used:
+            continue
+        unexpected = sorted(used - SDK_PRIVATE_ACCESS_DEBT.get(relative, frozenset()))
+        if unexpected:
+            offenders.append(f"{relative}: {unexpected}")
+    assert not offenders, (
+        "new SDK private-store access is forbidden; add a public HyMemoryClient "
+        f"API and call it through hy_memory_bridge: {offenders}"
+    )
 
 
 @pytest.mark.parametrize("driver", sorted(MEMHUB_DRIVERS))
