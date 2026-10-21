@@ -68,6 +68,46 @@ def test_restore_success_returns_zero(tmp_path, monkeypatch) -> None:
     assert '"state":"restored"' in output.getvalue().replace(" ", "")
 
 
+def test_restore_sdk_bundle_uses_full_data_plane_restore(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+
+    class Result:
+        bundle_id = "migration-1"
+        restored_files = 4
+        restored_bytes = 123
+        previous_database_path = tmp_path / "backups" / "pre.sqlite3"
+        previous_sdk_root = tmp_path / "backups" / "pre.sdk-data"
+
+    def restore(**_kwargs):
+        return Result()
+
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_bundle.restore_sdk_migration_bundle",
+        restore,
+    )
+    output = io.StringIO()
+
+    code = cli.run(
+        [
+            "restore",
+            "--source",
+            "backups/migration-1.sdk-bundle",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+    assert code == 0
+    document = output.getvalue().replace(" ", "")
+    assert '"bundle_id":"migration-1"' in document
+    assert '"restored_files":4' in document
+
+
 def test_migration_bundle_refuses_while_runtime_is_running(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
     monkeypatch.setattr(

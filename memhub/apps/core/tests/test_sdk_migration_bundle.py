@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import sqlite3
 from datetime import UTC, datetime
 
 import pytest
@@ -11,12 +12,20 @@ from one_memory.database_access import close_main_databases, main_database
 from one_memory.sdk_migration_bundle import (
     MigrationBundleRejected,
     create_sdk_migration_bundle,
+    restore_sdk_migration_bundle,
 )
 
 
 def _seed_home(home):
     database = home / "one-memory.sqlite3"
     with main_database(database).write() as connection, connection:
+        connection.execute(
+            "CREATE TABLE schema_migrations ("
+            "version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO schema_migrations VALUES (55, 'sdk_data_plane_migration', 'now')"
+        )
         connection.execute("CREATE TABLE durable (id TEXT PRIMARY KEY, body TEXT NOT NULL)")
         connection.execute("INSERT INTO durable VALUES ('one', 'management')")
     close_main_databases()
@@ -43,6 +52,27 @@ def _snapshotter(*, source_root, target_root, writers_stopped):
     if any(path.is_symlink() for path in source_root.rglob("*")):
         raise _SnapshotRejected("data_plane_snapshot_symlink")
     shutil.copytree(source_root, target_root)
+
+
+class _RestoreResult:
+    def __init__(self, previous_root):
+        self.previous_root = previous_root
+
+
+def _restore_data_plane(
+    *,
+    snapshot_root,
+    target_root,
+    protective_root,
+    writers_stopped,
+):
+    assert writers_stopped
+    previous = None
+    if target_root.exists():
+        target_root.replace(protective_root)
+        previous = protective_root
+    shutil.copytree(snapshot_root, target_root)
+    return _RestoreResult(previous)
 
 
 def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
@@ -122,3 +152,58 @@ def test_bundle_id_cannot_escape_managed_backups(tmp_path, bundle_id):
             runtime_stopped=True,
         )
     assert caught.value.code == "sdk_migration_bundle_id_invalid"
+
+
+def test_restore_bundle_replaces_management_and_sdk_together(tmp_path):
+    _seed_home(tmp_path)
+    create_sdk_migration_bundle(
+        data_dir=tmp_path,
+        bundle_id="migration-restore",
+        runtime_build="build-13",
+        runtime_stopped=True,
+        snapshotter=_snapshotter,
+    )
+
+    database = tmp_path / "one-memory.sqlite3"
+    with sqlite3.connect(database) as connection, connection:
+        connection.execute("UPDATE durable SET body='newer-management' WHERE id='one'")
+    sdk_file = tmp_path / "hy-memory" / "governed-v2" / "vector" / "nodes.bin"
+    sdk_file.write_bytes(b"newer-sdk")
+
+    result = restore_sdk_migration_bundle(
+        data_dir=tmp_path,
+        source="backups/migration-restore.sdk-bundle",
+        runtime_stopped=True,
+        restore_data_plane=_restore_data_plane,
+    )
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT body FROM durable").fetchone()[0] == "management"
+    assert sdk_file.read_bytes() == b"sdk-vector"
+    assert result.bundle_id == "migration-restore"
+    assert result.previous_database_path.is_file()
+    assert result.previous_sdk_root is not None
+
+
+def test_restore_rejects_tampered_bundle_before_touching_live_home(tmp_path):
+    _seed_home(tmp_path)
+    created = create_sdk_migration_bundle(
+        data_dir=tmp_path,
+        bundle_id="migration-tampered",
+        runtime_build="build-13",
+        runtime_stopped=True,
+        snapshotter=_snapshotter,
+    )
+    copied = created.bundle_path / "sdk" / "governed-v2" / "vector" / "nodes.bin"
+    copied.write_bytes(b"tampered")
+
+    with pytest.raises(MigrationBundleRejected) as caught:
+        restore_sdk_migration_bundle(
+            data_dir=tmp_path,
+            source="backups/migration-tampered.sdk-bundle",
+            runtime_stopped=True,
+            restore_data_plane=_restore_data_plane,
+        )
+    assert caught.value.code == "sdk_migration_bundle_verify_failed"
+    live = tmp_path / "hy-memory" / "governed-v2" / "vector" / "nodes.bin"
+    assert live.read_bytes() == b"sdk-vector"

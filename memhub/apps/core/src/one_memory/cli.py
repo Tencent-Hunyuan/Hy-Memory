@@ -142,8 +142,6 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
         return 2
 
     settings = load_settings()
-    from one_memory.managed_restore import RestoreRejected, restore_managed_backup
-
     status = inspect_runtime(settings.data_dir)
     if status.state != "stopped":
         document = {
@@ -163,9 +161,23 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
         }
         _write_restore(stream, as_json, document, "预览通过；加 --yes 才会覆盖当前数据库。")
         return 4
+    from one_memory.managed_restore import RestoreRejected, restore_managed_backup
+    from one_memory.sdk_migration_bundle import (
+        MigrationBundleRejected,
+        restore_sdk_migration_bundle,
+    )
+
+    is_sdk_bundle = source.endswith(".sdk-bundle")
     try:
-        result = restore_managed_backup(data_dir=settings.data_dir, source=source)
-    except RestoreRejected as error:
+        if is_sdk_bundle:
+            result = restore_sdk_migration_bundle(
+                data_dir=settings.data_dir,
+                source=source,
+                runtime_stopped=True,
+            )
+        else:
+            result = restore_managed_backup(data_dir=settings.data_dir, source=source)
+    except (RestoreRejected, MigrationBundleRejected) as error:
         document = {
             "schema_version": 1,
             "state": "failed",
@@ -173,6 +185,25 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
         }
         _write_restore(stream, as_json, document, f"恢复失败：{error.code}")
         return 1
+    if is_sdk_bundle:
+        document = {
+            "schema_version": 1,
+            "state": "restored",
+            "bundle_id": result.bundle_id,
+            "restored_files": result.restored_files,
+            "restored_bytes": result.restored_bytes,
+            "previous_database_path": str(result.previous_database_path),
+            "previous_sdk_root": (
+                str(result.previous_sdk_root) if result.previous_sdk_root else None
+            ),
+        }
+        _write_restore(
+            stream,
+            as_json,
+            document,
+            f"已恢复完整迁移备份：{result.bundle_id}。",
+        )
+        return 0
     document = {
         "schema_version": 1,
         "state": "restored",
