@@ -322,6 +322,7 @@
 | `test_schema_gate.py` | `contract` | 覆盖 fresh database records the build schema、future schema refuses to open、legacy database without a ledger is left untouched 场景。 |
 | `test_schema_migrations.py` | `contract` | 覆盖 evidence store adds source ordinal to previous schema、import store migrates previous job and error schema、old active job index lets a sync sit beside paused history 等 4 个场景。 |
 | `test_schema_ownership_gate.py` | `contract` | A1-03/A1-04: schema ownership, and the hard part of telling DDL from reads. |
+| `test_sdk_data_plane_migration.py` | `contract` | SDK-authority migration ledger, aliases and atomic cutover marker. |
 | `test_sdk_migration_bundle.py` | `contract` | SDK-authority cutover requires a verified management + SDK data-plane bundle. |
 | `test_sdk_verbatim_fallback.py` | `contract` | D98: the SDK's verbatim fallback must stay off. |
 | `test_search_without_profile.py` | `contract` | What 'semantic_search' should do once the profile that filled the store is gone. |
@@ -390,4 +391,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 385 个测试文件。
+共 386 个测试文件。
