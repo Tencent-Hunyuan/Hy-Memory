@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
-from one_memory.database_access import close_main_databases
+from one_memory.database_access import close_main_databases, main_database
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.sdk_data_plane_migration import (
     DataPlaneMigrationError,
     MemoryAuthority,
     SdkDataPlaneMigrationStore,
+)
+from one_memory.sdk_migration_inventory import (
+    LegacyMemoryInventory,
+    SdkMemoryInventory,
+    classify_memory_inventory,
+    content_hash,
+    read_legacy_memory_inventory,
 )
 
 
@@ -161,3 +169,117 @@ def test_alias_is_idempotent_but_cannot_be_retargeted(store):
             canonical_memory_id="other",
         )
     assert caught.value.code == "sdk_data_plane_alias_conflict"
+
+
+def test_legacy_inventory_preserves_task_id_mapping_and_supersession(store):
+    database = store.database_path
+    with main_database(database).write() as connection, connection:
+        for memory_id, status, content in (
+            ("legacy-old", "superseded", "old"),
+            ("legacy-new", "confirmed", "new"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO governed_memories (
+                    memory_id,user_id,kind,status,content,scopes_json,origin,
+                    tags_json,revision,created_at,updated_at
+                ) VALUES (?,?,?,?,?,'[\"all-apps\"]','extracted','[\"tag\"]',1,'now','now')
+                """,
+                (memory_id, "local", "chat", status, content),
+            )
+        connection.execute(
+            "INSERT INTO governed_memory_supersessions VALUES "
+            "('legacy-old','legacy-new','now')"
+        )
+        connection.execute(
+            "INSERT INTO memory_task_outputs VALUES (?,?,?)",
+            (
+                "task",
+                "legacy-new",
+                json.dumps(
+                    {
+                        "task_id": "task",
+                        "memory_id": "legacy-new",
+                        "memory_revision": 1,
+                        "hy_memory_id": "sdk-new",
+                        "owner": "user",
+                        "layer": "l2_fact",
+                        "engine": "hy-memory",
+                        "engine_version": "2.0.4",
+                        "support_refs": [],
+                    }
+                ),
+            ),
+        )
+
+    records = {item.legacy_memory_id: item for item in read_legacy_memory_inventory(database)}
+    assert records["legacy-new"].canonical_memory_id == "sdk-new"
+    assert records["legacy-new"].owner == "user"
+    assert records["legacy-new"].supersedes == ("legacy-old",)
+    assert records["legacy-old"].superseded_by == ("legacy-new",)
+
+
+def _legacy(
+    legacy_id,
+    *,
+    canonical_id=None,
+    content="body",
+    status="active",
+    layer="l2_fact",
+):
+    return LegacyMemoryInventory(
+        legacy_memory_id=legacy_id,
+        canonical_memory_id=canonical_id or legacy_id,
+        user_id="local",
+        agent_id="one-memory",
+        session_id="default_session",
+        content=content,
+        content_hash=content_hash(content),
+        status=status,
+        layer=layer,
+        owner="user",
+        tags=(),
+        supersedes=(),
+        superseded_by=(),
+    )
+
+
+def _sdk(memory_id, *, content="body", status="active"):
+    return SdkMemoryInventory(
+        memory_id=memory_id,
+        user_id="local",
+        agent_id="one-memory",
+        content_hash=content_hash(content),
+        status=status,
+    )
+
+
+def test_inventory_classification_covers_every_legacy_and_sdk_state():
+    decisions = classify_memory_inventory(
+        (
+            _legacy("matched"),
+            _legacy("mapped", canonical_id="sdk-mapped"),
+            _legacy("missing"),
+            _legacy("deleted", status="deleted"),
+            _legacy("delete-existing", status="deleted"),
+            _legacy("divergent"),
+            _legacy("unknown-layer", layer=None),
+        ),
+        (
+            _sdk("matched"),
+            _sdk("sdk-mapped"),
+            _sdk("delete-existing"),
+            _sdk("divergent", content="different"),
+            _sdk("sdk-only"),
+        ),
+    )
+    by_key = {item.item_key: item for item in decisions}
+    assert by_key["memory:matched"].action == "matched"
+    assert by_key["memory:mapped"].action == "record_alias"
+    assert by_key["memory:missing"].action == "import_exact"
+    assert by_key["memory:deleted"].action == "verified_deleted"
+    assert by_key["memory:delete-existing"].action == "delete"
+    assert by_key["memory:divergent"].action == "quarantine"
+    assert by_key["memory:unknown-layer"].reason == "legacy_layer_unknown"
+    assert by_key["sdk:sdk-only"].action == "adopt"
+    assert len(decisions) == 8
