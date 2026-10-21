@@ -2391,7 +2391,7 @@ class HyMemoryClient:
         except Exception as e:
             logger.warning(f"[delete] chain repair failed for {node_id}: {e}")
 
-    async def _cleanup_graph_evidence(self, deleted_node_id: str) -> None:
+    async def _cleanup_graph_evidence(self, deleted_node_id: str) -> bool:
         """
         清理已删除 VDB 节点在 Graph 中的 evidence 引用。
 
@@ -2402,13 +2402,13 @@ class HyMemoryClient:
         直接用底层 execute 删 VdbRef + DERIVED_FROM 边。
         """
         if self._graph_store is None:
-            return
+            return True
         try:
             gs = self._graph_store
             # Kuzu backend
             if hasattr(gs, '_execute') and hasattr(gs, '_available'):
                 if not gs._available:
-                    return
+                    return False
                 gs._execute(
                     "MATCH (v:VdbRef {node_id: $nid}) DETACH DELETE v;",
                     {"nid": deleted_node_id},
@@ -2420,8 +2420,10 @@ class HyMemoryClient:
                     {"nid": deleted_node_id},
                 )
             logger.debug(f"[delete] VdbRef {deleted_node_id} cleaned from Graph")
+            return True
         except Exception as e:
             logger.debug(f"[delete] VdbRef cleanup for {deleted_node_id}: {e}")
+            return False
 
     # ================================================================
     # 异步 API
@@ -4435,6 +4437,15 @@ class HyMemoryClient:
             except Exception:
                 old_isolation_key = ""
 
+        graph_node = None
+        graph_inspection_failed = False
+        if self._graph_store is not None:
+            try:
+                graph_node = await self._graph_store.get_node(memory_id)
+            except Exception as e:
+                graph_inspection_failed = True
+                logger.warning(f"[delete] graph_store lookup failed: {e}")
+
         # ── 演化链修复（VDB 删除前执行）──
         chain_repaired = False
         if node is not None:
@@ -4450,19 +4461,27 @@ class HyMemoryClient:
 
         # 删除图数据库节点 + 清理 evidence（如有）
         graph_deleted = False
+        graph_cleanup_ok = True
         if self._graph_store is not None:
-            try:
-                await self._graph_store.delete_node(memory_id)
-                graph_deleted = True
-            except Exception as e:
-                logger.warning(f"[delete] graph_store delete failed: {e}")
+            if graph_node is not None:
+                try:
+                    graph_deleted = bool(await self._graph_store.delete_node(memory_id))
+                except Exception as e:
+                    logger.warning(f"[delete] graph_store delete failed: {e}")
             # 清理该节点作为 VdbRef 被其他 Schema 引用的情况
-            try:
-                await self._cleanup_graph_evidence(memory_id)
-            except Exception as e:
-                logger.debug(f"[delete] graph evidence cleanup failed (non-fatal): {e}")
+            if node is not None or graph_node is not None:
+                graph_cleanup_ok = await self._cleanup_graph_evidence(memory_id)
 
-        deleted_count = 1 if deleted else 0
+        found = node is not None or graph_node is not None
+        stores_complete = (
+            not graph_inspection_failed
+            and (node is None or bool(deleted))
+            and (graph_node is None or graph_deleted)
+            and graph_cleanup_ok
+        )
+        success = found and stores_complete
+        partial = found and not stores_complete and (bool(deleted) or graph_deleted)
+        deleted_count = 1 if success else 0
 
         # 清理 tag_index：此 memory 删除后，检查其每个 tag 是否还有其他 memory 引用；
         # 无引用则从 tag_index 中移除。失败静默降级，不影响 delete 语义。
@@ -4501,10 +4520,14 @@ class HyMemoryClient:
         _parsed = {
             "memory_id": memory_id,
             **_ident,
-            "found": node is not None,
+            "found": found,
             "vdb_deleted": bool(deleted),
+            "graph_found": graph_node is not None,
             "graph_deleted": graph_deleted,
+            "graph_cleanup_ok": graph_cleanup_ok,
+            "graph_inspection_failed": graph_inspection_failed,
             "deleted_count": deleted_count,
+            "partial": partial,
             "chain_repaired": chain_repaired,
         }
         if node is not None:
@@ -4521,8 +4544,17 @@ class HyMemoryClient:
         )
 
         return {
-            "success": deleted,
+            "success": success,
             "deleted_count": deleted_count,
+            "partial": partial,
+            "vdb_deleted": bool(deleted),
+            "graph_deleted": graph_deleted,
+            "graph_cleanup_ok": graph_cleanup_ok,
+            "error_code": (
+                "delete_incomplete"
+                if graph_inspection_failed or (found and not stores_complete)
+                else None
+            ),
             "request_id": request_id,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
