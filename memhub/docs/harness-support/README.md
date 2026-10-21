@@ -1,5 +1,8 @@
 # Harness 一键插入支持索引
 
+
+> **架构变更（2026-10-21）：** 见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) Top Rules。宿主适配仍属 MemHub 管理面；~~导入进 MemHub Evidence 权威~~ 改为写入 **SDK（含 raw）**。各 harness 专页未改处冲突时以架构为准。
+
 更新日期：2026-10-14
 
 “一键插入应用”控制的是 **MemHub → Harness** 的 Recall 接入；“同步开关”控制的是 **Harness → MemHub** 的会话读取与处理。两者不是同一个功能。

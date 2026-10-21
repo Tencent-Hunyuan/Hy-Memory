@@ -1,0 +1,66 @@
+# HANDSOFF — MemHub / Hy Memory 架构改造
+
+更新：2026-10-21  
+权威细则：[`memhub/docs/ARCHITECTURE.md`](memhub/docs/ARCHITECTURE.md)（~~旧删线~~ + 新并列）  
+配套：[`memhub/MEMORY.md`](memhub/MEMORY.md)；其余 docs 已打「架构变更」条，冲突以 ARCHITECTURE Top Rules 为准。
+
+> 根目录原先无有效 `HANDSOFF` 文件；本文件为清空后重写，只保留本次架构改造交接。
+
+---
+
+## Top Rules（现行根本）
+
+1. **所有对 memory 的读写（含存储 backend）都交给 SDK**，经 SDK config / env 配置。
+2. **MemHub 内对 memory 的原子操作也一律经 SDK**；缺接口 → **先补 SDK client**，禁止 Core 直改 VDB/Graph/SDK 私库或再维护正文权威。
+3. **MemHub 不存 memory 实体 / 引擎侧关系**（正文、supersede 权威、向量图副本等）。主责是管理面：harness、LLM model、异步写入队列、config、Core/Runtime 状态。  
+   - **可以且应当存 `memory_id`**（SDK 给外层的唯一身份）及组织元数据。  
+   - Matters 等高级组织可留在 MemHub；**改 memory 必须走 SDK**。
+
+**推论：**
+
+| 旧 | 新 |
+|---|---|
+| MemHub `evidence*` 原文权威 | 原文 → **SDK raw**；Evidence 权威拆除 |
+| `governed_*` 列表/版本/supersede 权威 | 拆除方向；UI/纠正/删除 → **授权 + SDK API**；组织层只挂 `memory_id` |
+| SDK success 后再镜像进 Governance 才算产品写入 | SDK 合同为准；MemHub 至多记 `memory_id` / 任务回执 |
+| 拦 CRUD / parse ops 双写 supersede | 禁止作为目标架构 |
+
+---
+
+## 已改文档（合同先于代码）
+
+- 重写：`memhub/docs/ARCHITECTURE.md`、`memhub/MEMORY.md`
+- 条幅 + 关键段新旧对照：`contracts/*`（含 runtime-unification / unified-context-read / source-adapter 等）、`INSTALLATION.md`、`DEVELOPMENT_LOOP.md`、`MEMORY_EVENT_TIME_SCHEDULING_PLAN.md`、`PRODUCT_LOG_TROUBLESHOOTING.md`、`harness-support/README.md`
+- 各 harness 专页未逐段改写 → 冲突时以 ARCHITECTURE 为准
+
+**代码尚未按此拆除。** 文档是目标架构，不是已完成迁移。
+
+---
+
+## 建议实现顺序
+
+1. 冻结新功能写入 `governed_*` / MemHub `evidence*` 权威路径。  
+2. 记忆库 UI / recall：授权 + SDK list/get/search/update/delete；组织层只挂 `memory_id`。  
+3. 导入/同步：写入 SDK（含 raw）；退役 Evidence 权威。  
+4. 队列降级为「调度 SDK 调用」，完成态以 SDK 可验证结果为准。  
+5. 清空/删除镜像台账；缺的能力开 **SDK PR**，不在 Core 补影子表。
+
+---
+
+## 管理面仍属 MemHub（勿误拆）
+
+- harness：`source_grants`、sync desired-state（`config.json`）、适配器扫描（产出进 SDK，不是 Evidence 权威库）
+- model profiles / 密钥边界 / 模型内容许可
+- 异步队列与租约（调度，不是 memory 实体）
+- Core / Runtime 收据与健康
+- Matters 等组织（`memory_id` 外键）
+- call_events 类审计元数据（不存记忆正文）
+- ~~session inbox / change_outbox 围绕 Evidence 外发~~ → 需按新规则重定义或标旧
+
+---
+
+## 接手时注意
+
+- Pin 的公开 `hy-memory` 与「先补 SDK 接口」可能不同步：合源码 ≠ 用户包已带能力；用 `Refs` / pin PR 闭环。  
+- Top Rule 与旧 `ARCHITECTURE`「SQLite 含 Governance 为业务权威」冲突处，**以本 HANDSOFF + 新 ARCHITECTURE 文首为准**。  
+- 本地 `pr_principle.md` / `pr_review.md` 是 PR 流程台账，不替代本架构 HANDSOFF。

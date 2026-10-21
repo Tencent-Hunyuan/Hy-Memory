@@ -1,5 +1,8 @@
 # SourceAdapter V1
 
+
+> **架构变更（2026-10-21）：** 现行权威见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) **Top Rules**。~~MemHub Evidence / `governed_*` 作原文或 memory 权威~~ 已废弃为目标；memory 读写与 backend 只经 SDK；MemHub 可存 `memory_id` 引用。下文未逐段删线的历史表述，凡与 Top Rules 冲突处以架构文档为准。
+
 状态：9/2 冻结；9/3 仅做向后兼容补强。
 
 ## 输入与输出
@@ -21,6 +24,9 @@ cursor。旧文件后续追加也必须能被再次发现，不能只有一个�
 文件必须在打开时再次验证 realpath 归属、symlink、普通文件类型和大小预算。
 
 ## Evidence
+
+~~**旧目标：** Adapter 产出写入 MemHub Evidence 权威库，再进沉淀队列。~~  
+**新目标：** Adapter 仍可描述「扫描到的原文记录」形状，但持久化与 raw 权威归 **SDK**；本节字段名若仍叫 Evidence，视为 **导入中间表示**，不是 MemHub 业务权威表合同。
 
 必填：
 

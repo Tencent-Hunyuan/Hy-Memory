@@ -1,5 +1,8 @@
 # MemHub recall install contract, v1
 
+
+> **架构变更（2026-10-21）：** 现行权威见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) **Top Rules**。~~MemHub Evidence / `governed_*` 作原文或 memory 权威~~ 已废弃为目标；memory 读写与 backend 只经 SDK；MemHub 可存 `memory_id` 引用。下文未逐段删线的历史表述，凡与 Top Rules 冲突处以架构文档为准。
+
 This document describes how any MCP-capable host, or any agent that can run a
 shell command, connects itself to a local MemHub install.
 

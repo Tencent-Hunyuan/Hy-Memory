@@ -1,5 +1,8 @@
 # One Memory Runtime 统一架构与实施合同
 
+
+> **架构变更（2026-10-21）：** 现行权威见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) **Top Rules**。~~MemHub Evidence / `governed_*` 作原文或 memory 权威~~ 已废弃为目标；memory 读写与 backend 只经 SDK；MemHub 可存 `memory_id` 引用。下文未逐段删线的历史表述，凡与 Top Rules 冲突处以架构文档为准。
+
 更新：2026-10-12。关联 D02、D06、D07、D08、D26、D40、RT-D41、D56。
 
 > 状态说明（2026-10-16）：本文保留历史 `One Memory` / `one-memory` 合同名称。
@@ -93,11 +96,12 @@ One Memory Home/
   logs/
 ```
 
-2026-09-26 的 D56 已明确覆盖 D53：正式产品继续以 SQLite 作为 MemHub 唯一业务数据库，
+~~2026-09-26 的 D56 已明确覆盖 D53：正式产品继续以 SQLite 作为 MemHub 唯一业务数据库，
 不安装或并行维护 MySQL。Evidence、任务、cursor、session、配置、权限、Governance 和审计
 都以同一 SQLite 数据实例为权威；Adapter 仍可只读宿主自身的 SQLite 文件，HY SDK 内部
-存储另按 HY 合同处理。Runtime 负责同一数据目录的单写实例、schema 升级、WAL、备份恢复、
-磁盘预算和卸载保留数据。
+存储另按 HY 合同处理。~~
+
+**新（Top Rules）：** MemHub SQLite 仍是 **管理面** 权威（任务调度、cursor、session 管理、配置、权限、审计、Matters 组织与 `memory_id` 引用等），**不再**把 Evidence / Governance 当作原文或 memory 实体权威。Memory / raw / 向量 / 图等由 **HY SDK 存储合同** 拥有。Adapter 仍可只读宿主自身文件，但写入目标是 **SDK**。Runtime 仍负责数据目录单写、管理库 schema 升级、WAL、备份恢复、磁盘预算和卸载保留数据。MemHub 管理库不并行上 MySQL 双写（与 SDK 可选 `MEMORY_CACHE_BACKEND=mysql` 无关）。
 
 `runtime.json` 不得包含 token。`runtime-token` 必须是 owner-only，实例退出时删除；
 Windows 在正式支持前必须实现并真机验证用户 SID/DACL，不能靠忽略 POSIX mode 过关。

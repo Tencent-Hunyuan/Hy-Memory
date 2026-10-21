@@ -1,18 +1,64 @@
 # MemHub / One Memory Architecture
 
-Updated: 2026-10-16. This document describes the current MemHub implementation.
-Hy Memory is the SDK and engine. MemHub is the product and release name;
-One Memory / `one-memory` remains in historical module, storage, service, and
-compatibility interface names.
+Updated: 2026-10-21.
+
+**文档约定：** 以文首 **Top Rules（新）** 为现行权威。  
+用 ~~删除线~~ 标注的段落是历史设计（曾落地或曾写入本文件），**不再作为实现目标**；保留是为了对照迁移，不是双轨并行。  
+Hy Memory = SDK / 引擎。MemHub = 产品与发布名；`one-memory` 仍出现在历史模块、路径与兼容接口名中。
+
+---
+
+## Top Rules（新 · 根本）
+
+1. **所有对 memory 的读写操作都交给 SDK**，包括存储 backend；backend 选择与路径一律通过 **SDK config / env** 完成（如 vector / graph / cache / history / coding / raw）。MemHub 不另起一套 memory 存储引擎。
+2. **MemHub 内对 memory 的原子操作也一律经 SDK 完成。** SDK 若缺少所需 client 能力，**先补 SDK 接口**，再在产品层调用；禁止在 Core 内直接改 VDB/Graph/SDK 私有库，或再维护一份 memory 正文权威。
+3. **MemHub 层不存储 memory 实体与引擎侧关系**（正文、supersede 权威、向量/图副本等）。MemHub 的主责是 **管理面**：harness（来源授权与同步）、LLM model profile、异步写入队列、config 开关、Core/Runtime 状态。  
+   - **可以且应当**持久化 SDK 提供的 **`memory_id`（及组织用元数据）**，作为外键引用。  
+   - **禁止**再存一份 memory 正文台账、自判 supersede、把 SDK 当可丢缓存。
+
+**推论（新）：**
+
+- ~~原文 Evidence 业务库~~ → **原文进入 SDK raw 层**；不再以 MemHub `evidence` 表为原文权威。
+- ~~Governance / `governed_*` 作为产品级 memory 权威~~ → **拆除方向**；列表/纠正/删除/召回过滤改为 **授权 + 调 SDK**；需要挂接处只存 `memory_id`。
+- Matters 等高级组织可以留在 MemHub，但 **改 memory 必须走 SDK**。
+
+---
 
 ## Product and Runtime Shape
 
-MemHub is a local-first memory product. A user
-authorizes supported AI conversation sources, keeps their original content as
-local Evidence, processes eligible content through Hy Memory, governs the
-result, and grants hosts a separate scope for recall.
+MemHub is a local-first memory product.
+
+### 新：职责切分
 
 ```text
+AI hosts / harnesses
+  ├─ install / hooks / MCP / Skill / pairing
+  ├─ authorized recall (Host Bridge → Core → SDK search)
+  └─ (optional) higher-level organization (e.g. Matters) keyed by memory_id
+             │
+             ▼
+      Python Core / FastAPI   ← 管理面
+      ├─ harness grants & sync desired-state
+      ├─ model profiles & secrets boundary
+      ├─ async write queue (schedule / drain / leases)
+      ├─ config switches & Core/Runtime health
+      ├─ Hy Memory bridge (only SDK client entry for memory I/O)
+      └─ local HTTP API
+          ▲        ▲         ▲
+          │        │         └─ Host Bridge / recall broker
+       Web UI    CLI / Runtime Control
+                    ▲
+                 Electron
+
+Memory entities / raw / vectors / graph / coding stores
+  └─ owned exclusively by Hy Memory SDK (config/env under One Memory Home)
+```
+
+### ~~旧：产品叙事（已废弃为权威描述）~~
+
+~~A user authorizes supported AI conversation sources, keeps their original content as local Evidence, processes eligible content through Hy Memory, governs the result, and grants hosts a separate scope for recall.~~
+
+~~```text
 AI hosts and local conversation files
   ├─ historical import / incremental sync
   ├─ Host hooks, plugins, Skills and MCP
@@ -28,199 +74,173 @@ AI hosts and local conversation files
       ├─ Hy Memory bridge
       ├─ Governance and retrieval
       └─ local HTTP API
-          ▲        ▲         ▲
-          │        │         └─ Host Bridge / recall broker
-       Web UI    CLI / Runtime Control
-                    ▲
-                 Electron
-```
+```~~
+
+**对照：** 管理面（harness、队列、model、config）仍在 Core；~~Evidence + Governance 作 memory/原文权威~~ 按 Top Rules 退出。异步队列仍可调度「调用 SDK 写入」的工作，但 **写入结果的权威在 SDK**，MemHub 至多记录 `memory_id` / 任务回执。
 
 There is one managed Runtime and one MemHub data home per installation. CLI and
 Electron are clients and lifecycle interfaces to that Runtime; they do not own
-separate memory stores or extraction engines. The Web UI is served or developed
-as a client of Core and does not access the database or host files directly.
+separate memory engines. The Web UI is a client of Core and does not access host
+files or SDK private stores directly.
 
 ## Workspace Ownership
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/core` | Python 3.12 / FastAPI data plane: SQLite business data, source adapters, Evidence, import and memory jobs, HY integration, Governance, retrieval, permissions, and API. |
+| `apps/core` | **新：** FastAPI 管理面：harness、model、队列、config、Runtime 协作、**经 bridge 调用 SDK**。 ~~旧：SQLite 业务库含 Evidence、Governance 记忆台账、HY 集成与 retrieval 权威。~~ |
 | `apps/web` | React / TypeScript product UI and API client. |
-| `apps/desktop` | Electron shell, native window and OS integration; attaches to or starts the managed Runtime. |
-| `apps/cli` | Bootstrap, install, upgrade, service lifecycle, diagnostics, and user-facing commands. |
-| `packages/runtime-control` | Runtime discovery and lifecycle, local installation transactions, service management, host setup control, and shared CLI/Desktop runtime contracts. |
-| `packages/host-bridge` | Loopback recall broker and host-facing MCP, Skill, Hook, and plugin assets. It is not a second data plane. |
-| `packages/contracts` | Shared TypeScript API contracts, aligned with Core's API models. |
-| `packages/operations` | Shared typed operation flows used by clients. |
-| `scripts` | Development, privacy, test, packaging, and release gates; not runtime product code. |
+| `apps/desktop` | Electron shell; attaches to or starts the managed Runtime. |
+| `apps/cli` | Bootstrap, install, upgrade, service lifecycle, diagnostics. |
+| `packages/runtime-control` | Runtime discovery/lifecycle, install transactions, service management. |
+| `packages/host-bridge` | Loopback recall broker and host-facing MCP/Skill/Hook/plugin assets. Not a second memory engine. |
+| `packages/contracts` | Shared TypeScript API contracts. |
+| `packages/operations` | Shared typed operation flows. |
+| `scripts` | Dev/privacy/test/packaging gates; not runtime product code. |
 
-Python dependencies and Core tests are managed by `uv`; the TypeScript
-workspace is managed by `pnpm`. The repository requires Node.js 24 and Python
-3.12. See the root `package.json`, `apps/core/pyproject.toml`,
-[`../README.md`](../README.md), and [`../CONTRIBUTING.md`](../CONTRIBUTING.md)
-for executable commands and contribution rules.
+Python: `uv` + 3.12. TypeScript: `pnpm` + Node 24. See root `package.json`,
+`apps/core/pyproject.toml`, [`../README.md`](../README.md), [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## Data and Processing
 
-### Source authorization and synchronization
+### Source authorization and synchronization（管理面 · 仍属 MemHub）
 
-Source root authorization and Harness synchronization are distinct:
+Source root authorization and Harness synchronization remain distinct:
 
-- SQLite `source_grants` records the authorized root, its identity, grant and
-  revocation state. A grant does not by itself turn synchronization on.
-- Core-owned `<data_dir>/config.json` is the durable desired state for
-  `sync_enabled` per source. The embedded Hy Memory SDK is part of MemHub and
-  may use the complete local memory store; there is no second model-content
-  permission switch.
-- Core is the only writer of `config.json`. It validates a strict schema and
-  persists updates through a private temporary file, `fsync`, atomic replace,
-  and directory `fsync`.
-- Web, Desktop, CLI, and Runtime call Core APIs; they do not edit the file or
-  keep a second durable copy of these settings.
+- SQLite（或后续等价管理库）`source_grants`：授权根、身份、授予/撤销。Grant alone does not turn sync on.
+- Core-owned `<data_dir>/config.json`：per-source `sync_enabled` 等 desired state。
+- Core is the only writer of `config.json`（temp + fsync + atomic replace）.
+- Web/Desktop/CLI/Runtime call Core APIs; they do not keep a second durable copy.
 
-Turning sync on requires an authorized source root, prepares catch-up import
-work, commits the desired state, then activates scanning. Historical complete
-turns that do not yet have a durable write receipt are added to
-`memory_write_jobs`. Startup performs the same reconciliation for sources that
-are enabled in `config.json`.
+**新：** 同步/导入的目标是把宿主对话 **写入 SDK（含 raw 层）**，而不是写入 MemHub Evidence 权威库。队列可以描述「待调用 SDK 的工作」，完成态以 SDK 可验证结果 + 可选 `memory_id` 回执为准。
 
-Turning sync off has two effects for that Harness: scanning stops, so future
-content creates no new write job; and the drain stops claiming its pending
-jobs. A job that was claimed but has not made its first HY/model call is
-released back to `pending`. A job that has already started its first HY/model
-call is allowed to finish the whole job. Previously published memories remain
-available for authorized recall.
+~~**旧：** Turning sync on prepares catch-up import into Evidence / `memory_write_jobs`; historical turns without a durable write receipt are added to `memory_write_jobs`. Adapters read host files into MemHub Evidence; they do not call HY directly.~~
 
-Periodic polling and optional filesystem watch live in Core. The Web UI does
-not schedule scans. Historical import and live notifications converge on the
-same source identity, Evidence, and import-job model.
+~~Turning sync off stops scanning and stops claiming pending jobs; in-flight first HY call may finish; previously published memories remain for recall.~~  
+**新补充：** 暂停同步仍是管理面开关；已在 SDK 中的 memory/raw 生命周期由 SDK 与产品调用 SDK 的删除/范围 API 决定，不由 MemHub 影子表「撤销可见性」单独当权威（授权/scope 门禁仍可在召回网关执行）。
 
-Adapters may read authorized host files, including a host application's own
-SQLite database. They do not write MemHub's database and do not call HY
-directly. Source readers retain path containment, root/file identity,
-symlink-refusal, and cursor/anchor checks.
+Periodic polling / fs watch live in Core. UI does not schedule scans.
 
 ### Memory processing
 
-The normal content path is:
+#### 新：唯一写入路径
 
 ```text
+authorized harness / user action
+  -> (optional) durable job row in MemHub queue  // 调度与租约，不是 memory 实体
+  -> sedimentation / model / source gates         // 管理面门禁
+  -> HyMemoryBridge
+  -> Hy Memory SDK write (raw / chat / coding / …)
+  -> SDK stores (vector, graph, cache, history, coding, …) via SDK config/env
+  -> MemHub may persist memory_id (+ org metadata) for Matters / receipts / UI keys
+  -> search / recall / UI via SDK read APIs (+ MemHub authz)
+```
+
+- **原子 memory 变更**（create / update / delete / supersede 等）：只通过 SDK。缺接口则扩展 SDK client。
+- **异步队列**：MemHub 可保留，用于公平调度、租约、暂停、重试策略；队列 payload 指向「要喂给 SDK 的输入」，不把 MemHub 表当作沉淀结果权威。
+
+#### ~~旧：Evidence → Governance 路径（已废弃为目标架构）~~
+
+~~```text
 authorized source
   -> Evidence
   -> import job / complete conversation turn
   -> memory_write_jobs
   -> persisted event-time window
   -> durable drain
-  -> memory_tasks internal execution record
+  -> memory_tasks
   -> sedimentation and source gates
   -> Hy Memory bridge
   -> write verification and Governance
   -> search / recall / UI
-```
+```~~
 
-Evidence is stored before model work so processing failures do not discard
-source content. Complete-turn preparation preserves user, assistant, and tool
-roles and their authorship. Historical recovery, scanner callbacks, live
-notifications, manual memory input, and Matter discovery all submit to the
-same durable `memory_write_jobs` table. They do not invoke HY directly.
+~~Evidence is stored before model work so processing failures do not discard source content.~~  
+**新：** 原文/raw 的持久化与失败保留策略由 **SDK raw（及 SDK 合同）** 承担；MemHub 不再以 `evidence*` 表为原文权威。
 
-`memory_write_jobs` is the sole production intake and scheduling queue. Every
-row receives the complete turn's `event_at`, a `time_quality`, and a persistent
-monotonic `queue_seq`. The drain anchors a fixed ten-minute window at the
-oldest eligible event time. Different Harnesses may run concurrently inside
-that window, while each Harness remains FIFO by `queue_seq`; live priority
-metadata never jumps the event-time window. The persisted anchor prevents a
-restart or a chain of nearby jobs from sliding the window forward.
+~~`memory_write_jobs` is the sole production intake…~~  
+**新：** 若保留同名队列表，其语义降级为 **SDK 调用调度器**，不再隐含「写入 Governance 台账才算产品成功」。
 
-First onboarding imports are a barrier: accepted Harnesses finish importing
-the shared history cutoff and submit their chunks before the drain begins
-model work. Failed or explicitly disabled sources are excluded rather than
-blocking the user's whole timeline. See
-[`contracts/memory-event-time-scheduling-v1.md`](contracts/memory-event-time-scheduling-v1.md).
+~~`memory_tasks` remains as an internal execution record…~~  
+**新：** 任务/租约记录可保留作运维与排障；不得替代 SDK 查询结果作为 memory 真相。
 
-`memory_tasks` remains as an internal execution, lease, input, output, and
-reconciliation record created while a claimed write job runs through HY. It is
-not independently recovered or scheduled by the production composition root.
-The legacy `ProcessingCoordinator` and supervisor backfill/resume scheduler are
-not started by Core; history recovery writes durable jobs instead.
+### HY / SDK and MemHub bridge
 
-The synchronization API and the first HY-call boundary use the same
-sedimentation/source locks. If pause commits first, the job cannot cross into HY and returns to
-`pending`. If the job records its first HY invocation first, pause does not
-interrupt that in-progress job. Lease expiry after a possible HY call remains
-`unknown`, never a blind retry.
+#### 新
 
-### HY and Governance
+Hy Memory is the **only** extraction, memory entity, relationship, and semantic-retrieval engine. Product code enters it through `HyMemoryBridge`（共享 Runtime、模型配置、密钥边界），不在业务模块里私自 new 一套绕过门禁的 client——门禁指的是 **harness/model/队列**，不是再套一层 memory 正文 Governance。
 
-Hy Memory is the underlying extraction, memory, and semantic retrieval
-framework. Product code enters it through `HyMemoryBridge` and the permission
-transport, not by constructing an SDK client in feature code.
+- Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
+- Recall：Host Bridge / Core 先做 **host grant / scope**，再调 **SDK search/get**；可用 MemHub 侧存的 `memory_id` 集合做组织过滤，但 **内容与生命周期以 SDK 为准**。
+- Matters 等：MemHub 可存事项结构与 `memory_id[]`；改 memory 内容或生命周期 → SDK。
 
-The bridge and Governance layer preserve Evidence references, authorship,
-scope, write verification, revisions, corrections, and deletion behavior. A
-successful SDK response alone is not sufficient evidence of a product-level
-write. Retrieval results are checked against current Governance and access
-scope before being returned to the UI or an authorized host.
+Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。
 
-The currently pinned SDK is the public PyPI distribution
-`hy-memory==2.0.4`. Runtime configuration and permission boundaries are
-documented in [`../MEMORY.md`](../MEMORY.md).
+#### ~~旧：Governance 层（已废弃为目标架构）~~
 
-## Permission Boundaries
+~~The bridge and Governance layer preserve Evidence references, authorship, scope, write verification, revisions, corrections, and deletion behavior. A successful SDK response alone is not sufficient evidence of a product-level write. Retrieval results are checked against current Governance and access scope before being returned.~~
+
+~~**旧实现后果（对照用）：** 曾将 SDK 结果镜像进 `governed_*`（含 supersede 状态），并靠解析返回值 / observer / 再 `get` 双写。按 Top Rules，该镜像权威 **拆除**；写后核验若仍需要，应落在 **SDK 合同 + 显式 client API**，而不是第二套实体库。~~
+
+## Permission Boundaries（管理面 · 仍独立）
 
 These permissions answer different questions and must not be collapsed:
 
 1. **Source grant:** may Core read this selected host data root?
-2. **Harness sync:** should Core continue discovering and importing changes
-   from this source?
-3. **Model-content permission:** may eligible local conversation content be
-   sent to the configured model provider?
-4. **Host recall grant:** may this external host retrieve specified memory
-   scopes or use specified tools?
+2. **Harness sync:** should Core continue discovering/importing from this source into the **SDK write path**?
+3. **Model-content permission:** may eligible content be sent to the configured model provider (for SDK extraction etc.)?
+4. **Host recall grant:** may this external host retrieve specified scopes / tools?
 
-Model-content permission is a global final-state setting in `config.json`.
-Tasks do not carry a parallel permission receipt or per-task model permission
-ledger. A live permission guard rechecks the current setting and active model
-profile at remote-send and publication boundaries. Revocation therefore cannot
-be inferred from an old task snapshot.
+~~Model-content permission… Tasks do not carry a parallel permission receipt…~~（调度细节可保留实现，不改变 Top Rules。）
 
-Host installation and recall authorization can modify or expose configuration
-in another process. Their preview, fingerprint, scope, credential, and rollback
-protections remain because they cross an external trust boundary. These do not
-turn Harness sync into a multi-step external operation.
+Host installation / recall authorization cross an external trust boundary; preview, fingerprint, scope, credential, rollback protections remain.
 
 The product must not depend on screen capture, Accessibility/AXTree, OCR,
 keyboard/mouse, clipboard, or background audio collection.
 
 ## Storage
 
-SQLite is the sole authoritative MemHub business database, under the user's
-One Memory Home (normally `~/.one-memory`). It stores Evidence, grants, import
-jobs and cursors, memory tasks, Governance, model profiles, and other product
-state. Runtime versions and npm packages are not the data directory.
+### 新
 
-HY-owned vector, graph, cache, and history stores are managed according to the
-HY SDK contract under the One Memory Home. They are not a second authoritative
-MemHub business database. Adapters may separately read a host's own database
-under the source grant.
+| 存什么 | 谁拥有 | 怎么配 |
+| --- | --- | --- |
+| Memory 实体、raw、向量、图、coding、SDK cache/history | **Hy Memory SDK** | SDK config / env；目录落在 One Memory Home 下由 Runtime 约定 |
+| harness grants、sync desired-state、model profiles、队列/租约、Core 收据、Matters 等组织元数据、`memory_id` 引用 | **MemHub 管理库**（当前多为 `one-memory.sqlite3`） | Core 管理；**不**存 memory 正文 |
 
-MySQL-only business storage was an earlier proposal and is not the active
-architecture. Decision D56 selected SQLite and superseded D53. Do not add a
-MySQL runtime, fallback, dual-write path, or SQLite-to-MySQL migration as part
-of ordinary development. Historical migration research and records may remain
-in dated documents, but they are not implementation instructions.
+~~SQLite is the sole authoritative MemHub business database… It stores Evidence, grants, import jobs, memory tasks, Governance, model profiles…~~  
+**新：** MemHub SQLite（或后继）是 **管理面** 权威库，不是 memory 实体权威库。
 
-`config.json` contains desired user settings, not runtime health, source-root
-grants, cursors, or job state. Runtime state is reconstructed from durable
-settings and database state.
+~~HY-owned vector, graph, cache, and history stores… are not a second authoritative MemHub business database.~~  
+**新表述：** HY/SDK stores **就是** memory 数据平面权威；MemHub 不得再镜像一套业务实体与之并行。
+
+~~MySQL-only business storage was an earlier proposal… D56 selected SQLite…~~  
+**仍有效的工程约束：** 不要静默上 MemHub 业务双写 MySQL；SDK 侧 `MEMORY_CACHE_BACKEND=mysql` 等属 **SDK 合同**，与 MemHub 管理库无关。
+
+`config.json`：desired user settings，不是 runtime health 的唯一真相；健康态从收据与进程状态重建。
+
+### ~~旧表族（拆除方向 · 对照）~~
+
+~~- `evidence*` / import evidence 权威 → 改 SDK raw~~  
+~~- `governed_memories*` / supersessions / versions 作列表与生命周期权威 → 改 SDK API + 可选 `memory_id` 引用~~  
+~~- 以 Governance 为准的 visibility 正文缓存若依赖实体台账 → 随台账拆除或改为纯派生且可重建，且不得成为写权威~~
+
+**可保留方向（管理面）：** `source_grants`、model profile 相关表、队列/任务租约表、Matters 组织表（含 `memory_id`）、call_events 类审计元数据（不存对话/记忆正文）、Runtime 收据。
+
+## Matters / call_events / session inbox（口径）
+
+| 能力 | 新口径 |
+| --- | --- |
+| **Matters** | SDK memory 之上的高级组织；MemHub 可管事项结构并持久化 `memory_id`；**改 memory 必须走 SDK**。 |
+| **call_events** | 本机调用元数据审计（非 memory 实体）；可留在管理面；展示记忆时用 id 调 SDK。 |
+| **session inbox / lease / change_outbox** | ~~旧：围绕 Evidence/变更外发的宿主增量管道~~。Evidence 权威拆除后，若仍需要宿主增量，应重定义为 **管理事件或 SDK 可订阅合同**，不得靠 MemHub 影子 memory 表推送正文。 |
 
 ## Runtime and Interfaces
 
+（以下 Runtime / 安装 / 服务归属 **仍现行**，与 Top Rules 不冲突；未改语义处保持原文。）
+
 The repository has one Runtime implementation, one default data home, and one
-operating-system service identity per installation. The macOS App and npm CLI
-share the Runtime artifact contract, `~/.one-memory`, receipts, ports,
-credentials, Core API, single-writer lock, stable install root, and service
-declaration.
+OS service identity per installation. macOS App and npm CLI share Runtime
+artifact contract, `~/.one-memory`, receipts, ports, credentials, Core API,
+single-writer lock, stable install root, and service declaration.
 
 ### Runtime process shape
 
@@ -228,13 +248,12 @@ The long-running Runtime is a Node process running `runtime.cjs serve`. It owns:
 
 - one Python Core child;
 - one recall Broker / Host Gateway sidecar;
-- the Runtime, Core, Broker, token, and lock receipts under the data home;
-- Core restart supervision while the Runtime process remains alive.
+- Runtime/Core/Broker/token/lock receipts under the data home;
+- Core restart supervision while Runtime remains alive.
 
-The Electron UI and the npm CLI are control surfaces. They discover the Runtime
-through those receipts and verify its loopback identity before attaching. The
-Core's data-directory lock prevents a second Core writer, but that lock is not a
-replacement for having one unambiguous operating-system startup owner.
+Electron UI and npm CLI discover Runtime via receipts and verify loopback
+identity before attaching. Core’s data-directory lock prevents a second Core
+writer; it does not replace a single OS startup owner.
 
 ### macOS App path
 
@@ -245,9 +264,9 @@ attaching its UI:
    `~/Library/Application Support/One Memory/{versions,current}`.
 2. Install the stable `~/.local/bin/memhub` link.
 3. Write an App-owned service receipt under `~/.one-memory`.
-4. Install or migrate the single
-   `~/Library/LaunchAgents/com.tencent.onememory.runtime.plist` declaration.
-5. Wait for the Runtime, Core, and Broker to become verifiably ready.
+4. Install or migrate
+   `~/Library/LaunchAgents/com.tencent.onememory.runtime.plist`.
+5. Wait for Runtime, Core, and Broker to become verifiably ready.
 6. Attach Electron as a client of that Runtime.
 
 The LaunchAgent starts `current/bin/node current/runtime/runtime.cjs serve`
@@ -262,73 +281,33 @@ macOS user login
 Electron App -> attach/control only
 ```
 
-The old `SMAppService.mainAppService` registration is read only for migration:
-an App launched by the old login item stays hidden for that launch, then the old
-registration is disabled. It is not a second startup owner.
-
-Closing all windows or fully quitting Electron releases the UI's attachment but
-does not stop the managed Runtime. The explicit login-start preference controls
-a private `runtime-service.enabled` marker used by launchd's
-`KeepAlive.PathState`; disabling it affects future login/restart behavior but
-does not interrupt the currently running Runtime.
-
-An App-owned service records the exact `/Applications/...app` bundle and
-executable paths. The Runtime checks them before starting Core and while
-running. If the App is deleted, it removes the enable marker and exits cleanly.
-The stable `bin/node` launcher performs the same check before invoking Electron,
-covering the case where the Runtime was already stopped when the App was
-deleted. With the marker absent, launchd does not restart the job. User Memory
-data and the stable Runtime files remain until an explicit uninstall/delete
-operation.
+The old `SMAppService.mainAppService` registration is read only for migration.
+Closing all windows or quitting Electron does not stop the managed Runtime.
+Login-start preference controls `runtime-service.enabled` / launchd
+`KeepAlive.PathState`. App deletion removes the enable marker; user Memory data
+and stable Runtime files remain until explicit uninstall/delete-data.
 
 ### npm Bootstrap / CLI path
 
-The public installation design is a lightweight npm Bootstrap CLI plus an
-independently acquired Runtime. The Bootstrap package does not contain the
-Python Core, Web UI, Host Bridge, model assets, or a full Runtime. An explicit
-`memhub install --yes` resolves and verifies the release, installs the Runtime,
-installs CLI links, registers the user service, starts it, and waits for verified
-Core readiness in one rollback-capable transaction.
+Lightweight npm Bootstrap CLI plus independently acquired Runtime. Bootstrap
+does not ship Python Core, Web UI, Host Bridge, models, or full Runtime.
+`memhub install --yes` resolves/verifies release, installs Runtime, links CLI,
+registers user service, starts, waits for Core readiness (rollback-capable).
 
-```text
-Bootstrap CLI
-  -> release manifest and artifact verification
-  -> safe extraction to a private staging directory
-  -> managed Runtime install transaction
-  -> user-level service
-  -> Python Core + Host Gateway
-```
-
-On macOS, the CLI-managed service uses the same user LaunchAgent at
-`~/Library/LaunchAgents/com.tencent.onememory.runtime.plist`. It does not use
-`RunAtLoad`; conditional `KeepAlive.PathState` watches the private enable
-marker, and an explicit install/start bootstraps the declaration. It launches
-`current/bin/node current/runtime/runtime.cjs serve`.
-On Linux, it is a systemd user service enabled for `default.target`, with
-restart-on-failure and bounded restart backoff. Both are user services: they
-start after the user's service/login session exists, not as a pre-login system
-daemon.
-
-Install and upgrade preserve managed-install checks, health validation, and
-rollback behavior. `npm uninstall` removes only the Bootstrap CLI. `memhub
-uninstall` removes the managed service, Runtime and managed links while keeping
-Memory data by default. `delete-data` is a distinct confirmed operation.
+On macOS, same user LaunchAgent path; CLI-managed service uses
+`KeepAlive.PathState` + enable marker. On Linux, systemd user service with
+restart-on-failure. `npm uninstall` removes Bootstrap only; `memhub uninstall`
+removes service/Runtime/links, keeps data by default; `delete-data` is separate.
 
 ### Current lifecycle matrix
 
 | Scenario | Startup owner | After user login | Full UI quit | App deletion | Process-level recovery |
 | --- | --- | --- | --- | --- | --- |
-| macOS App-owned | LaunchAgent | Runtime/Core/Broker start without Electron | Runtime continues | Marker removed and Runtime stops; no restart | launchd restarts Runtime; Runtime restarts Core |
-| macOS CLI-owned | Same LaunchAgent | Runtime/Core/Broker start without Electron | No Electron dependency | GUI App deletion has no effect | launchd restarts Runtime; Runtime restarts Core |
-| Linux CLI-owned | systemd user service | Runtime starts with the user manager/default target | No UI dependency | Not applicable | systemd restarts Runtime; Runtime restarts Core |
-
-The background Service therefore remains available when the Electron UI is not
-running. Stopping Runtime, disabling login start, uninstalling Runtime, and
-deleting data remain distinct operations.
+| macOS App-owned | LaunchAgent | Runtime/Core/Broker without Electron | Runtime continues | Marker removed; Runtime stops | launchd ↔ Runtime ↔ Core |
+| macOS CLI-owned | Same LaunchAgent | Runtime/Core/Broker without Electron | No Electron dependency | GUI deletion no effect | launchd ↔ Runtime ↔ Core |
+| Linux CLI-owned | systemd user | Runtime with user manager | No UI dependency | N/A | systemd ↔ Runtime ↔ Core |
 
 ### Service ownership
-
-There is exactly one startup owner per data home:
 
 ```text
 macOS LaunchAgent or approved managed helper
@@ -340,48 +319,53 @@ Electron App -------- attach/control only
 npm CLI ------------- attach/control only
 ```
 
-The owner receipt is `app` or `cli`. A full `memhub install --yes` or successful
-CLI upgrade transaction can take ownership before starting the service and
-rolls the owner back on failure. Once CLI-owned, deleting the GUI App does not
-stop the service. Merely running `service-install` does not claim the Runtime;
-it only repairs/registers the current owner's service.
-
-Release acceptance covers logout/login, complete Mac reboot, notarization,
-staple, Gatekeeper, and clean-machine installation. Acceptance evidence is
-stored with release artifacts rather than in the source tree.
-
-The Host Bridge exposes only loopback services and host-scoped capabilities; it
-does not persist a general-purpose Core bearer token or provide an unrestricted
-Core proxy.
+Owner receipt is `app` or `cli`. Host Bridge exposes only loopback / host-scoped
+capabilities; it does not persist a general-purpose Core bearer as an
+unrestricted proxy.
 
 ## Current Support and Release Boundary
 
 Support is declared per immutable GitHub Release manifest:
 
-- Linux x64 and arm64 Runtime artifacts are built and verified on native GitHub
-  Actions runners.
-- macOS arm64 and x64 App/Runtime artifacts must carry Developer ID signatures,
-  notarization tickets, and native-platform acceptance receipts.
+- Linux x64/arm64 Runtime on native GHA runners.
+- macOS arm64/x64 App/Runtime: Developer ID, notarization, native acceptance.
 - Windows is not supported.
-- `hy-memory==2.0.4` is the public Python SDK dependency.
+- `hy-memory==2.0.4` is the current public Python SDK dependency; the release
+  lock and [`../MEMORY.md`](../MEMORY.md) are authoritative when the pin changes.
 
-See [`INSTALLATION.md`](INSTALLATION.md) for the release matrix. A source test,
-fake hosting test, or cross-build does not substitute for a native-platform
-lifecycle receipt.
+See [`INSTALLATION.md`](INSTALLATION.md).
 
 ## Engineering Rules
 
-- Preserve the source record before model processing.
-- Keep source authorization, model egress consent, and host recall scope
-  independent.
-- Do not treat unavailable source data as deletion.
-- Do not create confirmed memory without supporting evidence.
-- Keep claims traceable to the narrow original Evidence that supports them.
-- Do not let graph layout imply semantic relationships.
-- Run the smallest directly relevant tests for ordinary development.
-- Run full suites, release gates, packaging, live, soak, or cross-platform
-  acceptance only when explicitly requested or authorized for release work.
-- Never remove a safety boundary merely to make a test or release gate green.
+### 新（优先）
 
-The current test entry points are documented in
-[`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+- Top Rules 1–3 不可被「方便测试 / 赶发布」绕过。
+- Memory I/O 与 backend 只经 SDK；缺能力先补 SDK。
+- MemHub 可存 `memory_id` 引用与管理面状态；不存 memory 实体副本。
+- Source grant、model egress、host recall scope 保持独立。
+- 不要把「管理库查不到行」当成 SDK 侧已删除，除非已显式调 SDK 删除并确认。
+
+### ~~旧工程句（与 Top Rules 冲突者作废）~~
+
+~~- Preserve the source record before model processing.~~（改为 SDK raw 合同）  
+~~- Do not create confirmed memory without supporting evidence.~~（证据/raw 关系由 SDK 合同表达）  
+~~- Keep claims traceable to the narrow original Evidence that supports them.~~（改为可追溯到 SDK raw / 引用 id）  
+
+仍有效：
+
+- Do not treat unavailable source data as deletion（宿主文件消失 ≠ 自动删 SDK memory，除非产品显式定义并调 SDK）。
+- Do not let graph layout imply semantic relationships.
+- Run the smallest relevant tests for ordinary development; full/release/soak only when requested.
+- Never remove a safety boundary merely to make a gate green（授权/模型/召回边界）。
+
+Test entry points: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+## Migration note（给实现与评审）
+
+本文件更新 **先改合同与目标架构**，不表示代码已拆完。实现迁移顺序建议：
+
+1. 冻结新功能写入 `governed_*` / `evidence*` 权威路径。  
+2. 记忆库 UI / recall 改为 SDK API + 授权；组织层只挂 `memory_id`。  
+3. 导入/同步改为 SDK raw/write；退役 Evidence 权威。  
+4. 删除或清空镜像台账；队列改为纯调度。  
+5. 缺的 SDK API 开 SDK PR，而不是在 Core 里补影子表。
