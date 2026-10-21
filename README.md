@@ -153,7 +153,7 @@ result = client.search(
 
 result["facts"]          # fact layer
 result["experiences"]    # experience layer
-result["chain_block"]    # coding only: version-evolution context
+result["chain_block"]    # coding only: version-evolution context (empty unless MEMORY_CODING_CHAIN_BLOCK_ENABLED)
 ```
 
 ### 5. Routing, Source Isolation & Advanced APIs

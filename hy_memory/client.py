@@ -1192,6 +1192,19 @@ class HyMemoryClient:
             logger.warning("[coding] chain observe failed: %s", e)
             return 0
 
+    def _chain_block_enabled(self) -> bool:
+        """search 是否注入 coding 版本演进链块（diff / chain_block）。
+
+        公共开关：CodingConfig.chain_block_enabled /
+        MEMORY_CODING_CHAIN_BLOCK_ENABLED（默认 False，opt-in）。
+        无 _config 时按关闭处理。高级消融开关 HCM_BLOCK_OFF=1 仍在
+        chain_store.decorate 内生效（仅当本开关已开启时才有意义）。
+        """
+        coding = getattr(getattr(self, "_config", None), "coding", None)
+        if coding is None:
+            return False
+        return bool(getattr(coding, "chain_block_enabled", False))
+
     def _decorate_with_chain(self, facts, instruction: str = "", scope=None,
                              user_id=None, workspace_id=None):
         """读取侧：给向量层召回的 facts 挂上版本演进链块。
@@ -1204,11 +1217,14 @@ class HyMemoryClient:
         facts 顺序不重排 —— top-k 是向量层的事，这层只负责"每条 fact 后面跟什么"。
 
         best-effort：失败返回 ("", [])，退化成纯向量双层（= working 的行为）。
+        默认不注入（见 _chain_block_enabled）；需显式开启 chain_block_enabled。
         """
         if not facts:
             return "", []
-        # 走类而不是 self：_chain_owner 是 staticmethod，而这两个方法会被测试绑到裸
-        # SimpleNamespace 上调（同 _scene_variant 那处），self 上没有这个属性。
+        # 走类而不是 self：测试常把本方法绑到裸 SimpleNamespace 上，self 上未必有
+        # 同名 bound method；_chain_owner 同理。
+        if not HyMemoryClient._chain_block_enabled(self):
+            return "", []
         store = self._get_chain_store(
             HyMemoryClient._chain_owner(user_id, workspace_id))
         if store is None:

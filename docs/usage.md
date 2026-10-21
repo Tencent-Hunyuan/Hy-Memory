@@ -210,7 +210,8 @@ result = client.search(
 ```
 
 `working` / `coding` 路径返回 `scene="productivity"`、`facts`、`experiences`，不使用
-chat 的三桶结构；`coding` 还会返回 `chain_block` 和 `chain_used`。
+chat 的三桶结构；`coding` 还会返回 `chain_block` 和 `chain_used` 字段（默认空；
+需 `MEMORY_CODING_CHAIN_BLOCK_ENABLED=true` 才注入 diff 块）。
 
 #### `search_mode`
 

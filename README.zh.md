@@ -153,7 +153,7 @@ result = client.search(
 
 result["facts"]          # 事实层
 result["experiences"]    # 经验层
-result["chain_block"]    # 仅 coding：版本演进上下文
+result["chain_block"]    # 仅 coding：版本演进上下文（默认空；需 MEMORY_CODING_CHAIN_BLOCK_ENABLED）
 ```
 
 ### 5. 自动路由、来源过滤与进阶 API

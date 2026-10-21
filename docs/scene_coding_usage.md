@@ -168,9 +168,11 @@ working/coding 搜索返回：
 
 `limit` 分别限制 facts 与 experiences，因此两层最多各返回 `limit` 条。
 
-`scene="coding"` 额外返回 `chain_block` 和 `chain_used`：
+`scene="coding"` 额外返回 `chain_block` 和 `chain_used` 字段（键始终存在；默认内容为空）：
 
-- `chain_block` 是与已召回 fact 对齐的版本演进上下文；无法挂链时为 `""`。
+- 注入 diff / 版本演进块需显式开启 `MEMORY_CODING_CHAIN_BLOCK_ENABLED=true`
+  （或 `CodingConfig.chain_block_enabled=True`）。默认关闭，以节约 prompt token。
+- 开启后，`chain_block` 是与已召回 fact 对齐的版本演进上下文；无法挂链时为 `""`。
 - `chain_used` 是已经进入 chain block 的 `facts` 下标。
 - SDK 不会从 `facts` 删除这些条目。调用方若要拼成“chain block + 剩余 facts”，需自行按 `chain_used` 过滤。
 
@@ -222,10 +224,12 @@ working/coding 搜索返回：
 | `MEMORY_CODING_DB_PATH` | `{DATA_DIR}/data/coding_memory.db` | working 基础 SQLite 路径；coding/trace 路径由此派生 |
 | `MEMORY_CODING_TOOL_RESULT_MAX_BYTES` | `2048` | 单条 tool result 的字节上限 |
 | `MEMORY_CODING_VERBATIM_FALLBACK_ENABLED` | `false` | 模型无结果时是否保存原文 fact；默认关闭，避免 assistant/tool trace 直接展示 |
+| `MEMORY_CODING_CHAIN_BLOCK_ENABLED` | `false` | search 是否注入版本演进链块（`chain_block` / diff）；默认关闭（opt-in） |
 | `MEMORY_EXTRACT_HISTORY_TURNS` | `5` | 回读的历史 user-turn 数；当前 prompt 最终最多使用 5 |
 | `MEMORY_CODING_CHAIN_REPO_ROOT` | 空 | coding 版本链读取本地 Git diff 的仓库路径 |
 
 `HCM_*` 变量属于版本链的高级调优项，不是稳定的公共配置契约；普通接入不应依赖其默认值。
+其中 `HCM_BLOCK_OFF=1` 可在已开启 `MEMORY_CODING_CHAIN_BLOCK_ENABLED` 时做消融（完全不出块）。
 
 ## 8. 定向验证
 

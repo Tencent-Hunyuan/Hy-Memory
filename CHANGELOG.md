@@ -14,6 +14,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Coding search no longer injects the version-evolution diff block
+  (`chain_block`) by default. Enable with
+  `MEMORY_CODING_CHAIN_BLOCK_ENABLED=true` or
+  `CodingConfig.chain_block_enabled=True` (write-side observe unchanged).
 - Fixed governed-memory revisions and repeated evidence links failing when the
   visibility dirty-marker trigger encounters the same memory twice. Startup
   now replaces the affected legacy trigger without changing schema versions
