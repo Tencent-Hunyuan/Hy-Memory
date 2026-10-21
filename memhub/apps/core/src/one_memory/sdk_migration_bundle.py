@@ -230,6 +230,29 @@ def _verified_manifest(bundle: Path) -> dict[str, object]:
     return manifest
 
 
+def inspect_sdk_migration_bundle(
+    *,
+    data_dir: Path,
+    bundle_id: str,
+) -> dict[str, object]:
+    home = data_dir.resolve()
+    backups = (home / "backups").resolve()
+    if (
+        not bundle_id
+        or "/" in bundle_id
+        or "\\" in bundle_id
+        or bundle_id in {".", ".."}
+    ):
+        raise MigrationBundleRejected("sdk_migration_bundle_id_invalid")
+    bundle = (backups / f"{bundle_id}.sdk-bundle").resolve()
+    if bundle.parent != backups or bundle.is_symlink() or not bundle.is_dir():
+        raise MigrationBundleRejected("sdk_migration_bundle_source_invalid")
+    manifest = _verified_manifest(bundle)
+    if manifest.get("bundle_id") != bundle_id:
+        raise MigrationBundleRejected("sdk_migration_bundle_manifest_invalid")
+    return manifest
+
+
 def restore_sdk_migration_bundle(
     *,
     data_dir: Path,

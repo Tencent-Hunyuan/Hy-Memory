@@ -1,4 +1,5 @@
 import io
+from types import SimpleNamespace
 
 from one_memory import cli
 from one_memory.config import Settings
@@ -192,3 +193,111 @@ def test_migration_bundle_success_reports_bundle_identity(tmp_path, monkeypatch)
     document = output.getvalue().replace(" ", "")
     assert '"state":"created"' in document
     assert '"bundle_id":"migration-1"' in document
+
+
+def test_sdk_migrate_preview_never_commits_cutover(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+    output = io.StringIO()
+    code = cli.run(
+        [
+            "sdk-migrate",
+            "--migration-id",
+            "migration-1",
+            "--bundle-id",
+            "bundle-1",
+            "--json",
+        ],
+        output=output,
+    )
+    assert code == 4
+    document = output.getvalue().replace(" ", "")
+    assert '"state":"preview"' in document
+    assert '"commits_cutover":false' in document
+
+
+def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_bundle.inspect_sdk_migration_bundle",
+        lambda **_kwargs: {"runtime_build": "v1.0.4"},
+    )
+
+    async def fake_migrate(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("one_memory.memory_server.migration_runner.migrate", fake_migrate)
+
+    profile = SimpleNamespace(
+        has_api_key=False,
+        embedding_provider_kind="openai",
+        embedding_model="embedding",
+        embedding_dimensions=1024,
+    )
+
+    class Profiles:
+        def __init__(self, _database):
+            pass
+
+        def active_identity(self):
+            return ("profile", 1)
+
+        def snapshot(self, *_identity):
+            return profile
+
+        def resolve_snapshot_secret(self, *_args):
+            return None
+
+    class Secrets:
+        pass
+
+    class Bridge:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def close(self):
+            return None
+
+    async def backfill(**_kwargs):
+        return SimpleNamespace(
+            state="ready",
+            phase="reconciled",
+            migration_id="migration-1",
+            counts={"verified": 2},
+            memory_items=1,
+            raw_items=1,
+        )
+
+    monkeypatch.setattr("one_memory.model_profiles.ModelProfileStore", Profiles)
+    monkeypatch.setattr("one_memory.secrets.KeyringSecretStore", Secrets)
+    monkeypatch.setattr("one_memory.hy_memory_bridge.HyMemoryBridge", Bridge)
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_runner.run_sdk_data_plane_backfill",
+        backfill,
+    )
+    output = io.StringIO()
+    code = cli.run(
+        [
+            "sdk-migrate",
+            "--migration-id",
+            "migration-1",
+            "--bundle-id",
+            "bundle-1",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+    assert code == 0
+    document = output.getvalue().replace(" ", "")
+    assert '"state":"ready"' in document
+    assert '"commits_cutover":false' in document

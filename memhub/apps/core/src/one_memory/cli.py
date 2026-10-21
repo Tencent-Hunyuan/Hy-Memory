@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import os
 import signal
 import socket
@@ -77,6 +79,8 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
         return restore(options, stream)
     if command == "migration-bundle":
         return migration_bundle(options, stream)
+    if command == "sdk-migrate":
+        return sdk_migrate(options, stream)
     if command == "boundary" and not options:
         from one_memory.workbuddy_boundary import write_hook
 
@@ -98,6 +102,7 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
             "Usage: one-memory [serve [--maintenance|--reader]|status [--json]|doctor [--json]"
             "|restore --source <managed-backup> --yes [--json]"
             "|migration-bundle --bundle-id <id> --runtime-build <build> --yes [--json]"
+            "|sdk-migrate --migration-id <id> --bundle-id <id> --yes [--json]"
             "|boundary [--peek|--ack TOKEN]|capture SOURCE]\n"
         )
         return 2
@@ -317,6 +322,176 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
     }
     _write_restore(stream, as_json, document, f"完整迁移备份已创建：{result.bundle_path}")
     return 0
+
+
+def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
+    """Backfill legacy memory/raw into SDK while keeping legacy authority."""
+    migration_id: str | None = None
+    bundle_id: str | None = None
+    confirmed = False
+    as_json = False
+    index = 0
+    while index < len(options):
+        option = options[index]
+        if option == "--migration-id" and index + 1 < len(options):
+            migration_id = options[index + 1]
+            index += 2
+            continue
+        if option == "--bundle-id" and index + 1 < len(options):
+            bundle_id = options[index + 1]
+            index += 2
+            continue
+        if option == "--yes":
+            confirmed = True
+            index += 1
+            continue
+        if option == "--json":
+            as_json = True
+            index += 1
+            continue
+        stream.write(f"one-memory: 参数无效：{option}\n")
+        return 2
+    if not migration_id or not bundle_id:
+        stream.write(
+            "one-memory: sdk-migrate 需要 "
+            "--migration-id <id> --bundle-id <id>\n"
+        )
+        return 2
+
+    settings = load_settings()
+    status = inspect_runtime(settings.data_dir)
+    if status.state != "stopped":
+        document = {
+            "schema_version": 1,
+            "state": "blocked",
+            "code": "sdk_migration_runtime_running",
+            "runtime_state": status.state,
+        }
+        _write_restore(stream, as_json, document, "Runtime 仍在运行；不能迁移。")
+        return 4
+    if not confirmed:
+        document = {
+            "schema_version": 1,
+            "state": "preview",
+            "migration_id": migration_id,
+            "bundle_id": bundle_id,
+            "requires_confirmation": True,
+            "commits_cutover": False,
+        }
+        _write_restore(
+            stream,
+            as_json,
+            document,
+            "预览通过；加 --yes 后执行可续跑 backfill，但不会切换 authority。",
+        )
+        return 4
+
+    from one_memory.database_access import close_main_databases
+    from one_memory.hy_memory_bridge import HyMemoryBridge
+    from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
+    from one_memory.memory_server.migrations import MIGRATIONS
+    from one_memory.model_profiles import ModelProfileStore
+    from one_memory.sdk_migration_bundle import (
+        MigrationBundleRejected,
+        inspect_sdk_migration_bundle,
+    )
+    from one_memory.sdk_migration_runner import run_sdk_data_plane_backfill
+    from one_memory.secrets import KeyringSecretStore, SecretStoreUnavailableError
+
+    database = settings.data_dir / "one-memory.sqlite3"
+    try:
+        manifest = inspect_sdk_migration_bundle(
+            data_dir=settings.data_dir,
+            bundle_id=bundle_id,
+        )
+        asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
+        close_main_databases()
+        profiles = ModelProfileStore(database)
+        identity = profiles.active_identity()
+        if identity is None:
+            raise RuntimeError("model_profile_not_active")
+        profile = profiles.snapshot(*identity)
+        secrets = KeyringSecretStore()
+        secret = profiles.resolve_snapshot_secret(*identity, secrets)
+        if profile.has_api_key and secret is None:
+            raise RuntimeError("model_secret_unavailable")
+    except MigrationBundleRejected as error:
+        code = error.code
+    except SecretStoreUnavailableError:
+        code = "secure_storage_unavailable"
+    except Exception as error:
+        code = str(error) if str(error) in {
+            "model_profile_not_active",
+            "model_secret_unavailable",
+        } else "sdk_migration_preflight_failed"
+    else:
+        namespace_fingerprint = hashlib.sha256(
+            HY_MEMORY_NAMESPACE.encode()
+        ).hexdigest()
+        backend_material = json.dumps(
+            {
+                "namespace": HY_MEMORY_NAMESPACE,
+                "embedding_provider": str(profile.embedding_provider_kind or ""),
+                "embedding_model": profile.embedding_model,
+                "embedding_dimensions": profile.embedding_dimensions,
+                "vector": "chroma",
+                "cache": "sqlite",
+                "history": "sqlite",
+                "coding": "sqlite",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        backend_fingerprint = hashlib.sha256(backend_material.encode()).hexdigest()
+
+        async def run_backfill():
+            bridge = HyMemoryBridge(
+                profile=profile,
+                api_key=secret,
+                data_dir=settings.data_dir,
+            )
+            try:
+                return await run_sdk_data_plane_backfill(
+                    database_path=database,
+                    bridge=bridge,
+                    migration_id=migration_id,
+                    bundle_id=bundle_id,
+                    source_runtime_build=str(manifest.get("runtime_build") or ""),
+                    target_sdk_version=HY_MEMORY_VERSION,
+                    source_schema_version=MIGRATIONS[-1].version,
+                    namespace_fingerprint=namespace_fingerprint,
+                    backend_fingerprint=backend_fingerprint,
+                )
+            finally:
+                await bridge.close()
+
+        try:
+            result = asyncio.run(run_backfill())
+        except Exception:
+            code = "sdk_migration_backfill_failed"
+        else:
+            document = {
+                "schema_version": 1,
+                "state": result.state,
+                "phase": result.phase,
+                "migration_id": result.migration_id,
+                "counts": result.counts,
+                "memory_items": result.memory_items,
+                "raw_items": result.raw_items,
+                "commits_cutover": False,
+            }
+            _write_restore(
+                stream,
+                as_json,
+                document,
+                "SDK backfill 已完成；authority 尚未切换。",
+            )
+            return 0 if result.state == "ready" else 4
+
+    document = {"schema_version": 1, "state": "failed", "code": code}
+    _write_restore(stream, as_json, document, f"SDK backfill 失败：{code}")
+    return 1
 
 
 def _status_text(command: str, status: RuntimeStatus) -> str:
