@@ -5,6 +5,8 @@ Hy Memory and MemHub are versioned and released independently.
 ## Hy Memory 2.0.5.dev2 — 2026-10-21
 
 - Development preview; not the final `2.0.5` release.
+- Published as
+  [`hy-memory==2.0.5.dev2`](https://pypi.org/project/hy-memory/2.0.5.dev2/).
 - Adds exact, idempotent semantic-memory import for legacy MemHub cutover
   without extraction, reconciliation or identity changes.
 
