@@ -107,7 +107,7 @@ def test_external_scope_cannot_override_shared_or_host_workspace_boundary(tmp_pa
     asyncio.run(scenario())
 
 
-def test_scope_only_mutation_is_versioned_without_changing_status_or_reindexing(tmp_path):
+def test_per_memory_recall_scope_mutation_is_not_a_product_api(tmp_path):
     async def scenario():
         app = create_app(
             Settings(
@@ -126,72 +126,14 @@ def test_scope_only_mutation_is_versioned_without_changing_status_or_reindexing(
                 headers={"Authorization": "Bearer scope-test"},
             ) as client,
         ):
-            store = app.state.memory_governance_store
-            source = app.state.evidence_store.put(
-                EvidenceInput(
-                    source_id="manual",
-                    conversation_id="scope",
-                    message_id="1",
-                    role="user",
-                    written_by=WrittenBy.PERSON,
-                    verbatim="Original",
-                    origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
-                )
-            ).record
-            item = app.state.person_writes.create(
-                MemoryDraft(
-                    user_id="local",
-                    kind=MemoryKind.CHAT,
-                    content="Candidate",
-                    scopes=("private",),
-                    evidence_ids=(source.evidence_id,),
-                ),
-                request_id="create",
+            response = await client.post(
+                "/api/v1/memories/memory-1/scopes",
+                json={
+                    "request_id": "scope-change",
+                    "expected_revision": 1,
+                    "scopes": ["all-apps"],
+                },
             )
-            path = f"/api/v1/memories/{item.memory_id}/scopes"
-            payload = {"request_id": "scope-change", "expected_revision": 1, "scopes": ["all-apps"]}
-            changed = await client.post(path, json=payload)
-            assert changed.status_code == 200
-            assert changed.json()["content"] == "Candidate"
-            assert changed.json()["status"] == "confirmed"
-            assert changed.json()["revision"] == 2
-            assert changed.json()["evidence_ids"] == [source.evidence_id]
-            assert store.index_sync(item.memory_id, user_id="local") is None
-            assert (await client.post(path, json=payload)).json() == changed.json()
-            assert (
-                await client.post(path, json={**payload, "scopes": ["private"]})
-            ).status_code == 409
-            assert (
-                await client.post(path, json={**payload, "request_id": "stale"})
-            ).status_code == 409
-            assert store.history(item.memory_id, user_id="local")[0].action == "set_scopes"
-            undo = await client.post(
-                f"/api/v1/memories/{item.memory_id}/actions/undo",
-                json={"request_id": "undo-scope", "expected_revision": 2},
-            )
-            assert undo.json()["scopes"] == ["private"]
-            assert undo.json()["content"] == "Candidate"
-            assert app.state.evidence_store.get(source.evidence_id).verbatim == "Original"
-            for scopes in [[], [""], ["*"], ["private", "all-apps"]]:
-                response = await client.post(
-                    path, json={"request_id": "invalid", "expected_revision": 3, "scopes": scopes}
-                )
-                assert response.status_code == 422
-            assert (await client.get(f"/api/v1/memories/{item.memory_id}")).json()["memory"][
-                "revision"
-            ] == 3
-            deleted = app.state.person_writes.delete(
-                item.memory_id, user_id="local", request_id="delete", expected_revision=3
-            )
-            assert (
-                await client.post(
-                    path,
-                    json={
-                        **payload,
-                        "request_id": "deleted",
-                        "expected_revision": deleted.revision,
-                    },
-                )
-            ).status_code == 409
+            assert response.status_code == 404
 
     asyncio.run(scenario())

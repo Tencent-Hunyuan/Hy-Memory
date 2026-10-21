@@ -561,7 +561,6 @@ FIXTURE_MEMORY_ID = "0b6f7c1e-2d4a-4e8b-9c3d-5a1f0e2b7d64"
 FIXTURE_REQUESTS = {
     "add": "7d1c9a52-0b3e-4f6a-8c2d-1e5b9f4a3c70",
     "correct": "2f8e4b61-9c0d-4a7e-b3f5-6d2a1c8e9b04",
-    "scope": "c5a3e9d7-1f2b-4c6e-8a0d-3b7f5e1c9a28",
     "delete": "91b4d2f6-7e3a-4d8c-a5b1-0f6e2c9d4a37",
 }
 
@@ -631,13 +630,9 @@ def test_the_cli_receipt_fixture_is_what_core_actually_returns(tmp_path):
                     f"/api/v1/memories/{memory_id}/correct",
                     {"expected_revision": 1, "content": "PRIVATE CHANGED"},
                 ),
-                "scope": (
-                    f"/api/v1/memories/{memory_id}/scopes",
-                    {"expected_revision": 2, "scopes": ["codex"]},
-                ),
                 "delete": (
                     f"/api/v1/memories/{memory_id}/actions/delete",
-                    {"expected_revision": 3},
+                    {"expected_revision": 2},
                 ),
             }
             for name, step in steps.items():

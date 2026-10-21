@@ -43,7 +43,6 @@ from pydantic import (
     Field,
     StrictBool,
     StrictInt,
-    field_validator,
     model_validator,
 )
 
@@ -410,21 +409,6 @@ class MemoryMutationRequest(BaseModel):
 class CorrectMemoryRequest(MemoryMutationRequest):
     content: str = Field(min_length=1, max_length=1_000_000)
     scopes: tuple[str, ...] | None = Field(default=None, max_length=128)
-
-
-class MemoryScopesRequest(MemoryMutationRequest):
-    model_config = ConfigDict(extra="forbid")
-    scopes: tuple[str, ...] = Field(min_length=1, max_length=128)
-
-    @field_validator("scopes")
-    @classmethod
-    def validate_scopes(cls, scopes: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not scope.strip() or len(scope) > 512 or scope.strip() == "*" for scope in scopes):
-            raise ValueError("invalid_memory_scope")
-        cleaned = tuple(dict.fromkeys(scope.strip() for scope in scopes))
-        if "private" in cleaned and len(cleaned) != 1:
-            raise ValueError("private_scope_must_be_exclusive")
-        return cleaned
 
 
 class EvidenceExcerpt(BaseModel):
@@ -4060,27 +4044,6 @@ def create_app(
                 status_code=409,
                 detail="memory_request_conflict",
             ) from None
-
-    @app.post(
-        "/api/v1/memories/{memory_id}/scopes",
-        response_model=GovernedMemory,
-        dependencies=protected,
-    )
-    def set_memory_scopes(memory_id: str, request: MemoryScopesRequest) -> GovernedMemory:
-        try:
-            return _person_writes(app).set_scopes(
-                memory_id,
-                user_id="local",
-                request_id=request.request_id,
-                expected_revision=request.expected_revision,
-                scopes=request.scopes,
-            )
-        except KeyError:
-            raise HTTPException(status_code=404, detail="memory_not_found") from None
-        except MemoryMutationConflictError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from None
-        except MemoryMutationRequestConflictError:
-            raise HTTPException(status_code=409, detail="memory_request_conflict") from None
 
     @app.post(
         "/api/v1/memories/{memory_id}/index-sync",

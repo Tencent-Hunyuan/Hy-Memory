@@ -17,7 +17,7 @@ const FIXTURE = JSON.parse(
     ),
     "utf8",
   ),
-) as { receipts: Record<"add" | "correct" | "scope" | "delete", Receipt> };
+) as { receipts: Record<"add" | "correct" | "delete", Receipt> };
 
 interface Receipt {
   schema_version: number;
@@ -103,11 +103,8 @@ describe("memory mutation receipt v2 from Core", () => {
     });
   });
 
-  it.each<
-    ["correct" | "scope" | "delete", { content?: string; scopes?: string[] }]
-  >([
+  it.each<["correct" | "delete", { content?: string }]>([
     ["correct", { content: "Corrected synthetic memory." }],
-    ["scope", { scopes: ["codex"] }],
     ["delete", {}],
   ])(
     "recovers %s from the receipt Core returns for it",

@@ -4,15 +4,11 @@ import {
   buildMemoryActionRequest,
   buildMemoryCorrectRequest,
   buildMemoryCreateRequest,
-  buildMemoryScopesRequest,
   parseMemoryReceipt,
 } from "@one-memory/operations";
 import type { CoreReader } from "./core-client.js";
 import type { CoreOperations } from "./core-operations.js";
-import {
-  validateGovernedMemory,
-  validateMemoryDetail,
-} from "./core-responses.js";
+import { validateMemoryDetail } from "./core-responses.js";
 import { isMemoryId } from "./memory-report.js";
 import { PRODUCT } from "./version.js";
 
@@ -23,7 +19,7 @@ const MEMORY_KINDS = [
   "schema",
   "intention",
 ] as const;
-const OPERATIONS = ["add", "correct", "delete", "scope"] as const;
+const OPERATIONS = ["add", "correct", "delete"] as const;
 const MEMORY_ORIGINS = ["extracted", "answered", "agent", "manual"] as const;
 const MUTATION_RECEIPT_KEYS = new Set([
   "schema_version",
@@ -145,15 +141,12 @@ export async function planExistingMemoryMutation(
     operation: Exclude<(typeof OPERATIONS)[number], "add">;
     memoryId: string;
     content?: string;
-    scopes?: string[];
   },
 ): Promise<MemoryFlowDocument> {
   if (
     !isMemoryId(input.memoryId) ||
     (input.operation === "correct" && input.content === undefined) ||
-    (input.content !== undefined && !validContent(input.content)) ||
-    ((input.operation === "scope" || input.scopes !== undefined) &&
-      !validScopes(input.scopes ?? []))
+    (input.content !== undefined && !validContent(input.content))
   ) {
     return invalid("memory_plan_input_invalid");
   }
@@ -176,7 +169,6 @@ export async function planExistingMemoryMutation(
     expected_revision: memory.revision,
     expected_status: memory.status,
     expected_origin: memory.origin,
-    ...(input.scopes ? { scopes: input.scopes } : {}),
     ...(input.content ? contentIdentity(input.content) : {}),
     current: {
       status: memory.status,
@@ -407,15 +399,7 @@ function operationRequest(
       plan.memory_id as string,
       plan.expected_revision as number,
       content as string,
-      plan.scopes,
-      plan.request_id,
-    );
-  }
-  if (plan.operation === "scope") {
-    return buildMemoryScopesRequest(
-      plan.memory_id as string,
-      plan.expected_revision as number,
-      plan.scopes ?? [],
+      undefined,
       plan.request_id,
     );
   }
@@ -451,10 +435,7 @@ function matchesReceipt(
     return false;
   }
   if (plan.operation === "delete" && memory.status !== "deleted") return false;
-  if (
-    (plan.operation === "correct" || plan.operation === "scope") &&
-    memory.status !== plan.expected_status
-  ) {
+  if (plan.operation === "correct" && memory.status !== plan.expected_status) {
     return false;
   }
   if (plan.operation === "correct" && memory.content !== content) return false;
@@ -490,11 +471,7 @@ function validateMutationReceipt(
       : null;
   }
   const expectedOperation =
-    plan.operation === "add"
-      ? "create"
-      : plan.operation === "scope"
-        ? "set_scopes"
-        : plan.operation;
+    plan.operation === "add" ? "create" : plan.operation;
   const expectedRevision =
     plan.operation === "add" ? 1 : (plan.expected_revision as number) + 1;
   const expectedStatus = plan.operation === "delete" ? "deleted" : "confirmed";
@@ -561,9 +538,7 @@ function validatePlan(value: unknown): MemoryMutationPlan | null {
     plan.expected_status !== "confirmed" ||
     !oneOf(plan.expected_origin, MEMORY_ORIGINS) ||
     !validCurrent(plan) ||
-    (plan.operation === "correct" && !contentFields(plan)) ||
-    ((plan.operation === "scope" || plan.scopes !== undefined) &&
-      !validScopes(plan.scopes))
+    (plan.operation === "correct" && !contentFields(plan))
   ) {
     return null;
   }

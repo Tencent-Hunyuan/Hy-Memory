@@ -63,7 +63,6 @@ import {
   buildMemoryCorrectRequest,
   buildMemoryCreateRequest,
   buildMemoryNoteSaveRequest,
-  buildMemoryScopesRequest,
   buildModelProfileCreateRequest,
   buildModelProfileUpdateRequest,
   buildSourceImportRequest,
@@ -1431,33 +1430,6 @@ export async function syncMemoryIndex(
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
   return response.data;
-}
-
-export async function setMemoryScopes(
-  memoryId: string,
-  revision: number,
-  scopes: string[],
-  requestId: string,
-  traceId?: string,
-): Promise<GovernedMemory> {
-  const request = buildMemoryScopesRequest(
-    memoryId,
-    revision,
-    scopes,
-    requestId,
-  );
-  const response = await client.post<GovernedMemory>(
-    request.path,
-    request.body,
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const receipt = parseMemoryReceipt(response.data, {
-    memoryId,
-    expectedRevision: revision,
-    expectedStatus: "confirmed",
-  });
-  if (receipt === null) throw new Error("memory_scopes_receipt_invalid");
-  return receipt;
 }
 
 export function apiErrorCode(reason: unknown): string | null {

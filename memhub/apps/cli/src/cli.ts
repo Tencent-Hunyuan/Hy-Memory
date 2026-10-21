@@ -2397,7 +2397,6 @@ async function runCommand(
         operation: parsed.operation,
         memoryId: parsed.memoryId,
         ...(content === undefined ? {} : { content }),
-        ...(parsed.scopes.length === 0 ? {} : { scopes: parsed.scopes }),
       });
       emitMemoryFlow(document, asJson);
       return memoryFlowExitCode(document);
@@ -5793,10 +5792,9 @@ type MemoryCommand =
     }
   | {
       kind: "plan-existing";
-      operation: "correct" | "delete" | "scope";
+      operation: "correct" | "delete";
       memoryId: string;
       contentFile?: string;
-      scopes: string[];
     }
   | { kind: "apply"; planFile: string; contentFile?: string };
 
@@ -5887,7 +5885,7 @@ function parseMemoryPlanCommand(
 ): MemoryCommand | null {
   const operation = tokens[0];
   const add = operation === "add";
-  if (!add && !["correct", "delete", "scope"].includes(operation)) {
+  if (!add && !["correct", "delete"].includes(operation)) {
     return null;
   }
   const memoryId = add ? undefined : tokens[1];
@@ -5906,7 +5904,7 @@ function parseMemoryPlanCommand(
     else if (flag === "--kind" && add && !kindSet) {
       memoryKind = value;
       kindSet = true;
-    } else if (flag === "--scope" && !scopes.includes(value))
+    } else if (flag === "--scope" && add && !scopes.includes(value))
       scopes.push(value);
     else if (flag === "--evidence" && add && !evidenceIds.includes(value))
       evidenceIds.push(value);
@@ -5926,18 +5924,15 @@ function parseMemoryPlanCommand(
   }
   if (
     (operation === "correct" && !contentFile) ||
-    (operation === "scope" && scopes.length === 0) ||
-    (!["correct", "scope"].includes(operation) &&
-      (contentFile !== undefined || scopes.length > 0))
+    (operation === "delete" && (contentFile !== undefined || scopes.length > 0))
   ) {
     return null;
   }
   return {
     kind: "plan-existing",
-    operation: operation as "correct" | "delete" | "scope",
+    operation: operation as "correct" | "delete",
     memoryId: memoryId as string,
     ...(contentFile ? { contentFile } : {}),
-    scopes,
   };
 }
 

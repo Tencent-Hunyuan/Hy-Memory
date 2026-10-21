@@ -77,7 +77,6 @@ const {
   askMemoriesStream,
   mutateMemory,
   correctMemory,
-  setMemoryScopes,
   syncMemoryIndex,
   setExtractionWindow,
   manualExtract,
@@ -103,7 +102,6 @@ const {
   askMemoriesStream: vi.fn(),
   mutateMemory: vi.fn(),
   correctMemory: vi.fn(),
-  setMemoryScopes: vi.fn(),
   syncMemoryIndex: vi.fn(),
   setExtractionWindow: vi.fn(),
   manualExtract: vi.fn(),
@@ -133,7 +131,6 @@ vi.mock("./api", () => ({
   askMemoriesStream,
   mutateMemory,
   correctMemory,
-  setMemoryScopes,
   syncMemoryIndex,
   setExtractionWindow,
   manualExtract,
@@ -218,11 +215,6 @@ describe("MemorySpace", () => {
       content: "Corrected",
       revision: 2,
     });
-    setMemoryScopes.mockResolvedValue({
-      ...memory,
-      scopes: ["private"],
-      revision: 2,
-    });
     syncMemoryIndex.mockResolvedValue({
       memory_id: "memory-1",
       status: "synced",
@@ -297,7 +289,6 @@ describe("MemorySpace", () => {
       for (const write of [
         mutateMemory,
         correctMemory,
-        setMemoryScopes,
         syncMemoryIndex,
         setExtractionWindow,
         manualExtract,
@@ -1555,7 +1546,6 @@ describe("MemorySpace", () => {
     );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(mutateMemory).not.toHaveBeenCalled();
-    expect(setMemoryScopes).not.toHaveBeenCalled();
   });
 
   it.each(["success", "failure"])(

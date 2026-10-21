@@ -141,12 +141,11 @@ describe("memory governance plans", () => {
     );
   });
 
-  it("binds correction to the current version, source, author and scopes", async () => {
+  it("binds correction to the current version, source and author", async () => {
     const result = await planExistingMemoryMutation(detailReader(), {
       operation: "correct",
       memoryId: "memory-1",
       content: "Corrected synthetic memory.",
-      scopes: ["codex"],
     });
     expect(result.state).toBe("preview");
     if (result.state !== "preview") throw new Error("preview expected");
@@ -155,7 +154,6 @@ describe("memory governance plans", () => {
       expected_revision: 3,
       expected_status: "confirmed",
       expected_origin: "extracted",
-      scopes: ["codex"],
       current: {
         revision: 3,
         evidence: [
@@ -262,39 +260,31 @@ describe("memory governance plans", () => {
     },
   );
 
-  it("executes correction and scope changes without changing origin", async () => {
-    for (const operation of ["correct", "scope"] as const) {
-      const content =
-        operation === "correct" ? "Corrected synthetic memory." : undefined;
-      const preview = await planExistingMemoryMutation(detailReader(), {
-        operation,
-        memoryId: "memory-1",
-        ...(content ? { content } : {}),
-        scopes: ["codex"],
-      });
-      if (preview.state !== "preview") throw new Error("preview expected");
-      const post = vi.fn().mockResolvedValue({
-        state: "committed",
-        data: {
-          ...MEMORY,
-          content: content ?? MEMORY.content,
-          scopes: ["codex"],
-          revision: 4,
-        },
-      });
-      const result = await executeMemoryMutation(preview.plan, content, {
-        post,
-      } as CoreOperations);
-      expect(result.state).toBe("committed");
-      expect(post.mock.calls[0][0]).toBe(
-        `/api/v1/memories/memory-1/${operation === "scope" ? "scopes" : "correct"}`,
-      );
-      expect(post.mock.calls[0][1]).toMatchObject({
-        request_id: preview.plan.request_id,
-        expected_revision: 3,
-        scopes: ["codex"],
-      });
-    }
+  it("executes correction without changing origin or recall policy", async () => {
+    const content = "Corrected synthetic memory.";
+    const preview = await planExistingMemoryMutation(detailReader(), {
+      operation: "correct",
+      memoryId: "memory-1",
+      content,
+    });
+    if (preview.state !== "preview") throw new Error("preview expected");
+    const post = vi.fn().mockResolvedValue({
+      state: "committed",
+      data: {
+        ...MEMORY,
+        content,
+        revision: 4,
+      },
+    });
+    const result = await executeMemoryMutation(preview.plan, content, {
+      post,
+    } as CoreOperations);
+    expect(result.state).toBe("committed");
+    expect(post.mock.calls[0][0]).toBe("/api/v1/memories/memory-1/correct");
+    expect(post.mock.calls[0][1]).toMatchObject({
+      request_id: preview.plan.request_id,
+      expected_revision: 3,
+    });
   });
 
   it("treats a misbound HTTP 200 receipt as unknown", async () => {
@@ -513,8 +503,6 @@ describe("memory pending fence", () => {
           "memory-1",
           "--content-file",
           contentFile,
-          "--scope",
-          "codex",
           "--json",
         ]),
       ).toBe(0);
@@ -529,7 +517,6 @@ describe("memory pending fence", () => {
         operation: "correct",
         memory_id: "memory-1",
         expected_revision: 3,
-        scopes: ["codex"],
       },
     });
     expect(streams.stdout()).not.toContain("Corrected synthetic memory.");
