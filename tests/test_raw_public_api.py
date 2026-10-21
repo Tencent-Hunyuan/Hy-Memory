@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from hy_memory.client import HyMemoryClient
-from hy_memory.models.memory import MemoryLayer
+from hy_memory.models.memory import MemoryLayer, MemoryStatus
 
 
 class OutcomeCache:
@@ -160,3 +160,68 @@ async def test_raw_get_and_list_use_explicit_api():
     )
     assert page["total"] == 1
     assert [item["raw_id"] for item in page["raw"]] == ["raw-2"]
+
+
+@pytest.mark.asyncio
+async def test_exact_memory_import_preserves_id_lifecycle_and_chain():
+    client = _client()
+    result = await HyMemoryClient.async_import_memory_exact.__wrapped__(
+        client,
+        "older preference",
+        memory_id="memory-1",
+        user_id="u1",
+        agent_id="a1",
+        session_id="s1",
+        source="cursor",
+        layer="l2_fact",
+        status="superseded",
+        owner="user",
+        tags=["preference"],
+        superseded_by=["memory-2"],
+        is_latest=False,
+        request_id="request-memory-1",
+    )
+
+    assert result["memory_ids"] == ["memory-1"]
+    node = client._vector_store.nodes["memory-1"]
+    assert node.content == "older preference"
+    assert node.layer == MemoryLayer.L2_FACT
+    assert node.status == MemoryStatus.SUPERSEDED
+    assert node.superseded_by == ["memory-2"]
+    assert node.is_latest is False
+    assert node.custom["input_kind"] == "memory_exact_import"
+
+
+@pytest.mark.asyncio
+async def test_exact_memory_import_refuses_same_id_with_different_body():
+    client = _client()
+    await HyMemoryClient.async_import_memory_exact.__wrapped__(
+        client,
+        "first",
+        memory_id="memory-1",
+        user_id="u1",
+        request_id="request-memory-1",
+    )
+
+    with pytest.raises(ValueError, match="different memory content"):
+        await HyMemoryClient.async_import_memory_exact.__wrapped__(
+            client,
+            "changed",
+            memory_id="memory-1",
+            user_id="u1",
+            request_id="request-memory-2",
+        )
+
+
+@pytest.mark.asyncio
+async def test_exact_memory_import_rejects_raw_layer():
+    client = _client()
+    with pytest.raises(ValueError, match="use import_raw"):
+        await HyMemoryClient.async_import_memory_exact.__wrapped__(
+            client,
+            "raw",
+            memory_id="memory-1",
+            user_id="u1",
+            layer="l1_raw",
+            request_id="request-memory-1",
+        )

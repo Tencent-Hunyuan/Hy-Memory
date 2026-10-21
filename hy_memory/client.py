@@ -2936,6 +2936,49 @@ class HyMemoryClient:
             include_runtime_diag=True,
         )
 
+    def import_memory_exact(
+        self,
+        content: str,
+        *,
+        memory_id: str,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        layer: Any = "l2_fact",
+        status: Any = "active",
+        owner: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        supersedes: Optional[List[str]] = None,
+        superseded_by: Optional[List[str]] = None,
+        is_latest: bool = True,
+        memory_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Import one existing semantic memory without extraction/reconcile."""
+        return self._loop_thread.run(
+            self.async_import_memory_exact(
+                content,
+                memory_id=memory_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                layer=layer,
+                status=status,
+                owner=owner,
+                tags=tags,
+                supersedes=supersedes,
+                superseded_by=superseded_by,
+                is_latest=is_latest,
+                memory_at=memory_at,
+                metadata=metadata,
+                request_id=request_id,
+            ),
+            include_runtime_diag=True,
+        )
+
     def get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
         """Read one SDK raw record through the explicit raw API."""
         return self._loop_thread.run(self.async_get_raw(raw_id))
@@ -3222,6 +3265,157 @@ class HyMemoryClient:
         if stored_id != node_id:
             raise RuntimeError("raw import changed the requested identity")
         return {"success": True, "raw_id": node_id, "request_id": request_id}
+
+    @_ensure_internal_loop
+    async def async_import_memory_exact(
+        self,
+        content: str,
+        *,
+        memory_id: str,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        layer: Any = "l2_fact",
+        status: Any = "active",
+        owner: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        supersedes: Optional[List[str]] = None,
+        superseded_by: Optional[List[str]] = None,
+        is_latest: bool = True,
+        memory_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Import a canonical memory node exactly, with no model invocation."""
+        from .models.memory import MemoryLayer, MemoryStatus
+        from .utils.source_filter import normalize_source
+
+        if not content or not memory_id or not user_id:
+            raise ValueError("content, memory_id and user_id are required")
+        normalized_layer = (
+            layer if isinstance(layer, MemoryLayer) else MemoryLayer.from_string(str(layer))
+        )
+        if normalized_layer == MemoryLayer.L1_RAW:
+            raise ValueError("use import_raw for L1_RAW")
+        normalized_status = (
+            status if isinstance(status, MemoryStatus) else MemoryStatus(str(status).lower())
+        )
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="import_memory_exact",
+        )
+        if replay is not None:
+            return replay
+        try:
+            result = await self._async_import_memory_exact_impl(
+                content,
+                memory_id=memory_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=normalize_source(source),
+                layer=normalized_layer,
+                status=normalized_status,
+                owner=owner,
+                tags=tags or [],
+                supersedes=supersedes or [],
+                superseded_by=superseded_by or [],
+                is_latest=is_latest,
+                memory_at=memory_at,
+                metadata=metadata,
+                request_id=request_id,
+            )
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(request_id, "succeeded", result)
+        return result
+
+    async def _async_import_memory_exact_impl(
+        self,
+        content: str,
+        *,
+        memory_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        layer,
+        status,
+        owner: Optional[str],
+        tags: List[str],
+        supersedes: List[str],
+        superseded_by: List[str],
+        is_latest: bool,
+        memory_at: Optional[datetime],
+        metadata: Optional[Dict[str, Any]],
+        request_id: str,
+    ) -> Dict[str, Any]:
+        from .models.memory import MemoryNode, SourceType
+
+        existing = await self._vector_store.get_by_id(memory_id)
+        if existing is not None:
+            identity = (
+                existing.content == content,
+                existing.user_id == user_id,
+                existing.agent_id == agent_id,
+                existing.session_id == session_id,
+                existing.source == source,
+                existing.layer == layer,
+                existing.status == status,
+                existing.owner == owner,
+                list(existing.tags or []) == tags,
+                list(existing.supersedes or []) == supersedes,
+                list(existing.superseded_by or []) == superseded_by,
+                existing.is_latest == is_latest,
+            )
+            if not all(identity):
+                raise ValueError("memory_id is already bound to different memory content")
+            return {
+                "success": True,
+                "memory_id": memory_id,
+                "memory_ids": [memory_id],
+                "request_id": request_id,
+                "replayed": True,
+            }
+
+        custom = dict(metadata or {})
+        custom["request_id"] = request_id
+        custom["input_kind"] = "memory_exact_import"
+        embedding = await self._embed_service.embed(content)
+        node = MemoryNode(
+            node_id=memory_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            source=source,
+            layer=layer,
+            content=content,
+            source_type=SourceType.EXPLICIT,
+            status=status,
+            owner=owner,
+            tags=list(tags),
+            supersedes=list(supersedes),
+            superseded_by=list(superseded_by),
+            is_latest=is_latest,
+            embedding=embedding,
+            memory_at=memory_at,
+            custom=custom,
+        )
+        stored_id = await self._vector_store.upsert(node)
+        if stored_id != memory_id:
+            raise RuntimeError("exact memory import changed the requested identity")
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "memory_ids": [memory_id],
+            "request_id": request_id,
+        }
 
     @_ensure_internal_loop
     async def async_get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
