@@ -81,6 +81,21 @@ _CREATE_TABLES_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS write_outcomes (
+        request_id VARCHAR(256) NOT NULL,
+        user_id    VARCHAR(255) NOT NULL,
+        agent_id   VARCHAR(255) NOT NULL DEFAULT '',
+        session_id VARCHAR(255) NOT NULL DEFAULT '',
+        operation  VARCHAR(32) NOT NULL,
+        status     VARCHAR(32) NOT NULL,
+        result_json LONGTEXT NOT NULL,
+        created_at VARCHAR(64) NOT NULL,
+        updated_at VARCHAR(64) NOT NULL,
+        PRIMARY KEY (request_id),
+        KEY idx_write_outcomes_owner (user_id, agent_id, session_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
     CREATE TABLE IF NOT EXISTS system_metrics (
         minute_ts   VARCHAR(32) NOT NULL,
         data        LONGTEXT NOT NULL,
@@ -458,6 +473,62 @@ class MysqlCache(CacheBase):
         except Exception as e:
             logger.warning(f"get_pipeline_logs failed: {e}")
             return []
+
+    async def claim_write_outcome(
+        self,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        operation: str,
+    ) -> Optional[Dict[str, Any]]:
+        now = datetime.now().isoformat()
+        inserted = await self._execute(
+            """
+            INSERT IGNORE INTO write_outcomes (
+                request_id, user_id, agent_id, session_id, operation,
+                status, result_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, 'running', '{}', %s, %s)
+            """,
+            (request_id, user_id, agent_id, session_id, operation, now, now),
+        )
+        if inserted == 1:
+            return None
+        return await self.get_write_outcome(request_id)
+
+    async def finish_write_outcome(
+        self,
+        request_id: str,
+        status: str,
+        result: Dict[str, Any],
+    ) -> bool:
+        updated = await self._execute(
+            """
+            UPDATE write_outcomes
+            SET status = %s, result_json = %s, updated_at = %s
+            WHERE request_id = %s
+            """,
+            (
+                status,
+                json.dumps(result, ensure_ascii=False, default=str),
+                datetime.now().isoformat(),
+                request_id,
+            ),
+        )
+        return updated == 1
+
+    async def get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        row = await self._fetchone(
+            "SELECT * FROM write_outcomes WHERE request_id = %s",
+            (request_id,),
+        )
+        if row is None:
+            return None
+        try:
+            row["result"] = json.loads(row.pop("result_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            row["result"] = {}
+        return row
 
     # ================================================================
     # System Metrics（分钟粒度落盘）

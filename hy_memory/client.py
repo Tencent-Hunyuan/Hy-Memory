@@ -2246,6 +2246,10 @@ class HyMemoryClient:
             self.async_get_recent_history(user_id=user_id, agent_ids=agent_ids, limit=limit)
         )
 
+    def get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Return the exact durable outcome for one idempotent write request."""
+        return self._loop_thread.run(self.async_get_write_outcome(request_id))
+
     async def _close_async(self):
         if self._owns_runtime:
             from .metrics import MetricsCollector
@@ -2423,6 +2427,64 @@ class HyMemoryClient:
     # 异步 API
     # ================================================================
 
+    async def _claim_write_outcome(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        operation: str,
+    ) -> Optional[Dict[str, Any]]:
+        existing = await self._cache.claim_write_outcome(
+            request_id,
+            user_id,
+            agent_id,
+            session_id,
+            operation,
+        )
+        if existing is None:
+            return None
+        expected = (user_id, agent_id, session_id, operation)
+        actual = tuple(
+            str(existing.get(key) or "")
+            for key in ("user_id", "agent_id", "session_id", "operation")
+        )
+        if actual != expected:
+            raise ValueError("request_id is already bound to another write scope")
+        result = existing.get("result")
+        if isinstance(result, dict) and existing.get("status") in {"succeeded", "failed"}:
+            return {**result, "replayed": True}
+        return {
+            "success": False,
+            "request_id": request_id,
+            "outcome_status": str(existing.get("status") or "unknown"),
+            "error_code": "write_outcome_not_terminal",
+            "error_message": "write outcome is not terminal; query get_write_outcome",
+            "replayed": True,
+        }
+
+    async def _finish_write_outcome(
+        self,
+        request_id: str,
+        status: str,
+        result: Dict[str, Any],
+    ) -> None:
+        if not await self._cache.finish_write_outcome(request_id, status, result):
+            raise RuntimeError("write outcome disappeared before completion")
+
+    async def _mark_write_outcome_unknown(self, request_id: str) -> None:
+        await self._finish_write_outcome(
+            request_id,
+            "unknown",
+            {
+                "success": False,
+                "request_id": request_id,
+                "outcome_status": "unknown",
+                "error_code": "write_outcome_unknown",
+            },
+        )
+
     @_ensure_internal_loop
     async def async_add(
         self,
@@ -2447,27 +2509,48 @@ class HyMemoryClient:
             dict，可含 base_url / api_key / extra_headers / timeout；None = 用 client 配置。
             可用于按请求切换任意 OpenAI-compatible embedding endpoint。
         """
-        if embed_override:
-            with embed_endpoint_override(
-                base_url=embed_override.get("base_url"),
-                api_key=embed_override.get("api_key"),
-                extra_headers=embed_override.get("extra_headers"),
-                timeout=embed_override.get("timeout"),
-            ):
-                return await self._async_add_impl(
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="add",
+        )
+        if replay is not None:
+            return replay
+        try:
+            if embed_override:
+                with embed_endpoint_override(
+                    base_url=embed_override.get("base_url"),
+                    api_key=embed_override.get("api_key"),
+                    extra_headers=embed_override.get("extra_headers"),
+                    timeout=embed_override.get("timeout"),
+                ):
+                    result = await self._async_add_impl(
+                        data, user_id=user_id, agent_id=agent_id, session_id=session_id,
+                        source=source,
+                        metadata=metadata, memory_at=memory_at,
+                        scene=scene, workspace_id=workspace_id, branch=branch,
+                        request_id=request_id, meta=meta,
+                    )
+            else:
+                result = await self._async_add_impl(
                     data, user_id=user_id, agent_id=agent_id, session_id=session_id,
                     source=source,
                     metadata=metadata, memory_at=memory_at,
                     scene=scene, workspace_id=workspace_id, branch=branch,
                     request_id=request_id, meta=meta,
                 )
-        return await self._async_add_impl(
-            data, user_id=user_id, agent_id=agent_id, session_id=session_id,
-            source=source,
-            metadata=metadata, memory_at=memory_at,
-            scene=scene, workspace_id=workspace_id, branch=branch,
-            request_id=request_id, meta=meta,
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(
+            request_id,
+            "succeeded" if result.get("success") is True else "failed",
+            result,
         )
+        return result
 
     @_ensure_internal_loop
     async def async_finalize_session(
@@ -2824,6 +2907,50 @@ class HyMemoryClient:
 
     @_ensure_internal_loop
     async def async_add_extracted(
+        self,
+        contents: Union[str, List[str]],
+        *,
+        user_id: str = "",
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        metadata: Optional[Dict[str, Any]] = None,
+        memory_at: Optional[datetime] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Idempotent async wrapper for extracted-memory writes."""
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="add_extracted",
+        )
+        if replay is not None:
+            return replay
+        try:
+            result = await self._async_add_extracted_impl(
+                contents,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                metadata=metadata,
+                memory_at=memory_at,
+                request_id=request_id,
+            )
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(
+            request_id,
+            "succeeded" if result.get("success") is True else "failed",
+            result,
+        )
+        return result
+
+    async def _async_add_extracted_impl(
         self,
         contents: Union[str, List[str]],
         *,
@@ -6187,6 +6314,13 @@ class HyMemoryClient:
     # ================================================================
     # History API（异步）
     # ================================================================
+
+    @_ensure_internal_loop
+    async def async_get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Read a durable write result without scanning memory records."""
+        if not request_id:
+            raise ValueError("request_id is required")
+        return await self._cache.get_write_outcome(request_id)
 
     @_ensure_internal_loop
     async def async_history(self, memory_id: str) -> List[Dict[str, Any]]:

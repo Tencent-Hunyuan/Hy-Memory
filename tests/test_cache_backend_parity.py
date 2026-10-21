@@ -24,6 +24,9 @@ from hy_memory.data.cache_sqlite import SqliteCache
 STATEFUL_METHODS = [
     "get_episode_state",
     "upsert_episode_state",
+    "claim_write_outcome",
+    "finish_write_outcome",
+    "get_write_outcome",
 ]
 
 BACKENDS = [
@@ -68,6 +71,16 @@ def test_episode_state_table_declared(backend):
     assert "CREATE TABLE IF NOT EXISTS episode_state" in src, (
         f"{mod.__name__} 未声明 episode_state 建表语句"
     )
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_write_outcomes_table_declared(backend):
+    import hy_memory.data.cache_mysql as m
+    import hy_memory.data.cache_sqlite as s
+
+    mod = s if backend is SqliteCache else m
+    src = inspect.getsource(mod)
+    assert "CREATE TABLE IF NOT EXISTS write_outcomes" in src
 
 
 class TestRollingSummaryFullyRemoved:
