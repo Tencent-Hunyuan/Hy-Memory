@@ -31,6 +31,7 @@ from one_memory.sdk_migration_inventory import (
     record_memory_migration_plan,
     record_raw_migration_plan,
 )
+from one_memory.sdk_migration_runner import run_sdk_data_plane_backfill
 
 
 @pytest.fixture
@@ -501,3 +502,87 @@ def test_sdk_raw_inventory_pages_all_records():
     )
     inventory = asyncio.run(read_sdk_raw_inventory(bridge, page_size=1))
     assert [item.raw_id for item in inventory] == ["r1", "r2"]
+
+
+def test_offline_backfill_reaches_ready_without_committing_cutover(store):
+    database = store.database_path
+    with main_database(database).write() as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO governed_memories (
+                memory_id,user_id,kind,status,content,scopes_json,origin,
+                tags_json,revision,created_at,updated_at
+            ) VALUES (
+                'memory-1','local','chat','confirmed','preference',
+                '[\"all-apps\"]','extracted','[]',1,'now','now'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO evidence (
+                evidence_id,idempotency_key,user_id,source_id,conversation_id,
+                content_kind,role,written_by,verbatim,content_hash,revision,
+                imported_at,updated_at,ingest_seq
+            ) VALUES (
+                'e1','key','local','cursor','session','raw_conversation',
+                'user','person','verbatim',?,1,'now','now',1
+            )
+            """,
+            (content_hash("verbatim"),),
+        )
+    bridge = _Bridge()
+    result = asyncio.run(
+        run_sdk_data_plane_backfill(
+            database_path=database,
+            bridge=bridge,
+            migration_id="migration",
+            bundle_id="bundle",
+            source_runtime_build="v1.0.4",
+            target_sdk_version="2.0.5.dev2",
+            source_schema_version=55,
+            namespace_fingerprint="namespace",
+            backend_fingerprint="backend",
+        )
+    )
+
+    assert result.state == "ready"
+    assert result.phase == "reconciled"
+    assert result.counts == {"verified": 2}
+    assert [item["memory_id"] for item in bridge.imported] == ["memory-1"]
+    assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e1"]
+    assert store.authority() is MemoryAuthority.LEGACY
+
+
+def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):
+    database = store.database_path
+    with main_database(database).write() as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO governed_memories (
+                memory_id,user_id,kind,status,content,scopes_json,origin,
+                tags_json,revision,created_at,updated_at
+            ) VALUES (
+                'memory-1','local','coding','confirmed','unknown layer',
+                '[\"all-apps\"]','extracted','[]',1,'now','now'
+            )
+            """
+        )
+    result = asyncio.run(
+        run_sdk_data_plane_backfill(
+            database_path=database,
+            bridge=_Bridge(),
+            migration_id="migration",
+            bundle_id="bundle",
+            source_runtime_build="v1.0.4",
+            target_sdk_version="2.0.5.dev2",
+            source_schema_version=55,
+            namespace_fingerprint="namespace",
+            backend_fingerprint="backend",
+        )
+    )
+
+    assert result.state == "blocked"
+    assert result.phase == "review_required"
+    assert result.counts == {"quarantine": 1}
+    assert store.authority() is MemoryAuthority.LEGACY
