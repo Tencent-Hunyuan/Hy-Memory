@@ -2905,6 +2905,63 @@ class HyMemoryClient:
             include_runtime_diag=True,
         )
 
+    def import_raw(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        memory_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        raw_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Persist one exact raw record without extraction or reconciliation."""
+        return self._loop_thread.run(
+            self.async_import_raw(
+                content,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                memory_at=memory_at,
+                metadata=metadata,
+                raw_id=raw_id,
+                request_id=request_id,
+            ),
+            include_runtime_diag=True,
+        )
+
+    def get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
+        """Read one SDK raw record through the explicit raw API."""
+        return self._loop_thread.run(self.async_get_raw(raw_id))
+
+    def list_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        source: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> Dict[str, Any]:
+        """List raw records for an authorized SDK owner/scope."""
+        return self._loop_thread.run(
+            self.async_list_raw(
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                limit=limit,
+                offset=offset,
+                order=order,
+            )
+        )
+
     @_ensure_internal_loop
     async def async_add_extracted(
         self,
@@ -3038,6 +3095,183 @@ class HyMemoryClient:
             logger.warning(f"[add_extracted] failed: {result.error_message}")
 
         return resp
+
+    @staticmethod
+    def _raw_node_to_public(node) -> Dict[str, Any]:
+        def _timestamp(value):
+            return int(value.timestamp()) if isinstance(value, datetime) else None
+
+        return {
+            "raw_id": node.node_id,
+            "content": node.content,
+            "user_id": node.user_id,
+            "agent_id": node.agent_id,
+            "session_id": node.session_id,
+            "source": node.source,
+            "memory_at": _timestamp(node.memory_at),
+            "gmt_created": _timestamp(node.gmt_created),
+            "custom": node.custom or {},
+        }
+
+    @_ensure_internal_loop
+    async def async_import_raw(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: str = "default_session",
+        source: str = "default",
+        memory_at: Optional[datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        raw_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Persist exact source content as L1_RAW without running a model."""
+        from .utils.source_filter import normalize_source
+
+        if not isinstance(content, str) or not content:
+            raise ValueError("content is required")
+        if not user_id:
+            raise ValueError("user_id is required")
+        request_id = request_id or str(uuid.uuid4())
+        replay = await self._claim_write_outcome(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            operation="import_raw",
+        )
+        if replay is not None:
+            return replay
+        try:
+            result = await self._async_import_raw_impl(
+                content,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=normalize_source(source),
+                memory_at=memory_at,
+                metadata=metadata,
+                raw_id=raw_id,
+                request_id=request_id,
+            )
+        except BaseException:
+            await self._mark_write_outcome_unknown(request_id)
+            raise
+        await self._finish_write_outcome(request_id, "succeeded", result)
+        return result
+
+    async def _async_import_raw_impl(
+        self,
+        content: str,
+        *,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        memory_at: Optional[datetime],
+        metadata: Optional[Dict[str, Any]],
+        raw_id: Optional[str],
+        request_id: str,
+    ) -> Dict[str, Any]:
+        from .models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
+
+        node_id = raw_id or str(uuid.uuid4())
+        existing = await self._vector_store.get_by_id(node_id)
+        if existing is not None:
+            identity = (
+                existing.layer == MemoryLayer.L1_RAW,
+                existing.content == content,
+                existing.user_id == user_id,
+                existing.agent_id == agent_id,
+                existing.session_id == session_id,
+                existing.source == source,
+            )
+            if not all(identity):
+                raise ValueError("raw_id is already bound to different source content")
+            return {
+                "success": True,
+                "raw_id": node_id,
+                "request_id": request_id,
+                "replayed": True,
+            }
+
+        custom = dict(metadata or {})
+        custom["request_id"] = request_id
+        custom["input_kind"] = "raw_exact_import"
+        embedding = await self._embed_service.embed(content)
+        node = MemoryNode(
+            node_id=node_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            source=source,
+            layer=MemoryLayer.L1_RAW,
+            content=content,
+            source_type=SourceType.EXPLICIT,
+            status=MemoryStatus.ACTIVE,
+            is_latest=True,
+            embedding=embedding,
+            memory_at=memory_at,
+            custom=custom,
+        )
+        stored_id = await self._vector_store.upsert(node)
+        if stored_id != node_id:
+            raise RuntimeError("raw import changed the requested identity")
+        return {"success": True, "raw_id": node_id, "request_id": request_id}
+
+    @_ensure_internal_loop
+    async def async_get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
+        from .models.memory import MemoryLayer
+
+        node = await self._vector_store.get_by_id(raw_id)
+        if node is None or node.layer != MemoryLayer.L1_RAW:
+            return None
+        return self._raw_node_to_public(node)
+
+    @_ensure_internal_loop
+    async def async_list_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        source: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> Dict[str, Any]:
+        from .models.memory import MemoryLayer, MemoryStatus
+
+        if not user_id:
+            raise ValueError("user_id is required")
+        if limit < 1 or offset < 0:
+            raise ValueError("limit must be positive and offset must be non-negative")
+        nodes = await self._vector_store.list_by_user(
+            user_id=user_id,
+            agent_id=agent_id,
+            status_filter=[MemoryStatus.ACTIVE],
+            layers=[MemoryLayer.L1_RAW],
+            include_sources=[source] if source else None,
+            limit=100_000,
+            only_latest=False,
+            with_vectors=False,
+            allow_raw_layer=True,
+        )
+        if session_id:
+            nodes = [node for node in nodes if node.session_id == session_id]
+        nodes = self._sort_memory_nodes(nodes, order=order)
+        total = len(nodes)
+        return {
+            "raw": [
+                self._raw_node_to_public(node)
+                for node in nodes[offset: offset + limit]
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     @staticmethod
     def _public_search_views(
