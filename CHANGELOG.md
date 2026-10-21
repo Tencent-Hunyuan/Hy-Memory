@@ -14,6 +14,12 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Added SDK-authoritative lifecycle listing with explicit status filters,
+  idempotent durable write outcomes, exact raw import/get/list APIs, and
+  quiesced local data-plane snapshot/restore contracts for the MemHub
+  authority migration.
+- Physical delete now reports incomplete VDB/Graph cleanup as a partial failure
+  instead of claiming success after only one store was changed.
 - Coding search no longer injects the version-evolution diff block
   (`chain_block`) by default. Enable with
   `MEMORY_CODING_CHAIN_BLOCK_ENABLED=true` or
