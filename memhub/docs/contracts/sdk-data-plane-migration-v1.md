@@ -68,11 +68,11 @@ Every item must end in exactly one class:
 
 | Class | Meaning | Required action |
 | --- | --- | --- |
-| matched | Governance/mapping and SDK identity, content, owner, scope and lifecycle agree | verify only |
+| matched | Governance/mapping and SDK identity, content, owner and lifecycle agree | verify only |
 | mapped mismatch | legacy ID maps to a different existing SDK ID | keep SDK ID; record alias |
 | Governance-only | current legacy memory has no SDK entity | exact import without extraction |
 | SDK-only | SDK entity has no legacy mirror | retain and adopt |
-| divergent | both exist but content, owner, scope or lifecycle differs | reconcile explicit user intent or quarantine |
+| divergent | both exist but content, owner or lifecycle differs | reconcile explicit user intent or quarantine |
 | raw-only | Evidence has no SDK raw receipt | exact raw import |
 | unknown outcome | a task may have reached SDK without a confirmed result | SDK outcome inquiry; never blind retry |
 

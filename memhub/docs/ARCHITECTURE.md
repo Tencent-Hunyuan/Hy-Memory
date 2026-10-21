@@ -116,7 +116,7 @@ Source root authorization and Harness synchronization remain distinct:
 ~~**旧：** Turning sync on prepares catch-up import into Evidence / `memory_write_jobs`; historical turns without a durable write receipt are added to `memory_write_jobs`. Adapters read host files into MemHub Evidence; they do not call HY directly.~~
 
 ~~Turning sync off stops scanning and stops claiming pending jobs; in-flight first HY call may finish; previously published memories remain for recall.~~  
-**新补充：** 暂停同步仍是管理面开关；已在 SDK 中的 memory/raw 生命周期由 SDK 与产品调用 SDK 的删除/范围 API 决定，不由 MemHub 影子表「撤销可见性」单独当权威（授权/scope 门禁仍可在召回网关执行）。
+**新补充：** 暂停同步仍是管理面开关；已在 SDK 中的 memory/raw 生命周期由 SDK 与产品调用 SDK 的删除 API 决定，不由 MemHub 影子表「撤销可见性」单独当权威。
 
 Periodic polling / fs watch live in Core. UI does not schedule scans.
 
@@ -171,7 +171,7 @@ authorized source
 Hy Memory is the **only** extraction, memory entity, relationship, and semantic-retrieval engine. Product code enters it through `HyMemoryBridge`（共享 Runtime、模型配置、密钥边界），不在业务模块里私自 new 一套绕过门禁的 client——门禁指的是 **harness/model/队列**，不是再套一层 memory 正文 Governance。
 
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
-- Recall：Host Bridge / Core 先做 **host grant / scope**，再调 **SDK search/get**；可用 MemHub 侧存的 `memory_id` 集合做组织过滤，但 **内容与生命周期以 SDK 为准**。
+- Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。Matters 可用 `memory_id` 集合做组织过滤，但 **内容与生命周期以 SDK 为准**。
 - Matters 等：MemHub 可存事项结构与 `memory_id[]`；改 memory 内容或生命周期 → SDK。
 
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。
@@ -189,7 +189,7 @@ These permissions answer different questions and must not be collapsed:
 1. **Source grant:** may Core read this selected host data root?
 2. **Harness sync:** should Core continue discovering/importing from this source into the **SDK write path**?
 3. **Model-content permission:** may eligible content be sent to the configured model provider (for SDK extraction etc.)?
-4. **Host recall grant:** may this external host retrieve specified scopes / tools?
+4. **Host recall grant:** may this external host invoke the granted recall tools? This is not a per-memory cross-harness ACL.
 
 ~~Model-content permission… Tasks do not carry a parallel permission receipt…~~（调度细节可保留实现，不改变 Top Rules。）
 
