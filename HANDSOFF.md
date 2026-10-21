@@ -52,7 +52,7 @@
 
 - harness：`source_grants`、sync desired-state（`config.json`）、适配器扫描（产出进 SDK，不是 Evidence 权威库）
 - model profiles / 密钥边界 / 模型内容许可
-- 异步队列与租约（调度，不是 memory 实体）
+- `memory_write_jobs` / `memory_tasks` 异步队列、FIFO / event-time 调度与租约（始终属于 MemHub；调度，不是 memory 实体）
 - Core / Runtime 收据与健康
 - Matters 等组织（`memory_id` 外键）
 - call_events 类审计元数据（不存记忆正文）

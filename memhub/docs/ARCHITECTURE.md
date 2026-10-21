@@ -136,7 +136,8 @@ authorized harness / user action
 ```
 
 - **原子 memory 变更**（create / update / delete / supersede 等）：只通过 SDK。缺接口则扩展 SDK client。
-- **异步队列**：MemHub 可保留，用于公平调度、租约、暂停、重试策略；队列 payload 指向「要喂给 SDK 的输入」，不把 MemHub 表当作沉淀结果权威。
+- **异步队列**：`memory_write_jobs` / `memory_tasks`、FIFO / event-time、公平调度、租约、暂停与重试策略继续由 MemHub 持久化和执行；队列 payload 指向「要喂给 SDK 的输入」，不把 MemHub 表当作 memory 实体或沉淀结果权威。
+- SDK `write_outcomes` 只回答某个 request 是否已由 SDK 提交及返回哪些 `memory_id`；它不是队列，也不接管调度。
 
 #### ~~旧：Evidence → Governance 路径（已废弃为目标架构）~~
 
