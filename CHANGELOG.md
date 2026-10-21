@@ -2,6 +2,14 @@
 
 Hy Memory and MemHub are versioned and released independently.
 
+## Hy Memory 2.0.5.dev4 — 2026-10-21
+
+- Development preview; not the final `2.0.5` release.
+- Adds idempotent `process_raw` / `async_process_raw` APIs that extract and
+  reconcile ordered existing L1 raw IDs without embedding or inserting raw
+  again.
+- Returns durable raw/memory ID receipts for MemHub queue recovery.
+
 ## Hy Memory 2.0.5.dev3 — 2026-10-21
 
 - Development preview; not the final `2.0.5` release.
