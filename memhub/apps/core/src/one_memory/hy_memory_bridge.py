@@ -254,6 +254,7 @@ class HyMemoryIngestResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     success: bool
+    raw_ids: tuple[str, ...] = ()
     memories: tuple["HyMemoryOutput", ...] = ()
     #: Ids HY deleted during this write; only a permission lease can observe them.
     retired_memory_ids: tuple[str, ...] = ()
@@ -1002,7 +1003,37 @@ class HyMemoryBridge:
             raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
         if outcome is None:
             return ()
-        return await _outputs_from_write_outcome(
+        result = await _result_from_write_outcome(
+            client,
+            outcome,
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            evidence_ids=evidence_ids,
+        )
+        return result.memories
+
+    @_exclusive
+    async def receipt_for_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        evidence_ids: tuple[str, ...],
+    ) -> HyMemoryIngestResult | None:
+        """Return the exact terminal SDK receipt, including raw and memory ids."""
+        client = await self._get_client()
+        exact_inquiry = getattr(client, "get_write_outcome", None)
+        if not callable(exact_inquiry):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            outcome = await _joined_thread(exact_inquiry, request_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        if outcome is None:
+            return None
+        return await _result_from_write_outcome(
             client,
             outcome,
             request_id=request_id,
@@ -1293,6 +1324,12 @@ class HyMemoryBridge:
             raise HyMemoryBridgeError(_safe_error_code(raw))
         if raw.get("scene") == "productivity":
             return await _coding_result(client, request, raw)
+        raw_memory_id = raw.get("memory_id")
+        source_raw_ids = (
+            (raw_memory_id,)
+            if isinstance(raw_memory_id, str) and raw_memory_id
+            else ()
+        )
         raw_ids = raw.get("memory_ids")
         if not isinstance(raw_ids, list):
             single = raw.get("memory_id")
@@ -1361,7 +1398,11 @@ class HyMemoryBridge:
                     tags=_string_tuple(record.get("tags")),
                 )
             )
-        return HyMemoryIngestResult(success=True, memories=tuple(outputs))
+        return HyMemoryIngestResult(
+            success=True,
+            raw_ids=source_raw_ids,
+            memories=tuple(outputs),
+        )
 
     async def _get_client(self) -> HyMemoryClientProtocol:
         if self._client is not None:
@@ -2136,7 +2177,7 @@ def _basic_info_memories(raw: object) -> tuple[Mapping[str, object], ...]:
     return tuple(memory for memory in memories if isinstance(memory, Mapping))
 
 
-async def _outputs_from_write_outcome(
+async def _result_from_write_outcome(
     client: HyMemoryClientProtocol,
     outcome: object,
     *,
@@ -2144,7 +2185,7 @@ async def _outputs_from_write_outcome(
     user_id: str,
     agent_id: str,
     evidence_ids: tuple[str, ...],
-) -> tuple[HyMemoryOutput, ...]:
+) -> HyMemoryIngestResult:
     if not isinstance(outcome, Mapping):
         raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
     if outcome.get("request_id") not in {None, request_id}:
@@ -2155,7 +2196,7 @@ async def _outputs_from_write_outcome(
             raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
     status = outcome.get("status")
     if status == "failed":
-        return ()
+        return HyMemoryIngestResult(success=False)
     if status != "succeeded":
         raise HyMemoryBridgeError("hy_memory_outcome_not_terminal")
     result = outcome.get("result")
@@ -2166,8 +2207,16 @@ async def _outputs_from_write_outcome(
         values = result.get(key)
         if isinstance(values, list):
             candidates.extend(value for value in values if isinstance(value, str))
-    if isinstance(result.get("memory_id"), str):
-        candidates.append(cast(str, result["memory_id"]))
+    singular_id = result.get("memory_id")
+    if isinstance(singular_id, str):
+        candidates.append(singular_id)
+    raw_ids = (
+        (singular_id,)
+        if isinstance(singular_id, str)
+        and singular_id
+        and result.get("scene") != "productivity"
+        else ()
+    )
 
     outputs: list[HyMemoryOutput] = []
     for memory_id in dict.fromkeys(candidates):
@@ -2196,7 +2245,11 @@ async def _outputs_from_write_outcome(
                 evidence_ids=evidence_ids,
             )
         )
-    return tuple(outputs)
+    return HyMemoryIngestResult(
+        success=True,
+        raw_ids=raw_ids,
+        memories=tuple(outputs),
+    )
 
 
 def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:

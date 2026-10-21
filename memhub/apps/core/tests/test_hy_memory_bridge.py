@@ -613,8 +613,14 @@ def test_bridge_warm_loads_first_write_tokenizer_off_the_event_loop(tmp_path, mo
     assert calls[0][1] != event_loop_thread
 
 
-def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> None:
-    client = FakeHyMemoryClient({"success": True, "memory_ids": ["memory-1"]})
+def test_bridge_returns_sdk_raw_and_memory_ids_from_one_add(tmp_path) -> None:
+    client = FakeHyMemoryClient(
+        {
+            "success": True,
+            "memory_id": "raw-1",
+            "memory_ids": ["memory-1"],
+        }
+    )
     bridge = HyMemoryBridge(
         profile=snapshot(
             ProviderKind.OLLAMA,
@@ -637,6 +643,7 @@ def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> 
     result = asyncio.run(bridge.ingest(request))
     asyncio.run(bridge.close())
 
+    assert result.raw_ids == ("raw-1",)
     assert tuple(memory.memory_id for memory in result.memories) == ("memory-1",)
     assert result.memories[0].content == "Extracted memory"
     assert client.calls[0]["agent_id"] == "one-memory"

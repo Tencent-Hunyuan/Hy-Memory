@@ -2904,6 +2904,51 @@ async def _055_sdk_data_plane_migration(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def memory_task_sdk_receipts_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts (
+    task_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    raw_ids_json TEXT NOT NULL,
+    memory_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts (
+    task_id VARCHAR(128) PRIMARY KEY,
+    request_id VARCHAR(256) NOT NULL,
+    raw_ids_json JSON NOT NULL,
+    memory_ids_json JSON NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    UNIQUE KEY memory_task_sdk_receipt_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+def sdk_write_receipts_ddl(dialect: str = "mysql") -> str:
+    """SDK ids returned after one normal add(); pending jobs keep these empty."""
+    if dialect == "sqlite":
+        return """
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_raw_ids_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_memory_ids_json TEXT NOT NULL DEFAULT '[]';
+""" + memory_task_sdk_receipts_ddl("sqlite")
+    return """
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_raw_ids_json JSON NOT NULL DEFAULT ('[]');
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_memory_ids_json JSON NOT NULL DEFAULT ('[]');
+""" + memory_task_sdk_receipts_ddl("mysql")
+
+
+async def _056_sdk_write_receipts(cursor: Any) -> None:
+    for statement in _split_statements(sdk_write_receipts_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3172,5 +3217,11 @@ MIGRATIONS: tuple[Migration, ...] = (
             "memory_id_aliases",
             "sdk_data_plane_cutover",
         ),
+    ),
+    Migration(
+        56,
+        "sdk_write_receipts",
+        _056_sdk_write_receipts,
+        ("memory_task_sdk_receipts",),
     ),
 )

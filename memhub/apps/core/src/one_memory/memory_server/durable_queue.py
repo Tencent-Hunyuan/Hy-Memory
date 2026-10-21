@@ -303,6 +303,8 @@ LEGACY_MEMORY_WRITE_JOB_COLUMNS = (
     ("last_error", "TEXT"),
     ("event_at", "TEXT"),
     ("time_quality", "TEXT NOT NULL DEFAULT 'approximate'"),
+    ("sdk_raw_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("sdk_memory_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
 _FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
@@ -318,6 +320,15 @@ class DurableWriteRecord:
     created_at: str
     updated_at: str
     detail: str = ""
+    sdk_raw_ids: tuple[str, ...] = ()
+    sdk_memory_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DurableSdkReceipt:
+    job_id: str
+    raw_ids: tuple[str, ...]
+    memory_ids: tuple[str, ...]
 
 
 class ReconcileSchemaUnavailableError(RuntimeError):
@@ -1100,7 +1111,8 @@ class DurableWriteQueue:
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
             _require_queue_schema(connection)
             row = connection.execute(
-                "SELECT job_id, state, created_at, updated_at, last_error "
+                "SELECT job_id, state, created_at, updated_at, last_error, "
+                "sdk_raw_ids_json,sdk_memory_ids_json "
                 "FROM memory_write_jobs WHERE idempotency_key=?",
                 (request_id,),
             ).fetchone()
@@ -1114,6 +1126,8 @@ class DurableWriteQueue:
             created_at=str(row["created_at"]),
             updated_at=str(row["updated_at"]),
             detail=str(row["last_error"] or ""),
+            sdk_raw_ids=tuple(json.loads(str(row["sdk_raw_ids_json"]))),
+            sdk_memory_ids=tuple(json.loads(str(row["sdk_memory_ids_json"]))),
         )
 
     def payload_for(self, job_id: str) -> WriteRequest | None:
@@ -1135,6 +1149,21 @@ class DurableWriteQueue:
             return None
         return WriteRequest.model_validate_json(payload)
 
+    def sdk_receipt(self, job_id: str) -> DurableSdkReceipt | None:
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            row = connection.execute(
+                "SELECT state,sdk_raw_ids_json,sdk_memory_ids_json "
+                "FROM memory_write_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None or str(row["state"]) != COMPLETED:
+            return None
+        return DurableSdkReceipt(
+            job_id=job_id,
+            raw_ids=tuple(json.loads(str(row["sdk_raw_ids_json"]))),
+            memory_ids=tuple(json.loads(str(row["sdk_memory_ids_json"]))),
+        )
+
     def settle(
         self,
         job_id: str,
@@ -1143,6 +1172,8 @@ class DurableWriteQueue:
         error_code: str | None = None,
         hy_invoked: bool | None = None,
         owner: str | None = None,
+        sdk_raw_ids: tuple[str, ...] | None = None,
+        sdk_memory_ids: tuple[str, ...] | None = None,
     ) -> None:
         """Record a terminal outcome, and whether HY was reached.
 
@@ -1171,6 +1202,13 @@ class DurableWriteQueue:
         lease lapsed and the row was re-claimed elsewhere cannot settle a job
         it no longer owns and overwrite the new owner's outcome.
         """
+        if (sdk_raw_ids is not None or sdk_memory_ids is not None) and state != COMPLETED:
+            raise ValueError("SDK ids may only be attached to a completed job")
+        if any(
+            not isinstance(value, str) or not value
+            for value in (*(sdk_raw_ids or ()), *(sdk_memory_ids or ()))
+        ):
+            raise ValueError("SDK receipt ids must be non-empty strings")
         with main_database(self.database_path).write() as connection, connection:
             now = datetime.now(UTC).isoformat()
             current = connection.execute(
@@ -1221,17 +1259,34 @@ class DurableWriteQueue:
                     "AND lease_expires_at IS NOT NULL AND lease_expires_at>=?"
                 )
                 params = (owner, now)
+            receipt_sql = ""
+            receipt_values: tuple[Any, ...] = ()
+            if sdk_raw_ids is not None or sdk_memory_ids is not None:
+                receipt_sql = ", sdk_raw_ids_json=?, sdk_memory_ids_json=?"
+                receipt_values = (
+                    json.dumps(list(dict.fromkeys(sdk_raw_ids or ()))),
+                    json.dumps(list(dict.fromkeys(sdk_memory_ids or ()))),
+                )
             if hy_invoked is None:
                 updated = connection.execute(
                     "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
-                    f"lease_expires_at=NULL, last_error=?, updated_at=? {where}",
-                    (state, error_code, now, job_id, *params),
+                    f"lease_expires_at=NULL, last_error=?{receipt_sql}, updated_at=? {where}",
+                    (state, error_code, *receipt_values, now, job_id, *params),
                 )
             else:
                 updated = connection.execute(
                     "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
-                    f"lease_expires_at=NULL, last_error=?, hy_invoked=?, updated_at=? {where}",
-                    (state, error_code, 1 if hy_invoked else 0, now, job_id, *params),
+                    f"lease_expires_at=NULL, last_error=?, hy_invoked=?"
+                    f"{receipt_sql}, updated_at=? {where}",
+                    (
+                        state,
+                        error_code,
+                        1 if hy_invoked else 0,
+                        *receipt_values,
+                        now,
+                        job_id,
+                        *params,
+                    ),
                 )
             if owner is not None and updated.rowcount != 1:
                 # Defensive: the guard above should already have caught this,
@@ -1893,6 +1948,8 @@ class DurableWriteRegistry:
             created_at=record.created_at,
             updated_at=record.updated_at,
             detail=detail,
+            raw_ids=record.sdk_raw_ids,
+            memory_ids=record.sdk_memory_ids,
         )
 
     def submit(
@@ -2053,10 +2110,16 @@ async def execute_job(
     try:
         level = ServiceLevel.REALTIME if request.priority == "live" else ServiceLevel.BACKGROUND
         with service_level_context(level):
-            await supervisor.process_records(
+            completed_tasks = await supervisor.process_records(
                 records,
                 before_hy_invocation=mark_hy_invocation,
             )
+        receipts = []
+        for task in completed_tasks:
+            receipt = await in_the_background(supervisor.tasks.sdk_receipt, task.task_id)
+            if receipt is None:
+                raise RuntimeError("sdk_write_receipt_missing")
+            receipts.append(receipt)
     except Exception as error:  # noqa: BLE001 - classified below
         # Never persist the raw message: it may be a provider response or the
         # user's own text, and `last_error` is shown over HTTP as `detail`.
@@ -2126,7 +2189,20 @@ async def execute_job(
         else:
             logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
         return
-    await in_the_background(queue.settle, job_id, state=COMPLETED, owner=owner)
+    await in_the_background(
+        queue.settle,
+        job_id,
+        state=COMPLETED,
+        owner=owner,
+        sdk_raw_ids=tuple(
+            dict.fromkeys(raw_id for receipt in receipts for raw_id in receipt.raw_ids)
+        ),
+        sdk_memory_ids=tuple(
+            dict.fromkeys(
+                memory_id for receipt in receipts for memory_id in receipt.memory_ids
+            )
+        ),
+    )
 
 
 class DurableWriteDrain:

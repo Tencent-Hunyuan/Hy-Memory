@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -6,6 +7,8 @@ import pytest
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_queue import FRESH_WINDOW
+from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
+from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.memory_tasks import (
     TASK_MAX_ATTEMPTS,
     MemoryTaskKind,
@@ -42,6 +45,31 @@ def activate(
         secrets=secrets,
     )
     return profiles.activate(profile.profile_id, secrets)
+
+
+def test_sdk_receipt_records_ids_only_after_sdk_success(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
+    tasks = MemoryTaskStore(database)
+
+    assert tasks.sdk_receipt("task-1") is None
+    receipt = tasks.save_sdk_receipt(
+        task_id="task-1",
+        request_id="request-1",
+        raw_ids=("raw-1",),
+        memory_ids=("memory-1", "memory-1"),
+    )
+
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1",)
+    assert tasks.sdk_receipt("task-1") == receipt
+    with pytest.raises(MemoryTaskRequestConflictError):
+        tasks.save_sdk_receipt(
+            task_id="task-1",
+            request_id="request-1",
+            raw_ids=("raw-2",),
+            memory_ids=("memory-1",),
+        )
 
 
 def test_task_freezes_active_profile_revision_and_is_idempotent(tmp_path) -> None:

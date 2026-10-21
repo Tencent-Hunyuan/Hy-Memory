@@ -57,6 +57,9 @@
 - harness：`source_grants`、sync desired-state（`config.json`）、适配器扫描（产出进 SDK，不是 Evidence 权威库）
 - model profiles / 密钥边界 / 模型内容许可
 - `memory_write_jobs` / `memory_tasks` 异步队列、FIFO / event-time 调度与租约（始终属于 MemHub；调度，不是 memory 实体）
+  - pending job 尚未调用 SDK，因此没有 raw/memory ID；worker 对 SDK 只调用一次
+    `add()`，SDK 内部完成 raw + extraction/reconciliation，成功后 MemHub 仅保存
+    返回的 raw ID / memory IDs 与 outcome。禁止“先 import_raw 再排 extraction”。
 - Core / Runtime 收据与健康
 - Matters 等组织（`memory_id` 外键）
 - call_events 类审计元数据（不存记忆正文）

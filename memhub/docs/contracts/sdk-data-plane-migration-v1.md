@@ -152,6 +152,14 @@ same deterministic SDK operation key and must not create another memory.
 
 Queue rows and leases remain MemHub management state.
 
+- A pending job has not called the SDK and therefore has no SDK raw or memory
+  ID yet.
+- Its worker calls SDK `add()` once. The SDK owns raw persistence plus
+  extraction/reconciliation; a successful job stores only the returned raw ID,
+  canonical memory IDs and terminal outcome.
+- Exact `import_raw()` is a historical migration primitive, not the first half
+  of a two-stage normal write path.
+
 - `hy_invoked=0` may be safely retried after normal lease recovery.
 - `hy_invoked=1`, `memory_tasks.status=unknown`, or any non-terminal SDK outcome
   must use `get_write_outcome(request_id)`.

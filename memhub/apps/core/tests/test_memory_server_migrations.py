@@ -125,6 +125,18 @@ def test_sdk_data_plane_cutover_ledger_is_owned_by_migration_55() -> None:
         assert "operation_key" in ddl
 
 
+def test_sdk_write_receipts_are_owned_by_migration_56() -> None:
+    from one_memory.memory_server.migrations import MIGRATIONS, sdk_write_receipts_ddl
+
+    migration = next(item for item in MIGRATIONS if item.version == 56)
+    assert migration.tables == ("memory_task_sdk_receipts",)
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_write_receipts_ddl(dialect)
+        assert "sdk_raw_ids_json" in ddl
+        assert "sdk_memory_ids_json" in ddl
+        assert "CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts" in ddl
+
+
 def test_plan_upgrade_from_zero_is_everything() -> None:
     expected = [item.version for item in MIGRATIONS]
     assert [item.version for item in plan_upgrade(MIGRATIONS, 0)] == expected
@@ -2124,7 +2136,7 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50, 51, 52, 53, 54)
+    assert result.applied == (49, 50, 51, 52, 53, 54, 55, 56)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
@@ -2157,7 +2169,7 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (51, 52, 53, 54)
+    assert result.applied == (51, 52, 53, 54, 55, 56)
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]

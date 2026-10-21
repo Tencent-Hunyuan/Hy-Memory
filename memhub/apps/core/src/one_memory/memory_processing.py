@@ -241,6 +241,15 @@ class MemoryBridgeProtocol(Protocol):
         evidence_ids: tuple[str, ...],
     ) -> tuple[HyMemoryOutput, ...]: ...
 
+    async def receipt_for_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        evidence_ids: tuple[str, ...],
+    ) -> HyMemoryIngestResult | None: ...
+
     async def graph_snapshot(
         self,
         *,
@@ -532,6 +541,13 @@ class MemoryTaskRunner:
             self._log_step(task_id, 5, "hy_ingest", step_started)
             if not result.success:
                 raise HyMemoryBridgeError("hy_memory_runtime_failed")
+            await in_the_background(
+                self.tasks.save_sdk_receipt,
+                task_id=task.task_id,
+                request_id=request.request_id,
+                raw_ids=result.raw_ids,
+                memory_ids=tuple(memory.memory_id for memory in result.memories),
+            )
             outputs = result.memories
             if only_contents and not outputs:
                 raise HyMemoryBridgeError("hy_memory_import_no_readable_output")
@@ -1553,16 +1569,37 @@ class MemoryProcessingSupervisor:
                 if task.profile_snapshot.has_api_key and secret is None:
                     continue
                 bridge = self.bridge_factory(task.profile_snapshot, secret, self.data_dir)
-                inquiry = getattr(bridge, "outputs_for_request", None)
-                if inquiry is None:
-                    continue
-                outputs = await inquiry(
-                    request_id=request.request_id,
-                    user_id=request.user_id,
-                    agent_id=request.agent_id,
-                    evidence_ids=request.evidence_ids,
-                )
-                if not outputs:
+                receipt_inquiry = getattr(bridge, "receipt_for_request", None)
+                if receipt_inquiry is not None:
+                    sdk_result = await receipt_inquiry(
+                        request_id=request.request_id,
+                        user_id=request.user_id,
+                        agent_id=request.agent_id,
+                        evidence_ids=request.evidence_ids,
+                    )
+                    if sdk_result is None or not sdk_result.success:
+                        continue
+                    await in_the_background(
+                        self.tasks.save_sdk_receipt,
+                        task_id=task.task_id,
+                        request_id=request.request_id,
+                        raw_ids=sdk_result.raw_ids,
+                        memory_ids=tuple(
+                            memory.memory_id for memory in sdk_result.memories
+                        ),
+                    )
+                    outputs = sdk_result.memories
+                else:
+                    inquiry = getattr(bridge, "outputs_for_request", None)
+                    if inquiry is None:
+                        continue
+                    outputs = await inquiry(
+                        request_id=request.request_id,
+                        user_id=request.user_id,
+                        agent_id=request.agent_id,
+                        evidence_ids=request.evidence_ids,
+                    )
+                if not outputs and self.tasks.sdk_receipt(task.task_id) is None:
                     continue
                 derivation = await in_the_background(self.governance.hy_derivation)
                 await in_the_background(

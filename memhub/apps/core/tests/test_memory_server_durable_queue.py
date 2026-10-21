@@ -98,6 +98,30 @@ def test_acceptance_is_written_to_the_business_database(tmp_path, monkeypatch) -
     ]
 
 
+def test_pending_job_has_no_sdk_ids_and_completed_job_keeps_the_sdk_receipt(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    job = queue.submit(_request())
+
+    assert queue.sdk_receipt(job.job_id) is None
+    with pytest.raises(ValueError):
+        queue.settle(
+            job.job_id,
+            state=UNKNOWN,
+            sdk_raw_ids=("raw-1",),
+        )
+    queue.settle(
+        job.job_id,
+        state=COMPLETED,
+        sdk_raw_ids=("raw-1",),
+        sdk_memory_ids=("memory-1", "memory-1"),
+    )
+
+    receipt = queue.sdk_receipt(job.job_id)
+    assert receipt is not None
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1",)
+
+
 def test_an_isolated_legacy_queue_keeps_the_empty_snapshot_compatibility_shape(tmp_path) -> None:
     """Queues without an Evidence authority exist only for legacy/unit compatibility."""
     import json
@@ -872,6 +896,48 @@ def test_a_durable_job_is_processed_through_the_authorized_path(tmp_path) -> Non
 
     assert supervisor.seen == [("e1", "e2")]
     assert _state(path, record.job_id) == "completed"
+
+
+def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+
+    class Tasks:
+        @staticmethod
+        def sdk_receipt(task_id):
+            assert task_id == "task-1"
+            return type(
+                "Receipt",
+                (),
+                {
+                    "raw_ids": ("raw-1",),
+                    "memory_ids": ("memory-1", "memory-2"),
+                },
+            )()
+
+    class Supervisor:
+        tasks = Tasks()
+
+        @staticmethod
+        async def process_records(_records, **kwargs):
+            await kwargs["before_hy_invocation"]()
+            return (type("Task", (), {"task_id": "task-1"})(),)
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=Supervisor(),
+            evidence=_EvidenceStore({"e1"}),
+        )
+    )
+
+    receipt = queue.sdk_receipt(record.job_id)
+    assert receipt is not None
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1", "memory-2")
 
 
 def test_missing_evidence_is_refused_without_calling_the_model(tmp_path) -> None:

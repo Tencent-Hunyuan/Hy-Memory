@@ -50,6 +50,8 @@ class MemoryWriteReceipt(BaseModel):
     created_at: str
     updated_at: str
     detail: str = ""
+    raw_ids: tuple[str, ...] = ()
+    memory_ids: tuple[str, ...] = ()
 
 
 def _registry(
@@ -135,6 +137,8 @@ def router(dependencies: list[Any] | None = None) -> APIRouter:
             created_at=record.created_at,
             updated_at=record.updated_at,
             detail=record.detail,
+            raw_ids=record.raw_ids,
+            memory_ids=record.memory_ids,
         )
 
     return instance
