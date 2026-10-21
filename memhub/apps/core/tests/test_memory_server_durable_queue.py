@@ -925,6 +925,46 @@ def test_a_claimed_row_with_no_readable_payload_is_settled_not_left_running(tmp_
     assert _rows(path)[0]["lease_owner"] is None
 
 
+def test_extraction_prompt_config_error_is_terminal_without_hy_invocation(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Recorder(error=HyMemoryBridgeError("hy_extraction_scope_rule_not_found")),
+            evidence=_EvidenceStore({"e1"}),
+        )
+    )
+    row = _rows(path)[0]
+    assert row["state"] == FAILED
+    assert row["hy_invoked"] == 0
+    assert row["last_error"] == "hy_extraction_scope_rule_not_found"
+
+
+def test_scope_error_after_prior_hy_invocation_remains_unknown(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Recorder(
+                error=HyMemoryBridgeError("hy_extraction_scope_rule_not_found"),
+                invoke_hy=True,
+            ),
+            evidence=_EvidenceStore({"e1"}),
+        )
+    )
+    row = _rows(path)[0]
+    assert row["state"] == UNKNOWN
+    assert row["hy_invoked"] == 1
+
+
 def test_an_unknown_outcome_is_recorded_as_unknown_not_retried(tmp_path) -> None:
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)

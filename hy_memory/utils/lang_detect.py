@@ -8,6 +8,7 @@ Uses a two-tier strategy:
 This avoids langdetect's known weakness with short Chinese text.
 """
 
+import json
 import logging
 import re
 from typing import List, Optional
@@ -135,6 +136,30 @@ def detect_language(text: str) -> str:
     return "zh" if ratio > 0.1 else "en"
 
 
+def _spoken_text(value: str) -> str:
+    """Ignore text-block metadata when a message content is structured JSON."""
+    text = value.strip()
+    if text.startswith("["):
+        try:
+            blocks = json.loads(text)
+        except (ValueError, TypeError):
+            pass
+        else:
+            if (
+                isinstance(blocks, list)
+                and blocks
+                and all(
+                    isinstance(block, dict)
+                    and isinstance(block.get("type"), str)
+                    and block["type"] in {"text", "input_text", "output_text"}
+                    and isinstance(block.get("text"), str)
+                    for block in blocks
+                )
+            ):
+                return "\n".join(block["text"] for block in blocks)
+    return text
+
+
 def extract_content_for_detection(
     content: str = "",
     messages: Optional[List] = None,
@@ -153,20 +178,57 @@ def extract_content_for_detection(
         Concatenated content text suitable for language detection.
     """
     if content and content.strip():
-        return content.strip()
+        value = content.strip()
+        # Writer serializes message batches to JSON before calling Extractor.
+        # Detect the spoken text, not the leading ASCII keys (role/content),
+        # without changing the raw evidence sent to the model.
+        if value.startswith("["):
+            try:
+                decoded = json.loads(value)
+            except (ValueError, TypeError):
+                pass
+            else:
+                if (
+                    isinstance(decoded, list)
+                    and decoded
+                    and all(
+                        isinstance(item, dict)
+                        and isinstance(item.get("role"), str)
+                        and isinstance(item.get("content"), str)
+                        for item in decoded
+                    )
+                ):
+                    # In a mixed batch, the latest user turn is the clearest
+                    # instruction for the language; assistant/tool metadata
+                    # must not decide it first.
+                    user_text = [
+                        _spoken_text(item["content"])
+                        for item in decoded
+                        if item["role"] == "user" and item["content"].strip()
+                    ]
+                    if user_text:
+                        return user_text[-1]
+                    spoken = "\n".join(_spoken_text(item["content"]) for item in decoded)
+                    if spoken.strip():
+                        return spoken
+        return _spoken_text(value)
 
     if messages:
         parts = []
+        user_parts = []
         for msg in messages:
             if isinstance(msg, dict):
-                c = msg.get("content", "")
+                c, role = msg.get("content", ""), msg.get("role")
             elif hasattr(msg, "content"):
-                c = msg.content
+                c, role = msg.content, getattr(msg, "role", None)
             else:
                 continue
-            if c and c.strip():
-                parts.append(c.strip())
-        return "\n".join(parts)
+            if isinstance(c, str) and c.strip():
+                text = _spoken_text(c)
+                parts.append(text)
+                if role == "user":
+                    user_parts.append(text)
+        return user_parts[-1] if user_parts else "\n".join(parts)
 
     return ""
 
