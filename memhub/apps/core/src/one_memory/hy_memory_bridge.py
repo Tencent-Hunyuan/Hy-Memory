@@ -1461,6 +1461,40 @@ def hy_memory_store_exists(data_dir: Path) -> bool:
     return (data_dir / "hy-memory" / HY_MEMORY_NAMESPACE / "graph").exists()
 
 
+def snapshot_hy_data_plane(
+    *,
+    source_root: Path,
+    target_root: Path,
+    writers_stopped: bool,
+) -> object:
+    """Offline SDK snapshot entry; product modules do not import SDK stores."""
+    from hy_memory.snapshot import snapshot_local_data_plane
+
+    return snapshot_local_data_plane(
+        source_root=source_root,
+        target_root=target_root,
+        writers_stopped=writers_stopped,
+    )
+
+
+def restore_hy_data_plane(
+    *,
+    snapshot_root: Path,
+    target_root: Path,
+    writers_stopped: bool,
+    protective_root: Path | None = None,
+) -> object:
+    """Offline SDK restore entry; requires the released SDK snapshot contract."""
+    from hy_memory.snapshot import restore_local_data_plane
+
+    return restore_local_data_plane(
+        snapshot_root=snapshot_root,
+        target_root=target_root,
+        writers_stopped=writers_stopped,
+        protective_root=protective_root,
+    )
+
+
 class LocalHyEmbedService:
     """Drop-in for HY's EmbedService that runs the built-in ONNX model.
 

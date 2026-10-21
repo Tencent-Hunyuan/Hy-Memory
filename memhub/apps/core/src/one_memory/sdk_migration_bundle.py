@@ -115,12 +115,12 @@ def create_sdk_migration_bundle(
                 raise MigrationBundleRejected("sdk_migration_bundle_sdk_root_invalid")
             if snapshotter is None:
                 try:
-                    from hy_memory.snapshot import snapshot_local_data_plane
+                    from one_memory.hy_memory_bridge import snapshot_hy_data_plane
                 except ImportError as error:
                     raise MigrationBundleRejected(
                         "sdk_migration_snapshot_unavailable"
                     ) from error
-                snapshotter = snapshot_local_data_plane
+                snapshotter = snapshot_hy_data_plane
             try:
                 snapshotter(
                     source_root=sdk_root,
@@ -261,10 +261,10 @@ def restore_sdk_migration_bundle(
 
     if restore_data_plane is None:
         try:
-            from hy_memory.snapshot import restore_local_data_plane
+            from one_memory.hy_memory_bridge import restore_hy_data_plane
         except ImportError as error:
             raise MigrationBundleRejected("sdk_migration_restore_unavailable") from error
-        restore_data_plane = restore_local_data_plane
+        restore_data_plane = restore_hy_data_plane
 
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%S%fZ")
     database_live = home / "one-memory.sqlite3"
