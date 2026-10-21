@@ -197,6 +197,7 @@ def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store)
             migration_id="m1",
             bundle_id="bundle-1",
             sdk_version="2.0.5.dev3",
+            product_paths_ready=True,
         )
 
     queue.settle(job.job_id, state=COMPLETED)
@@ -206,6 +207,7 @@ def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store)
         migration_id="m1",
         bundle_id="bundle-1",
         sdk_version="2.0.5.dev3",
+        product_paths_ready=True,
     )
     assert marker.migration_id == "m1"
 

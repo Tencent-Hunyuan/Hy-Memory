@@ -92,8 +92,11 @@ def commit_reconciled_cutover(
     bundle_id: str,
     sdk_version: str,
     store_version: str = "1",
+    product_paths_ready: bool = False,
 ) -> CutoverMarker:
     """Verify backup/work quiescence and atomically commit SDK authority."""
+    if not product_paths_ready:
+        raise DataPlaneMigrationError("sdk_data_plane_product_paths_not_ready")
     inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id)
     blockers = sdk_cutover_blockers(database_path)
     if blockers:
