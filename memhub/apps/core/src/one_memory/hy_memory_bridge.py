@@ -437,6 +437,12 @@ class HyMemoryClientProtocol(Protocol):
         **kwargs: object,
     ) -> Mapping[str, object]: ...
 
+    def import_raw(
+        self,
+        content: str,
+        **kwargs: object,
+    ) -> Mapping[str, object]: ...
+
     def update(self, memory_id: str, content: str) -> Mapping[str, object]: ...
 
     def delete(self, memory_id: str) -> Mapping[str, object]: ...
@@ -871,6 +877,43 @@ class HyMemoryBridge:
             raise HyMemoryBridgeError("hy_memory_exact_import_failed") from error
         if not isinstance(raw, Mapping) or raw.get("success") is not True:
             raise HyMemoryBridgeError("hy_memory_exact_import_failed")
+        return dict(raw)
+
+    @_exclusive
+    async def import_sdk_raw_exact(
+        self,
+        *,
+        content: str,
+        raw_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        memory_at: datetime | None,
+        metadata: Mapping[str, object],
+        request_id: str,
+    ) -> dict[str, object]:
+        client = await self._get_client()
+        importer = getattr(client, "import_raw", None)
+        if not callable(importer):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            raw = await _joined_thread(
+                importer,
+                content,
+                raw_id=raw_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                memory_at=memory_at,
+                metadata=dict(metadata),
+                request_id=request_id,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_import_failed") from error
+        if not isinstance(raw, Mapping) or raw.get("success") is not True:
+            raise HyMemoryBridgeError("hy_memory_raw_import_failed")
         return dict(raw)
 
     @_exclusive

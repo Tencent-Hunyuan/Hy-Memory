@@ -6,7 +6,7 @@ import json
 import pytest
 
 from one_memory.database_access import close_main_databases, main_database
-from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord
+from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.sdk_data_plane_migration import (
@@ -16,13 +16,20 @@ from one_memory.sdk_data_plane_migration import (
 )
 from one_memory.sdk_migration_inventory import (
     LegacyMemoryInventory,
+    LegacyRawInventory,
     SdkMemoryInventory,
+    SdkRawInventory,
     classify_memory_inventory,
+    classify_raw_inventory,
     content_hash,
     execute_memory_migration_plan,
+    execute_raw_migration_plan,
     read_legacy_memory_inventory,
+    read_legacy_raw_inventory,
     read_sdk_memory_inventory,
+    read_sdk_raw_inventory,
     record_memory_migration_plan,
+    record_raw_migration_plan,
 )
 
 
@@ -291,7 +298,9 @@ class _Bridge:
     def __init__(self, memories=()):
         self.memories = tuple(memories)
         self.imported = []
+        self.imported_raw = []
         self.deleted = []
+        self.raw = ()
 
     async def list_sdk_memories(self, *, limit, offset, **_kwargs):
         page = self.memories[offset : offset + limit]
@@ -309,6 +318,14 @@ class _Bridge:
     async def delete(self, memory_id):
         self.deleted.append(memory_id)
         return {"success": True, "deleted_count": 1}
+
+    async def list_sdk_raw(self, *, limit, offset, **_kwargs):
+        rows = self.raw[offset : offset + limit]
+        return rows, len(self.raw)
+
+    async def import_sdk_raw_exact(self, **kwargs):
+        self.imported_raw.append(kwargs)
+        return {"success": True, "raw_id": kwargs["raw_id"]}
 
 
 def _record(memory_id, *, content="body", status="active"):
@@ -375,3 +392,112 @@ def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
     assert bridge.deleted == ["delete-existing"]
     progress = store.progress("m1")
     assert progress.counts == {"adopted": 1, "deleted": 2, "verified": 3}
+
+
+def test_legacy_raw_inventory_preserves_exact_source_metadata(store):
+    database = store.database_path
+    with main_database(database).write() as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO evidence (
+                evidence_id,idempotency_key,user_id,source_id,workspace,project,
+                conversation_id,message_id,source_ordinal,content_kind,role,
+                written_by,created_at,verbatim,content_hash,revision,
+                imported_at,updated_at,ingest_seq
+            ) VALUES (
+                'e1','key','local','cursor','/repo','project','session','message',
+                '7','raw_conversation','user','person','2026-10-01T00:00:00+00:00',
+                'verbatim',?,2,'2026-10-02T00:00:00+00:00',
+                '2026-10-02T00:00:00+00:00',1
+            )
+            """,
+            (content_hash("verbatim"),),
+        )
+    (raw,) = read_legacy_raw_inventory(database)
+    assert raw.evidence_id == "e1"
+    assert raw.session_id == "session"
+    assert raw.source == "cursor"
+    assert raw.metadata["role"] == "user"
+    assert raw.metadata["revision"] == 2
+    assert raw.memory_at.isoformat() == "2026-10-01T00:00:00+00:00"
+
+
+def _legacy_raw(evidence_id, *, content="verbatim"):
+    return LegacyRawInventory(
+        evidence_id=evidence_id,
+        user_id="local",
+        agent_id="one-memory",
+        session_id="session",
+        source="cursor",
+        content=content,
+        content_hash=content_hash(content),
+        memory_at=None,
+        metadata={"role": "user"},
+    )
+
+
+def _sdk_raw(raw_id, *, content="verbatim"):
+    return SdkRawInventory(
+        raw_id=raw_id,
+        user_id="local",
+        agent_id="one-memory",
+        session_id="session",
+        source="cursor",
+        content_hash=content_hash(content),
+    )
+
+
+def test_raw_inventory_matches_exact_scope_imports_missing_and_adopts_sdk_only(store):
+    legacy = (_legacy_raw("e1"), _legacy_raw("e2", content="missing"))
+    sdk = (_sdk_raw("raw-existing"), _sdk_raw("raw-sdk-only", content="sdk-only"))
+    decisions = classify_raw_inventory(legacy, sdk)
+    by_key = {item.item_key: item for item in decisions}
+    assert by_key["raw:e1"].action == "matched"
+    assert by_key["raw:e1"].raw_id == "raw-existing"
+    assert by_key["raw:e2"].action == "import_exact"
+    assert by_key["raw:e2"].raw_id == "evidence:e2"
+    assert by_key["sdk-raw:raw-sdk-only"].action == "adopt"
+
+    _start(store)
+    recorded = record_raw_migration_plan(
+        store,
+        migration_id="m1",
+        legacy=legacy,
+        sdk=sdk,
+    )
+    bridge = _Bridge()
+    asyncio.run(
+        execute_raw_migration_plan(
+            bridge,
+            store,
+            migration_id="m1",
+            legacy=legacy,
+            decisions=recorded,
+        )
+    )
+    assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e2"]
+    assert store.progress("m1").counts == {"adopted": 1, "verified": 2}
+
+
+def test_sdk_raw_inventory_pages_all_records():
+    bridge = _Bridge()
+    bridge.raw = (
+        HySdkRawRecord(
+            raw_id="r1",
+            content="one",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="s1",
+            source="cursor",
+        ),
+        HySdkRawRecord(
+            raw_id="r2",
+            content="two",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="s2",
+            source="claude",
+        ),
+    )
+    inventory = asyncio.run(read_sdk_raw_inventory(bridge, page_size=1))
+    assert [item.raw_id for item in inventory] == ["r1", "r2"]
