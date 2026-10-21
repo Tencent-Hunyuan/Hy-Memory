@@ -6,6 +6,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 - Development preview for the MemHub SDK-authority migration; this is not the
   final `2.0.5` release.
+- Published as
+  [`hy-memory==2.0.5.dev1`](https://pypi.org/project/hy-memory/2.0.5.dev1/).
 - Adds lifecycle status filtering, durable idempotent write outcomes, exact raw
   APIs, offline local data-plane snapshot/restore, and fail-closed physical
   delete receipts.
