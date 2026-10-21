@@ -369,3 +369,8 @@ Test entry points: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 3. 导入/同步改为 SDK raw/write；退役 Evidence 权威。  
 4. 删除或清空镜像台账；队列改为纯调度。  
 5. 缺的 SDK API 开 SDK PR，而不是在 Core 里补影子表。
+
+Released installations require the offline, resumable compatibility protocol in
+[`contracts/sdk-data-plane-migration-v1.md`](contracts/sdk-data-plane-migration-v1.md).
+Do not cut over an existing home with a SQLite-only backup or by replaying
+Evidence through extraction.

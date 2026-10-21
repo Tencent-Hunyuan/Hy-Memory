@@ -3,6 +3,7 @@
 更新：2026-10-21  
 权威细则：[`memhub/docs/ARCHITECTURE.md`](memhub/docs/ARCHITECTURE.md)（~~旧删线~~ + 新并列）  
 配套：[`memhub/MEMORY.md`](memhub/MEMORY.md)；其余 docs 已打「架构变更」条，冲突以 ARCHITECTURE Top Rules 为准。
+旧用户迁移：[`memhub/docs/contracts/sdk-data-plane-migration-v1.md`](memhub/docs/contracts/sdk-data-plane-migration-v1.md)。
 
 > 根目录原先无有效 `HANDSOFF` 文件；本文件为清空后重写，只保留本次架构改造交接。
 
