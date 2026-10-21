@@ -89,6 +89,51 @@ class MemoryContextItem(BaseModel):
 ContextItem = Annotated[RawContextItem | MemoryContextItem, Field(discriminator="kind")]
 
 
+class SdkRawContextItem(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["raw"] = "raw"
+    raw_id: str = Field(min_length=1, max_length=512)
+    content: str = Field(max_length=20000)
+    source: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(min_length=1, max_length=512)
+    memory_at: datetime | None = None
+    score: float = Field(ge=0, le=1)
+    truncated: bool = False
+
+
+class SdkMemoryContextItem(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["memory"] = "memory"
+    memory_id: str = Field(min_length=1, max_length=512)
+    content: str = Field(max_length=20000)
+    layer: str = Field(max_length=64)
+    status: str = Field(max_length=32)
+    source: str | None = Field(default=None, max_length=128)
+    updated_at: datetime | None = None
+    score: float = Field(ge=0, le=1)
+    truncated: bool = False
+
+
+SdkContextItem = Annotated[
+    SdkRawContextItem | SdkMemoryContextItem,
+    Field(discriminator="kind"),
+]
+
+
+class SdkContextSearchResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[2] = 2
+    request_id: str = Field(min_length=1, max_length=64)
+    state: Literal["grounded", "empty", "partial", "unavailable"]
+    items: tuple[SdkContextItem, ...] = Field(max_length=20)
+    used_characters: int = Field(ge=0, le=20000)
+    truncated: bool
+    total_ms: float = Field(ge=0)
+
+
 class ContextLaneResult(BaseModel):
     """Internal bounded adapter result; the aggregator applies shared budgets."""
 

@@ -13,7 +13,9 @@ from pydantic import SecretStr
 from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.database_access import close_main_databases, main_database
+from one_memory.hy_memory_bridge import HySdkMemoryRecord, HySdkRawHit
 from one_memory.imports.storage import SEARCH_SCHEMA
+from one_memory.semantic_deadline import SemanticMemoryHit
 from tests.test_memory_library import database as database  # noqa: F401
 from tests.test_memory_library import grant, put
 
@@ -78,6 +80,64 @@ def test_no_model_local_query_returns_real_raw_and_governed_items(app):
         for item in body["items"]
     )
     assert all(item["revision"] == 7 for item in body["items"] if item["kind"] == "memory")
+
+
+def test_sdk_context_v2_is_honest_about_sdk_fields(app):
+    class Bridge:
+        async def search_sdk_raw(self, *_args, **_kwargs):
+            return (
+                HySdkRawHit(
+                    raw_id="raw-1",
+                    content="raw content",
+                    user_id="local",
+                    agent_id="one-memory",
+                    session_id="session",
+                    source="cursor",
+                    score=0.7,
+                ),
+            )
+
+        async def search_memories(self, *_args, **_kwargs):
+            return (
+                SemanticMemoryHit(
+                    memory_id="memory-1",
+                    score=0.9,
+                    formatted_content="memory content",
+                    sdk_formatted=True,
+                    formatting_complete=True,
+                ),
+            )
+
+        async def get_sdk_memory(self, _memory_id):
+            return HySdkMemoryRecord(
+                memory_id="memory-1",
+                content="memory content",
+                layer="l2_fact",
+                status="active",
+                is_latest=True,
+                user_id="local",
+                agent_id="one-memory",
+            )
+
+    app.state.sdk_library_bridge = Bridge()
+    async def run():
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            return await client.post(
+                "/api/v2/context/search",
+                json={"query": "content"},
+                headers=AUTH,
+            )
+
+    response = asyncio.run(run())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 2
+    assert {item["kind"] for item in body["items"]} == {"raw", "memory"}
+    assert all("revision" not in item for item in body["items"])
+    assert all("evidence_ids" not in item for item in body["items"])
 
 
 @pytest.mark.parametrize(

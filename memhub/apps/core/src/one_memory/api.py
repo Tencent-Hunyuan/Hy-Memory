@@ -50,7 +50,7 @@ from one_memory import __version__, memory_visibility
 from one_memory.auth import local_api_guard, renderer_origins
 from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
 from one_memory.config import Settings, load_settings
-from one_memory.context_routes import context_router
+from one_memory.context_routes import context_router, sdk_context_router
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
     close_main_databases,
@@ -1554,6 +1554,7 @@ def create_app(
     app.include_router(memory_note_router(protected))
     app.include_router(file_import_router(protected))
     app.include_router(context_router(protected))
+    app.include_router(sdk_context_router(protected))
 
     def require_workbuddy_boundary(request: Request) -> None:
         access = external_access(request.headers)
