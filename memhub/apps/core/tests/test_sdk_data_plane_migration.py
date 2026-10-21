@@ -7,7 +7,6 @@ import pytest
 
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
-from one_memory.memory_access_scopes import MemoryAccessScopeStore
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.sdk_data_plane_migration import (
@@ -226,7 +225,6 @@ def test_legacy_inventory_preserves_task_id_mapping_and_supersession(store):
     records = {item.legacy_memory_id: item for item in read_legacy_memory_inventory(database)}
     assert records["legacy-new"].canonical_memory_id == "sdk-new"
     assert records["legacy-new"].owner == "user"
-    assert records["legacy-new"].scopes == ("all-apps",)
     assert records["legacy-new"].supersedes == ("legacy-old",)
     assert records["legacy-old"].superseded_by == ("legacy-new",)
 
@@ -251,7 +249,6 @@ def _legacy(
         layer=layer,
         owner="user",
         tags=(),
-        scopes=("all-apps",),
         supersedes=(),
         superseded_by=(),
     )
@@ -396,15 +393,6 @@ def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
     assert bridge.deleted == ["delete-existing"]
     progress = store.progress("m1")
     assert progress.counts == {"adopted": 1, "deleted": 2, "verified": 3}
-    scopes = MemoryAccessScopeStore(store.database_path).by_memory_ids(
-        ("matched", "missing", "sdk-mapped", "sdk-only")
-    )
-    assert scopes == {
-        "matched": ("all-apps",),
-        "missing": ("all-apps",),
-        "sdk-mapped": ("all-apps",),
-        "sdk-only": ("all-apps",),
-    }
 
 
 def test_legacy_raw_inventory_preserves_exact_source_metadata(store):

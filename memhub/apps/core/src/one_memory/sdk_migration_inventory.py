@@ -13,7 +13,6 @@ from typing import Protocol
 
 from one_memory.database_access import main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkRawRecord
-from one_memory.memory_access_scopes import MemoryAccessScopeStore
 from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
 
 
@@ -34,7 +33,6 @@ class LegacyMemoryInventory:
     layer: str | None
     owner: str | None
     tags: tuple[str, ...]
-    scopes: tuple[str, ...]
     supersedes: tuple[str, ...]
     superseded_by: tuple[str, ...]
 
@@ -166,7 +164,7 @@ def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInven
 
         records: list[LegacyMemoryInventory] = []
         for row in connection.execute(
-            "SELECT memory_id,user_id,kind,status,content,tags_json,scopes_json "
+            "SELECT memory_id,user_id,kind,status,content,tags_json "
             "FROM governed_memories ORDER BY memory_id"
         ):
             legacy_id = str(row["memory_id"])
@@ -178,11 +176,6 @@ def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInven
             except (TypeError, ValueError):
                 tags_value = []
             tags = tuple(value for value in tags_value if isinstance(value, str))
-            try:
-                scopes_value = json.loads(row["scopes_json"] or "[]")
-            except (TypeError, ValueError):
-                scopes_value = []
-            scopes = tuple(value for value in scopes_value if isinstance(value, str))
             kind = str(row["kind"])
             status = str(row["status"])
             records.append(
@@ -204,7 +197,6 @@ def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInven
                     layer=mapped_layer or _KIND_LAYER.get(kind),
                     owner=mapped_owner,
                     tags=tags,
-                    scopes=scopes,
                     supersedes=tuple(supersedes.get(legacy_id, ())),
                     superseded_by=tuple(superseded_by.get(legacy_id, ())),
                 )
@@ -418,7 +410,6 @@ async def execute_memory_migration_plan(
     decisions: tuple[MemoryMigrationDecision, ...],
 ) -> None:
     legacy_by_id = {item.legacy_memory_id: item for item in legacy}
-    scope_store = MemoryAccessScopeStore(store.database_path)
     for decision in decisions:
         item = (
             legacy_by_id.get(decision.legacy_memory_id)
@@ -434,7 +425,6 @@ async def execute_memory_migration_plan(
             )
             continue
         if decision.action == "adopt":
-            scope_store.replace(decision.canonical_memory_id, ("all-apps",))
             store.settle_item(
                 migration_id=migration_id,
                 item_key=decision.item_key,
@@ -445,7 +435,6 @@ async def execute_memory_migration_plan(
         if decision.action in {"delete", "verified_deleted"}:
             if decision.action == "delete":
                 await bridge.delete(decision.canonical_memory_id)
-            scope_store.remove(decision.canonical_memory_id)
             store.settle_item(
                 migration_id=migration_id,
                 item_key=decision.item_key,
@@ -480,7 +469,6 @@ async def execute_memory_migration_plan(
                 legacy_memory_id=item.legacy_memory_id,
                 canonical_memory_id=item.canonical_memory_id,
             )
-        scope_store.replace(item.canonical_memory_id, item.scopes or ("all-apps",))
         store.settle_item(
             migration_id=migration_id,
             item_key=decision.item_key,

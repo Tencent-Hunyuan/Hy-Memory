@@ -211,8 +211,17 @@ from one_memory.model_profiles import (
 from one_memory.model_request_audit import AuditedModelTransport, ModelRequestAuditStore
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
 from one_memory.onboarding import OnboardingState, OnboardingStore
-from one_memory.recall import GovernedRecallTarget, RecallReceipt, RecallRequest
+from one_memory.recall import (
+    GovernedRecallTarget,
+    RecallReceipt,
+    RecallRequest,
+    SdkRecallTarget,
+)
 from one_memory.runtime import CoreRuntime
+from one_memory.sdk_data_plane_migration import (
+    MemoryAuthority,
+    SdkDataPlaneMigrationStore,
+)
 from one_memory.secrets import (
     KeyringSecretStore,
     SecretStore,
@@ -922,22 +931,37 @@ def create_app(
                 app.state.call_event_store.initialize()
             app.state.source_totals = SourceTotals(app.state.evidence_store)
             app.state.source_read_access = SourceReadAccess(database_path)
-            evidence_store = app.state.evidence_store
-            app.state.recall_target = GovernedRecallTarget(
-                app.state.memory_governance_store,
-                filter_memories=app.state.source_read_access.memories,
-                semantic_search=lambda query: _memory_processing_supervisor(app).semantic_recall(
-                    query
-                ),
-                # Read per request rather than cached: an import that lands
-                # while the app is open should make its workspace reachable
-                # without a restart. Affordable only because the read is served
-                # by a covering index; see `EvidenceStore.known_workspaces`.
-                resolve_workspace=lambda workspace_path: resolve_workspace_scopes(
-                    workspace_path,
-                    evidence_store.known_workspaces(user_id="local"),
-                ),
+            app.state.sdk_data_plane_migrations = SdkDataPlaneMigrationStore(database_path)
+            app.state.memory_authority = (
+                app.state.sdk_data_plane_migrations.authority()
             )
+            evidence_store = app.state.evidence_store
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                sdk_bridge = _sdk_library_bridge(app)
+                app.state.recall_target = SdkRecallTarget(
+                    semantic_search=lambda query: sdk_bridge.search_memories(
+                        query,
+                        user_id="local",
+                        agent_id="*",
+                    ),
+                    get_memory=sdk_bridge.get_sdk_memory,
+                )
+            else:
+                app.state.recall_target = GovernedRecallTarget(
+                    app.state.memory_governance_store,
+                    filter_memories=app.state.source_read_access.memories,
+                    semantic_search=lambda query: _memory_processing_supervisor(
+                        app
+                    ).semantic_recall(query),
+                    # Read per request rather than cached: an import that lands
+                    # while the app is open should make its workspace reachable
+                    # without a restart. Affordable only because the read is served
+                    # by a covering index; see `EvidenceStore.known_workspaces`.
+                    resolve_workspace=lambda workspace_path: resolve_workspace_scopes(
+                        workspace_path,
+                        evidence_store.known_workspaces(user_id="local"),
+                    ),
+                )
             app.state.import_job_store = ImportJobStore(database_path)
             app.state.onboarding_store = OnboardingStore(database_path)
             app.state.history_import_gate_released = False
@@ -3485,7 +3509,7 @@ def create_app(
         )
         target = _recall_target(app)
         access = external_access(http_request.headers)
-        if access is not None:
+        if access is not None and isinstance(target, GovernedRecallTarget):
             target = copy(target)
             original_filter = target.filter_memories
             target.filter_memories = lambda memories: tuple(
@@ -4495,8 +4519,8 @@ async def _refresh_live_watch(app: FastAPI) -> None:
             watch.start(prime=True)
 
 
-def _recall_target(app: FastAPI) -> GovernedRecallTarget:
-    return cast(GovernedRecallTarget, app.state.recall_target)
+def _recall_target(app: FastAPI) -> GovernedRecallTarget | SdkRecallTarget:
+    return cast(GovernedRecallTarget | SdkRecallTarget, app.state.recall_target)
 
 
 def _detection(app: FastAPI) -> dict[str, SourceInstallState]:

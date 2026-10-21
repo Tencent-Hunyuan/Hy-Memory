@@ -115,7 +115,6 @@ def test_sdk_data_plane_cutover_ledger_is_owned_by_migration_55() -> None:
         "sdk_data_plane_migrations",
         "sdk_data_plane_migration_items",
         "memory_id_aliases",
-        "memory_access_scopes",
         "sdk_data_plane_cutover",
     }
     for dialect in ("sqlite", "mysql"):
