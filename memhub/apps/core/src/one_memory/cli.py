@@ -75,6 +75,8 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
     command, *options = arguments
     if command == "restore":
         return restore(options, stream)
+    if command == "migration-bundle":
+        return migration_bundle(options, stream)
     if command == "boundary" and not options:
         from one_memory.workbuddy_boundary import write_hook
 
@@ -95,6 +97,7 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
         stream.write(
             "Usage: one-memory [serve [--maintenance|--reader]|status [--json]|doctor [--json]"
             "|restore --source <managed-backup> --yes [--json]"
+            "|migration-bundle --bundle-id <id> --runtime-build <build> --yes [--json]"
             "|boundary [--peek|--ack TOKEN]|capture SOURCE]\n"
         )
         return 2
@@ -196,6 +199,93 @@ def _write_restore(
         stream.write(f"{json.dumps(document, ensure_ascii=False)}\n")
     else:
         stream.write(f"{text}\n")
+
+
+def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
+    """Create a complete management + SDK bundle while Runtime is stopped."""
+    bundle_id: str | None = None
+    runtime_build: str | None = None
+    confirmed = False
+    as_json = False
+    index = 0
+    while index < len(options):
+        option = options[index]
+        if option == "--bundle-id" and index + 1 < len(options):
+            bundle_id = options[index + 1]
+            index += 2
+            continue
+        if option == "--runtime-build" and index + 1 < len(options):
+            runtime_build = options[index + 1]
+            index += 2
+            continue
+        if option == "--yes":
+            confirmed = True
+            index += 1
+            continue
+        if option == "--json":
+            as_json = True
+            index += 1
+            continue
+        stream.write(f"one-memory: 参数无效：{option}\n")
+        return 2
+    if not bundle_id or not runtime_build:
+        stream.write(
+            "one-memory: migration-bundle 需要 "
+            "--bundle-id <id> --runtime-build <build>\n"
+        )
+        return 2
+
+    settings = load_settings()
+    status = inspect_runtime(settings.data_dir)
+    if status.state != "stopped":
+        document = {
+            "schema_version": 1,
+            "state": "blocked",
+            "code": "sdk_migration_bundle_runtime_running",
+            "runtime_state": status.state,
+        }
+        _write_restore(stream, as_json, document, "Runtime 仍在运行；不能创建迁移备份。")
+        return 4
+    if not confirmed:
+        document = {
+            "schema_version": 1,
+            "state": "preview",
+            "bundle_id": bundle_id,
+            "requires_confirmation": True,
+        }
+        _write_restore(stream, as_json, document, "预览通过；加 --yes 后创建完整迁移备份。")
+        return 4
+
+    from one_memory.sdk_migration_bundle import (
+        MigrationBundleRejected,
+        create_sdk_migration_bundle,
+    )
+
+    try:
+        result = create_sdk_migration_bundle(
+            data_dir=settings.data_dir,
+            bundle_id=bundle_id,
+            runtime_build=runtime_build,
+            runtime_stopped=True,
+        )
+    except MigrationBundleRejected as error:
+        document = {
+            "schema_version": 1,
+            "state": "failed",
+            "code": error.code,
+        }
+        _write_restore(stream, as_json, document, f"迁移备份失败：{error.code}")
+        return 1
+    document = {
+        "schema_version": 1,
+        "state": "created",
+        "bundle_id": result.bundle_id,
+        "bundle_path": str(result.bundle_path),
+        "file_count": result.file_count,
+        "total_bytes": result.total_bytes,
+    }
+    _write_restore(stream, as_json, document, f"完整迁移备份已创建：{result.bundle_path}")
+    return 0
 
 
 def _status_text(command: str, status: RuntimeStatus) -> str:

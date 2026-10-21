@@ -66,3 +66,89 @@ def test_restore_success_returns_zero(tmp_path, monkeypatch) -> None:
     )
     assert code == 0
     assert '"state":"restored"' in output.getvalue().replace(" ", "")
+
+
+def test_migration_bundle_refuses_while_runtime_is_running(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("running", "runtime_verified"),
+    )
+    output = io.StringIO()
+
+    code = cli.run(
+        [
+            "migration-bundle",
+            "--bundle-id",
+            "migration-1",
+            "--runtime-build",
+            "build-13",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+    assert code == 4
+    assert "sdk_migration_bundle_runtime_running" in output.getvalue()
+
+
+def test_migration_bundle_previews_before_writing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+    output = io.StringIO()
+
+    code = cli.run(
+        [
+            "migration-bundle",
+            "--bundle-id",
+            "migration-1",
+            "--runtime-build",
+            "build-13",
+            "--json",
+        ],
+        output=output,
+    )
+    assert code == 4
+    assert '"state": "preview"' in output.getvalue() or '"state":"preview"' in output.getvalue()
+
+
+def test_migration_bundle_success_reports_bundle_identity(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+
+    class Result:
+        bundle_id = "migration-1"
+        bundle_path = tmp_path / "backups" / "migration-1.sdk-bundle"
+        file_count = 4
+        total_bytes = 123
+
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_bundle.create_sdk_migration_bundle",
+        lambda **_kwargs: Result(),
+    )
+    output = io.StringIO()
+    code = cli.run(
+        [
+            "migration-bundle",
+            "--bundle-id",
+            "migration-1",
+            "--runtime-build",
+            "build-13",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+    assert code == 0
+    document = output.getvalue().replace(" ", "")
+    assert '"state":"created"' in document
+    assert '"bundle_id":"migration-1"' in document
