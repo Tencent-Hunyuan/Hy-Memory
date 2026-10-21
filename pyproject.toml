@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hy-memory"
-version = "2.0.5.dev1"
+version = "2.0.5.dev2"
 description = "HY Memory - Industrial-grade dual-system cognitive memory framework"
 readme = "README.md"
 requires-python = ">=3.9"
