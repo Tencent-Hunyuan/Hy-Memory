@@ -280,27 +280,6 @@ class MemoryWriter(WritePipeline):
             custom["source_raw_memory_ids"] = source_ids
         return custom
 
-    async def _attach_existing_raw_ids(
-        self,
-        vector_store,
-        memory_ids: List[str],
-        raw_ids: List[str],
-    ) -> None:
-        """Attach every reused raw record to canonical outputs."""
-        for memory_id in memory_ids:
-            node = await vector_store.get_by_id(memory_id)
-            if node is None:
-                continue
-            custom = dict(node.custom or {})
-            source_ids = list(custom.get("source_raw_memory_ids") or [])
-            legacy_source = str(getattr(node, "source_raw_memory_id", "") or "")
-            for raw_id in (legacy_source, *raw_ids):
-                if raw_id and raw_id not in source_ids:
-                    source_ids.append(raw_id)
-            if source_ids:
-                custom["source_raw_memory_ids"] = source_ids
-                await vector_store.update_payload(memory_id, {"custom": custom})
-
     @staticmethod
     def _attach_client_meta(custom: Dict[str, Any], request: Optional[WriteRequest]) -> None:
         """给新建节点挂上调用方 meta（单份 list）。
@@ -2617,23 +2596,13 @@ class MemoryWriter(WritePipeline):
             from ..metrics import MetricsCollector
             MetricsCollector.get().sys1_start()
 
-            existing_raw_ids = request.existing_raw_ids
-            if (
-                not isinstance(existing_raw_ids, list)
-                or any(not isinstance(raw_id, str) or not raw_id for raw_id in existing_raw_ids)
-            ):
-                raise ValueError("_existing_raw_ids must be a list of non-empty ids")
-
-            # 2. 向量化（处理已有 raw 时复用已存节点，不再次 embed）
+            # 2. 向量化 + 持久化（L1_RAW）
             _t_embed = datetime.now()
-            if existing_raw_ids:
-                embedding, embed_meta = [], {"reused_raw": True}
-            else:
-                with tracer.span("embed") as s:
-                    embedding, embed_meta = await self.embed_service.embed_queued_with_meta(
-                        request.content
-                    )
-                    s.set_output({"dims": len(embedding), "content_len": len(request.content)})
+            with tracer.span("embed") as s:
+                embedding, embed_meta = await self.embed_service.embed_queued_with_meta(
+                    request.content
+                )
+                s.set_output({"dims": len(embedding), "content_len": len(request.content)})
             _embed_ms = (datetime.now() - _t_embed).total_seconds() * 1000
             response.extra["embedding"] = embedding
             await self._emit_pipeline_step(
@@ -2656,43 +2625,27 @@ class MemoryWriter(WritePipeline):
             with tracer.span("qdrant_upsert") as s:
                 try:
                     vector_store = await self._get_vector_store()
-                    if existing_raw_ids:
-                        memory_id = existing_raw_ids[-1]
-                        mem_node = await vector_store.get_by_id(memory_id)
-                        if (
-                            mem_node is None
-                            or mem_node.layer != MemoryLayer.L1_RAW
-                            or mem_node.user_id != request.user_id
-                            or mem_node.agent_id != (request.agent_id or "default_agent")
-                            or mem_node.session_id != (request.session_id or "default_session")
-                            or mem_node.source != request.source
-                        ):
-                            raise ValueError("existing raw record is outside the write scope")
-                    else:
-                        layer_enum = MemoryLayer.from_string(suggested_layer)
-                        _raw_custom: Dict[str, Any] = {}
-                        self._attach_client_meta(_raw_custom, request)
-                        mem_node = MemoryNode(
-                            user_id=request.user_id,
-                            agent_id=request.agent_id or "default_agent",
-                            session_id=request.session_id or "default_session",
-                            source=request.source,
-                            layer=layer_enum,
-                            content=request.content,
-                            source_type=SourceType.EXPLICIT,
-                            status=MemoryStatus.ACTIVE,
-                            is_latest=True,
-                            embedding=embedding,
-                            memory_at=request.memory_at,
-                            custom=_raw_custom,
-                        )
-                        memory_id = await vector_store.upsert(mem_node)
+                    layer_enum = MemoryLayer.from_string(suggested_layer)
+                    _raw_custom: Dict[str, Any] = {}
+                    self._attach_client_meta(_raw_custom, request)
+                    mem_node = MemoryNode(
+                        user_id=request.user_id,
+                        agent_id=request.agent_id or "default_agent",
+                        session_id=request.session_id or "default_session",
+                        source=request.source,
+                        layer=layer_enum,
+                        content=request.content,
+                        source_type=SourceType.EXPLICIT,
+                        status=MemoryStatus.ACTIVE,
+                        is_latest=True,
+                        embedding=embedding,
+                        memory_at=request.memory_at,
+                        custom=_raw_custom,
+                    )
+                    memory_id = await vector_store.upsert(mem_node)
                     response.memory_id = memory_id
                     s.set_output({"memory_id": memory_id, "layer": suggested_layer})
-                    logger.debug(
-                        f"[write] {'reused' if existing_raw_ids else 'persisted'}: "
-                        f"id={memory_id} layer={suggested_layer}"
-                    )
+                    logger.debug(f"[write] persisted: id={memory_id} layer={suggested_layer}")
                 except Exception as persist_err:
                     _l1_error = str(persist_err)
                     s.set_error(_l1_error)
@@ -2756,12 +2709,6 @@ class MemoryWriter(WritePipeline):
                         recent_history_count=_recent_history_count,
                     )
                     total_tokens += response.extra.get("_agent_tokens", 0)
-                if existing_raw_ids and response.extra.get("agent_stored_ids"):
-                    await self._attach_existing_raw_ids(
-                        vector_store,
-                        list(response.extra["agent_stored_ids"]),
-                        existing_raw_ids,
-                    )
                 if response.extra.get("agent_status") == "failed":
                     await self._emit_pipeline_step(
                         request,
@@ -2771,13 +2718,12 @@ class MemoryWriter(WritePipeline):
                             "error": response.extra.get("agent_error", ""),
                         },
                     )
-                    if not existing_raw_ids:
-                        await self._rollback_failed_l1(
-                            request=request,
-                            response=response,
-                            vector_store=vector_store,
-                            memory_id=memory_id,
-                        )
+                    await self._rollback_failed_l1(
+                        request=request,
+                        response=response,
+                        vector_store=vector_store,
+                        memory_id=memory_id,
+                    )
                     response.tokens_used = total_tokens
                     _failed_workflow_ms = (
                         datetime.now() - _t_workflow
