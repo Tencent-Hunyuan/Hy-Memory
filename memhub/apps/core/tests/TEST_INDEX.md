@@ -203,7 +203,7 @@
 | `test_memory_correction_sync.py` | `integration` | R-27: a correction that only lands locally, while HY keeps the old text. |
 | `test_memory_deletion_outbox.py` | `contract` | 删除发件箱：一条删除同一时刻只归一个执行者，结果只由持有领取凭证的那个写。 |
 | `test_memory_dispatch_lifecycle.py` | `contract` | Exercise the automatic enqueue boundary without producing substitute memories. |
-| `test_memory_evidence_freshness.py` | `contract` | 覆盖 fresh then revised and identity only change、any complete fresh proof wins over old proof、other revision and incomplete proof do not hide legacy or correction 等 21 个场景。 |
+| `test_memory_evidence_freshness.py` | `contract` | 新鲜度拆除后：读路径恒为 current；证据修订 / 畸形 proof / segment ref 不再藏记忆或 503。 |
 | `test_memory_freshness_integration_review.py` | `integration` | Independent synthetic read-path review; no lifespan, model or user database. |
 | `test_memory_governance.py` | `contract` | 覆盖 correction keeps verbatim and appends history、mutations are revision checked and request idempotent、delete result survives restart and request replay 等 42 个场景。 |
 | `test_memory_governance_api.py` | `integration` | 覆盖 memory governance api preserves evidence and reports cleanup、memory validation does not echo content 场景。 |
