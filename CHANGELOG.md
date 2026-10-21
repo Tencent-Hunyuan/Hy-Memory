@@ -14,6 +14,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Added `import_memory_exact` for idempotent migration of an existing semantic
+  memory with its canonical ID, lifecycle and supersession links, without
+  extraction or reconciliation.
 - Added SDK-authoritative lifecycle listing with explicit status filters,
   idempotent durable write outcomes, exact raw import/get/list APIs, and
   quiesced local data-plane snapshot/restore contracts for the MemHub
