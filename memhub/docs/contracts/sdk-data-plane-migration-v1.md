@@ -52,7 +52,7 @@ by inspected schema/store capabilities, not one branch per historical SDK pin.
 The old SDK version is informational only and is not a migration discriminator.
 
 The migration Runtime itself must expose the required APIs (currently the
-`2.0.5.dev2` development preview); old data is not rejected merely because an
+`2.0.5.dev3` development preview); old data is not rejected merely because an
 earlier App wrote it.
 
 ## 3. Legacy-state classification

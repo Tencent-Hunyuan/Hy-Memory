@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 HY_MEMORY_DISTRIBUTION = "hy-memory"
-HY_MEMORY_VERSION = "2.0.5.dev2"
+HY_MEMORY_VERSION = "2.0.5.dev3"
 HY_MEMORY_NAMESPACE = "governed-v2"
 DiagnosticLogLevel = Literal["error", "warning", "info", "debug"]
 

@@ -3,7 +3,7 @@
 The result decides whether the `unknown` job state can ever be retired, so it
 is probed against the installed SDK rather than written down from memory.
 
-What is verified against `hy-memory==2.0.5.dev2`:
+What is verified against `hy-memory==2.0.5.dev3`:
 
 - `HyMemoryClient.add(..., request_id=...)` accepts a caller-supplied id and
   atomically claims it in the SDK cache before invoking a write. Replays return
