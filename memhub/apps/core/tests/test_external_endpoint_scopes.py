@@ -552,6 +552,23 @@ def test_delivery_endpoint_accepts_only_a_recall_grant_and_returns_no_read_data(
     asyncio.run(scenario())
 
 
+def test_sdk_context_v2_accepts_the_same_composed_external_grants(tmp_path):
+    async def scenario():
+        async with library(tmp_path) as (_, client, *_):
+            response = await client.post(
+                "/api/v2/context/search",
+                json={"query": "needle", "kinds": ["raw", "memory"]},
+                headers=envelope(
+                    tools=("om_recall", "om_conversations"),
+                    scopes=("all-apps", "source:workbuddy"),
+                ),
+            )
+            assert response.status_code == 503, response.text
+            assert response.json()["detail"] == "sdk_context_unavailable"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("tool", TOOLS)
 def test_source_revocation_keeps_surviving_data_and_blocks_revoked_bodies(tmp_path, tool):
     async def scenario():

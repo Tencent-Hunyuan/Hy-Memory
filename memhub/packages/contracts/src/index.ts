@@ -962,8 +962,13 @@ export type {
   ContextReason,
   ContextSearchRequest,
   ContextSearchResponse,
+  HostContextSearchResponse,
   MemoryContextItem,
   RawContextItem,
+  SdkContextItem,
+  SdkContextSearchResponse,
+  SdkMemoryContextItem,
+  SdkRawContextItem,
 } from "./context.js";
 export type {
   ContextExpandRequestV2,

@@ -52,6 +52,7 @@ export interface MemoryContextItem {
   memory_kind: string;
   updated_at: string;
   evidence_ids: string[];
+  matched_by: readonly ("lexical" | "governed_semantic")[];
   truncated: boolean;
 }
 
@@ -118,3 +119,8 @@ export interface SdkContextSearchResponse {
   truncated: boolean;
   total_ms: number;
 }
+
+/** Native Host Bridge wire response. Schemas stay distinct and are never adapted. */
+export type HostContextSearchResponse =
+  | ContextSearchResponse
+  | SdkContextSearchResponse;

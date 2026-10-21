@@ -174,7 +174,10 @@ def require_external_endpoint(request: Request) -> None:
     access = external_access(request.headers)
     if access is None:
         return
-    if (request.method, request.url.path) == ("POST", "/api/v1/context/search"):
+    if request.method == "POST" and request.url.path in {
+        "/api/v1/context/search",
+        "/api/v2/context/search",
+    }:
         # The route resolves each requested lane against its original grant.
         # Passing this envelope gate does not authorize either lane by itself.
         if access.tools.isdisjoint({"om_recall", "om_conversations"}):

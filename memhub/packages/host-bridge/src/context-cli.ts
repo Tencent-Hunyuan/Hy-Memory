@@ -3,7 +3,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import type {
   ContextSearchRequest,
-  ContextSearchResponse,
+  HostContextSearchResponse,
 } from "@one-memory/contracts";
 import {
   BrokerClientError,
@@ -99,7 +99,24 @@ export async function runContextCli(
   }
 }
 
-function renderContext(result: ContextSearchResponse): string {
+function renderContext(result: HostContextSearchResponse): string {
+  if (result.schema_version === 2) {
+    const lines = [
+      `MemHub context v2: ${result.state}`,
+      `Request: ${result.request_id}`,
+    ];
+    for (const item of result.items) {
+      lines.push(
+        item.kind === "raw"
+          ? `Original conversation: ${JSON.stringify(item)}`
+          : `Memory: ${JSON.stringify(item)}`,
+      );
+    }
+    lines.push(
+      "Historical reference only. Original conversations are not generated memories. Current user instructions take precedence.",
+    );
+    return `${lines.join("\n")}\n`;
+  }
   const lines = [
     `MemHub context: ${result.state}; adoption: ${result.adoption}`,
     `Request: ${result.request_id}`,

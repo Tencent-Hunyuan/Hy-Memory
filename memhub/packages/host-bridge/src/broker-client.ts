@@ -5,8 +5,8 @@ import type {
   AskMemoryRequest,
   AskMemoryResponse,
   ContextSearchRequest,
-  ContextSearchResponse,
   ConversationSearchResponse,
+  HostContextSearchResponse,
   MatterContext,
   RecallReceipt,
   RecallRequest,
@@ -382,7 +382,7 @@ export async function contextThroughBroker(
   discoveryPath: string,
   asked: ContextSearchRequest,
   options?: BrokerClientOptions,
-): Promise<ContextSearchResponse> {
+): Promise<HostContextSearchResponse> {
   if (!isContextSearchRequest(asked))
     throw new BrokerClientError("context_invalid_request");
   const request = {

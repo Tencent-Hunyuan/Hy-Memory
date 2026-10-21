@@ -178,6 +178,15 @@ def test_memory_authority_is_legacy_until_cutover_marker_exists(app):
     response = request(app, url="/api/v2/memory-authority")
     assert response.status_code == 200
     assert response.json() == {"authority": "legacy", "migration_id": None}
+    app.state.sdk_data_plane_migrations = SimpleNamespace(
+        cutover=lambda: SimpleNamespace(migration_id="migration-1")
+    )
+    response = request(app, url="/api/v2/memory-authority")
+    assert response.status_code == 200
+    assert response.json() == {
+        "authority": "sdk",
+        "migration_id": "migration-1",
+    }
 
 
 @pytest.mark.parametrize(
