@@ -60,7 +60,7 @@ import {
   MemoryNoteComposer,
   type PendingMemoryNote,
 } from "./MemoryNoteComposer";
-import { MemoryRecallScope, memoryProvenanceLabel } from "./MemoryRecallScope";
+import { memoryProvenanceLabel } from "./MemoryRecallScope";
 import type { MemoryArrival } from "./memory-arrival-state";
 import {
   blockReasonLabel,
@@ -248,7 +248,6 @@ export function MemorySpace({
     memories: GovernedMemory[];
   } | null>(null);
   const [draft, setDraft] = useState("");
-  const [scopes, setScopes] = useState("");
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const bulkInFlight = useRef(false);
   const [bulkFailures, setBulkFailures] = useState(
@@ -946,7 +945,6 @@ export function MemorySpace({
       setDetail(result);
       setDetailLoad(null);
       setDraft(result.memory.content);
-      setScopes(result.memory.scopes.join(", "));
     } catch (reason) {
       if (epoch === detailEpoch.current) {
         setError(message(reason));
@@ -1710,12 +1708,10 @@ export function MemorySpace({
           (simplified && (!mapLibrary.page || sourceSnapshotStale))
         }
         draft={draft}
-        scopes={scopes}
         busy={busy || detailReadBlocked}
         answer={answer}
         streaming={streaming}
         onDraft={setDraft}
-        onScopes={setScopes}
         onOpenMemory={(memoryId) => void open(memoryId)}
         onCloseDetail={closeDetail}
         onSave={save}
@@ -1781,10 +1777,8 @@ export function MemorySpace({
           detail={detail}
           busy={busy}
           draft={draft}
-          scopes={scopes}
           requestIds={requestIds}
           onDraft={setDraft}
-          onScopes={setScopes}
           onClose={closeDetail}
           onSave={save}
           onAction={action}
@@ -1995,10 +1989,8 @@ export function MemorySpace({
           detail={detail}
           busy={busy || detailReadBlocked || (management && !library.writable)}
           draft={draft}
-          scopes={scopes}
           requestIds={requestIds}
           onDraft={setDraft}
-          onScopes={setScopes}
           onClose={() => setDetail(null)}
           onSave={save}
           onAction={action}
@@ -2060,7 +2052,6 @@ function MemoryInspector({
   onDraft,
   onClose,
   onSave,
-  onSaveScopes,
   onAction,
   onSyncIndex,
   onConfigureModel,
@@ -2069,13 +2060,10 @@ function MemoryInspector({
   detail: MemoryDetail | null;
   busy: boolean;
   draft: string;
-  scopes: string;
   requestIds: RefObject<Map<string, string>>;
   onDraft(value: string): void;
-  onScopes(value: string): void;
   onClose(): void;
   onSave(event: FormEvent<HTMLFormElement>): Promise<void>;
-  onSaveScopes(scopes: string[]): Promise<void>;
   onAction(action: "undo" | "delete"): Promise<void>;
   onSyncIndex(): Promise<void>;
   onConfigureModel(): void;
@@ -2088,7 +2076,7 @@ function MemoryInspector({
         data-tour-id="memory-original-pane"
       >
         <p>选择一条记忆</p>
-        <small>查看它的来源、使用范围和修改历史。</small>
+        <small>查看它的来源、内容和修改历史。</small>
       </aside>
     );
   }
@@ -2168,12 +2156,6 @@ function MemoryInspector({
           </button>
         </form>
       ) : null}
-      <MemoryRecallScope
-        key={`${detail.memory.memory_id}:${detail.memory.revision}`}
-        detail={detail}
-        busy={busy}
-        onSave={onSaveScopes}
-      />
       <div className="source-actions">
         {detail.history.length > 1 &&
         detail.memory.status !== "deleted" &&

@@ -440,14 +440,6 @@ describe("MemorySpace", () => {
           fireEvent.change(within(inspector).getByLabelText("记忆内容"), {
             target: { value: "Library correction draft" },
           });
-        if (status === "confirmed") {
-          await userEvent.click(
-            within(inspector).getByRole("button", { name: "调整召回范围" }),
-          );
-          await userEvent.click(
-            within(inspector).getByRole("radio", { name: "停止外部记忆召回" }),
-          );
-        }
         // Tabs are the only way to change mode now, and a tab click clears the
         // answer and closes the detail by design. The invariant still worth
         // pinning is that suspending and resuming the surface keeps the
@@ -477,14 +469,6 @@ describe("MemorySpace", () => {
               ) as HTMLTextAreaElement
             ).value,
           ).toBe("Library correction draft");
-        if (status === "confirmed")
-          expect(
-            (
-              within(inspector).getByRole("radio", {
-                name: "停止外部记忆召回",
-              }) as HTMLInputElement
-            ).checked,
-          ).toBe(true);
         expect(getMemory).toHaveBeenCalledTimes(1);
         expect(getMemories).toHaveBeenCalledTimes(1);
         expectNoTeachingWrites();

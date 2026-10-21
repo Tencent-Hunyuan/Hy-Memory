@@ -313,7 +313,6 @@ function Host({
           : null
       }
       draft={detail?.memory.content ?? ""}
-      scopes="all-apps"
       busy={false}
       answer={null}
       streaming={null}
@@ -341,7 +340,6 @@ function Host({
       onCloseDetail={() => setDetail(null)}
       onAsk={() => {}}
       onDraft={() => {}}
-      onScopes={() => {}}
       onSave={() => {}}
       onAction={() => {}}
       onSyncIndex={() => {}}
