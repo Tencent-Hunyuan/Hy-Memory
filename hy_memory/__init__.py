@@ -55,6 +55,11 @@ except Exception:
 from .client import HyMemoryClient
 from .inspector import MemoryInspector
 from .runtime import SharedRuntime
+from .snapshot import (
+    DataPlaneSnapshot,
+    DataPlaneSnapshotRejected,
+    snapshot_local_data_plane,
+)
 
 # ====== 配置 ======
 from .config import MemoryConfig
@@ -111,6 +116,9 @@ __all__ = [
     "HyMemoryClient",
     "MemoryInspector",
     "SharedRuntime",
+    "DataPlaneSnapshot",
+    "DataPlaneSnapshotRejected",
+    "snapshot_local_data_plane",
     # 配置
     "MemoryConfig",
     # Embedding 端点覆盖
