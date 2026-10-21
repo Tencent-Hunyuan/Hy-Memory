@@ -7,6 +7,8 @@ import pytest
 
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
+from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.sdk_data_plane_migration import (
@@ -14,6 +16,7 @@ from one_memory.sdk_data_plane_migration import (
     MemoryAuthority,
     SdkDataPlaneMigrationStore,
 )
+from one_memory.sdk_migration_bundle import create_sdk_migration_bundle
 from one_memory.sdk_migration_inventory import (
     LegacyMemoryInventory,
     LegacyRawInventory,
@@ -31,7 +34,10 @@ from one_memory.sdk_migration_inventory import (
     record_memory_migration_plan,
     record_raw_migration_plan,
 )
-from one_memory.sdk_migration_runner import run_sdk_data_plane_backfill
+from one_memory.sdk_migration_runner import (
+    commit_reconciled_cutover,
+    run_sdk_data_plane_backfill,
+)
 
 
 @pytest.fixture
@@ -158,6 +164,50 @@ def test_cutover_requires_ready_phase_and_terminal_items(store):
     )
     assert marker.migration_id == "m1"
     assert store.authority() is MemoryAuthority.SDK
+
+
+def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store):
+    _start(store)
+    store.set_phase("m1", phase="reconciled", state="ready")
+    data_dir = store.database_path.parent
+    create_sdk_migration_bundle(
+        data_dir=data_dir,
+        bundle_id="bundle-1",
+        runtime_build="build-13",
+        runtime_stopped=True,
+    )
+    queue = DurableWriteQueue(store.database_path)
+    request = WriteRequest(
+        internal_session_id="session-1",
+        source_id="cursor",
+        batch_identity=BatchIdentity(
+            internal_session_id="session-1",
+            first_round=1,
+            last_round=1,
+        ),
+        evidence_ids=["e1"],
+        idempotency_key="request-1",
+    )
+    job = queue.submit(request)
+
+    with pytest.raises(DataPlaneMigrationError, match="write_jobs"):
+        commit_reconciled_cutover(
+            data_dir=data_dir,
+            database_path=store.database_path,
+            migration_id="m1",
+            bundle_id="bundle-1",
+            sdk_version="2.0.5.dev3",
+        )
+
+    queue.settle(job.job_id, state=COMPLETED)
+    marker = commit_reconciled_cutover(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        migration_id="m1",
+        bundle_id="bundle-1",
+        sdk_version="2.0.5.dev3",
+    )
+    assert marker.migration_id == "m1"
 
 
 def test_alias_is_idempotent_but_cannot_be_retargeted(store):
