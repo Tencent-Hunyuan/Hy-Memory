@@ -27,14 +27,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Final, Literal
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationInfo,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from one_memory.imports.models import EvidenceRecord
 
@@ -221,8 +214,7 @@ class WriteRequest(BaseModel):
     internal_session_id: str = Field(min_length=1, max_length=128)
     source_id: str | None = Field(default=None, min_length=1, max_length=128)
     batch_identity: BatchIdentity
-    evidence_ids: list[str] = Field(default_factory=list)
-    raw_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(min_length=1)
     # New jobs freeze the complete input in their own payload. The default is
     # solely for reading pre-upgrade rows whose payload only carried ids.
     input_records: tuple[EvidenceRecord, ...] = ()
@@ -234,6 +226,8 @@ class WriteRequest(BaseModel):
     @field_validator("evidence_ids")
     @classmethod
     def _evidence_required(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("a write request must point at evidence")
         if any(not item or not item.strip() for item in value):
             raise ValueError("evidence_ids must not contain empty ids")
         if len(set(value)) != len(value):
@@ -249,25 +243,6 @@ class WriteRequest(BaseModel):
         if value and evidence_ids != [record.evidence_id for record in value]:
             raise ValueError("input_records must match evidence_ids in order")
         return value
-
-    @field_validator("raw_ids")
-    @classmethod
-    def _raw_ids_are_bounded_and_unique(cls, value: list[str]) -> list[str]:
-        if len(value) > 100:
-            raise ValueError("raw_ids may contain at most 100 ids")
-        if any(not item or not item.strip() for item in value):
-            raise ValueError("raw_ids must not contain empty ids")
-        if len(set(value)) != len(value):
-            raise ValueError("raw_ids must be unique")
-        return value
-
-    @model_validator(mode="after")
-    def _one_authoritative_input(self) -> WriteRequest:
-        if bool(self.evidence_ids) == bool(self.raw_ids):
-            raise ValueError("a write request must point at evidence or SDK raw, not both")
-        if self.raw_ids and self.input_records:
-            raise ValueError("SDK raw requests must not embed Evidence records")
-        return self
 
     @property
     def request_key(self) -> str:

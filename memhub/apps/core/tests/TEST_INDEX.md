@@ -324,7 +324,6 @@
 | `test_schema_ownership_gate.py` | `contract` | A1-03/A1-04: schema ownership, and the hard part of telling DDL from reads. |
 | `test_sdk_data_plane_migration.py` | `contract` | SDK-authority migration ledger, aliases and atomic cutover marker. |
 | `test_sdk_migration_bundle.py` | `contract` | SDK-authority cutover requires a verified management + SDK data-plane bundle. |
-| `test_sdk_raw_dispatch.py` | `contract` | 覆盖 consume happens only after durable queue submission、raw dispatch receipts store ids and order but never content、stage is idempotent escalates priority and rejects rebinding 场景。 |
 | `test_sdk_verbatim_fallback.py` | `contract` | D98: the SDK's verbatim fallback must stay off. |
 | `test_search_without_profile.py` | `contract` | What 'semantic_search' should do once the profile that filled the store is gone. |
 | `test_secondary_source_adapters.py` | `contract` | 覆盖 pi and qwenwork keep tool and sidechain content out of the persons words、qwen code reads only the transcript beside its bookkeeping、qwen native parts preserve visible text not reasoning or tools 等 22 个场景。 |
@@ -392,4 +391,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 387 个测试文件。
+共 386 个测试文件。

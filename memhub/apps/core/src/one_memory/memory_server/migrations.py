@@ -2904,60 +2904,6 @@ async def _055_sdk_data_plane_migration(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
-def sdk_raw_dispatch_ddl(dialect: str = "mysql") -> str:
-    """Management-only replay markers from exact SDK raw import to queue intake."""
-    if dialect == "sqlite":
-        return """
-CREATE TABLE IF NOT EXISTS sdk_raw_pending_dispatch (
-    user_id TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    file_key TEXT NOT NULL,
-    internal_session_id TEXT NOT NULL,
-    workspace TEXT,
-    agent_id TEXT NOT NULL,
-    raw_id TEXT NOT NULL,
-    source_order INTEGER NOT NULL,
-    priority TEXT NOT NULL CHECK (priority IN ('normal','live')),
-    event_at TEXT,
-    import_request_id TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, source_id, file_key, raw_id)
-);
-CREATE INDEX IF NOT EXISTS sdk_raw_dispatch_session_order
-ON sdk_raw_pending_dispatch(
-    user_id, source_id, file_key, internal_session_id, workspace, source_order, raw_id
-)
-"""
-    return """
-CREATE TABLE IF NOT EXISTS sdk_raw_pending_dispatch (
-    user_id VARCHAR(256) NOT NULL,
-    source_id VARCHAR(128) NOT NULL,
-    file_key VARCHAR(512) NOT NULL,
-    internal_session_id VARCHAR(128) NOT NULL,
-    workspace VARCHAR(1024) NULL,
-    agent_id VARCHAR(256) NOT NULL,
-    raw_id VARCHAR(256) NOT NULL,
-    source_order BIGINT NOT NULL,
-    priority VARCHAR(16) NOT NULL,
-    event_at VARCHAR(64) NULL,
-    import_request_id VARCHAR(256) NOT NULL,
-    created_at VARCHAR(64) NOT NULL,
-    PRIMARY KEY (user_id, source_id, file_key, raw_id),
-    KEY sdk_raw_dispatch_session_order (
-        user_id, source_id, file_key, internal_session_id,
-        workspace(255), source_order, raw_id
-    ),
-    CONSTRAINT sdk_raw_dispatch_priority
-        CHECK (priority IN ('normal','live'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-"""
-
-
-async def _056_sdk_raw_dispatch(cursor: Any) -> None:
-    for statement in _split_statements(sdk_raw_dispatch_ddl(_dialect(cursor))):
-        await cursor.execute(statement)
-
-
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3226,11 +3172,5 @@ MIGRATIONS: tuple[Migration, ...] = (
             "memory_id_aliases",
             "sdk_data_plane_cutover",
         ),
-    ),
-    Migration(
-        56,
-        "sdk_raw_dispatch",
-        _056_sdk_raw_dispatch,
-        ("sdk_raw_pending_dispatch",),
     ),
 )

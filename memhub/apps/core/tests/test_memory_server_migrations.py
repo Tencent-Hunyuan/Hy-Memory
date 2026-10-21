@@ -125,20 +125,6 @@ def test_sdk_data_plane_cutover_ledger_is_owned_by_migration_55() -> None:
         assert "operation_key" in ddl
 
 
-def test_sdk_raw_dispatch_receipts_are_management_only_migration_56() -> None:
-    from one_memory.memory_server.migrations import MIGRATIONS, sdk_raw_dispatch_ddl
-
-    migration = next(item for item in MIGRATIONS if item.version == 56)
-    assert migration.tables == ("sdk_raw_pending_dispatch",)
-    for dialect in ("sqlite", "mysql"):
-        ddl = sdk_raw_dispatch_ddl(dialect)
-        assert "CREATE TABLE IF NOT EXISTS sdk_raw_pending_dispatch" in ddl
-        assert "raw_id" in ddl
-        assert "internal_session_id" in ddl
-        assert "content" not in ddl
-        assert "verbatim" not in ddl
-
-
 def test_plan_upgrade_from_zero_is_everything() -> None:
     expected = [item.version for item in MIGRATIONS]
     assert [item.version for item in plan_upgrade(MIGRATIONS, 0)] == expected

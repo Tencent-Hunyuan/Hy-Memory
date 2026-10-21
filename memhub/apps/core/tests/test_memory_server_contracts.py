@@ -85,7 +85,8 @@ def test_batch_id_is_deterministic_for_the_same_rounds() -> None:
     assert first != third
 
 
-def test_write_request_requires_one_authoritative_input() -> None:
+def test_write_request_requires_evidence_before_hy() -> None:
+    """No write job may be created without evidence to point back at."""
     with pytest.raises(ValueError):
         WriteRequest(
             internal_session_id="sess-1",
@@ -96,29 +97,6 @@ def test_write_request_requires_one_authoritative_input() -> None:
             ),
             evidence_ids=[],
             idempotency_key="key-1",
-        )
-    raw = WriteRequest(
-        internal_session_id="sess-1",
-        source_id="cursor",
-        batch_identity=BatchIdentity(
-            internal_session_id="sess-1",
-            first_round=1,
-            last_round=5,
-        ),
-        raw_ids=["raw-1", "raw-2"],
-        idempotency_key="key-raw",
-    )
-    assert raw.evidence_ids == []
-    assert raw.input_records == ()
-    assert raw.raw_ids == ["raw-1", "raw-2"]
-    with pytest.raises(ValueError):
-        WriteRequest(
-            internal_session_id="sess-1",
-            source_id="cursor",
-            batch_identity=raw.batch_identity,
-            evidence_ids=["evidence-1"],
-            raw_ids=["raw-1"],
-            idempotency_key="key-both",
         )
 
 
