@@ -219,6 +219,25 @@ class SdkDataPlaneMigrationStore:
                         "sdk_data_plane_migration_operation_conflict"
                     ) from error
             else:
+                if (
+                    str(row["state"]) in TERMINAL_ITEM_STATES
+                    and (
+                        source_id,
+                        source_revision,
+                        source_hash,
+                    )
+                    == (
+                        row["source_id"],
+                        row["source_revision"],
+                        row["source_hash"],
+                    )
+                ):
+                    # A crash after an SDK side effect can make the next
+                    # inventory classify the same source as verified/adopted
+                    # instead of import/delete. Keep the settled operation as
+                    # the durable audit identity.
+                    connection.execute("COMMIT")
+                    return
                 identity = (
                     source_kind,
                     source_id,

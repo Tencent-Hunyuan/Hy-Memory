@@ -553,6 +553,39 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e1"]
     assert store.authority() is MemoryAuthority.LEGACY
 
+    # Simulate a process dying after both SDK side effects but before startup
+    # could finish. The next inventory observes them as matched rather than
+    # import_exact; that reclassification must resume the settled ledger
+    # instead of conflicting with its original operation key.
+    bridge.memories = (_record("memory-1", content="preference"),)
+    bridge.raw = (
+        HySdkRawRecord(
+            raw_id="evidence:e1",
+            content="verbatim",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="session",
+            source="cursor",
+        ),
+    )
+    resumed = asyncio.run(
+        run_sdk_data_plane_backfill(
+            database_path=database,
+            bridge=bridge,
+            migration_id="migration",
+            bundle_id="bundle",
+            source_runtime_build="v1.0.4",
+            target_sdk_version="2.0.5.dev3",
+            source_schema_version=55,
+            namespace_fingerprint="namespace",
+            backend_fingerprint="backend",
+        )
+    )
+    assert resumed.state == "ready"
+    assert resumed.counts == {"verified": 2}
+    assert len(bridge.imported) == 1
+    assert len(bridge.imported_raw) == 1
+
 
 def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):
     database = store.database_path

@@ -153,6 +153,10 @@ export {
   waitForRuntimeProcess,
 } from "./runtime-launcher.js";
 export {
+  type RuntimeMaintenanceDependencies,
+  withRuntimeMaintenanceFence,
+} from "./runtime-maintenance.js";
+export {
   type ManagedRuntime,
   RuntimeService,
   type RuntimeServiceOptions,
