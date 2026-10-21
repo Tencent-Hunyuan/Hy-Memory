@@ -41,7 +41,6 @@ import {
   retryUnknownMemoryProcessing,
   saveMemoryNote,
   setExtractionWindow,
-  setMemoryScopes,
   syncMemoryIndex,
 } from "./api";
 import { ConversationSearch } from "./ConversationSearch";
@@ -1223,71 +1222,6 @@ export function MemorySpace({
     }
   }
 
-  async function saveScopes(nextScopes: string[]) {
-    if (detailReadBlocked || (management && !library.writable)) return;
-    const selected = detailRef.current;
-    if (!selected) return;
-    const { memory_id: id, revision } = selected.memory;
-    const epoch = detailEpoch.current;
-    const intent = `${id}:scopes:${revision}:${JSON.stringify(nextScopes)}`;
-    const requestId = requestIdFor(requestIds.current, intent);
-    setBusy(true);
-    const trace = traceUiAction("memory", "submit");
-    try {
-      const updated = await setMemoryScopes(
-        id,
-        revision,
-        nextScopes,
-        requestId,
-        trace.traceId,
-      );
-      trace.done("succeeded");
-      requestIds.current.delete(intent);
-      if (
-        detailEpoch.current === epoch &&
-        detailRef.current?.memory.memory_id === id &&
-        detailRef.current.memory.revision === revision
-      ) {
-        setDetail({
-          ...selected,
-          memory: updated,
-          history: [
-            {
-              memory_id: id,
-              revision: updated.revision,
-              action: "set_scopes",
-              status: updated.status,
-              content: updated.content,
-              scopes: updated.scopes,
-              created_at: updated.updated_at,
-            },
-            ...selected.history,
-          ],
-        });
-        setScopes(updated.scopes.join(", "));
-      }
-      invalidateAnswers(
-        memories.map((memory) => (memory.memory_id === id ? updated : memory)),
-      );
-      try {
-        await refresh(query);
-      } catch {
-        setError("召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。");
-      }
-    } catch (reason) {
-      trace.done(writeTraceStatus(reason), {
-        reason: isDefiniteRefusal(reason)
-          ? "memory_scopes_failed"
-          : "memory_scopes_result_unknown",
-      });
-      // The caller (MemoryRecallScope) owns the inline error and needs the
-      // rejection to distinguish a revision conflict from an unknown result.
-      throw reason;
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function syncIndex() {
     if (!detail || detailReadBlocked || (management && !library.writable))
       return;
@@ -1785,7 +1719,6 @@ export function MemorySpace({
         onOpenMemory={(memoryId) => void open(memoryId)}
         onCloseDetail={closeDetail}
         onSave={save}
-        onSaveScopes={saveScopes}
         onAction={(name) => void action(name)}
         onSyncIndex={() => void syncIndex()}
         onBuildRelations={() => void buildRelations()}
@@ -1854,7 +1787,6 @@ export function MemorySpace({
           onScopes={setScopes}
           onClose={closeDetail}
           onSave={save}
-          onSaveScopes={saveScopes}
           onAction={action}
           onSyncIndex={syncIndex}
           onConfigureModel={onConfigureModel}
@@ -2069,7 +2001,6 @@ export function MemorySpace({
           onScopes={setScopes}
           onClose={() => setDetail(null)}
           onSave={save}
-          onSaveScopes={saveScopes}
           onAction={action}
           onSyncIndex={syncIndex}
           onConfigureModel={onConfigureModel}
