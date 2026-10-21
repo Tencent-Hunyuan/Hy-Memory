@@ -6,6 +6,7 @@ import json
 import pytest
 
 from one_memory.database_access import close_main_databases, main_database
+from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.sdk_data_plane_migration import (
@@ -18,7 +19,10 @@ from one_memory.sdk_migration_inventory import (
     SdkMemoryInventory,
     classify_memory_inventory,
     content_hash,
+    execute_memory_migration_plan,
     read_legacy_memory_inventory,
+    read_sdk_memory_inventory,
+    record_memory_migration_plan,
 )
 
 
@@ -283,3 +287,93 @@ def test_inventory_classification_covers_every_legacy_and_sdk_state():
     assert by_key["memory:unknown-layer"].reason == "legacy_layer_unknown"
     assert by_key["sdk:sdk-only"].action == "adopt"
     assert len(decisions) == 8
+
+
+class _Bridge:
+    def __init__(self, memories=()):
+        self.memories = tuple(memories)
+        self.imported = []
+        self.deleted = []
+
+    async def list_sdk_memories(self, *, limit, offset, **_kwargs):
+        page = self.memories[offset : offset + limit]
+        return HySdkMemoryPage(
+            memories=page,
+            total=len(self.memories),
+            limit=limit,
+            offset=offset,
+        )
+
+    async def import_sdk_memory_exact(self, **kwargs):
+        self.imported.append(kwargs)
+        return {"success": True, "memory_id": kwargs["memory_id"]}
+
+    async def delete(self, memory_id):
+        self.deleted.append(memory_id)
+        return {"success": True, "deleted_count": 1}
+
+
+def _record(memory_id, *, content="body", status="active"):
+    return HySdkMemoryRecord(
+        memory_id=memory_id,
+        content=content,
+        layer="l2_fact",
+        status=status,
+        is_latest=status == "active",
+        user_id="local",
+        agent_id="one-memory",
+    )
+
+
+def test_sdk_inventory_is_paged_without_dropping_lifecycle_records():
+    bridge = _Bridge(
+        (
+            _record("active"),
+            _record("old", status="superseded"),
+            _record("shadow", status="shadow"),
+        )
+    )
+    inventory = asyncio.run(read_sdk_memory_inventory(bridge, page_size=2))
+    assert [(item.memory_id, item.status) for item in inventory] == [
+        ("active", "active"),
+        ("old", "superseded"),
+        ("shadow", "shadow"),
+    ]
+
+
+def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
+    _start(store)
+    legacy = (
+        _legacy("matched"),
+        _legacy("missing"),
+        _legacy("mapped", canonical_id="sdk-mapped"),
+        _legacy("deleted", status="deleted"),
+        _legacy("delete-existing", status="deleted"),
+    )
+    sdk = (
+        _sdk("matched"),
+        _sdk("sdk-mapped"),
+        _sdk("delete-existing"),
+        _sdk("sdk-only"),
+    )
+    decisions = record_memory_migration_plan(
+        store,
+        migration_id="m1",
+        legacy=legacy,
+        sdk=sdk,
+    )
+    bridge = _Bridge()
+    asyncio.run(
+        execute_memory_migration_plan(
+            bridge,
+            store,
+            migration_id="m1",
+            legacy=legacy,
+            decisions=decisions,
+        )
+    )
+
+    assert [item["memory_id"] for item in bridge.imported] == ["missing"]
+    assert bridge.deleted == ["delete-existing"]
+    progress = store.progress("m1")
+    assert progress.counts == {"adopted": 1, "deleted": 2, "verified": 3}
