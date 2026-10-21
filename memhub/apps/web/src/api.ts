@@ -45,6 +45,10 @@ import {
   type OnboardingState,
   type RecentConversationsPage,
   type SavedMemoryNoteEvidence,
+  type SdkMemoryPage,
+  type SdkMemoryRecord,
+  type SdkMemoryStatus,
+  type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
   type SourceResponse,
@@ -874,6 +878,67 @@ export async function getMemoryLibrary(
     "/api/v1/memory-library",
     { params: query, signal },
   );
+  return response.data;
+}
+
+export async function getSdkMemoryLibrary(
+  {
+    statuses = ["active"],
+    offset = 0,
+    limit = 100,
+  }: {
+    statuses?: SdkMemoryStatus[];
+    offset?: number;
+    limit?: number;
+  } = {},
+  signal?: AbortSignal,
+): Promise<SdkMemoryPage> {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(limit),
+  });
+  for (const status of statuses) params.append("statuses", status);
+  const response = await client.get<SdkMemoryPage>("/api/v2/memory-library", {
+    params,
+    signal,
+  });
+  return response.data;
+}
+
+export async function getSdkMemory(memoryId: string): Promise<SdkMemoryRecord> {
+  const response = await client.get<SdkMemoryRecord>(
+    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
+  );
+  return response.data;
+}
+
+export async function updateSdkMemory(
+  memoryId: string,
+  content: string,
+): Promise<SdkMemoryRecord> {
+  const response = await client.put<SdkMemoryRecord>(
+    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
+    { content },
+  );
+  return response.data;
+}
+
+export async function deleteSdkMemory(memoryId: string): Promise<void> {
+  await client.delete(`/api/v2/memories/${encodeURIComponent(memoryId)}`);
+}
+
+export async function getSdkRaw({
+  source,
+  offset = 0,
+  limit = 100,
+}: {
+  source?: string;
+  offset?: number;
+  limit?: number;
+} = {}): Promise<SdkRawPage> {
+  const response = await client.get<SdkRawPage>("/api/v2/raw", {
+    params: { source, offset, limit },
+  });
   return response.data;
 }
 
