@@ -2,6 +2,12 @@
 
 Hy Memory and MemHub are versioned and released independently.
 
+## Hy Memory 2.0.5.dev3 — 2026-10-21
+
+- Development preview; not the final `2.0.5` release.
+- Lets the existing `search` API explicitly query SDK raw with
+  `layers=["l1_raw"]`, including existing source filters.
+
 ## Hy Memory 2.0.5.dev2 — 2026-10-21
 
 - Development preview; not the final `2.0.5` release.
