@@ -104,6 +104,27 @@ def test_governance_candidate_shadow_is_owned_by_migration_32() -> None:
     assert "CREATE TABLE IF NOT EXISTS governed_memories_terms_meta " in sqlite
 
 
+def test_sdk_data_plane_cutover_ledger_is_owned_by_migration_55() -> None:
+    from one_memory.memory_server.migrations import (
+        MIGRATIONS,
+        sdk_data_plane_migration_ddl,
+    )
+
+    migration = next(item for item in MIGRATIONS if item.version == 55)
+    assert set(migration.tables) == {
+        "sdk_data_plane_migrations",
+        "sdk_data_plane_migration_items",
+        "memory_id_aliases",
+        "sdk_data_plane_cutover",
+    }
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_data_plane_migration_ddl(dialect)
+        for table in migration.tables:
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
+        assert "UNIQUE" in ddl
+        assert "operation_key" in ddl
+
+
 def test_plan_upgrade_from_zero_is_everything() -> None:
     expected = [item.version for item in MIGRATIONS]
     assert [item.version for item in plan_upgrade(MIGRATIONS, 0)] == expected

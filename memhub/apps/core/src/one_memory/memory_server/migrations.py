@@ -2785,6 +2785,127 @@ async def _035_scanner_state(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def sdk_data_plane_migration_ddl(dialect: str = "mysql") -> str:
+    """Management-only ledger for the one-time SDK-authority cutover."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migrations (
+    migration_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    source_runtime_build TEXT NOT NULL,
+    source_sdk_version TEXT NOT NULL,
+    target_sdk_version TEXT NOT NULL,
+    source_schema_version INTEGER NOT NULL,
+    namespace_fingerprint TEXT NOT NULL,
+    backend_fingerprint TEXT NOT NULL,
+    backup_bundle_id TEXT,
+    reconciliation_digest TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cutover_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migration_items (
+    migration_id TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_revision TEXT,
+    source_hash TEXT NOT NULL,
+    target_memory_id TEXT,
+    target_hash TEXT,
+    operation_key TEXT NOT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error_code TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (migration_id, item_key),
+    UNIQUE (migration_id, operation_key)
+);
+CREATE INDEX IF NOT EXISTS sdk_migration_items_state
+ON sdk_data_plane_migration_items(migration_id, state, item_key);
+CREATE TABLE IF NOT EXISTS memory_id_aliases (
+    legacy_memory_id TEXT PRIMARY KEY,
+    canonical_memory_id TEXT NOT NULL,
+    migration_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memory_id_aliases_canonical
+ON memory_id_aliases(canonical_memory_id);
+CREATE TABLE IF NOT EXISTS sdk_data_plane_cutover (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    migration_id TEXT NOT NULL,
+    sdk_version TEXT NOT NULL,
+    store_version TEXT NOT NULL,
+    namespace_fingerprint TEXT NOT NULL,
+    backend_fingerprint TEXT NOT NULL,
+    backup_bundle_id TEXT NOT NULL,
+    reconciliation_digest TEXT NOT NULL,
+    completed_at TEXT NOT NULL
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migrations (
+    migration_id VARCHAR(128) PRIMARY KEY,
+    state VARCHAR(32) NOT NULL,
+    phase VARCHAR(64) NOT NULL,
+    source_runtime_build VARCHAR(128) NOT NULL,
+    source_sdk_version VARCHAR(64) NOT NULL,
+    target_sdk_version VARCHAR(64) NOT NULL,
+    source_schema_version INT NOT NULL,
+    namespace_fingerprint VARCHAR(128) NOT NULL,
+    backend_fingerprint VARCHAR(128) NOT NULL,
+    backup_bundle_id VARCHAR(128) NULL,
+    reconciliation_digest VARCHAR(128) NULL,
+    created_at VARCHAR(64) NOT NULL,
+    updated_at VARCHAR(64) NOT NULL,
+    cutover_at VARCHAR(64) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migration_items (
+    migration_id VARCHAR(128) NOT NULL,
+    item_key VARCHAR(384) NOT NULL,
+    source_kind VARCHAR(64) NOT NULL,
+    source_id VARCHAR(256) NOT NULL,
+    source_revision VARCHAR(128) NULL,
+    source_hash VARCHAR(128) NOT NULL,
+    target_memory_id VARCHAR(256) NULL,
+    target_hash VARCHAR(128) NULL,
+    operation_key VARCHAR(256) NOT NULL,
+    state VARCHAR(32) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    error_code VARCHAR(128) NULL,
+    updated_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (migration_id, item_key),
+    UNIQUE KEY sdk_migration_item_operation (migration_id, operation_key),
+    KEY sdk_migration_items_state (migration_id, state, item_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS memory_id_aliases (
+    legacy_memory_id VARCHAR(256) PRIMARY KEY,
+    canonical_memory_id VARCHAR(256) NOT NULL,
+    migration_id VARCHAR(128) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    KEY memory_id_aliases_canonical (canonical_memory_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS sdk_data_plane_cutover (
+    singleton TINYINT PRIMARY KEY,
+    migration_id VARCHAR(128) NOT NULL,
+    sdk_version VARCHAR(64) NOT NULL,
+    store_version VARCHAR(64) NOT NULL,
+    namespace_fingerprint VARCHAR(128) NOT NULL,
+    backend_fingerprint VARCHAR(128) NOT NULL,
+    backup_bundle_id VARCHAR(128) NOT NULL,
+    reconciliation_digest VARCHAR(128) NOT NULL,
+    completed_at VARCHAR(64) NOT NULL,
+    CONSTRAINT sdk_data_plane_cutover_singleton CHECK (singleton = 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _055_sdk_data_plane_migration(cursor: Any) -> None:
+    for statement in _split_statements(sdk_data_plane_migration_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3042,5 +3163,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         54,
         "legacy_possibly_sent_tasks",
         _054_legacy_possibly_sent_tasks,
+    ),
+    Migration(
+        55,
+        "sdk_data_plane_migration",
+        _055_sdk_data_plane_migration,
+        (
+            "sdk_data_plane_migrations",
+            "sdk_data_plane_migration_items",
+            "memory_id_aliases",
+            "sdk_data_plane_cutover",
+        ),
     ),
 )

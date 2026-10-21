@@ -132,6 +132,8 @@ The MemHub management database owns operational migration tables:
   identity/hash, deterministic operation key, state, attempts and error code;
 - `memory_id_aliases`: historical ID to canonical SDK ID for old Matters,
   call-events, task receipts and links.
+- `sdk_data_plane_cutover`: the singleton authority marker and immutable
+  SDK/backend/bundle/reconciliation fingerprints.
 
 Progress is committed only after SDK verification. Retrying an item uses the
 same deterministic SDK operation key and must not create another memory.
