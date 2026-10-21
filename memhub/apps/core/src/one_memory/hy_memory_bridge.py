@@ -866,6 +866,25 @@ class HyMemoryBridge:
         governance.
         """
         client = await self._get_client()
+        exact_inquiry = getattr(client, "get_write_outcome", None)
+        if callable(exact_inquiry):
+            try:
+                outcome = await _joined_thread(exact_inquiry, request_id)
+            except Exception as error:
+                raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+            if outcome is None:
+                return ()
+            return await _outputs_from_write_outcome(
+                client,
+                outcome,
+                request_id=request_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                evidence_ids=evidence_ids,
+            )
+
+        # Compatibility for the pinned 2.0.4 wheel. Remove after the SDK-first
+        # authority release is published and MemHub's exact pin is bumped.
         page_size = 500
         outputs: list[HyMemoryOutput] = []
         seen: set[str] = set()
@@ -2059,6 +2078,69 @@ def _basic_info_memories(raw: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(memories, list):
         raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
     return tuple(memory for memory in memories if isinstance(memory, Mapping))
+
+
+async def _outputs_from_write_outcome(
+    client: HyMemoryClientProtocol,
+    outcome: object,
+    *,
+    request_id: str,
+    user_id: str,
+    agent_id: str,
+    evidence_ids: tuple[str, ...],
+) -> tuple[HyMemoryOutput, ...]:
+    if not isinstance(outcome, Mapping):
+        raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
+    if outcome.get("request_id") not in {None, request_id}:
+        raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
+    for key, expected in (("user_id", user_id), ("agent_id", agent_id)):
+        value = outcome.get(key)
+        if value is not None and value != expected:
+            raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
+    status = outcome.get("status")
+    if status == "failed":
+        return ()
+    if status != "succeeded":
+        raise HyMemoryBridgeError("hy_memory_outcome_not_terminal")
+    result = outcome.get("result")
+    if not isinstance(result, Mapping):
+        raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
+    candidates: list[str] = []
+    for key in ("memory_ids", "experience_ids", "fact_ids"):
+        values = result.get(key)
+        if isinstance(values, list):
+            candidates.extend(value for value in values if isinstance(value, str))
+    if isinstance(result.get("memory_id"), str):
+        candidates.append(cast(str, result["memory_id"]))
+
+    outputs: list[HyMemoryOutput] = []
+    for memory_id in dict.fromkeys(candidates):
+        try:
+            record = await _joined_thread(client.get, memory_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        # The singular add memory_id may be the hidden L1 raw node. It is not a
+        # semantic memory output and public get correctly returns None for it.
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("user_id") != user_id or record.get("agent_id") != agent_id:
+            raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
+        content = record.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        layer = record.get("layer")
+        owner = record.get("owner")
+        outputs.append(
+            HyMemoryOutput(
+                memory_id=memory_id,
+                content=content,
+                layer=layer if isinstance(layer, str) else None,
+                owner=owner if owner in {"user", "agent"} else None,
+                tags=_string_tuple(record.get("tags")),
+                evidence_ids=evidence_ids,
+            )
+        )
+    return tuple(outputs)
 
 
 def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:

@@ -644,6 +644,8 @@ def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> 
 
 def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) -> None:
     client = FakeHyMemoryClient({"success": True})
+    # Pinned SDK 2.0.4 compatibility path: no durable outcome API yet.
+    client.get_write_outcome = None
     client.list_result = {
         "vdb": {
             "total": 3,
@@ -697,6 +699,40 @@ def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) 
 
     assert [output.memory_id for output in outputs] == ["matched"]
     assert outputs[0].evidence_ids == ("evidence-1",)
+
+
+def test_bridge_prefers_exact_sdk_write_outcome_over_library_scan(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    client.write_outcome = {
+        "request_id": "request-1",
+        "user_id": "local",
+        "agent_id": "one-memory",
+        "status": "succeeded",
+        "result": {"success": True, "memory_ids": ["memory-1"]},
+    }
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    outputs = asyncio.run(
+        bridge.outputs_for_request(
+            request_id="request-1",
+            user_id="local",
+            agent_id="one-memory",
+            evidence_ids=("evidence-1",),
+        )
+    )
+
+    assert [output.memory_id for output in outputs] == ["memory-1"]
+    assert outputs[0].evidence_ids == ("evidence-1",)
+    assert not any("list_memories" in call for call in client.calls)
 
 
 def test_bridge_reads_sdk_memory_lifecycle_without_governance(tmp_path) -> None:
