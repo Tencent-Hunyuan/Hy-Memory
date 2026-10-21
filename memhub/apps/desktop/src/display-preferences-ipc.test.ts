@@ -1,4 +1,8 @@
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { translate } from "@one-memory/contracts/gui-i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface FakeFrame {
@@ -11,13 +15,17 @@ interface FakeFrame {
 
 const fake = vi.hoisted(() => ({
   ready: undefined as (() => Promise<void>) | undefined,
-  handlers: new Map<string, (event: unknown) => unknown>(),
+  handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   windows: [] as FakeWindow[],
   app: undefined as unknown as EventEmitter,
   theme: undefined as unknown as EventEmitter,
   renderer: undefined as unknown as EventEmitter,
   unload: undefined as unknown as EventTarget,
   packaged: true,
+  userData: "",
+  preferred: vi.fn(() => ["es-MX", "zh-CN"]),
+  locale: vi.fn(() => "zh-CN"),
+  menu: vi.fn(),
   loadFailure: false,
   reduceMotion: false as unknown,
   reduceTransparency: false as unknown,
@@ -93,7 +101,10 @@ vi.mock("electron", () => ({
       }),
       isPackaged: fake.packaged,
       getName: () => "One Memory Preview",
-      getPath: () => "/unused/display-test",
+      getPath: (name: string) =>
+        name === "userData" ? fake.userData : "/unused/display-test",
+      getPreferredSystemLanguages: fake.preferred,
+      getLocale: fake.locale,
       getAppPath: () => "/unused/display-test",
       quit: vi.fn(),
       exit: vi.fn(),
@@ -119,8 +130,10 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: FakeWindow,
   ipcMain: {
-    handle: (channel: string, handler: (event: unknown) => unknown) =>
-      fake.handlers.set(channel, handler),
+    handle: (
+      channel: string,
+      handler: (event: unknown, ...args: unknown[]) => unknown,
+    ) => fake.handlers.set(channel, handler),
     removeHandler: (channel: string) => {
       fake.removeHandler(channel);
       fake.handlers.delete(channel);
@@ -138,7 +151,7 @@ vi.mock("electron", () => ({
   session: { defaultSession: {} },
   clipboard: { writeText: vi.fn() },
   dialog: { showErrorBox: fake.error },
-  Menu: { buildFromTemplate: vi.fn(() => ({})), setApplicationMenu: vi.fn() },
+  Menu: { buildFromTemplate: vi.fn(() => ({})), setApplicationMenu: fake.menu },
   shell: { openExternal: vi.fn() },
 }));
 vi.mock("@one-memory/host-bridge", () => ({
@@ -190,7 +203,8 @@ vi.mock("./core-supervisor", () => ({
   findAvailablePort: async () => 9999,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  fake.userData = await mkdtemp(path.join(os.tmpdir(), "memhub-language-ipc-"));
   vi.resetModules();
   vi.resetAllMocks();
   fake.app = new EventEmitter();
@@ -212,8 +226,9 @@ beforeEach(() => {
   vi.stubEnv("ONE_MEMORY_WEB_URL", "http://127.0.0.1:5173");
   vi.stubEnv("ONE_MEMORY_SMOKE_QUIT_MS", "0");
 });
-afterEach(() => {
+afterEach(async () => {
   fake.app.emit("will-quit");
+  await rm(fake.userData, { recursive: true, force: true });
   fake.unload.dispatchEvent(new Event("unload"));
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -240,6 +255,91 @@ function handler() {
 const eventFor = (window: FakeWindow) => ({
   sender: window.webContents,
   senderFrame: window.frame,
+});
+
+describe("GUI language main IPC", () => {
+  it("loads the active profile after ready and before native menus", async () => {
+    await writeFile(
+      path.join(fake.userData, "gui-language.json"),
+      JSON.stringify({ preference: "es" }),
+    );
+    await import("./main.js");
+    expect(fake.preferred).not.toHaveBeenCalled();
+    expect(fake.menu).not.toHaveBeenCalled();
+    await fake.ready?.();
+    expect(fake.preferred).toHaveBeenCalledTimes(1);
+    expect(fake.preferred.mock.invocationCallOrder[0]).toBeLessThan(
+      fake.menu.mock.invocationCallOrder[0],
+    );
+    const read = fake.handlers.get("one-memory:get-language-preference");
+    if (!read) throw Error("Missing language read handler");
+    expect(await read(eventFor(fake.windows[0]))).toEqual({
+      preference: "es",
+      locale: "es",
+      revision: 0,
+    });
+  });
+  it("guards both operations and broadcasts only to live owned main frames", async () => {
+    const window = await startup();
+    const read = fake.handlers.get("one-memory:get-language-preference");
+    if (!read) throw Error("Missing language read handler");
+    const write = fake.handlers.get("one-memory:set-language-preference");
+    if (!write) throw Error("Missing language write handler");
+    const foreign = new FakeWindow();
+    for (const event of [
+      eventFor(foreign),
+      {
+        sender: window.webContents,
+        senderFrame: { ...window.frame, parent: window.frame },
+      },
+      { sender: window.webContents, senderFrame: null },
+    ]) {
+      await expect(read(event)).rejects.toThrow();
+      await expect(write(event, "es")).rejects.toThrow();
+    }
+    window.frame.url = "https://example.invalid";
+    await expect(read(eventFor(window))).rejects.toThrow();
+    await expect(write(eventFor(window), "es")).rejects.toThrow();
+    window.frame.url = "one-memory://app/index.html";
+    await write(eventFor(window), "zh-CN");
+    expect(window.frame.send).toHaveBeenCalledWith(
+      "one-memory:language-preference-changed",
+      { preference: "zh-CN", locale: "zh-CN", revision: 1 },
+    );
+    expect(foreign.frame.send).not.toHaveBeenCalled();
+    window.frame.send.mockImplementation(() => {
+      throw Error("destroyed during send");
+    });
+    await expect(write(eventFor(window), "es")).resolves.toMatchObject({
+      revision: 2,
+    });
+    fake.app.emit("will-quit");
+    expect(fake.handlers.has("one-memory:get-language-preference")).toBe(false);
+    expect(fake.handlers.has("one-memory:set-language-preference")).toBe(false);
+  });
+  it("does not deliver an admitted write to a document that navigated during persistence", async () => {
+    const window = await startup();
+    const write = fake.handlers.get("one-memory:set-language-preference");
+    const read = fake.handlers.get("one-memory:get-language-preference");
+    if (!write || !read) throw Error("Missing language handlers");
+    const result = write(eventFor(window), "es");
+    window.frame.url = "https://example.invalid";
+    await expect(result).rejects.toThrow();
+    expect(window.frame.send).not.toHaveBeenCalled();
+    window.frame.url = "one-memory://app/index.html";
+    expect(await read(eventFor(window))).toMatchObject({
+      preference: "es",
+      revision: 1,
+    });
+  });
+  it("uses the shared locale for the native error title without translating error codes", async () => {
+    fake.loadFailure = true;
+    await startup();
+    expect(fake.error).toHaveBeenCalledWith(
+      translate("es", "nativeErrorTitle"),
+      "page_load_failed",
+    );
+  });
 });
 
 describe("display preference main IPC", () => {
@@ -412,6 +512,9 @@ describe("display preference main IPC", () => {
 interface PreferenceAPI {
   getBackgroundHealth(): Promise<unknown>;
   restartBackground(): Promise<{ state: "restarted" }>;
+  getLanguagePreference(): Promise<unknown>;
+  setLanguagePreference(preference: unknown): Promise<unknown>;
+  onLanguagePreferenceChanged(listener: (value: unknown) => void): () => void;
   getDisplayPreferences(): Promise<{
     reduceMotion: boolean;
     reduceTransparency: boolean;
@@ -423,6 +526,51 @@ async function preload() {
   await import("./preload.js");
   return fake.expose.mock.calls[0][1] as PreferenceAPI;
 }
+
+describe("language preference preload", () => {
+  it("validates writes and snapshots, strips event metadata and cleans subscriptions", async () => {
+    const api = await preload();
+    const snapshot = { preference: "es", locale: "es", revision: 2 };
+    fake.invoke.mockResolvedValue({ ...snapshot, secret: "not exposed" });
+    expect(await api.getLanguagePreference()).toEqual(snapshot);
+    expect(await api.setLanguagePreference("es")).toEqual(snapshot);
+    expect(fake.invoke).toHaveBeenLastCalledWith(
+      "one-memory:set-language-preference",
+      "es",
+    );
+    fake.invoke.mockClear();
+    await expect(api.setLanguagePreference("en")).rejects.toThrow();
+    expect(fake.invoke).not.toHaveBeenCalled();
+    const listener = vi.fn();
+    const unsubscribe = api.onLanguagePreferenceChanged(listener);
+    for (const invalid of [
+      null,
+      {},
+      { ...snapshot, revision: -1 },
+      { ...snapshot, preference: "en" },
+      { ...snapshot, locale: "en" },
+    ]) {
+      fake.invoke.mockResolvedValue(invalid);
+      await expect(api.getLanguagePreference()).rejects.toThrow();
+      await expect(api.setLanguagePreference("es")).rejects.toThrow();
+      fake.renderer.emit("one-memory:language-preference-changed", {}, invalid);
+    }
+    expect(listener).not.toHaveBeenCalled();
+    fake.renderer.emit(
+      "one-memory:language-preference-changed",
+      { secret: true },
+      { ...snapshot, secret: true },
+    );
+    expect(listener).toHaveBeenCalledExactlyOnceWith(snapshot);
+    expect(listener.mock.calls[0][0]).not.toBe(snapshot);
+    fake.unload.dispatchEvent(new Event("unload"));
+    unsubscribe();
+    unsubscribe();
+    expect(
+      fake.renderer.listenerCount("one-memory:language-preference-changed"),
+    ).toBe(0);
+  });
+});
 
 describe("display preference preload", () => {
   it("preload exposes a no-argument background health read", async () => {

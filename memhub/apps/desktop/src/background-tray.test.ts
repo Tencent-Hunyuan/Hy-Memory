@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { LanguageSnapshot } from "@one-memory/contracts/gui-i18n";
 import type {
   App,
   Menu,
@@ -25,6 +26,12 @@ function fixture(
     enabled: false,
     status: "disabled",
   };
+  let changed: (() => void) | undefined;
+  const languageSnapshot: LanguageSnapshot = {
+    preference: "zh-CN",
+    locale: "zh-CN",
+    revision: 1,
+  };
   const app = { isPackaged: packaged, quit: vi.fn() };
   const tray = Object.assign(new EventEmitter(), {
     setToolTip: vi.fn(),
@@ -49,6 +56,15 @@ function fixture(
     installBackgroundTray({
       app: app as unknown as App,
       platform,
+      language: {
+        read: () => languageSnapshot,
+        subscribe: (listener) => {
+          changed = () => listener(languageSnapshot);
+          return () => {
+            changed = undefined;
+          };
+        },
+      },
       resourcesPath: "/bundle/Contents/Resources",
       appPath: "/repo/apps/desktop",
       createImage: vi.fn(() => image as unknown as NativeImage),
@@ -80,6 +96,10 @@ function fixture(
     install,
     menu,
     click,
+    changeLanguage(locale: LanguageSnapshot["locale"]) {
+      languageSnapshot.locale = locale;
+      changed?.();
+    },
     setState(value: LoginPreference) {
       state = value;
     },
@@ -87,6 +107,26 @@ function fixture(
 }
 
 describe("native macOS background tray", () => {
+  it("rebuilds Spanish and Chinese labels without changing login or stopping services", async () => {
+    const f = fixture();
+    f.install();
+    await flush();
+    f.changeLanguage("es");
+    await flush();
+    expect(f.menu()[0]?.label).toBe("Abrir MemHub");
+    expect(f.menu()[1]?.label).toBe("Iniciar MemHub al iniciar sesión");
+    expect(f.menu()[3]?.label).toBe(
+      "Salir de MemHub (el servicio sigue en segundo plano)",
+    );
+    expect(f.setLoginPreference).not.toHaveBeenCalled();
+    f.click(0);
+    expect(f.open).toHaveBeenCalledOnce();
+    f.changeLanguage("zh-CN");
+    await flush();
+    expect(f.menu()[0]?.label).toBe("打开 MemHub");
+    f.click(3);
+    expect(f.app.quit).toHaveBeenCalledOnce();
+  });
   it("reads and changes the unified Runtime login preference", async () => {
     const f = fixture();
     const dispose = f.install();

@@ -24,6 +24,13 @@ const detail = {
   ],
 } as MemoryDetail;
 
+it("traduce la procedencia y conserva el chino original por defecto", () => {
+  expect(memoryProvenanceLabel(detail, "es")).toBe(
+    "Memoria existente importada · Autor desconocido",
+  );
+  expect(memoryProvenanceLabel(detail)).toBe("导入的已有记忆 · 作者未知");
+});
+
 describe("MemoryRecallScope", () => {
   afterEach(cleanup);
   it("requires Save and submits only scopes", async () => {

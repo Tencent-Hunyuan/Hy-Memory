@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
 import {
   act,
   cleanup,
@@ -10,12 +11,20 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+it("permite crecer al botón de retorno y ajustar la barra sin cortar el español", () => {
+  const css = readFileSync(`${process.cwd()}/src/call-history.css`, "utf8");
+  expect(css).toMatch(/\.call-history-back\.r6-button\s*\{[^}]*width:\s*auto/s);
+  expect(css).toMatch(/\.call-history-actions\s*\{[^}]*flex-wrap:\s*wrap/s);
+});
+
 import { CallHistory } from "./CallHistory";
 import type {
   CallEvent,
   CallHistoryPage,
   ResolvedCallReference,
 } from "./call-history-client";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 
 const { getHistory, clearEvents, clearAllEvents, getReferences } = vi.hoisted(
   () => ({
@@ -138,6 +147,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
   if (originalShowModal)
     Object.defineProperty(
       HTMLDialogElement.prototype,
@@ -146,6 +156,68 @@ afterEach(() => {
     );
   else Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
 });
+
+it("traduce el historial en vivo sin cambiar nombres ni contenido importado", async () => {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <CallHistory onBack={vi.fn()} />
+    </LanguageProvider>,
+  );
+  const first = await loaded();
+  expect(
+    screen.getByRole("heading", { name: "Historial de uso" }),
+  ).toBeTruthy();
+  expect(first.textContent).toBe("Cursor encontró 3 contenidos relacionados");
+  fireEvent.click(first);
+  expect(
+    screen.getByRole("heading", { name: "Esta consulta de memorias" }),
+  ).toBeTruthy();
+  expect(screen.getAllByText("Consulta completada")).toHaveLength(2);
+  expect(screen.getByText("Consulta de memorias")).toBeTruthy();
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  fireEvent(window, new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }));
+  expect(screen.getByRole("heading", { name: "这次查记忆" })).toBeTruthy();
+  window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+});
+
+it.each([0, 1, 3])(
+  "muestra %i registros con confirmación española y conserva títulos opacos",
+  async (count) => {
+    getHistory.mockResolvedValue(
+      page(
+        Array.from({ length: count }, (_, index) =>
+          event(`event-${index}`, {
+            host_id: "Aplicación 中文",
+            references: [],
+          }),
+        ),
+      ),
+    );
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+    render(
+      <LanguageProvider>
+        <CallHistory onBack={vi.fn()} />
+      </LanguageProvider>,
+    );
+    if (!count) {
+      expect(
+        await screen.findByText("Todavía no hay registros de uso"),
+      ).toBeTruthy();
+      return;
+    }
+    await loaded("event-0");
+    expect(screen.getAllByText(/Aplicación 中文 encontró/)).toHaveLength(count);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Borrar registros de esta página" }),
+    );
+    expect(screen.getByRole("dialog").textContent).toContain(
+      count === 1
+        ? "¿Borrar el 1 registro de esta página?"
+        : "¿Borrar los 3 registros de esta página?",
+    );
+  },
+);
 
 it("loads a bounded first page and returns to applications", async () => {
   const pending = deferred<CallHistoryPage>();

@@ -1,7 +1,9 @@
 import type { MemoryDetail } from "@one-memory/contracts";
+import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
 import { Check, Globe2, LockKeyhole, Settings2 } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { apiErrorCode } from "./api";
+import { useMemoryLanguage } from "./memory-language";
 import { isDefiniteRefusal } from "./write-outcome";
 
 type Mode = "limited" | "shared" | "disabled";
@@ -14,7 +16,11 @@ const modeOf = (scopes: string[]): Mode =>
       ? "disabled"
       : "limited";
 
-export function memoryProvenanceLabel(detail: MemoryDetail): string {
+export function memoryProvenanceLabel(
+  detail: MemoryDetail,
+  locale: GuiLocale = "zh-CN",
+): string {
+  const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
   const evidence = detail.evidence.filter((item) => item.available);
   if (
     evidence.length &&
@@ -25,21 +31,21 @@ export function memoryProvenanceLabel(detail: MemoryDetail): string {
     );
     const author =
       authors.size !== 1
-        ? "多位作者"
+        ? t("provenance.multiple")
         : authors.has("person")
-          ? "用户原文"
+          ? t("provenance.person")
           : authors.has("agent")
-            ? "Agent 原文"
-            : "作者未知";
-    return `导入的已有记忆 · ${author}`;
+            ? t("provenance.agent")
+            : t("provenance.unknown");
+    return translate(locale, "provenance.imported", { author });
   }
   return detail.memory.origin === "manual"
-    ? "手动添加"
+    ? t("provenance.manual")
     : detail.memory.origin === "answered"
-      ? "问答生成"
+      ? t("provenance.answered")
       : detail.memory.origin === "agent"
-        ? "由 AI 回复整理"
-        : "由原始对话整理";
+        ? t("provenance.generated")
+        : t("provenance.conversation");
 }
 
 export function MemoryRecallScope({
@@ -51,6 +57,7 @@ export function MemoryRecallScope({
   busy: boolean;
   onSave(scopes: string[]): Promise<void>;
 }) {
+  const { text } = useMemoryLanguage();
   const id = useId();
   const editButton = useRef<HTMLButtonElement>(null);
   const [editing, setEditing] = useState(false);
@@ -107,18 +114,21 @@ export function MemoryRecallScope({
     }
   };
   return (
-    <section className="memory-recall-scope" aria-label="外部记忆召回范围">
+    <section
+      className="memory-recall-scope"
+      aria-label={text("外部记忆召回范围")}
+    >
       <div className="recall-scope-heading">
         <span>
           <LockKeyhole size={15} aria-hidden="true" />
-          外部记忆召回
+          {text("外部记忆召回")}
         </span>
         {editable && !editing && (
           <button
             type="button"
             className="quiet map-tool"
-            title="调整召回范围"
-            aria-label="调整召回范围"
+            title={text("调整召回范围")}
+            aria-label={text("调整召回范围")}
             ref={editButton}
             disabled={disabled}
             onClick={() => {
@@ -130,11 +140,11 @@ export function MemoryRecallScope({
           </button>
         )}
       </div>
-      <p className="recall-scope-summary">{summary}</p>
+      <p className="recall-scope-summary">{text(summary)}</p>
       {editing && (
         <>
           <fieldset disabled={disabled}>
-            <legend className="sr-only">选择召回范围</legend>
+            <legend className="sr-only">{text("选择召回范围")}</legend>
             {(
               [
                 ...(previous.length ? [["limited", "原有限定范围"]] : []),
@@ -158,7 +168,7 @@ export function MemoryRecallScope({
                 ) : (
                   <LockKeyhole size={16} aria-hidden="true" />
                 )}
-                <span>{label}</span>
+                <span>{text(label)}</span>
               </label>
             ))}
           </fieldset>
@@ -169,27 +179,27 @@ export function MemoryRecallScope({
               onClick={() => void save()}
             >
               <Check size={15} aria-hidden="true" />
-              {saving ? "正在保存…" : "保存召回范围"}
+              {text(saving ? "正在保存…" : "保存召回范围")}
             </button>
             <button
               type="button"
               className="quiet"
-              aria-label="取消范围修改"
+              aria-label={text("取消范围修改")}
               disabled={disabled}
               onClick={close}
             >
-              取消
+              {text("取消")}
             </button>
           </div>
         </>
       )}
       {error && (
         <p className="notice danger" role="alert">
-          {error}
+          {text(error)}
         </p>
       )}
       <p className="recall-scope-boundary">
-        原文检索仍按来源授权；已带出的内容不会撤回。
+        {text("原文检索仍按来源授权；已带出的内容不会撤回。")}
       </p>
     </section>
   );

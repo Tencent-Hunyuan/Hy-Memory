@@ -47,17 +47,18 @@ describe("desktop window frame", () => {
         container.querySelectorAll(".onboarding-r6-titlebar"),
       ).toHaveLength(1);
       expect(container.querySelector(".onboarding-r6-traffic")).toBeNull();
-      // The user removed the mark, the "One Memory" wordmark and the
-      // "第一次见面" caption on 2026-09-20. The bar stays empty; MemHub is not
-      // put back into it.
+      // Branding stays removed; only the explicit GUI language selector
+      // occupies the native titlebar, outside the draggable area.
       expect(screen.queryByText("MemHub")).toBeNull();
       expect(screen.queryByText("One Memory")).toBeNull();
       expect(screen.queryByText("第一次见面")).toBeNull();
       expect(
         container.querySelector(".onboarding-r6-titlebar")?.children.length,
-      ).toBe(0);
+      ).toBe(1);
+      expect(screen.getByRole("combobox", { name: "界面语言" })).toBeTruthy();
       const titlebar = declaration(".onboarding-r6-titlebar");
-      expect(titlebar).toMatch(/flex:\s*0 0 58px/);
+      expect(titlebar).toMatch(/flex:\s*0 0 auto/);
+      expect(titlebar).toMatch(/min-height:\s*58px/);
       expect(titlebar).toMatch(/-webkit-app-region:\s*drag/);
     },
   );

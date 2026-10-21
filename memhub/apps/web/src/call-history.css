@@ -25,7 +25,8 @@
   line-height: 45px;
 }
 .call-history-back.r6-button {
-  width: 132px;
+  width: auto;
+  min-width: 132px;
 }
 .call-history .r6-button-label {
   display: inline-flex;
@@ -65,6 +66,7 @@
 }
 .call-history-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;

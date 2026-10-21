@@ -9,6 +9,27 @@ import { findingsOf, mattersOf, memoriesInMatter } from "./workbench-findings";
 
 const NOW = new Date("2026-09-10T00:00:00Z");
 
+it("localiza hallazgos conservando contenidos y nombres de ámbitos opacos", () => {
+  const findings = findingsOf({
+    now: NOW,
+    processing: null,
+    locale: "es",
+    memories: [
+      memory("a", { content: "原文甲", evidence_ids: ["shared"] }),
+      memory("b", {
+        content: "原文乙",
+        evidence_ids: ["shared"],
+        scopes: ["custom:范围原文"],
+      }),
+    ],
+  });
+  expect(findings[0].label).toBe("Proceden del mismo texto");
+  expect(findings[0].text).toContain("原文甲");
+  expect(findings[0].text).toContain("原文乙");
+  expect(findings[0].text).toContain("范围原文");
+  expect(findings[0].text).toContain("Perfil personal");
+});
+
 function memory(
   id: string,
   overrides: Partial<GovernedMemory> = {},

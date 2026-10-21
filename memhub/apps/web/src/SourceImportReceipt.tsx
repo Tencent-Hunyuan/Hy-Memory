@@ -3,9 +3,11 @@ import type {
   SourceImportReceipt as Receipt,
   SourceResponse,
 } from "@one-memory/contracts";
+import type { GuiLocale } from "@one-memory/contracts/gui-i18n";
 import { FileText, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getConversation, getSourceImportReceipt } from "./api";
+import { memoryText, useMemoryLanguage } from "./memory-language";
 
 export function SourceImportReceipt({ source }: { source: SourceResponse }) {
   return source.authorized ? (
@@ -14,6 +16,7 @@ export function SourceImportReceipt({ source }: { source: SourceResponse }) {
 }
 
 function ReceiptBody({ source }: { source: SourceResponse }) {
+  const { locale, text, count } = useMemoryLanguage();
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -97,85 +100,96 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
         }
       }}
     >
-      <summary>查看已读内容</summary>
+      <summary>{text("查看已读内容")}</summary>
       {opened && (
         <div className="source-receipt-body">
           <header>
-            <span>已保存原文 · {source.display_name}</span>
+            <span>
+              {text("已保存原文")} · {source.display_name}
+            </span>
             <button
               type="button"
               className="quiet"
-              title="刷新已读内容"
-              aria-label="刷新已读内容"
+              title={text("刷新已读内容")}
+              aria-label={text("刷新已读内容")}
               disabled={loading}
               onClick={() => void load()}
             >
               <RefreshCw size={15} />
             </button>
           </header>
-          {loading && <p role="status">正在核对本机已保存记录…</p>}
-          {error && <p role="alert">{error}</p>}
+          {loading && <p role="status">{text("正在核对本机已保存记录…")}</p>}
+          {error && <p role="alert">{text(error)}</p>}
           {receipt && (
             <>
               <dl className="source-receipt-counts">
                 <div>
-                  <dt>原始消息</dt>
-                  <dd>{receipt.messages.toLocaleString()}</dd>
+                  <dt>{text("原始消息")}</dt>
+                  <dd>{receipt.messages.toLocaleString(locale)}</dd>
                 </div>
                 <div>
-                  <dt>会话</dt>
-                  <dd>{receipt.conversations.toLocaleString()}</dd>
+                  <dt>{text("会话")}</dt>
+                  <dd>{receipt.conversations.toLocaleString(locale)}</dd>
                 </div>
                 <div>
-                  <dt>用户发言</dt>
-                  <dd>{receipt.person_messages.toLocaleString()}</dd>
+                  <dt>{text("用户发言")}</dt>
+                  <dd>{receipt.person_messages.toLocaleString(locale)}</dd>
                 </div>
                 <div>
-                  <dt>Agent 发言</dt>
-                  <dd>{receipt.agent_messages.toLocaleString()}</dd>
+                  <dt>{text("Agent 发言")}</dt>
+                  <dd>{receipt.agent_messages.toLocaleString(locale)}</dd>
                 </div>
                 <div>
-                  <dt>作者未知</dt>
-                  <dd>{receipt.unknown_author_messages.toLocaleString()}</dd>
+                  <dt>{text("作者未知")}</dt>
+                  <dd>
+                    {receipt.unknown_author_messages.toLocaleString(locale)}
+                  </dd>
                 </div>
                 <div>
-                  <dt>原始时间未知</dt>
-                  <dd>{receipt.unknown_time_messages.toLocaleString()}</dd>
+                  <dt>{text("原始时间未知")}</dt>
+                  <dd>
+                    {receipt.unknown_time_messages.toLocaleString(locale)}
+                  </dd>
                 </div>
                 {receipt.tool_messages > 0 && (
                   <div>
-                    <dt>工具记录</dt>
-                    <dd>{receipt.tool_messages.toLocaleString()}</dd>
+                    <dt>{text("工具记录")}</dt>
+                    <dd>{receipt.tool_messages.toLocaleString(locale)}</dd>
                   </div>
                 )}
               </dl>
               <p className="source-receipt-note">
                 {receipt.unknown_time_messages > 0
-                  ? `${receipt.unknown_time_messages.toLocaleString()} 条记录没有原始时间，未用导入时间代替。`
-                  : "原始时间来自已保存记录。"}{" "}
-                作者数量按当前记录分类统计，不代表记忆抽取已完成或语义已核实。
+                  ? text("{count} 条记录没有原始时间，未用导入时间代替。", {
+                      count: count(receipt.unknown_time_messages),
+                    })
+                  : text("原始时间来自已保存记录。")}{" "}
+                {text(
+                  "作者数量按当前记录分类统计，不代表记忆抽取已完成或语义已核实。",
+                )}
               </p>
               <p className="source-receipt-meta">
-                统计于 {time(receipt.measured_at)}
+                {text("统计于 ")}
+                {time(receipt.measured_at, locale)}
                 {receipt.messages !== source.imported_messages
-                  ? " · 导入数量仍在更新，可刷新核对"
+                  ? text(" · 导入数量仍在更新，可刷新核对")
                   : ""}
               </p>
               {receipt.examples.length > 0 ? (
                 <section
                   className="source-receipt-examples"
-                  aria-label="已保存的原文样例"
+                  aria-label={text("已保存的原文样例")}
                 >
-                  <h3>已保存的原文样例</h3>
+                  <h3>{text("已保存的原文样例")}</h3>
                   <p className="source-receipt-meta">
-                    最多展示 3 段，不代表全部历史或推荐记忆。
+                    {text("最多展示 3 段，不代表全部历史或推荐记忆。")}
                   </p>
                   {receipt.examples.map((example) => (
                     <article key={example.evidence_id}>
                       <header>
                         <span>
-                          {author(example.written_by)} ·{" "}
-                          {time(example.created_at)}
+                          {text(author(example.written_by))} ·{" "}
+                          {time(example.created_at, locale)}
                         </span>
                         <button
                           type="button"
@@ -183,35 +197,37 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
                           onClick={() => void read(example.evidence_id)}
                         >
                           <FileText size={14} aria-hidden="true" />
-                          查看完整对话
+                          {text("查看完整对话")}
                         </button>
                       </header>
                       <p className="source-receipt-quote">{example.excerpt}</p>
                       {example.truncated && (
-                        <small>原文较长，此处仅展示前 600 个字符。</small>
+                        <small>
+                          {text("原文较长，此处仅展示前 600 个字符。")}
+                        </small>
                       )}
                     </article>
                   ))}
                 </section>
               ) : (
-                <p>这个来源还没有保存原文。</p>
+                <p>{text("这个来源还没有保存原文。")}</p>
               )}
             </>
           )}
-          {reading && <p role="status">正在读取完整对话…</p>}
-          {readError && <p role="alert">{readError}</p>}
+          {reading && <p role="status">{text("正在读取完整对话…")}</p>}
+          {readError && <p role="alert">{text(readError)}</p>}
           {transcript && (
             <section
               className="source-receipt-conversation"
-              aria-label="完整对话"
+              aria-label={text("完整对话")}
             >
               <header>
-                <h3>完整对话</h3>
+                <h3>{text("完整对话")}</h3>
                 <button
                   type="button"
                   className="quiet"
-                  title="关闭完整对话"
-                  aria-label="关闭完整对话"
+                  title={text("关闭完整对话")}
+                  aria-label={text("关闭完整对话")}
                   onClick={() => {
                     conversationGeneration.current++;
                     setTranscript(null);
@@ -224,7 +240,8 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
                 {transcript.messages.map((message) => (
                   <li key={message.evidence_id}>
                     <small>
-                      {author(message.written_by)} · {time(message.created_at)}
+                      {text(author(message.written_by))} ·{" "}
+                      {time(message.created_at, locale)}
                     </small>
                     <p>{message.verbatim}</p>
                   </li>
@@ -247,8 +264,8 @@ function author(value: string) {
         ? "工具"
         : "作者未知";
 }
-function time(value: string | null) {
+function time(value: string | null, locale: GuiLocale) {
   return value && Number.isFinite(Date.parse(value))
-    ? new Date(value).toLocaleString()
-    : "时间未知";
+    ? new Date(value).toLocaleString(locale)
+    : memoryText(locale, "时间未知");
 }

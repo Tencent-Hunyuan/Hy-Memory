@@ -1,7 +1,7 @@
 /* P3 source 143:2786 / 2854 / 2936; shared shell stays in R6ColdStartFrame. */
 .onboarding-model-r6 .onboarding-r6-head > div {
   width: 620px;
-  max-width: calc(100% - 320px);
+  max-width: 100%;
 }
 .onboarding-model-layout {
   display: grid;
@@ -234,7 +234,7 @@
   font-size: 12px;
 }
 .onboarding-model-footer-note {
-  flex: 1;
+  flex: 1 1 260px;
   min-width: 0;
   font-size: 12px;
   line-height: 24px;
@@ -243,13 +243,24 @@
 }
 .onboarding-model-footer-actions {
   display: flex;
-  gap: 16px;
-  width: 398px;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+  gap: 12px;
+  margin-left: auto;
   justify-content: flex-end;
+  align-items: stretch;
 }
 .onboarding-model-footer-actions .r6-button {
-  width: 150px;
-  height: 44px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  padding: 10px 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
   min-height: 44px;
   border-radius: 8px;
   font-size: 14px;
@@ -257,7 +268,7 @@
   background: rgb(255 255 255 / 34%);
 }
 .onboarding-model-footer-actions .r6-button[data-variant="primary"] {
-  width: 210px;
+  width: auto;
   background: var(--r6-action);
   color: white;
   border-color: #5b6f7e;
@@ -268,11 +279,23 @@
   border-color: var(--r6-control-edge);
 }
 .onboarding-model-advanced-head {
-  display: block;
-  height: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
   font-size: 13px;
   line-height: 21px;
   color: #63707b;
+}
+.onboarding-model-advanced-head .onboarding-model-toggle {
+  margin-top: 0;
+  padding: 6px 0;
+  gap: 12px;
+  text-align: left;
+  white-space: normal;
+}
+.onboarding-model-advanced-head .onboarding-model-toggle svg {
+  flex-shrink: 0;
 }
 .onboarding-model-advanced-grid {
   display: grid;
@@ -362,11 +385,10 @@
     gap: 24px;
   }
 }
-@media (min-width: 761px) and (max-height: 959px) {
+/* One scroll owner for the editable pane; the disclosure scrolls independently. */
+@media (min-width: 761px) {
   .onboarding-model-r6 .onboarding-r6-body {
     overflow: hidden;
-    padding-top: 16px;
-    padding-bottom: 16px;
   }
   .onboarding-model-layout {
     height: 100%;
@@ -382,10 +404,20 @@
     overscroll-behavior: contain;
     scrollbar-width: thin;
     scrollbar-gutter: stable;
-    scroll-padding: 4px;
+    scroll-padding: 12px;
+    padding-inline: 4px 16px;
   }
   .onboarding-model-recovery-actions {
     flex-shrink: 0;
+  }
+}
+.onboarding-model-field select {
+  padding-inline-end: 32px;
+}
+@media (min-width: 761px) and (max-height: 959px) {
+  .onboarding-model-r6 .onboarding-r6-body {
+    padding-top: 16px;
+    padding-bottom: 16px;
   }
   .onboarding-model-feedback {
     flex: 0 1 auto;
@@ -473,9 +505,14 @@
     width: 100%;
     gap: 12px;
   }
+  .onboarding-model-footer-actions .r6-button,
   .onboarding-model-footer-actions .r6-button[data-variant="primary"] {
-    width: auto;
-    flex: 1;
+    flex: 1 1 160px;
+  }
+}
+@media (max-width: 480px) {
+  .onboarding-model-advanced-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (prefers-reduced-transparency: reduce) {

@@ -1,8 +1,10 @@
 import type { GovernedMemory } from "@one-memory/contracts";
+import type { MessageKey } from "@one-memory/contracts/gui-i18n";
 import { Copy, ExternalLink, X } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { copyText } from "./copy-text";
 import type { RecallHostStatus } from "./global";
+import { useGuiLanguage } from "./gui-language";
 import { useRecallHosts } from "./host-state";
 
 const NO_HOSTS: RecallHostStatus[] = [];
@@ -18,6 +20,7 @@ export function HandoffBar({
   answerText?: string;
   suspended?: boolean;
 }) {
+  const { t } = useGuiLanguage();
   const hosts = (useRecallHosts({ read: true }).data ?? NO_HOSTS).filter(
     (host) => host.present,
   );
@@ -29,14 +32,14 @@ export function HandoffBar({
   const prompt = promptFrom(usable, matterLabel, answerText);
   if (!usable.length) return null;
   return (
-    <section className="wb-handoff" aria-label="带出记忆">
+    <section className="wb-handoff" aria-label={t("handoff.region")}>
       <button
         type="button"
         className="quiet"
         onClick={() => setOpenedFor(prompt)}
       >
         <ExternalLink size={15} aria-hidden="true" />
-        {answerText ? "带出回答与引用" : "带出所选记忆"}
+        {t(answerText ? "handoff.answer" : "handoff.selected")}
       </button>
       {openedFor === prompt && (
         <HandoffDialog
@@ -65,10 +68,15 @@ function HandoffDialog({
   onClose(): void;
   suspended?: boolean;
 }) {
+  const { t, tnPlain, locale } = useGuiLanguage();
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
   const [hostId, setHostId] = useState("");
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState<{
+    key: MessageKey;
+    host?: string;
+    target?: boolean;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const active = useRef(true);
   const host = hosts.find((item) => item.hostId === hostId);
@@ -94,11 +102,11 @@ function HandoffDialog({
 
   async function send(open: boolean) {
     setBusy(true);
-    setNote("");
+    setNote(null);
     try {
       await copyText(prompt);
     } catch {
-      setNote("复制失败，未打开任何应用。可在预览中选中文本复制。");
+      setNote({ key: "handoff.copyFailed" });
       setBusy(false);
       return;
     }
@@ -106,18 +114,15 @@ function HandoffDialog({
     if (open && host && window.oneMemory) {
       try {
         const result = await window.oneMemory.openHandoff(host.hostId, prompt);
-        setNote(
-          result.opened
-            ? `已复制并请求打开 ${host.label}。尚未发送；请核对目标输入框。`
-            : `已完整复制。${host.label} 未能预填，请在目标应用粘贴；尚未发送。`,
-        );
+        setNote({
+          key: result.opened ? "handoff.opened" : "handoff.notPrefilled",
+          host: host.label,
+        });
       } catch {
-        setNote(`内容已完整复制，但未能打开 ${host.label}。尚未发送。`);
+        setNote({ key: "handoff.openFailed", host: host.label });
       }
     } else {
-      setNote(
-        `已完整复制${host ? `，可粘贴到 ${host.label}` : ""}。尚未发送。`,
-      );
+      setNote({ key: "handoff.copied", host: host?.label, target: !!host });
     }
     setBusy(false);
   }
@@ -147,47 +152,47 @@ function HandoffDialog({
         }}
       >
         <header className="handoff-heading">
-          <h2 id={titleId}>带到其他应用</h2>
+          <h2 id={titleId}>{t("handoff.title")}</h2>
           <button
             type="button"
             className="quiet"
-            title="关闭预览"
-            aria-label="关闭带出预览"
+            title={t("handoff.closeTitle")}
+            aria-label={t("handoff.close")}
             onClick={onClose}
           >
             <X size={18} />
           </button>
         </header>
         <p>
-          {count} 条记忆 · {prompt.length.toLocaleString()} 字符 · 未省略
+          {tnPlain("handoff.stats", count, {
+            characters: prompt.length.toLocaleString(locale),
+          })}
         </p>
         <textarea
-          aria-label="将带出的完整内容"
+          aria-label={t("handoff.content")}
           readOnly
           value={prompt}
           spellCheck={false}
         />
         <label className="handoff-target">
-          目标应用
+          {t("handoff.target")}
           <select
             value={hostId}
             onChange={(event) => {
               setHostId(event.target.value);
-              setNote("");
+              setNote(null);
             }}
           >
-            <option value="">其他应用 · 仅复制</option>
+            <option value="">{t("handoff.other")}</option>
             {hosts.map((item) => (
               <option key={item.hostId} value={item.hostId}>
                 {item.label}
-                {item.handoff !== "open" ? " · 仅复制" : ""}
+                {item.handoff !== "open" ? t("handoff.copyOnly") : ""}
               </option>
             ))}
           </select>
         </label>
-        <p>
-          仅带出上方内容，不包含原始对话。复制不是授权连接，已带出的副本无法从其他应用撤回。
-        </p>
+        <p>{t("handoff.boundary")}</p>
         <div className="consent-actions">
           <button
             type="button"
@@ -196,7 +201,7 @@ function HandoffDialog({
             onClick={() => void send(false)}
           >
             <Copy size={15} aria-hidden="true" />
-            复制内容
+            {t("handoff.copy")}
           </button>
           {host?.handoff === "open" && (
             <button
@@ -205,11 +210,20 @@ function HandoffDialog({
               onClick={() => void send(true)}
             >
               <ExternalLink size={15} aria-hidden="true" />
-              复制并打开 {host.label}
+              {t("handoff.open", { host: host.label })}
             </button>
           )}
         </div>
-        {note && <p role="status">{note}</p>}
+        {note && (
+          <p role="status">
+            {t(note.key, {
+              host: note.host ?? "",
+              target: note.target
+                ? t("handoff.pasteTarget", { host: note.host ?? "" })
+                : "",
+            })}
+          </p>
+        )}
       </section>
     </div>
   );

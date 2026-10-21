@@ -12,6 +12,32 @@ import {
 import { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ApplicationDetail } from "./ApplicationDetail";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
+
+it("translates application detail live without triggering extra reads or writes", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  const refresh = vi.fn().mockResolvedValue({ sources: [source] });
+  render(
+    <LanguageProvider>
+      <ApplicationDetail {...props} refresh={refresh} />
+    </LanguageProvider>,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Detalles de la aplicación" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("switch", { name: "Sincronización" })).toBeTruthy();
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  await act(async () =>
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
+    ),
+  );
+  expect(await screen.findByRole("heading", { name: "应用详情" })).toBeTruthy();
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(props.setSync).not.toHaveBeenCalled();
+});
+
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { commitSources } from "./source-state";
@@ -573,6 +599,109 @@ it("shows insertion still on when neither removal nor revocation succeeded", asy
   ).toBeTruthy();
   await waitFor(() =>
     expect(insertion.getAttribute("aria-checked")).toBe("true"),
+  );
+});
+
+let languageListener: ((snapshot: unknown) => void) | undefined;
+function switchLanguage(locale: "es" | "zh-CN", revision: number) {
+  act(() => languageListener?.({ preference: locale, locale, revision }));
+}
+async function failDisconnectInSpanish() {
+  const oneMemory = window.oneMemory as unknown as Record<string, unknown>;
+  oneMemory.getLanguagePreference = vi.fn(async () => ({
+    preference: "es",
+    locale: "es",
+    revision: 1,
+  }));
+  oneMemory.onLanguagePreferenceChanged = vi.fn(
+    (listener: (snapshot: unknown) => void) => {
+      languageListener = listener;
+      return () => {};
+    },
+  );
+  render(
+    <LanguageProvider>
+      <ApplicationDetail
+        {...props}
+        source={opencode}
+        sources={[opencode]}
+        refresh={vi.fn().mockResolvedValue({ sources: [opencode] })}
+      />
+    </LanguageProvider>,
+  );
+  const insertion = await screen.findByRole("switch", {
+    name: "Conectar con un clic",
+  });
+  await waitFor(() =>
+    expect(insertion.getAttribute("aria-checked")).toBe("true"),
+  );
+  fireEvent.click(insertion);
+  return insertion;
+}
+
+it("words a failed turn-off with its reason in Spanish, without Chinese punctuation", async () => {
+  editedHostBridge({ revokeFails: true });
+  await failDisconnectInSpanish();
+  const alert = await screen.findByText(/No se pudo eliminar la conexión/);
+  expect(alert.textContent).toBe(
+    "No se pudo eliminar la conexión ni revocar el permiso. OpenCode aún puede usar memorias. Reintenta. Motivo: El canal de control de la aplicación no está disponible.",
+  );
+  expect(alert.textContent).not.toMatch(/[。：；，]/);
+});
+
+it("re-words a visible failure when the language changes, without new writes", async () => {
+  const bridge = editedHostBridge({ revokeFails: true });
+  await failDisconnectInSpanish();
+  await screen.findByText(/Motivo: El canal de control/);
+  const reads = (
+    window.oneMemory as unknown as {
+      getRecallHosts: ReturnType<typeof vi.fn>;
+    }
+  ).getRecallHosts;
+  const readCount = reads.mock.calls.length;
+  const revokes = bridge.revokeRecallPermission.mock.calls.length;
+  switchLanguage("zh-CN", 2);
+  expect(
+    await screen.findByText(
+      "连接未能移除，记忆权限也未能撤销，OpenCode 仍可使用记忆，请重试。原因：应用控制通道暂不可用。",
+    ),
+  ).toBeTruthy();
+  switchLanguage("es", 3);
+  expect(await screen.findByText(/Motivo: El canal de control/)).toBeTruthy();
+  expect(bridge.revokeRecallPermission.mock.calls.length).toBe(revokes);
+  expect(bridge.uninstallRecall).not.toHaveBeenCalled();
+  expect(reads.mock.calls.length).toBe(readCount);
+});
+
+it("omits the reason in Spanish when the failure has no known cause", async () => {
+  editedHostBridge({ revokeFails: true });
+  const oneMemory = window.oneMemory as unknown as Record<string, unknown>;
+  oneMemory.previewRecallUninstall = vi.fn(async () => {
+    throw Error("something_unknown");
+  });
+  oneMemory.revokeRecallPermission = vi.fn(async () => {
+    throw Error("something_unknown");
+  });
+  await failDisconnectInSpanish();
+  const alert = await screen.findByText(/No se pudo eliminar la conexión/);
+  expect(alert.textContent).toBe(
+    "No se pudo eliminar la conexión ni revocar el permiso. OpenCode aún puede usar memorias. Reintenta.",
+  );
+});
+
+it("adds the failed re-read note in Spanish after the reason", async () => {
+  editedHostBridge({ revokeFails: true });
+  const oneMemory = window.oneMemory as unknown as Record<string, unknown>;
+  const getRecallHosts = oneMemory.getRecallHosts as ReturnType<typeof vi.fn>;
+  const revoke = oneMemory.revokeRecallPermission as ReturnType<typeof vi.fn>;
+  revoke.mockImplementation(async () => {
+    getRecallHosts.mockRejectedValue(Error("offline"));
+    throw Error("host_control_unavailable");
+  });
+  await failDisconnectInSpanish();
+  const alert = await screen.findByText(/No se pudo eliminar la conexión/);
+  expect(alert.textContent).toBe(
+    "No se pudo eliminar la conexión ni revocar el permiso. OpenCode aún puede usar memorias. Reintenta. Motivo: El canal de control de la aplicación no está disponible. Tampoco se pudo volver a leer la conexión; el estado mostrado podría no estar actualizado.",
   );
 });
 

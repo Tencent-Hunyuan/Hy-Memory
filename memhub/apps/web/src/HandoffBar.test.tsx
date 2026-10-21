@@ -3,6 +3,7 @@ import type { GovernedMemory } from "@one-memory/contracts";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { HandoffBar, promptFrom } from "./HandoffBar";
 
 function memory(
@@ -65,6 +66,27 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   delete window.oneMemory;
+});
+
+it("traduce la vista previa sin modificar el prompt contractual chino", async () => {
+  delete window.oneMemory;
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  const memories = [memory("a", { content: "Contenido 中文 opaco" })];
+  render(
+    <LanguageProvider>
+      <HandoffBar memories={memories} matterLabel="Tema 中文" />
+    </LanguageProvider>,
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Llevar las memorias seleccionadas" }),
+  );
+  expect(
+    screen.getByRole("heading", { name: "Llevar a otras aplicaciones" }),
+  ).toBeTruthy();
+  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+    promptFrom(memories, "Tema 中文"),
+  );
+  window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
 });
 
 describe("handoff preview", () => {

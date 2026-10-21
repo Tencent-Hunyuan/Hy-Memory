@@ -50,6 +50,7 @@ interface Overrides {
   whenReady?: Promise<void>;
   windowGate?: Promise<void>;
   windowError?: Error;
+  beforeNativeUi?: () => Promise<void>;
   /** Give the lifecycle a startup placeholder, as the packaged App does. */
   startupWindow?: boolean;
   startupWindowError?: Error;
@@ -94,6 +95,7 @@ function fixture(background = false, lock = true, overrides: Overrides = {}) {
     platform: overrides.platform ?? "darwin",
     background,
     prepare,
+    beforeNativeUi: overrides.beforeNativeUi,
     initialize,
     stop,
     dispose,
@@ -148,6 +150,35 @@ function fixture(background = false, lock = true, overrides: Overrides = {}) {
 }
 
 describe("desktop background lifecycle with injected Electron", () => {
+  it("awaits the post-readiness language hook before menus, tray and runtime", async () => {
+    const gate = deferred();
+    const beforeNativeUi = vi.fn(() => gate.promise);
+    const f = fixture(false, true, { beforeNativeUi });
+    expect(beforeNativeUi).not.toHaveBeenCalled();
+    f.ready.resolve();
+    await f.flush();
+    expect(beforeNativeUi).toHaveBeenCalledTimes(1);
+    expect(f.installTray).not.toHaveBeenCalled();
+    expect(f.initialize).not.toHaveBeenCalled();
+    gate.resolve();
+    f.starting.resolve();
+    await f.flush();
+    expect(f.installTray).toHaveBeenCalledTimes(1);
+    expect(f.windows).toHaveLength(1);
+  });
+  it("does not install native UI after quitting during the language hook", async () => {
+    const gate = deferred();
+    const f = fixture(false, true, { beforeNativeUi: () => gate.promise });
+    f.ready.resolve();
+    await f.flush();
+    f.quit();
+    gate.resolve();
+    await f.flush();
+    expect(f.installTray).not.toHaveBeenCalled();
+    expect(f.initialize).not.toHaveBeenCalled();
+    f.stopping.resolve();
+    await f.flush();
+  });
   it("starts services and tray without a window in background mode", async () => {
     const f = fixture(true);
     await f.boot();

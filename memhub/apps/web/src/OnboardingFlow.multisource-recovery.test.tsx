@@ -261,7 +261,7 @@ it("keeps the single-source submit frozen when another source arrives during fin
 
 it("empty discovery shows zero and allows explicit entry without a connection request", async () => {
   await ready();
-  expect(count()).toBe("0");
+  await waitFor(() => expect(count()).toBe("0"));
   expect(screen.getByRole("button", { name: "开始导入" })).toHaveProperty(
     "disabled",
     true,

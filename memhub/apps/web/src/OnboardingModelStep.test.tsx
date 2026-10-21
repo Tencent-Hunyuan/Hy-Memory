@@ -9,12 +9,93 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import {
   OnboardingModelStep,
   type OnboardingModelStepProps,
 } from "./OnboardingModelStep";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+
+it.each(["es", "zh-CN"] as const)(
+  "keeps %s footer actions, pending locks and permission boundaries",
+  async (locale) => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
+    const p = props();
+    p.onSkip = vi.fn();
+    let finish!: () => void;
+    p.onTest = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const labels =
+      locale === "es"
+        ? [
+            "Omitir por ahora",
+            "Probar conexión",
+            "Confirmar y habilitar",
+            "Probando el modelo…",
+          ]
+        : ["跳过，先进入应用", "测试模型连通性", "确认启用", "正在测试模型…"];
+    const draw = (probe?: OnboardingModelStepProps["probe"]) => (
+      <LanguageProvider>
+        <OnboardingModelStep
+          {...p}
+          capability={{ saveAndEnable: true }}
+          probe={probe}
+          advancedOpen
+        />
+      </LanguageProvider>
+    );
+    const view = render(draw());
+    const skip = screen.getByRole("button", { name: labels[0] });
+    if (locale === "es") {
+      expect(
+        document.getElementById(skip.getAttribute("aria-describedby") ?? "")
+          ?.textContent,
+      ).toContain("Aplicaciones");
+    }
+    fireEvent.click(skip);
+    expect(p.onSkip).toHaveBeenCalledOnce();
+    expect(p.onBack).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: labels[2] })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: labels[1] }));
+    expect(screen.getByRole("button", { name: labels[3] })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(skip).toHaveProperty("disabled", true);
+    expect(p.onSaveAndEnable).not.toHaveBeenCalled();
+    await act(async () => finish());
+    view.rerender(draw({ state: "failed", message: "synthetic failure" }));
+    expect(screen.getByRole("button", { name: labels[2] })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByLabelText("API Key")).toHaveProperty("value", "secret");
+    expect(p.onDraftChange).not.toHaveBeenCalled();
+    view.rerender(draw({ state: "passed", message: "synthetic success" }));
+    fireEvent.click(screen.getByRole("button", { name: labels[2] }));
+    await act(async () => {});
+    expect(p.onSaveAndEnable).toHaveBeenCalledOnce();
+    expect(p.onSaveDraft).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        locale === "es"
+          ? /La prueba de conexión solo envía/
+          : /测试连接只发送测试内容/,
+      ),
+    ).toBeTruthy();
+  },
+);
 function props(): OnboardingModelStepProps {
   return {
     draft: {

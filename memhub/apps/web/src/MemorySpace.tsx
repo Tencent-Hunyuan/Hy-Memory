@@ -63,13 +63,13 @@ import {
 } from "./MemoryNoteComposer";
 import { MemoryRecallScope, memoryProvenanceLabel } from "./MemoryRecallScope";
 import type { MemoryArrival } from "./memory-arrival-state";
+import { useMemoryLanguage } from "./memory-language";
 import {
   blockReasonLabel,
   extractionStateLabel,
   extractionWindowPresetLabel,
   memoryHistoryActionLabel,
   modelBlock,
-  retryingBlockLabel,
   splitBlockedStages,
   taskKindLabel,
 } from "./memory-processing-labels";
@@ -119,6 +119,7 @@ export function MemorySpace({
   focusDialogue?: boolean;
   onFocusDialogueConsumed?(): void;
 }) {
+  const { text, plain } = useMemoryLanguage();
   const [memories, setMemories] = useState<GovernedMemory[]>([]);
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [detailFreshness, setDetailFreshness] = useState<{
@@ -197,10 +198,10 @@ export function MemorySpace({
   // filter's, and naming the new one would caption the wrong numbers.
   const settledFilterLabel = [
     mapLibrary.settledSource
-      ? `来源 ${sourceNameOr(sources, mapLibrary.settledSource, mapLibrary.settledSource)}`
+      ? `${text("来源")} ${sourceNameOr(sources, mapLibrary.settledSource, mapLibrary.settledSource)}`
       : "",
     mapLibrary.settledQuery.trim()
-      ? `关键词“${mapLibrary.settledQuery.trim()}”`
+      ? text("关键词“{query}”", { query: mapLibrary.settledQuery.trim() })
       : "",
   ]
     .filter(Boolean)
@@ -1344,7 +1345,7 @@ export function MemorySpace({
     if (
       busy ||
       !window.confirm(
-        "重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？",
+        text("重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？"),
       )
     )
       return;
@@ -1416,18 +1417,37 @@ export function MemorySpace({
       </div>
       <header className="memory-instrument-header">
         <div>
-          <h1 id="memory-title">{simplified ? "记忆" : "记忆空间"}</h1>
+          <h1 id="memory-title">{text(simplified ? "记忆" : "记忆空间")}</h1>
           <span className="memory-loaded-count">
             {simplified && !management
               ? mapLibrary.failed
-                ? "记忆读取失败"
+                ? text("记忆读取失败")
                 : mapLibrary.stale
-                  ? "正在导入历史会话，记忆将陆续出现"
+                  ? text("正在导入历史会话，记忆将陆续出现")
                   : mapLibrary.page
-                    ? `已沉淀 ${mapLibrary.page.total} 条${settledFilterLabel ? `（${settledFilterLabel}）` : ""} · 当前展示 ${mapLibrary.page.items.length} 条`
-                    : "正在读取…"
+                    ? text(
+                        "已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                        {
+                          count: plain(mapLibrary.page.total),
+                          filter: settledFilterLabel
+                            ? text("（{filter}）", {
+                                filter: settledFilterLabel,
+                              })
+                            : "",
+                          shown: plain(mapLibrary.page.items.length),
+                        },
+                        mapLibrary.page.total,
+                      )
+                    : text("正在读取…")
               : loaded
-                ? `已加载 ${memories.filter((m) => m.status !== "deleted").length} 条记忆`
+                ? text(
+                    "已加载 {count} 条记忆",
+                    {
+                      count: memories.filter((m) => m.status !== "deleted")
+                        .length,
+                    },
+                    memories.filter((m) => m.status !== "deleted").length,
+                  )
                 : "正在读取…"}
           </span>
         </div>
@@ -1447,7 +1467,7 @@ export function MemorySpace({
           <div
             className="memory-mode-tabs"
             role="tablist"
-            aria-label="记忆空间模式"
+            aria-label={text("记忆空间模式")}
             onKeyDown={(event) => {
               // A `role="tablist"` is expected to move selection with the arrow
               // keys (WAI-ARIA tabs pattern). Without this the four tabs were
@@ -1504,7 +1524,7 @@ export function MemorySpace({
                 }}
               >
                 <Icon size={16} aria-hidden="true" />
-                {label}
+                {text(label)}
               </button>
             ))}
           </div>
@@ -1517,10 +1537,10 @@ export function MemorySpace({
               className={processingNeedsAttention ? "status-attention" : ""}
             >
               {processingNeedsAttention
-                ? "整理需要处理"
+                ? text("整理需要处理")
                 : processing.running || processing.pending
-                  ? "正在整理记忆"
-                  : "整理状态"}
+                  ? text("正在整理记忆")
+                  : text("整理状态")}
             </span>
             <ChevronDown size={14} aria-hidden="true" />
           </summary>
@@ -1532,39 +1552,59 @@ export function MemorySpace({
                 }
               />
               {processing.running || processing.pending
-                ? `${processing.running} 处理中 · ${queueWaiting(processing)}${queueEta(processing)}`
-                : `${processing.completed} 次整理已完成`}
+                ? `${text("{count} 处理中", { count: processing.running })} · ${queueWaiting(processing, text)}${queueEta(processing, text)}`
+                : text(
+                    "{count} 次整理已完成",
+                    { count: processing.completed },
+                    processing.completed,
+                  )}
               {processing.outside_window_pending ? (
                 <span className="pipeline-outside-window">
-                  {` · ${processing.outside_window_pending} 条在窗口外（原文可搜）`}
+                  {text(
+                    " · {count} 条在窗口外（原文可搜）",
+                    { count: processing.outside_window_pending },
+                    processing.outside_window_pending,
+                  )}
                 </span>
               ) : null}
               {processing.manual_extract_batches_planned ? (
                 <span className="pipeline-manual-batches">
-                  {` · 已规划 ${processing.manual_extract_batches_planned} 批，当前第 ${processing.manual_extract_batches_current} 批`}
+                  {text(" · 已规划 {planned} 批，当前第 {current} 批", {
+                    planned: processing.manual_extract_batches_planned,
+                    current: processing.manual_extract_batches_current ?? 0,
+                  })}
                 </span>
               ) : null}
               {blocked.named.length ? (
                 <span className="pipeline-blocked">
                   {blocked.named
-                    .map(
-                      (block) =>
-                        `${taskKindLabel(block.kind)}卡在 ${blockReasonLabel(block.reason)}（${block.count} 条）`,
+                    .map((block) =>
+                      text("{kind}卡在 {reason}（{count} 条）", {
+                        kind: text(taskKindLabel(block.kind)),
+                        reason: text(blockReasonLabel(block.reason)),
+                        count: block.count,
+                      }),
                     )
                     .join(" · ")}
                 </span>
               ) : null}
               {blocked.retrying ? (
                 <span className="pipeline-retrying">
-                  {` · ${retryingBlockLabel(blocked.retrying)}`}
+                  {` · ${text("{count} 条这次没能整理成功，正在重试", { count: blocked.retrying })}`}
                 </span>
               ) : null}
             </p>
             {(processing.unknown ?? 0) > 0 ? (
               <div className="memory-processing-unknown" role="status">
-                <span>{`有 ${processing.unknown} 段对话的整理结果不确定`}</span>
+                <span>
+                  {text(
+                    "有 {count} 段对话的整理结果不确定",
+                    { count: processing.unknown ?? 0 },
+                    processing.unknown ?? 0,
+                  )}
+                </span>
                 <R6Button disabled={busy} onClick={() => void retryUnknown()}>
-                  重新整理
+                  {text("重新整理")}
                 </R6Button>
               </div>
             ) : null}
@@ -1596,10 +1636,13 @@ export function MemorySpace({
       />
       {simplified && pendingNote ? (
         <p className="memory-pending-note" role="status">
-          <span>原话已保存，正在等待整理：{pendingNote.text}</span>
+          <span>
+            {text("原话已保存，正在等待整理：")}
+            {pendingNote.text}
+          </span>
           {pendingNote.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
-              配置整理模型
+              {text("配置整理模型")}
             </button>
           ) : null}
         </p>
@@ -1607,18 +1650,18 @@ export function MemorySpace({
 
       {readError && (
         <details className="memory-feedback-details">
-          <summary>查看读取详情</summary>
-          <p>{readError}</p>
+          <summary>{text("查看读取详情")}</summary>
+          <p>{text(readError)}</p>
         </details>
       )}
       {refreshing ? (
         <p className="memory-refreshing" role="status">
-          正在更新…
+          {text("正在更新…")}
         </p>
       ) : null}
       {error ? (
         <p className="error-banner" role="alert">
-          {error}
+          {text(error)}
         </p>
       ) : null}
 
@@ -1670,19 +1713,19 @@ export function MemorySpace({
         }}
       >
         <label htmlFor="memory-query">
-          {displayedMode === "ask" ? "向已确认记忆提问" : "搜索记忆库"}
+          {text(displayedMode === "ask" ? "向已确认记忆提问" : "搜索记忆库")}
         </label>
         <div>
           {displayedMode === "ask" ? (
             <select
-              aria-label="问答记忆范围"
+              aria-label={text("问答记忆范围")}
               value={askScope}
               onChange={(event) =>
                 setAskScope(event.target.value as "all-apps" | "*")
               }
             >
-              <option value="all-apps">只问个人画像</option>
-              <option value="*">问全部记忆（含项目）</option>
+              <option value="all-apps">{text("只问个人画像")}</option>
+              <option value="*">{text("问全部记忆（含项目）")}</option>
             </select>
           ) : null}
           <input
@@ -1694,8 +1737,8 @@ export function MemorySpace({
             maxLength={management ? 512 : undefined}
             placeholder={
               displayedMode === "ask"
-                ? "例如：我对真实数据有什么要求？"
-                : "搜索偏好、决定或经历"
+                ? text("例如：我对真实数据有什么要求？")
+                : text("搜索偏好、决定或经历")
             }
             onChange={(event) => {
               if (bulkInFlight.current) return;
@@ -1708,10 +1751,10 @@ export function MemorySpace({
             disabled={busy || (!management && !query.trim())}
           >
             {busy
-              ? "处理中…"
+              ? text("处理中…")
               : displayedMode === "ask"
-                ? "根据记忆回答"
-                : "搜索"}
+                ? text("根据记忆回答")
+                : text("搜索")}
           </button>
           {management && (query || submittedQuery) ? (
             <R6Button
@@ -1724,7 +1767,7 @@ export function MemorySpace({
                 setSelection(new Set());
               }}
             >
-              清除搜索
+              {text("清除搜索")}
             </R6Button>
           ) : null}
         </div>
@@ -1814,14 +1857,18 @@ export function MemorySpace({
             <p className="answer-label">
               {answer
                 ? answer.mode === "generated"
-                  ? "模型综合"
+                  ? text("模型综合")
                   : answer.mode === "extractive"
-                    ? "原文摘录"
-                    : "没有命中"
+                    ? text("原文摘录")
+                    : text("没有命中")
                 : streaming?.text
-                  ? "正在生成"
-                  : "正在检索记忆"}{" "}
-              · 基于 {(answer ?? streaming)?.memories.length ?? 0} 条已确认记忆
+                  ? text("正在生成")
+                  : text("正在检索记忆")}
+              {text(
+                " · 基于 {count} 条已确认记忆",
+                { count: (answer ?? streaming)?.memories.length ?? 0 },
+                (answer ?? streaming)?.memories.length ?? 0,
+              )}
             </p>
             <h2 aria-live="polite">
               {answer ? answer.answer : streaming?.text}
@@ -1841,7 +1888,9 @@ export function MemorySpace({
           </article>
         ) : (
           <p className="ask-intro">
-            回答只使用已确认记忆。每个答案都可以回到对应记忆和来源原话。
+            {text(
+              "回答只使用已确认记忆。每个答案都可以回到对应记忆和来源原话。",
+            )}
           </p>
         )}
         <MemoryInspector
@@ -1871,7 +1920,7 @@ export function MemorySpace({
           <nav
             className="memory-status-tabs"
             data-tour-id="memory-status-tabs"
-            aria-label="记忆治理状态"
+            aria-label={text("记忆治理状态")}
           >
             {(
               [
@@ -1892,7 +1941,7 @@ export function MemorySpace({
                   if (!simplified) setDetail(null);
                 }}
               >
-                {label}{" "}
+                {text(label)}{" "}
                 {!simplified &&
                   memories.filter((memory) => memory.status === value).length}
               </button>
@@ -1901,17 +1950,28 @@ export function MemorySpace({
           {management && (
             <>
               {library.page ? (
-                <nav aria-label="记忆库分页">
-                  <span aria-live="polite">共 {library.page.total} 条</span>{" "}
+                <nav
+                  className="memory-library-pagination"
+                  aria-label={text("记忆库分页")}
+                >
+                  <span aria-live="polite">
+                    {text(
+                      "共 {count} 条",
+                      { count: plain(library.page.total) },
+                      library.page.total,
+                    )}
+                  </span>{" "}
                   <span>
-                    第{" "}
-                    {Math.floor(library.page.offset / library.page.limit) + 1}{" "}
-                    页
+                    {text("第 {page} 页", {
+                      page:
+                        Math.floor(library.page.offset / library.page.limit) +
+                        1,
+                    })}
                   </span>
                   <R6Button
                     variant="quiet"
-                    title="上一页"
-                    aria-label="上一页"
+                    title={text("上一页")}
+                    aria-label={text("上一页")}
                     disabled={busy || library.page.offset === 0}
                     onClick={() => {
                       if (library.page) {
@@ -1924,8 +1984,8 @@ export function MemorySpace({
                   </R6Button>
                   <R6Button
                     variant="quiet"
-                    title="下一页"
-                    aria-label="下一页"
+                    title={text("下一页")}
+                    aria-label={text("下一页")}
                     disabled={
                       busy ||
                       library.page.offset + library.page.limit >=
@@ -1943,30 +2003,52 @@ export function MemorySpace({
                 </nav>
               ) : null}
               {sourceSnapshotStale ? (
-                <p role="status">来源状态待核对，记忆库暂不可读取。</p>
+                <p role="status">
+                  {text("来源状态待核对，记忆库暂不可读取。")}
+                </p>
               ) : library.stale ? (
                 <p role="status">
-                  正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。
+                  {text(
+                    "正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。",
+                  )}
                 </p>
               ) : library.failed ? (
                 <div role="alert">
-                  <p>记忆库读取失败，请重试。</p>
+                  <p>{text("记忆库读取失败，请重试。")}</p>
                   <R6Button
                     onClick={() => {
                       void library.refresh().catch(() => {});
                     }}
                   >
-                    重新读取记忆库
+                    {text("重新读取记忆库")}
                   </R6Button>
                 </div>
               ) : library.loading ? (
-                <p role="status">正在读取记忆库…</p>
+                <p role="status">{text("正在读取记忆库…")}</p>
               ) : null}
             </>
           )}
           {bulkResult ? (
-            <p role="status" aria-label="批量操作结果">
-              {`已${bulkResult.action ? bulkActionLabel(bulkResult.action) : "处理"} ${bulkResult.succeeded} 条${bulkResult.failed ? `，${bulkResult.failed} 条未完成` : ""}`}
+            <p role="status" aria-label={text("批量操作结果")}>
+              {text(
+                "已{action} {count} 条",
+                {
+                  action: text(
+                    bulkResult.action
+                      ? bulkActionLabel(bulkResult.action)
+                      : "处理（操作）",
+                  ),
+                  count: bulkResult.succeeded,
+                },
+                bulkResult.succeeded,
+              )}
+              {bulkResult.failed
+                ? text(
+                    "，{count} 条未完成",
+                    { count: bulkResult.failed },
+                    bulkResult.failed,
+                  )
+                : ""}
             </p>
           ) : null}
           {visibleFailures.length ? (
@@ -1975,19 +2057,33 @@ export function MemorySpace({
               disabled={busy}
               onClick={() => void runBulk(visibleFailures)}
             >
-              {`重试失败的 ${visibleFailures.length} 条`}
+              {text(
+                "重试失败的 {count} 条",
+                { count: visibleFailures.length },
+                visibleFailures.length,
+              )}
             </button>
           ) : null}
           {selectedCount ? (
-            <fieldset className="memory-bulk-bar" aria-label="批量操作">
-              <span>{`已选 ${selectedCount} 条`}</span>
+            <fieldset className="memory-bulk-bar" aria-label={text("批量操作")}>
+              <span>
+                {text(
+                  "已选 {count} 条",
+                  { count: selectedCount },
+                  selectedCount,
+                )}
+              </span>
               <button
                 type="button"
                 className="danger"
                 disabled={busy}
                 onClick={() => void bulkAction("delete")}
               >
-                {`删除所选 ${selectedCount} 条`}
+                {text(
+                  "删除所选 {count} 条",
+                  { count: selectedCount },
+                  selectedCount,
+                )}
               </button>
               <button
                 type="button"
@@ -1997,7 +2093,7 @@ export function MemorySpace({
                   if (!bulkInFlight.current) setSelection(new Set());
                 }}
               >
-                取消选择
+                {text("取消选择")}
               </button>
             </fieldset>
           ) : null}
@@ -2010,7 +2106,9 @@ export function MemorySpace({
                     <input
                       type="checkbox"
                       disabled={busy}
-                      aria-label={`选择：${memory.content}`}
+                      aria-label={text("选择：{content}", {
+                        content: memory.content,
+                      })}
                       checked={selection.has(memory.memory_id)}
                       onChange={() => toggleSelection(memory.memory_id)}
                     />
@@ -2026,22 +2124,36 @@ export function MemorySpace({
                     >
                       <span>{memory.content}</span>
                       <small>
-                        {kindLabel(memory.kind)} · {statusLabel(memory.status)}{" "}
-                        · {memory.evidence_ids.length} 条原话
+                        {text(kindLabel(memory.kind))} ·{" "}
+                        {text(statusLabel(memory.status))} ·{" "}
+                        {text(
+                          "{count} 条原话",
+                          { count: memory.evidence_ids.length },
+                          memory.evidence_ids.length,
+                        )}
                       </small>
                     </button>
                     {failure ? (
                       <fieldset
                         className="memory-bulk-failure"
-                        aria-label={`处理失败：${memory.content}`}
+                        aria-label={text("处理失败：{content}", {
+                          content: memory.content,
+                        })}
                       >
-                        <p>{`未能${bulkActionLabel(failure.action)}：${failure.error}`}</p>
+                        <p>
+                          {text("未能{action}：{error}", {
+                            action: text(bulkActionLabel(failure.action)),
+                            error: text(failure.error),
+                          })}
+                        </p>
                         <button
                           type="button"
                           disabled={busy}
                           onClick={() => void runBulk([failure])}
                         >
-                          {`重试${bulkActionLabel(failure.action)}`}
+                          {text("重试{action}", {
+                            action: text(bulkActionLabel(failure.action)),
+                          })}
                         </button>
                       </fieldset>
                     ) : null}
@@ -2052,10 +2164,12 @@ export function MemorySpace({
           ) : management && !library.page ? null : !loaded && !management ? (
             // Not the same as having none, and it used to read as if it
             // were.
-            <p className="memory-status-empty">正在读取记忆库…</p>
+            <p className="memory-status-empty">{text("正在读取记忆库…")}</p>
           ) : (
             <p className="memory-status-empty">
-              {`没有${statusLabel(statusFilter)}的记忆。`}
+              {text("没有{status}的记忆。", {
+                status: text(statusLabel(statusFilter)),
+              })}
             </p>
           )}
         </div>
@@ -2100,6 +2214,7 @@ function ModelPrompt({
   hasMemories: boolean;
   onConfigureModel(): void;
 }) {
+  const { text, plain } = useMemoryLanguage();
   const blocked = processing ? modelBlock(processing.blocked_stages) : null;
   if (!blocked) return null;
   if (
@@ -2110,12 +2225,15 @@ function ModelPrompt({
   )
     return null;
   return (
-    <p className="model-prompt" role="status" aria-label="记忆未在生成">
+    <p className="model-prompt" role="status" aria-label={text("记忆未在生成")}>
       <span>
-        {`还没有开始生成记忆：${blockReasonLabel(blocked.reason)}（${blocked.count} 条待处理）`}
+        {text("还没有开始生成记忆：{reason}（{count} 条待处理）", {
+          reason: text(blockReasonLabel(blocked.reason)),
+          count: plain(blocked.count),
+        })}
       </span>
       <button type="button" onClick={onConfigureModel}>
-        去配置生成模型
+        {text("去配置生成模型")}
       </button>
     </p>
   );
@@ -2150,36 +2268,37 @@ function MemoryInspector({
   onConfigureModel(): void;
   onOpen(memoryId: string): Promise<void>;
 }) {
+  const { text, locale } = useMemoryLanguage();
   if (!detail) {
     return (
       <aside
         className="memory-inspector memory-inspector-empty"
         data-tour-id="memory-original-pane"
       >
-        <p>选择一条记忆</p>
-        <small>查看它的来源、使用范围和修改历史。</small>
+        <p>{text("选择一条记忆")}</p>
+        <small>{text("查看它的来源、使用范围和修改历史。")}</small>
       </aside>
     );
   }
   return (
     <aside
       className="memory-inspector"
-      aria-label="记忆详情"
+      aria-label={text("记忆详情")}
       data-tour-id="memory-original-pane"
     >
       <button
         type="button"
         className="drawer-close"
-        aria-label="关闭记忆详情"
+        aria-label={text("关闭记忆详情")}
         onClick={onClose}
       >
         ×
       </button>
       <p className="status-label">
-        {kindLabel(detail.memory.kind)} · {statusLabel(detail.memory.status)} ·
-        r{detail.memory.revision}
+        {text(kindLabel(detail.memory.kind))} ·{" "}
+        {text(statusLabel(detail.memory.status))} · r{detail.memory.revision}
       </p>
-      <p className="map-origin">{memoryProvenanceLabel(detail)}</p>
+      <p className="map-origin">{memoryProvenanceLabel(detail, locale)}</p>
       {detail.memory.superseded_by?.length ||
       detail.memory.supersedes?.length ? (
         <p className="memory-supersession">
@@ -2190,7 +2309,7 @@ function MemoryInspector({
               className="quiet"
               onClick={() => void onOpen(memoryId)}
             >
-              查看替代它的记忆
+              {text("查看替代它的记忆")}
             </button>
           ))}
           {(detail.memory.supersedes ?? []).map((memoryId) => (
@@ -2200,7 +2319,7 @@ function MemoryInspector({
               className="quiet"
               onClick={() => void onOpen(memoryId)}
             >
-              查看它取代的旧记忆
+              {text("查看它取代的旧记忆")}
             </button>
           ))}
         </p>
@@ -2220,7 +2339,7 @@ function MemoryInspector({
       {detail.memory.status === "confirmed" ? (
         <form onSubmit={onSave}>
           <label>
-            记忆内容
+            {text("记忆内容")}
             <textarea
               name="memory-content"
               autoComplete="off"
@@ -2233,7 +2352,7 @@ function MemoryInspector({
             />
           </label>
           <button type="submit" disabled={busy}>
-            保存纠正
+            {text("保存纠正")}
           </button>
         </form>
       ) : null}
@@ -2253,7 +2372,7 @@ function MemoryInspector({
             disabled={busy}
             onClick={() => onAction("undo")}
           >
-            撤销上次修改
+            {text("撤销上次修改")}
           </button>
         ) : null}
         {detail.memory.status !== "deleted" ? (
@@ -2263,31 +2382,39 @@ function MemoryInspector({
             disabled={busy}
             onClick={() => onAction("delete")}
           >
-            删除
+            {text("删除")}
           </button>
         ) : null}
       </div>
-      <h3>来源原话</h3>
+      <h3>{text("来源原话")}</h3>
       {detail.evidence.map((item) => (
         <blockquote key={item.evidence_id}>
           {item.available ? (
             <>
               {item.extraction_state &&
               item.extraction_state !== "extracted" ? (
-                <small>{extractionStateLabel(item.extraction_state)}</small>
+                <small>
+                  {text(extractionStateLabel(item.extraction_state))}
+                </small>
               ) : null}
               {item.verbatim}
             </>
           ) : (
-            "来源原话已不可读取"
+            text("来源原话已不可读取")
           )}
         </blockquote>
       ))}
-      <h3>修改历史</h3>
+      <h3>{text("修改历史")}</h3>
       <ol>
         {detail.history.map((item) => (
           <li key={item.revision}>
-            r{item.revision} · {memoryHistoryActionLabel(item.action)}
+            r{item.revision} ·{" "}
+            {text(
+              // 删除 also names the delete button; the history line needs a noun.
+              item.action === "delete"
+                ? "删除（记录）"
+                : memoryHistoryActionLabel(item.action),
+            )}
           </li>
         ))}
       </ol>
@@ -2336,14 +2463,17 @@ function IndexSyncNotice({
   onConfigureModel(): void;
   onRefresh(): void;
 }) {
+  const { text, locale } = useMemoryLanguage();
   const { attemptedLine, explanation, action } = indexSyncPresentation(
     sync,
-    clockStamp(sync.updated_at),
+    clockStamp(sync.updated_at, locale),
+    locale,
   );
 
   return (
     <p className="notice" role="status">
-      搜索里还是改之前那句话。{explanation} <small>{attemptedLine}</small>
+      {text("搜索里还是改之前那句话。")} {explanation}{" "}
+      <small>{attemptedLine}</small>
       {action === "retry" ? (
         <>
           {" "}
@@ -2353,7 +2483,7 @@ function IndexSyncNotice({
             disabled={busy}
             onClick={onRetry}
           >
-            重试同步
+            {text("重试同步")}
           </button>
         </>
       ) : null}
@@ -2366,7 +2496,7 @@ function IndexSyncNotice({
             disabled={busy}
             onClick={onConfigureModel}
           >
-            配置整理模型
+            {text("配置整理模型")}
           </button>
         </>
       ) : null}
@@ -2379,7 +2509,7 @@ function IndexSyncNotice({
             disabled={busy}
             onClick={onRefresh}
           >
-            刷新核对
+            {text("刷新核对")}
           </button>
         </>
       ) : null}
@@ -2406,8 +2536,9 @@ function kindLabel(kind: string) {
   return labels[kind] ?? kind;
 }
 
+/** A catalog key for `text()`: in Chinese it reads as the bare verb. */
 function bulkActionLabel(action: BulkAction): string {
-  const labels = { delete: "删除" };
+  const labels = { delete: "删除（操作）" };
   return labels[action];
 }
 
@@ -2420,7 +2551,11 @@ function statusLabel(status: string) {
   return labels[status] ?? status;
 }
 
-function queueWaiting(processing: MemoryProcessingSummary): string {
+type QueueText = ReturnType<typeof useMemoryLanguage>["text"];
+function queueWaiting(
+  processing: MemoryProcessingSummary,
+  text: QueueText,
+): string {
   const fresh = processing.fresh_pending ?? 0;
   const backlog = processing.backlog_pending ?? 0;
   const active = processing.active_queue ?? 0;
@@ -2430,22 +2565,27 @@ function queueWaiting(processing: MemoryProcessingSummary): string {
   const stranded = processing.stranded_running ?? 0;
   const activeSuffix =
     inFlight || active
-      ? ` · 处理中 ${inFlight} / 待派发 ${active}`
+      ? text(" · 处理中 {running} / 待派发 {active}", {
+          running: inFlight,
+          active,
+        })
       : strandedUnknown
-        ? ` · ${processing.running - inFlight} 条任务状态待核对`
+        ? text(" · {count} 条任务状态待核对", {
+            count: processing.running - inFlight,
+          })
         : stranded
-          ? ` · ${stranded} 条任务状态异常，正在恢复`
+          ? text(" · {count} 条任务状态异常，正在恢复", { count: stranded })
           : "";
   if (fresh + backlog === 0) {
-    return `${processing.pending} 等待${activeSuffix}`;
+    return `${text("{count} 等待", { count: processing.pending })}${activeSuffix}`;
   }
   if (backlog === 0) {
-    return `最新 ${fresh} 条待处理${activeSuffix}`;
+    return `${text("最新 {count} 条待处理", { count: fresh })}${activeSuffix}`;
   }
   if (fresh === 0) {
-    return `历史积压 ${backlog} 条${activeSuffix}`;
+    return `${text("历史积压 {count} 条", { count: backlog })}${activeSuffix}`;
   }
-  return `最新 ${fresh} 条待处理 · 历史积压 ${backlog} 条${activeSuffix}`;
+  return `${text("最新 {count} 条待处理", { count: fresh })} · ${text("历史积压 {count} 条", { count: backlog })}${activeSuffix}`;
 }
 
 const EXTRACTION_WINDOW_PRESETS: ExtractionWindowPreset[] = [
@@ -2468,6 +2608,7 @@ function ExtractionWindowControls({
   onError(value: string | null): void;
   onRefresh(): Promise<void>;
 }) {
+  const { text } = useMemoryLanguage();
   async function changeWindow(preset: ExtractionWindowPreset) {
     if (preset === processing.extraction_window_preset) return;
     onBusy(true);
@@ -2512,7 +2653,7 @@ function ExtractionWindowControls({
   return (
     <div className="extraction-window-controls">
       <label>
-        自动提炼范围
+        {text("自动提炼范围")}
         <select
           value={processing.extraction_window_preset}
           disabled={busy}
@@ -2522,7 +2663,7 @@ function ExtractionWindowControls({
         >
           {EXTRACTION_WINDOW_PRESETS.map((preset) => (
             <option key={preset} value={preset}>
-              {extractionWindowPresetLabel(preset)}
+              {text(extractionWindowPresetLabel(preset))}
             </option>
           ))}
         </select>
@@ -2533,14 +2674,17 @@ function ExtractionWindowControls({
           disabled={busy}
           onClick={() => void extractNextBatch()}
         >
-          手动提炼下一批
+          {text("手动提炼下一批")}
         </button>
       ) : null}
     </div>
   );
 }
 
-function queueEta(processing: MemoryProcessingSummary): string {
+function queueEta(
+  processing: MemoryProcessingSummary,
+  text: QueueText,
+): string {
   // A local model handles one extraction at a time, so a long queue can mean
   // most of a day. Saying so is kinder than a bare count that looks stuck.
   const perTask = processing.seconds_per_completion;
@@ -2549,10 +2693,12 @@ function queueEta(processing: MemoryProcessingSummary): string {
   }
   const hours = (processing.pending * perTask) / 3600;
   if (hours < 1) {
-    return `（约 ${Math.max(1, Math.round(hours * 60))} 分钟）`;
+    return text("（约 {count} 分钟）", {
+      count: Math.max(1, Math.round(hours * 60)),
+    });
   }
   if (hours < 24) {
-    return `（约 ${Math.round(hours)} 小时）`;
+    return text("（约 {count} 小时）", { count: Math.round(hours) });
   }
-  return `（约 ${Math.round(hours / 24)} 天）`;
+  return text("（约 {count} 天）", { count: Math.round(hours / 24) });
 }

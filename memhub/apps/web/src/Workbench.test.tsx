@@ -18,8 +18,40 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
+import { OptionMenu } from "./OptionMenu";
+import { Answer, Workbench } from "./Workbench";
 
-import { Workbench } from "./Workbench";
+it("localiza la selección vacía del menú auxiliar", () => {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <OptionMenu value="" options={[]} onChange={vi.fn()} />
+    </LanguageProvider>,
+  );
+  expect(
+    screen.getByRole("button", { name: "Selecciona una opción" }),
+  ).toBeTruthy();
+  window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+});
+
+it("traduce la respuesta visible sin traducir la respuesta del modelo", () => {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <Answer
+        answer={null}
+        streaming={{ text: "Respuesta 中文 opaca", memories: [] }}
+        onOpenMemory={vi.fn()}
+        onSaveAnswer={vi.fn()}
+        asPage={false}
+      />
+    </LanguageProvider>,
+  );
+  expect(screen.getByText("Respuesta 中文 opaca")).toBeTruthy();
+  expect(screen.getByText("Se recuperaron 0 memorias")).toBeTruthy();
+  window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+});
 
 const getConversation = vi.fn();
 
@@ -223,6 +255,49 @@ function mount(props: Partial<Parameters<typeof Workbench>[0]> = {}) {
   );
   return { ...handlers, view };
 }
+
+it("localiza el espacio vacío y sus controles", () => {
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  const props = {
+    memories: [],
+    graph: null,
+    sources: [],
+    processing: null,
+    loaded: true,
+    detail: null,
+    draft: "",
+    scopes: "",
+    busy: false,
+    answer: null,
+    streaming: null,
+    requestIds: { current: new Map() },
+    onDraft: vi.fn(),
+    onScopes: vi.fn(),
+    onOpenMemory: vi.fn(),
+    onCloseDetail: vi.fn(),
+    onSave: vi.fn(),
+    onAction: vi.fn(),
+    onSyncIndex: vi.fn(),
+    onAsk: vi.fn(),
+    onSaveAnswer: vi.fn(),
+    onBuildRelations: vi.fn(),
+    onConnect: vi.fn(),
+    onConfigureModel: vi.fn(),
+  };
+  render(
+    <LanguageProvider>
+      <Workbench {...props} />
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("navigation", { name: "Temas" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Autorizar una fuente" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("textbox", { name: "Preguntar sobre este asunto" }),
+  ).toBeTruthy();
+  window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+});
 
 it("选中的图节点把记忆库与详情联到一起（图 → 列表 → 原文）", async () => {
   // The goal requires the graph, the memory list and the original text to be
@@ -800,5 +875,37 @@ describe("按主题聚类", () => {
     expect(panel.textContent).toContain("统一走 axios");
     expect(panel.textContent).toContain("同一个主题");
     expect(panel.textContent).not.toContain("原话来源");
+  });
+
+  it("Core 送来未知的节点类型或连线来头时，仍然说得出一个词而不是留空", async () => {
+    const user = userEvent.setup();
+    mount({
+      graph: {
+        total_memories: 1,
+        projected_memories: 1,
+        hy_graph_available: false,
+        nodes: [
+          { node_id: "future:x", node_type: "future_kind", label: "新节点" },
+          { node_id: "memory:a", node_type: "memory", label: "统一走 axios" },
+        ],
+        edges: [
+          {
+            edge_id: "e1",
+            source_node_id: "future:x",
+            target_node_id: "memory:a",
+            relation: "related_to",
+            origin: "future_origin",
+          },
+        ],
+      } as unknown as MemoryGraphResponse,
+    });
+
+    await user.click(screen.getByRole("button", { name: "新节点" }));
+
+    const panel = screen.getByLabelText("这个节点");
+    expect(panel.querySelector(".wb-status")?.textContent).toBe("记忆");
+    expect(panel.querySelector(".wb-trace-origin")?.textContent).toBe(
+      "原话来源",
+    );
   });
 });
