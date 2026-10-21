@@ -1913,6 +1913,7 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -1935,6 +1936,9 @@ class HyMemoryClient:
             agent_ids: 可选，多 agent 批量列举。非空时优先于 agent_id。
             layers:   可选，只返回指定层级（字符串或 MemoryLayer）。不传时返回
                       L1_RAW 以外的全部层级，与改动前一致。
+            statuses: 可选，只返回指定生命周期（字符串或 MemoryStatus）。不传时
+                      保持兼容，只返回 ACTIVE。可显式读取 SUPERSEDED / SHADOW /
+                      NEGATED / CONFLICTED / ARCHIVED；物理删除的节点不会返回。
             with_evolution: 可选，为当前页条目附加 evolution_chain（默认关闭）。
 
         Returns:
@@ -1947,7 +1951,7 @@ class HyMemoryClient:
                 user_ids=user_ids, agent_ids=agent_ids,
                 limit=limit, offset=offset, order=order,
                 workspace_id=workspace_id, branch=branch,
-                layers=layers, with_evolution=with_evolution,
+                layers=layers, statuses=statuses, with_evolution=with_evolution,
             )
         )
 
@@ -4445,6 +4449,20 @@ class HyMemoryClient:
         return out
 
     @staticmethod
+    def _normalize_statuses(statuses: Optional[List[Any]]) -> Optional[List]:
+        """Normalize public lifecycle filters without inventing product states."""
+        from .models.memory import MemoryStatus
+
+        if not statuses:
+            return None
+        out: List[MemoryStatus] = []
+        for item in statuses:
+            status = item if isinstance(item, MemoryStatus) else MemoryStatus(str(item).lower())
+            if status not in out:
+                out.append(status)
+        return out
+
+    @staticmethod
     def _sort_memory_nodes(nodes: List, *, order: str) -> List:
         reverse = (order.lower() != "asc")
 
@@ -4472,14 +4490,16 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List] = None,
+        statuses: Optional[List] = None,
         with_evolution: bool = False,
     ) -> Dict[str, Any]:
         from .models.memory import MemoryLayer, MemoryStatus
         from .pipelines._retrieval.user_level_l0 import collapse_user_level_l0_hits
 
-        # 过滤条件维持改动前原样（仅 status=ACTIVE），本次只加多值枚举。
-        # 不叠加 only_latest：正常数据下 writer 对 is_latest/status 成对写，两者等效，
-        # 加了只能多拦脏数据，却会改变现网 list 的返回口径。
+        # Default stays ACTIVE for compatibility. An explicit filter is how
+        # callers inspect SDK-owned superseded/shadow lifecycle records.
+        effective_statuses = statuses or [MemoryStatus.ACTIVE]
+        # 不叠加 only_latest：正常数据下 writer 对 is_latest/status 成对写，两者等效。
         # 列表页只需 payload（content/tags/custom/链头信息）与排序字段，
         # 不涉及向量运算，一概 with_vectors=False，避免拉回大量 embedding。
         #
@@ -4491,7 +4511,7 @@ class HyMemoryClient:
             agent_id=agent_id,
             user_ids=user_ids,
             agent_ids=agent_ids,
-            status_filter=[MemoryStatus.ACTIVE],
+            status_filter=effective_statuses,
             layers=layers,
             with_vectors=False,
         )
@@ -4505,7 +4525,7 @@ class HyMemoryClient:
             l0_nodes = await self._vector_store.list_by_user(
                 user_id=user_id,
                 user_ids=user_ids,
-                status_filter=[MemoryStatus.ACTIVE],
+                status_filter=effective_statuses,
                 layers=[MemoryLayer.L0_BASIC_INFO],
                 with_vectors=False,
             )
@@ -4579,9 +4599,10 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List] = None,
+        statuses: Optional[List] = None,
     ) -> Optional[Dict[str, Any]]:
         """列出图库 L6/L7 节点；无图数据、不可用或 layers 不含图层时返回 None。"""
-        from .models.memory import MemoryLayer, MemoryNode
+        from .models.memory import MemoryLayer, MemoryNode, MemoryStatus
 
         graph_layers = [MemoryLayer.L6_SCHEMA, MemoryLayer.L7_INTENTION]
         if layers:
@@ -4619,6 +4640,11 @@ class HyMemoryClient:
                 for layer in graph_layers
             ])
             graph_nodes = [n for chunk in chunks for n in chunk]
+            effective_statuses = statuses or [MemoryStatus.ACTIVE]
+            graph_nodes = [
+                node for node in graph_nodes
+                if getattr(node, "status", None) in effective_statuses
+            ]
 
             graph_nodes = self._sort_memory_nodes(graph_nodes, order=order)
             total = len(graph_nodes)
@@ -4649,6 +4675,7 @@ class HyMemoryClient:
         offset: int,
         request_id: str,
         t0: float,
+        statuses: Optional[List] = None,
     ) -> Dict[str, Any]:
         """按 workspace_id（+可选 branch）纯过滤列出经验层完整详情。
 
@@ -4664,6 +4691,9 @@ class HyMemoryClient:
             "offset": offset,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
+        from .models.memory import MemoryStatus
+        if statuses and MemoryStatus.ACTIVE not in statuses:
+            return empty
         try:
             await self._get_coding_writer()  # 副作用：lazy init store
         except Exception as e:
@@ -4692,6 +4722,7 @@ class HyMemoryClient:
                 "files": list(d.files),
                 "source_fact_ids": list(d.source_fact_ids),
                 "confidence": d.confidence,
+                "status": MemoryStatus.ACTIVE.value,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
             }
@@ -4726,6 +4757,7 @@ class HyMemoryClient:
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -4745,6 +4777,12 @@ class HyMemoryClient:
             - 不传时行为与改动前一致：返回 L1_RAW 以外的全部层级。
               显式指定则完全以传入为准，包含只要 L1_RAW 的场景。
             - 指定的层级都不在图库（L6/L7）时跳过图库查询，返回中省略 graph 键。
+
+        statuses（默认空）：
+            - 不传时保持兼容，只返回 ACTIVE。
+            - 可传 MemoryStatus 或其字符串值，读取 SDK 内现存的 superseded /
+              shadow / negated / conflicted / archived 记录。
+            - delete 是物理删除，不存在可列出的 deleted 状态。
 
         with_evolution（默认 False）：
             - 为 VDB 条目附加 `evolution_chain`（latest → oldest），结构与 search 一致，
@@ -4779,12 +4817,14 @@ class HyMemoryClient:
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
         t0 = time.perf_counter()
+        effective_statuses = self._normalize_statuses(statuses)
 
         # workspace_id 非空 → 走 coding memory 列表路径
         if workspace_id:
             return await self._list_coding(
                 user_id=user_id, workspace_id=workspace_id, branch=branch,
                 limit=limit, offset=offset, request_id=request_id, t0=t0,
+                statuses=effective_statuses,
             )
 
         effective_layers = self._normalize_layers(layers)
@@ -4793,13 +4833,14 @@ class HyMemoryClient:
             user_id=user_id, agent_id=agent_id,
             user_ids=user_ids, agent_ids=agent_ids,
             limit=limit, offset=offset, order=order,
-            layers=effective_layers, with_evolution=with_evolution,
+            layers=effective_layers, statuses=effective_statuses,
+            with_evolution=with_evolution,
         )
         graph = await self._list_graph_bucket(
             user_id=user_id, agent_id=agent_id,
             user_ids=user_ids, agent_ids=agent_ids,
             limit=limit, offset=offset, order=order,
-            layers=effective_layers,
+            layers=effective_layers, statuses=effective_statuses,
         )
 
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
