@@ -81,6 +81,7 @@ def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
         data_dir=tmp_path,
         bundle_id="migration-1",
         runtime_build="build-13",
+        source_sdk_version="2.0.4",
         runtime_stopped=True,
         now=datetime(2026, 10, 21, tzinfo=UTC),
         snapshotter=_snapshotter,
@@ -90,6 +91,8 @@ def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
     assert manifest["bundle_id"] == "migration-1"
     assert manifest["sdk_namespace"] == "governed-v2"
     assert manifest["runtime_build"] == "build-13"
+    assert manifest["source_sdk_version"] == "2.0.4"
+    assert manifest["snapshot_sdk_version"] == "2.0.5.dev2"
     paths = {item["path"]: item for item in manifest["files"]}
     assert {
         "management/one-memory.sqlite3",
@@ -112,6 +115,7 @@ def test_bundle_refuses_live_runtime(tmp_path):
             data_dir=tmp_path,
             bundle_id="migration-live",
             runtime_build="build-13",
+            source_sdk_version="2.0.4",
             runtime_stopped=False,
         )
     assert caught.value.code == "sdk_migration_bundle_runtime_running"
@@ -133,6 +137,7 @@ def test_bundle_rejects_sdk_symlinks_without_publishing_partial_output(tmp_path)
             data_dir=tmp_path,
             bundle_id="migration-link",
             runtime_build="build-13",
+            source_sdk_version="2.0.4",
             runtime_stopped=True,
             snapshotter=_snapshotter,
         )
@@ -149,6 +154,7 @@ def test_bundle_id_cannot_escape_managed_backups(tmp_path, bundle_id):
             data_dir=tmp_path,
             bundle_id=bundle_id,
             runtime_build="build-13",
+            source_sdk_version="2.0.4",
             runtime_stopped=True,
         )
     assert caught.value.code == "sdk_migration_bundle_id_invalid"
@@ -160,6 +166,7 @@ def test_restore_bundle_replaces_management_and_sdk_together(tmp_path):
         data_dir=tmp_path,
         bundle_id="migration-restore",
         runtime_build="build-13",
+        source_sdk_version="2.0.4",
         runtime_stopped=True,
         snapshotter=_snapshotter,
     )
@@ -191,6 +198,7 @@ def test_restore_rejects_tampered_bundle_before_touching_live_home(tmp_path):
         data_dir=tmp_path,
         bundle_id="migration-tampered",
         runtime_build="build-13",
+        source_sdk_version="2.0.4",
         runtime_stopped=True,
         snapshotter=_snapshotter,
     )

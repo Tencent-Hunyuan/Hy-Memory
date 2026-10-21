@@ -97,7 +97,8 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
         stream.write(
             "Usage: one-memory [serve [--maintenance|--reader]|status [--json]|doctor [--json]"
             "|restore --source <managed-backup> --yes [--json]"
-            "|migration-bundle --bundle-id <id> --runtime-build <build> --yes [--json]"
+            "|migration-bundle --bundle-id <id> --runtime-build <build> "
+            "--source-sdk-version <version> --yes [--json]"
             "|boundary [--peek|--ack TOKEN]|capture SOURCE]\n"
         )
         return 2
@@ -236,6 +237,7 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
     """Create a complete management + SDK bundle while Runtime is stopped."""
     bundle_id: str | None = None
     runtime_build: str | None = None
+    source_sdk_version: str | None = None
     confirmed = False
     as_json = False
     index = 0
@@ -249,6 +251,10 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
             runtime_build = options[index + 1]
             index += 2
             continue
+        if option == "--source-sdk-version" and index + 1 < len(options):
+            source_sdk_version = options[index + 1]
+            index += 2
+            continue
         if option == "--yes":
             confirmed = True
             index += 1
@@ -259,10 +265,11 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
             continue
         stream.write(f"one-memory: 参数无效：{option}\n")
         return 2
-    if not bundle_id or not runtime_build:
+    if not bundle_id or not runtime_build or not source_sdk_version:
         stream.write(
             "one-memory: migration-bundle 需要 "
-            "--bundle-id <id> --runtime-build <build>\n"
+            "--bundle-id <id> --runtime-build <build> "
+            "--source-sdk-version <version>\n"
         )
         return 2
 
@@ -282,6 +289,7 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
             "schema_version": 1,
             "state": "preview",
             "bundle_id": bundle_id,
+            "source_sdk_version": source_sdk_version,
             "requires_confirmation": True,
         }
         _write_restore(stream, as_json, document, "预览通过；加 --yes 后创建完整迁移备份。")
@@ -297,6 +305,7 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
             data_dir=settings.data_dir,
             bundle_id=bundle_id,
             runtime_build=runtime_build,
+            source_sdk_version=source_sdk_version,
             runtime_stopped=True,
         )
     except MigrationBundleRejected as error:
