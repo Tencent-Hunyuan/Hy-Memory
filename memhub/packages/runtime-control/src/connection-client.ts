@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
-import { isConnectionControlError } from "@one-memory/host-bridge";
 import type { HostPairingReceipt } from "@one-memory/host-bridge";
+import { isConnectionControlError } from "@one-memory/host-bridge";
 import axios from "axios";
 import { inspectRecallBrokerStatus } from "./broker-status.js";
 import type { BatchJournal, BatchResult } from "./connection-batch.js";

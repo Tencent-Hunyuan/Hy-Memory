@@ -2888,8 +2888,7 @@ export function renderCustomHarnessSkill(
   };
   const server = mcp.mcpServers["one-memory"];
   if (!server) throw new Error("custom_harness_material_unavailable");
-  server.env.ONE_MEMORY_HOST_CREDENTIAL_FILE =
-    `<ABSOLUTE_PRIVATE_CREDENTIAL_FILE_FOR_${pairing.hostId}>`;
+  server.env.ONE_MEMORY_HOST_CREDENTIAL_FILE = `<ABSOLUTE_PRIVATE_CREDENTIAL_FILE_FOR_${pairing.hostId}>`;
   return `---
 name: memhub-custom-connection
 description: Pair a user-named local Harness with MemHub and install its MCP connection.

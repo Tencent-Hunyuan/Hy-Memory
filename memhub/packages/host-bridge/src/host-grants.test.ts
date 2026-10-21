@@ -86,7 +86,9 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
     roots.push(root);
     const directory = path.join(root, "grants");
     let now = Date.parse("2026-10-19T12:00:00.000Z");
-    const store = await HostGrantStore.initialize(directory, { now: () => now });
+    const store = await HostGrantStore.initialize(directory, {
+      now: () => now,
+    });
     const pairing = await store.createPairing({ displayName: "Kimi Code" });
     expect(pairing).toMatchObject({
       displayName: "Kimi Code",
@@ -100,11 +102,15 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
       allowedTools: ["om_recall", "om_ask", "om_conversations", "om_matters"],
       allowedScopes: ["all-apps"],
     });
-    expect(await store.authorize(issued.secret, {
-      tool: "om_recall",
-      scopes: ["all-apps"],
-    })).toMatchObject({ hostId: pairing.hostId });
-    await expect(store.exchangePairing(pairing.pairingCode)).rejects.toMatchObject({
+    expect(
+      await store.authorize(issued.secret, {
+        tool: "om_recall",
+        scopes: ["all-apps"],
+      }),
+    ).toMatchObject({ hostId: pairing.hostId });
+    await expect(
+      store.exchangePairing(pairing.pairingCode),
+    ).rejects.toMatchObject({
       code: "host_pairing_invalid",
     });
     now += 60_000;
@@ -112,14 +118,20 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
   });
 
   it("refuses an expired custom Harness pairing code", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "om-host-pairing-expired-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "om-host-pairing-expired-"),
+    );
     roots.push(root);
     const directory = path.join(root, "grants");
     let now = 1_000;
-    const store = await HostGrantStore.initialize(directory, { now: () => now });
+    const store = await HostGrantStore.initialize(directory, {
+      now: () => now,
+    });
     const pairing = await store.createPairing({ displayName: "Other Harness" });
     now += 10 * 60 * 1000 + 1;
-    await expect(store.exchangePairing(pairing.pairingCode)).rejects.toMatchObject({
+    await expect(
+      store.exchangePairing(pairing.pairingCode),
+    ).rejects.toMatchObject({
       code: "host_pairing_invalid",
     });
     expect(await store.listInstallations()).toEqual([]);

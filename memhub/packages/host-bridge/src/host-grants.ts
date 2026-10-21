@@ -278,12 +278,16 @@ export class HostGrantStore {
   async createPairing(input: {
     displayName: string;
   }): Promise<HostPairingReceipt> {
-    if (!hasKeys(input, ["displayName"]) || !validDisplayName(input.displayName)) {
+    if (
+      !hasKeys(input, ["displayName"]) ||
+      !validDisplayName(input.displayName)
+    ) {
       fail("host_grant_invalid_input");
     }
     const displayName = input.displayName;
     const now = this.#now();
-    if (!Number.isSafeInteger(now) || now < 0) fail("host_grant_store_unavailable");
+    if (!Number.isSafeInteger(now) || now < 0)
+      fail("host_grant_store_unavailable");
     return this.#mutate((data) => {
       pruneExpiredPairings(data, now);
       if (
@@ -335,7 +339,8 @@ export class HostGrantStore {
       fail("host_pairing_invalid");
     }
     const now = this.#now();
-    if (!Number.isSafeInteger(now) || now < 0) fail("host_grant_store_unavailable");
+    if (!Number.isSafeInteger(now) || now < 0)
+      fail("host_grant_store_unavailable");
     const issued = await this.#mutate((data) => {
       const codeHash = hashPairingCode(data.storeId, code);
       const pairingIndex = data.pairings.findIndex(

@@ -36,7 +36,8 @@ export function ConnectionFallback() {
       ) : (
         <>
           <p className="connection-boundary">
-            为未列出的本机 Harness 生成一次性配对 Skill。纯网页聊天、远端容器或另一台机器不能直接连接本机。
+            为未列出的本机 Harness 生成一次性配对
+            Skill。纯网页聊天、远端容器或另一台机器不能直接连接本机。
           </p>
           <label className="custom-harness-name">
             Harness 名称
@@ -90,7 +91,9 @@ export function ConnectionFallback() {
                 onClick={async () => {
                   try {
                     await copyText(material.skill);
-                    setNotice("已复制配对 Skill。请粘贴到对应 Harness 中执行。");
+                    setNotice(
+                      "已复制配对 Skill。请粘贴到对应 Harness 中执行。",
+                    );
                   } catch {
                     setNotice("复制失败，可在上方选中文本复制。");
                   }

@@ -34,7 +34,9 @@ describe("ConnectionFallback", () => {
     );
     await user.click(screen.getByRole("button", { name: "复制 Skill" }));
     expect(copyText).toHaveBeenCalledWith("pair with 123456");
-    expect(screen.getByRole("status").textContent).toContain("粘贴到对应 Harness");
+    expect(screen.getByRole("status").textContent).toContain(
+      "粘贴到对应 Harness",
+    );
   });
   it("offers retry and clipboard failure recovery without fake pairing success", async () => {
     const user = userEvent.setup();

@@ -51,13 +51,7 @@ const MAX_PAIRING_FAILURES_PER_WINDOW = 10;
 export interface ConnectionControlRequest {
   schema_version: 1;
   instance_id: string;
-  action:
-    | "capability"
-    | "preview"
-    | "execute"
-    | "receipt"
-    | "host"
-    | "pairing";
+  action: "capability" | "preview" | "execute" | "receipt" | "host" | "pairing";
   input: Record<string, unknown>;
 }
 
@@ -529,7 +523,9 @@ export class RecallBroker {
     }
     if (
       request.headers.origin !== undefined ||
-      Object.keys(request.headers).some((key) => key.startsWith("sec-fetch-")) ||
+      Object.keys(request.headers).some((key) =>
+        key.startsWith("sec-fetch-"),
+      ) ||
       request.headers["content-type"]?.split(";", 1)[0]?.trim() !==
         "application/json"
     ) {
@@ -571,7 +567,10 @@ export class RecallBroker {
       });
     } catch (error) {
       this.pairingFailureCount++;
-      if (error instanceof HostGrantError && error.code === "host_pairing_invalid") {
+      if (
+        error instanceof HostGrantError &&
+        error.code === "host_pairing_invalid"
+      ) {
         sendJson(response, 401, { error: "host_pairing_invalid" });
         return;
       }
