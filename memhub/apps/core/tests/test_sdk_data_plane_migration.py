@@ -218,6 +218,11 @@ def test_alias_is_idempotent_but_cannot_be_retargeted(store):
         canonical_memory_id="sdk",
     )
     store.record_alias(
+        migration_id="m2",
+        legacy_memory_id="legacy",
+        canonical_memory_id="sdk",
+    )
+    store.record_alias(
         migration_id="m1",
         legacy_memory_id="legacy",
         canonical_memory_id="sdk",

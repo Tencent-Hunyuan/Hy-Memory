@@ -321,10 +321,7 @@ class SdkDataPlaneMigrationStore:
                         self._now(),
                     ),
                 )
-            elif (
-                existing["canonical_memory_id"] != canonical_memory_id
-                or existing["migration_id"] != migration_id
-            ):
+            elif existing["canonical_memory_id"] != canonical_memory_id:
                 raise DataPlaneMigrationError("sdk_data_plane_alias_conflict")
             connection.execute("COMMIT")
 

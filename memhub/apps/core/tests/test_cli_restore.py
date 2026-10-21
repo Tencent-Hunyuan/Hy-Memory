@@ -1,4 +1,5 @@
 import io
+import sqlite3
 from types import SimpleNamespace
 
 from one_memory import cli
@@ -195,6 +196,46 @@ def test_migration_bundle_success_reports_bundle_identity(tmp_path, monkeypatch)
     assert '"bundle_id":"migration-1"' in document
 
 
+def test_migration_bundle_reuses_an_existing_verified_bundle(tmp_path, monkeypatch) -> None:
+    from one_memory.sdk_migration_bundle import MigrationBundleRejected
+
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+
+    def exists(**_kwargs):
+        raise MigrationBundleRejected("sdk_migration_bundle_exists")
+
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_bundle.create_sdk_migration_bundle",
+        exists,
+    )
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_bundle.inspect_sdk_migration_bundle",
+        lambda **_kwargs: {"file_count": 4, "total_bytes": 123},
+    )
+    output = io.StringIO()
+
+    code = cli.run(
+        [
+            "migration-bundle",
+            "--bundle-id",
+            "migration-1",
+            "--runtime-build",
+            "build-13",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+
+    assert code == 0
+    assert '"state": "reused"' in output.getvalue()
+
+
 def test_sdk_migrate_preview_never_commits_cutover(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
     monkeypatch.setattr(
@@ -301,3 +342,84 @@ def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch
     document = output.getvalue().replace(" ", "")
     assert '"state":"ready"' in document
     assert '"commits_cutover":false' in document
+
+
+def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_runner.commit_reconciled_cutover",
+        lambda **_kwargs: SimpleNamespace(
+            migration_id="migration-1",
+            backup_bundle_id="bundle-1",
+            sdk_version="2.0.5.dev3",
+            completed_at="2026-10-21T00:00:00Z",
+        ),
+    )
+    output = io.StringIO()
+
+    code = cli.run(
+        [
+            "sdk-cutover",
+            "--migration-id",
+            "migration-1",
+            "--bundle-id",
+            "bundle-1",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+
+    assert code == 0
+    document = output.getvalue().replace(" ", "")
+    assert '"state":"cutover"' in document
+    assert '"sdk_version":"2.0.5.dev3"' in document
+
+
+def test_sdk_cutover_never_runs_while_runtime_is_live(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("running", "healthy"),
+    )
+    output = io.StringIO()
+
+    code = cli.run(
+        [
+            "sdk-cutover",
+            "--migration-id",
+            "migration-1",
+            "--bundle-id",
+            "bundle-1",
+            "--yes",
+            "--json",
+        ],
+        output=output,
+    )
+
+    assert code == 4
+    assert '"code": "sdk_cutover_runtime_running"' in output.getvalue()
+
+
+def test_sdk_migration_status_distinguishes_empty_and_legacy_data(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    empty = io.StringIO()
+    assert cli.run(["sdk-migration-status", "--json"], output=empty) == 0
+    assert '"state": "empty"' in empty.getvalue()
+
+    database = tmp_path / "one-memory.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE evidence (evidence_id TEXT PRIMARY KEY)")
+        connection.execute("INSERT INTO evidence VALUES ('e1')")
+    required = io.StringIO()
+    assert cli.run(["sdk-migration-status", "--json"], output=required) == 0
+    assert '"state": "required"' in required.getvalue()
+    assert '"raw": 1' in required.getvalue()
