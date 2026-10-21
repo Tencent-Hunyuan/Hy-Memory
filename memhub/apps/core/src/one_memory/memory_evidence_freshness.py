@@ -22,13 +22,20 @@ from contextlib import contextmanager
 from one_memory.database_access import register_function
 from one_memory.diagnostic_log import diagnostic_event
 from one_memory.imports.models import EvidenceRecord
-from one_memory.memory_tasks import MemoryTaskOutput, matches_evidence_ref
+from one_memory.memory_tasks import MemoryTaskOutput, TaskEvidenceRef, matches_evidence_ref
 
 _PROOFS = 64
 _REFERENCES = 128
 _BODY_BYTES = 65_536
 _EVIDENCE_BYTES = 8 * 1024 * 1024
 _SCOPE_STEPS = 64
+
+#: Keys a support reference may carry. Derive them from the TypedDict so a new
+#: optional field (for example the segment_* fields added for split evidence)
+#: cannot make every proof "invalid" here.
+_SUPPORT_REF_KEYS = frozenset(
+    TaskEvidenceRef.__required_keys__ | TaskEvidenceRef.__optional_keys__
+)
 
 #: Budget refusals: the check could not finish, the data is not malformed.
 BUDGET_ERRORS = frozenset(
@@ -348,7 +355,7 @@ def register_memory_freshness(db: sqlite3.Connection) -> str:
             raw_refs = body.get("support_refs", [])
             if not isinstance(raw_refs, list) or any(
                 not isinstance(ref, dict)
-                or set(ref) - {"evidence_id", "revision", "content_hash", "identity_hash"}
+                or set(ref) - _SUPPORT_REF_KEYS
                 for ref in raw_refs
             ):
                 raise ValueError("memory_freshness_invalid_reference")
@@ -359,7 +366,7 @@ def register_memory_freshness(db: sqlite3.Connection) -> str:
                 raise ValueError("memory_freshness_reference_budget")
             for ref in output.support_refs:
                 if (
-                    set(ref) - {"evidence_id", "revision", "content_hash", "identity_hash"}
+                    set(ref) - _SUPPORT_REF_KEYS
                     or not ref["evidence_id"]
                     or ref["revision"] < 1
                     or any(
