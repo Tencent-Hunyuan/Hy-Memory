@@ -2203,6 +2203,20 @@ async def execute_job(
             )
         ),
     )
+    authority = getattr(supervisor, "sdk_authority", None)
+    release = getattr(evidence, "release_sdk_staging", None)
+    durable_receipt = await in_the_background(queue.sdk_receipt, job_id)
+    if (
+        callable(authority)
+        and authority()
+        and callable(release)
+        and durable_receipt is not None
+        and (durable_receipt.raw_ids or durable_receipt.memory_ids)
+    ):
+        await in_the_background(
+            release,
+            tuple(record.evidence_id for record in records),
+        )
 
 
 class DurableWriteDrain:

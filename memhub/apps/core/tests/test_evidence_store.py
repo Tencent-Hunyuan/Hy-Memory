@@ -62,6 +62,31 @@ def forget_repair(connection: sqlite3.Connection, name: str) -> None:
     connection.execute("DELETE FROM evidence_repairs WHERE name = ?", (name,))
 
 
+def test_sdk_staging_release_removes_new_raw_but_keeps_legacy_governance(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    transient = store.put(evidence(message_id="transient")).record
+    legacy = store.put(evidence(message_id="legacy", verbatim="legacy")).record
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE governed_memory_evidence ("
+            "memory_id TEXT NOT NULL,evidence_id TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO governed_memory_evidence VALUES (?,?)",
+            ("memory-1", legacy.evidence_id),
+        )
+        connection.commit()
+
+    removed = store.release_sdk_staging(
+        (transient.evidence_id, legacy.evidence_id)
+    )
+
+    assert removed == 1
+    assert store.get(transient.evidence_id) is None
+    assert store.get(legacy.evidence_id) is not None
+
+
 def test_same_source_message_merges_origins_without_duplication(tmp_path) -> None:
     store = EvidenceStore(tmp_path / "one-memory.sqlite3")
     first = store.put(evidence())

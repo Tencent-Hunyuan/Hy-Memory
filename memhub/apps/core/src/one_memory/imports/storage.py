@@ -1796,6 +1796,40 @@ class EvidenceStore:
                     records.append(record)
             return records
 
+    def release_sdk_staging(self, evidence_ids: tuple[str, ...]) -> int:
+        """Remove post-cutover queue staging after SDK success.
+
+        Historical rows referenced by legacy Governance remain for the
+        compatibility release. SDK-authority imports create no such links and
+        stop being MemHub raw storage once the job has SDK receipts.
+        """
+        ids = tuple(dict.fromkeys(evidence_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect(writing=True) as connection:
+            has_governance = (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='governed_memory_evidence'"
+                ).fetchone()
+                is not None
+            )
+            legacy_guard = (
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM governed_memory_evidence governed "
+                "WHERE governed.evidence_id=evidence.evidence_id"
+                ")"
+                if has_governance
+                else ""
+            )
+            changed = connection.execute(
+                f"DELETE FROM evidence WHERE evidence_id IN ({placeholders}) "
+                f"{legacy_guard}",
+                ids,
+            )
+        return changed.rowcount
+
     def stage_memory_dispatch(
         self,
         record: EvidenceRecord,

@@ -919,18 +919,27 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
 
     class Supervisor:
         tasks = Tasks()
+        sdk_authority = staticmethod(lambda: True)
 
         @staticmethod
         async def process_records(_records, **kwargs):
             await kwargs["before_hy_invocation"]()
             return (type("Task", (), {"task_id": "task-1"})(),)
 
+    class Evidence(_EvidenceStore):
+        released: tuple[str, ...] = ()
+
+        def release_sdk_staging(self, evidence_ids):
+            self.released = evidence_ids
+            return len(evidence_ids)
+
+    evidence = Evidence({"e1"})
     asyncio.run(
         execute_job(
             record.job_id,
             queue=queue,
             supervisor=Supervisor(),
-            evidence=_EvidenceStore({"e1"}),
+            evidence=evidence,
         )
     )
 
@@ -938,6 +947,7 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
     assert receipt is not None
     assert receipt.raw_ids == ("raw-1",)
     assert receipt.memory_ids == ("memory-1", "memory-2")
+    assert evidence.released == ("e1",)
 
 
 def test_missing_evidence_is_refused_without_calling_the_model(tmp_path) -> None:
