@@ -2831,6 +2831,14 @@ CREATE TABLE IF NOT EXISTS memory_id_aliases (
 );
 CREATE INDEX IF NOT EXISTS memory_id_aliases_canonical
 ON memory_id_aliases(canonical_memory_id);
+CREATE TABLE IF NOT EXISTS memory_access_scopes (
+    memory_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (memory_id, scope)
+);
+CREATE INDEX IF NOT EXISTS memory_access_scopes_scope
+ON memory_access_scopes(scope, memory_id);
 CREATE TABLE IF NOT EXISTS sdk_data_plane_cutover (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     migration_id TEXT NOT NULL,
@@ -2883,6 +2891,13 @@ CREATE TABLE IF NOT EXISTS memory_id_aliases (
     migration_id VARCHAR(128) NOT NULL,
     created_at VARCHAR(64) NOT NULL,
     KEY memory_id_aliases_canonical (canonical_memory_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS memory_access_scopes (
+    memory_id VARCHAR(256) NOT NULL,
+    scope VARCHAR(512) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (memory_id, scope),
+    KEY memory_access_scopes_scope (scope, memory_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 CREATE TABLE IF NOT EXISTS sdk_data_plane_cutover (
     singleton TINYINT PRIMARY KEY,
@@ -3170,6 +3185,7 @@ MIGRATIONS: tuple[Migration, ...] = (
             "sdk_data_plane_migrations",
             "sdk_data_plane_migration_items",
             "memory_id_aliases",
+            "memory_access_scopes",
             "sdk_data_plane_cutover",
         ),
     ),
