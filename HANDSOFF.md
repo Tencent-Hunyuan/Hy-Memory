@@ -46,6 +46,10 @@
 4. 队列降级为「调度 SDK 调用」，完成态以 SDK 可验证结果为准。  
 5. 清空/删除镜像台账；缺的能力开 **SDK PR**，不在 Core 补影子表。
 
+旧用户的数据迁移不是独立的手工升级步骤：由 App 在可见的启动 loading
+阶段、Core 开始提供产品读写之前，完成 bundle、可续跑 backfill、reconciliation
+与最终 cutover。失败或缺少前置配置时 marker 保持未提交，不允许静默进入双写。
+
 ---
 
 ## 管理面仍属 MemHub（勿误拆）

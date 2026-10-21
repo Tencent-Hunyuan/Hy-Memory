@@ -6,8 +6,10 @@ This contract migrates released MemHub installations from the historical
 Evidence/Governance authority to the Hy Memory SDK data plane defined by
 [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
-It is an offline, resumable migration. It is not a permanent dual-read or
-dual-write design.
+It is an offline, resumable migration executed inside the App's visible startup
+loading phase, before Core accepts product traffic. It is not a permanent
+dual-read or dual-write design and is not a separate manual upgrade flow for
+ordinary users.
 
 ## 1. Authority before and after cutover
 
@@ -169,6 +171,18 @@ Queue rows and leases remain MemHub management state.
   bodies.
 
 ## 10. Cutover
+
+The packaged App owns orchestration. While the startup placeholder is visible,
+it starts no product writer, creates or verifies the full bundle, resumes the
+durable migration ledger, reconciles SDK state, and only then commits cutover.
+The normal App window is revealed after this phase. A retry resumes the same
+migration and deterministic operation keys; it does not create a second run.
+
+If migration cannot safely complete, the marker remains absent and startup must
+report the durable blocked/deferred reason. It must not silently continue into
+an SDK/legacy dual-write mode. A missing model profile may defer migration while
+legacy authority is still intact so the user can configure the App; it never
+authorizes a partial cutover.
 
 Cutover requires:
 
