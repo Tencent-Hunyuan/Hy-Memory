@@ -39,6 +39,7 @@ import logging
 import hashlib
 import json
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -250,6 +251,17 @@ def _series_episode_id(
     """Stable identity for one cross-session episode component."""
     raw = "\0".join((user_id, agent_id, *sorted(set(member_ids))))
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "hy-memory:series-episode:" + raw))
+
+
+def _series_memory_at(times: List[int]) -> Optional[datetime]:
+    """Earliest member timestamp as the same local wall clock it came from.
+
+    ``_node_timestamp`` produces ``datetime.timestamp()`` values. Reading them
+    back with ``utcfromtimestamp`` turns them into a naive *UTC* datetime, which
+    the vector payload later re-interprets as local time and shifts by the
+    machine's UTC offset.
+    """
+    return datetime.fromtimestamp(min(times)) if times else None
 
 
 def _node_timestamp(node: Any) -> Optional[int]:
@@ -974,8 +986,6 @@ async def finalize_series_episode_containers(
     Stored text is only a title plus a structural intro. Exact L2 bodies remain in
     their canonical nodes and are referenced by ID from dated timeline segments.
     """
-    from datetime import datetime
-
     from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
     from ..pipelines._retrieval.session_episode import (
         add_parent_episode_membership,
@@ -1061,7 +1071,7 @@ async def finalize_series_episode_containers(
             segment["memory_at"] for segment in plan["timeline"]
             if segment.get("memory_at") is not None
         ]
-        memory_at = datetime.utcfromtimestamp(min(times)) if times else None
+        memory_at = _series_memory_at(times)
         content = f"{plan['title']}. {plan['intro']}".strip()
         series = MemoryNode(
             node_id=series_id, user_id=user_id,

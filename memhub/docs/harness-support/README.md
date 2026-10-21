@@ -38,7 +38,7 @@ Preview 不会弹出给用户；开关点击本身被视为确认。关闭时通
 | [ZCode](zcode.md) | 开放 | MCP + Skill + 注入/采集 Hooks | 注入入口移交 + Stop 钩子 | 尚无同步适配器 |
 | [Pi](pi.md) | 开放 | CLI Skill，不使用 MCP | JS Capture Extension | Pi session 扫描 + Extension 实时入口 |
 | [OpenClaw](openclaw.md) | 正式产品冻结 | 当前没有；仅有未开放的底层 MCP 写入器 | 没有 Hook、Plugin 或 Prefetch | Adapter 也被冻结，开关不可用 |
-| [DeepSeek Harness](deepseek-harness.md) | 详情页排除；Profile UI 有 Bug | Profile 级 MCP Patch | 无自动 Hook | `$DSH_HOME/sessions` 扫描 |
+| [DeepSeek Harness](deepseek-harness.md) | 详情页排除，来源管理页按 Profile 接入 | Profile 级 MCP Patch | 无自动 Hook | `$DSH_HOME/sessions` 扫描 |
 
 ## 同步开关的统一精确语义
 

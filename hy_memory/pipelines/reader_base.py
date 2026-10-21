@@ -1840,6 +1840,8 @@ class BaseReadPipeline(ReadPipeline):
                     query_embedding,
                     user_ids=isolation_params.get("user_ids"),
                     agent_ids=isolation_params.get("agent_ids"),
+                    isolation_key=isolation_params.get("isolation_key") or "",
+                    isolation_keys=isolation_params.get("isolation_keys"),
                     limit=request.intention_limit,
                     stats_out=_intent_stats,
                     include_sources=request.include_sources,

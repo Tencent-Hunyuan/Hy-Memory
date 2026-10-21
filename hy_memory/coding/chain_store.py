@@ -647,7 +647,9 @@ class HyCodeMem:
         top-k，但它们的 diff 对当前工作区不可能有用，因此挂链前必须做同仓过滤。
         """
         facts = facts or []
-        # 开关: HCM_BLOCK_OFF=1 → 完全不出块, 也不从 bullet 删任何 fact。
+        # 高级消融开关: HCM_BLOCK_OFF=1 → 完全不出块, 也不从 bullet 删任何 fact。
+        # 公共 opt-in 见 CodingConfig.chain_block_enabled /
+        # MEMORY_CODING_CHAIN_BLOCK_ENABLED（默认关；客户端在调用 decorate 前拦截）。
         if os.environ.get("HCM_BLOCK_OFF") == "1":
             return "", []
         picked, used = [], []

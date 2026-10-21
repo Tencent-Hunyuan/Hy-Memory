@@ -197,6 +197,7 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 | `MEMORY_HISTORY_DB_PATH` | `{DATA_DIR}/data/history.db` | History SQLite 路径 |
 | `MEMORY_HISTORY_RECORD_SEARCHES` | `false` | 是否记录 Search 操作 |
 | `MEMORY_CODING_CHAIN_REPO_ROOT` | — | coding 版本链读取本地 Git diff 的仓库根目录 |
+| `MEMORY_CODING_CHAIN_BLOCK_ENABLED` | `false` | search(scene=coding) 是否注入版本演进链块（diff / `chain_block`）；默认关 |
 
 ## HTTP Server
 

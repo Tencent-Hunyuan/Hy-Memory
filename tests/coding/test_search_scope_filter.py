@@ -63,11 +63,21 @@ async def scope_ctx(tmp_data_dir, mock_embed):
     await store.close()
 
 
-async def _search(ctx, query, *, workspace_id=None, branch=None, limit=10):
+async def _search(
+    ctx,
+    query,
+    *,
+    workspace_id=None,
+    branch=None,
+    limit=10,
+    agent_ids=None,
+    session_ids=None,
+):
     """闸门全开，只让作用域过滤起作用。"""
     return await HyMemoryClient._search_coding(
         ctx,
         target_query=query, user_ids=["u1"],
+        agent_ids=agent_ids, session_ids=session_ids,
         workspace_id=workspace_id, branch=branch,
         limit=limit,
         working_fact_min_score=0.0, working_experience_min_score=0.0,
@@ -96,6 +106,33 @@ def _eids(resp):
 
 def _fids(resp):
     return sorted(f["fact_id"] for f in resp["facts"])
+
+
+@pytest.mark.asyncio
+class TestAgentSessionScope:
+    async def test_search_coding_forwards_agent_and_session_scope(self, scope_ctx):
+        store = scope_ctx._coding_store
+        for suffix, agent_id, session_id in (
+            ("a1", "a1", "s1"),
+            ("a2", "a2", "s2"),
+        ):
+            await store.insert(CodingMemory(
+                experience_id=f"e_{suffix}", user_id="u1",
+                agent_id=agent_id, session_id=session_id,
+                task="打包发布到私有包索引", solution=f"S-{suffix}",
+            ))
+            await store.insert_fact(WorkingFact(
+                fact_id=f"f_{suffix}", user_id="u1",
+                agent_id=agent_id, session_id=session_id,
+                statement="打包发布到私有包索引",
+            ))
+
+        resp = await _search(
+            scope_ctx, "打包发布到私有包索引",
+            agent_ids=["a1"], session_ids=["s1"],
+        )
+        assert _eids(resp) == ["e_a1"]
+        assert _fids(resp) == ["f_a1"]
 
 
 # ================================================================

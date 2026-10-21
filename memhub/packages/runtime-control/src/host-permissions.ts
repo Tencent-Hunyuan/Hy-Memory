@@ -10,12 +10,14 @@ import {
   unlink,
 } from "node:fs/promises";
 import path from "node:path";
+import { isHostId } from "@one-memory/contracts";
 import {
   createClaudeCodeRemovalTarget,
   createClaudeCodeTarget,
   HostGrantError,
   type HostGrantReceipt,
   HostGrantStore,
+  type HostPairingReceipt,
   type HostReadTool,
   isPluginCacheBookkeeping,
   readHostCredentialFile,
@@ -151,6 +153,10 @@ export class HostPermissions {
       ...this.runtime,
       credentialFile: path.join(this.hostDirectory(layout), "credential"),
     };
+  }
+
+  createCustomPairing(displayName: string): Promise<HostPairingReceipt> {
+    return this.hostGrantStore.createPairing({ displayName });
   }
 
   /** Whether the host's entry was installed from this data directory.
@@ -1055,10 +1061,19 @@ function status(
   };
 }
 
+/** Whether a layout can hold a revocable credential.
+ *
+ * The id grammar lives in `@one-memory/contracts` so that this layer, the
+ * grant store and the CLI cannot drift: a host id `host list` prints has to be
+ * one `host install` accepts. Profile scoping is what DeepSeek Harness needs —
+ * it configures recall per profile (`deepseek-harness:desktop`) — and the
+ * installation directory is a digest of the whole id, so the colon never
+ * becomes a path component.
+ */
 function supported(layout: RecallHostLayout): boolean {
   return (
     (layout.channel === "mcp" || layout.channel === "cli") &&
-    /^[a-z][a-z0-9-]{0,63}$/.test(layout.hostId) &&
+    isHostId(layout.hostId) &&
     layout.hostId !== "openclaw"
   );
 }

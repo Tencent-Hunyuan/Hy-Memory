@@ -31,7 +31,6 @@ from one_memory.hy_runtime_config import (
     diagnostic_log_level,
 )
 from one_memory.hy_source_context import HySourceContext, HyWriteBindings
-from one_memory.hy_store_concurrency import native_store_read_slot
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind, attach_disable_thinking
 from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.semantic_deadline import SemanticMemoryHit
@@ -984,27 +983,29 @@ class HyMemoryBridge:
         caller could only rank by position — which forced semantic hits to be
         placed as a block ahead of everything the keyword lane found. The
         score is what lets the two lanes be ranked against each other.
+
+        Native search runs without a process-local write gate. MemHub expects
+        concurrent read during precipitation; store work is a short burst after
+        network-bound embed/LLM steps, and refusing reads with
+        ``hy_memory_store_busy`` only pushed callers onto weaker fallbacks.
         """
-        async with native_store_read_slot() as admitted:
-            if not admitted:
-                raise HyMemoryBridgeError("hy_memory_store_busy")
-            client = await self._get_client()
-            try:
-                result = await _joined_thread(
-                    client.search,
-                    query,
-                    user_ids=[user_id],
-                    agent_ids=[] if agent_id == "*" else [agent_id],
-                    limit=limit,
-                    min_score=hy_relevance_floor(),
-                    schema_min_score=hy_relevance_floor(),
-                    schema_limit=limit,
-                    intention_limit=limit,
-                    scene="normal",
-                    reader=HY_MEMORY_READER,
-                )
-            except Exception as error:
-                raise HyMemoryBridgeError("hy_memory_search_failed") from error
+        client = await self._get_client()
+        try:
+            result = await _joined_thread(
+                client.search,
+                query,
+                user_ids=[user_id],
+                agent_ids=[] if agent_id == "*" else [agent_id],
+                limit=limit,
+                min_score=hy_relevance_floor(),
+                schema_min_score=hy_relevance_floor(),
+                schema_limit=limit,
+                intention_limit=limit,
+                scene="normal",
+                reader=HY_MEMORY_READER,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_search_failed") from error
         hits = _replied_memories(result, "hy_memory_search_shape_unknown")
         found: list[SemanticMemoryHit] = []
         seen: set[str] = set()

@@ -6,7 +6,6 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1197,40 +1196,6 @@ def test_bridge_preserves_sdk_formatted_search_content(tmp_path) -> None:
     assert hits[0].formatted_content == formatted
     assert hits[0].sdk_formatted is True
     assert hits[0].formatting_complete is True
-
-
-def test_semantic_search_skips_native_store_while_a_write_is_active(tmp_path, monkeypatch) -> None:
-    client = FakeHyMemoryClient(
-        {"success": True},
-        search_result={"memories": [{"memory_id": "must-not-be-read"}]},
-    )
-    bridge = HyMemoryBridge(
-        profile=snapshot(
-            ProviderKind.OLLAMA,
-            base_url="http://127.0.0.1:11434",
-            has_api_key=False,
-        ),
-        api_key=None,
-        data_dir=tmp_path,
-        client=client,
-    )
-
-    @asynccontextmanager
-    async def busy_store():
-        yield False
-
-    monkeypatch.setattr("one_memory.hy_memory_bridge.native_store_read_slot", busy_store)
-
-    with pytest.raises(HyMemoryBridgeError, match="hy_memory_store_busy"):
-        asyncio.run(
-            bridge.search_ids(
-                "导入期间查询",
-                user_id="local",
-                agent_id="*",
-            )
-        )
-
-    assert client.search_calls == []
 
 
 def test_search_ids_does_not_create_nodes_tasks_or_collections(tmp_path) -> None:

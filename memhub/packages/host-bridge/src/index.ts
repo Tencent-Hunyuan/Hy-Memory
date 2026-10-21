@@ -40,6 +40,7 @@ export {
   type HostGrantReceipt,
   HostGrantStore,
   type HostGrantStoreOptions,
+  type HostPairingReceipt,
   type HostReadTool,
   type IssuedHostCredential,
   type VerifiedHostIdentity,

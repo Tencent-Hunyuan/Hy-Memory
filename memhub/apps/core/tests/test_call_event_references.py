@@ -355,8 +355,9 @@ def test_actual_evidence_proof_revision_and_corrected_memory(fresh):
     assert all(item.available for item in resolve_call_references(path, event(raw, reference)))
     evidence.put(value.model_copy(update={"verbatim": "revised evidence"}))
     result = resolve_call_references(path, event(raw, reference))
+    # Raw refs still track evidence.revision; memory refs no longer use freshness.
     assert_hidden(result[0], raw, "changed")
-    assert_hidden(result[1], reference, "changed")
+    assert result[1].available
     corrected = as_person(MemoryGovernanceStore(path)).correct(
         memory.memory_id,
         user_id="local",
@@ -369,7 +370,7 @@ def test_actual_evidence_proof_revision_and_corrected_memory(fresh):
     assert resolve_call_references(path, event(current))[0].title == corrected.content
 
 
-def test_scope_only_revision_still_checks_original_support(fresh):
+def test_scope_only_revision_keeps_memory_readable_when_evidence_changes(fresh):
     path, evidence, value, record, memory, tasks, output = fresh
     updated = as_person(MemoryGovernanceStore(path)).set_scopes(
         memory.memory_id,
@@ -381,25 +382,27 @@ def test_scope_only_revision_still_checks_original_support(fresh):
     reference = memory_ref(updated.memory_id, updated.revision)
     assert resolve_call_references(path, event(reference))[0].available
     evidence.put(value.model_copy(update={"verbatim": "revised evidence"}))
-    assert_hidden(resolve_call_references(path, event(reference))[0], reference, "changed")
+    assert resolve_call_references(path, event(reference))[0].available
 
 
-def test_freshness_identity_change_without_revision_change(fresh):
+def test_evidence_identity_change_without_revision_keeps_memory_readable(fresh):
     path, evidence, value, record, memory, tasks, output = fresh
     reference = memory_ref(memory.memory_id, memory.revision)
     assert resolve_call_references(path, event(reference))[0].available
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("UPDATE evidence SET workspace='workspace:changed'")
-    assert_hidden(resolve_call_references(path, event(reference))[0], reference, "changed")
+    assert resolve_call_references(path, event(reference))[0].available
 
 
-def test_invalid_freshness_proof_fails_whole_response_but_revoked_never_reads_it(fresh):
+def test_invalid_proof_is_ignored_but_revocation_still_hides_memory(fresh):
     path, evidence, value, record, memory, tasks, output = fresh
     reference = memory_ref(memory.memory_id, memory.revision)
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("UPDATE memory_task_outputs SET body='invalid secret proof'")
-    with pytest.raises(CallReferencesUnavailable, match="^call_references_unavailable$"):
-        resolve_call_references(path, event(ref(key=record.evidence_id), reference))
+    assert all(
+        item.available
+        for item in resolve_call_references(path, event(ref(key=record.evidence_id), reference))
+    )
     with closing(sqlite3.connect(path)) as db, db:
         grant(db, "cursor")
     result = resolve_call_references(path, event(reference))
@@ -455,9 +458,13 @@ def test_authorization_revision_freshness_and_titles_share_one_snapshot(fresh, m
     assert [item.title for item in snapshot] == [memory.content, record.verbatim]
     assert changed == [True] and reads and all(reads)
     current = resolve_call_references(path, event(reference, raw))
-    assert_hidden(
-        current[0], reference, "changed" if change in ("evidence", "memory") else "unavailable"
-    )
+    # Memory refs no longer hide on evidence revision/identity via freshness.
+    if change == "evidence":
+        assert current[0].available
+    else:
+        assert_hidden(
+            current[0], reference, "changed" if change == "memory" else "unavailable"
+        )
     assert current[1].available == (change in ("memory", "link"))
 
 

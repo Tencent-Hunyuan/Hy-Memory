@@ -5,14 +5,14 @@
 ## 安装与快速开始
 
 ```bash
-pip install hy-memory==2.0.3
+pip install hy-memory==2.0.4
 
 # 可选后端
-pip install 'hy-memory[qdrant]==2.0.1'
-pip install 'hy-memory[faiss]==2.0.1'
-pip install 'hy-memory[graph]==2.0.1'     # Neo4j；Kuzu 已在核心依赖中
-pip install 'hy-memory[mysql]==2.0.1'
-pip install 'hy-memory[rerank]==2.0.1'    # 本地多语言 cross-encoder rerank
+pip install 'hy-memory[qdrant]==2.0.4'
+pip install 'hy-memory[faiss]==2.0.4'
+pip install 'hy-memory[graph]==2.0.4'     # Neo4j；Kuzu 已在核心依赖中
+pip install 'hy-memory[mysql]==2.0.4'
+pip install 'hy-memory[rerank]==2.0.4'    # 本地多语言 cross-encoder rerank
 ```
 
 默认 LLM 和 Embedding 均使用 OpenAI-compatible 接口。使用 OpenAI 时可只设置：
@@ -210,7 +210,8 @@ result = client.search(
 ```
 
 `working` / `coding` 路径返回 `scene="productivity"`、`facts`、`experiences`，不使用
-chat 的三桶结构；`coding` 还会返回 `chain_block` 和 `chain_used`。
+chat 的三桶结构；`coding` 还会返回 `chain_block` 和 `chain_used` 字段（默认空；
+需 `MEMORY_CODING_CHAIN_BLOCK_ENABLED=true` 才注入 diff 块）。
 
 #### `search_mode`
 

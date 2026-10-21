@@ -436,13 +436,6 @@ def test_unavailable_semantic_result_cannot_discard_lexical_memory(app, monkeypa
     assert body["paths"]["memory"]["reason"] == "lexical_only"
 
 
-def test_busy_hy_store_is_reported_as_a_timed_out_semantic_lane() -> None:
-    async def busy(_query: str) -> tuple[str, ...]:
-        raise RuntimeError("hy_memory_store_busy")
-
-    assert asyncio.run(search_within(busy, "q", 1.0)) == ((), "timed_out")
-
-
 def test_context_diagnostics_report_each_lane_without_changing_v1(app, monkeypatch):  # noqa: F811
     from one_memory import context_routes
 

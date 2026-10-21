@@ -1685,7 +1685,7 @@ def create_app(
     # --- Reader-only internal endpoints. Registered here, before the public
     # routes below; no early return, so every route after this still registers.
 
-    @app.get("/internal/semantic-ids")
+    @app.get("/internal/semantic-ids", dependencies=protected)
     async def internal_semantic_ids(
         query: str = Query(min_length=1, max_length=2_000),
         limit: int = Query(default=12, ge=1, le=20),
@@ -1697,7 +1697,7 @@ def create_app(
             return {"ids": []}
         return {"ids": [memory_id for memory_id, _score in hits]}
 
-    @app.post("/internal/call-event")
+    @app.post("/internal/call-event", dependencies=protected)
     async def internal_call_event(request: Request) -> dict[str, bool]:
         """Side effects the Reader cannot write: it opens with query_only."""
         try:
@@ -1716,7 +1716,7 @@ def create_app(
             return {"recorded": False}
         return {"recorded": bool(recorded)}
 
-    @app.get("/internal/graph-snapshot")
+    @app.get("/internal/graph-snapshot", dependencies=protected)
     async def internal_graph_snapshot(
         limit: int = Query(default=160, ge=1, le=300),
     ) -> dict[str, object]:

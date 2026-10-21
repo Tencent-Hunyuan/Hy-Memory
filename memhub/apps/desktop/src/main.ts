@@ -6,7 +6,7 @@ import {
   checkSkillDrift,
   planRecallRepoint,
   readInstallSelfCheck,
-  renderConnectionMaterial,
+  renderCustomHarnessSkill,
   verifyRecallInstall,
 } from "@one-memory/host-bridge/installer";
 import {
@@ -788,12 +788,31 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       return { opened: true as const, reason: null };
     },
   );
-  ipcMain.handle("one-memory:connection-material", (event) => {
-    assertAllowedRenderer(event.senderFrame?.url);
-    if (hostRuntimeSelection?.state === "blocked")
-      throw new Error(hostRuntimeSelection.code);
-    return renderConnectionMaterial(recallRuntime);
-  });
+  ipcMain.handle(
+    "one-memory:create-custom-harness-skill",
+    async (event, displayName: unknown) => {
+      assertAllowedRenderer(event.senderFrame?.url);
+      if (hostRuntimeSelection?.state === "blocked")
+        throw new Error(hostRuntimeSelection.code);
+      if (
+        typeof displayName !== "string" ||
+        displayName !== displayName.trim() ||
+        displayName.length < 1 ||
+        displayName.length > 80 ||
+        /[\0\r\n]/.test(displayName)
+      )
+        throw new Error("custom_harness_name_invalid");
+      const pairing = connectionClient?.createPairing
+        ? await connectionClient.createPairing(displayName)
+        : await localPermissions?.createCustomPairing(displayName);
+      if (!pairing) throw new Error("host_pairing_unavailable");
+      return {
+        displayName: pairing.displayName,
+        expiresAt: pairing.expiresAt,
+        skill: renderCustomHarnessSkill(recallRuntime, pairing),
+      };
+    },
+  );
   ipcMain.handle("one-memory:get-login-preference", (event) => {
     assertAllowedRenderer(event.senderFrame?.url);
     return readLoginPreference(dataDir, process.platform, appManagedRuntime);

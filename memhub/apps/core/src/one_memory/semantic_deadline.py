@@ -140,8 +140,6 @@ async def search_within(
         return (), "failed"
     error = pending.exception()
     if error is not None:
-        if str(error) == "hy_memory_store_busy":
-            return (), "timed_out"
         return (), "failed"
     found = pending.result()
     normalized = normalize_semantic_hits(found)

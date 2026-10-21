@@ -193,7 +193,7 @@ vi.mock("@one-memory/host-bridge/installer", () => ({
   checkSkillDrift: fake.localRead,
   planRecallRepoint: fake.localRead,
   readInstallSelfCheck: fake.localRead,
-  renderConnectionMaterial: fake.localRead,
+  renderCustomHarnessSkill: fake.localRead,
   verifyRecallInstall: fake.localRead,
 }));
 // Spread the real module instead of whitelisting it. Main imports domain
@@ -342,7 +342,7 @@ describe("packaged Desktop host-control ownership", () => {
     expect(fake.verifyHostRuntime).not.toHaveBeenCalled();
   });
 
-  it("keeps an hourly host path failure out of connection material", async () => {
+  it("keeps an hourly host path failure out of custom Harness pairing", async () => {
     vi.stubEnv(
       "ONE_MEMORY_HOURLY_INSTANCE_ID",
       "1d3b0c1c-59d1-44c3-9e3b-24e5ecfa1b19",
@@ -362,9 +362,9 @@ describe("packaged Desktop host-control ownership", () => {
         },
       }),
     );
-    await expect(invoke("connection-material")).rejects.toThrow(
-      "host_runtime_current_unavailable",
-    );
+    await expect(
+      invoke("create-custom-harness-skill", "Kimi Code"),
+    ).rejects.toThrow("host_runtime_current_unavailable");
   });
 
   it("does not open local HostPermissions for a blocked embedded hourly path", async () => {

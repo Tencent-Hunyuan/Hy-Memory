@@ -18,13 +18,13 @@ If you run into a problem, please open an Issue with the version, platform,repro
 
 ## 发行与平台合同
 
-公共 Python SDK 为 `hy-memory==2.0.3`。MemHub 源码版本为 `1.0.3`
-（build 7），GitHub 仓库为
+公共 Python SDK 为 `hy-memory==2.0.4`。MemHub 源码版本为 `1.0.4`
+（build 13），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-`v1.0.3` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
+`v1.0.4` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
 Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命周期验收；macOS
 制品由发行流水线完成 Developer ID 签名、公证和验收后手动上传。Windows 不支持。
 只有同时出现在 GitHub Release 与 `release-manifest.json` 中、且通过公开校验的制品才属于
@@ -113,7 +113,7 @@ MemHub 的 SQLite 数据默认位于 `~/.one-memory`，不在 npm 包或 Runtime
 
 ## Hy Memory
 
-当前开发依赖固定为公开 PyPI 包 `hy-memory==2.0.3`。SDK 配置、权限边界及 search
+当前开发依赖固定为公开 PyPI 包 `hy-memory==2.0.4`。SDK 配置、权限边界及 search
 返回格式见 [`MEMORY.md`](MEMORY.md)。HY search 返回的 `content` 已包含 SDK 统一生成的
 逻辑时间和演化上下文；调用方不应再次转换时间戳或重复拼接 `When`。
 

@@ -169,7 +169,7 @@ it.each(["recall-and-sync", "sync-only"] as const)(
         format: ["esm"],
         platform: "node",
         target: "node20",
-        noExternal: ["axios"],
+        noExternal: ["@one-memory/contracts", "axios"],
         banner: {
           js: 'import { createRequire as __mhCreateRequire } from "node:module"; const require = __mhCreateRequire(import.meta.url);',
         },

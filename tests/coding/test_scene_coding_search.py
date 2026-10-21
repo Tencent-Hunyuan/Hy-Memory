@@ -62,7 +62,21 @@ def _seed_chain(tmpdir, branch="feat/q4", path=_PATH):
     return H
 
 
-def _bind_chain(ctx, store):
+def _enable_chain_block(ctx):
+    """search 侧 chain_block 默认关；测注入路径时显式 opt-in。"""
+    from hy_memory.config import MemoryConfig
+
+    cfg = getattr(ctx, "_config", None)
+    if cfg is None:
+        cfg = MemoryConfig()
+        ctx._config = cfg
+    cfg.coding.chain_block_enabled = True
+    ctx._chain_block_enabled = HyMemoryClient._chain_block_enabled.__get__(
+        ctx, type(ctx))
+    return ctx
+
+
+def _bind_chain(ctx, store, *, enable_block=True):
     """把链层挂到 search_ctx 这个 SimpleNamespace 上。
 
     search_ctx 是裸 namespace，不是真 client，所以 _decorate_with_chain 这个
@@ -73,6 +87,8 @@ def _bind_chain(ctx, store):
     ctx._get_chain_store = lambda owner="": store
     ctx._decorate_with_chain = HyMemoryClient._decorate_with_chain.__get__(
         ctx, type(ctx))
+    if enable_block:
+        _enable_chain_block(ctx)
     return ctx
 
 
@@ -128,6 +144,17 @@ class TestSearchCodingVariantEndToEnd:
         # 两版都在，不只留最后一版：遇到被弃那版的代码要认得出来
         assert "第1版" in blk and "第2版" in blk
         assert "255.0" in blk and "360.0" in blk
+
+    async def test_coding_variant_chain_block_default_off(self, search_ctx, chain_dir):
+        """默认不注入 chain_block（省 token）；库里有链也返回空块。"""
+        await self._seed_fact(search_ctx)
+        # 挂上真链层，但不开启 chain_block_enabled
+        _bind_chain(search_ctx, _seed_chain(chain_dir), enable_block=False)
+
+        resp = await self._search(search_ctx, _STATEMENT, variant="coding")
+        assert len(resp["facts"]) == 1
+        assert resp["chain_block"] == ""
+        assert resp["chain_used"] == []
 
     async def test_facts_not_deduped(self, search_ctx, chain_dir):
         """★ 挂上链的 fact 仍留在 facts 里 —— 刻意不去重。

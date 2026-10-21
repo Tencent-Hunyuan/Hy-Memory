@@ -541,6 +541,59 @@ class TestFactStore:
         assert [f.fact_id for f, _ in hits] == ["f1"]
         assert hits[0][1] > 0.9
 
+    async def test_search_facts_filters_agent_and_session_lists(self, coding_store):
+        for fact_id, agent_id, session_id in (
+            ("f_a1", "a1", "s1"),
+            ("f_a2", "a2", "s2"),
+        ):
+            await coding_store.insert_fact(WorkingFact(
+                fact_id=fact_id, user_id="u1", agent_id=agent_id,
+                session_id=session_id, statement="同一个事实",
+            ))
+        emb = await coding_store.embed_service.embed("同一个事实")
+
+        hits = await coding_store.search_facts(
+            emb, user_id="u1", agent_ids=["a1"], top=5,
+        )
+        assert [f.fact_id for f, _ in hits] == ["f_a1"]
+
+        hits = await coding_store.search_facts(
+            emb, user_id="u1", session_ids=["s2"], top=5,
+        )
+        assert [f.fact_id for f, _ in hits] == ["f_a2"]
+
+        hits = await coding_store.search_facts(
+            emb, user_id="u1", agent_ids=["a1", "a2"], top=5,
+        )
+        assert {f.fact_id for f, _ in hits} == {"f_a1", "f_a2"}
+
+    async def test_search_experiences_filters_agent_and_session_lists(self, coding_store):
+        for experience_id, agent_id, session_id in (
+            ("e_a1", "a1", "s1"),
+            ("e_a2", "a2", "s2"),
+        ):
+            await coding_store.insert(CodingMemory(
+                experience_id=experience_id, user_id="u1",
+                agent_id=agent_id, session_id=session_id,
+                task="同一个任务", search_keys=["同一个任务"], solution="S",
+            ))
+        emb = await coding_store.embed_service.embed("同一个任务")
+
+        hits = await coding_store.search_by_query_embedding(
+            emb, user_id="u1", agent_ids=["a1"], top=5,
+        )
+        assert {h["experience_id"] for h in hits} == {"e_a1"}
+
+        hits = await coding_store.search_by_query_embedding(
+            emb, user_id="u1", session_ids=["s2"], top=5,
+        )
+        assert {h["experience_id"] for h in hits} == {"e_a2"}
+
+        hits = await coding_store.search_by_query_embedding(
+            emb, user_id="u1", agent_ids=["a1", "a2"], top=5,
+        )
+        assert {h["experience_id"] for h in hits} == {"e_a1", "e_a2"}
+
     async def test_supersede_soft_deletes(self, coding_store):
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1", statement="旧结论",

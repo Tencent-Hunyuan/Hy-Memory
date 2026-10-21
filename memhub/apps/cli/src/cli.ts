@@ -4,7 +4,11 @@ import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { HealthResponse, ImportJob } from "@one-memory/contracts";
+import {
+  type HealthResponse,
+  type ImportJob,
+  isHostId,
+} from "@one-memory/contracts";
 import {
   type AcquiredRuntimeDistribution,
   acquireRuntimeDistribution,
@@ -5156,10 +5160,10 @@ type HostCommand =
       args: unknown[];
     };
 
-// `deepseek-harness:web` is a real id — that host is configured per profile —
-// and `host list` prints it. Rejecting it here would mean listing a host the
-// CLI then refuses to act on.
-const HOST_ID = /^[a-z0-9][a-z0-9-]{0,31}(:[a-z0-9][a-z0-9-]{0,31})?$/;
+// Host ids are read with the same grammar as the permission layer and the
+// grant store (`@one-memory/contracts`): `deepseek-harness:web` is a real id —
+// that host is configured per profile — and `host list` prints it, so rejecting
+// it here would mean listing a host the CLI then refuses to act on.
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 
 /** Host subcommands.
@@ -5182,7 +5186,7 @@ function parseHostCommand(rest: readonly string[]): HostCommand | null {
     const token = tokens[index];
     if (token === "--host") {
       const value = tokens[index + 1];
-      if (!value || !HOST_ID.test(value)) return null;
+      if (!value || !isHostId(value)) return null;
       if (hostId !== undefined) return null;
       hostId = value;
       index += 1;
@@ -5215,7 +5219,7 @@ function parseHostCommand(rest: readonly string[]): HostCommand | null {
     qualifier !== undefined &&
     (verb === "status" || verb === "install" || verb === "uninstall")
   ) {
-    if (!HOST_ID.test(qualifier)) return null;
+    if (!isHostId(qualifier)) return null;
     hostId = qualifier;
     // Drop the consumed host positional so the verb/qualifier checks below see
     // the same shape as the flag form.
@@ -5231,7 +5235,7 @@ function parseHostCommand(rest: readonly string[]): HostCommand | null {
     positional[2] !== undefined
   ) {
     const trailing = positional[2];
-    if (!HOST_ID.test(trailing)) return null;
+    if (!isHostId(trailing)) return null;
     hostId = trailing;
     positional.splice(2, 1);
     verb = positional[0];

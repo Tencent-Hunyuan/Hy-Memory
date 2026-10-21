@@ -76,8 +76,7 @@ def _memory(db: sqlite3.Connection, reference: CallReference) -> SourceRecordRef
     if row["status"] == "deleted" or row["deleted_at"] is not None:
         return _hidden(reference)
 
-    # Same local revocation/ownership predicate as SourceReadAccess.memories,
-    # evaluated BEFORE freshness (which can read support text), in this snapshot.
+    # Same local revocation/ownership predicate as SourceReadAccess.memories.
     # Its public methods open their own connections, so cannot be used here.
     access = db.execute(
         "SELECT EXISTS (SELECT 1 FROM governed_memory_evidence "
@@ -121,8 +120,8 @@ def resolve_call_references(database_path: Path, event: CallEvent) -> list[Sourc
 
     Local-owner only: event host attribution is NOT authorization. Explicit local
     source revocations deny access; absent grants retain legacy local semantics.
-    A memory needs at least one accessible active citation. No proof preserves
-    shared freshness compatibility, not a claim of verified historical freshness.
+    A memory needs at least one accessible active citation. Evidence freshness
+    proofs are retired and do not affect availability.
 
     Any read/parse/budget failure raises a fixed whole-request error, never a
     partial result or per-item deletion. The route owner must map this separately

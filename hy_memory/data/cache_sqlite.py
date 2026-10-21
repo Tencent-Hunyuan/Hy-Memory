@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS pipeline_logs_v2 (
 CREATE INDEX IF NOT EXISTS idx_plog_request ON pipeline_logs_v2(request_id);
 CREATE INDEX IF NOT EXISTS idx_plog_user    ON pipeline_logs_v2(user_id);
 
+CREATE TABLE IF NOT EXISTS write_outcomes (
+    request_id   TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL,
+    agent_id     TEXT NOT NULL DEFAULT '',
+    session_id   TEXT NOT NULL DEFAULT '',
+    operation    TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    result_json  TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_write_outcomes_owner
+ON write_outcomes(user_id, agent_id, session_id);
+
 CREATE TABLE IF NOT EXISTS system_metrics (
     minute_ts  TEXT PRIMARY KEY,
     data       TEXT NOT NULL,
@@ -413,6 +427,88 @@ class SqliteCache(CacheBase):
         except Exception as e:
             logger.warning(f"get_pipeline_logs failed: {e}")
             return []
+
+    # ================================================================
+    # Durable write outcomes
+    # ================================================================
+
+    async def claim_write_outcome(
+        self,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        operation: str,
+    ) -> Optional[Dict[str, Any]]:
+        def _claim():
+            with self._lock:
+                now = datetime.now().isoformat()
+                cursor = self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO write_outcomes (
+                        request_id, user_id, agent_id, session_id, operation,
+                        status, result_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'running', '{}', ?, ?)
+                    """,
+                    (request_id, user_id, agent_id, session_id, operation, now, now),
+                )
+                self._conn.commit()
+                if cursor.rowcount == 1:
+                    return None
+                row = self._conn.execute(
+                    "SELECT * FROM write_outcomes WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                return dict(row) if row else None
+
+        existing = await _run_in_sqlite_pool(_claim)
+        if existing is None:
+            return None
+        return await self.get_write_outcome(request_id)
+
+    async def finish_write_outcome(
+        self,
+        request_id: str,
+        status: str,
+        result: Dict[str, Any],
+    ) -> bool:
+        def _finish():
+            with self._lock:
+                cursor = self._conn.execute(
+                    """
+                    UPDATE write_outcomes
+                    SET status = ?, result_json = ?, updated_at = ?
+                    WHERE request_id = ?
+                    """,
+                    (
+                        status,
+                        json.dumps(result, ensure_ascii=False, default=str),
+                        datetime.now().isoformat(),
+                        request_id,
+                    ),
+                )
+                self._conn.commit()
+                return cursor.rowcount == 1
+
+        return await _run_in_sqlite_pool(_finish)
+
+    async def get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        def _get():
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT * FROM write_outcomes WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                return dict(row) if row else None
+
+        row = await _run_in_sqlite_pool(_get)
+        if row is None:
+            return None
+        try:
+            row["result"] = json.loads(row.pop("result_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            row["result"] = {}
+        return row
 
     # ================================================================
     # System Metrics（分钟粒度落盘）
