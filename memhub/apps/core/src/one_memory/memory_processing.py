@@ -239,7 +239,6 @@ class MemoryBridgeProtocol(Protocol):
         user_id: str,
         agent_id: str,
         evidence_ids: tuple[str, ...],
-        scan_limit: int = 10_000,
     ) -> tuple[HyMemoryOutput, ...]: ...
 
     async def graph_snapshot(

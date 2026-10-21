@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import re
@@ -855,90 +854,30 @@ class HyMemoryBridge:
         user_id: str,
         agent_id: str,
         evidence_ids: tuple[str, ...],
-        scan_limit: int = 10_000,
     ) -> tuple[HyMemoryOutput, ...]:
-        """Read back durable HY nodes carrying one exact write request id.
+        """Read one exact durable SDK write outcome without scanning memories.
 
-        This is the safe side of unknown-outcome recovery: it does not invoke
-        the model or mutate HY. The public SDK listing is paged rather than
-        reading HY's private SQLite/Chroma schema, and every result is checked
-        against user, agent and request identity before it can reach
-        governance.
+        This is the safe side of unknown-outcome recovery: it never invokes the
+        model, mutates HY, or treats a bounded library scan as proof of absence.
         """
         client = await self._get_client()
         exact_inquiry = getattr(client, "get_write_outcome", None)
-        if callable(exact_inquiry):
-            try:
-                outcome = await _joined_thread(exact_inquiry, request_id)
-            except Exception as error:
-                raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
-            if outcome is None:
-                return ()
-            return await _outputs_from_write_outcome(
-                client,
-                outcome,
-                request_id=request_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                evidence_ids=evidence_ids,
-            )
-
-        # Compatibility for the pinned 2.0.4 wheel. Remove after the SDK-first
-        # authority release is published and MemHub's exact pin is bumped.
-        page_size = 500
-        outputs: list[HyMemoryOutput] = []
-        seen: set[str] = set()
-        for offset in range(0, scan_limit, page_size):
-            try:
-                raw = await _joined_thread(
-                    cast(Any, client).list_memories,
-                    user_id=user_id,
-                    agent_id=agent_id,
-                    limit=page_size,
-                    offset=offset,
-                )
-            except Exception as error:
-                raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
-            records = _listed_memories(raw)
-            for record in records:
-                custom = record.get("custom")
-                if isinstance(custom, str):
-                    try:
-                        custom = json.loads(custom)
-                    except (TypeError, ValueError):
-                        custom = None
-                if (
-                    not isinstance(custom, Mapping)
-                    or custom.get("request_id") != request_id
-                    or record.get("user_id") != user_id
-                    or record.get("agent_id") != agent_id
-                ):
-                    continue
-                memory_id, content = record.get("memory_id"), record.get("content")
-                if (
-                    not isinstance(memory_id, str)
-                    or memory_id in seen
-                    or not isinstance(content, str)
-                    or not content.strip()
-                ):
-                    continue
-                seen.add(memory_id)
-                layer, owner = record.get("layer"), record.get("owner")
-                outputs.append(
-                    HyMemoryOutput(
-                        memory_id=memory_id,
-                        content=content,
-                        layer=layer if isinstance(layer, str) else None,
-                        owner=owner if owner in {"user", "agent"} else None,
-                        tags=_string_tuple(record.get("tags")),
-                        evidence_ids=evidence_ids,
-                    )
-                )
-            vdb = raw.get("vdb") if isinstance(raw, Mapping) else None
-            total = vdb.get("total") if isinstance(vdb, Mapping) else None
-            if len(records) < page_size or (isinstance(total, int) and offset + page_size >= total):
-                break
-        return tuple(outputs)
+        if not callable(exact_inquiry):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            outcome = await _joined_thread(exact_inquiry, request_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        if outcome is None:
+            return ()
+        return await _outputs_from_write_outcome(
+            client,
+            outcome,
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            evidence_ids=evidence_ids,
+        )
 
     @_exclusive
     async def profile_memories(

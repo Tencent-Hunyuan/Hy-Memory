@@ -642,9 +642,9 @@ def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> 
     assert client.closed is True
 
 
-def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) -> None:
+def test_bridge_refuses_bounded_outcome_scan_without_sdk_contract(tmp_path) -> None:
     client = FakeHyMemoryClient({"success": True})
-    # Pinned SDK 2.0.4 compatibility path: no durable outcome API yet.
+    # Simulate an older SDK: bounded list scans are no longer accepted as proof.
     client.get_write_outcome = None
     client.list_result = {
         "vdb": {
@@ -688,17 +688,15 @@ def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) 
         client=client,
     )
 
-    outputs = asyncio.run(
-        bridge.outputs_for_request(
-            request_id="request-1",
-            user_id="local",
-            agent_id="one-memory",
-            evidence_ids=("evidence-1",),
+    with pytest.raises(HyMemoryBridgeError, match="hy_memory_sdk_upgrade_required"):
+        asyncio.run(
+            bridge.outputs_for_request(
+                request_id="request-1",
+                user_id="local",
+                agent_id="one-memory",
+                evidence_ids=("evidence-1",),
+            )
         )
-    )
-
-    assert [output.memory_id for output in outputs] == ["matched"]
-    assert outputs[0].evidence_ids == ("evidence-1",)
 
 
 def test_bridge_prefers_exact_sdk_write_outcome_over_library_scan(tmp_path) -> None:
@@ -1445,7 +1443,7 @@ def test_hy_runtime_matches_public_sdk_without_reranker_or_service_backends(
     config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
 
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.4"
+    assert HY_MEMORY_VERSION == "2.0.5.dev1"
     assert HY_MEMORY_MODE == "ultra"
     assert HY_MEMORY_READER == "hybrid"
     assert os.environ["MEMORY_MODE"] == "ultra"

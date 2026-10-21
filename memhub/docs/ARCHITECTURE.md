@@ -331,7 +331,7 @@ Support is declared per immutable GitHub Release manifest:
 - Linux x64/arm64 Runtime on native GHA runners.
 - macOS arm64/x64 App/Runtime: Developer ID, notarization, native acceptance.
 - Windows is not supported.
-- `hy-memory==2.0.4` is the current public Python SDK dependency; the release
+- `hy-memory==2.0.5.dev1` is the current development-preview SDK dependency; the release
   lock and [`../MEMORY.md`](../MEMORY.md) are authoritative when the pin changes.
 
 See [`INSTALLATION.md`](INSTALLATION.md).
