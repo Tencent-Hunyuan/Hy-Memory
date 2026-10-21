@@ -826,6 +826,56 @@ def test_bridge_reads_raw_and_write_outcome_through_public_sdk(tmp_path) -> None
     assert rows == (raw,)
 
 
+def test_bridge_searches_raw_through_existing_sdk_search_and_source_filter(tmp_path) -> None:
+    client = FakeHyMemoryClient(
+        {"success": True},
+        search_result={
+            "scene": "chat",
+            "memories": {
+                "schema": [],
+                "proactive": [],
+                "normal": [
+                    {
+                        "memory_id": "raw-1",
+                        "content": "verbatim",
+                        "layer": "l1_raw",
+                        "status": "active",
+                        "score": 0.8,
+                        "user_id": "local",
+                        "agent_id": "one-memory",
+                        "session_id": "session",
+                        "source": "cursor",
+                        "custom": {"role": "user"},
+                    }
+                ],
+            },
+        },
+    )
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    hits = asyncio.run(
+        bridge.search_sdk_raw(
+            "query",
+            user_id="local",
+            source_ids=("cursor",),
+        )
+    )
+
+    assert hits[0].raw_id == "raw-1"
+    assert hits[0].content == "verbatim"
+    assert client.search_calls[-1]["layers"] == ["l1_raw"]
+    assert client.search_calls[-1]["include_sources"] == ["cursor"]
+
+
 def test_bridge_imports_legacy_memory_exactly_without_governance(tmp_path) -> None:
     client = FakeHyMemoryClient({"success": True})
     bridge = HyMemoryBridge(

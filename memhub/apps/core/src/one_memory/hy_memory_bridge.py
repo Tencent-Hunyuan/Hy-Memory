@@ -337,6 +337,10 @@ class HySdkRawRecord(BaseModel):
     custom: dict[str, object] = Field(default_factory=dict)
 
 
+class HySdkRawHit(HySdkRawRecord):
+    score: float = Field(ge=0, le=1)
+
+
 # HyMemoryIngestResult names HyMemoryOutput before it exists, so pydantic left
 # its schema unbuilt and would have built it on whichever thread first used the
 # model. That thread is the event loop, and building it walks
@@ -832,6 +836,40 @@ class HyMemoryBridge:
         if not isinstance(total, int) or total < 0:
             raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
         return records, total
+
+    async def search_sdk_raw(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        source_ids: tuple[str, ...] = (),
+        limit: int = 8,
+    ) -> tuple[HySdkRawHit, ...]:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                client.search,
+                query,
+                user_ids=[user_id],
+                agent_ids=[],
+                include_sources=list(source_ids),
+                limit=limit,
+                min_score=0.0,
+                schema_min_score=0.0,
+                schema_limit=0,
+                intention_limit=0,
+                scene="chat",
+                reader=HY_MEMORY_READER,
+                layers=["l1_raw"],
+            )
+        except TypeError as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_search_failed") from error
+        return tuple(
+            _sdk_raw_hit(record)
+            for record in _replied_memories(raw, "hy_memory_raw_search_shape_unknown")
+        )
 
     @_exclusive
     async def import_sdk_memory_exact(
@@ -2249,6 +2287,20 @@ def _sdk_raw_record(raw: object) -> HySdkRawRecord:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise HyMemoryBridgeError("hy_memory_raw_shape_unknown") from error
+
+
+def _sdk_raw_hit(raw: object) -> HySdkRawHit:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_raw_search_shape_unknown")
+    raw_id = raw.get("memory_id")
+    score = raw.get("score")
+    if not isinstance(raw_id, str) or not isinstance(score, int | float):
+        raise HyMemoryBridgeError("hy_memory_raw_search_shape_unknown")
+    base = _sdk_raw_record({**raw, "raw_id": raw_id})
+    return HySdkRawHit(
+        **base.model_dump(),
+        score=max(0.0, min(1.0, float(score))),
+    )
 
 
 def _listed_memories(raw: object) -> tuple[Mapping[str, object], ...]:
