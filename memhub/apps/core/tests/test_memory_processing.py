@@ -304,6 +304,68 @@ def _runner(tmp_path, stores, bridge):
     )
 
 
+def test_sdk_authority_completes_from_one_sdk_receipt_without_governance_mirror(
+    tmp_path,
+) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, profile = stores
+    folder = tmp_path / "cursor-root"
+    folder.mkdir()
+    SourceGrantStore(tmp_path / "one-memory.sqlite3", home=tmp_path).grant(
+        user_id="local",
+        source_id="cursor",
+        root=folder,
+        candidate_kind=RootCandidateKind.DEFAULT,
+    )
+    record = _put(
+        evidence,
+        message_id="sdk-authority",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="记住只调用一次 SDK。",
+    )
+    task = _task(tasks, profile, record)
+
+    class Bridge(FakeBridge):
+        async def ingest(self, request) -> HyMemoryIngestResult:
+            self.requests.append(request)
+            return HyMemoryIngestResult(
+                success=True,
+                raw_ids=("raw-1",),
+                memories=(
+                    HyMemoryOutput(
+                        memory_id="memory-1",
+                        content="只调用一次 SDK。",
+                        layer="L2_FACT",
+                    ),
+                ),
+            )
+
+    def forbidden():
+        raise AssertionError("SDK authority must not open Governance derivation")
+
+    governance.hy_derivation = forbidden  # type: ignore[method-assign]
+    runner = MemoryTaskRunner(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        bridge_factory=lambda _profile, _secret, _data_dir: Bridge(),
+        sdk_authority=lambda: True,
+    )
+
+    completed = asyncio.run(runner.run(task.task_id, input_records=(record,)))
+
+    assert completed.status is MemoryTaskStatus.COMPLETED
+    receipt = tasks.sdk_receipt(task.task_id)
+    assert receipt is not None
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1",)
+    assert governance.get("memory-1", user_id="local") is None
+
+
 def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
     stores = _setup(tmp_path)
     evidence, _profiles, tasks, _governance, _secrets, profile = stores

@@ -288,6 +288,7 @@ class MemoryTaskRunner:
             Callable[[ModelProfileSnapshot, str | None, Path], MemoryBridgeProtocol] | None
         ) = None,
         close_bridge: bool = True,
+        sdk_authority: Callable[[], bool] | None = None,
     ) -> None:
         self.tasks = tasks
         self.profiles = profiles
@@ -297,6 +298,7 @@ class MemoryTaskRunner:
         self.data_dir = data_dir
         self.bridge_factory = bridge_factory or self._create_bridge
         self.close_bridge = close_bridge
+        self.sdk_authority = sdk_authority or (lambda: False)
 
     async def run(
         self,
@@ -435,7 +437,12 @@ class MemoryTaskRunner:
         hy_invoked = False
         # Before anything is read, so an overruling made while this task runs
         # is one the writes below can tell from those its context already left out.
-        derivation = await in_the_background(self.governance.hy_derivation)
+        sdk_authority = self.sdk_authority()
+        derivation = (
+            None
+            if sdk_authority
+            else await in_the_background(self.governance.hy_derivation)
+        )
         if task.kind is not MemoryTaskKind.EXTRACT:
             return await in_the_background(
                 self.tasks.fail,
@@ -505,7 +512,9 @@ class MemoryTaskRunner:
             if prepare is not None:
                 await prepare()
             request = self._request(task, chunk)
-            if request.source_context is not None:
+            if sdk_authority and request.source_context is not None:
+                request = request.model_copy(update={"source_context": None})
+            elif request.source_context is not None:
                 context = await in_the_background(
                     self._source_context, task, request.source_context
                 )
@@ -541,6 +550,9 @@ class MemoryTaskRunner:
             self._log_step(task_id, 5, "hy_ingest", step_started)
             if not result.success:
                 raise HyMemoryBridgeError("hy_memory_runtime_failed")
+            if only_contents and not result.memories:
+                raise HyMemoryBridgeError("hy_memory_import_no_readable_output")
+            step_started = monotonic()
             await in_the_background(
                 self.tasks.save_sdk_receipt,
                 task_id=task.task_id,
@@ -548,9 +560,24 @@ class MemoryTaskRunner:
                 raw_ids=result.raw_ids,
                 memory_ids=tuple(memory.memory_id for memory in result.memories),
             )
+            if sdk_authority:
+                if uses_frozen_input:
+                    if input_records is None:
+                        await in_the_background(self._frozen_chunk, task)
+                    if grant_token != await in_the_background(
+                        self._grant_token,
+                        task,
+                        chunk[0],
+                    ):
+                        raise HyMemoryBridgeError("hy_memory_source_changed")
+                self._log_step(task_id, 6, "sdk_receipt", step_started)
+                return await in_the_background(
+                    self.tasks.complete,
+                    task_id,
+                    runner_token=runner_token,
+                )
+            assert derivation is not None
             outputs = result.memories
-            if only_contents and not outputs:
-                raise HyMemoryBridgeError("hy_memory_import_no_readable_output")
             # What HY learnt about the person, as opposed to about this
             # conversation. It arrives by being read back because the write
             # does not report it (see `profile_memories`), and it goes through
@@ -1306,6 +1333,7 @@ class MemoryProcessingSupervisor:
         source_writes_permitted: Callable[[str], bool] | None = None,
         service_levels: ServiceLevelScheduler | None = None,
         sedimentation_enabled: Callable[[], bool] | None = None,
+        sdk_authority: Callable[[], bool] | None = None,
     ) -> None:
         self.tasks = tasks
         self.profiles = profiles
@@ -1324,6 +1352,7 @@ class MemoryProcessingSupervisor:
         #: did before the switch existed. Read per decision rather than cached,
         #: so stopping takes effect on the next dispatch without a restart.
         self.sedimentation_enabled = sedimentation_enabled
+        self.sdk_authority = sdk_authority or (lambda: False)
         self.service_levels = service_levels or ServiceLevelScheduler()
         self.extraction_settings = extraction_settings or ExtractionSettingsStore(
             data_dir / "one-memory.sqlite3"
@@ -3135,6 +3164,7 @@ class MemoryProcessingSupervisor:
             data_dir=self.data_dir,
             bridge_factory=self._bridge,
             close_bridge=False,
+            sdk_authority=self.sdk_authority,
         )
 
     def _bridge(

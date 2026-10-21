@@ -837,6 +837,11 @@ def create_app(
             except LibraryUpgradeError as error:
                 logging.getLogger("one_memory.library_upgrade").error("%s", error)
                 raise
+            # SDK authority may need its bridge before the rest of startup
+            # selects recall targets. Model/secret management is control-plane
+            # state, so initialize it before authority selection.
+            app.state.secret_store = secret_store or KeyringSecretStore()
+            app.state.model_profile_store = ModelProfileStore(database_path)
             app.state.memory_governance_store = MemoryGovernanceStore(
                 database_path, prepared=prepared
             )
@@ -981,9 +986,6 @@ def create_app(
             app.state.sedimentation_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
-            app.state.secret_store = secret_store or KeyringSecretStore()
-            app.state.model_profile_store = ModelProfileStore(database_path)
-
             async def cleanup_stale_model_secrets() -> None:
                 try:
                     removed = await asyncio.to_thread(
@@ -1112,6 +1114,7 @@ def create_app(
                 source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                 service_levels=app.state.service_levels,
                 sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
+                sdk_authority=lambda: app.state.memory_authority is MemoryAuthority.SDK,
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
