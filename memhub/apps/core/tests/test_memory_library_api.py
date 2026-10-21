@@ -174,6 +174,12 @@ def test_sdk_native_library_detail_update_delete_and_raw_routes(app):
     assert sdk.deleted == ["memory-1"]
 
 
+def test_memory_authority_is_legacy_until_cutover_marker_exists(app):
+    response = request(app, url="/api/v2/memory-authority")
+    assert response.status_code == 200
+    assert response.json() == {"authority": "legacy", "migration_id": None}
+
+
 @pytest.mark.parametrize(
     ("parameter", "value"),
     [

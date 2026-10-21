@@ -33,6 +33,7 @@ import {
   digestMemoryGraph,
   getMemories,
   getMemory,
+  getMemoryAuthority,
   getMemoryGraph,
   getMemoryProcessing,
   getModelProfiles,
@@ -50,6 +51,7 @@ import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
 import { MemoryMap } from "./MemoryMap";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
+import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { sourceNameOr } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { useMemoryLibrary } from "./use-memory-library";
@@ -141,12 +143,28 @@ export function MemorySpace({
   const [query, setQuery] = useState("");
   const [askScope, setAskScope] = useState<"all-apps" | "*">("all-apps");
   const [mode, setMode] = useState<MemoryMode>("map");
+  const [memoryAuthority, setMemoryAuthority] = useState<"legacy" | "sdk">(
+    "legacy",
+  );
   const [managementOpen, setManagementOpen] = useState(false);
   const displayedMode = simplified
     ? managementOpen
       ? "library"
       : "map"
     : mode;
+  useEffect(() => {
+    if ((!active && !preload) || typeof getMemoryAuthority !== "function")
+      return;
+    let current = true;
+    void getMemoryAuthority()
+      .then((result) => {
+        if (current) setMemoryAuthority(result.authority);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [active, preload]);
   useEffect(() => {
     const openManagement = () => {
       if (simplified) setManagementOpen((value) => !value);
@@ -1793,211 +1811,227 @@ export function MemorySpace({
         className="memory-library-layout"
         hidden={displayedMode !== "library"}
       >
-        <div>
-          <nav
-            className="memory-status-tabs"
-            data-tour-id="memory-status-tabs"
-            aria-label="记忆治理状态"
-          >
-            {(
-              [
-                ["confirmed", "已可用"],
-                ["superseded", "已被取代"],
-                ["deleted", "已删除"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                disabled={busy}
-                aria-current={statusFilter === value ? "page" : undefined}
-                onClick={() => {
-                  if (bulkInFlight.current) return;
-                  setStatusFilter(value);
-                  setSelection(new Set());
-                  if (!simplified) setDetail(null);
-                }}
+        {memoryAuthority === "sdk" ? (
+          <SdkMemoryLibrary active={active} />
+        ) : (
+          <>
+            <div>
+              <nav
+                className="memory-status-tabs"
+                data-tour-id="memory-status-tabs"
+                aria-label="记忆治理状态"
               >
-                {label}{" "}
-                {!simplified &&
-                  memories.filter((memory) => memory.status === value).length}
-              </button>
-            ))}
-          </nav>
-          {management && (
-            <>
-              {library.page ? (
-                <nav aria-label="记忆库分页">
-                  <span aria-live="polite">共 {library.page.total} 条</span>{" "}
-                  <span>
-                    第{" "}
-                    {Math.floor(library.page.offset / library.page.limit) + 1}{" "}
-                    页
-                  </span>
-                  <R6Button
-                    variant="quiet"
-                    title="上一页"
-                    aria-label="上一页"
-                    disabled={busy || library.page.offset === 0}
+                {(
+                  [
+                    ["confirmed", "已可用"],
+                    ["superseded", "已被取代"],
+                    ["deleted", "已删除"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={busy}
+                    aria-current={statusFilter === value ? "page" : undefined}
                     onClick={() => {
-                      if (library.page) {
-                        setSelection(new Set());
-                        library.go(library.page.offset - library.page.limit);
-                      }
+                      if (bulkInFlight.current) return;
+                      setStatusFilter(value);
+                      setSelection(new Set());
+                      if (!simplified) setDetail(null);
                     }}
                   >
-                    <ChevronLeft size={18} aria-hidden="true" />
-                  </R6Button>
-                  <R6Button
-                    variant="quiet"
-                    title="下一页"
-                    aria-label="下一页"
-                    disabled={
-                      busy ||
-                      library.page.offset + library.page.limit >=
-                        library.page.total
-                    }
-                    onClick={() => {
-                      if (library.page) {
-                        setSelection(new Set());
-                        library.go(library.page.offset + library.page.limit);
-                      }
-                    }}
-                  >
-                    <ChevronRight size={18} aria-hidden="true" />
-                  </R6Button>
-                </nav>
-              ) : null}
-              {sourceSnapshotStale ? (
-                <p role="status">来源状态待核对，记忆库暂不可读取。</p>
-              ) : library.stale ? (
-                <p role="status">
-                  正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。
-                </p>
-              ) : library.failed ? (
-                <div role="alert">
-                  <p>记忆库读取失败，请重试。</p>
-                  <R6Button
-                    onClick={() => {
-                      void library.refresh().catch(() => {});
-                    }}
-                  >
-                    重新读取记忆库
-                  </R6Button>
-                </div>
-              ) : library.loading ? (
-                <p role="status">正在读取记忆库…</p>
-              ) : null}
-            </>
-          )}
-          {bulkResult ? (
-            <p role="status" aria-label="批量操作结果">
-              {`已${bulkResult.action ? bulkActionLabel(bulkResult.action) : "处理"} ${bulkResult.succeeded} 条${bulkResult.failed ? `，${bulkResult.failed} 条未完成` : ""}`}
-            </p>
-          ) : null}
-          {visibleFailures.length ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void runBulk(visibleFailures)}
-            >
-              {`重试失败的 ${visibleFailures.length} 条`}
-            </button>
-          ) : null}
-          {selectedCount ? (
-            <fieldset className="memory-bulk-bar" aria-label="批量操作">
-              <span>{`已选 ${selectedCount} 条`}</span>
-              <button
-                type="button"
-                className="danger"
-                disabled={busy}
-                onClick={() => void bulkAction("delete")}
-              >
-                {`删除所选 ${selectedCount} 条`}
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => {
-                  if (!bulkInFlight.current) setSelection(new Set());
-                }}
-              >
-                取消选择
-              </button>
-            </fieldset>
-          ) : null}
-          {libraryMemories.length ? (
-            <ul className="memory-ledger">
-              {libraryMemories.map((memory) => {
-                const failure = bulkFailures.get(memory.memory_id);
-                return (
-                  <li key={memory.memory_id}>
-                    <input
-                      type="checkbox"
-                      disabled={busy}
-                      aria-label={`选择：${memory.content}`}
-                      checked={selection.has(memory.memory_id)}
-                      onChange={() => toggleSelection(memory.memory_id)}
-                    />
-                    <button
-                      type="button"
-                      className={`memory-ledger-row memory-${memory.status}`}
-                      aria-current={
-                        detail?.memory.memory_id === memory.memory_id
-                          ? "true"
-                          : undefined
-                      }
-                      onClick={() => open(memory.memory_id)}
-                    >
-                      <span>{memory.content}</span>
-                      <small>
-                        {kindLabel(memory.kind)} · {statusLabel(memory.status)}{" "}
-                        · {memory.evidence_ids.length} 条原话
-                      </small>
-                    </button>
-                    {failure ? (
-                      <fieldset
-                        className="memory-bulk-failure"
-                        aria-label={`处理失败：${memory.content}`}
+                    {label}{" "}
+                    {!simplified &&
+                      memories.filter((memory) => memory.status === value)
+                        .length}
+                  </button>
+                ))}
+              </nav>
+              {management && (
+                <>
+                  {library.page ? (
+                    <nav aria-label="记忆库分页">
+                      <span aria-live="polite">共 {library.page.total} 条</span>{" "}
+                      <span>
+                        第{" "}
+                        {Math.floor(library.page.offset / library.page.limit) +
+                          1}{" "}
+                        页
+                      </span>
+                      <R6Button
+                        variant="quiet"
+                        title="上一页"
+                        aria-label="上一页"
+                        disabled={busy || library.page.offset === 0}
+                        onClick={() => {
+                          if (library.page) {
+                            setSelection(new Set());
+                            library.go(
+                              library.page.offset - library.page.limit,
+                            );
+                          }
+                        }}
                       >
-                        <p>{`未能${bulkActionLabel(failure.action)}：${failure.error}`}</p>
+                        <ChevronLeft size={18} aria-hidden="true" />
+                      </R6Button>
+                      <R6Button
+                        variant="quiet"
+                        title="下一页"
+                        aria-label="下一页"
+                        disabled={
+                          busy ||
+                          library.page.offset + library.page.limit >=
+                            library.page.total
+                        }
+                        onClick={() => {
+                          if (library.page) {
+                            setSelection(new Set());
+                            library.go(
+                              library.page.offset + library.page.limit,
+                            );
+                          }
+                        }}
+                      >
+                        <ChevronRight size={18} aria-hidden="true" />
+                      </R6Button>
+                    </nav>
+                  ) : null}
+                  {sourceSnapshotStale ? (
+                    <p role="status">来源状态待核对，记忆库暂不可读取。</p>
+                  ) : library.stale ? (
+                    <p role="status">
+                      正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。
+                    </p>
+                  ) : library.failed ? (
+                    <div role="alert">
+                      <p>记忆库读取失败，请重试。</p>
+                      <R6Button
+                        onClick={() => {
+                          void library.refresh().catch(() => {});
+                        }}
+                      >
+                        重新读取记忆库
+                      </R6Button>
+                    </div>
+                  ) : library.loading ? (
+                    <p role="status">正在读取记忆库…</p>
+                  ) : null}
+                </>
+              )}
+              {bulkResult ? (
+                <p role="status" aria-label="批量操作结果">
+                  {`已${bulkResult.action ? bulkActionLabel(bulkResult.action) : "处理"} ${bulkResult.succeeded} 条${bulkResult.failed ? `，${bulkResult.failed} 条未完成` : ""}`}
+                </p>
+              ) : null}
+              {visibleFailures.length ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void runBulk(visibleFailures)}
+                >
+                  {`重试失败的 ${visibleFailures.length} 条`}
+                </button>
+              ) : null}
+              {selectedCount ? (
+                <fieldset className="memory-bulk-bar" aria-label="批量操作">
+                  <span>{`已选 ${selectedCount} 条`}</span>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => void bulkAction("delete")}
+                  >
+                    {`删除所选 ${selectedCount} 条`}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!bulkInFlight.current) setSelection(new Set());
+                    }}
+                  >
+                    取消选择
+                  </button>
+                </fieldset>
+              ) : null}
+              {libraryMemories.length ? (
+                <ul className="memory-ledger">
+                  {libraryMemories.map((memory) => {
+                    const failure = bulkFailures.get(memory.memory_id);
+                    return (
+                      <li key={memory.memory_id}>
+                        <input
+                          type="checkbox"
+                          disabled={busy}
+                          aria-label={`选择：${memory.content}`}
+                          checked={selection.has(memory.memory_id)}
+                          onChange={() => toggleSelection(memory.memory_id)}
+                        />
                         <button
                           type="button"
-                          disabled={busy}
-                          onClick={() => void runBulk([failure])}
+                          className={`memory-ledger-row memory-${memory.status}`}
+                          aria-current={
+                            detail?.memory.memory_id === memory.memory_id
+                              ? "true"
+                              : undefined
+                          }
+                          onClick={() => open(memory.memory_id)}
                         >
-                          {`重试${bulkActionLabel(failure.action)}`}
+                          <span>{memory.content}</span>
+                          <small>
+                            {kindLabel(memory.kind)} ·{" "}
+                            {statusLabel(memory.status)} ·{" "}
+                            {memory.evidence_ids.length} 条原话
+                          </small>
                         </button>
-                      </fieldset>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : management && !library.page ? null : !loaded && !management ? (
-            // Not the same as having none, and it used to read as if it
-            // were.
-            <p className="memory-status-empty">正在读取记忆库…</p>
-          ) : (
-            <p className="memory-status-empty">
-              {`没有${statusLabel(statusFilter)}的记忆。`}
-            </p>
-          )}
-        </div>
-        <MemoryInspector
-          detail={detail}
-          busy={busy || detailReadBlocked || (management && !library.writable)}
-          draft={draft}
-          requestIds={requestIds}
-          onDraft={setDraft}
-          onClose={() => setDetail(null)}
-          onSave={save}
-          onAction={action}
-          onSyncIndex={syncIndex}
-          onConfigureModel={onConfigureModel}
-          onOpen={open}
-        />
+                        {failure ? (
+                          <fieldset
+                            className="memory-bulk-failure"
+                            aria-label={`处理失败：${memory.content}`}
+                          >
+                            <p>{`未能${bulkActionLabel(failure.action)}：${failure.error}`}</p>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void runBulk([failure])}
+                            >
+                              {`重试${bulkActionLabel(failure.action)}`}
+                            </button>
+                          </fieldset>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : management && !library.page ? null : !loaded &&
+                !management ? (
+                // Not the same as having none, and it used to read as if it
+                // were.
+                <p className="memory-status-empty">正在读取记忆库…</p>
+              ) : (
+                <p className="memory-status-empty">
+                  {`没有${statusLabel(statusFilter)}的记忆。`}
+                </p>
+              )}
+            </div>
+            <MemoryInspector
+              detail={detail}
+              busy={
+                busy || detailReadBlocked || (management && !library.writable)
+              }
+              draft={draft}
+              requestIds={requestIds}
+              onDraft={setDraft}
+              onClose={() => setDetail(null)}
+              onSave={save}
+              onAction={action}
+              onSyncIndex={syncIndex}
+              onConfigureModel={onConfigureModel}
+              onOpen={open}
+            />
+          </>
+        )}
       </div>
     </section>
   );

@@ -19,6 +19,10 @@ import * as api from "./api";
 import { MemorySpace } from "./MemorySpace";
 
 vi.mock("./api", () => ({
+  getMemoryAuthority: vi.fn().mockResolvedValue({
+    authority: "legacy",
+    migration_id: null,
+  }),
   getMemories: vi.fn(),
   getMemoryLibrary: vi.fn(),
   getMemoryGraph: vi.fn(),
@@ -124,6 +128,10 @@ function graph(items: GovernedMemory[]): MemoryGraphResponse {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(api.getMemoryAuthority).mockResolvedValue({
+    authority: "legacy",
+    migration_id: null,
+  });
   // Match current Core route defaults: /memories is limit=100 unless requested.
   vi.mocked(api.getMemories).mockImplementation(async (query = "") =>
     corpus.filter((item) => item.content.includes(query)).slice(0, 100),

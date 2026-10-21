@@ -544,6 +544,13 @@ class SdkRawPage(BaseModel):
     limit: int = Field(ge=1, le=500)
 
 
+class MemoryAuthorityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authority: Literal["legacy", "sdk"]
+    migration_id: str | None = None
+
+
 class MemoryProcessingBlock(BaseModel):
     kind: str
     reason: str
@@ -3007,6 +3014,21 @@ def create_app(
         except Exception:
             # Stored-data/IO failures are not empty results or invalid client input.
             raise HTTPException(status_code=503, detail="memory_library_unavailable") from None
+
+    @app.get(
+        "/api/v2/memory-authority",
+        response_model=MemoryAuthorityResponse,
+        dependencies=protected,
+    )
+    def memory_authority() -> MemoryAuthorityResponse:
+        store = getattr(app.state, "sdk_data_plane_migrations", None)
+        if store is None:
+            store = SdkDataPlaneMigrationStore(_evidence_store(app).database_path)
+        marker = store.cutover()
+        return MemoryAuthorityResponse(
+            authority="sdk" if marker is not None else "legacy",
+            migration_id=marker.migration_id if marker is not None else None,
+        )
 
     @app.get(
         "/api/v2/memory-library",

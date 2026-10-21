@@ -71,6 +71,7 @@ const detail: MemoryDetail = {
 const {
   apiErrorCode,
   getMemories,
+  getMemoryAuthority,
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
@@ -96,6 +97,7 @@ const {
 } = vi.hoisted(() => ({
   apiErrorCode: vi.fn(),
   getMemories: vi.fn(),
+  getMemoryAuthority: vi.fn(),
   getMemory: vi.fn(),
   getMemoryGraph: vi.fn(),
   getMemoryProcessing: vi.fn(),
@@ -125,6 +127,7 @@ const LIBRARY_REFRESH_MS = 10_000;
 vi.mock("./api", () => ({
   apiErrorCode,
   getMemories,
+  getMemoryAuthority,
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
@@ -165,6 +168,10 @@ describe("MemorySpace", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    getMemoryAuthority.mockResolvedValue({
+      authority: "legacy",
+      migration_id: null,
+    });
     apiErrorCode.mockReturnValue(null);
     getMemories.mockResolvedValue([memory]);
     getMemory.mockResolvedValue(detail);

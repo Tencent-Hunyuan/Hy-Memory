@@ -27,6 +27,7 @@ import {
   type ImportJob,
   type LiveSyncHealth,
   type ManualExtractReceipt,
+  type MemoryAuthorityResponse,
   type MemoryDetail,
   type MemoryGraphResponse,
   type MemoryIndexSync,
@@ -901,6 +902,13 @@ export async function getSdkMemoryLibrary(
     params,
     signal,
   });
+  return response.data;
+}
+
+export async function getMemoryAuthority(): Promise<MemoryAuthorityResponse> {
+  const response = await client.get<MemoryAuthorityResponse>(
+    "/api/v2/memory-authority",
+  );
   return response.data;
 }
 

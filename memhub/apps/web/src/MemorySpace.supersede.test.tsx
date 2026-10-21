@@ -24,6 +24,10 @@ const api = vi.hoisted(() => ({
   correct: vi.fn(),
 }));
 vi.mock("./api", () => ({
+  getMemoryAuthority: async () => ({
+    authority: "legacy",
+    migration_id: null,
+  }),
   getMemoryLibrary: (query: MemoryLibraryQuery, signal?: AbortSignal) =>
     query.active_only === true
       ? api.mapLibrary(query, signal)
