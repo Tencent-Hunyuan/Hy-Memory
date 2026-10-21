@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import UTC, datetime
 
 import pytest
@@ -31,6 +32,19 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+class _SnapshotRejected(RuntimeError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _snapshotter(*, source_root, target_root, writers_stopped):
+    assert writers_stopped
+    if any(path.is_symlink() for path in source_root.rglob("*")):
+        raise _SnapshotRejected("data_plane_snapshot_symlink")
+    shutil.copytree(source_root, target_root)
+
+
 def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
     _seed_home(tmp_path)
     result = create_sdk_migration_bundle(
@@ -39,6 +53,7 @@ def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
         runtime_build="build-13",
         runtime_stopped=True,
         now=datetime(2026, 10, 21, tzinfo=UTC),
+        snapshotter=_snapshotter,
     )
 
     manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
@@ -89,6 +104,7 @@ def test_bundle_rejects_sdk_symlinks_without_publishing_partial_output(tmp_path)
             bundle_id="migration-link",
             runtime_build="build-13",
             runtime_stopped=True,
+            snapshotter=_snapshotter,
         )
     assert caught.value.code == "sdk_migration_bundle_symlink"
     assert not (tmp_path / "backups" / "migration-link.sdk-bundle").exists()

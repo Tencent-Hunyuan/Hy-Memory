@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,24 +46,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _copy_tree_without_links(source: Path, target: Path) -> None:
-    if source.is_symlink():
-        raise MigrationBundleRejected("sdk_migration_bundle_symlink")
-    for root, directories, files in os.walk(source, followlinks=False):
-        root_path = Path(root)
-        relative = root_path.relative_to(source)
-        target_root = target / relative
-        target_root.mkdir(parents=True, exist_ok=True)
-        for name in directories:
-            if (root_path / name).is_symlink():
-                raise MigrationBundleRejected("sdk_migration_bundle_symlink")
-        for name in files:
-            item = root_path / name
-            if item.is_symlink():
-                raise MigrationBundleRejected("sdk_migration_bundle_symlink")
-            shutil.copy2(item, target_root / name)
-
-
 def _inventory(root: Path) -> list[dict[str, object]]:
     files: list[dict[str, object]] = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
@@ -86,6 +68,7 @@ def create_sdk_migration_bundle(
     runtime_build: str,
     runtime_stopped: bool,
     now: datetime | None = None,
+    snapshotter: Callable[..., object] | None = None,
 ) -> MigrationBundleResult:
     """Create and verify one management + SDK data-plane migration bundle."""
     if not runtime_stopped:
@@ -120,7 +103,28 @@ def create_sdk_migration_bundle(
         if sdk_root.exists():
             if not sdk_root.is_dir():
                 raise MigrationBundleRejected("sdk_migration_bundle_sdk_root_invalid")
-            _copy_tree_without_links(sdk_root, staging / "sdk" / HY_MEMORY_NAMESPACE)
+            if snapshotter is None:
+                try:
+                    from hy_memory.snapshot import snapshot_local_data_plane
+                except ImportError as error:
+                    raise MigrationBundleRejected(
+                        "sdk_migration_snapshot_unavailable"
+                    ) from error
+                snapshotter = snapshot_local_data_plane
+            try:
+                snapshotter(
+                    source_root=sdk_root,
+                    target_root=staging / "sdk" / HY_MEMORY_NAMESPACE,
+                    writers_stopped=True,
+                )
+            except Exception as error:
+                sdk_code = getattr(error, "code", "")
+                code = (
+                    "sdk_migration_bundle_symlink"
+                    if sdk_code == "data_plane_snapshot_symlink"
+                    else "sdk_migration_bundle_sdk_snapshot_failed"
+                )
+                raise MigrationBundleRejected(code) from error
 
         config = home / "config.json"
         if config.exists():
