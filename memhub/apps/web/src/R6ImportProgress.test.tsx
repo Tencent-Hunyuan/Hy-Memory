@@ -1,11 +1,21 @@
 // @vitest-environment jsdom
 
 import type { ImportJob, SourceResponse } from "@one-memory/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { R6ImportProgress } from "./R6ImportProgress";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  await setUiLanguage("zh-CN");
+});
 const source = {
   source_id: "cursor",
   display_name: "Cursor",
@@ -37,6 +47,43 @@ it("uses the selected job's message count, never the source total or fake percen
   expect(container.textContent).not.toContain("9999");
   expect(container.textContent).not.toContain("%");
   expect(container.textContent).not.toContain("持续导入中");
+});
+
+it("switches progress and status labels without translating source names or changing job counts", async () => {
+  const view = render(
+    <R6ImportProgress
+      sourceIds={["cursor"]}
+      sources={[source]}
+      jobs={[
+        {
+          ...job,
+          stored: 0,
+          discovered: 3522,
+          errors: 2,
+          history_after: "2026-10-15T00:00:00Z",
+        },
+      ]}
+    />,
+  );
+  await act(() => setUiLanguage("en"));
+  expect(
+    screen.getByRole("region", { name: "Import progress for selected apps" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("article", { name: "Import progress for Cursor" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByText("3,522 scanned; filtering the last 3 days"),
+  ).toBeTruthy();
+  expect(screen.getByRole("status")).toHaveProperty(
+    "textContent",
+    "Importing · 2 read errors",
+  );
+  expect(
+    view.container.querySelector("article")?.getAttribute("data-running"),
+  ).toBe("true");
+  await act(() => setUiLanguage("zh-CN"));
+  expect(screen.getByText("已扫描 3,522 条，正在筛选最近 3 天")).toBeTruthy();
 });
 
 it("does not describe scanned-but-skipped history as saved", () => {

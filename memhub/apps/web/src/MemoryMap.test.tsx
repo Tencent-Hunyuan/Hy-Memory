@@ -26,6 +26,7 @@ import {
   MemoryMap,
 } from "./MemoryMap";
 import type { MemoryArrival } from "./memory-arrival-state";
+import { setUiLanguage } from "./ui-language";
 
 const {
   conversation,
@@ -77,10 +78,13 @@ beforeEach(() => {
   });
   searchConversations.mockResolvedValue({ hits: [], empty_reason: "no_match" });
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.resetAllMocks();
   vi.unstubAllGlobals();
+  window.oneMemory = undefined;
+  await setUiLanguage("zh-CN");
+  window.localStorage.clear();
 });
 const memories = ["第一条", "第二条"].map((content, i) => ({
   memory_id: `m${i}`,
@@ -129,6 +133,103 @@ it("drops the progress button on the empty memory page and leaves it once memori
     screen.queryByRole("heading", { name: "还没有已生成的记忆" }),
   ).toBeNull();
   expect(screen.getByRole("heading", { name: "记忆详情" })).toBeTruthy();
+});
+
+it("switches the simplified empty state and source filter to English without changing source names", async () => {
+  const view = render(<Host simplified items={[]} />);
+  expect(
+    screen.getByRole("heading", { name: "还没有已生成的记忆" }),
+  ).toBeTruthy();
+  await act(async () => setUiLanguage("en"));
+  expect(
+    screen.getByRole("heading", { name: "No memories created yet" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Back to apps" })).toBeTruthy();
+
+  view.rerender(<Host simplified sources={importedSources} />);
+  expect(screen.getByText("Codex")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Source" }).textContent).toBe(
+    "All apps",
+  );
+  expect(
+    screen
+      .getByRole("textbox", { name: "Filter map memories" })
+      .getAttribute("placeholder"),
+  ).toBe("Search memories");
+  expect(screen.getByRole("list", { name: "Map memory list" })).toBeTruthy();
+  expect(screen.getAllByText("Created on Time unknown")).toHaveLength(2);
+  expect(
+    within(screen.getByRole("list", { name: "Map memory list" })).getByRole(
+      "button",
+      { name: /第一条/ },
+    ),
+  ).toBeTruthy();
+});
+
+it("localizes the paged count, dates and controls but not stored memories or source names", async () => {
+  await setUiLanguage("en");
+  const items = [
+    { ...memories[0], updated_at: "2026-04-08T12:00:00Z" },
+  ] as GovernedMemory[];
+  render(
+    <Host
+      simplified
+      items={items}
+      sources={importedSources}
+      libraryView={pagedView({
+        items,
+        total: 519,
+        offset: 100,
+        limit: 100,
+        source_ids_by_memory: { m0: ["codex"] },
+        source_time_by_memory: {
+          m0: {
+            at: `${new Date().getFullYear()}-05-05T12:00:00`,
+            basis: "conversation",
+          },
+        },
+      })}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "Map memory list" });
+  const memory = within(list).getByRole("button", { name: /第一条/ });
+  expect(memory.textContent).toContain("Codex · Conversation on May 5");
+  expect(memory.textContent).toContain("Created on");
+  expect(memory.textContent).toContain("第一条");
+  expect(
+    screen.getByRole("navigation", { name: "Map memory pages" }).textContent,
+  ).toContain("519 total · Page 2 of 6");
+  expect(
+    screen.getByRole("button", { name: "Refresh map memories" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Source" }).textContent).toBe(
+    "All apps",
+  );
+});
+
+it("translates an existing transcript failure when the language changes, keeping original text verbatim", async () => {
+  conversation.mockRejectedValue(new Error("unavailable"));
+  render(<Host />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "图中选择 第一条" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "共同原文" }));
+  await userEvent.click(screen.getByRole("button", { name: "看完整对话" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "暂时无法读取这段对话，已保留当前记忆。",
+  );
+  await act(async () => setUiLanguage("en"));
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Could not load this conversation. The current memory remains selected.",
+  );
+  expect(screen.getByRole("button", { name: "共同原文" })).toBeTruthy();
+  expect(
+    screen.getByRole("textbox", { name: "Ask memories a question" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Build existing connections" }),
+  ).toBeTruthy();
 });
 
 it("OBS-22: the graph inspector has no editing entry and never says changes cannot be saved", async () => {

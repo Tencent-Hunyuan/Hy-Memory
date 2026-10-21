@@ -39,11 +39,15 @@ describe("early desktop startup errors", () => {
     roots.push(dataDir);
     const processEvents = new EventEmitter();
     const order: string[] = [];
+    const showError = vi.fn(
+      (_title: string, _message: string) => void order.push("dialog"),
+    );
     const dispose = installEarlyStartupErrorHandler({
       processEvents,
       dataDir,
       stderr: { write: vi.fn(() => (order.push("stderr"), true)) },
-      showError: vi.fn(() => void order.push("dialog")),
+      showError,
+      getLanguage: () => "en",
       exit: vi.fn(() => void order.push("exit")),
       afterDiagnosticWrite: () => order.push("diagnostic"),
     });
@@ -61,6 +65,13 @@ describe("early desktop startup errors", () => {
       "utf8",
     );
     expect(order).toEqual(["stderr", "diagnostic", "dialog", "exit"]);
+    expect(showError).toHaveBeenCalledWith(
+      "MemHub could not start",
+      expect.stringContaining("MemHub could not start"),
+    );
+    expect(showError.mock.calls[0]?.[1]).not.toContain(
+      "desktop_test_real_home_mismatch",
+    );
     expect(log).toContain('"error_code":"desktop_test_real_home_mismatch"');
     expect(log).toContain('"safe_stack":["apps/desktop/src/main.ts:80:1"]');
     dispose();

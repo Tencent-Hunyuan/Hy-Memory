@@ -18,6 +18,7 @@ import * as api from "./api";
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import { queryClient, resetClient } from "./query-client";
+import { setUiLanguage } from "./ui-language";
 
 const {
   summary,
@@ -582,6 +583,39 @@ it("reads sources again on a later visit once the earlier read has gone stale", 
   view.rerender(home(true));
   await waitFor(() => expect(getSources).toHaveBeenCalledTimes(2));
 });
+it("switches home cards, application rows and expanded list without translating memory content", async () => {
+  window.oneMemory = {
+    ...window.oneMemory,
+    setUiLanguage: vi.fn(async (next) => next),
+  } as NonNullable<typeof window.oneMemory>;
+  const view = render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+    />,
+  );
+  try {
+    await screen.findByText("实际治理记忆");
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    expect(
+      screen.getByRole("heading", { name: "Memory overview" }),
+    ).toBeTruthy();
+    expect(screen.getByText("2 apps connected")).toBeTruthy();
+    expect(screen.getByText("History access authorized")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "View all 5 apps" }));
+    expect(screen.getByRole("heading", { name: "5 apps" })).toBeTruthy();
+    expect(screen.getByText("实际治理记忆")).toBeTruthy();
+  } finally {
+    view.unmount();
+    await act(async () => {
+      await setUiLanguage("zh-CN");
+    });
+  }
+});
+
 it("uses full summary count, renders latest real memory and expands all applications", async () => {
   render(
     <ApplicationsHome

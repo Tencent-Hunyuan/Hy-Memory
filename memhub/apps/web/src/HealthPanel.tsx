@@ -1,3 +1,4 @@
+import { formatUiNumber, type UiMessage } from "@one-memory/contracts";
 import { Download, Flag, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -23,6 +24,7 @@ import {
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button, R6Switch } from "./R6Controls";
 import { LINK_WORDING } from "./recall-host-wording";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import type { useImportSources } from "./use-import-sources";
 
 type ImportState = ReturnType<typeof useImportSources>;
@@ -97,11 +99,13 @@ async function readHosts() {
   return (await refreshRecallHosts()).filter((host) => host.present);
 }
 
-function ReadTime({ label, value }: { label: string; value: string }) {
+function ReadTime({ label, value }: { label: UiMessage; value: string }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   return (
     <p className="health-stamp">
-      {label}
-      <time dateTime={value}>{clockStamp(value)}</time>
+      {t(label)}
+      <time dateTime={value}>{clockStamp(value, language)}</time>
     </p>
   );
 }
@@ -111,17 +115,23 @@ function ReadReceipt({
   confirmedAt,
   failedAt,
 }: Pick<Reading<unknown>, "pending" | "confirmedAt" | "failedAt">) {
+  const t = useTranslate();
   return (
     <>
       {failedAt ? (
         <p role="status">
-          暂时无法读取
-          {confirmedAt ? " · 数据已过期，以下为上次读取结果。" : "。"}
+          {t(
+            confirmedAt
+              ? "暂时无法读取 · 数据已过期，以下为上次读取结果。"
+              : "暂时无法读取。",
+          )}
         </p>
       ) : null}
       {pending ? (
         <p role="status">
-          {confirmedAt ? "正在重新读取，以下为上次读取结果…" : "正在读取状态…"}
+          {t(
+            confirmedAt ? "正在重新读取，以下为上次读取结果…" : "正在读取状态…",
+          )}
         </p>
       ) : null}
       {confirmedAt ? (
@@ -143,6 +153,9 @@ function ReadReceipt({
  * the table the originating screen already uses.
  */
 export function HealthPanel({ imports }: { imports: ImportState }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
+  const number = (value: number) => formatUiNumber(language, value);
   const [detailedLogging, setDetailedLoggingState] = useState(false);
   const [detailedLoggingPending, setDetailedLoggingPending] = useState(false);
   const backgroundRead = useDiagnosticRead(readBackgroundHealth);
@@ -154,7 +167,10 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
   const [diagnosticAction, setDiagnosticAction] = useState<
     "incident" | "export" | null
   >(null);
-  const [diagnosticMessage, setDiagnosticMessage] = useState("");
+  const [diagnosticMessage, setDiagnosticMessage] = useState<{
+    key: UiMessage;
+    values?: Readonly<Record<string, string>>;
+  } | null>(null);
   const [sourceFailedAt, setSourceFailedAt] = useState<string | null>(null);
   const refreshFlight = useRef(false);
   const lifecycle = useRef(0);
@@ -199,13 +215,16 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
 
   async function markIncident() {
     if (!window.oneMemory?.markDiagnosticIncident) {
-      setDiagnosticMessage("请在桌面 App 中记录问题时间点。");
+      setDiagnosticMessage({ key: "请在桌面 App 中记录问题时间点。" });
       return;
     }
     setDiagnosticAction("incident");
-    setDiagnosticMessage("");
+    setDiagnosticMessage(null);
     try {
-      const description = window.prompt("简单描述刚才遇到的问题（可不填）", "");
+      const description = window.prompt(
+        t("简单描述刚才遇到的问题（可不填）"),
+        "",
+      );
       if (description === null) {
         setDiagnosticAction(null);
         return;
@@ -213,9 +232,12 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
       const receipt =
         await window.oneMemory.markDiagnosticIncident(description);
       await window.oneMemory.copyText?.(receipt.incident_id);
-      setDiagnosticMessage(`问题编号已复制：${receipt.incident_id}`);
+      setDiagnosticMessage({
+        key: "问题编号已复制：{id}",
+        values: { id: receipt.incident_id },
+      });
     } catch {
-      setDiagnosticMessage("问题时间点未能记录，请重试。");
+      setDiagnosticMessage({ key: "问题时间点未能记录，请重试。" });
     } finally {
       setDiagnosticAction(null);
     }
@@ -223,14 +245,21 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
 
   async function exportDiagnostics() {
     if (!window.oneMemory?.exportDiagnostics) {
-      setDiagnosticMessage("请在桌面 App 中导出诊断信息。");
+      setDiagnosticMessage({ key: "请在桌面 App 中导出诊断信息。" });
       return;
     }
     setDiagnosticAction("export");
-    setDiagnosticMessage("");
+    setDiagnosticMessage(null);
     try {
       const result = await exportDiagnosticsFile();
-      setDiagnosticMessage(result.message);
+      setDiagnosticMessage(
+        result.ok
+          ? {
+              key: "日志已导出：{name}",
+              values: result.filename ? { name: result.filename } : undefined,
+            }
+          : { key: "诊断信息未能导出，请重试。" },
+      );
     } finally {
       setDiagnosticAction(null);
     }
@@ -244,13 +273,14 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
   const sourceReceipt = (
     <>
       {imports.loading ? (
-        <p role="status">正在读取本地服务与来源状态…</p>
+        <p role="status">{t("正在读取本地服务与来源状态…")}</p>
       ) : sourceUnavailable ? (
         <p role="status">
-          暂时无法读取
-          {sourceConfirmedAt || imports.health || imports.sources.length
-            ? " · 数据已过期，以下为上次读取结果。"
-            : "。"}
+          {t(
+            sourceConfirmedAt || imports.health || imports.sources.length
+              ? "暂时无法读取 · 数据已过期，以下为上次读取结果。"
+              : "暂时无法读取。",
+          )}
         </p>
       ) : null}
       {sourceConfirmedAt ? (
@@ -274,7 +304,7 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
     <section className="view health-view" aria-labelledby="health-title">
       <header className="view-header">
         <div>
-          <h1 id="health-title">运行诊断</h1>
+          <h1 id="health-title">{t("运行诊断")}</h1>
         </div>
       </header>
 
@@ -285,26 +315,36 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           onClick={() => void exportDiagnostics()}
         >
           <Download size={16} aria-hidden="true" />
-          导出日志（发给开发排查）
+          {t("导出日志（发给开发排查）")}
         </R6Button>
       </div>
 
-      <section className="health-block" aria-label="本地服务">
-        <h2>本地服务</h2>
+      <section className="health-block" aria-label={t("本地服务")}>
+        <h2>{t("本地服务")}</h2>
         {sourceReceipt}
         {imports.health ? (
           <p>
-            {`${sourceUnavailable || imports.loading ? "上次读取" : "运行中"} · 版本 ${imports.health.version} · 实例 ${imports.health.instance_id}`}
+            {t(
+              sourceUnavailable || imports.loading
+                ? "上次读取 · 版本 {version} · 实例 {id}"
+                : "运行中 · 版本 {version} · 实例 {id}",
+              {
+                version: imports.health.version,
+                id: imports.health.instance_id,
+              },
+            )}
           </p>
         ) : !sourceUnavailable && !imports.loading ? (
-          <p>还没连上本地 Core。</p>
+          <p>{t("还没连上本地 Core。")}</p>
         ) : null}
       </section>
 
-      <section className="health-block" aria-label="后台服务">
-        <h2>后台服务</h2>
+      <section className="health-block" aria-label={t("后台服务")}>
+        <h2>{t("后台服务")}</h2>
         {backgroundRead.value === "no-bridge" ? (
-          <p>当前环境无法检查后台服务，请在支持此功能的桌面 App 中查看。</p>
+          <p>
+            {t("当前环境无法检查后台服务，请在支持此功能的桌面 App 中查看。")}
+          </p>
         ) : (
           <>
             <ReadReceipt {...backgroundRead} />
@@ -312,13 +352,18 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
               <>
                 <p>
                   {backgroundRead.pending || backgroundRead.failedAt
-                    ? "上次读取："
+                    ? t("上次读取：")
                     : ""}
-                  {backgroundVerdict(backgroundRead.value.state)}
+                  {t(backgroundVerdict(backgroundRead.value.state))}
                 </p>
                 <p>
-                  Core：{runtimeStateLabel(backgroundRead.value.core)} ·
-                  宿主桥接：{runtimeStateLabel(backgroundRead.value.broker)}
+                  {t("Core：{state}", {
+                    state: t(runtimeStateLabel(backgroundRead.value.core)),
+                  })}{" "}
+                  ·{" "}
+                  {t("宿主桥接：{state}", {
+                    state: t(runtimeStateLabel(backgroundRead.value.broker)),
+                  })}
                 </p>
               </>
             ) : null}
@@ -326,8 +371,8 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
         )}
       </section>
 
-      <section className="health-block" aria-label="各来源累计条数">
-        <h2>各来源累计条数</h2>
+      <section className="health-block" aria-label={t("各来源累计条数")}>
+        <h2>{t("各来源累计条数")}</h2>
         {sourceReceipt}
         {imports.sources.length ? (
           <dl>
@@ -335,41 +380,83 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
               <div key={source.source_id}>
                 <dt>{source.display_name}</dt>
                 <dd>
-                  {`${source.imported_conversations} 个会话 · ${source.imported_messages} 条消息`}
+                  {t("{conversations} 个会话 · {messages} 条消息", {
+                    conversations: number(source.imported_conversations),
+                    messages: number(source.imported_messages),
+                  })}
                 </dd>
               </div>
             ))}
           </dl>
         ) : !sourceUnavailable && !imports.loading ? (
-          <p>还没有已连接的来源。</p>
+          <p>{t("还没有已连接的来源。")}</p>
         ) : null}
       </section>
 
-      <section className="health-block" aria-label="记忆提炼">
-        <h2>记忆提炼</h2>
+      <section className="health-block" aria-label={t("记忆提炼")}>
+        <h2>{t("记忆提炼")}</h2>
         <ReadReceipt {...processingRead} />
         {processing ? (
           <>
             <p>
-              {`${processing.running} 处理中 · ${processing.pending} 排队 · ${processing.completed} 已完成 · ${processing.failed} 失败`}
+              {t(
+                "{running} 处理中 · {pending} 排队 · {completed} 已完成 · {failed} 失败",
+                {
+                  running: number(processing.running),
+                  pending: number(processing.pending),
+                  completed: number(processing.completed),
+                  failed: number(processing.failed),
+                },
+              )}
             </p>
             {processing.metrics ? (
-              <dl aria-label="导入与整理详情">
+              <dl aria-label={t("导入与整理详情")}>
                 <div>
-                  <dt>原文与完整对话轮次</dt>
-                  <dd>{`${processing.metrics.raw_evidence} 条原文 · ${processing.metrics.complete_turns} 个完整 turn`}</dd>
+                  <dt>{t("原文与完整对话轮次")}</dt>
+                  <dd>
+                    {t("{raw} 条原文 · {turns} 个完整 turn", {
+                      raw: number(processing.metrics.raw_evidence),
+                      turns: number(processing.metrics.complete_turns),
+                    })}
+                  </dd>
                 </div>
                 <div>
-                  <dt>HY 整理</dt>
-                  <dd>{`${processing.metrics.hy_calls} 次调用 · ${processing.metrics.completed} 完成 · ${processing.metrics.unknown} 结果不确定 · ${processing.metrics.failed} 失败 · ${processing.metrics.cancelled} 取消`}</dd>
+                  <dt>{t("HY 整理")}</dt>
+                  <dd>
+                    {t(
+                      "{calls} 次调用 · {completed} 完成 · {unknown} 结果不确定 · {failed} 失败 · {cancelled} 取消",
+                      {
+                        calls: number(processing.metrics.hy_calls),
+                        completed: number(processing.metrics.completed),
+                        unknown: number(processing.metrics.unknown),
+                        failed: number(processing.metrics.failed),
+                        cancelled: number(processing.metrics.cancelled),
+                      },
+                    )}
+                  </dd>
                 </div>
                 <div>
-                  <dt>产出</dt>
-                  <dd>{`${processing.metrics.governed_memories} 条记忆`}</dd>
+                  <dt>{t("产出")}</dt>
+                  <dd>
+                    {t("{count} 条记忆", {
+                      count: number(processing.metrics.governed_memories),
+                    })}
+                  </dd>
                 </div>
                 <div>
-                  <dt>WorkBuddy 查记忆</dt>
-                  <dd>{`${processing.metrics.workbuddy.injected} 次注入 · ${processing.metrics.workbuddy.timed_out} 次超时 · ${processing.metrics.workbuddy.unavailable} 次不可用`}</dd>
+                  <dt>{t("WorkBuddy 查记忆")}</dt>
+                  <dd>
+                    {t(
+                      "{injected} 次注入 · {timeout} 次超时 · {unavailable} 次不可用",
+                      {
+                        injected: number(processing.metrics.workbuddy.injected),
+                        timeout: number(processing.metrics.workbuddy.timed_out),
+                        unavailable: number(
+                          processing.metrics.workbuddy.unavailable,
+                        ),
+                      },
+                    )}
+                  </dd>
                 </div>
               </dl>
             ) : null}
@@ -378,26 +465,32 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
                 {splitBlockedStages(processing.blocked_stages).named.map(
                   (block) => (
                     <li key={`${block.kind}:${block.reason}`}>
-                      {`${taskKindLabel(block.kind)}卡在 ${blockReasonLabel(block.reason)}（${block.count} 条）`}
+                      {t("{kind}卡在 {reason}（{count} 条）", {
+                        kind: taskKindLabel(block.kind, language),
+                        reason: blockReasonLabel(block.reason, language),
+                        count: number(block.count),
+                      })}
                     </li>
                   ),
                 )}
-                {retrying ? <li>{retryingBlockLabel(retrying)}</li> : null}
+                {retrying ? (
+                  <li>{retryingBlockLabel(retrying, language)}</li>
+                ) : null}
               </ul>
             ) : !processingRead.failedAt && !processingRead.pending ? (
-              <p>暂无需要处理的问题。</p>
+              <p>{t("暂无需要处理的问题。")}</p>
             ) : null}
           </>
         ) : null}
       </section>
 
-      <section className="health-block" aria-label="AI 接通情况">
-        <h2>AI 接通情况</h2>
+      <section className="health-block" aria-label={t("AI 接通情况")}>
+        <h2>{t("AI 接通情况")}</h2>
         {/* Host state lives in the desktop shell. In a browser it is not
             false, it is unavailable, and reporting it as 未接通 would send
             the user to repair links that may well be fine. */}
         {hosts === "no-bridge" || !window.oneMemory ? (
-          <p>在浏览器里读不到；请在桌面 App 里查看。</p>
+          <p>{t("在浏览器里读不到；请在桌面 App 里查看。")}</p>
         ) : (
           <>
             <ReadReceipt {...hostsRead} />
@@ -408,34 +501,36 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
                     <dt>{host.label}</dt>
                     <dd>
                       {hostsRead.failedAt || hostsRead.pending
-                        ? "上次读取："
+                        ? t("上次读取：")
                         : ""}
-                      {hostVerdict(host)}
+                      {t(hostVerdict(host))}
                     </dd>
                   </div>
                 ))}
               </dl>
             ) : hosts && !hostsRead.failedAt && !hostsRead.pending ? (
-              <p>本机没有检测到可接入的 AI 工具。</p>
+              <p>{t("本机没有检测到可接入的 AI 工具。")}</p>
             ) : null}
           </>
         )}
       </section>
-      <section className="health-block" aria-label="详细日志">
+      <section className="health-block" aria-label={t("详细日志")}>
         <div className="health-setting-row">
           <div>
-            <h2>详细日志（排查用）</h2>
-            <p>默认关闭。仅在开发人员请你协助排查时开启。</p>
+            <h2>{t("详细日志（排查用）")}</h2>
+            <p>{t("默认关闭。仅在开发人员请你协助排查时开启。")}</p>
           </div>
           <R6Switch
-            label="详细日志（排查用）"
+            label={t("详细日志（排查用）")}
             checked={detailedLogging}
             pending={detailedLoggingPending}
             onCheckedChange={(enabled) => {
               setDetailedLoggingPending(true);
               void setDetailedLogging(enabled)
                 .then(setDetailedLoggingState)
-                .catch(() => setDiagnosticMessage("详细日志设置失败，请重试。"))
+                .catch(() =>
+                  setDiagnosticMessage({ key: "详细日志设置失败，请重试。" }),
+                )
                 .finally(() => setDetailedLoggingPending(false));
             }}
           />
@@ -448,7 +543,7 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           onClick={() => void refresh()}
         >
           <RefreshCw size={16} aria-hidden="true" />
-          重新读取状态
+          {t("重新读取状态")}
         </R6Button>
         <R6Button
           variant="quiet"
@@ -456,12 +551,18 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           onClick={() => void markIncident()}
         >
           <Flag size={16} aria-hidden="true" />
-          记录问题时间点
+          {t("记录问题时间点")}
         </R6Button>
       </div>
       {diagnosticMessage ? (
         <p className="health-diagnostic-message" role="status">
-          {diagnosticMessage}
+          {t(
+            diagnosticMessage.key,
+            diagnosticMessage.key === "日志已导出：{name}" &&
+              !diagnosticMessage.values
+              ? { name: t("诊断文件") }
+              : diagnosticMessage.values,
+          )}
         </p>
       ) : null}
     </section>
@@ -470,25 +571,25 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
 
 /** A host with no self-check on record has not been shown to work, and the
  * install flow's own wording for that is 未接通. */
-function hostVerdict(host: RecallHostStatus): string {
+function hostVerdict(host: RecallHostStatus): UiMessage {
   if (!host.installed) return LINK_WORDING.unreachable;
   const state = host.selfCheck?.state;
   return (state ? LINK_WORDING[state] : undefined) ?? LINK_WORDING.unreachable;
 }
 
-function backgroundVerdict(state: BackgroundSnapshot["state"]): string {
+function backgroundVerdict(state: BackgroundSnapshot["state"]): UiMessage {
   return {
     healthy: "后台服务可用",
     stopped: "后台服务已停止",
     degraded: "后台服务部分不可用",
     untrusted: "后台服务身份未通过核验",
     unknown: "后台状态尚未确认",
-  }[state];
+  }[state] as UiMessage;
 }
 
 function runtimeStateLabel(
   state: BackgroundSnapshot["core"] | BackgroundSnapshot["broker"],
-): string {
+): UiMessage {
   return {
     running: "运行中",
     stopped: "已停止",
@@ -496,5 +597,5 @@ function runtimeStateLabel(
     untrusted: "身份未通过核验",
     unknown: "尚未确认",
     not_checked: "未检查",
-  }[state];
+  }[state] as UiMessage;
 }

@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events";
+import { translate, type UiLanguage } from "@one-memory/contracts";
 import {
   diagnosticError,
   writeDiagnosticEventSync,
@@ -10,6 +11,7 @@ interface EarlyStartupErrorHandlerOptions {
   dataDir: string;
   stderr: Pick<NodeJS.WriteStream, "write">;
   showError(title: string, message: string): void;
+  getLanguage?: () => UiLanguage;
   exit(code: number): void;
   afterDiagnosticWrite?: () => void;
 }
@@ -56,7 +58,11 @@ export function installEarlyStartupErrorHandler(
       // The dialog is the only part of this a person ever reads, so it gets the
       // explanation, not the code. The code stays in the diagnostic event,
       // where support can still match it against a known failure.
-      options.showError("MemHub 无法启动", stableRuntimeUserMessage(error));
+      const language = options.getLanguage?.() ?? "zh-CN";
+      options.showError(
+        translate(language, "MemHub 无法启动"),
+        stableRuntimeUserMessage(error, language),
+      );
       options.exit(1);
     }
   };

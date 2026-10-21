@@ -8,6 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import type { UiLanguage } from "@one-memory/contracts";
 import { installCliLink, planCliLink } from "@one-memory/runtime-control";
 
 const CLI_PATH_BEGIN = "# >>> memhub PATH >>>";
@@ -126,6 +127,8 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "installed_version_conflict",
   "distribution_downgrade_refused",
   "install_current_unmanaged",
+  "host_permission_store_unavailable",
+  "runtime_broker_unavailable",
 ]);
 
 export function stableRuntimeErrorCode(error: unknown): string {
@@ -195,11 +198,25 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "MemHub 启动失败。请重新启动；如果仍然打不开，请重新安装，你的记忆数据不会受到影响。",
 };
 
-export function stableRuntimeUserMessage(error: unknown): string {
+const STABLE_RUNTIME_ENGLISH_MESSAGES: Record<string, string> = {
+  installed_version_conflict:
+    "The runtime does not match this installer. Install a newer MemHub release. Your memories are not affected.",
+  distribution_downgrade_refused:
+    "The installed runtime is newer than this installer. Install the latest MemHub release. Your memories are not affected.",
+  install_current_unmanaged:
+    "The runtime installation has been changed. Reinstall MemHub. Your memories are not affected.",
+  desktop_start_failed:
+    "MemHub could not start. Restart it; if it still will not open, reinstall it. Your memories are not affected.",
+};
+
+export function stableRuntimeUserMessage(
+  error: unknown,
+  language: UiLanguage = "zh-CN",
+): string {
   const code = stableRuntimeErrorCode(error);
-  return (
-    STABLE_RUNTIME_USER_MESSAGES[code] ??
-    STABLE_RUNTIME_USER_MESSAGES.desktop_start_failed ??
-    ""
-  );
+  const messages =
+    language === "en"
+      ? STABLE_RUNTIME_ENGLISH_MESSAGES
+      : STABLE_RUNTIME_USER_MESSAGES;
+  return messages[code] ?? messages.desktop_start_failed ?? "";
 }

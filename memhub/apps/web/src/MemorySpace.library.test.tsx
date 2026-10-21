@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MemorySpace } from "./MemorySpace";
+import { setUiLanguage } from "./ui-language";
 
 const api = vi.hoisted(() => ({
   library: vi.fn(),
@@ -114,9 +115,10 @@ beforeEach(() => {
     revision: 4,
   }));
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   vi.useRealTimers();
+  await setUiLanguage("zh-CN");
 });
 async function manage(props = {}) {
   const view = render(<MemorySpace simplified {...props} />);
@@ -541,6 +543,14 @@ it.each(["deleted", "403", "404"])(
     expect(api.detail.mock.calls.length).toBeGreaterThan(reads);
     expect(api.detail.mock.lastCall?.[0]).toBe("全库0");
     expect(screen.queryByRole("textbox", { name: "记忆内容" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("已不可读取");
+    const readsAfterRevoke = api.detail.mock.calls.length;
+    await act(async () => setUiLanguage("en"));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "The selected memory can no longer be read.",
+    );
+    expect(api.detail).toHaveBeenCalledTimes(readsAfterRevoke);
+    await act(async () => setUiLanguage("zh-CN"));
     expect(screen.getByRole("alert").textContent).toContain("已不可读取");
   },
 );

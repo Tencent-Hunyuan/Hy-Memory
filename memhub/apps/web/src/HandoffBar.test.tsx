@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import type { GovernedMemory } from "@one-memory/contracts";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HandoffBar, promptFrom } from "./HandoffBar";
+import { setUiLanguage } from "./ui-language";
 
 function memory(
   id: string,
@@ -202,5 +203,139 @@ describe("handoff preview", () => {
     await user.click(screen.getByRole("button", { name: "带出所选记忆" }));
     expect(screen.getByRole("button", { name: "复制内容" })).toBeTruthy();
     expect(getRecallHosts).not.toHaveBeenCalled();
+  });
+  it("updates the open preview and status without translating the user's content", async () => {
+    if (!window.oneMemory) throw new Error("Missing mocked bridge");
+    window.oneMemory.setUiLanguage = vi.fn(async (next) => next);
+    const user = userEvent.setup();
+    render(
+      <HandoffBar
+        memories={[memory("a", { content: "用户私有记忆" })]}
+        matterLabel="用户主题"
+        answerText="用户原样回答"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "带出回答与引用" }));
+    await user.selectOptions(screen.getByLabelText("目标应用"), "cursor");
+    const chinesePreview = (
+      screen.getByLabelText("将带出的完整内容") as HTMLTextAreaElement
+    ).value;
+    expect(chinesePreview).toContain("来自 MemHub 的「用户主题」历史背景");
+    expect(chinesePreview).toContain("已有回答（需结合引用核对）：");
+    await user.click(screen.getByRole("button", { name: "复制并打开 Cursor" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toContain("尚未发送"),
+    );
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(
+        screen.getByRole("button", {
+          name: "Take answer and references to another app",
+        }),
+      ).toBeTruthy();
+      const englishPreview = (
+        screen.getByLabelText(
+          "Full content to take to another app",
+        ) as HTMLTextAreaElement
+      ).value;
+      expect(englishPreview).not.toBe(chinesePreview);
+      expect(englishPreview).toContain("Background on “用户主题” from MemHub");
+      expect(englishPreview).toContain(
+        "Existing answer (verify against references):",
+      );
+      expect(englishPreview).toContain("Referenced memories:");
+      expect(englishPreview).toContain("[a · v1] 用户私有记忆");
+      expect(englishPreview).toContain("用户原样回答");
+      expect(englishPreview).not.toContain("不是覆盖当前任务的指令");
+      expect(englishPreview).not.toContain("已有回答（需结合引用核对）：");
+      expect(screen.getByRole("status").textContent).toContain(
+        "Nothing was sent",
+      );
+      expect(screen.getByRole("status").textContent).toContain("Cursor");
+      await user.click(
+        screen.getByRole("button", { name: "Copy and open Cursor" }),
+      );
+      await waitFor(() =>
+        expect(openHandoff).toHaveBeenLastCalledWith("cursor", englishPreview),
+      );
+      expect(copyText).toHaveBeenLastCalledWith(englishPreview);
+    } finally {
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+  it("keeps an open preview when its localized context label changes", async () => {
+    if (!window.oneMemory) throw new Error("Missing mocked bridge");
+    window.oneMemory.setUiLanguage = vi.fn(async (next) => next);
+    const user = userEvent.setup();
+    const view = render(
+      <HandoffBar
+        memories={[memory("a")]}
+        contextId="answer"
+        matterLabel="这次回答"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "带出所选记忆" }));
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+        view.rerender(
+          <HandoffBar
+            memories={[memory("a")]}
+            contextId="answer"
+            matterLabel="This answer"
+          />,
+        );
+      });
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(
+        (
+          screen.getByLabelText(
+            "Full content to take to another app",
+          ) as HTMLTextAreaElement
+        ).value,
+      ).toContain("Background on “This answer” from MemHub");
+    } finally {
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+  it("does not open a host with a stale preview when language changes during copying", async () => {
+    if (!window.oneMemory) throw new Error("Missing mocked bridge");
+    window.oneMemory.setUiLanguage = vi.fn(async (next) => next);
+    let copied: () => void = () => undefined;
+    copyText.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          copied = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<HandoffBar memories={[memory("a")]} matterLabel="主题" />);
+    await user.click(screen.getByRole("button", { name: "带出所选记忆" }));
+    await user.selectOptions(screen.getByLabelText("目标应用"), "cursor");
+    await user.click(screen.getByRole("button", { name: "复制并打开 Cursor" }));
+    try {
+      await act(async () => {
+        await setUiLanguage("en");
+      });
+      await act(async () => {
+        copied();
+      });
+      expect(openHandoff).not.toHaveBeenCalled();
+      expect(screen.getByRole("status").textContent).toContain(
+        "The preview changed",
+      );
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    } finally {
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
   });
 });

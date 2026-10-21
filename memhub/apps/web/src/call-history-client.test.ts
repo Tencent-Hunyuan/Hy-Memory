@@ -121,6 +121,17 @@ it("clear-all uses the dedicated transport and never reuses page IDs", async () 
   fake.clearAll.mockResolvedValue({ removed: -1 });
   await expect(clearAllCallEvents()).rejects.toThrow();
 });
+it("localizes lookup headlines and failure details without changing event data", () => {
+  expect(callRowHeadline(event, "en")).toBe("Codex found 1 related item");
+  expect(callRowDetail({ ...event, state: "timed_out" }, "en")).toContain(
+    "lookup timed out",
+  );
+  expect(callDetailHeadline({ ...event, state: "denied" }, "Codex", "en")).toBe(
+    "Codex was not authorized to look up memories",
+  );
+  expect(event.state).toBe("grounded");
+});
+
 it("uses one plain-language lookup vocabulary across summary surfaces", () => {
   expect(callEventHeadline(event)).toBe("Codex 查到 1 条相关内容");
   expect(callDetailHeadline({ ...event, memory_count: 2 })).toBe(

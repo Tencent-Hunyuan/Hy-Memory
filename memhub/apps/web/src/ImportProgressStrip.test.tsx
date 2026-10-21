@@ -13,6 +13,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ImportProgressStrip } from "./ImportProgressStrip";
+import { setUiLanguage } from "./ui-language";
 
 function job(overrides: Partial<ImportJob> = {}): ImportJob {
   return {
@@ -82,7 +83,166 @@ function deferred() {
 }
 
 describe("ImportProgressStrip", () => {
-  afterEach(cleanup);
+  afterEach(async () => {
+    cleanup();
+    await setUiLanguage("zh-CN");
+  });
+
+  it("renders the App-facing English import notice and switches back without losing source counts", async () => {
+    await setUiLanguage("en");
+    render(
+      <ImportProgressStrip
+        userFacing
+        jobs={[job()]}
+        sources={[source("cursor", "Cursor", { imported_conversations: 1761 })]}
+        backfilling={false}
+        onOpenSources={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "1,761 conversations imported",
+    );
+    expect(screen.getByRole("status").textContent).not.toContain("正在导入");
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByRole("status").textContent).toContain(
+      "已导入 1,761 个会话",
+    );
+  });
+
+  it("renders English stale receipts, localized time and counts, preserving source and raw codes", async () => {
+    await setUiLanguage("en");
+    const { container } = render(
+      <ImportProgressStrip
+        jobs={[
+          job({
+            operation: "sync",
+            status: "completed",
+            stored: 0,
+            merged: 81614,
+            errors: 2,
+          }),
+        ]}
+        sources={[
+          source("cursor", "用户来源", {
+            imported_messages: 81614,
+            imported_conversations: 1761,
+          }),
+        ]}
+        backfilling={false}
+        sourceSnapshot={staleSnapshot}
+        onOpenSources={vi.fn()}
+        issues={[
+          {
+            issue_id: 1,
+            job_id: "job-1",
+            kind: "error",
+            reason: "source_permission_changed",
+            conversation_id: null,
+            created_at: confirmedAt,
+          },
+        ]}
+      />,
+    );
+    const strip = screen.getByRole("status");
+    expect(strip.textContent).toContain("Source status needs review");
+    expect(strip.textContent).toContain(
+      "用户来源: 81,614 originals · 1,761 conversations",
+    );
+    expect(strip.textContent).toContain(
+      "0 new originals this time · 81,614 already present · 2 errors",
+    );
+    expect(strip.textContent).toContain(
+      "This source's read permission changed",
+    );
+    expect(strip.textContent).not.toContain("source_permission_changed");
+    expect(strip.textContent).not.toContain("job-1");
+    expect(strip.textContent).not.toContain(confirmedAt);
+    expect(
+      screen.getByRole("list", { name: "Complete job receipts" }).textContent,
+    ).toContain("Completed");
+    expect(container.querySelector("time")?.dateTime).toBe(confirmedAt);
+    expect(container.querySelector("time")?.textContent).toBe(
+      new Date(confirmedAt).toLocaleString("en", { hour12: false }),
+    );
+    expect(screen.getByRole("button", { name: "View sources" })).toBeTruthy();
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByRole("list", { name: "完整任务回执" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("用户来源");
+  });
+
+  it("renders English generation failures and action receipts without translating raw errors", async () => {
+    await setUiLanguage("en");
+    const onJobAction = vi
+      .fn()
+      .mockRejectedValue(new Error("custom_error_code"));
+    render(
+      <ImportProgressStrip
+        jobs={[job({ stored: 280, errors: 2 })]}
+        sources={sources}
+        backfilling={false}
+        onOpenSources={vi.fn()}
+        onJobAction={onJobAction}
+        arrival={{
+          importing: true,
+          importedMessages: 300,
+          importedConversations: 2,
+          phase: "failed",
+          blockedStages: [
+            {
+              kind: "extract",
+              reason: "hy_memory_model_authentication_failed",
+              count: 1,
+            },
+          ],
+        }}
+        onConfigureModel={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "Memory extraction",
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "Model authentication failed",
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "affected items: 1",
+    );
+    expect(screen.getByRole("status").textContent).not.toContain(
+      "hy_memory_model_authentication_failed",
+    );
+    expect(
+      screen.getByRole("button", { name: "Configure model" }),
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Pause all" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Cursor: could not pause: custom_error_code",
+    );
+    expect(screen.getByRole("button", { name: "Retry pause" })).toBeTruthy();
+  });
+
+  it("relocalizes a stale refresh failure while retaining its external detail", async () => {
+    await setUiLanguage("en");
+    render(
+      <ImportProgressStrip
+        jobs={[job()]}
+        sources={sources}
+        backfilling={false}
+        sourceSnapshot={staleSnapshot}
+        onOpenSources={vi.fn()}
+        onRefresh={vi.fn().mockRejectedValue(new Error("custom_error_code"))}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Refresh and check" }),
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "Check failed; status still needs review. custom_error_code",
+    );
+    await act(async () => setUiLanguage("zh-CN"));
+    expect(screen.getByRole("status").textContent).toContain(
+      "核对失败，状态仍待核对。custom_error_code",
+    );
+  });
 
   it("keeps daily sync silent in the user-facing shell", () => {
     const { container } = render(
@@ -1013,7 +1173,10 @@ describe("ImportProgressStrip", () => {
 });
 
 describe("pausing and continuing imports from the strip", () => {
-  afterEach(cleanup);
+  afterEach(async () => {
+    cleanup();
+    await setUiLanguage("zh-CN");
+  });
 
   type Action = "pause" | "resume" | "cancel";
   const cursorRunning = job();

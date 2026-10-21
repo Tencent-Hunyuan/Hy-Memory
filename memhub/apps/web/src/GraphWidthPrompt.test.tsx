@@ -9,18 +9,20 @@
  * accident this whole path exists to prevent.
  */
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
+import { setUiLanguage } from "./ui-language";
 
-const { getGraphWidth, decideGraphWidth } = vi.hoisted(() => ({
+const { getGraphWidth, decideGraphWidth, apiErrorCode } = vi.hoisted(() => ({
   getGraphWidth: vi.fn(),
   decideGraphWidth: vi.fn(),
+  apiErrorCode: vi.fn((): string | null => null),
 }));
 
 vi.mock("./api", () => ({
-  apiErrorCode: () => null,
+  apiErrorCode,
   getGraphWidth,
   decideGraphWidth,
 }));
@@ -35,10 +37,14 @@ const MISMATCH = {
 };
 
 describe("GraphWidthPrompt", () => {
-  afterEach(cleanup);
+  afterEach(async () => {
+    cleanup();
+    await setUiLanguage("zh-CN");
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    apiErrorCode.mockReturnValue(null);
     getGraphWidth.mockResolvedValue(MISMATCH);
     decideGraphWidth.mockResolvedValue({
       archived_path: null,
@@ -214,5 +220,124 @@ describe("GraphWidthPrompt", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
+  });
+
+  it("switches the dialog and aria labels without changing the default or choice", async () => {
+    const user = userEvent.setup();
+    render(<GraphWidthPrompt />);
+    const keep = await screen.findByRole("radio", { name: /保留现有记忆库/ });
+    expect((keep as HTMLInputElement).checked).toBe(true);
+    await act(() => setUiLanguage("en"));
+    const dialog = screen.getByRole("dialog", {
+      name: "Existing memory library does not match the built-in model",
+    });
+    expect(dialog.textContent).toContain("768 dimensions");
+    expect(dialog.textContent).toContain("512");
+    const defaultChoice = screen.getByRole("radio", {
+      name: /Keep existing library \(default\)/,
+    });
+    expect((defaultChoice as HTMLInputElement).checked).toBe(true);
+    expect(
+      screen.getByRole("radio", {
+        name: /Archive \(do not delete\).*427 memories/,
+      }),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("radio", { name: /Export first, then decide/ }),
+    );
+    await act(() => setUiLanguage("zh-CN"));
+    expect(
+      (screen.getByRole("radio", { name: /先导出再决定/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    await user.click(screen.getByRole("button", { name: "就这么办" }));
+    expect(decideGraphWidth).toHaveBeenCalledWith(
+      "export_first",
+      expect.any(String),
+    );
+  });
+
+  it("localizes export receipt while retaining the exact exported path", async () => {
+    const user = userEvent.setup();
+    const path = "/fixture/backup-原样";
+    decideGraphWidth.mockResolvedValue({
+      archived_path: null,
+      exported_path: path,
+      mismatch: MISMATCH.mismatch,
+    });
+    render(<GraphWidthPrompt />);
+    await user.click(
+      await screen.findByRole("radio", { name: /先导出再决定/ }),
+    );
+    await user.click(screen.getByRole("button", { name: "就这么办" }));
+    expect(await screen.findByText(path)).toBeTruthy();
+    await act(() => setUiLanguage("en"));
+    expect(screen.getByText(path).textContent).toBe(path);
+    expect(screen.getByText(/Exported to/).textContent).toContain(
+      "original library is unchanged",
+    );
+  });
+
+  it("localizes known export failure without presenting an uncreated backup as safe", async () => {
+    const user = userEvent.setup();
+    apiErrorCode.mockReturnValue("graph_export_failed");
+    decideGraphWidth.mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+    render(<GraphWidthPrompt />);
+    await user.click(await screen.findByRole("button", { name: "就这么办" }));
+    expect(await screen.findByText(/导出失败，未生成备份/)).toBeTruthy();
+    await act(() => setUiLanguage("en"));
+    expect(
+      screen.getByText(/Export failed and no backup was created/),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("radio", {
+          name: /Keep existing library/,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+  });
+
+  it("localizes a refused export without claiming a backup exists", async () => {
+    const user = userEvent.setup();
+    apiErrorCode.mockReturnValue("export_root_required");
+    decideGraphWidth.mockRejectedValue(
+      Object.assign(new Error("export_root_required"), {
+        definiteRefusal: true,
+      }),
+    );
+    render(<GraphWidthPrompt />);
+    await user.click(await screen.findByRole("button", { name: "就这么办" }));
+    expect(await screen.findByText(/缺少导出位置，未生成备份/)).toBeTruthy();
+    await act(() => setUiLanguage("en"));
+    expect(
+      screen.getByText(
+        /No export location was provided, so no backup was created/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("localizes unknown outcomes and retains raw external refusal details", async () => {
+    const user = userEvent.setup();
+    decideGraphWidth.mockRejectedValueOnce(new Error("network interrupted"));
+    render(<GraphWidthPrompt />);
+    await user.click(await screen.findByRole("button", { name: "就这么办" }));
+    expect(await screen.findByText(/宽度选择结果尚未确认/)).toBeTruthy();
+    await act(() => setUiLanguage("en"));
+    expect(
+      screen.getByText(/result of your choice is unconfirmed/),
+    ).toBeTruthy();
+    const raw = "remote-code-原样";
+    decideGraphWidth.mockRejectedValueOnce(
+      Object.assign(new Error(raw), { definiteRefusal: true }),
+    );
+    await user.click(screen.getByRole("button", { name: "Confirm choice" }));
+    expect(
+      await screen.findByText(`Could not complete the width choice: ${raw}`),
+    ).toBeTruthy();
+    await act(() => setUiLanguage("zh-CN"));
+    expect(screen.getByText(`宽度选择未能完成：${raw}`)).toBeTruthy();
   });
 });

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslate } from "./ui-language";
 import { useMediaPreference } from "./use-media-preference";
 
 type Phase = "closed" | "opening" | "open" | "closing";
@@ -20,6 +21,7 @@ export function MemoryEvidencePanel({
   children: ReactNode;
   suspended?: boolean;
 }) {
+  const t = useTranslate();
   const compact = useMediaPreference("(max-width: 1100px)");
   const reduceMotion = useMediaPreference("(prefers-reduced-motion: reduce)");
   const reduceTransparency = useMediaPreference(
@@ -135,7 +137,7 @@ export function MemoryEvidencePanel({
       className="map-inspector"
       {...(modal ? { role: "dialog", "aria-modal": !suspended } : {})}
       inert={suspended}
-      aria-label="记忆与原文"
+      aria-label={t("记忆与原文")}
       data-tour-id="memory-original-pane"
       tabIndex={-1}
       hidden={!present || (compact && suspended)}

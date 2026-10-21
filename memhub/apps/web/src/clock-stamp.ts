@@ -1,3 +1,5 @@
+import { translate, type UiLanguage } from "@one-memory/contracts";
+
 /**
  * One clock format for every user-facing timestamp.
  *
@@ -14,11 +16,15 @@
  * Unparseable input returns 时间未知 rather than a fabricated date. That string
  * is already asserted across several suites, so it stays exactly as-is.
  */
-export function clockStamp(value: string | null | undefined): string {
-  if (!value || !Number.isFinite(Date.parse(value))) return "时间未知";
+export function clockStamp(
+  value: string | null | undefined,
+  language: UiLanguage = "zh-CN",
+): string {
+  if (!value || !Number.isFinite(Date.parse(value)))
+    return translate(language, "时间未知");
   const date = new Date(value);
   const now = new Date();
-  const clock = new Intl.DateTimeFormat("zh-CN", {
+  const clock = new Intl.DateTimeFormat(language, {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
@@ -27,8 +33,8 @@ export function clockStamp(value: string | null | undefined): string {
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate()
   )
-    return `今天 ${clock}`;
-  return new Intl.DateTimeFormat("zh-CN", {
+    return translate(language, "今天 {time}", { time: clock });
+  return new Intl.DateTimeFormat(language, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

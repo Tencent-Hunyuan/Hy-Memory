@@ -2,6 +2,7 @@ import type {
   GovernedMemory,
   MemoryDetail,
   SourceResponse,
+  UiMessage,
 } from "@one-memory/contracts";
 import {
   ArrowLeft,
@@ -29,6 +30,7 @@ import {
 import type { RecallHostStatus } from "./global";
 import { refreshRecallHosts, useRecallHosts } from "./host-state";
 import { refreshSources } from "./source-state";
+import { useTranslate, useUiLanguage } from "./ui-language";
 
 const NO_HOSTS: RecallHostStatus[] = [];
 
@@ -41,6 +43,8 @@ export function FirstUseGuide({
   onSources(): void;
   onClose(): void;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const [scene, setScene] = useState<GuideScenario>("same");
   const [route, setRoute] = useState<GuideRoute>("context");
   const [memories, setMemories] = useState<GovernedMemory[]>([]);
@@ -52,17 +56,22 @@ export function FirstUseGuide({
   const hosts = hostsError ? NO_HOSTS : (hostRead.data ?? NO_HOSTS);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage | "">("");
   const [reload, setReload] = useState(0);
   const [targetId, setTargetId] = useState("");
   const [topic, setTopic] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{
+    key: UiMessage;
+    name?: string;
+  } | null>(null);
   const [copiedKey, setCopiedKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [reported, setReported] = useState<"ok" | "missing" | null>(null);
   const mounted = useRef(true);
   const actionEpoch = useRef(0);
+  const previousLanguage = useRef(language);
   const contextKey = JSON.stringify([
+    language,
     scene,
     route,
     selectedId,
@@ -123,7 +132,7 @@ export function FirstUseGuide({
     let cancelled = false;
     setDetail(null);
     setError("");
-    setNotice("");
+    setNotice(null);
     setCopiedKey("");
     setReported(null);
     if (!selectedId) {
@@ -153,6 +162,16 @@ export function FirstUseGuide({
     };
   }, [selectedId]);
 
+  useEffect(() => {
+    if (previousLanguage.current === language) return;
+    previousLanguage.current = language;
+    actionEpoch.current++;
+    setBusy(false);
+    setNotice(null);
+    setCopiedKey("");
+    setReported(null);
+  }, [language]);
+
   const available =
     detail !== null &&
     detail.memory.memory_id === selectedId &&
@@ -173,9 +192,24 @@ export function FirstUseGuide({
     sources.find((item) => item.source_id === id)?.display_name ??
     (id === "one-memory-manual" ? "端内添加" : id);
   const sourceLabel = sourceIds.map(nameOf).join("、") || "原应用";
+  const displaySourceLabel =
+    sourceIds
+      .map(
+        (id) =>
+          sources.find((item) => item.source_id === id)?.display_name ??
+          (id === "one-memory-manual" ? t("端内添加") : id),
+      )
+      .join(t("、")) || t("原应用");
   const draft =
     available && detail
-      ? draftForScenario(scene, effectiveRoute, topic, detail, sourceLabel)
+      ? draftForScenario(
+          scene,
+          effectiveRoute,
+          topic,
+          detail,
+          sourceLabel,
+          language,
+        )
       : "";
   const scenario =
     GUIDE_SCENARIOS.find((item) => item.id === scene) ?? GUIDE_SCENARIOS[0];
@@ -185,7 +219,7 @@ export function FirstUseGuide({
 
   function changed() {
     actionEpoch.current++;
-    setNotice("");
+    setNotice(null);
     setCopiedKey("");
     setReported(null);
     setBusy(false);
@@ -200,7 +234,7 @@ export function FirstUseGuide({
       contextRef.current === key &&
       actionEpoch.current === epoch;
     setBusy(true);
-    setNotice("");
+    setNotice(null);
     setReported(null);
     let validated = false;
     try {
@@ -232,7 +266,7 @@ export function FirstUseGuide({
         )
       ) {
         setCopiedKey("");
-        setNotice("连接状态已变化，尚未复制。请重新选择方式。");
+        setNotice({ key: "连接状态已变化，尚未复制。请重新选择方式。" });
         return;
       }
       validated = true;
@@ -245,14 +279,17 @@ export function FirstUseGuide({
           if (current())
             setNotice(
               result.opened
-                ? `已复制并请求打开 ${host.label}。尚未发送，请核对输入框。`
-                : "已完整复制，未能预填。可在目标应用粘贴，尚未发送。",
+                ? {
+                    key: "已复制并请求打开 {name}。尚未发送，请核对输入框。",
+                    name: host.label,
+                  }
+                : { key: "已完整复制，未能预填。可在目标应用粘贴，尚未发送。" },
             );
         } catch {
           if (current())
-            setNotice("已完整复制，但未能打开目标应用。尚未发送。");
+            setNotice({ key: "已完整复制，但未能打开目标应用。尚未发送。" });
         }
-      } else setNotice("已完整复制。尚未发送，也没有新增读取授权。");
+      } else setNotice({ key: "已完整复制。尚未发送，也没有新增读取授权。" });
     } catch {
       if (current()) {
         if (!validated) {
@@ -260,7 +297,9 @@ export function FirstUseGuide({
           setCopiedKey("");
           setError("无法核对当前记忆与授权，旧预览已收起。请刷新后重试。");
         }
-        setNotice("未能核对最新内容或完成复制。请重试；没有打开目标应用。");
+        setNotice({
+          key: "未能核对最新内容或完成复制。请重试；没有打开目标应用。",
+        });
       }
     } finally {
       if (current()) setBusy(false);
@@ -271,16 +310,16 @@ export function FirstUseGuide({
     <section className="view first-use-view" aria-labelledby="first-use-title">
       <header className="first-use-heading">
         <div>
-          <p className="first-use-eyebrow">上手体验</p>
-          <h1 id="first-use-title">让下一次对话接得上</h1>
+          <p className="first-use-eyebrow">{t("上手体验")}</p>
+          <h1 id="first-use-title">{t("让下一次对话接得上")}</h1>
         </div>
         <button type="button" className="quiet" onClick={onClose}>
           <ArrowLeft size={16} aria-hidden="true" />
-          返回记忆
+          {t("返回记忆")}
         </button>
       </header>
       <fieldset className="first-use-scenarios">
-        <legend className="sr-only">选择使用场景</legend>
+        <legend className="sr-only">{t("选择使用场景")}</legend>
         {GUIDE_SCENARIOS.map((item, index) => (
           <label key={item.id} data-selected={scene === item.id}>
             <input
@@ -295,48 +334,56 @@ export function FirstUseGuide({
                 setRoute("context");
               }}
             />
-            <span className="first-use-number">0{index + 1}</span>
-            <span>{item.label}</span>
+            <span className="first-use-number">
+              {String(index + 1).padStart(2, "0")}
+            </span>
+            <span>{t(item.label)}</span>
           </label>
         ))}
       </fieldset>
-      <p className="first-use-description">{scenario.description}</p>
+      <p className="first-use-description">{t(scenario.description)}</p>
       {importedMessages > 0 && (
         <p className="first-use-receipt">
-          本机已保存 {importedMessages.toLocaleString()} 条原始消息 ·{" "}
+          {t("本机已保存 {count} 条原始消息 · ", {
+            count: importedMessages.toLocaleString(language),
+          })}
           {loading
-            ? "正在读取已整理记忆"
-            : `本页已加载 ${memories.length} 条可用记忆`}
-          。两个阶段分别计数。
+            ? t("正在读取已整理记忆")
+            : t("本页已加载 {count} 条可用记忆", {
+                count: memories.length.toLocaleString(language),
+              })}
+          {t("。两个阶段分别计数。")}
         </p>
       )}
       <div className="first-use-path">
-        <span>选择背景</span>
+        <span>{t("选择背景")}</span>
         <ArrowRight size={14} aria-hidden="true" />
-        <span>核对来源</span>
+        <span>{t("核对来源")}</span>
         <ArrowRight size={14} aria-hidden="true" />
-        <span>到新对话试用</span>
+        <span>{t("到新对话试用")}</span>
       </div>
       {error && (
         <p className="error-banner" role="alert">
-          {error}
+          {t(error)}
         </p>
       )}
       {loading ? (
-        <p role="status">正在读取本机已有记忆…</p>
+        <p role="status">{t("正在读取本机已有记忆…")}</p>
       ) : !memories.length ? (
         <section className="first-use-empty">
           <FileText size={28} aria-hidden="true" />
-          <h2>先留下一条真正有用的背景</h2>
+          <h2>{t("先留下一条真正有用的背景")}</h2>
           <p>
-            目前没有可用于这次体验的记忆。已导入的原文不等于已经整理好；候选内容也不会被自动带出。
+            {t(
+              "目前没有可用于这次体验的记忆。已导入的原文不等于已经整理好；候选内容也不会被自动带出。",
+            )}
           </p>
           <div>
             <button type="button" onClick={onClose}>
-              去添加记忆
+              {t("去添加记忆")}
             </button>
             <button type="button" className="secondary" onClick={onSources}>
-              查看导入与连接
+              {t("查看导入与连接")}
             </button>
             <button
               type="button"
@@ -344,7 +391,7 @@ export function FirstUseGuide({
               onClick={() => setReload((n) => n + 1)}
             >
               <RefreshCw size={15} />
-              刷新
+              {t("刷新")}
             </button>
           </div>
         </section>
@@ -355,12 +402,12 @@ export function FirstUseGuide({
             aria-labelledby="guide-background-title"
           >
             <header>
-              <h2 id="guide-background-title">这次用到的背景</h2>
+              <h2 id="guide-background-title">{t("这次用到的背景")}</h2>
               <button
                 type="button"
                 className="quiet"
-                title="刷新示例"
-                aria-label="刷新示例"
+                title={t("刷新示例")}
+                aria-label={t("刷新示例")}
                 onClick={() => {
                   changed();
                   setDetail(null);
@@ -372,7 +419,7 @@ export function FirstUseGuide({
               </button>
             </header>
             <label className="first-use-field">
-              选择一条记忆
+              {t("选择一条记忆")}
               <select
                 value={selectedId}
                 onChange={(event) => {
@@ -390,46 +437,55 @@ export function FirstUseGuide({
               </select>
             </label>
             <p className="first-use-meta">
-              从当前已加载的 {memories.length}{" "}
-              条可用记忆中选择，不代表全部历史。
+              {t("从当前已加载的 {count} 条可用记忆中选择，不代表全部历史。", {
+                count: memories.length.toLocaleString(language),
+              })}
             </p>
             {detailLoading ? (
-              <p role="status">正在核对原始依据…</p>
+              <p role="status">{t("正在核对原始依据…")}</p>
             ) : available && detail ? (
               <>
                 <blockquote className="first-use-memory">
                   {detail.memory.content}
                 </blockquote>
                 <p className="first-use-meta">
-                  {sourceLabel} · 版本 {detail.memory.revision} ·
-                  系统整理，需你核对
+                  {t("{name} · 版本 {revision} · 系统整理，需你核对", {
+                    name: displaySourceLabel,
+                    revision: detail.memory.revision.toLocaleString(language),
+                  })}
                 </p>
                 <p className="first-use-scope">
-                  适用范围：
+                  {t("适用范围：")}
                   {detail.memory.scopes.includes("all-apps")
-                    ? "已设为跨应用可用，不等于个人偏好"
+                    ? t("已设为跨应用可用，不等于个人偏好")
                     : detail.memory.scopes.includes("private")
-                      ? "已停止外部记忆召回；手动带出需另行确认"
-                      : "限定范围，未扩大外部召回范围"}
+                      ? t("已停止外部记忆召回；手动带出需另行确认")
+                      : t("限定范围，未扩大外部召回范围")}
                 </p>
                 <details className="first-use-evidence" open>
-                  <summary>原始依据 · {detail.evidence.length} 段</summary>
+                  <summary>
+                    {t("原始依据 · {count} 段", {
+                      count: detail.evidence.length.toLocaleString(language),
+                    })}
+                  </summary>
                   {detail.evidence.map((item) => (
                     <article key={item.evidence_id}>
                       <header>
                         <span>
-                          {item.source_id ? nameOf(item.source_id) : "未知来源"}
+                          {item.source_id
+                            ? nameOf(item.source_id)
+                            : t("未知来源")}
                         </span>
                         <span>
                           {item.written_by === "person"
-                            ? "你"
+                            ? t("你")
                             : item.written_by === "agent"
                               ? "Agent"
-                              : "作者未识别"}{" "}
+                              : t("作者未识别")}{" "}
                           ·{" "}
                           {item.created_at
-                            ? new Date(item.created_at).toLocaleString()
-                            : "时间未知"}
+                            ? new Date(item.created_at).toLocaleString(language)
+                            : t("时间未知")}
                         </span>
                       </header>
                       <p>{item.verbatim}</p>
@@ -439,7 +495,9 @@ export function FirstUseGuide({
               </>
             ) : (
               <p className="first-use-unavailable">
-                原文或当前授权不可用。换一条背景或刷新后再试，不会带出这条内容。
+                {t(
+                  "原文或当前授权不可用。换一条背景或刷新后再试，不会带出这条内容。",
+                )}
               </p>
             )}
           </section>
@@ -447,9 +505,9 @@ export function FirstUseGuide({
             className="first-use-destination"
             aria-labelledby="guide-draft-title"
           >
-            <h2 id="guide-draft-title">下一段对话的开场白</h2>
+            <h2 id="guide-draft-title">{t("下一段对话的开场白")}</h2>
             <label className="first-use-field">
-              在哪个应用试用
+              {t("在哪个应用试用")}
               <select
                 value={host?.hostId ?? ""}
                 onChange={(event) => {
@@ -458,7 +516,7 @@ export function FirstUseGuide({
                   setRoute("context");
                 }}
               >
-                <option value="">自行选择应用 · 仅复制</option>
+                <option value="">{t("自行选择应用 · 仅复制")}</option>
                 {destinations.map((item) => (
                   <option key={item.hostId} value={item.hostId}>
                     {item.label}
@@ -468,14 +526,14 @@ export function FirstUseGuide({
             </label>
             <p className="first-use-connection">
               {hostsError
-                ? "暂时无法读取连接状态，可重试或仅复制背景。"
+                ? t("暂时无法读取连接状态，可重试或仅复制背景。")
                 : !host
-                  ? "尚未选择已连接的应用。手动带入不等于安装连接。"
+                  ? t("尚未选择已连接的应用。手动带入不等于安装连接。")
                   : canQuery
-                    ? "上次自检可达，本次是否用对仍需核对。"
+                    ? t("上次自检可达，本次是否用对仍需核对。")
                     : host.installed
-                      ? "已安装连接，尚未验证读取。"
-                      : "尚未安装读取连接。"}
+                      ? t("已安装连接，尚未验证读取。")
+                      : t("尚未安装读取连接。")}
             </p>
             <button
               type="button"
@@ -483,10 +541,10 @@ export function FirstUseGuide({
               onClick={onSources}
             >
               <Link2 size={15} aria-hidden="true" />
-              管理应用连接
+              {t("管理应用连接")}
             </button>
             <fieldset className="first-use-routes">
-              <legend className="sr-only">选择带入方式</legend>
+              <legend className="sr-only">{t("选择带入方式")}</legend>
               <label>
                 <input
                   type="radio"
@@ -497,7 +555,7 @@ export function FirstUseGuide({
                     setRoute("context");
                   }}
                 />
-                带入背景
+                {t("带入背景")}
               </label>
               <label>
                 <input
@@ -510,12 +568,12 @@ export function FirstUseGuide({
                     setRoute("query");
                   }}
                 />
-                让应用查询
+                {t("让应用查询")}
               </label>
             </fieldset>
             {effectiveRoute === "query" && (
               <label className="first-use-field">
-                要接续的主题
+                {t("要接续的主题")}
                 <input
                   value={topic}
                   maxLength={160}
@@ -528,17 +586,17 @@ export function FirstUseGuide({
             )}
             <p className="first-use-meta">
               {effectiveRoute === "query"
-                ? "只带查询，不把上方的预期答案塞进新会话。"
+                ? t("只带查询，不把上方的预期答案塞进新会话。")
                 : scene === "new"
-                  ? "仅带你选择的这一条，不自动生成个人画像。"
-                  : "完整带入这一条背景与引用；这不是自动召回测试。"}
+                  ? t("仅带你选择的这一条，不自动生成个人画像。")
+                  : t("完整带入这一条背景与引用；这不是自动召回测试。")}
             </p>
             <textarea
               className="first-use-draft"
-              aria-label="开场白完整预览"
+              aria-label={t("开场白完整预览")}
               readOnly
               value={draft}
-              placeholder="原始依据可用后显示开场白"
+              placeholder={t("原始依据可用后显示开场白")}
               spellCheck={false}
             />
             <div className="first-use-actions">
@@ -548,7 +606,7 @@ export function FirstUseGuide({
                 onClick={() => void carry(false)}
               >
                 <Copy size={16} aria-hidden="true" />
-                {busy ? "正在核对…" : "复制开场白"}
+                {busy ? t("正在核对…") : t("复制开场白")}
               </button>
               {host?.handoff === "open" && (
                 <button
@@ -558,18 +616,18 @@ export function FirstUseGuide({
                   onClick={() => void carry(true)}
                 >
                   <ExternalLink size={16} aria-hidden="true" />
-                  复制并打开 {host.label}
+                  {t("复制并打开 {name}", { name: host.label })}
                 </button>
               )}
             </div>
             {notice && (
               <p className="first-use-notice" role="status">
-                {notice}
+                {t(notice.key, { name: notice.name ?? "" })}
               </p>
             )}
             {copiedKey === contextKey && (
               <section className="first-use-result">
-                <p>尚无本次外部调用回执。新对话是否引用了正确的背景？</p>
+                <p>{t("尚无本次外部调用回执。新对话是否引用了正确的背景？")}</p>
                 <div>
                   <button
                     type="button"
@@ -577,21 +635,23 @@ export function FirstUseGuide({
                     onClick={() => setReported("ok")}
                   >
                     <Check size={15} />
-                    我已核对结果
+                    {t("我已核对结果")}
                   </button>
                   <button
                     type="button"
                     className="quiet"
                     onClick={() => setReported("missing")}
                   >
-                    没有找回来
+                    {t("没有找回来")}
                   </button>
                 </div>
                 {reported && (
                   <p role="status">
                     {reported === "ok"
-                      ? "你的反馈：已核对。这不是系统自动验收记录。"
-                      : "你的反馈：没有找回来。先检查来源是否导入、记忆范围与应用连接。"}
+                      ? t("你的反馈：已核对。这不是系统自动验收记录。")
+                      : t(
+                          "你的反馈：没有找回来。先检查来源是否导入、记忆范围与应用连接。",
+                        )}
                   </p>
                 )}
               </section>
@@ -610,18 +670,19 @@ export function FirstUseInvitation({
   onOpen(): void;
   onDismiss(): void;
 }) {
+  const t = useTranslate();
   return (
-    <aside className="first-use-invitation" aria-label="上手体验邀请">
-      <span>用一条自己的记忆，试着接续下一次对话。</span>
+    <aside className="first-use-invitation" aria-label={t("上手体验邀请")}>
+      <span>{t("用一条自己的记忆，试着接续下一次对话。")}</span>
       <button type="button" className="quiet" onClick={onOpen}>
-        试一次
+        {t("试一次")}
         <ArrowRight size={15} aria-hidden="true" />
       </button>
       <button
         type="button"
         className="quiet"
-        title="稍后再看"
-        aria-label="关闭上手邀请"
+        title={t("稍后再看")}
+        aria-label={t("关闭上手邀请")}
         onClick={onDismiss}
       >
         <X size={15} />

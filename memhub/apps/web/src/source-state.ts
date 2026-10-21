@@ -1,4 +1,9 @@
-import type { SourceResponse, SourceSyncState } from "@one-memory/contracts";
+import {
+  type SourceResponse,
+  type SourceSyncState,
+  translate,
+  type UiLanguage,
+} from "@one-memory/contracts";
 import { replaceEqualDeep, useMutation, useQuery } from "@tanstack/react-query";
 import {
   connectSources,
@@ -145,18 +150,30 @@ function applySyncReceipt(receipt: SourceSyncState | undefined) {
  * pointing at "reinstall" here is what sent people through uninstall cycles
  * that could not touch the cause (issue #29).
  */
-export function sourceAuthorizationNote(source: SourceResponse): string | null {
+export function sourceAuthorizationNote(
+  source: SourceResponse,
+  language: UiLanguage = "zh-CN",
+): string | null {
   switch (source.authorization_state) {
     case "missing_grant":
-      return "此应用还没有读取授权，请先授权它的对话目录。";
+      return translate(
+        language,
+        "此应用还没有读取授权，请先授权它的对话目录。",
+      );
     case "revoked_grant":
-      return "此应用的读取授权已撤销，请重新授权。";
+      return translate(language, "此应用的读取授权已撤销，请重新授权。");
     case "source_identity_changed":
-      return "此应用的对话目录已被重建，请重新授权。";
+      return translate(language, "此应用的对话目录已被重建，请重新授权。");
     case "source_root_unavailable":
-      return "此应用的对话目录现在读不到，请确认应用已安装并产生过对话。";
+      return translate(
+        language,
+        "此应用的对话目录现在读不到，请确认应用已安装并产生过对话。",
+      );
     case "candidate_changed":
-      return "此应用的对话目录已变更，请按最新目录重新授权。";
+      return translate(
+        language,
+        "此应用的对话目录已变更，请按最新目录重新授权。",
+      );
     default:
       return null;
   }

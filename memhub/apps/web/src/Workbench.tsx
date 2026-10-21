@@ -1,5 +1,5 @@
-import type {
-  AskMemoryResponse,
+import {
+  type AskMemoryResponse,
   ConversationTranscript,
   GovernedMemory,
   MemoryDetail,
@@ -9,6 +9,9 @@ import type {
   MemoryGraphResponse,
   MemoryProcessingSummary,
   SourceResponse,
+  translate,
+  UiLanguage,
+  UiMessage,
 } from "@one-memory/contracts";
 import { Check, PencilLine, RotateCcw, Trash2 } from "lucide-react";
 import {
@@ -23,6 +26,7 @@ import { HandoffBar } from "./HandoffBar";
 import { MemoryGraph3D } from "./MemoryGraph3D";
 import { MemoryRecallScope, memoryProvenanceLabel } from "./MemoryRecallScope";
 import { extractionStateLabel } from "./memory-processing-labels";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import {
   type Finding,
   findingsOf,
@@ -99,6 +103,8 @@ export function Workbench({
    * reuses the request id prepared for text the user has since replaced. */
   requestIds: RefObject<Map<string, string>>;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const [matter, setMatter] = useState("");
   const [selectedNode, setSelectedNode] = useState<MemoryGraphNode | null>(
     null,
@@ -124,8 +130,9 @@ export function Workbench({
     [memories, matter],
   );
   const findings = useMemo(
-    () => findingsOf({ memories: inMatter, processing, now: new Date() }),
-    [inMatter, processing],
+    () =>
+      findingsOf({ memories: inMatter, processing, now: new Date(), language }),
+    [inMatter, processing, language],
   );
   // Counted across the whole library, not this matter. A tag used once here
   // and once elsewhere is a tag used twice; scoping this to the matter would
@@ -139,8 +146,8 @@ export function Workbench({
     // fails. Keying the skeleton on null meant the one screen it existed for
     // never saw it.
     const drawn = graph ? narrow(graph, inMatter, matter) : null;
-    return drawn?.nodes.length ? drawn : skeleton(sources, graph);
-  }, [graph, inMatter, matter, sources]);
+    return drawn?.nodes.length ? drawn : skeleton(sources, graph, language);
+  }, [graph, inMatter, matter, sources, language]);
   const evidence = useMemo(
     () => orderEvidence(detail, highlighted, memories),
     [detail, highlighted, memories],
@@ -166,7 +173,7 @@ export function Workbench({
   const nameOf = (sourceId: string | null) =>
     sources.find((item) => item.source_id === sourceId)?.display_name ??
     sourceId ??
-    "未知来源";
+    t("未知来源");
 
   return (
     <div className="workbench">
@@ -178,16 +185,21 @@ export function Workbench({
             belongs to — is a workspace scope, and its plaintext name lives on
             the evidence rows in Core; nothing here can recover it from the
             hash, so calling this column 事项 named something it was not. */}
-        <nav className="wb-matters" aria-label="主题">
-          <p className="wb-column-label">主题</p>
+        <nav className="wb-matters" aria-label={t("主题")}>
+          <p className="wb-column-label">{t("主题")}</p>
           {allTags.length ? (
             // Says the two numbers the column actually shows: how many
             // topics took shape, and how many tags did not. Reporting one
             // total meant reading "22 个主题标签" above six rows.
             <p className="wb-tag-tally">
               {onceOnly.size === 0
-                ? `${allTags.length - onceOnly.size} 个主题成形`
-                : `${allTags.length - onceOnly.size} 个主题成形，另有 ${onceOnly.size} 个标签只出现过一次`}
+                ? t("{count} 个主题成形", {
+                    count: allTags.length - onceOnly.size,
+                  })
+                : t("{count} 个主题成形，另有 {single} 个标签只出现过一次", {
+                    count: allTags.length - onceOnly.size,
+                    single: onceOnly.size,
+                  })}
             </p>
           ) : null}
           {matters.map((item) => (
@@ -203,10 +215,12 @@ export function Workbench({
                   setTranscript(null);
                 }}
               >
-                {item.label}
+                {item.scope ? item.label : t("全部")}
                 <small>
-                  {item.memoryCount} 条记忆
-                  {item.sourceCount ? ` · ${item.sourceCount} 个来源` : ""}
+                  {t("{count} 条记忆", { count: item.memoryCount })}
+                  {item.sourceCount
+                    ? t(" · {count} 个来源", { count: item.sourceCount })
+                    : ""}
                 </small>
               </button>
               {/* The graph is a canvas: clicking a circle is a mouse-only
@@ -252,7 +266,9 @@ export function Workbench({
                               data-once={onceOnly.has(tag) ? "true" : undefined}
                               title={
                                 onceOnly.has(tag)
-                                  ? "这个主题只出现在这一条上。可能是它只发生过一次，也可能是同一个主题被拆成了两个名字。"
+                                  ? t(
+                                      "这个主题只出现在这一条上。可能是它只发生过一次，也可能是同一个主题被拆成了两个名字。",
+                                    )
                                   : undefined
                               }
                             >
@@ -272,14 +288,17 @@ export function Workbench({
         <div className="wb-stage">
           <div className="wb-graph" data-testid="workbench-graph">
             <p className="wb-graph-title">
-              {matters.find((item) => item.scope === matter)?.label ?? "全部"}
-              {shown.nodes.length ? " 的关系图" : ""}
+              {matter
+                ? (matters.find((item) => item.scope === matter)?.label ??
+                  t("全部"))
+                : t("全部")}
+              {shown.nodes.length ? t(" 的关系图") : ""}
             </p>
             <div className="wb-graph-legend">
-              <span data-kind="memory">记忆</span>
-              <span data-kind="schema">HY 归纳</span>
-              <span data-kind="topic">主题</span>
-              <span data-kind="source">来源 App</span>
+              <span data-kind="memory">{t("记忆")}</span>
+              <span data-kind="schema">{t("HY 归纳")}</span>
+              <span data-kind="topic">{t("主题")}</span>
+              <span data-kind="source">{t("来源 App")}</span>
             </div>
             {/* Laid out by the row, not by offsets. Both were absolutely
                 positioned with a right edge each, and measuring them found
@@ -294,16 +313,20 @@ export function Workbench({
                   className="quiet"
                   disabled={busy}
                   onClick={() => {
-                    const label =
-                      matters.find((item) => item.scope === matter)?.label ??
-                      "全部";
+                    const label = matter
+                      ? (matters.find((item) => item.scope === matter)?.label ??
+                        t("全部"))
+                      : t("全部");
                     setPageOf(matter);
                     onAsk(
-                      `把「${label}」这件事讲清楚：现在到哪一步了、已经定下来的有哪些、还有什么没定。`,
+                      t(
+                        "把「{name}」这件事讲清楚：现在到哪一步了、已经定下来的有哪些、还有什么没定。",
+                        { name: label },
+                      ),
                     );
                   }}
                 >
-                  读这个事项的综述
+                  {t("读这个事项的综述")}
                 </button>
               ) : null}
               <button
@@ -312,7 +335,7 @@ export function Workbench({
                 disabled={busy || !graph?.nodes.length}
                 onClick={onBuildRelations}
               >
-                {busy ? "正在归纳…" : "用 HY Memory 生成关系"}
+                {busy ? t("正在归纳…") : t("用 HY Memory 生成关系")}
               </button>
             </div>
             {shown.nodes.length ? (
@@ -340,10 +363,12 @@ export function Workbench({
           </div>
           {graph?.nodes.length ? (
             <p className="wb-receipt">
-              画的是{" "}
-              {shown.nodes.filter((node) => node.node_type === "memory").length}{" "}
-              / 全部 {graph.total_memories} 条记忆
-              <span>{graphReceipt(shown)}</span>
+              {t("画的是 {shown} / 全部 {total} 条记忆", {
+                shown: shown.nodes.filter((node) => node.node_type === "memory")
+                  .length,
+                total: graph.total_memories,
+              })}
+              <span>{graphReceipt(shown, t)}</span>
             </p>
           ) : null}
 
@@ -355,7 +380,10 @@ export function Workbench({
             scopes={scopes}
             busy={busy}
             matterLabel={
-              matters.find((item) => item.scope === matter)?.label ?? "全部"
+              matter
+                ? (matters.find((item) => item.scope === matter)?.label ??
+                  t("全部"))
+                : t("全部")
             }
             onDraft={onDraft}
             onScopes={onScopes}
@@ -381,7 +409,7 @@ export function Workbench({
             }}
           >
             <div className="wb-chips">
-              {chipsFor(inMatter).map((chip) => (
+              {chipsFor(inMatter, language).map((chip) => (
                 <button
                   key={chip}
                   type="button"
@@ -397,13 +425,13 @@ export function Workbench({
             </div>
             <div className="wb-ask-row">
               <input
-                aria-label="就着这个事项提问"
-                placeholder="就着这个事项问，回答只用已确认的记忆"
+                aria-label={t("就着这个事项提问")}
+                placeholder={t("就着这个事项问，回答只用已确认的记忆")}
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
               />
               <button type="submit" disabled={!question.trim()}>
-                问
+                {t("问")}
               </button>
             </div>
             {answer || streaming ? (
@@ -421,18 +449,24 @@ export function Workbench({
             memories={inMatter.filter(
               (memory) => memory.memory_id === detail?.memory.memory_id,
             )}
+            contextId={matter ?? "all"}
             matterLabel={
-              matters.find((item) => item.scope === matter)?.label ?? "全部"
+              matter
+                ? (matters.find((item) => item.scope === matter)?.label ??
+                  t("全部"))
+                : t("全部")
             }
           />
         </div>
 
-        <aside className="wb-evidence" aria-label="原始对话">
-          <p className="wb-column-label">原始对话</p>
+        <aside className="wb-evidence" aria-label={t("原始对话")}>
+          <p className="wb-column-label">{t("原始对话")}</p>
           <p className="wb-evidence-note">
             {detail
-              ? `这条记忆出自下面 ${evidence.length} 段原话，按时间排`
-              : "点图上任意一个圈，这里显示它出自哪些原话"}
+              ? t("这条记忆出自下面 {count} 段原话，按时间排", {
+                  count: evidence.length,
+                })
+              : t("点图上任意一个圈，这里显示它出自哪些原话")}
           </p>
           {evidence.map((item) => (
             <article
@@ -453,16 +487,20 @@ export function Workbench({
               >
                 <span className="wb-evidence-meta">
                   <b>{nameOf(item.source_id)}</b>
-                  <span>{when(item.created_at)}</span>
+                  <span>{when(item.created_at, language)}</span>
                 </span>
                 {item.extraction_state &&
                 item.extraction_state !== "extracted" ? (
                   <small className="wb-evidence-state">
-                    {extractionStateLabel(item.extraction_state)}
+                    {item.extraction_state === "outside_window"
+                      ? t("未提炼 · 在窗口外")
+                      : item.extraction_state === "queued"
+                        ? t("未提炼 · 排队中")
+                        : extractionStateLabel(item.extraction_state)}
                   </small>
                 ) : null}
                 <span className="wb-evidence-excerpt">
-                  {item.available ? item.verbatim : "来源原话已不可读取"}
+                  {item.available ? item.verbatim : t("来源原话已不可读取")}
                 </span>
               </button>
               {openEvidence === item.evidence_id ? (
@@ -472,17 +510,21 @@ export function Workbench({
                     className="secondary"
                     onClick={() => void openTranscript(item.evidence_id)}
                   >
-                    看完整对话
+                    {t("看完整对话")}
                   </button>
                   {transcriptError ? (
-                    <p className="wb-transcript-error">{transcriptError}</p>
+                    <p className="wb-transcript-error">
+                      {t("这段对话的原文已经不在库里了。")}
+                    </p>
                   ) : null}
                   {transcript ? (
                     <ol className="wb-transcript">
                       {transcript.messages.map((message) => (
                         <li key={message.evidence_id}>
                           <span className="wb-transcript-role">
-                            {message.written_by === "user" ? "你" : "助手"}
+                            {message.written_by === "user"
+                              ? t("你")
+                              : t("助手")}
                           </span>
                           {message.verbatim}
                         </li>
@@ -495,7 +537,7 @@ export function Workbench({
           ))}
           {!detail && !memories.length && loaded ? (
             <p className="wb-evidence-note">
-              还没有记忆。已经导入的原话可以在「历史对话」里直接搜。
+              {t("还没有记忆。已经导入的原话可以在「历史对话」里直接搜。")}
             </p>
           ) : null}
         </aside>
@@ -503,9 +545,9 @@ export function Workbench({
 
       {processing?.blocked_stages.length ? (
         <p className="wb-floor">
-          有对话排在队里等一个条件。原文已经在库里，随时搜得到。
+          {t("有对话排在队里等一个条件。原文已经在库里，随时搜得到。")}
           <button type="button" className="quiet" onClick={onConfigureModel}>
-            去看看缺什么
+            {t("去看看缺什么")}
           </button>
         </p>
       ) : null}
@@ -520,12 +562,13 @@ function Findings({
   findings: Finding[];
   onPick(finding: Finding): void;
 }) {
+  const t = useTranslate();
   if (!findings.length) return null;
   return (
-    <section className="wb-findings" aria-label="我替你看出这几件事">
+    <section className="wb-findings" aria-label={t("我替你看出这几件事")}>
       <div className="wb-findings-head">
-        <b>我替你看出这几件事</b>
-        <span>都是本机记录算出来的，点一条会在图上标出它依据的记忆</span>
+        <b>{t("我替你看出这几件事")}</b>
+        <span>{t("都是本机记录算出来的，点一条会在图上标出它依据的记忆")}</span>
       </div>
       {findings.map((finding) => (
         <div key={finding.id} className="wb-finding">
@@ -539,7 +582,7 @@ function Findings({
                 className="quiet wb-finding-link"
                 onClick={() => onPick(finding)}
               >
-                在图上看
+                {t("在图上看")}
               </button>
             ) : null}
           </div>
@@ -584,19 +627,23 @@ export function NodeDetail({
   onClose(): void;
   compact?: boolean;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const [editing, setEditing] = useState(!compact);
   const formId = useId();
   if (detail) {
     const memory = detail.memory;
     return (
-      <article className="wb-detail" aria-label="这条记忆">
+      <article className="wb-detail" aria-label={t("这条记忆")}>
         <div className="wb-detail-head">
           <span className={`wb-status s-${memory.status}`}>
-            {statusLabel(memory.status)}
+            {t(statusLabel(memory.status))}
           </span>
-          <span className="wb-detail-rev">第 {memory.revision} 版</span>
+          <span className="wb-detail-rev">
+            {t("第 {revision} 版", { revision: memory.revision })}
+          </span>
           <button type="button" className="quiet" onClick={onClose}>
-            收起
+            {t("收起")}
           </button>
         </div>
         {detail.index_sync?.status === "pending" ? (
@@ -604,13 +651,13 @@ export function NodeDetail({
           // the memory here reads correctly and search does not, and nobody
           // would guess that from a sync badge.
           <p className="notice" role="status">
-            搜索里还是改之前那句话。
+            {t("搜索里还是改之前那句话。")}
             {detail.index_sync.last_error_code ===
             "hy_memory_update_rejected" ? (
               // HY has no such memory to re-embed, so retrying cannot end
               // differently. Offering the button anyway would have the user
               // pressing it until they gave up.
-              "HY Memory 里没有这条记忆，重试也补不上。"
+              t("HY Memory 里没有这条记忆，重试也补不上。")
             ) : (
               <button
                 type="button"
@@ -618,7 +665,7 @@ export function NodeDetail({
                 disabled={busy}
                 onClick={onSyncIndex}
               >
-                重试同步
+                {t("重试同步")}
               </button>
             )}
           </p>
@@ -627,7 +674,9 @@ export function NodeDetail({
           <p className="map-memory-reading">{memory.content}</p>
         )}
         {compact && !editing && (
-          <p className="map-origin">{memoryProvenanceLabel(detail)}</p>
+          <p className="map-origin">
+            {memoryProvenanceLabel(detail, language)}
+          </p>
         )}
         {onSaveScopes && (
           <MemoryRecallScope
@@ -638,12 +687,12 @@ export function NodeDetail({
           />
         )}
         {editing && memory.status === "confirmed" ? (
-          <form id={formId} onSubmit={onSave} aria-label="纠正记忆内容">
+          <form id={formId} onSubmit={onSave} aria-label={t("纠正记忆内容")}>
             <label>
-              记忆内容
+              {t("记忆内容")}
               <textarea
                 name="memory-content"
-                aria-label="记忆内容"
+                aria-label={t("记忆内容")}
                 autoComplete="off"
                 required
                 rows={3}
@@ -664,13 +713,13 @@ export function NodeDetail({
               onClick={() => setEditing(true)}
             >
               <PencilLine size={14} aria-hidden="true" />
-              纠正
+              {t("纠正")}
             </button>
           )}
           {editing && memory.status === "confirmed" ? (
             <button type="submit" form={formId} disabled={busy}>
               <Check size={14} aria-hidden="true" />
-              保存纠正
+              {t("保存纠正")}
             </button>
           ) : null}
           {compact && editing && (
@@ -684,7 +733,7 @@ export function NodeDetail({
                 setEditing(false);
               }}
             >
-              取消编辑
+              {t("取消编辑")}
             </button>
           )}
           {detail.history.length > 1 && memory.status !== "deleted" ? (
@@ -693,8 +742,8 @@ export function NodeDetail({
               className="secondary"
               disabled={busy}
               onClick={() => onAction("undo")}
-              title="撤销上次修改"
-              aria-label="撤销上次修改"
+              title={t("撤销上次修改")}
+              aria-label={t("撤销上次修改")}
             >
               <RotateCcw size={15} aria-hidden="true" />
             </button>
@@ -707,7 +756,7 @@ export function NodeDetail({
               onClick={() => onAction("delete")}
             >
               <Trash2 size={14} aria-hidden="true" />
-              删除
+              {t("删除")}
             </button>
           ) : null}
         </div>
@@ -719,24 +768,29 @@ export function NodeDetail({
     const trace = graph ? traceFrom(graph, node.node_id, 2) : [];
     const direct = trace.filter((step) => step.hop === 1);
     return (
-      <article className="wb-detail" aria-label="这个节点">
+      <article className="wb-detail" aria-label={t("这个节点")}>
         <div className="wb-detail-head">
-          <span className="wb-status">{nodeTypeLabel(node.node_type)}</span>
+          <span className="wb-status">{t(nodeTypeLabel(node.node_type))}</span>
           <strong>{node.label}</strong>
         </div>
         <p className="wb-detail-note">
-          这不是一条记忆，是记忆挂靠的东西。直接关系 {direct.length} 条，
-          两跳可达 {trace.length - direct.length} 条。
+          {t(
+            "这不是一条记忆，是记忆挂靠的东西。直接关系 {direct} 条，两跳可达 {indirect} 条。",
+            {
+              direct: direct.length,
+              indirect: trace.length - direct.length,
+            },
+          )}
         </p>
         <ul className="wb-trace">
           {trace.slice(0, 8).map((step) => (
             <li key={`${step.edge.edge_id}:${step.hop}`}>
               <span className="wb-trace-hop">
-                {step.hop === 1 ? "直接" : "两跳"}
+                {step.hop === 1 ? t("直接") : t("两跳")}
               </span>
-              {relationLabel(step.edge.relation)} · {step.node.label}
+              {relationLabel(step.edge.relation, t)} · {step.node.label}
               <span className="wb-trace-origin">
-                {edgeOriginLabel(step.edge.origin)}
+                {t(edgeOriginLabel(step.edge.origin))}
               </span>
             </li>
           ))}
@@ -746,12 +800,14 @@ export function NodeDetail({
   }
 
   return (
-    <article className="wb-detail wb-detail-idle" aria-label="这个事项">
+    <article className="wb-detail wb-detail-idle" aria-label={t("这个事项")}>
       <div className="wb-detail-head">
         <strong>{matterLabel}</strong>
       </div>
       <p className="wb-detail-note">
-        图上的圈是记忆，线是它们被同一段对话提到过。选中一个，这里会变成它的来历和改法。左边换一个事项，图跟着换。
+        {t(
+          "图上的圈是记忆，线是它们被同一段对话提到过。选中一个，这里会变成它的来历和改法。左边换一个事项，图跟着换。",
+        )}
       </p>
     </article>
   );
@@ -785,6 +841,7 @@ export function Answer({
   asPage: boolean;
   suspended?: boolean;
 }) {
+  const t = useTranslate();
   const shownMemories = (answer ?? streaming)?.memories ?? [];
   // Only a finished answer, and only one that stands on something. Filing
   // back what a stream is halfway through writing would keep a sentence that
@@ -799,11 +856,19 @@ export function Answer({
     groundedAnswer.answer.length > ANSWER_AS_MEMORY_LIMIT;
   return (
     <div className="wb-answer" aria-live="polite">
-      <p>{answer ? answer.answer : streaming?.text || "正在检索记忆…"}</p>
+      <p>{answer ? answer.answer : streaming?.text || t("正在检索记忆…")}</p>
       <p className="wb-answer-source">
         {answer
-          ? `${answer.mode === "generated" ? "模型综合" : answer.mode === "extractive" ? "原文摘录" : "没有命中"} · 依据 ${shownMemories.length} 条已确认记忆`
-          : `已召回 ${shownMemories.length} 条`}
+          ? t("{mode} · 依据 {count} 条已确认记忆", {
+              mode:
+                answer.mode === "generated"
+                  ? t("模型综合")
+                  : answer.mode === "extractive"
+                    ? t("原文摘录")
+                    : t("没有命中"),
+              count: shownMemories.length,
+            })
+          : t("已召回 {count} 条", { count: shownMemories.length })}
       </p>
       {groundedAnswer && !tooLong ? (
         <button
@@ -818,12 +883,12 @@ export function Answer({
             })
           }
         >
-          存为记忆
+          {t("存为记忆")}
         </button>
       ) : null}
       {tooLong ? (
         <p className="wb-answer-source">
-          这个回答太长，超过当前保存上限，暂不能存为记忆。
+          {t("这个回答太长，超过当前保存上限，暂不能存为记忆。")}
         </p>
       ) : null}
       {asPage ? (
@@ -833,7 +898,9 @@ export function Answer({
         // summary drifts from what it summarised and nothing notices, and a
         // rebuilt one cannot.
         <p className="wb-answer-source">
-          这是综述，不是记忆。每次都会重新生成，所以它不会和下面这些记忆走散。
+          {t(
+            "这是综述，不是记忆。每次都会重新生成，所以它不会和下面这些记忆走散。",
+          )}
         </p>
       ) : null}
       <ol>
@@ -853,7 +920,8 @@ export function Answer({
         <HandoffBar
           memories={shownMemories}
           suspended={suspended}
-          matterLabel="这次回答"
+          contextId="answer"
+          matterLabel={t("这次回答")}
           answerText={answer.answer}
         />
       )}
@@ -868,22 +936,23 @@ function EmptyStage({
   loaded: boolean;
   onConnect(): void;
 }) {
+  const t = useTranslate();
   if (!loaded) {
     return (
       <div className="wb-graph-empty">
-        <p>正在读取记忆…</p>
-        <small>本地 Core 启动后会自动出现，不用刷新。</small>
+        <p>{t("正在读取记忆…")}</p>
+        <small>{t("本地 Core 启动后会自动出现，不用刷新。")}</small>
       </div>
     );
   }
   return (
     <div className="wb-graph-empty">
-      <p>这里还没有东西可以连起来。</p>
+      <p>{t("这里还没有东西可以连起来。")}</p>
       <small>
-        授权一个来源之后，先出现的是来源和主题的骨架，记忆会陆续挂上去。
+        {t("授权一个来源之后，先出现的是来源和主题的骨架，记忆会陆续挂上去。")}
       </small>
       <button type="button" onClick={onConnect}>
-        去授权一个来源
+        {t("去授权一个来源")}
       </button>
     </div>
   );
@@ -922,6 +991,7 @@ function narrow(
 function skeleton(
   sources: SourceResponse[],
   graph: MemoryGraphResponse | null,
+  language: UiLanguage,
 ): MemoryGraphResponse {
   const withHistory = sources.filter(
     (item) => item.authorized && item.imported_conversations > 0,
@@ -933,7 +1003,10 @@ function skeleton(
     nodes: withHistory.map((item) => ({
       node_id: `source:${item.source_id}`,
       node_type: "source" as const,
-      label: `${item.display_name} · ${item.imported_conversations} 段`,
+      label: translate(language, "{name} · {count} 段", {
+        name: item.display_name,
+        count: item.imported_conversations,
+      }),
       memory_id: null,
       source_id: item.source_id,
       kind: null,
@@ -981,34 +1054,37 @@ function evidenceOf(
 
 /** Questions built from what is actually in this matter, so a chip never
  * offers to answer something there is no record of. */
-function chipsFor(memories: GovernedMemory[]): string[] {
+function chipsFor(memories: GovernedMemory[], language: UiLanguage): string[] {
   if (!memories.length) return [];
-  const chips = ["这里最近有什么变化"];
-  if (memories.length >= 3) chips.push("把这些归纳成几条");
+  const chips = [translate(language, "这里最近有什么变化")];
+  if (memories.length >= 3) chips.push(translate(language, "把这些归纳成几条"));
   return chips;
 }
 
-function when(iso: string | null): string {
-  if (!iso) return "时间不明";
+function when(iso: string | null, language: UiLanguage): string {
+  if (!iso) return translate(language, "时间不明");
   const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "时间不明";
+  if (Number.isNaN(at.getTime())) return translate(language, "时间不明");
   return `${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 
-function statusLabel(status: GovernedMemory["status"]): string {
+function statusLabel(status: GovernedMemory["status"]): UiMessage {
   if (status === "confirmed") return "已可用";
   if (status === "superseded") return "已被取代";
   return "已删除";
 }
 
-function nodeTypeLabel(type: MemoryGraphNode["node_type"]): string {
+function nodeTypeLabel(type: MemoryGraphNode["node_type"]): UiMessage {
   if (type === "source") return "来源 App";
   if (type === "topic") return "主题";
   if (type === "schema") return "HY 归纳";
   return "记忆";
 }
 
-function graphReceipt(graph: MemoryGraphResponse): string {
+function graphReceipt(
+  graph: MemoryGraphResponse,
+  t: ReturnType<typeof useTranslate>,
+): string {
   const counts = {
     provenance: 0,
     same_conversation: 0,
@@ -1017,24 +1093,25 @@ function graphReceipt(graph: MemoryGraphResponse): string {
   };
   for (const edge of graph.edges) counts[edge.origin] += 1;
   const parts = [
-    `原话来源 ${counts.provenance} 条`,
-    `同一次对话 ${counts.same_conversation} 条`,
+    t("原话来源 {count} 条", { count: counts.provenance }),
+    t("同一次对话 {count} 条", { count: counts.same_conversation }),
   ];
   // Only mentioned once there is one. A young library has no shared tag yet,
   // and a line reading 0 would be one more thing to read past.
-  if (counts.shared_tag > 0) parts.push(`同一个主题 ${counts.shared_tag} 条`);
+  if (counts.shared_tag > 0)
+    parts.push(t("同一个主题 {count} 条", { count: counts.shared_tag }));
   if (counts.hy_relation > 0) {
-    parts.push(`HY Memory 归纳 ${counts.hy_relation} 条`);
+    parts.push(t("HY Memory 归纳 {count} 条", { count: counts.hy_relation }));
     return parts.join(" · ");
   }
   parts.push(
     graph.hy_graph_available
-      ? "HY Memory 还没归纳出关系，点击上方按钮运行 System 2"
-      : "还没配置可用模型，无法读取 HY Memory 的归纳关系",
+      ? t("HY Memory 还没归纳出关系，点击上方按钮运行 System 2")
+      : t("还没配置可用模型，无法读取 HY Memory 的归纳关系"),
   );
   return parts.join(" · ");
 }
-function edgeOriginLabel(origin: MemoryGraphEdge["origin"]): string {
+function edgeOriginLabel(origin: MemoryGraphEdge["origin"]): UiMessage {
   if (origin === "hy_relation") return "HY Memory 归纳";
   if (origin === "same_conversation") return "同一次对话";
   // Named before the fallthrough. The chain ends in 原话来源, so a missing
@@ -1044,8 +1121,11 @@ function edgeOriginLabel(origin: MemoryGraphEdge["origin"]): string {
 }
 
 /** Walk out from one node so each drawn line can be checked by hand. */
-function relationLabel(relation: string): string {
-  const labels: Record<string, string> = {
+function relationLabel(
+  relation: string,
+  t: ReturnType<typeof useTranslate>,
+): string {
+  const labels: Record<string, UiMessage> = {
     evidence_source: "来源于",
     same_conversation: "同一次对话",
     shared_tag: "同一个主题",
@@ -1053,7 +1133,7 @@ function relationLabel(relation: string): string {
     tagged_with: "属于主题",
     related_to: "相关",
   };
-  return labels[relation] ?? relation.replaceAll("_", " ");
+  return labels[relation] ? t(labels[relation]) : relation.replaceAll("_", " ");
 }
 
 /** Two numbers rather than one total.

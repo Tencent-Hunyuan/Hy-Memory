@@ -149,10 +149,19 @@ describe("ensureStableRuntimeThenRepair", () => {
     expect(repair).toHaveBeenCalledOnce();
   });
 
-  it("reports only allowlisted stable installer codes", () => {
+  it("reports only allowlisted startup codes in diagnostics", () => {
     expect(
       stableRuntimeErrorCode(new Error("installed_version_conflict")),
     ).toBe("installed_version_conflict");
+    expect(
+      stableRuntimeErrorCode(new Error("host_permission_store_unavailable")),
+    ).toBe("host_permission_store_unavailable");
+    expect(
+      stableRuntimeErrorCode(new Error("runtime_broker_unavailable")),
+    ).toBe("runtime_broker_unavailable");
+    expect(
+      stableRuntimeUserMessage(new Error("runtime_broker_unavailable"), "en"),
+    ).not.toContain("runtime_broker_unavailable");
     expect(
       stableRuntimeErrorCode(new Error("secret=/Users/person/private-token")),
     ).toBe("desktop_start_failed");
@@ -273,5 +282,14 @@ describe("startup install errors", () => {
     expect(stableRuntimeUserMessage("not an error")).toContain(
       "MemHub 启动失败",
     );
+    const english = stableRuntimeUserMessage(
+      new Error("secret=/Users/private"),
+      "en",
+    );
+    expect(english).toContain("MemHub could not start");
+    expect(english).not.toContain("/Users/private");
+    expect(
+      stableRuntimeUserMessage(new Error("installed_version_conflict"), "en"),
+    ).toContain("runtime does not match");
   });
 });

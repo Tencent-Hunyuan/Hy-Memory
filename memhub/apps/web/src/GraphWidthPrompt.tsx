@@ -1,9 +1,11 @@
 import type {
   GraphWidthDecision,
   GraphWidthStatus,
+  UiMessage,
 } from "@one-memory/contracts";
 import { useEffect, useRef, useState } from "react";
-import { decideGraphWidth, getGraphWidth } from "./api";
+import { apiErrorCode, decideGraphWidth, getGraphWidth } from "./api";
+import { useTranslate } from "./ui-language";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 
@@ -20,10 +22,14 @@ export function GraphWidthPrompt({
 }: {
   onResolved?(): void;
 }) {
+  const t = useTranslate();
   const [status, setStatus] = useState<GraphWidthStatus | null>(null);
   const [decision, setDecision] = useState<GraphWidthDecision>("keep_existing");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    key: UiMessage;
+    values?: Readonly<Record<string, string | number>>;
+  } | null>(null);
   const [settled, setSettled] = useState(false);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -81,15 +87,25 @@ export function GraphWidthPrompt({
           ? "graph_width_decision_failed"
           : "graph_width_decision_result_unknown",
       });
-      // A refusal is a fact; a timeout is not. Only the refusal branch may
-      // present the raw code as "failed", and the unknown branch says so.
-      setError(
-        refused
-          ? reason instanceof Error
-            ? reason.message
-            : String(reason)
-          : "宽度选择尚未确认，现有记忆库未被改动。请重试。",
-      );
+      // A refused request may show its external detail verbatim; an unknown
+      // write outcome must not claim the graph or export was left unchanged.
+      const code = apiErrorCode(reason);
+      if (code === "graph_export_failed") {
+        setError({ key: "导出失败，未生成备份；请不要将其视为已备份。" });
+      } else if (refused && code === "export_root_required") {
+        setError({ key: "缺少导出位置，未生成备份；请检查设置后重试。" });
+      } else if (refused) {
+        setError({
+          key: "宽度选择未能完成：{reason}",
+          values: {
+            reason: reason instanceof Error ? reason.message : String(reason),
+          },
+        });
+      } else {
+        setError({
+          key: "宽度选择结果尚未确认，请核对现有记忆库状态后再重试。",
+        });
+      }
     } finally {
       setBusy(false);
     }
@@ -98,15 +114,21 @@ export function GraphWidthPrompt({
   const choices: { value: GraphWidthDecision; label: string }[] = [
     {
       value: "keep_existing",
-      label: `保留现有记忆库（默认）：继续用原来的 embedding 配置，${status.memory_count} 条记忆和关系图都不动`,
+      label: t(
+        "保留现有记忆库（默认）：继续用原来的 embedding 配置，{count} 条记忆和关系图都不动",
+        { count: status.memory_count },
+      ),
     },
     {
       value: "rebuild_with_new",
-      label: `改用内置模型：现有关系图会被归档（不删除），${status.memory_count} 条记忆的关系需要重新建一遍`,
+      label: t(
+        "改用内置模型：现有关系图会被归档（不删除），{count} 条记忆的关系需要重新建一遍",
+        { count: status.memory_count },
+      ),
     },
     {
       value: "export_first",
-      label: "先导出再决定：现在什么都不动，导出之后再回来选",
+      label: t("先导出再决定：现在什么都不动，导出之后再回来选"),
     },
   ];
 
@@ -115,7 +137,7 @@ export function GraphWidthPrompt({
       className="graph-width-prompt"
       role="dialog"
       aria-modal="true"
-      aria-label="现有记忆库和内置模型对不上"
+      aria-label={t("现有记忆库和内置模型对不上")}
       ref={panel}
       onKeyDown={(event) => {
         if (event.key !== "Tab" || !panel.current) return;
@@ -136,9 +158,15 @@ export function GraphWidthPrompt({
         }
       }}
     >
-      <h2>现有记忆库和内置模型对不上</h2>
+      <h2>{t("现有记忆库和内置模型对不上")}</h2>
       <p>
-        {`你现在的记忆库按 ${stored_width} 维建的，内置模型出的是 ${expected_width} 维。两者接不上，不选一个的话抽取会一直失败。`}
+        {t(
+          "你现在的记忆库按 {stored} 维建的，内置模型出的是 {expected} 维。两者接不上，不选一个的话抽取会一直失败。",
+          {
+            stored: stored_width,
+            expected: expected_width,
+          },
+        )}
       </p>
       <ul>
         {choices.map((choice) => (
@@ -159,12 +187,13 @@ export function GraphWidthPrompt({
       </ul>
       {exportedPath ? (
         <p className="notice">
-          已导出到 <code>{exportedPath}</code>。原库没有动，现在可以再选一次。
+          {t("已导出到")} <code>{exportedPath}</code>
+          {t("。原库没有动，现在可以再选一次。")}
         </p>
       ) : null}
-      {error ? <p className="notice">{error}</p> : null}
+      {error ? <p className="notice">{t(error.key, error.values)}</p> : null}
       <button type="button" disabled={busy} onClick={() => void confirm()}>
-        就这么办
+        {t("就这么办")}
       </button>
     </div>
   );

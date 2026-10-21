@@ -1,7 +1,13 @@
-import type { MemoryDetail } from "@one-memory/contracts";
+import {
+  type MemoryDetail,
+  translate,
+  type UiLanguage,
+  type UiMessage,
+} from "@one-memory/contracts";
 import { Check, Globe2, LockKeyhole, Settings2 } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { apiErrorCode } from "./api";
+import { useTranslate } from "./ui-language";
 import { isDefiniteRefusal } from "./write-outcome";
 
 type Mode = "limited" | "shared" | "disabled";
@@ -14,7 +20,11 @@ const modeOf = (scopes: string[]): Mode =>
       ? "disabled"
       : "limited";
 
-export function memoryProvenanceLabel(detail: MemoryDetail): string {
+export function memoryProvenanceLabel(
+  detail: MemoryDetail,
+  language: UiLanguage = "zh-CN",
+): string {
+  const t = (key: UiMessage) => translate(language, key);
   const evidence = detail.evidence.filter((item) => item.available);
   if (
     evidence.length &&
@@ -23,7 +33,7 @@ export function memoryProvenanceLabel(detail: MemoryDetail): string {
     const authors = new Set(
       evidence.map((item) => item.written_by ?? "unknown"),
     );
-    const author =
+    const author: UiMessage =
       authors.size !== 1
         ? "多位作者"
         : authors.has("person")
@@ -31,15 +41,17 @@ export function memoryProvenanceLabel(detail: MemoryDetail): string {
           : authors.has("agent")
             ? "Agent 原文"
             : "作者未知";
-    return `导入的已有记忆 · ${author}`;
+    return translate(language, "导入的已有记忆 · {author}", {
+      author: t(author),
+    });
   }
   return detail.memory.origin === "manual"
-    ? "手动添加"
+    ? t("手动添加")
     : detail.memory.origin === "answered"
-      ? "问答生成"
+      ? t("问答生成")
       : detail.memory.origin === "agent"
-        ? "由 AI 回复整理"
-        : "由原始对话整理";
+        ? t("由 AI 回复整理")
+        : t("由原始对话整理");
 }
 
 export function MemoryRecallScope({
@@ -51,12 +63,13 @@ export function MemoryRecallScope({
   busy: boolean;
   onSave(scopes: string[]): Promise<void>;
 }) {
+  const t = useTranslate();
   const id = useId();
   const editButton = useRef<HTMLButtonElement>(null);
   const [editing, setEditing] = useState(false);
   const current = modeOf(detail.memory.scopes);
   const [mode, setMode] = useState<Mode>(current);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UiMessage | "">("");
   const [saving, setSaving] = useState(false);
   const previous =
     [
@@ -69,10 +82,10 @@ export function MemoryRecallScope({
   const editable = detail.memory.status === "confirmed";
   const summary =
     current === "shared"
-      ? "所有关联工具"
+      ? t("所有关联工具")
       : current === "disabled"
-        ? "已停止外部记忆召回"
-        : "原有限定范围";
+        ? t("已停止外部记忆召回")
+        : t("原有限定范围");
   const close = () => {
     setEditing(false);
     setMode(current);
@@ -107,18 +120,18 @@ export function MemoryRecallScope({
     }
   };
   return (
-    <section className="memory-recall-scope" aria-label="外部记忆召回范围">
+    <section className="memory-recall-scope" aria-label={t("外部记忆召回范围")}>
       <div className="recall-scope-heading">
         <span>
           <LockKeyhole size={15} aria-hidden="true" />
-          外部记忆召回
+          {t("外部记忆召回")}
         </span>
         {editable && !editing && (
           <button
             type="button"
             className="quiet map-tool"
-            title="调整召回范围"
-            aria-label="调整召回范围"
+            title={t("调整召回范围")}
+            aria-label={t("调整召回范围")}
             ref={editButton}
             disabled={disabled}
             onClick={() => {
@@ -134,13 +147,13 @@ export function MemoryRecallScope({
       {editing && (
         <>
           <fieldset disabled={disabled}>
-            <legend className="sr-only">选择召回范围</legend>
+            <legend className="sr-only">{t("选择召回范围")}</legend>
             {(
               [
                 ...(previous.length ? [["limited", "原有限定范围"]] : []),
                 ["shared", "所有关联工具"],
                 ["disabled", "停止外部记忆召回"],
-              ] as [Mode, string][]
+              ] as [Mode, UiMessage][]
             ).map(([value, label]) => (
               <label key={value} className="recall-scope-option">
                 <input
@@ -158,7 +171,7 @@ export function MemoryRecallScope({
                 ) : (
                   <LockKeyhole size={16} aria-hidden="true" />
                 )}
-                <span>{label}</span>
+                <span>{t(label)}</span>
               </label>
             ))}
           </fieldset>
@@ -169,27 +182,27 @@ export function MemoryRecallScope({
               onClick={() => void save()}
             >
               <Check size={15} aria-hidden="true" />
-              {saving ? "正在保存…" : "保存召回范围"}
+              {saving ? t("正在保存…") : t("保存召回范围")}
             </button>
             <button
               type="button"
               className="quiet"
-              aria-label="取消范围修改"
+              aria-label={t("取消范围修改")}
               disabled={disabled}
               onClick={close}
             >
-              取消
+              {t("取消")}
             </button>
           </div>
         </>
       )}
       {error && (
         <p className="notice danger" role="alert">
-          {error}
+          {t(error)}
         </p>
       )}
       <p className="recall-scope-boundary">
-        原文检索仍按来源授权；已带出的内容不会撤回。
+        {t("原文检索仍按来源授权；已带出的内容不会撤回。")}
       </p>
     </section>
   );

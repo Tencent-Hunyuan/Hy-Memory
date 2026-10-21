@@ -1,4 +1,8 @@
-import type { MemoryNoteReceipt, ModelProfile } from "@one-memory/contracts";
+import type {
+  MemoryNoteReceipt,
+  ModelProfile,
+  UiMessage,
+} from "@one-memory/contracts";
 import { FilePlus2, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -10,10 +14,11 @@ import {
 } from "./api";
 import { memoryWriteErrorText } from "./model-error-text";
 import { subscribePoll } from "./poll-scheduler";
+import { useTranslate, useUiLanguage } from "./ui-language";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal } from "./write-outcome";
 
-const states: Record<MemoryNoteReceipt["state"], string> = {
+const states: Record<MemoryNoteReceipt["state"], UiMessage> = {
   waiting_for_model: "原话已保存，等待可用模型",
   waiting_for_permission: "原话已保存，等待整理",
   pending: "原话已保存，等待整理",
@@ -42,6 +47,8 @@ export function MemoryNoteComposer({
   onPendingChange?(note: PendingMemoryNote | null): void;
   suspended?: boolean;
 }) {
+  const t = useTranslate();
+  const language = useUiLanguage();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [notes, setNotes] = useState<MemoryNoteReceipt[]>([]);
@@ -51,9 +58,9 @@ export function MemoryNoteComposer({
   // the line flicker from 尚未配置 to the model name on every open.
   const [modelRead, setModelRead] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [savedToast, setSavedToast] = useState("");
+  const [error, setError] = useState<UiMessage | "">("");
+  const [notice, setNotice] = useState<UiMessage | "">("");
+  const [savedToast, setSavedToast] = useState<UiMessage | "">("");
   const panel = useRef<HTMLElement>(null);
   const isOpen = useRef(false);
   const notesRequest = useRef(0);
@@ -85,7 +92,7 @@ export function MemoryNoteComposer({
   }, []);
 
   const refreshNotes = useCallback(
-    async (failure: string, notifyResults = false) => {
+    async (failure: UiMessage, notifyResults = false) => {
       const request = ++notesRequest.current;
       try {
         const value = await getMemoryNotes();
@@ -274,11 +281,11 @@ export function MemoryNoteComposer({
         data-tour-id="memory-note-trigger"
         onClick={() => setOpen(true)}
       >
-        <FilePlus2 size={16} aria-hidden="true" /> 添加记忆
+        <FilePlus2 size={16} aria-hidden="true" /> {t("添加记忆")}
       </button>
       {savedToast && (
         <p className="memory-note-toast" role="status">
-          {savedToast}
+          {t(savedToast)}
         </p>
       )}
       {open && (
@@ -313,12 +320,12 @@ export function MemoryNoteComposer({
             }}
           >
             <header className="memory-note-heading">
-              <h2 id="memory-note-title">添加记忆</h2>
+              <h2 id="memory-note-title">{t("添加记忆")}</h2>
               <button
                 className="quiet"
                 type="button"
-                aria-label="关闭新增记忆"
-                title="关闭"
+                aria-label={t("关闭新增记忆")}
+                title={t("关闭")}
                 disabled={busy}
                 onClick={close}
               >
@@ -332,7 +339,7 @@ export function MemoryNoteComposer({
               }}
             >
               <label className="memory-note-label" htmlFor="memory-note-text">
-                记下这件事
+                {t("记下这件事")}
               </label>
               <textarea
                 id="memory-note-text"
@@ -340,20 +347,20 @@ export function MemoryNoteComposer({
                 maxLength={12000}
                 value={text}
                 disabled={busy}
-                placeholder="例如：项目周会不排在周五。"
+                placeholder={t("例如：项目周会不排在周五。")}
                 onChange={(event) => setText(event.target.value)}
               />
               <p className="memory-note-model">
-                整理模型：
+                {t("整理模型：")}
                 {model?.name ??
-                  (modelRead ? "尚未配置，原话仍可保存" : "正在读取")}
+                  (modelRead ? t("尚未配置，原话仍可保存") : t("正在读取"))}
               </p>
               {error && (
                 <p className="error-banner" role="alert">
-                  {error}
+                  {t(error)}
                 </p>
               )}
-              {notice && <p role="status">{notice}</p>}
+              {notice && <p role="status">{t(notice)}</p>}
               <div className="consent-actions">
                 {modelRead && !model && (
                   <button
@@ -365,63 +372,71 @@ export function MemoryNoteComposer({
                       onConfigureModel();
                     }}
                   >
-                    配置模型
+                    {t("配置模型")}
                   </button>
                 )}
                 <button type="submit" disabled={busy || !text.trim()}>
-                  {busy ? "保存中…" : "保存原话"}
+                  {busy ? t("保存中…") : t("保存原话")}
                 </button>
               </div>
             </form>
             {notes.length > 0 && (
-              <section className="memory-note-recent" aria-label="最近添加">
-                <h3>最近添加</h3>
+              <section
+                className="memory-note-recent"
+                aria-label={t("最近添加")}
+              >
+                <h3>{t("最近添加")}</h3>
                 <ul>
-                  {notes.map((note) => (
-                    <li key={note.evidence_id}>
-                      <p>{note.text}</p>
-                      <small>{states[note.state]}</small>
-                      {memoryWriteErrorText(note.error) && (
-                        <p className="error-banner">
-                          {memoryWriteErrorText(note.error)}
-                        </p>
-                      )}
-                      {note.error === "hy_memory_model_payment_required" && (
-                        <p className="error-banner">
-                          模型服务要求检查余额或付款状态，原话仍已保存。
-                        </p>
-                      )}
-                      <div className="memory-note-actions">
-                        {note.memory_ids.map((id, index) => (
-                          <button
-                            key={id}
-                            type="button"
-                            className="quiet"
-                            onClick={() => {
-                              close();
-                              onOpenMemory(id);
-                            }}
-                          >
-                            查看记忆
-                            {note.memory_ids.length > 1 ? ` ${index + 1}` : ""}
-                          </button>
-                        ))}
-                        {(note.state === "failed" ||
-                          note.state === "waiting_for_model" ||
-                          note.state === "waiting_for_permission") && (
-                          <button
-                            type="button"
-                            className="quiet"
-                            disabled={busy}
-                            onClick={() => void retry(note)}
-                          >
-                            <RefreshCw size={14} aria-hidden="true" />
-                            重新整理
-                          </button>
+                  {notes.map((note) => {
+                    const writeError = memoryWriteErrorText(note.error);
+                    return (
+                      <li key={note.evidence_id}>
+                        <p>{note.text}</p>
+                        <small>{t(states[note.state])}</small>
+                        {writeError && (
+                          <p className="error-banner">{t(writeError)}</p>
                         )}
-                      </div>
-                    </li>
-                  ))}
+                        {note.error === "hy_memory_model_payment_required" && (
+                          <p className="error-banner">
+                            {t(
+                              "模型服务要求检查余额或付款状态，原话仍已保存。",
+                            )}
+                          </p>
+                        )}
+                        <div className="memory-note-actions">
+                          {note.memory_ids.map((id, index) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className="quiet"
+                              onClick={() => {
+                                close();
+                                onOpenMemory(id);
+                              }}
+                            >
+                              {t("查看记忆")}
+                              {note.memory_ids.length > 1
+                                ? ` ${(index + 1).toLocaleString(language)}`
+                                : ""}
+                            </button>
+                          ))}
+                          {(note.state === "failed" ||
+                            note.state === "waiting_for_model" ||
+                            note.state === "waiting_for_permission") && (
+                            <button
+                              type="button"
+                              className="quiet"
+                              disabled={busy}
+                              onClick={() => void retry(note)}
+                            >
+                              <RefreshCw size={14} aria-hidden="true" />
+                              {t("重新整理")}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             )}

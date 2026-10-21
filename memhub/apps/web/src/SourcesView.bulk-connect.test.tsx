@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -9,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SourcesView } from "./SourcesView";
+import { setUiLanguage } from "./ui-language";
 import type { useImportSources } from "./use-import-sources";
 
 afterEach(() => {
@@ -178,6 +180,130 @@ const fullGrant = {
 };
 
 describe("connecting every app at once", () => {
+  it("shows the English preview, accessible source control and success without changing host names or paths", async () => {
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    try {
+      const api = setup();
+      const user = userEvent.setup();
+      expect(
+        screen.getByRole("checkbox", { name: "Process WorkBuddy" }),
+      ).toBeTruthy();
+      expect(screen.getByText(/Total: 1 conversations/)).toBeTruthy();
+      await user.click(
+        await screen.findByRole("button", { name: "Connect all apps (2)" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: "Connect apps (2)",
+      });
+      expect(dialog.textContent).toContain("Cursor");
+      expect(dialog.textContent).toContain("Claude");
+      expect(dialog.textContent).toContain("/synthetic/.claude.json");
+      expect(dialog.textContent).toContain(
+        "Install connection and allow memory access",
+      );
+      expect(dialog.textContent).toContain(
+        "Already installed; allow memory access",
+      );
+      expect(within(dialog).getByText("Files to change: 1")).toBeTruthy();
+      expect(dialog.textContent).not.toMatch(/[\u3400-\u9fff]/);
+      expect(api.installRecall).not.toHaveBeenCalled();
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: "Confirm app connections (2)",
+        }),
+      );
+      expect((await within(dialog).findByRole("status")).textContent).toBe(
+        "Apps connected: 2.",
+      );
+      expect(api.setRecallPermission).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+      delete window.oneMemory;
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+
+  it("shows English skip reasons and incomplete app names without changing the result", async () => {
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    try {
+      const api = setup();
+      api.previewRecallInstall.mockRejectedValueOnce(
+        new Error("controlled preview failure"),
+      );
+      const user = userEvent.setup();
+      await user.click(
+        await screen.findByRole("button", { name: "Connect all apps (2)" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: "Connect apps (1)",
+      });
+      expect(dialog.textContent).toContain(
+        "Skipped: Could not preview this app's connection changes",
+      );
+      expect(dialog.textContent).toContain("Apps not prepared: 1; skipped.");
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: "Confirm app connections (1)",
+        }),
+      );
+      expect((await within(dialog).findByRole("status")).textContent).toBe(
+        "Apps connected: 1; unfinished: 1 — Claude (Could not preview this app's connection changes). Retry individually below.",
+      );
+      expect(api.installRecall).not.toHaveBeenCalled();
+      expect(api.setRecallPermission).toHaveBeenCalledTimes(1);
+      expect(dialog.textContent).not.toMatch(/[\u3400-\u9fff]/);
+    } finally {
+      cleanup();
+      delete window.oneMemory;
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+
+  it("translates a known write failure in the English alert and receipt", async () => {
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    try {
+      const api = setup();
+      api.installRecall.mockRejectedValueOnce(
+        new Error("host_permission_store_unavailable"),
+      );
+      const user = userEvent.setup();
+      await user.click(
+        await screen.findByRole("button", { name: "Connect all apps (2)" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: "Connect apps (2)",
+      });
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: "Confirm app connections (2)",
+        }),
+      );
+      expect((await within(dialog).findByRole("status")).textContent).toBe(
+        "Apps connected: 1; unfinished: 1 — Claude (Permission storage is unavailable). Retry individually below.",
+      );
+      expect(within(dialog).getByRole("alert").textContent).toBe(
+        "Permission storage is unavailable. Retry this app separately or later.",
+      );
+      expect(dialog.textContent).not.toMatch(/[\u3400-\u9fff]/);
+    } finally {
+      cleanup();
+      delete window.oneMemory;
+      await act(async () => {
+        await setUiLanguage("zh-CN");
+      });
+    }
+  });
+
   it("reads what it would write before writing any of it", async () => {
     const api = setup();
     const user = userEvent.setup();

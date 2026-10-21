@@ -48,6 +48,11 @@ class FakeWindow extends EventEmitter {
   isDestroyed() {
     return this.destroyed;
   }
+  isMinimized() {
+    return false;
+  }
+  restore() {}
+  focus() {}
   show() {}
   async loadURL(url: string) {
     this.frame.url = url;
@@ -193,9 +198,11 @@ async function startup() {
   await import("./main.js");
   if (!fake.ready) throw new Error("No startup callback");
   await fake.ready();
-  if (fake.windows.length === 0 && fake.error.mock.calls.length > 0) {
-    throw new Error(String(fake.error.mock.calls.at(-1)?.[1]));
-  }
+  expect(fake.error).not.toHaveBeenCalled();
+  expect(fake.windows.at(-1)?.frame.url).toBe(
+    fake.packaged ? "one-memory://app/index.html" : "http://127.0.0.1:5173",
+  );
+  if (!fake.windows[0]) throw new Error("Missing startup window");
   return fake.windows[0];
 }
 const eventFor = (window: FakeWindow) => ({

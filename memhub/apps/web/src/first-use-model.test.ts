@@ -116,6 +116,68 @@ describe("first use evidence and draft boundaries", () => {
     expect(text).toContain("不代表完整个人画像");
     expect(text).toContain("workspace:project-a");
   });
+  it.each(["same", "switch", "new"] as const)(
+    "localizes only the fixed context wrapper for %s",
+    (scene) => {
+      const topic = "用户自定主题";
+      const source = "用户原始来源";
+      const memory = guideDetail({ content: "用户原样记忆" });
+      const chinese = draftForScenario(scene, "context", topic, memory, source);
+      const english = draftForScenario(
+        scene,
+        "context",
+        topic,
+        memory,
+        source,
+        "en",
+      );
+      expect(chinese).toContain("来自 MemHub 的「用户自定主题」历史背景");
+      expect(chinese).toContain("适用范围（未扩大）：workspace:project-a");
+      expect(english).toContain("Background on “用户自定主题” from MemHub");
+      expect(english).toContain("Scope (not expanded): workspace:project-a");
+      expect(english).toContain("用户原样记忆");
+      expect(english).toContain("[m1 · v1]");
+      expect(english).not.toContain("适用范围（未扩大）");
+      if (scene === "switch") expect(english).toContain(source);
+      if (scene === "new")
+        expect(english).toContain("not a complete profile of me");
+    },
+  );
+  it.each(["same", "switch", "new"] as const)(
+    "localizes only the fixed lookup instructions for %s",
+    (scene) => {
+      const text = draftForScenario(
+        scene,
+        "query",
+        "用户自定主题",
+        guideDetail(),
+        "用户原始来源",
+        "en",
+      );
+      expect(text).toContain("related to “用户自定主题”");
+      expect(text).toContain("sources and citations actually returned");
+      expect(text).toContain("Do not guess, expand access permissions");
+      expect(text).not.toContain("周会不安排在周五");
+      expect(text).not.toContain("周五我有其他安排");
+      expect(text).not.toContain("请先用 MemHub");
+      if (scene === "switch") expect(text).toContain("用户原始来源");
+    },
+  );
+  it("uses English fixed fallbacks for empty topics without changing Chinese defaults", () => {
+    const memory = guideDetail();
+    expect(
+      draftForScenario("same", "context", " ", memory, "Cursor"),
+    ).toContain("来自 MemHub 的「这次工作」历史背景");
+    expect(
+      draftForScenario("same", "context", " ", memory, "Cursor", "en"),
+    ).toContain("Background on “this work” from MemHub");
+    expect(draftForScenario("same", "query", " ", memory, "Cursor")).toContain(
+      "之前讨论的工作",
+    );
+    expect(
+      draftForScenario("same", "query", " ", memory, "Cursor", "en"),
+    ).toContain("the work we discussed");
+  });
   it("invalidates changed revision, content, scope, citation or status", () => {
     const original = guideDetail();
     expect(sameGuideMemory(original, guideDetail())).toBe(true);

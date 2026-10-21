@@ -5,6 +5,7 @@ import type {
   ConnectionSetupPreview,
   ConnectionSetupResult,
   ConnectionSetupSelection,
+  UiLanguage,
 } from "@one-memory/contracts";
 import type { DebugLogSnapshot } from "./debug-log-types.js";
 
@@ -214,6 +215,11 @@ export interface RecallUninstallPreview {
 declare global {
   interface Window {
     oneMemory?: {
+      getUiLanguage?(): Promise<UiLanguage>;
+      setUiLanguage?(language: UiLanguage): Promise<UiLanguage>;
+      onUiLanguageChanged?(
+        listener: (language: UiLanguage) => void,
+      ): () => void;
       getBuildInfo?(): {
         version: string;
         buildNumber: string;

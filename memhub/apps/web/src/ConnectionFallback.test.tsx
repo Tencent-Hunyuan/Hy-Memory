@@ -3,10 +3,12 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectionFallback } from "./ConnectionFallback";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   delete window.oneMemory;
+  await setUiLanguage("zh-CN");
 });
 describe("ConnectionFallback", () => {
   it("loads machine-local material on demand and never calls copy a connection", async () => {
@@ -59,6 +61,27 @@ describe("ConnectionFallback", () => {
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toContain("复制失败"),
     );
+  });
+  it("switches visible copy while preserving machine-supplied connection material", async () => {
+    const user = userEvent.setup();
+    const material = "local-only-config";
+    window.oneMemory = {
+      getConnectionMaterial: vi
+        .fn()
+        .mockResolvedValue({ mcp: material, shell: null, prompt: material }),
+      setUiLanguage: vi.fn().mockResolvedValue("en"),
+    } as unknown as Window["oneMemory"];
+    render(<ConnectionFallback />);
+    await user.click(screen.getByText("连接其他工具"));
+    await screen.findByLabelText("本机连接材料");
+    await setUiLanguage("en");
+    expect(screen.getByText("Connect other tools")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Local connection details" }),
+    ).toHaveProperty("value", material);
+    expect(
+      screen.getByText(/Contains local paths, but no memories or keys/),
+    ).toBeTruthy();
   });
   it("does not invent runtime paths in the browser", () => {
     render(<ConnectionFallback />);

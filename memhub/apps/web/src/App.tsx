@@ -1,4 +1,9 @@
-import type { HealthResponse, OnboardingState } from "@one-memory/contracts";
+import {
+  type HealthResponse,
+  type OnboardingState,
+  translate,
+  type UiLanguage,
+} from "@one-memory/contracts";
 import {
   ArrowLeft,
   BookOpen,
@@ -41,6 +46,7 @@ import "./first-use.css";
 import "./r6-shell.css";
 import "./r6-memory.css";
 import "./selected-memory.css";
+import { useTranslate } from "./ui-language";
 import { useImportSources } from "./use-import-sources";
 
 type View =
@@ -64,6 +70,7 @@ export function App() {
 }
 
 function AppContent() {
+  const t = useTranslate();
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [startupRead, setStartupRead] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -216,19 +223,19 @@ function AppContent() {
         {startupRead === "error" ? (
           <div className="boot-status">
             <p className="error-banner" role="alert">
-              暂时无法读取启动状态，请重试。
+              {t("暂时无法读取启动状态，请重试。")}
             </p>
             <R6Button
               onClick={() => {
                 if (!startupFlight.current) readStartup();
               }}
             >
-              重新读取
+              {t("重新读取")}
             </R6Button>
           </div>
         ) : (
           <p className="boot-status" aria-live="polite">
-            正在打开 MemHub…
+            {t("正在打开 MemHub…")}
           </p>
         )}
       </main>
@@ -264,9 +271,9 @@ function AppContent() {
           the text it used to contain. */}
       <header className="r6-titlebar" />
       <a className="skip-link" href="#main-content">
-        跳到主要内容
+        {t("跳到主要内容")}
       </a>
-      <nav className="app-rail" aria-label="主要导航">
+      <nav className="app-rail" aria-label={t("主要导航")}>
         <div className="brand-mark" title="MemHub">
           <Layers3 size={21} strokeWidth={1.6} aria-hidden="true" />
           <span>MemHub</span>
@@ -275,7 +282,7 @@ function AppContent() {
           {import.meta.env.VITE_ENABLE_MATTERS === "true" && (
             <RailButton
               active={displayedView === "matters"}
-              label="事项"
+              label={t("事项")}
               icon={<BookOpen size={18} />}
               onClick={() => navigate("matters")}
             />
@@ -285,7 +292,7 @@ function AppContent() {
               key={destination}
               active={displayedView === destination}
               tourId={destination === "sources" ? "nav-sources" : undefined}
-              label={destination === "memory" ? "记忆" : "应用"}
+              label={destination === "memory" ? t("记忆") : t("应用")}
               icon={
                 destination === "memory" ? (
                   <Network size={19} />
@@ -308,16 +315,18 @@ function AppContent() {
           <RailButton
             active={displayedView === "settings" || displayedView === "health"}
             tourId="nav-settings"
-            label="设置"
+            label={t("设置")}
             icon={<Settings size={18} />}
             onClick={() => navigate("settings")}
           />
           <p
             className="rail-core"
-            title="记忆保存在本机；使用云模型整理或交给已授权的助手时，相关内容会发送给对应服务。"
+            title={t(
+              "记忆保存在本机；使用云模型整理或交给已授权的助手时，相关内容会发送给对应服务。",
+            )}
           >
             <span aria-hidden="true" />
-            本地存储
+            {t("本地存储")}
           </p>
         </div>
       </nav>
@@ -439,7 +448,7 @@ function AppContent() {
               onClick={() => navigate("settings")}
             >
               <ArrowLeft size={16} />
-              设置
+              {t("设置")}
             </button>
             <HealthPanel imports={imports} />
           </>
@@ -480,14 +489,19 @@ export function viewFromUrl(
     : "sources";
 }
 
-export function coreStatus(health: HealthResponse | null): string {
-  if (!health) return "连接 Core…";
+export function coreStatus(
+  health: HealthResponse | null,
+  language: UiLanguage = "zh-CN",
+): string {
+  if (!health) return translate(language, "连接 Core…");
   // After a large import there is a stretch where Core is connected and
   // working through conversations it has not read yet. Saying only "已连接"
   // there reads as "nothing is happening", and the memories are not in yet.
-  if (health.memory_backfill === "running") return "本地 Core 正在整理历史对话";
-  if (health.memory_backfill === "failed") return "历史对话整理未完成";
-  return "本地 Core 已连接";
+  if (health.memory_backfill === "running")
+    return translate(language, "本地 Core 正在整理历史对话");
+  if (health.memory_backfill === "failed")
+    return translate(language, "历史对话整理未完成");
+  return translate(language, "本地 Core 已连接");
 }
 
 function RailButton({

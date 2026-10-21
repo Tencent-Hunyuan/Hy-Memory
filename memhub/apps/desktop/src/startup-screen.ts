@@ -1,3 +1,4 @@
+import { translate, type UiLanguage } from "@one-memory/contracts";
 import { APP_ORIGIN, STARTUP_SCREEN_PATH } from "./app-protocol";
 
 export const STARTUP_SCREEN_URL = `${APP_ORIGIN}${STARTUP_SCREEN_PATH}`;
@@ -10,9 +11,9 @@ export const STARTUP_SCREEN_URL = `${APP_ORIGIN}${STARTUP_SCREEN_PATH}`;
  * the gap. It deliberately makes no IPC calls: it renders before `initialize`
  * has registered any handler, and anything it asked for would fail.
  */
-export function startupScreenHtml(): string {
+export function startupScreenHtml(language: UiLanguage = "zh-CN"): string {
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="${language}">
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'" />
@@ -102,7 +103,7 @@ export function startupScreenHtml(): string {
   <body>
     <main>
       <h1>MemHub</h1>
-      <p>正在启动，正在准备记忆服务…</p>
+      <p>${translate(language, "正在启动，正在准备记忆服务…")}</p>
       <div class="bar"><span></span></div>
     </main>
   </body>

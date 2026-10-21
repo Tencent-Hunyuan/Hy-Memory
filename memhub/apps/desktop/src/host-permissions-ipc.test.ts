@@ -287,9 +287,18 @@ describe.skipIf(process.platform === "win32")(
       expect(fake.startBroker).not.toHaveBeenCalled();
       expect(fake.brokerOptions).toEqual([]);
       expect(fake.error).toHaveBeenCalledWith(
-        expect.any(String),
+        "MemHub 无法启动",
+        expect.stringContaining("MemHub 启动失败"),
+      );
+      expect(fake.error.mock.calls[0]?.[1]).not.toContain(
         "host_permission_store_unavailable",
       );
+      expect(
+        await readFile(
+          path.join(fake.dataDir, "logs", "diagnostic-desktop.jsonl"),
+          "utf8",
+        ),
+      ).toContain('"error_code":"host_permission_store_unavailable"');
       expect(fake.quit).toHaveBeenCalledTimes(1);
       expect(
         await readFile(

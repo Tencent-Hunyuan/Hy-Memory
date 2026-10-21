@@ -1,6 +1,7 @@
+import { translate } from "@one-memory/contracts";
 import { describe, expect, it } from "vitest";
 
-import { modelErrorText } from "./model-error-text";
+import { modelErrorText, modelProfileDisplayText } from "./model-error-text";
 
 describe("模型配置的报错要说人话", () => {
   it("把后端的代号翻成一句能照着做的话", () => {
@@ -22,6 +23,24 @@ describe("模型配置的报错要说人话", () => {
       const text = modelErrorText(code);
       expect(text, code).not.toBe(code);
       expect(text, code).not.toContain("_");
+    }
+  });
+
+  it("只翻译本地固定提示，不翻译外部错误和错误码", () => {
+    const local = "创建结果尚未确认，请核对已保存结果，不要重复提交。";
+    expect(
+      modelProfileDisplayText(local, (key) => translate("zh-CN", key)),
+    ).toBe(local);
+    expect(modelProfileDisplayText(local, (key) => translate("en", key))).toBe(
+      "The creation result is unconfirmed. Review saved results; do not submit again.",
+    );
+    for (const raw of [
+      "provider failed: bad-model",
+      "model_profile_conflict",
+    ]) {
+      expect(modelProfileDisplayText(raw, (key) => translate("en", key))).toBe(
+        raw,
+      );
     }
   });
 

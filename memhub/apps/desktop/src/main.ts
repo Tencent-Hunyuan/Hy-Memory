@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { translate, type UiLanguage } from "@one-memory/contracts";
 import { RecallBroker } from "@one-memory/host-bridge";
 import {
   checkSkillDrift,
@@ -107,10 +108,12 @@ import {
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeUserMessage,
   startStableRuntimeRepair,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
 import { resolveTrialProfile } from "./trial-profile";
+import { UiLanguagePreference } from "./ui-language-preference";
 import { createWindowOptions } from "./window-options";
 
 const developmentUrl =
@@ -124,9 +127,12 @@ let runtimeSupervisor: RuntimeSupervisor | null = null;
 let runtimeDataDir: string | null = null;
 let preserveManagedRuntimeOnQuit = false;
 let disposeTray: (() => void) | null = null;
+let uiLanguage: UiLanguage = "zh-CN";
+const uiLanguageListeners = new Set<() => void>();
 const displayWindows = new Set<BrowserWindow>();
 let disposeDisplayPreferences: (() => void) | null = null;
 let disposeSourceDirectoryPicker: (() => void) | null = null;
+let disposeUiLanguageIpc: (() => void) | null = null;
 let connectionSetup: ReturnType<typeof installConnectionSetupIpc> | null = null;
 let disposeBackgroundHealth: (() => void) | null = null;
 let stableRuntimeRepair: Promise<void> | null = null;
@@ -146,6 +152,7 @@ installEarlyStartupErrorHandler({
     path.join(app.getPath("home"), ".one-memory"),
   stderr: process.stderr,
   showError: (title, message) => dialog.showErrorBox(title, message),
+  getLanguage: () => uiLanguage,
   exit: (code) => app.exit(code),
 });
 const desktopTestIsolation = resolveDesktopTestIsolation(
@@ -224,6 +231,64 @@ if (trialProfile) {
   app.setPath("userData", hourlyUserDataDir);
 }
 
+// Read after the profile-specific userData path is selected, before lifecycle,
+// protocol or startup windows are created. No Core or conversation data is read.
+const languagePreference = new UiLanguagePreference(app.getPath("userData"));
+uiLanguage = languagePreference.get();
+let menuInstalled = false;
+
+function installNativeApplicationMenu(): void {
+  menuInstalled = true;
+  installApplicationMenu({
+    productName: app.getName(),
+    language: uiLanguage,
+    buildMenu: (template) => Menu.buildFromTemplate(template),
+    setMenu: (menu) => Menu.setApplicationMenu(menu),
+    exportLogs: async () => {
+      if (!exportDiagnosticsFromMenu)
+        throw new Error("diagnostic_export_not_ready");
+      await exportDiagnosticsFromMenu();
+    },
+    reportError: (message) => dialog.showErrorBox("MemHub", message),
+  });
+}
+
+function installUiLanguageIpc(): () => void {
+  ipcMain.handle("one-memory:get-ui-language", (event: IpcMainInvokeEvent) => {
+    requireTrustedWindow(event);
+    return uiLanguage;
+  });
+  ipcMain.handle(
+    "one-memory:set-ui-language",
+    (event: IpcMainInvokeEvent, input: unknown) => {
+      requireTrustedWindow(event);
+      const previous = uiLanguage;
+      const next = languagePreference.set(input);
+      if (next !== previous) {
+        uiLanguage = next;
+        if (menuInstalled) installNativeApplicationMenu();
+        for (const notify of uiLanguageListeners) notify();
+        for (const window of displayWindows) {
+          try {
+            assertTrustedWindow(window);
+            window.webContents.mainFrame.send(
+              "one-memory:ui-language-changed",
+              next,
+            );
+          } catch {
+            // Navigation or destruction can race the update; never send elsewhere.
+          }
+        }
+      }
+      return next;
+    },
+  );
+  return () => {
+    ipcMain.removeHandler("one-memory:get-ui-language");
+    ipcMain.removeHandler("one-memory:set-ui-language");
+  };
+}
+
 function prepareProtocol(): void {
   protocol.registerSchemesAsPrivileged([
     {
@@ -273,7 +338,7 @@ let appProtocolInstalled = false;
 function installPackagedWebProtocol(): void {
   if (!app.isPackaged || appProtocolInstalled) return;
   installAppProtocol(path.join(process.resourcesPath, "web"), {
-    startupScreen: startupScreenHtml,
+    startupScreen: () => startupScreenHtml(uiLanguage),
   });
   appProtocolInstalled = true;
 }
@@ -554,6 +619,13 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     }
   } catch {
     // Never fall back to an anonymous broker or reset an existing broken store.
+    await diagnostics.log({
+      level: "error",
+      component: "desktop.lifecycle",
+      event: "desktop.start_failed",
+      outcome: "failed",
+      error_code: "host_permission_store_unavailable",
+    });
     throw new Error("host_permission_store_unavailable");
   }
   if (isQuitting()) return;
@@ -1028,6 +1100,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
   try {
     disposeDisplayPreferences = installDisplayPreferences();
     disposeSourceDirectoryPicker = installSourceDirectoryPicker();
+    disposeUiLanguageIpc = installUiLanguageIpc();
     if (appManagedRuntime) {
       if (!desktopTestIsolation) disableLegacyLoginItem(app, process.platform);
       const installRoot = desktopTestIsolation
@@ -1218,10 +1291,12 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       });
       void dialog.showMessageBox({
         type: "warning",
-        message: "请先将 MemHub 拖到“应用程序”文件夹",
-        detail:
+        message: translate(uiLanguage, "请先将 MemHub 拖到“应用程序”文件夹"),
+        detail: translate(
+          uiLanguage,
           "从“应用程序”重新打开后，MemHub 才会接入其他应用并安装命令行工具。",
-        buttons: ["知道了"],
+        ),
+        buttons: [translate(uiLanguage, "知道了")],
       });
     } else if (
       trialProfile === null &&
@@ -1392,17 +1467,7 @@ if (desktopVersion !== null) {
     revealStartupWindow,
     getWindows: () => [...displayWindows],
     installTray: (open) => {
-      installApplicationMenu({
-        productName: app.getName(),
-        buildMenu: (template) => Menu.buildFromTemplate(template),
-        setMenu: (menu) => Menu.setApplicationMenu(menu),
-        exportLogs: async () => {
-          if (!exportDiagnosticsFromMenu)
-            throw new Error("diagnostic_export_not_ready");
-          await exportDiagnosticsFromMenu();
-        },
-        reportError: (message) => dialog.showErrorBox("MemHub", message),
-      });
+      installNativeApplicationMenu();
       disposeTray = installBackgroundTray({
         app,
         platform: process.platform,
@@ -1412,6 +1477,11 @@ if (desktopVersion !== null) {
         createTray: (image) => new Tray(image),
         buildMenu: (template) => Menu.buildFromTemplate(template),
         open,
+        getLanguage: () => uiLanguage,
+        onLanguageChanged: (refresh) => {
+          uiLanguageListeners.add(refresh);
+          return () => uiLanguageListeners.delete(refresh);
+        },
         reportError: (message) => dialog.showErrorBox("MemHub", message),
         readLoginPreference: () =>
           runtimeDataDir
@@ -1510,6 +1580,9 @@ if (desktopVersion !== null) {
       disposeSourceDirectoryPicker = null;
       disposeDisplayPreferences?.();
       disposeDisplayPreferences = null;
+      disposeUiLanguageIpc?.();
+      disposeUiLanguageIpc = null;
+      uiLanguageListeners.clear();
       displayWindows.clear();
     },
     onError: (error) => {
@@ -1518,8 +1591,8 @@ if (desktopVersion !== null) {
         error instanceof Error ? error.name : "UnknownError",
       );
       dialog.showErrorBox(
-        "MemHub 无法启动",
-        error instanceof Error ? error.message : "desktop_unavailable",
+        translate(uiLanguage, "MemHub 无法启动"),
+        stableRuntimeUserMessage(error, uiLanguage),
       );
     },
   });

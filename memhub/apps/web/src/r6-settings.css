@@ -99,6 +99,18 @@
   flex: 1;
   min-width: 0;
 }
+.r6-settings .r6-setting-row > .ui-language-selector {
+  flex: 0 0 auto;
+}
+.r6-settings .ui-language-selector label {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+}
+.r6-settings .ui-language-selector select {
+  min-height: 36px;
+  min-width: 140px;
+}
 .r6-settings .r6-setting-row > button {
   margin-top: 12px;
   flex-shrink: 0;

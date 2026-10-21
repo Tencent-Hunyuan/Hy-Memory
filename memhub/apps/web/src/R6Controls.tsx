@@ -3,6 +3,7 @@ import {
   type InputHTMLAttributes,
   useId,
 } from "react";
+import { useTranslate } from "./ui-language";
 import "./r6-controls.css";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -35,15 +36,16 @@ export function R6Button({
 }
 
 export function R6Stepper({ active }: { active: 1 | 2 | 3 }) {
+  const t = useTranslate();
   return (
-    <nav className="r6-stepper" aria-label="首次设置进度">
+    <nav className="r6-stepper" aria-label={t("首次设置进度")}>
       <ol>
-        {["导入历史", "连接应用", "沉淀记忆"].map((label, index) => (
+        {(["导入历史", "连接应用", "沉淀记忆"] as const).map((label, index) => (
           <li
             key={label}
             aria-current={active === index + 1 ? "step" : undefined}
           >
-            <span aria-hidden="true">0{index + 1}</span> {label}
+            <span aria-hidden="true">0{index + 1}</span> {t(label)}
           </li>
         ))}
       </ol>
@@ -115,13 +117,16 @@ export function R6Field({
 }
 
 export function R6LocalStorage() {
+  const t = useTranslate();
   return (
     <span
       className="r6-local-storage"
-      title="对话与记忆保存在本机；使用云模型或已授权的助手时，相关内容会发送给对应服务。"
+      title={t(
+        "对话与记忆保存在本机；使用云模型或已授权的助手时，相关内容会发送给对应服务。",
+      )}
     >
       <span aria-hidden="true" />
-      本地存储
+      {t("本地存储")}
     </span>
   );
 }

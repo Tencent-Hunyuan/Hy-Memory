@@ -17,6 +17,7 @@ import type { ComponentProps } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MatterWorkspace } from "./MatterWorkspace";
 import type { MemoryGraph3D } from "./MemoryGraph3D";
+import { setUiLanguage } from "./ui-language";
 
 const api = vi.hoisted(() => ({
   getMatters: vi.fn(),
@@ -118,6 +119,41 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+it("switches matter navigation and search while preserving matter-authored text", async () => {
+  const view = render(<MatterWorkspace onOpenSources={() => {}} />);
+  await screen.findByRole("heading", { name: matter.title });
+  try {
+    await act(async () => {
+      await setUiLanguage("en");
+    });
+    expect(screen.getByRole("heading", { name: "Workspace" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Sources and connections/ }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Search matters" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: matter.title })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Knowledge profile" })).toBeTruthy();
+    expect(
+      screen.getByText("Are you still working on this matter?"),
+    ).toBeTruthy();
+    expect(screen.getByText(matter.purpose)).toBeTruthy();
+    await userEvent.click(
+      screen.getByRole("tab", { name: "Knowledge profile" }),
+    );
+    expect(screen.getByText("Decisions")).toBeTruthy();
+    expect(screen.getByText(matter.claims[0].statement)).toBeTruthy();
+    expect(screen.getByText(matter.uncertainties[0])).toBeTruthy();
+    expect(api.discoverMatters).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+    await act(async () => {
+      await setUiLanguage("zh-CN");
+    });
+  }
+});
 
 it("separates write verification from provider failures without automatic retries", async () => {
   api.getMatters.mockResolvedValue([]);

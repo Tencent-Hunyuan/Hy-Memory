@@ -4,6 +4,7 @@ import type {
   ConversationSearchHit,
   ConversationTranscript,
   GovernedMemory,
+  UiMessage,
 } from "@one-memory/contracts";
 import { isAxiosError } from "axios";
 import { ChevronRight, RefreshCw, Search } from "lucide-react";
@@ -19,13 +20,14 @@ import {
 } from "./api";
 import { AppMark } from "./app-mark";
 import "./conversation-search.css";
+import { useTranslate, useUiLanguage } from "./ui-language";
 
 type OpenedConversation = {
   hit: ConversationSearchHit;
   phase: "loading" | "ready" | "error";
   transcript: ConversationTranscript | null;
   memories: GovernedMemory[];
-  error: string | null;
+  error: UiMessage | null;
 };
 
 type ConversationListHit = ConversationSearchHit;
@@ -41,6 +43,7 @@ export function ConversationSearch({
 }: {
   onOpenMemory?(memoryId: string): void;
 } = {}) {
+  const t = useTranslate();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<ConversationSearchHit[] | null>(null);
   const [browser, setBrowser] = useState<ConversationBrowserPage | null>(null);
@@ -48,7 +51,7 @@ export function ConversationSearch({
   const [sourceOptions, setSourceOptions] = useState<string[]>([]);
   const [emptyReason, setEmptyReason] =
     useState<ConversationSearchEmptyReason | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<UiMessage | null>(null);
   const [busy, setBusy] = useState(false);
   const [mobileMemories, setMobileMemories] = useState(false);
   const [opened, setOpened] = useState<OpenedConversation | null>(null);
@@ -276,14 +279,14 @@ export function ConversationSearch({
           void run(query.trim());
         }}
       >
-        <label htmlFor={`${id}-query`}>搜索历史对话</label>
+        <label htmlFor={`${id}-query`}>{t("搜索历史对话")}</label>
         <div>
           <input
             id={`${id}-query`}
             name="conversation-query"
             autoComplete="off"
             value={query}
-            placeholder="例如：打包、抽取、周末"
+            placeholder={t("例如：打包、抽取、周末")}
             onChange={(event) => setQuery(event.target.value)}
           />
           <button
@@ -293,22 +296,24 @@ export function ConversationSearch({
             }
           >
             <Search size={16} aria-hidden="true" />
-            {busy ? "搜索中…" : "搜索"}
+            {busy ? t("搜索中…") : t("搜索")}
           </button>
         </div>
       </form>
 
       <p className="conversation-search-note">
-        这里搜的是你导入的原始对话，不是记忆。设置模型后，才会开始生成记忆。
+        {t(
+          "这里搜的是你导入的原始对话，不是记忆。设置模型后，才会开始生成记忆。",
+        )}
       </p>
 
       <label className="conversation-source-filter">
-        <span>应用</span>
+        <span>{t("应用")}</span>
         <select
           value={sourceFilter}
           onChange={(event) => setSourceFilter(event.target.value)}
         >
-          <option value="">全部应用</option>
+          <option value="">{t("全部应用")}</option>
           {sourceOptions.map((source) => (
             <option value={source} key={source}>
               {source}
@@ -319,7 +324,7 @@ export function ConversationSearch({
 
       {error ? (
         <div className="conversation-search-error">
-          <p role="alert">{error}</p>
+          <p role="alert">{t(error)}</p>
           <button
             type="button"
             className="quiet"
@@ -327,7 +332,7 @@ export function ConversationSearch({
             onClick={() => void run(lastQuery.current)}
           >
             <RefreshCw size={16} aria-hidden="true" />
-            重新搜索
+            {t("重新搜索")}
           </button>
         </div>
       ) : null}
@@ -335,14 +340,20 @@ export function ConversationSearch({
       {emptyReason ? (
         <p className="conversation-search-empty" role="status">
           {emptyReason === "nothing_imported"
-            ? "先导入历史，然后就能搜了"
-            : "没有找到相关对话"}
+            ? t("先导入历史，然后就能搜了")
+            : t("没有找到相关对话")}
         </p>
       ) : null}
 
       {listedHits.length ? (
-        <section className="conversation-browser" aria-label="历史对话搜索结果">
-          <section className="conversation-browser-list" aria-label="会话列表">
+        <section
+          className="conversation-browser"
+          aria-label={t("历史对话搜索结果")}
+        >
+          <section
+            className="conversation-browser-list"
+            aria-label={t("会话列表")}
+          >
             {listedHits.map((hit) => (
               <article
                 key={`${hit.source_id}:${hit.conversation_id}:${hit.workspace ?? ""}`}
@@ -354,7 +365,7 @@ export function ConversationSearch({
                   type="button"
                   className="conversation-hit-open"
                   aria-label={
-                    sameHit(opened?.hit, hit) ? "收起原文" : "查看原文"
+                    sameHit(opened?.hit, hit) ? t("收起原文") : t("查看原文")
                   }
                   aria-expanded={sameHit(opened?.hit, hit)}
                   aria-controls={`${id}-transcript`}
@@ -373,17 +384,23 @@ export function ConversationSearch({
                         {sourceLabel(hit.source_id)}
                       </span>
                       {hit.project ? <span>{hit.project}</span> : null}
-                      {hit.turn_count !== undefined ? (
-                        <span>{hit.turn_count} 轮</span>
+                      {hit.turn_count != null ? (
+                        <span>
+                          {t("{count} 轮", { count: hit.turn_count })}
+                        </span>
                       ) : null}
                       {hit.memory_count ? (
-                        <span>已沉淀 {hit.memory_count} 条记忆</span>
+                        <span>
+                          {t("已沉淀 {count} 条记忆", {
+                            count: hit.memory_count,
+                          })}
+                        </span>
                       ) : null}
                       <OriginalTime value={hit.created_at} />
                     </small>
                   </span>
                   <ChevronRight size={16} aria-hidden="true" />
-                  <span className="sr-only">查看原文</span>
+                  <span className="sr-only">{t("查看原文")}</span>
                 </button>
               </article>
             ))}
@@ -391,11 +408,11 @@ export function ConversationSearch({
           <section
             id={`${id}-transcript`}
             className="conversation-transcript"
-            aria-label="完整原始对话"
+            aria-label={t("完整原始对话")}
             aria-busy={opened?.phase === "loading"}
           >
             {!opened ? (
-              <p className="conversation-search-empty">选择一段对话</p>
+              <p className="conversation-search-empty">{t("选择一段对话")}</p>
             ) : null}
             {opened?.phase === "ready" ? (
               <button
@@ -405,22 +422,22 @@ export function ConversationSearch({
                 aria-controls={`${id}-memories`}
                 onClick={() => setMobileMemories((visible) => !visible)}
               >
-                关联记忆 {opened.memories.length}
+                {t("关联记忆 {count}", { count: opened.memories.length })}
               </button>
             ) : null}
             {opened?.phase === "loading" ? (
-              <p role="status">正在读取原文…</p>
+              <p role="status">{t("正在读取原文…")}</p>
             ) : null}
             {opened?.error ? (
               <div className="conversation-read-error">
-                <p role="alert">{opened.error}</p>
+                <p role="alert">{t(opened.error)}</p>
                 <button
                   type="button"
                   className="quiet"
                   onClick={() => void read(opened.hit)}
                 >
                   <RefreshCw size={16} aria-hidden="true" />
-                  重试读取原文
+                  {t("重试读取原文")}
                 </button>
               </div>
             ) : null}
@@ -430,7 +447,7 @@ export function ConversationSearch({
                 className="quiet"
                 onClick={() => void loadOlder()}
               >
-                加载更早的对话
+                {t("加载更早的对话")}
               </button>
             ) : null}
             {opened?.phase === "ready" ? (
@@ -442,7 +459,7 @@ export function ConversationSearch({
                         key={item.evidence_id}
                         className="conversation-system"
                       >
-                        <summary>系统上下文</summary>
+                        <summary>{t("系统上下文")}</summary>
                         <p>{item.verbatim}</p>
                       </details>
                     ))}
@@ -454,7 +471,7 @@ export function ConversationSearch({
                           key={item.evidence_id}
                           className="conversation-tool"
                         >
-                          <summary>工具记录</summary>
+                          <summary>{t("工具记录")}</summary>
                           <p>{item.verbatim}</p>
                         </details>
                       ) : (
@@ -465,7 +482,7 @@ export function ConversationSearch({
                           data-match={matched}
                         >
                           <header className="conversation-turn-meta">
-                            <span>{authorLabel(item.written_by)}</span>
+                            <span>{t(authorLabel(item.written_by))}</span>
                             <OriginalTime value={item.created_at} />
                           </header>
                           <p className="conversation-turn-verbatim">
@@ -479,7 +496,7 @@ export function ConversationSearch({
                     {index === turns.length - 1 &&
                     opened.transcript?.trailing_turn_unanswered ? (
                       <p className="conversation-round-unanswered">
-                        这一回合还没等到回答，暂不参与记忆整理。
+                        {t("这一回合还没等到回答，暂不参与记忆整理。")}
                       </p>
                     ) : null}
                   </li>
@@ -490,13 +507,13 @@ export function ConversationSearch({
           <aside
             id={`${id}-memories`}
             className="conversation-memories"
-            aria-label="关联记忆"
+            aria-label={t("关联记忆")}
             data-mobile-visible={mobileMemories}
           >
-            <h3>这段对话沉淀的记忆</h3>
-            {!opened ? <p>选择一段对话后查看</p> : null}
+            <h3>{t("这段对话沉淀的记忆")}</h3>
+            {!opened ? <p>{t("选择一段对话后查看")}</p> : null}
             {opened?.phase === "ready" && opened.memories.length === 0 ? (
-              <p>这段对话还没有沉淀成记忆</p>
+              <p>{t("这段对话还没有沉淀成记忆")}</p>
             ) : null}
             {opened?.memories.map((memory) => (
               <article key={memory.memory_id}>
@@ -586,7 +603,7 @@ function SourceIcon({ sourceId }: { sourceId: string }) {
   return <AppMark id={sourceId} size={16} />;
 }
 
-function failureWording(reason: unknown): string {
+function failureWording(reason: unknown): UiMessage {
   if (permissionUnavailable(reason))
     return "历史对话读取权限或记录已不可用，旧内容已收起。请重新搜索核对。";
   if (apiErrorCode(reason) === "conversation_search_unavailable") {
@@ -596,16 +613,18 @@ function failureWording(reason: unknown): string {
 }
 
 function OriginalTime({ value }: { value: string | null }) {
+  const language = useUiLanguage();
+  const t = useTranslate();
   return value && Number.isFinite(Date.parse(value)) ? (
     <time dateTime={value}>
-      {new Date(value).toLocaleString("zh-CN", { hour12: false })}
+      {new Date(value).toLocaleString(language, { hour12: false })}
     </time>
   ) : (
-    <span>时间未知</span>
+    <span>{t("时间未知")}</span>
   );
 }
 
-function authorLabel(value: string) {
+function authorLabel(value: string): UiMessage {
   return value === "person"
     ? "用户原话"
     : value === "agent"

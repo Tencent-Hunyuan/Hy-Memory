@@ -4,9 +4,31 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { SourceSnapshotStatus } from "./SourceSnapshotStatus";
+import { setUiLanguage } from "./ui-language";
 
-afterEach(cleanup);
+afterEach(async () => {
+  cleanup();
+  await setUiLanguage("zh-CN");
+});
 const confirmedAt = "2026-09-14T04:00:00.000Z";
+
+it("updates visible dates and labels with language without changing the receipt timestamp", async () => {
+  render(
+    <SourceSnapshotStatus
+      snapshot={{ confirmedAt, stale: false }}
+      onRefresh={vi.fn()}
+    />,
+  );
+  await act(async () => {
+    await setUiLanguage("en");
+  });
+  const stamp = screen.getByText(/Status confirmed at/).querySelector("time");
+  expect(stamp?.dateTime).toBe(confirmedAt);
+  expect(stamp?.textContent).toBe(new Date(confirmedAt).toLocaleString("en"));
+  expect(
+    screen.getByRole("button", { name: "Refresh source status" }),
+  ).toBeTruthy();
+});
 
 it("labels the last full-source observation without inventing a source event time", () => {
   render(
