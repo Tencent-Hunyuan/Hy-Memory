@@ -6,10 +6,7 @@ import type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "@one-memory/contracts";
-import type {
-  LanguagePreference,
-  LanguageSnapshot,
-} from "@one-memory/i18n";
+import type { LanguagePreference, LanguageSnapshot } from "@one-memory/i18n";
 import type { DebugLogSnapshot } from "./debug-log-types.js";
 
 export type RecallPermissionTool =

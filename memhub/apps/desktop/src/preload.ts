@@ -6,16 +6,16 @@ import type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "@one-memory/contracts";
+import type {
+  RecallInstallPreview,
+  RecallUninstallPreview,
+} from "@one-memory/host-bridge/installer";
 import {
   isLanguagePreference,
   isLanguageSnapshot,
   type LanguagePreference,
   type LanguageSnapshot,
 } from "@one-memory/i18n";
-import type {
-  RecallInstallPreview,
-  RecallUninstallPreview,
-} from "@one-memory/host-bridge/installer";
 import type { BackgroundHealth } from "@one-memory/runtime-control";
 import { contextBridge, ipcRenderer } from "electron";
 import type { DebugLogSnapshot } from "./diagnostics-ipc";

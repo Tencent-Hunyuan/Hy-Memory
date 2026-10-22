@@ -4,11 +4,7 @@ import type {
   SourceResponse,
 } from "@one-memory/contracts";
 
-import {
-  type GuiLocale,
-  translate,
-  translateCount,
-} from "@one-memory/i18n";
+import { type GuiLocale, translate, translateCount } from "@one-memory/i18n";
 
 /** One row of the left column: a topic, with what is actually under it. */
 export interface Matter {

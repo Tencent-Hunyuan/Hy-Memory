@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { type GuiLocale, translate } from "@one-memory/i18n";
 import { RecallBroker } from "@one-memory/host-bridge";
 import {
   checkSkillDrift,
@@ -10,6 +9,7 @@ import {
   renderCustomHarnessSkill,
   verifyRecallInstall,
 } from "@one-memory/host-bridge/installer";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import {
   claimRuntimeServiceForApp,
   claimRuntimeServiceForCli,
