@@ -120,7 +120,7 @@ authorized harness / user action
 Hy Memory is the **only** extraction, memory entity, relationship, and semantic-retrieval engine. Product code enters it through `HyMemoryBridge`（共享 Runtime、模型配置、密钥边界），不在业务模块里私自 new 一套绕过门禁的 client。
 
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
-- Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job/task outcome。`import_raw()` 只用于历史数据的 exact migration，不拆分正常写路径。
+- Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。`import_raw()` 只用于历史数据的 exact migration，不拆分正常写路径。
 - Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。
 - Context wire：cutover marker 提交前只使用 legacy Context v1；提交后 Host Bridge 只使用 SDK-native Context v2。两种 schema 原样校验、原样返回，不把 SDK item 补造成 v1 的 `revision`、`evidence_ids`、`paths` 或 `adoption`，已选择的 v2 路径失败时也不回退 legacy 权威。
 - Ask wire：marker 前保留 Governance Ask v1；marker 后 Web / Host Bridge 只调用 SDK Ask v2。v2 的引用只含 SDK 原生 `memory_id/content/layer/status/source/gmt_created`，生成过程中重复 `get` 校验同一 SDK 快照，不补造 revision、Evidence 或 scopes，SDK 失败不回退 v1。

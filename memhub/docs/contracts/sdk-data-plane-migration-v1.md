@@ -28,7 +28,8 @@ After the cutover marker is committed:
   dropped before the normal App window is revealed;
 - startup must not fall back to legacy authority because an SDK read failed.
 
-The marker, not table existence, selects the authority.
+The surviving `memory_authority_state` singleton, not legacy table existence,
+selects the authority.
 
 ### Fresh install
 
@@ -62,9 +63,9 @@ the same SDK SQL table families (`memory_operations_v2`, `pipeline_logs_v2`,
 by inspected schema/store capabilities, not one branch per historical SDK pin.
 The old SDK version is informational only and is not a migration discriminator.
 
-The migration Runtime itself must expose the required APIs (currently the
-`2.0.5.dev3` development preview); old data is not rejected merely because an
-earlier App wrote it.
+The migration Runtime itself must expose the required APIs. Its exact SDK
+version is defined by the release lockfiles; old data is not rejected merely
+because an earlier App wrote it.
 
 ## 3. Legacy-state classification
 
@@ -91,7 +92,7 @@ An unclassified item blocks cutover.
 
 ## 4. User edits, deletion and supersession
 
-The target product has no MemHub revision history or Undo.
+The current product has no MemHub revision history or Undo.
 
 - The latest non-deleted user correction is imported as the current SDK body.
 - Historical `governed_memory_versions` remain in the compatibility backup, but
@@ -141,22 +142,26 @@ The bundle is published only after an isolated restore verifies hashes, counts
 and SDK reads. A remote backend without a supported snapshot/export mechanism
 blocks migration; SQLite-only backup is not reported as success.
 
-## 7. Durable migration ledger
+## 7. Authority state and migration ledger
 
-The MemHub management database owns operational migration tables:
+The MemHub management database owns:
 
+- `memory_authority_state`: the surviving singleton authority and migration ID;
 - `sdk_data_plane_migrations`: one run, source/target fingerprints, bundle,
   phase, cutover state and reconciliation digest;
 - `sdk_data_plane_migration_items`: source identity/revision/hash, target SDK
   identity/hash, deterministic operation key, state, attempts and error code;
-- `memory_id_aliases`: historical ID to canonical SDK ID for call-events,
-  task receipts and links.
+- `memory_id_aliases`: temporary historical ID to canonical SDK ID mapping for
+  call-events, write-job receipts, and links;
 - `raw_id_aliases`: legacy Evidence ID/item index to canonical SDK raw ID.
-- `sdk_data_plane_cutover`: the singleton authority marker and immutable
+- `sdk_data_plane_cutover`: a temporary detailed cutover receipt containing
   SDK/backend/bundle/reconciliation fingerprints.
 
 Progress is committed only after SDK verification. Retrying an item uses the
 same deterministic SDK operation key and must not create another memory.
+Before cleanup, every surviving reference is rewritten to its canonical SDK
+ID. Alias, item-ledger, and detailed cutover tables are then dropped; the
+authority singleton and verified bundle remain.
 
 ## 8. Queue and unknown outcomes
 
@@ -174,14 +179,15 @@ Queue rows and leases remain MemHub management state.
 - `memory_write_jobs.hy_invoked=1`, `state=unknown`, or any non-terminal SDK
   outcome must use `get_write_outcome(request_id)`.
 - `running`/`unknown` is not absence and must not be replayed.
-- confirmed SDK IDs become task receipts; Governance publication is not part of
+- confirmed SDK IDs become write-job outcomes/receipts; Governance publication is not part of
   completion after cutover.
 
 ## 9. Call events and session delivery
 
 - Matter was an unpublished placeholder. Its rows are not migrated and every
   `matter*` table is deleted during cleanup.
-- Historical IDs remain resolvable through `memory_id_aliases`.
+- Before cleanup, historical IDs resolve through `memory_id_aliases`; surviving
+  records are rewritten to canonical SDK IDs before that table is dropped.
 - `call_events` remains metadata-only; reference titles/content resolve through
   SDK APIs.
 - Evidence-based session inbox/outbox is disabled at cutover unless replaced by
@@ -213,8 +219,9 @@ Cutover requires:
 - deterministic full-ID get verification;
 - a verified full migration bundle.
 
-The final transaction writes an immutable marker with migration ID, SDK/store
-version, namespace/backend fingerprint, bundle ID, digest and completion time.
+The final transaction writes the detailed cutover receipt and changes
+`memory_authority_state` to SDK authority. Cleanup may remove the detailed
+receipt after bundle verification; the authority singleton remains.
 
 After that transaction, legacy memory/raw writes are rejected.
 

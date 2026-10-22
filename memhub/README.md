@@ -18,7 +18,7 @@ If you run into a problem, please open an Issue with the version, platform,repro
 
 ## 发行与平台合同
 
-当前重构验证固定使用开发预览 `hy-memory==2.0.5.dev3`。MemHub 源码版本为 `1.0.4`
+源码当前固定使用公开 PyPI 开发预览 `hy-memory==2.0.5.dev3`。MemHub 源码版本为 `1.0.4`
 （build 13），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
@@ -114,7 +114,7 @@ MemHub 的 SQLite 数据默认位于 `~/.one-memory`，不在 npm 包或 Runtime
 
 ## Hy Memory
 
-当前开发依赖固定为公开 PyPI 开发预览 `hy-memory==2.0.5.dev3`。SDK 配置、权限边界及 search
+SDK 依赖固定为公开 PyPI 开发预览 `hy-memory==2.0.5.dev3`。SDK 配置、权限边界及 search
 返回格式见 [`MEMORY.md`](MEMORY.md)。HY search 返回的 `content` 已包含 SDK 统一生成的
 逻辑时间和演化上下文；调用方不应再次转换时间戳或重复拼接 `When`。
 

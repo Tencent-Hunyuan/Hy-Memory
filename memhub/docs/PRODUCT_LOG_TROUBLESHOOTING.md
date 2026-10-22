@@ -249,7 +249,7 @@ jq --arg id "$TASK_ID" 'select(.task_id == $id)' "$LOG"
 - 有 `core.ready`，没有 `import.finished`：来源未授权、未开启同步，或来源读取失败。
 - `import.finished` 正常，没有 `memory_scheduler.tasks_queued`：导入内容尚未形成完整会话，或未进入处理窗口。
 - 有 `memory_task.started`，没有 `hy.ingest_completed`：重点查模型配置、余额、网络、超时和 `hy.ingest_failed`。
-- 有 `hy.ingest_completed`，但 `memory_task.finished` 失败：重点查最终治理写入和对应 `error_code`。
+- 有 `hy.ingest_completed`，但 `memory_task.finished` 失败：重点查 SDK 结果确认、写入队列终态和对应 `error_code`。
 - `pending_count` 长时间完全不下降：查看是否反复出现同一个错误码，或任务都在
   `waiting_for_model`。
 - 导入数量持续增加、沉淀任务完全没有出现：这是异常，不应解释为“对话没有记忆价值”。

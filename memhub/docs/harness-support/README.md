@@ -64,7 +64,7 @@ Core 会：
 3. 停止 claim Job 表中尚未开始的 Job；这些 Job 保持原状态，等待下次打开；
 4. 不再通过 Adapter 扫描新 Session；
 5. 已经 running 的少量 Job允许执行完，不强杀；
-6. Harness Hook/Plugin 后续即使继续调用 Capture，Core 也会因为同步关闭而拒绝入库；
+6. Harness Hook/Plugin 后续即使继续调用 Capture，Core 也会因为同步关闭而拒绝进入 SDK 写入路径；
 7. 已经生成的 Memory 不删除，仍可被 Search 和 Recall 使用。
 
 关闭同步开关不会卸载 MCP、Skill、Hook 或 Plugin，也不会撤销 Harness 查询记忆的 Credential。那些属于“一键插入应用”开关。

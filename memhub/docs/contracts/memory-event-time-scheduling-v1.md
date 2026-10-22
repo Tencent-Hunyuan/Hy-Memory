@@ -28,7 +28,7 @@ Time selection is:
 
 All chunks produced from one oversized turn share its opener time. Their
 existing `queue_seq` order is preserved. Timestamps are scheduling metadata,
-not part of the evidence or write idempotency identity.
+not part of the raw record or write idempotency identity.
 
 ### Cursor
 
@@ -72,9 +72,9 @@ restart cannot silently widen or slide the window.
 
 During onboarding, all accepted Harness history jobs first:
 
-1. import Evidence inside the shared history cutoff;
+1. scan source records inside the shared history cutoff;
 2. form complete-turn chunks;
-3. submit durable write jobs.
+3. submit self-contained durable write jobs to the SDK write path.
 
 The drain does not claim model work until every accepted history job is
 terminal. A failed Harness is recorded and excluded; it does not block all
@@ -99,22 +99,22 @@ batch are not held.
 ## Immutable job input and branches
 
 Every new `memory_write_jobs.payload_json` stores the complete immutable
-Evidence records used by the write, not only references to another table.
-Execution and unknown reconciliation use that snapshot. Terminal jobs retain
-it as audit data.
+messages and source metadata used by the write, not references to another
+table. Execution and unknown reconciliation use that snapshot. Successful
+terminal jobs retain IDs and outcome while their input body is reaped.
 
 When a Harness rewinds and continues from an earlier point, already stored
-Evidence and jobs are not deleted. Shared unchanged messages deduplicate;
+SDK raw records and jobs are not deleted. Shared unchanged messages deduplicate;
 changed or new branch records append new jobs. A later revision of a reused
-host message id receives a new write id while the earlier job keeps its
-original content.
+host message ID receives a new write ID while the earlier terminal receipt
+remains unchanged.
 
 ## Upgrade compatibility
 
 Legacy jobs are assigned:
 
-1. the latest `role=user` Evidence time linked to the job;
-2. otherwise the earliest linked Evidence time;
+1. the latest `role=user` legacy source-record time linked to the job;
+2. otherwise the earliest linked source-record time;
 3. otherwise the original job creation time.
 
 They are marked `approximate` and retain `queue_seq` as a deterministic

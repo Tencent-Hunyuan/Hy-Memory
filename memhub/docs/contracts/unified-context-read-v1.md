@@ -5,9 +5,9 @@ After cutover, Host Bridge uses SDK-native Context v2. The two schemas are
 validated and returned independently; SDK data is never fabricated into v1
 revision or Evidence fields.
 
-## Frozen Integration Surface
+## V1 compatibility surface
 
-- New `POST /api/v1/context/search`; proposed host tool `om_context` consumes it.
+- `POST /api/v1/context/search`; the host tool `om_context` consumes it.
   Existing recall/conversations tools retain their permission and response shape.
 - Pydantic source of truth: `context_models.py`. Request has query, kinds,
   **raw_source_ids**, total limit, character_budget and timeout_ms. The renamed
