@@ -13,6 +13,7 @@ def test_sync_config_defaults_off_and_survives_restart(tmp_path):
 
     saved = json.loads((tmp_path / "config.json").read_text())
     assert saved == {
+        "extraction_window_preset": "3m",
         "schema_version": 1,
         "sedimentation_enabled": True,
         "sources": {"cursor": {"sync_enabled": True}},
@@ -46,6 +47,7 @@ def test_legacy_model_content_permission_is_ignored_on_upgrade(tmp_path):
     assert store.sync_enabled("cursor")
     store.set_sync("codex", True)
     assert json.loads((tmp_path / "config.json").read_text()) == {
+        "extraction_window_preset": "3m",
         "schema_version": 1,
         "sedimentation_enabled": True,
         "sources": {

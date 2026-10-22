@@ -200,6 +200,16 @@ class HyReconcileGuard:
                 details={"result_count": len(result.ops)},
             )
             return result
+        try:
+            await self._check_targets(result, kwargs)
+        except ValueError as error:
+            code = str(error)
+            self.failures.append(code)
+            raise
+        except Exception as error:
+            code = "hy_memory_write_verification_failed"
+            self.failures.append(code)
+            raise ValueError(code) from error
         owners: dict[str, set[str]] = {}
         for item in kwargs.get("new_memories_with_meta") or []:
             if item.get("owner") in {"user", "agent"}:

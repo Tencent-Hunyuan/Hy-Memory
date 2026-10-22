@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 387
-EXPECTED_TEST_FILES_SHA256 = "3c295fef1b664994a5cf54665005b5927b5fa432b210f6d4094e4ac93bfedc21"
+EXPECTED_TEST_FILE_COUNT = 340
+EXPECTED_TEST_FILES_SHA256 = "f69d3f33df5277febb09557d5bce7adb7d8719ed47e48a71f852e3e4ecf8fd74"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
@@ -52,12 +52,10 @@ INTEGRATION_FILES = frozenset(
         "test_backup_endpoint.py",
         "test_backup_restore_api.py",
         "test_c1_import_via_api_path.py",
-        "test_call_event_api.py",
         "test_capture_deadline.py",
         "test_chat_exports.py",
         "test_cli_lifecycle.py",
         "test_connection_lifetime.py",
-        "test_context_api.py",
         "test_context_search_both_paths.py",
         "test_conversation_search.py",
         "test_credential_responsiveness.py",
@@ -65,37 +63,26 @@ INTEGRATION_FILES = frozenset(
         "test_diagnostic_trace.py",
         "test_diagnostic_trace_api.py",
         "test_evidence_reconcile_primitive.py",
-        "test_external_endpoint_scopes.py",
         "test_external_installation_permissions.py",
         "test_fault_matrix.py",
         "test_file_import_operations.py",
         "test_graph_width_endpoint.py",
         "test_home_summary.py",
-        "test_hy_writeback.py",
         "test_import_api.py",
-        "test_library_upgrade.py",
         "test_live_capture.py",
         "test_live_watch_grants.py",
         "test_log_privacy.py",
         "test_loopback_origin_write.py",
         "test_main_database_entry.py",
         "test_manual_transcript_import.py",
-        "test_matter_collection.py",
-        "test_matter_hy_integration.py",
-        "test_matter_lifecycle_wiring.py",
-        "test_matters.py",
         "test_measure_c1_loop_blocking_contract.py",
         "test_memory_content_import.py",
         "test_memory_correction_sync.py",
         "test_memory_freshness_integration_review.py",
         "test_memory_governance_api.py",
         "test_memory_graph_api.py",
-        "test_memory_library_api.py",
-        "test_memory_mutation_receipts.py",
-        "test_memory_no_candidate.py",
         "test_memory_notes.py",
         "test_memory_qa_api.py",
-        "test_memory_queue_recency.py",
         "test_memory_server_durable_queue.py",
         "test_memory_supersede.py",
         "test_memory_visibility.py",
@@ -111,7 +98,6 @@ INTEGRATION_FILES = frozenset(
         "test_raw_search_without_model.py",
         "test_reader_app.py",
         "test_recall_fusion_live.py",
-        "test_recall_hy_primary.py",
         "test_recall_scope_control.py",
         "test_retrieval_lifespan.py",
         "test_runtime.py",
@@ -123,7 +109,6 @@ INTEGRATION_FILES = frozenset(
         "test_source_connection_intents.py",
         "test_source_import_receipts.py",
         "test_source_permission_races.py",
-        "test_source_revocation_parking.py",
         "test_source_session_count_api.py",
         "test_source_status_latency.py",
         "test_source_sync_idempotent.py",

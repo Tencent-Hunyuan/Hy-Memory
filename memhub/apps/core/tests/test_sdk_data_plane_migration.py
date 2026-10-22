@@ -2,22 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 
 import pytest
 
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
-from one_memory.imports.storage import EvidenceStore
-from one_memory.ingest_journal import initialize as initialize_ingest_journal
-from one_memory.matters.models import DiscoveryInput, MatterPatch
-from one_memory.matters.sdk_discovery import SdkMatterDiscovery
-from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
-from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
-from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 from one_memory.sdk_data_plane_migration import (
     DataPlaneMigrationError,
     MemoryAuthority,
@@ -43,9 +36,11 @@ from one_memory.sdk_migration_inventory import (
 )
 from one_memory.sdk_migration_runner import (
     commit_reconciled_cutover,
+    prepare_legacy_write_queue_for_cutover,
     run_sdk_data_plane_backfill,
     sdk_cutover_blockers,
 )
+from one_memory.target_schema import legacy_tables_present
 
 
 @pytest.fixture
@@ -174,16 +169,20 @@ def test_cutover_requires_ready_phase_and_terminal_items(store):
     assert store.authority() is MemoryAuthority.SDK
 
 
-def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store):
+def test_startup_cutover_freezes_pending_job_input_and_preserves_the_queue(store):
     _start(store)
     store.set_phase("m1", phase="reconciled", state="ready")
     data_dir = store.database_path.parent
-    create_sdk_migration_bundle(
-        data_dir=data_dir,
-        bundle_id="bundle-1",
-        runtime_build="build-13",
-        runtime_stopped=True,
-    )
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "INSERT INTO evidence (evidence_id,idempotency_key,user_id,source_id,"
+            "conversation_id,content_kind,role,written_by,verbatim,content_hash,"
+            "revision,imported_at,updated_at,ingest_seq) "
+            "VALUES ('e1','e1','local','cursor','session-1','raw_conversation',"
+            "'user','person','pending input',?,1,"
+            "'2026-10-22T00:00:00+00:00','2026-10-22T00:00:00+00:00',1)",
+            (content_hash("pending input"),),
+        )
     queue = DurableWriteQueue(store.database_path)
     request = WriteRequest(
         internal_session_id="session-1",
@@ -197,17 +196,12 @@ def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store)
         idempotency_key="request-1",
     )
     job = queue.submit(request)
-
-    with pytest.raises(DataPlaneMigrationError, match="write_jobs"):
-        commit_reconciled_cutover(
-            data_dir=data_dir,
-            database_path=store.database_path,
-            migration_id="m1",
-            bundle_id="bundle-1",
-            sdk_version="2.0.5.dev3",
-        )
-
-    queue.settle(job.job_id, state=COMPLETED)
+    create_sdk_migration_bundle(
+        data_dir=data_dir,
+        bundle_id="bundle-1",
+        runtime_build="build-13",
+        runtime_stopped=True,
+    )
     marker = commit_reconciled_cutover(
         data_dir=data_dir,
         database_path=store.database_path,
@@ -216,6 +210,58 @@ def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store)
         sdk_version="2.0.5.dev3",
     )
     assert marker.migration_id == "m1"
+    assert legacy_tables_present(store.database_path) == ()
+    assert store.authority() is MemoryAuthority.SDK
+    preserved = DurableWriteQueue(store.database_path, sdk_authority=True)
+    assert preserved.get("request-1").state == "pending"
+    assert preserved.payload_for(job.job_id).input_records[0].verbatim == "pending input"
+
+
+def test_unstarted_legacy_task_moves_to_surviving_write_queue(store):
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "INSERT INTO evidence (evidence_id,idempotency_key,user_id,source_id,"
+            "conversation_id,content_kind,role,written_by,verbatim,content_hash,"
+            "revision,imported_at,updated_at,ingest_seq) "
+            "VALUES ('e2','e2','local','cursor','session-2','raw_conversation',"
+            "'user','person','legacy task input',?,1,"
+            "'2026-10-22T00:00:00+00:00','2026-10-22T00:00:00+00:00',2)",
+            (content_hash("legacy task input"),),
+        )
+        database.execute(
+            "INSERT INTO memory_tasks "
+            "(task_id,request_id,user_id,kind,input_ref,status,profile_id,"
+            "profile_revision,profile_snapshot_json,runner_token,attempts,"
+            "last_error_code,created_at,updated_at,duration_seconds,hy_invocation_count) "
+            "VALUES ('task-legacy','request-legacy','local','extract','e2','pending',"
+            "'profile',1,'{}',NULL,0,NULL,'now','now',NULL,0)"
+        )
+        database.execute(
+            "INSERT INTO memory_task_inputs(task_id,refs_json) VALUES (?,?)",
+            (
+                "task-legacy",
+                json.dumps(
+                    [
+                        {
+                            "evidence_id": "e2",
+                            "revision": 1,
+                            "content_hash": content_hash("legacy task input"),
+                        }
+                    ]
+                ),
+            ),
+        )
+
+    assert prepare_legacy_write_queue_for_cutover(store.database_path) == (0, 1)
+
+    queue = DurableWriteQueue(store.database_path)
+    migrated = queue.get("legacy-task:task-legacy")
+    assert migrated is not None and migrated.state == "pending"
+    assert queue.payload_for(migrated.job_id).input_records[0].verbatim == "legacy task input"
+    with main_database(store.database_path).read() as database:
+        assert database.execute(
+            "SELECT status,last_error_code FROM memory_tasks WHERE task_id='task-legacy'"
+        ).fetchone() == ("cancelled", "migrated_to_memory_write_job")
 
 
 def test_alias_is_idempotent_but_cannot_be_retargeted(store):
@@ -244,13 +290,11 @@ def test_alias_is_idempotent_but_cannot_be_retargeted(store):
     assert caught.value.code == "sdk_data_plane_alias_conflict"
 
 
-def test_cutover_blockers_require_current_matter_sdk_projection(store):
+def test_cutover_ignores_unpublished_matter_placeholders(store):
     with main_database(store.database_path).write() as database, database:
-        database.execute(
-            "INSERT INTO matters(matter_id,version,needs_update) VALUES ('m1',1,0)"
-        )
+        database.execute("INSERT INTO matters(matter_id,version,needs_update) VALUES ('m1',1,0)")
 
-    assert sdk_cutover_blockers(store.database_path)["matter_references"] == 1
+    assert "matter_references" not in sdk_cutover_blockers(store.database_path)
 
 
 def test_legacy_inventory_preserves_task_id_mapping_and_supersession(store):
@@ -270,8 +314,7 @@ def test_legacy_inventory_preserves_task_id_mapping_and_supersession(store):
                 (memory_id, "local", "chat", status, content),
             )
         connection.execute(
-            "INSERT INTO governed_memory_supersessions VALUES "
-            "('legacy-old','legacy-new','now')"
+            "INSERT INTO governed_memory_supersessions VALUES ('legacy-old','legacy-new','now')"
         )
         connection.execute(
             "INSERT INTO memory_task_outputs VALUES (?,?,?)",
@@ -613,57 +656,6 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             """,
             (content_hash("verbatim"),),
         )
-        connection.execute(
-            "INSERT INTO matter_versions(matter_id,version,body,dependencies,created_at) "
-            "VALUES (?,?,?,?,?)",
-            (
-                "matter-1",
-                1,
-                json.dumps(
-                    {
-                        "title": "本地优先",
-                        "purpose": "保持本地处理",
-                        "boundary": "记忆系统",
-                        "anchors": ["本地"],
-                        "tags": [],
-                        "uncertainties": [],
-                        "source_engine": "hy-memory",
-                        "claims": [
-                            {
-                                "kind": "constraint",
-                                "scope": "记忆系统",
-                                "basis": "human_statement",
-                                "verification": "citation_checked",
-                                "state": "current",
-                                "change_note": "",
-                                "statement": "preference",
-                                "memory_refs": [
-                                    {
-                                        "memory_id": "memory-1",
-                                        "content_hash": content_hash("preference"),
-                                    }
-                                ],
-                                "citations": [
-                                    {
-                                        "evidence_id": "e1",
-                                        "quote": "verbatim",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                ),
-                "[]",
-                "now",
-            ),
-        )
-        connection.execute(
-            "INSERT INTO matters(matter_id,version,needs_update) VALUES ('matter-1',1,0)"
-        )
-        connection.execute(
-            "INSERT INTO matter_notes(matter_id,evidence_id,created_at) "
-            "VALUES ('matter-1','e1','2026-10-21T00:00:00+00:00')"
-        )
     bridge = _Bridge()
     result = asyncio.run(
         run_sdk_data_plane_backfill(
@@ -681,32 +673,10 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
 
     assert result.state == "ready"
     assert result.phase == "reconciled"
-    assert result.counts == {"verified": 4}
+    assert result.counts == {"verified": 2}
     assert [item["memory_id"] for item in bridge.imported] == ["memory-1"]
     assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e1"]
     assert store.authority() is MemoryAuthority.LEGACY
-    with main_database(database).read(row_factory=sqlite3.Row) as connection:
-        matter = connection.execute(
-            "SELECT references_json FROM matter_sdk_versions "
-            "WHERE matter_id='matter-1' AND version=1"
-        ).fetchone()
-    references = json.loads(str(matter["references_json"]))
-    assert references["claims"][0]["memory_refs"] == [
-        {
-            "memory_id": "memory-1",
-            "content_hash": content_hash("preference"),
-        }
-    ]
-    assert references["claims"][0]["raw_refs"][0]["raw_id"] == "evidence:e1"
-    assert "statement" not in references["claims"][0]
-    assert "quote" not in references["claims"][0]["raw_refs"][0]
-    with main_database(database).read(row_factory=sqlite3.Row) as connection:
-        migrated_note = connection.execute(
-            "SELECT raw_id FROM matter_sdk_notes "
-            "WHERE matter_id='matter-1' AND note_id='e1'"
-        ).fetchone()
-    assert migrated_note["raw_id"] == "evidence:e1"
-
     # Simulate a process dying after both SDK side effects but before startup
     # could finish. The next inventory observes them as matched rather than
     # import_exact; that reclassification must resume the settled ledger
@@ -723,123 +693,6 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             custom={"role": "user", "written_by": "person"},
         ),
     )
-    sdk_matters = SdkMatterStore(database, bridge)  # type: ignore[arg-type]
-    hydrated = asyncio.run(sdk_matters.get("matter-1"))
-    assert hydrated.claims[0].statement == "preference"
-    assert hydrated.claims[0].memory_refs[0].authority == "sdk"
-    assert hydrated.claims[0].citations[0].raw_id == "evidence:e1"
-    assert hydrated.claims[0].citations[0].evidence_id is None
-    assert hydrated.claims[0].citations[0].quote == "verbatim"
-    patched = asyncio.run(
-        sdk_matters.patch(
-            "matter-1",
-            MatterPatch(expected_version=1, title="本地优先更新"),
-        )
-    )
-    assert patched.version == 2
-    assert patched.title == "本地优先更新"
-    assert len(asyncio.run(sdk_matters.history("matter-1"))) == 2
-    evidence_store = EvidenceStore(database)
-    with main_database(database).write() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        initialize_ingest_journal(connection)
-        connection.execute("COMMIT")
-    queue = DurableWriteQueue(database, evidence=evidence_store)
-    sdk_matters.configure_notes(
-        evidence_store=evidence_store,
-        write_intake=UnifiedWriteIntake(queue),
-        write_queue=queue,
-    )
-    pending_note = asyncio.run(
-        sdk_matters.add_note(
-            "matter-1",
-            "新备注",
-            expected_version=2,
-        )
-    )
-    assert pending_note.raw_id is None
-    with main_database(database).read(row_factory=sqlite3.Row) as connection:
-        note_job = connection.execute(
-            "SELECT job_id FROM memory_write_jobs "
-            "WHERE idempotency_key IN "
-            "(SELECT request_id FROM matter_sdk_notes WHERE matter_id='matter-1')"
-        ).fetchone()
-    queue.settle(
-        str(note_job["job_id"]),
-        state=COMPLETED,
-        sdk_raw_ids=("raw-note-1",),
-    )
-    bridge.raw = (
-        *bridge.raw,
-        HySdkRawRecord(
-            raw_id="raw-note-1",
-            content="新备注",
-            user_id="local",
-            agent_id="one-memory",
-            session_id="matter:matter-1",
-            source="one-memory-manual",
-            custom={"role": "user", "written_by": "person"},
-        ),
-    )
-    notes = asyncio.run(sdk_matters.notes("matter-1"))
-    sdk_note = next(note for note in notes if note.raw_id == "raw-note-1")
-    assert sdk_note.evidence_id is None
-    assert sdk_note.text == "新备注"
-    evidence_store.release_sdk_staging((str(pending_note.evidence_id),))
-
-    class Model:
-        async def complete(self, *_args, **_kwargs):
-            return {
-                "matters": [
-                    {
-                        "title": "SDK 新事项",
-                        "purpose": "组织 SDK 记忆",
-                        "boundary": "SDK",
-                        "anchors": ["memory-1"],
-                        "tags": ["SDK"],
-                        "uncertainties": [],
-                        "claims": [
-                            {
-                                "memory_ids": ["memory-1"],
-                                "kind": "constraint",
-                                "scope": "SDK",
-                                "state": "current",
-                                "basis": "human_statement",
-                                "citations": [
-                                    {
-                                        "raw_id": "evidence:e1",
-                                        "quote": "verbatim",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                ]
-            }
-
-    bridge.memories = (
-        bridge.memories[0].model_copy(
-            update={
-                "owner": "user",
-                "source_raw_ids": ("evidence:e1",),
-            }
-        ),
-    )
-
-    async def discover():
-        discovery = SdkMatterDiscovery(
-            sdk_matters,
-            Model(),  # type: ignore[arg-type]
-            bridge,  # type: ignore[arg-type]
-        )
-        status = discovery.start(DiscoveryInput())
-        await discovery._tasks[status.run_id]
-        return status, await sdk_matters.list()
-
-    discovery_status, discovered_matters = asyncio.run(discover())
-    assert discovery_status.status == "completed"
-    assert any(item.title == "SDK 新事项" for item in discovered_matters)
-
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,
@@ -854,7 +707,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         )
     )
     assert resumed.state == "ready"
-    assert resumed.counts == {"adopted": 1, "verified": 4}
+    assert resumed.counts == {"verified": 2}
     assert len(bridge.imported) == 1
     assert len(bridge.imported_raw) == 1
 

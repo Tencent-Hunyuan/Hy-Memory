@@ -348,22 +348,6 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
   },
   {
-    name: "processing",
-    summary: "手动推进待处理证据；默认只预览，确认后执行。",
-    usage:
-      "memhub processing extract [--evidence <id> ...] [--confirm] [--json]",
-    options: [
-      {
-        flag: "--evidence <id>",
-        summary:
-          "processing extract 要提前处理的证据 ID，可重复；不给则推进下一批。",
-      },
-      DIRECT_CONFIRM_OPTION,
-      JSON_OPTION,
-    ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
     name: "models",
     summary:
       "交互配置模型，或生成配置/探测计划、执行已确认操作与查询回执；脚本模式的凭据只从受控文件读取。",
@@ -387,25 +371,14 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   },
   {
     name: "memories",
-    summary:
-      "列出/查看记忆，或生成并显式确认带版本与 request identity 的治理操作计划。",
+    summary: "通过 SDK 数据面列出、查看、修改或物理删除记忆。",
     usage:
-      "memhub memories list [--query <text>] [--query-file <path>] [--status <state>] [--source <id>] [--offset <n>] [--limit <n>] [--json]\n            memhub memories show <memory-id> [--json]\n            memhub memories plan add --content-file <path> --scope <scope> --evidence <id> [--kind <kind>] [--json]\n            memhub memories plan <correct|delete|scope> <memory-id> [--content-file <path>] [--scope <scope>] [--json]\n            memhub memories apply --plan-file <path> --confirm [--content-file <path>] [--json]",
+      "memhub memories list [--status <state>] [--offset <n>] [--limit <n>] [--json]\n            memhub memories show <memory-id> [--json]\n            memhub memories update <memory-id> --content-file <path> [--confirm] [--json]\n            memhub memories delete <memory-id> [--confirm] [--json]",
     options: [
-      {
-        flag: "--query <text>",
-        summary:
-          "按内容过滤；会出现在 shell 历史里，敏感词请改用 --query-file。",
-      },
-      {
-        flag: "--query-file <path>",
-        summary: "从文件读取过滤词，避免查询内容进入命令行历史。",
-      },
       {
         flag: "--status <state>",
         summary: `记忆状态，取值 ${MEMORY_STATUSES.join("、")}。`,
       },
-      { flag: "--source <id>", summary: "只看某个来源产生的记忆。" },
       { flag: "--offset <n>", summary: "跳过前 n 条，默认 0。" },
       {
         flag: "--limit <n>",
@@ -416,22 +389,16 @@ export const COMMANDS: readonly CommandDescriptor[] = [
         summary:
           "从有界普通文件读取新增/纠正正文；计划只保存摘要，执行时再次校验。",
       },
-      {
-        flag: "--kind <chat|working|coding|schema|intention>",
-        summary: "新增记忆的类型，默认 chat。",
-      },
-      {
-        flag: "--scope <scope>",
-        summary: "记忆使用范围，可重复；private 必须独占。",
-      },
-      {
-        flag: "--evidence <id>",
-        summary: "新增记忆引用的 Evidence ID，可重复。",
-      },
-      PLAN_FILE_OPTION,
-      EXPLICIT_CONFIRM_OPTION,
+      DIRECT_CONFIRM_OPTION,
       JSON_OPTION,
     ],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+  },
+  {
+    name: "profile",
+    summary: "读取 SDK 组装后的用户长期画像（L0 + 已启用的长期画像补充）。",
+    usage: "memhub profile [--json]",
+    options: [DATA_DIR_OPTION, JSON_OPTION],
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
   },
   {
@@ -455,28 +422,6 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
   },
   {
-    name: "import-file",
-    summary:
-      "上传、提交或丢弃一份历史导入文件；提交与丢弃默认只出计划，需 --confirm。",
-    usage:
-      "memhub import-file upload --file <path> [--kind raw_conversation|memory_content] [--confirm] [--json]\n            memhub import-file commit <upload-id> [--confirm] [--json]\n            memhub import-file discard <upload-id> [--confirm] [--json]",
-    options: [
-      {
-        flag: "--file <path>",
-        summary:
-          "要上传的普通文件（非符号链接，<=128 MiB，.zip/.json/.md/.txt）。",
-      },
-      {
-        flag: "--kind <kind>",
-        summary:
-          "输入类型，默认 raw_conversation；memory_content 用于记忆正文。",
-      },
-      DIRECT_CONFIRM_OPTION,
-      JSON_OPTION,
-    ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
     name: "notes",
     summary:
       "端内新增记忆（memory-notes）：从普通文件新增，或显式确认后处理已有笔记。",
@@ -488,20 +433,6 @@ export const COMMANDS: readonly CommandDescriptor[] = [
         summary: "从有界普通文件读取新增正文；计划只保存摘要，执行时重新校验。",
       },
       PLAN_FILE_OPTION,
-      DIRECT_CONFIRM_OPTION,
-      JSON_OPTION,
-    ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
-    name: "extraction",
-    summary: "设置提取窗口；默认只出计划，--confirm 后才写入。",
-    usage: "memhub extraction set --window <3m|6m|1y|all> [--confirm] [--json]",
-    options: [
-      {
-        flag: "--window <preset>",
-        summary: "提取窗口预设：3m、6m、1y 或 all。",
-      },
       DIRECT_CONFIRM_OPTION,
       JSON_OPTION,
     ],
@@ -722,16 +653,16 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   },
   {
     name: "write",
-    summary:
-      "提交一次记忆写入，返回可查询的 request id；写入异步完成，不可重复提交。",
+    summary: "提交 OpenAI messages 到 SDK 写入队列，或按 request id 查询状态。",
     usage:
-      "memhub write --session <id> --from <round> --to <round> --evidence <id> [--evidence <id>...] [--live] [--json]",
+      "memhub write submit --messages-file <path> --session <id> [--source <id>] [--request-id <id>] [--memory-at <RFC3339>] [--live] [--json]\n            memhub write status --id <request-id> [--json]",
     options: [DATA_DIR_OPTION, JSON_OPTION],
     exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED],
   },
   {
     name: "task",
-    summary: "查询写入任务状态；unknown 表示结果待定，不可据此重发。",
+    summary:
+      "兼容别名：按 request id 查询写入状态；新脚本请使用 write status。",
     usage: "memhub task --id <request-id> [--json]",
     options: [DATA_DIR_OPTION, JSON_OPTION],
     exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED],

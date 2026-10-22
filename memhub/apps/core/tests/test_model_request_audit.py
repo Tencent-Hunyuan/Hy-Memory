@@ -24,9 +24,7 @@ def _transport(tmp_path, response):
     )
 
 
-def test_records_one_physical_request_with_provider_usage_and_no_content(
-    tmp_path, monkeypatch
-):
+def test_records_one_physical_request_with_provider_usage_and_no_content(tmp_path, monkeypatch):
     private = "private conversation text"
     monkeypatch.setattr(
         "one_memory.model_request_audit._current_prompt_stage",

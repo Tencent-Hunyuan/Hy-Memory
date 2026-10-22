@@ -161,9 +161,7 @@ def test_ask_stream_endpoint_requires_the_local_token(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_sdk_ask_v2_stream_is_native_and_v1_fails_after_cutover(
-    tmp_path, monkeypatch
-) -> None:
+def test_sdk_ask_v2_stream_is_native_and_v1_fails_after_cutover(tmp_path, monkeypatch) -> None:
     memory = SdkAskMemory(
         memory_id="memory-1",
         content="用户要求真实数据。",

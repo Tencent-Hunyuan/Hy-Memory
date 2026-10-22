@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -115,7 +115,23 @@ class SdkMigrationBridge(Protocol):
         order: str = "desc",
     ) -> Awaitable[HySdkMemoryPage]: ...
 
-    def import_sdk_memory_exact(self, **kwargs: object) -> Awaitable[dict[str, object]]: ...
+    def import_sdk_memory_exact(
+        self,
+        *,
+        content: str,
+        memory_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        layer: str,
+        status: str,
+        owner: str | None,
+        tags: tuple[str, ...],
+        supersedes: tuple[str, ...],
+        superseded_by: tuple[str, ...],
+        is_latest: bool,
+        request_id: str,
+    ) -> Awaitable[dict[str, object]]: ...
 
     def list_sdk_raw(
         self,
@@ -129,7 +145,19 @@ class SdkMigrationBridge(Protocol):
         order: str = "desc",
     ) -> Awaitable[tuple[tuple[HySdkRawRecord, ...], int]]: ...
 
-    def import_sdk_raw_exact(self, **kwargs: object) -> Awaitable[dict[str, object]]: ...
+    def import_sdk_raw_exact(
+        self,
+        *,
+        content: str,
+        raw_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        memory_at: datetime | None,
+        metadata: Mapping[str, object],
+        request_id: str,
+    ) -> Awaitable[dict[str, object]]: ...
 
     def delete(self, memory_id: str) -> Awaitable[dict[str, object]]: ...
 
@@ -168,9 +196,7 @@ def read_legacy_memory_inventory(database_path: Path) -> tuple[LegacyMemoryInven
             "FROM governed_memories ORDER BY memory_id"
         ):
             legacy_id = str(row["memory_id"])
-            mapped_id, mapped_layer, mapped_owner = mappings.get(
-                legacy_id, (legacy_id, None, None)
-            )
+            mapped_id, mapped_layer, mapped_owner = mappings.get(legacy_id, (legacy_id, None, None))
             try:
                 tags_value = json.loads(row["tags_json"] or "[]")
             except (TypeError, ValueError):
@@ -304,9 +330,7 @@ def classify_memory_inventory(
             and current.agent_id == item.agent_id
         ):
             action = (
-                "matched"
-                if item.legacy_memory_id == item.canonical_memory_id
-                else "record_alias"
+                "matched" if item.legacy_memory_id == item.canonical_memory_id else "record_alias"
             )
             reason = "same_identity" if action == "matched" else "mapped_identity"
         else:
@@ -321,14 +345,14 @@ def classify_memory_inventory(
             )
         )
 
-    for item in sdk:
-        if item.memory_id not in claimed_sdk_ids:
+    for sdk_item in sdk:
+        if sdk_item.memory_id not in claimed_sdk_ids:
             decisions.append(
                 MemoryMigrationDecision(
-                    item_key=f"sdk:{item.memory_id}",
+                    item_key=f"sdk:{sdk_item.memory_id}",
                     action="adopt",
                     legacy_memory_id=None,
-                    canonical_memory_id=item.memory_id,
+                    canonical_memory_id=sdk_item.memory_id,
                     reason="sdk_only",
                 )
             )
@@ -377,12 +401,11 @@ def record_memory_migration_plan(
     legacy_by_id = {item.legacy_memory_id: item for item in legacy}
     sdk_by_id = {item.memory_id: item for item in sdk}
     for decision in decisions:
-        source = (
-            legacy_by_id.get(decision.legacy_memory_id)
+        source_hash = (
+            legacy_by_id[decision.legacy_memory_id].content_hash
             if decision.legacy_memory_id is not None
-            else sdk_by_id[decision.canonical_memory_id]
+            else sdk_by_id[decision.canonical_memory_id].content_hash
         )
-        source_hash = source.content_hash
         operation_key = hashlib.sha256(
             f"{migration_id}:{decision.item_key}:{decision.action}:{source_hash}".encode()
         ).hexdigest()
@@ -445,6 +468,7 @@ async def execute_memory_migration_plan(
         if item is None:
             raise RuntimeError(f"missing legacy inventory for {decision.item_key}")
         if decision.action == "import_exact":
+            assert item.layer is not None
             request_id = hashlib.sha256(
                 f"{migration_id}:{decision.item_key}:import_exact".encode()
             ).hexdigest()
@@ -655,263 +679,3 @@ async def execute_raw_migration_plan(
             legacy_evidence_id=item.evidence_id,
             canonical_raw_id=decision.raw_id,
         )
-
-
-def backfill_sdk_matter_references(
-    database_path: Path,
-    store: SdkDataPlaneMigrationStore,
-    *,
-    migration_id: str,
-) -> int:
-    """Project legacy Matter versions into body-free SDK reference documents."""
-    blocked = 0
-    with main_database(database_path).read(
-        row_factory=sqlite3.Row,
-    ) as database:
-        tables = {
-            str(row["name"])
-            for row in database.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
-        if "matter_versions" not in tables:
-            return 0
-        memory_aliases = {
-            str(row["legacy_memory_id"]): str(row["canonical_memory_id"])
-            for row in database.execute(
-                "SELECT legacy_memory_id,canonical_memory_id FROM memory_id_aliases"
-            )
-        }
-        raw_aliases = {
-            str(row["legacy_evidence_id"]): (
-                str(row["canonical_raw_id"]),
-                int(row["item_index"]),
-            )
-            for row in database.execute(
-                "SELECT legacy_evidence_id,canonical_raw_id,item_index "
-                "FROM raw_id_aliases"
-            )
-        }
-        raw_contents = {
-            str(row["evidence_id"]): str(row["verbatim"])
-            for row in database.execute(
-                "SELECT evidence_id,verbatim FROM evidence"
-            )
-        }
-        sdk_ids = {
-            str(row["target_memory_id"])
-            for row in database.execute(
-                "SELECT target_memory_id FROM sdk_data_plane_migration_items "
-                "WHERE migration_id=? AND target_memory_id IS NOT NULL "
-                "AND source_kind LIKE 'memory:%'",
-                (migration_id,),
-            )
-        }
-        matter_rows = tuple(
-            database.execute(
-                "SELECT matter_id,version,body,created_at FROM matter_versions "
-                "ORDER BY matter_id,version"
-            )
-        )
-        note_rows = (
-            tuple(
-                database.execute(
-                    "SELECT matter_id,evidence_id,created_at FROM matter_notes "
-                    "ORDER BY matter_id,created_at"
-                )
-            )
-            if "matter_notes" in tables
-            else ()
-        )
-    for row in matter_rows:
-        matter_id = str(row["matter_id"])
-        version = int(row["version"])
-        body_text = str(row["body"])
-        item_key = f"matter:{matter_id}:{version}"
-        source_hash = hashlib.sha256(body_text.encode()).hexdigest()
-        operation_key = hashlib.sha256(
-            f"{migration_id}:{item_key}:{source_hash}".encode()
-        ).hexdigest()
-        store.upsert_item(
-            migration_id=migration_id,
-            item_key=item_key,
-            source_kind="matter:references",
-            source_id=f"{matter_id}:{version}",
-            source_hash=source_hash,
-            operation_key=operation_key,
-        )
-        try:
-            body = json.loads(body_text)
-            references = _matter_reference_document(
-                body,
-                memory_aliases=memory_aliases,
-                raw_aliases=raw_aliases,
-                raw_contents=raw_contents,
-                sdk_ids=sdk_ids,
-            )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            store.settle_item(
-                migration_id=migration_id,
-                item_key=item_key,
-                state="quarantine",
-                error_code="matter_sdk_reference_unresolved",
-            )
-            blocked += 1
-            continue
-        with main_database(database_path).write(autocommit=True) as database:
-            database.execute(
-                "INSERT INTO matter_sdk_versions "
-                "(matter_id,version,references_json,created_at) VALUES (?,?,?,?) "
-                "ON CONFLICT(matter_id,version) DO UPDATE SET "
-                "references_json=excluded.references_json",
-                (
-                    matter_id,
-                    version,
-                    json.dumps(references, ensure_ascii=False, sort_keys=True),
-                    str(row["created_at"]),
-                ),
-            )
-        store.settle_item(
-            migration_id=migration_id,
-            item_key=item_key,
-            state="verified",
-            target_memory_id=f"{matter_id}:{version}",
-            target_hash=hashlib.sha256(
-                json.dumps(references, sort_keys=True).encode()
-            ).hexdigest(),
-        )
-    for note in note_rows:
-        evidence_id = str(note["evidence_id"])
-        item_key = f"matter-note:{note['matter_id']}:{evidence_id}"
-        source_hash = hashlib.sha256(item_key.encode()).hexdigest()
-        store.upsert_item(
-            migration_id=migration_id,
-            item_key=item_key,
-            source_kind="matter:note",
-            source_id=evidence_id,
-            source_hash=source_hash,
-            operation_key=hashlib.sha256(
-                f"{migration_id}:{item_key}".encode()
-            ).hexdigest(),
-        )
-        alias = raw_aliases.get(evidence_id)
-        if alias is None:
-            store.settle_item(
-                migration_id=migration_id,
-                item_key=item_key,
-                state="quarantine",
-                error_code="matter_note_raw_unresolved",
-            )
-            blocked += 1
-            continue
-        with main_database(database_path).write(autocommit=True) as database:
-            database.execute(
-                "INSERT INTO matter_sdk_notes "
-                "(matter_id,note_id,request_id,raw_id,created_at) VALUES (?,?,?,?,?) "
-                "ON CONFLICT(request_id) DO NOTHING",
-                (
-                    str(note["matter_id"]),
-                    evidence_id,
-                    f"legacy-note:{note['matter_id']}:{evidence_id}",
-                    alias[0],
-                    str(note["created_at"]),
-                ),
-            )
-        store.settle_item(
-            migration_id=migration_id,
-            item_key=item_key,
-            state="verified",
-            target_memory_id=alias[0],
-            target_hash=source_hash,
-        )
-    return blocked
-
-
-def _matter_reference_document(
-    body: dict[str, object],
-    *,
-    memory_aliases: dict[str, str],
-    raw_aliases: dict[str, tuple[str, int]],
-    raw_contents: dict[str, str],
-    sdk_ids: set[str],
-) -> dict[str, object]:
-    claims = body.get("claims")
-    if not isinstance(claims, list):
-        raise ValueError("matter claims missing")
-    projected_claims = []
-    for claim in claims:
-        if not isinstance(claim, dict):
-            raise ValueError("matter claim invalid")
-        refs = claim.get("memory_refs")
-        citations = claim.get("citations")
-        if not isinstance(refs, list) or not isinstance(citations, list):
-            raise ValueError("matter references missing")
-        memory_refs = []
-        for ref in refs:
-            if not isinstance(ref, dict) or not isinstance(ref.get("memory_id"), str):
-                raise ValueError("matter memory ref invalid")
-            legacy_id = str(ref["memory_id"])
-            canonical = memory_aliases.get(legacy_id, legacy_id)
-            if canonical not in sdk_ids:
-                raise ValueError("matter memory unresolved")
-            memory_refs.append(
-                {
-                    "memory_id": canonical,
-                    "content_hash": str(ref.get("content_hash") or ""),
-                }
-            )
-        raw_refs = []
-        for citation in citations:
-            if (
-                not isinstance(citation, dict)
-                or not isinstance(citation.get("evidence_id"), str)
-                or not isinstance(citation.get("quote"), str)
-            ):
-                raise ValueError("matter citation invalid")
-            raw_id, item_index = raw_aliases[str(citation["evidence_id"])]
-            quote = str(citation["quote"])
-            start = raw_contents[str(citation["evidence_id"])].find(quote)
-            if start < 0:
-                raise ValueError("matter quote unresolved")
-            raw_refs.append(
-                {
-                    "raw_id": raw_id,
-                    "item_index": item_index,
-                    "start": start,
-                    "end": start + len(quote),
-                    "quote_hash": hashlib.sha256(quote.encode()).hexdigest(),
-                }
-            )
-        projected_claims.append(
-            {
-                key: claim.get(key)
-                for key in (
-                    "kind",
-                    "scope",
-                    "basis",
-                    "verification",
-                    "state",
-                    "change_note",
-                )
-            }
-            | {"memory_refs": memory_refs, "raw_refs": raw_refs}
-        )
-    return {
-        "authority": "sdk",
-        **{
-            key: body.get(key)
-            for key in (
-                "title",
-                "purpose",
-                "boundary",
-                "anchors",
-                "tags",
-                "uncertainties",
-                "source_engine",
-                "scope_confirmed",
-                "agent_access",
-                "model",
-            )
-        },
-        "claims": projected_claims,
-    }

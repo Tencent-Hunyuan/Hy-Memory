@@ -243,10 +243,7 @@ class ModelRequestAuditStore:
                 )
                 for key, value in zip(summary_keys, summary, strict=True)
             },
-            "requests": [
-                dict(zip(keys, tuple(row), strict=True))
-                for row in rows
-            ],
+            "requests": [dict(zip(keys, tuple(row), strict=True)) for row in rows],
             "by_minute": [
                 {
                     "minute": str(row[0]),
@@ -305,9 +302,7 @@ def _response_usage(content: bytes) -> _ResponseUsage:
         else usage.get("prompt_cache_hit_tokens")
     )
     reasoning = (
-        completion_details.get("reasoning_tokens")
-        if isinstance(completion_details, dict)
-        else None
+        completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None
     )
     return {
         "provider_request_id": body.get("id") if isinstance(body.get("id"), str) else None,

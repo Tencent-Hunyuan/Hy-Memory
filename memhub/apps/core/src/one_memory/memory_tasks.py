@@ -236,8 +236,7 @@ def matches_evidence_ref(record: EvidenceRecord, ref: TaskEvidenceRef) -> bool:
     if "segment_hash" in ref:
         base = evidence_ref(record)
         if any(
-            base.get(key) != ref.get(key)
-            for key in ("evidence_id", "revision", "content_hash")
+            base.get(key) != ref.get(key) for key in ("evidence_id", "revision", "content_hash")
         ):
             return False
         if not _identity_hash_matches(record, ref.get("identity_hash")):
@@ -1143,9 +1142,7 @@ class MemoryTaskStore:
                 ),
             )
             if changed.rowcount != 1:
-                raise MemoryTaskOwnershipError(
-                    "Memory task runner no longer owns this task"
-                )
+                raise MemoryTaskOwnershipError("Memory task runner no longer owns this task")
         return self.require(task_id)
 
     def park_for_permission(self, task_id: str, *, error_code: str) -> bool:

@@ -243,9 +243,7 @@ class SdkRecallTarget:
                 continue
             formatted = (
                 hit.formatted_content
-                if hit.sdk_formatted
-                and hit.formatting_complete
-                and hit.formatted_content
+                if hit.sdk_formatted and hit.formatting_complete and hit.formatted_content
                 else None
             )
             content = formatted or memory.content

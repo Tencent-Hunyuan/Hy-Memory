@@ -177,7 +177,7 @@ class SdkMemoryAnswerer:
         recheck = await self._authorize(profile, question, grounding)
         prompt = tuple(_PromptMemory(memory) for memory in grounding)
         reader = _StreamingAnswerReader(prompt)  # type: ignore[arg-type]
-        async with aclosing(
+        async with aclosing(  # type: ignore[type-var]
             self._model_chunks(profile, question, grounding, recheck)
         ) as chunks:
             async for chunk in chunks:
@@ -218,9 +218,7 @@ class SdkMemoryAnswerer:
 
     async def _active_profile(self) -> ModelProfile | None:
         secrets: SecretStore | _DeferredSecretStore = (
-            self.secrets
-            if self.authorize_generation is None
-            else _DeferredSecretStore()
+            self.secrets if self.authorize_generation is None else _DeferredSecretStore()
         )
         return await asyncio.to_thread(self.profiles.active, secrets)
 
@@ -344,8 +342,7 @@ def _wire_memory(record: HySdkMemoryRecord) -> SdkAskMemory:
 
 def _summary(memories: tuple[SdkAskMemory, ...]) -> str:
     statements = [
-        memory.content.replace("用户", "你", 1).replace("The user", "You", 1)
-        for memory in memories
+        memory.content.replace("用户", "你", 1).replace("The user", "You", 1) for memory in memories
     ]
     if len(statements) == 1:
         return statements[0]

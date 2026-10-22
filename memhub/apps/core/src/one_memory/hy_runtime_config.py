@@ -147,10 +147,7 @@ def apply_diagnostic_log_level(level: DiagnosticLogLevel) -> None:
     for root in _NOISY_LIBRARY_LOGGERS:
         logging.getLogger(root).setLevel(noisy_level)
     for name in tuple(logging.Logger.manager.loggerDict):
-        if any(
-            name == root or name.startswith(f"{root}.")
-            for root in _NOISY_LIBRARY_LOGGERS
-        ):
+        if any(name == root or name.startswith(f"{root}.") for root in _NOISY_LIBRARY_LOGGERS):
             logging.getLogger(name).setLevel(noisy_level)
 
     os.environ["MEMORY_LOG_LEVEL"] = logging.getLevelName(selected)

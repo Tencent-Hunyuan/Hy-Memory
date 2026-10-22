@@ -11,6 +11,7 @@ pytest_plugins = ("tests.core_test_reporting",)
 
 REFUSES_NESTED = "refuses_nested_checkout"
 RESETS_DATABASE_STATS = "resets_main_database_stats"
+FRESH_SDK = "fresh_sdk"
 RESERVED_PORTS = {8765, 18765}
 PORT_KEYS = (
     "ONE_MEMORY_PORT",
@@ -41,6 +42,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", f"{REFUSES_NESTED}: the test makes a nested main-database checkout on purpose"
     )
+    config.addinivalue_line(
+        "markers", f"{FRESH_SDK}: an empty app home boots directly into SDK authority"
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -55,6 +59,30 @@ def pytest_collection_modifyitems(config, items):
 def _nested() -> int:
     stats = main_database_stats()
     return int(stats.get("nested_connections", 0)) + int(stats.get("nested_refusals", 0))
+
+
+@pytest.fixture(autouse=True)
+def _explicit_app_schema_generation(request, monkeypatch):
+    """Keep historical app tests legacy; fresh-schema tests opt in explicitly."""
+    if request.node.get_closest_marker(FRESH_SDK) is not None:
+        yield
+        return
+    from one_memory import api
+    from one_memory.imports.storage import EvidenceStore
+
+    bootstrap = api.bootstrap_fresh_management_schema
+
+    def bootstrap_legacy_home(database_path: Path) -> bool:
+        if not database_path.exists():
+            EvidenceStore(database_path)
+        return bootstrap(database_path)
+
+    monkeypatch.setattr(
+        api,
+        "bootstrap_fresh_management_schema",
+        bootstrap_legacy_home,
+    )
+    yield
 
 
 @pytest.fixture(autouse=True)

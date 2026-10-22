@@ -540,6 +540,8 @@ export interface SdkMemoryRecord {
   supersedes: string[];
   superseded_by: string[];
   tags: string[];
+  owner: string | null;
+  source_raw_ids: string[];
   user_id: string;
   agent_id: string;
   session_id: string | null;
@@ -553,6 +555,12 @@ export interface SdkMemoryPage {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface SdkUserProfileResponse {
+  request_id: string;
+  profile: Record<string, unknown> | null;
+  elapsed_ms: number;
 }
 
 export interface MemoryAuthorityResponse {

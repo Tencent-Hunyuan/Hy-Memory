@@ -161,7 +161,7 @@ def test_profile_change_during_secret_read_rejects_old_credentials(setup, change
                     )
 
     secrets.after_read = change_identity
-    with pytest.raises(HyMemoryBridgeError, match="^model_content_profile_changed$"):
+    with pytest.raises(HyMemoryBridgeError, match="^model_profile_changed$"):
         asyncio.run(supervisor._active_credentials())
     assert len(secrets.reads) == 1
     assert supervisor._bridges == {}

@@ -105,10 +105,13 @@ def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
         assert _sha256(copied) == item["sha256"]
     assert result.file_count == manifest["file_count"]
     assert result.total_bytes == manifest["total_bytes"]
-    assert inspect_sdk_migration_bundle(
-        data_dir=tmp_path,
-        bundle_id="migration-1",
-    ) == manifest
+    assert (
+        inspect_sdk_migration_bundle(
+            data_dir=tmp_path,
+            bundle_id="migration-1",
+        )
+        == manifest
+    )
 
 
 def test_bundle_refuses_live_runtime(tmp_path):

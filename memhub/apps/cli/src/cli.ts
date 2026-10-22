@@ -80,6 +80,7 @@ import {
   createCoreReader,
   createUiSessionRequest,
   deleteModelProfile,
+  parseOpenAIMessages,
   probeAdapter,
   readAdapters,
   readMemoryWrite,
@@ -99,7 +100,6 @@ import {
   createCoreOperations,
 } from "./core-operations.js";
 import {
-  MEMORY_STATUSES,
   type SourceConnectionCandidate,
   validateImportJob,
   validateSourceConnectionCandidates,
@@ -922,7 +922,36 @@ async function runCommand(
     if (attachment === null) {
       return runtimeUnavailable(descriptor, asJson);
     }
-    const receipt = await submitMemoryWrite(attachment, parsed);
+    if (parsed.kind === "status") {
+      const receipt = await readMemoryWrite(attachment, parsed.id);
+      process.stdout.write(
+        asJson
+          ? `${JSON.stringify({ schema_version: 1, write: receipt })}\n`
+          : receipt === null
+            ? "未找到该 request id。\n"
+            : `request_id: ${receipt.request_id}\nstate: ${receipt.state}\n`,
+      );
+      return EXIT_OK;
+    }
+    const document = await readBoundedJson(parsed.messages_file);
+    const messages = parseOpenAIMessages(document);
+    if (messages === null) {
+      return reject(
+        descriptor,
+        asJson,
+        "messages 文件必须是含 user/assistant/tool 文本消息的 OpenAI messages 数组。",
+      );
+    }
+    const receipt = await submitMemoryWrite(attachment, {
+      session: parsed.session,
+      source: parsed.source,
+      request_id: parsed.request_id ?? randomUUID(),
+      messages,
+      ...(parsed.memory_at === undefined
+        ? {}
+        : { memory_at: parsed.memory_at }),
+      ...(parsed.priority === undefined ? {} : { priority: parsed.priority }),
+    });
     process.stdout.write(
       asJson
         ? `${JSON.stringify({ schema_version: 1, write: receipt })}\n`
@@ -2294,6 +2323,75 @@ async function runCommand(
     emitReadDocument(named, document, asJson);
     return sourceProgressExitCode(document);
   }
+  if (named === "profile") {
+    if (arguments_.slice(1).some((value) => value !== "--json")) return usage();
+    const config = resolveRuntimeCliConfig(environment, process.argv[1]);
+    const attached = await attachClients(config.dataDir, {
+      readerTimeoutMs: 15_000,
+    });
+    if (!attached.reader) {
+      const document = {
+        schema_version: 2,
+        product: PRODUCT,
+        state: "unavailable",
+        code: attached.failure ?? "runtime_attach_failed",
+      };
+      emit(
+        asJson
+          ? `${JSON.stringify(document)}\n`
+          : `用户画像读取失败：${document.code}\n`,
+      );
+      return EXIT_RUNTIME_STOPPED;
+    }
+    const outcome = await attached.reader<unknown>("/api/v2/user-profile");
+    if (outcome.state !== "ok") {
+      const document = {
+        schema_version: 2,
+        product: PRODUCT,
+        state: outcome.state,
+        code: outcome.code,
+      };
+      emit(
+        asJson
+          ? `${JSON.stringify(document)}\n`
+          : `用户画像读取失败：${outcome.code}\n`,
+      );
+      return EXIT_FAILED;
+    }
+    const value = outcome.data as {
+      request_id?: unknown;
+      profile?: unknown;
+      elapsed_ms?: unknown;
+    };
+    if (
+      typeof value.request_id !== "string" ||
+      !(
+        value.profile === null ||
+        (typeof value.profile === "object" && !Array.isArray(value.profile))
+      ) ||
+      typeof value.elapsed_ms !== "number"
+    ) {
+      return reject(descriptor, asJson, "用户画像响应格式无效。");
+    }
+    const document = {
+      schema_version: 2,
+      product: PRODUCT,
+      state: "ok",
+      ...value,
+    };
+    const content =
+      value.profile && typeof value.profile === "object"
+        ? (value.profile as { content?: unknown }).content
+        : null;
+    emit(
+      asJson
+        ? `${JSON.stringify(document)}\n`
+        : value.profile === null
+          ? "尚未形成用户长期画像。\n"
+          : `${typeof content === "string" ? content : JSON.stringify(value.profile)}\n`,
+    );
+    return EXIT_OK;
+  }
   if (named === "memories") {
     const parsed = await parseMemoryCommand(arguments_.slice(1));
     if (!parsed) return usage();
@@ -2326,6 +2424,8 @@ async function runCommand(
     }
     if (blocked || !reader) {
       if (
+        parsed.kind === "update" ||
+        parsed.kind === "delete" ||
         parsed.kind === "plan-add" ||
         parsed.kind === "plan-existing" ||
         parsed.kind === "apply"
@@ -2373,6 +2473,62 @@ async function runCommand(
           : renderMemoryDetailText(document),
       );
       return document.memory.state === "ok" ? EXIT_OK : EXIT_FAILED;
+    }
+    if (parsed.kind === "update" || parsed.kind === "delete") {
+      const content =
+        parsed.kind === "update"
+          ? await readMemoryContentFile(parsed.contentFile)
+          : null;
+      if (parsed.kind === "update" && content === null) return usage();
+      const plan = {
+        schema_version: 2,
+        product: PRODUCT,
+        state: "preview",
+        operation: parsed.kind,
+        memory_id: parsed.memoryId,
+        ...(content === null
+          ? {}
+          : {
+              content_sha256: createHash("sha256")
+                .update(content)
+                .digest("hex"),
+            }),
+      };
+      if (!parsed.confirmed) {
+        emit(
+          asJson
+            ? `${JSON.stringify(plan)}\n`
+            : `计划：${parsed.kind} ${parsed.memoryId}\n使用 --confirm 执行。\n`,
+        );
+        return EXIT_OK;
+      }
+      if (!operations) return EXIT_FAILED;
+      const writable = operations as CoreOperations &
+        CorePutOperations &
+        CoreDeleteOperations;
+      const path = `/api/v2/memories/${encodeURIComponent(parsed.memoryId)}`;
+      const outcome =
+        parsed.kind === "update"
+          ? await writable.put<unknown>(path, { content })
+          : await writable.delete<unknown>(path);
+      const document = {
+        schema_version: 2,
+        product: PRODUCT,
+        state: outcome.state,
+        operation: parsed.kind,
+        memory_id: parsed.memoryId,
+        ...(outcome.state === "committed"
+          ? { result: outcome.data }
+          : { code: outcome.code }),
+      };
+      emit(
+        asJson
+          ? `${JSON.stringify(document)}\n`
+          : outcome.state === "committed"
+            ? `已${parsed.kind === "update" ? "更新" : "删除"}记忆 ${parsed.memoryId}\n`
+            : `操作失败：${outcome.code}\n`,
+      );
+      return outcome.state === "committed" ? EXIT_OK : EXIT_FAILED;
     }
     if (parsed.kind === "plan-add") {
       const content = await readMemoryContentFile(parsed.contentFile);
@@ -5784,6 +5940,13 @@ type MemoryCommand =
   | { kind: "list"; query: MemoryQuery }
   | { kind: "show"; memoryId: string }
   | {
+      kind: "update";
+      memoryId: string;
+      contentFile: string;
+      confirmed: boolean;
+    }
+  | { kind: "delete"; memoryId: string; confirmed: boolean }
+  | {
       kind: "plan-add";
       contentFile: string;
       memoryKind: string;
@@ -5810,6 +5973,33 @@ async function parseMemoryCommand(
       ? { kind: "show", memoryId }
       : null;
   }
+  if (action === "update" || action === "delete") {
+    const memoryId = tokens[1];
+    if (!memoryId || !isMemoryId(memoryId)) return null;
+    let contentFile: string | undefined;
+    let confirmed = false;
+    for (let index = 2; index < tokens.length; index += 1) {
+      const flag = tokens[index];
+      if (flag === "--confirm") {
+        if (confirmed) return null;
+        confirmed = true;
+        continue;
+      }
+      const value = tokens[index + 1];
+      if (value === undefined || value.startsWith("--")) return null;
+      if (flag !== "--content-file" || contentFile !== undefined) return null;
+      contentFile = value;
+      index += 1;
+    }
+    if (action === "update")
+      return contentFile
+        ? { kind: "update", memoryId, contentFile, confirmed }
+        : null;
+    return contentFile === undefined
+      ? { kind: "delete", memoryId, confirmed }
+      : null;
+  }
+  if (action === "plan" || action === "apply") return null;
   if (action === "plan") return parseMemoryPlanCommand(tokens.slice(1));
   if (action === "apply") {
     let planFile: string | undefined;
@@ -5835,10 +6025,7 @@ async function parseMemoryCommand(
       : null;
   }
   if (action !== "list") return null;
-  let query: string | undefined;
-  let queryFile: string | undefined;
   let status: string | undefined;
-  let source: string | undefined;
   let offset = 0;
   let limit = 100;
   let offsetSet = false;
@@ -5847,11 +6034,7 @@ async function parseMemoryCommand(
     const flag = tokens[index];
     const value = tokens[index + 1];
     if (value === undefined || value.startsWith("--")) return null;
-    if (flag === "--query" && query === undefined) query = value;
-    else if (flag === "--query-file" && queryFile === undefined)
-      queryFile = value;
-    else if (flag === "--status" && status === undefined) status = value;
-    else if (flag === "--source" && source === undefined) source = value;
+    if (flag === "--status" && status === undefined) status = value;
     else if (flag === "--limit" && !limitSet) {
       limit = Number(value);
       limitSet = true;
@@ -5860,24 +6043,11 @@ async function parseMemoryCommand(
       offsetSet = true;
     } else return null;
   }
-  if (query !== undefined && queryFile !== undefined) return null;
-  if (queryFile !== undefined) {
-    query = (await readQueryFile(queryFile)) ?? undefined;
-    if (query === undefined) return null;
-  }
-  if (
-    query !== undefined &&
-    (query.length === 0 || query.length > QUERY_MAX_CHARACTERS)
-  ) {
+  if (status !== undefined && (status.length === 0 || status.length > 64))
     return null;
-  }
-  if (status !== undefined && !MEMORY_STATUSES.includes(status as never)) {
-    return null;
-  }
-  if (source !== undefined && source.length === 0) return null;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) return null;
   if (!Number.isSafeInteger(offset) || offset < 0) return null;
-  return { kind: "list", query: { query, status, source, offset, limit } };
+  return { kind: "list", query: { status, offset, limit } };
 }
 
 function parseMemoryPlanCommand(

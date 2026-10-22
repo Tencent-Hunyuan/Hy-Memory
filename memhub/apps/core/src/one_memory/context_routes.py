@@ -537,9 +537,17 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                 total_ms=(time.monotonic() - started) * 1000,
             )
         partial = isinstance(raw_items, Exception) or isinstance(memory_items, Exception)
+        raw_candidates = (
+            () if isinstance(raw_items, Exception) else cast(tuple[SdkContextItem, ...], raw_items)
+        )
+        memory_candidates = (
+            ()
+            if isinstance(memory_items, Exception)
+            else cast(tuple[SdkContextItem, ...], memory_items)
+        )
         candidates: list[SdkContextItem] = [
-            *(() if isinstance(raw_items, Exception) else raw_items),
-            *(() if isinstance(memory_items, Exception) else memory_items),
+            *raw_candidates,
+            *memory_candidates,
         ]
         candidates.sort(key=lambda item: item.score, reverse=True)
         selected: list[SdkContextItem] = []
@@ -555,21 +563,13 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                 truncated = True
                 break
             if len(content) > remaining:
-                item = item.model_copy(
-                    update={"content": content[:remaining], "truncated": True}
-                )
+                item = item.model_copy(update={"content": content[:remaining], "truncated": True})
                 truncated = True
             selected.append(item)
             used += len(item.content)
         return SdkContextSearchResponse(
             request_id=str(uuid4()),
-            state=(
-                "partial"
-                if partial
-                else "grounded"
-                if selected
-                else "empty"
-            ),
+            state=("partial" if partial else "grounded" if selected else "empty"),
             items=tuple(selected),
             used_characters=used,
             truncated=truncated,

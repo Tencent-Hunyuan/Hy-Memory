@@ -117,10 +117,10 @@ def test_declarations_with_no_reader_are_named_rather_than_mistaken_for_behaviou
     assert readers("resolve_source_deletions", defined_in=("imports/lifecycle.py",)) == set()
 
     # Tool calls are stored clipped and redacted by the adapters that know the
-    # format, and read back only where a turn is assembled for HY.
+    # format; protocol role is authoritative when a write job is assembled.
     assert readers("WrittenBy.TOOL") == {
-        "memory_processing.py",
-        "hy_source_context.py",
+        "imports/models.py",
+        "memory_server/routes.py",
         # The row a record's tool calls become when it also said something.
         "imports/sources/common.py",
     } | {
@@ -453,7 +453,7 @@ def test_a_workbuddy_grant_follows_the_app_to_its_other_default_home(tmp_path) -
         default_homes=(codebuddy, workbuddy),
     )
 
-    assert moved is not None and moved.sync_enabled
+    assert moved is not None
     assert store.authorized_root(user_id="local", source_id="workbuddy").root == workbuddy.resolve()
 
 

@@ -109,7 +109,7 @@ def _follows_the_input_language(prompt: str) -> bool:
     )
 
 
-def test_hy_judges_a_chinese_question_with_an_english_traceback_to_be_english(
+def test_hy_keeps_a_chinese_question_with_an_english_traceback_in_chinese(
     tmp_path,
 ) -> None:
     """The premise, pinned to HY's own detector rather than described.
@@ -120,7 +120,7 @@ def test_hy_judges_a_chinese_question_with_an_english_traceback_to_be_english(
     depending on that.
     """
     assert _chinese_char_ratio(CHINESE_QUESTION_WITH_ENGLISH_ERROR) < 0.3
-    assert is_chinese(CHINESE_QUESTION_WITH_ENGLISH_ERROR) is False
+    assert is_chinese(CHINESE_QUESTION_WITH_ENGLISH_ERROR) is True
 
 
 def test_the_extractor_is_told_to_write_chinese_even_when_the_input_reads_as_english(
@@ -237,7 +237,7 @@ def test_a_reworded_sdk_prompt_still_gets_a_chinese_instruction(
     assert "hy_language_rule_not_found" in caplog.text
 
 
-def test_setting_only_the_chinese_override_would_not_have_fixed_it(tmp_path) -> None:
+def test_setting_the_chinese_override_controls_the_mixed_traceback_prompt(tmp_path) -> None:
     """Pins why R-03 is not the one-line config change it was planned as.
 
     `extract_system_prompt_zh` sits inside the `is_chinese(...)` true branch,
@@ -253,4 +253,4 @@ def test_setting_only_the_chinese_override_would_not_have_fixed_it(tmp_path) -> 
 
     asyncio.run(extractor.extract(content=CHINESE_QUESTION_WITH_ENGLISH_ERROR))
 
-    assert llm.system_prompt() != "只用中文写记忆。"
+    assert llm.system_prompt() == "只用中文写记忆。"

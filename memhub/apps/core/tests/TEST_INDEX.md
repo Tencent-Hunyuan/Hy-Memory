@@ -5,8 +5,6 @@
 | 测试文件 | 等级 | 一句话说明 |
 | --- | --- | --- |
 | `test_active_credentials.py` | `contract` | Active credentials are read once per call, never reused after a refusal. |
-| `test_active_memory_window.py` | `contract` | 覆盖 active window is bounded independently of pending total、active window does not take the writer when nothing needs deferring、active window rejects non integer limits 等 9 个场景。 |
-| `test_active_window_rotation.py` | `contract` | Rule 5: a blocked head must not stop the rest from ever being scheduled. |
 | `test_anchor_invalid_rewind.py` | `contract` | Bug 2 real branch: an in-place same-length rewrite invalidates the anchor. |
 | `test_architecture_layer_gate.py` | `contract` | A0-01: L0-L4 dependency-direction gate. |
 | `test_archive_detection.py` | `contract` | S4.1: what an uploaded export is, decided before anything parses it. |
@@ -49,9 +47,7 @@
 | `test_c1_sqlite_damage_per_source.py` | `contract` | SQLite-backed sources: damage and unknown schema must be reported, not swallowed. |
 | `test_c1_upgrade_migration_matrix.py` | `contract` | Upgrade/migration matrix: an older database keeps importing incrementally. |
 | `test_c4_raw_warmup.py` | `contract` | 覆盖 warm raw read path is side effect free、warm raw read path tolerates missing fts index、warm raw read path never raises or blocks startup 场景。 |
-| `test_call_event_api.py` | `integration` | 覆盖 query records only final metadata and trusted host、delivery report is separate from adoption、delivery report rejects hosts and missing events 等 18 个场景。 |
 | `test_call_event_recorder.py` | `contract` | 覆盖 denied memory lane is attributed to conversations、requested memory lane stays recall、zero result timeout is recorded separately from unavailable 等 6 个场景。 |
-| `test_call_event_references.py` | `contract` | 覆盖 current titles exact contract order and no body in event、grants rechecked without cache and match source access、revision change never returns new or historical title 等 23 个场景。 |
 | `test_call_event_store.py` | `contract` | Isolated metadata receipts; never use a user database or start recording. |
 | `test_capture_deadline.py` | `integration` | A capture the hook hands off outlives that hook; it has to end itself. |
 | `test_change_outbox.py` | `contract` | Evidence imports no longer feed the dormant change outbox. |
@@ -63,9 +59,7 @@
 | `test_codex_header_provenance.py` | `contract` | 覆盖 header workspace versions and native ids reach file origin、new adapter rereads header after a real checkpoint、machine and unknown session sources do not establish human or agent sender 等 14 个场景。 |
 | `test_connection_lifetime.py` | `integration` | Every SQLite connection a request opens must be closed when the request ends. |
 | `test_context_access.py` | `contract` | 覆盖 memory only never reads raw authority、raw permission does not grant memory and removes revoked sources、raw requires all apps and source 等 13 个场景。 |
-| `test_context_api.py` | `integration` | 覆盖 no model local query returns real raw and governed items、existing single lane authorization never runs denied reader、authentication and origin remain required 等 14 个场景。 |
 | `test_context_endpoint_guard.py` | `contract` | 覆盖 composite route accepts existing read capabilities for later body validation、other capabilities do not enable composite read、composite read does not open other routes 等 5 个场景。 |
-| `test_context_hy_primary.py` | `contract` | MemHub_context memory lane: HY decides the order, keywords only when HY does not answer. |
 | `test_context_memory.py` | `contract` | 覆盖 permissions precede candidate limit and do not leak counts、scope user status and active source isolation、denied scope does not open database 等 60 个场景。 |
 | `test_context_raw.py` | `contract` | 覆盖 empty authority and unrequested path do not open database、permissions precede candidate limit and no model needed、explicit source filter never broadens authority 等 37 个场景。 |
 | `test_context_raw_scale_benchmark.py` | `contract` | 覆盖 object scale probe has exact positive control and plan、raw scale probe uses fts and has a nonzero positive control 场景。 |
@@ -80,14 +74,12 @@
 | `test_credential_responsiveness.py` | `integration` | 覆盖 credentials do not block the event loop、disabled automatic processing does not digest onboarding、answering reads credentials off loop 等 5 个场景。 |
 | `test_cursor_default_root_windows.py` | `contract` | R-29 剩余：Cursor 默认根路径不能写死成 macOS。 |
 | `test_d93_same_process_load.py` | `integration` | D93 test 2: read latency while pure-Python work holds the GIL. |
-| `test_d93_visibility_equivalence.py` | `contract` | D93 test 1: the written-ahead visibility must agree with the exact check. |
 | `test_daemon_contract.py` | `unit` | A5-01/A5-03: process ownership, and the three grants kept apart. |
 | `test_daemon_scheduler.py` | `contract` | A5-02/A5-04: the daemon's scan scheduler and composed health. |
 | `test_data_safety.py` | `contract` | A5-05: backup usability/rotation, crash recovery, log retention. |
 | `test_database_contention.py` | `contract` | Writers meet in this one file, and the loser used to lose data. |
 | `test_database_file_permissions.py` | `contract` | 覆盖 a new main database is readable by its owner alone、the wal sidecars are not left world readable、a database from an older build is tightened on open 场景。 |
 | `test_db_session_utc.py` | `contract` | The MySQL session must be pinned to UTC. |
-| `test_delivery_board.py` | `contract` | 覆盖 parses only the marked structured record、verified requires evidence with a positive control、rejects unknown dependency 等 5 个场景。 |
 | `test_derived_echo.py` | `contract` | A host that saves our injection back must not mint a new user decision. |
 | `test_detailed_logging.py` | `contract` | 覆盖 detailed pipeline logging defaults off and survives restart、live log level applies to full hy and provider call chain、info collects hy info without enabling debug pipeline content 等 7 个场景。 |
 | `test_diagnostic_log.py` | `contract` | 覆盖 high frequency success events are summarized but warnings are not、structured log is private correlated and owner only、arbitrary detail and absolute stack are rejected 等 14 个场景。 |
@@ -102,23 +94,17 @@
 | `test_evidence_reconcile_primitive.py` | `integration` | A bounded, read-only discovery primitive for the H23 Evidence reconcile. |
 | `test_evidence_store.py` | `contract` | 覆盖 same source message merges origins without duplication、identical text from different sources is not deduplicated、rescanning an unchanged file does not write the message again 等 26 个场景。 |
 | `test_export_probe.py` | `contract` | What a probe may say about a stranger's chat history, and what it may not. |
-| `test_external_endpoint_scopes.py` | `integration` | Core boundary tests using the broker's envelope, never a host's claimed identity. |
 | `test_external_installation_permissions.py` | `integration` | 覆盖 external marker is not an installation grant、external diagnostic trace uses its own read only tool、raw source grants filter before limit and private body loading 场景。 |
-| `test_extraction_defer.py` | `contract` | Deferring out-of-window work, and letting it back in a batch at a time. |
 | `test_extraction_settings_store.py` | `contract` | The migrated store must behave identically on SQLite and on MySQL. |
 | `test_extraction_state.py` | `unit` | Three extraction states: extracted, outside the window, or still queued. |
 | `test_extraction_window.py` | `unit` | Extraction window: outside it, evidence stays searchable and out of the queue. |
 | `test_fault_matrix.py` | `integration` | A7-03: the fault matrix is complete, and the dangerous outcomes are pinned. |
-| `test_file_cursor_import.py` | `contract` | History import is live sync from an empty cursor: stat, skip unchanged, read forward. |
 | `test_file_import_operations.py` | `integration` | Bounded synthetic uploads; operation identity is not a content dedup key. |
 | `test_file_import_operations_review.py` | `contract` | Upload refusal/legacy compatibility review with bounded synthetic files only. |
-| `test_file_publish_job_boundary.py` | `contract` | Staged uploads cannot widen an earlier directory import's uncaptured input. |
-| `test_four_app_live_ingest.py` | `contract` | Actual source readers + OS watch + Core routes; no model or native host calls. |
 | `test_frozen_core_layout.py` | `contract` | 覆盖 single file layout remains available without private preset、folder layout keeps same core and all native dependencies、unknown layout does not silently build another package 等 5 个场景。 |
 | `test_golden_corpus.py` | `contract` | A7-01: the golden corpus comparison. |
 | `test_governance_permission_commit.py` | `contract` | 覆盖 permission guard is rechecked inside write transaction and rolls back、guard context does not leak into subsequent manual actions、guard check and commit hold database write authority 场景。 |
 | `test_governance_read_path_does_not_take_the_writer.py` | `contract` | The recall read path must not acquire the single global writer. |
-| `test_governance_store_root.py` | `contract` | 生产代码里治理 store 只在 Core 启动的组合根建一次。 |
 | `test_graph_width_endpoint.py` | `integration` | The width mismatch has to reach the interface, not just the log. |
 | `test_graph_width_export.py` | `unit` | EXPORT_FIRST has to actually export. |
 | `test_graph_width_guard.py` | `unit` | Graph width mismatch must ask, never silently archive. |
@@ -126,11 +112,9 @@
 | `test_health.py` | `contract` | 覆盖 a backfill that fails says so rather than disappearing、a failed catch up leaves a traceback behind、configured model without content consent does not start backfill 等 15 个场景。 |
 | `test_history_listing_rotation.py` | `contract` | 覆盖 history listing alternates started and untouched files、history listing drains whichever cohort is longer 场景。 |
 | `test_home_summary.py` | `integration` | 覆盖 summary counts beyond page limit and excludes ineligible rows、summary revocation excludes whole mixed memory not only citation、latest is bounded and other users revocations do not hide local data 等 6 个场景。 |
-| `test_home_summary_permissions.py` | `contract` | 覆盖 bad active link excludes whole latest memory、bad inactive link does not hide memory or enter source set、other user memory and grant are isolated 等 10 个场景。 |
 | `test_host_capabilities.py` | `unit` | A plugin does not become realtime on every host or every unknown version. |
 | `test_hourly_c1_peak_replay_contract.py` | `contract` | Guard the package peak-replay probe's error accounting. |
 | `test_hourly_c1_recall_stage_probe_contract.py` | `contract` | Guard the packaged recall stage probe's command and error semantics. |
-| `test_hy_baseline_source.py` | `contract` | 覆盖 first import replay copies raw prefix without selecting message ids、frozen transcript keeps middle user message and excludes later records 场景。 |
 | `test_hy_coding_reply.py` | `contract` | R-07: HY's coding-shaped replies read as "no memories at all". |
 | `test_hy_log_privacy.py` | `contract` | HY SDK records are not rewritten by One Memory's logging setup. |
 | `test_hy_memory_bridge.py` | `contract` | 覆盖 hy client initialization is serial across bridges、native hy clients share one runtime per data directory、ollama profile ignores ambient remote storage and models 等 41 个场景。 |
@@ -141,10 +125,7 @@
 | `test_hy_runtime_config.py` | `contract` | MEMORY.md is the audited record of what we send HY; keep it answerable. |
 | `test_hy_sdk_idempotency_probe.py` | `contract` | A0-03: probe whether the HY SDK can make a write idempotent. |
 | `test_hy_source_context.py` | `contract` | 覆盖 bound context rejects a same named conversation in another workspace、bound context rejects a duplicated evidence id、bound context rejects a same conversation from another source 等 9 个场景。 |
-| `test_hy_stage_trace.py` | `contract` | 覆盖 observer returns native results without editing or requesting models、observer redacts content without recording prompts or exception details 场景。 |
 | `test_hy_step_trace_switch.py` | `contract` | Rule 15: the per-step HY trace is off unless the debug tier asks for it. |
-| `test_hy_trial_budget.py` | `contract` | Offline proofs for the real-model acceptance budget (no network, no Keychain). |
-| `test_hy_writeback.py` | `integration` | HY 的结果只有一扇门进治理表，而且每次进门都带着调用开始时的证据快照。 |
 | `test_import_api.py` | `integration` | 覆盖 resume during cleanup returns conflict without internal error、authorize detect import and revoke api flow、protected api rejects missing token and foreign origin 等 5 个场景。 |
 | `test_import_control_races_review.py` | `contract` | Read-only review repro: real runner/store, synthetic delayed adapter cleanup. |
 | `test_import_evidence_atomicity.py` | `contract` | 覆盖 counter failure rolls back evidence versions and cursor、same identity cursor rewind is blocked and logged、replaced identity may reset checkpoint 等 20 个场景。 |
@@ -153,8 +134,6 @@
 | `test_import_skip_batching.py` | `contract` | 覆盖 batch limit and tail use fewer commits、batched skips keep their order against the next write、flushes before every nonmatching event 等 14 个场景。 |
 | `test_import_snapshots.py` | `contract` | Atomic snapshot publication plus frozen manifest, path, mode, and per-file checksum guards. |
 | `test_import_supervisor.py` | `contract` | 覆盖 supervisor starts all granted sources together、supervisor runs enqueued job in background、harness freeze keeps pending job and thaw runs the same row 等 11 个场景。 |
-| `test_import_three_scenarios.py` | `contract` | The three import scenarios a user actually meets. |
-| `test_import_three_scenarios_real.py` | `contract` | The three import scenarios, on a real Core at a real volume. |
 | `test_imported_index_background.py` | `contract` | The ordering index is built off the startup path. |
 | `test_ingest_journal.py` | `contract` | 覆盖 baseline and empty initialize are explicit transactional and idempotent、old date new import and revise noop and rollbacks、import metadata changes invalidate without authorizing content 等 12 个场景。 |
 | `test_input_sanitization.py` | `unit` | 覆盖 redacts cli and assignment secrets without removing context、redacts bearer known tokens urls and private keys、redacts quoted json assignments and basic authorization 等 8 个场景。 |
@@ -163,7 +142,6 @@
 | `test_intake_dedupe.py` | `contract` | A4-07: hook and scan share one identity, so order cannot duplicate. |
 | `test_internal_preset.py` | `contract` | The optional model preset a configured build carries. |
 | `test_jsonl_snapshot_tail.py` | `contract` | Bounded EOF handling on synthetic files only, never original host history. |
-| `test_library_upgrade.py` | `integration` | 升级前的备份是 Core 启动的第一步：只读地看、照原样备份，之后才有任何东西改库。 |
 | `test_live_capture.py` | `integration` | Visible hook text lands in Evidence before the transcript file is flushed. |
 | `test_live_sync.py` | `contract` | 覆盖 live sync preempts a reader batch before it emits work、live sync cuts in front of a running history import、live sync does not resume a history import the user paused 等 24 个场景。 |
 | `test_live_sync_file_incremental.py` | `contract` | 覆盖 unchanged file metadata avoids a job and content read、changed file content is read once by the import job、workbuddy first live poll baselines history then imports only append 等 6 个场景。 |
@@ -184,16 +162,6 @@
 | `test_main_database_isolation.py` | `contract` | What one checkout of the main database can do, and what it leaves for the next. |
 | `test_managed_restore.py` | `contract` | 覆盖 restore rejects a source outside the managed backup directory、restore rejects a symlinked source、restore rejects a non one memory database 等 9 个场景。 |
 | `test_manual_transcript_import.py` | `integration` | 覆盖 manual json keeps authors unknown time and exact text、marked text keeps code fences and never invents timestamps、ambiguous partial or invalid manual data never leaves partial import 等 4 个场景。 |
-| `test_matter_collection.py` | `integration` | 覆盖 hy windows cover every turn including leading and boundary assistants、oversize turn is split without silently dropping content、partial timestamps preserve source sequence 等 8 个场景。 |
-| `test_matter_discovery.py` | `contract` | 覆盖 synthesis materializes only known verbatim citations、duplicate claims keep all governed refs and distinct states、synthesis cannot echo the original sixty claim list 等 27 个场景。 |
-| `test_matter_hy_integration.py` | `integration` | 覆盖 hy inputs are frozen and outputs keep task and governance links、history supported repeat does not reassign its source to new assistant turn、bound native update preserves memory identity revision and source union 等 19 个场景。 |
-| `test_matter_lifecycle_missing_source.py` | `contract` | A HY-backed Matter must fail closed when no lifecycle source is wired. |
-| `test_matter_lifecycle_wiring.py` | `integration` | The composition root must give MatterStore a live HY lifecycle source. |
-| `test_matter_model_transport.py` | `contract` | 覆盖 transient failure retries identical request once、repeated timeout is bounded and not cached、revocation stops retry before another request 等 8 个场景。 |
-| `test_matter_shadow.py` | `contract` | 覆盖 snapshot filters revoked and other users without changing source、snapshot is read only even when a write is attempted、checked claims require exact supplied quote and stay unverified 等 9 个场景。 |
-| `test_matter_timeline.py` | `contract` | 覆盖 timeline splits changed phase from unchanged resources with lineage、supported remaining text cannot hide lost meaning、preservation cannot accept duplicate or unrequested group ids 等 7 个场景。 |
-| `test_matter_trial_render.py` | `contract` | 覆盖 rejects a result without readonly boundary、checks group members and escapes script endings 场景。 |
-| `test_matters.py` | `integration` | 覆盖 unknown message times are not replaced by import times、selection preserves full long messages and numerical order、selection excludes revoked sources and other users 等 26 个场景。 |
 | `test_measure_c1_import_scale.py` | `contract` | The import measurement must not report fabricated or conflated counters. |
 | `test_measure_c1_loop_blocking_contract.py` | `integration` | Contract guards for the C1 event-loop blocking measurement. |
 | `test_memhub_display_identity.py` | `contract` | Display name MemHub must not fork the technical identity. |
@@ -201,18 +169,12 @@
 | `test_memory_citation_query_plan.py` | `contract` | Correlated citation checks must look links up by memory, not scan by 'active'. |
 | `test_memory_content_import.py` | `integration` | 覆盖 existing memory preview keeps unknown author and exact original、invalid existing memory records never leave a partial upload、memory content requires explicit mode and rejects vendor guessing 等 5 个场景。 |
 | `test_memory_correction_sync.py` | `integration` | R-27: a correction that only lands locally, while HY keeps the old text. |
-| `test_memory_deletion_outbox.py` | `contract` | 删除发件箱：一条删除同一时刻只归一个执行者，结果只由持有领取凭证的那个写。 |
-| `test_memory_dispatch_lifecycle.py` | `contract` | Exercise the automatic enqueue boundary without producing substitute memories. |
 | `test_memory_evidence_freshness.py` | `contract` | 新鲜度拆除后：读路径恒为 current；证据修订 / 畸形 proof / segment ref 不再藏记忆或 503。 |
 | `test_memory_freshness_integration_review.py` | `integration` | Independent synthetic read-path review; no lifespan, model or user database. |
 | `test_memory_governance.py` | `contract` | 覆盖 correction keeps verbatim and appends history、mutations are revision checked and request idempotent、delete result survives restart and request replay 等 42 个场景。 |
 | `test_memory_governance_api.py` | `integration` | 覆盖 memory governance api preserves evidence and reports cleanup、memory validation does not echo content 场景。 |
 | `test_memory_graph_api.py` | `integration` | 覆盖 graph labels where every edge came from、a created memory is on the map with its source links、drawing the map does not stop the app answering 等 12 个场景。 |
 | `test_memory_language.py` | `contract` | R-03: memory language follows the message, so Kristin's gets written in English. |
-| `test_memory_library.py` | `contract` | 覆盖 full library is reachable in stable pages、permission filter precedes count search source and page、query filters before expensive freshness 等 26 个场景。 |
-| `test_memory_library_api.py` | `integration` | 覆盖 auth and external policy reject before reading、invalid parameters are 422 before projection、empty unknown source and query boundary are success not failure 等 12 个场景。 |
-| `test_memory_mutation_receipts.py` | `integration` | Read-only mutation receipts from real governance history, without model calls. |
-| `test_memory_no_candidate.py` | `integration` | 新记忆一经创建即有效；「待确认」「已拒绝」只作为旧库迁移的输入存在。 |
 | `test_memory_notes.py` | `integration` | 覆盖 empty library can save a note without a matter or configured model、note requires authentication explicit scope and nonempty content、saved note evidence returns raw and consent reference from same record 等 6 个场景。 |
 | `test_memory_processing.py` | `contract` | 覆盖 stale known reason diagnostics never fail dispatch、memory task logs six step durations without content、assistant turns reach hy so references can be resolved 等 95 个场景。 |
 | `test_memory_processing_diagnostics.py` | `contract` | 覆盖 conversation prepare failure includes safe message and stack、deletion sync failure includes safe message and stack 场景。 |
@@ -220,7 +182,6 @@
 | `test_memory_qa_api.py` | `integration` | 覆盖 ask stream endpoint emits recall deltas and final、ask stream endpoint requires the local token 场景。 |
 | `test_memory_qa_permissions.py` | `contract` | 覆盖 initial refusal precedes all secret access and network、invalid authorization result fails before secret access、authorization receives exact question and only outbound grounding 等 16 个场景。 |
 | `test_memory_qa_scope_candidate_budget.py` | `contract` | The light Q&A path spends its candidate page the same way recall did. |
-| `test_memory_queue_recency.py` | `integration` | R-02: the extraction queue has no time dimension. |
 | `test_memory_server_config_state.py` | `unit` | 覆盖 sync config defaults off and survives restart、sync config updates one source without losing another、model content permission is one global final state 等 4 个场景。 |
 | `test_memory_server_contracts.py` | `unit` | A0-02: freeze the cross-layer write contract (red state first). |
 | `test_memory_server_db.py` | `contract` | A1-02: pool configuration, transaction boundary and loop binding. |
@@ -278,10 +239,8 @@
 | `test_recall_during_import_probe_contract.py` | `contract` | Guard the source-level recall-during-import probe's sampling semantics. |
 | `test_recall_excluded_sources.py` | `contract` | D94: an empty result names the sources this host may not read. |
 | `test_recall_fusion_live.py` | `integration` | RCL-04 against a real HY instance instead of a stand-in. |
-| `test_recall_hy_primary.py` | `integration` | Host recall: HY search decides the order, the ledger only filters. |
 | `test_recall_library_scale.py` | `contract` | 覆盖 recall reaches a memory that is not among the newest 500、semantic recall reaches a memory outside the newest 500、recall still works just below the boundary 等 5 个场景。 |
 | `test_recall_log_probe_exclusion.py` | `contract` | A-21：R-10 一旦引入召回日志，「探针不污染」必须自动变红而不是静默失效。 |
-| `test_recall_precipitation_harness.py` | `contract` | The precipitation measurement harness must stay loadable and single-sourced. |
 | `test_recall_probe.py` | `contract` | The self-check query, and what it must not touch on its way through. |
 | `test_recall_revoked_candidate_crowding.py` | `contract` | Revoked-source rows must not crowd a readable recall hit out of the page. |
 | `test_recall_scope_candidate_budget.py` | `contract` | 覆盖 other scopes cannot consume the recall candidate budget、internal wildcard still reports real candidate truncation、workspace resolution does not remove shared results 等 9 个场景。 |
@@ -303,7 +262,6 @@
 | `test_retrieval_raw_lane.py` | `contract` | v1 raw lane must not claim complete empty when the derived index is partial. |
 | `test_retrieval_runtime.py` | `contract` | 覆盖 constructor and missing start create nothing、stop releases supervisor worker but preserves immutable snapshot、not initialized or invalid configuration never creates index 等 21 个场景。 |
 | `test_retrieval_vector_store.py` | `contract` | 覆盖 constructor does no io and unopened calls do not create、open existing missing store or collection never creates、real chroma collection has no embedding function or documents 等 32 个场景。 |
-| `test_revocation_recall_boundary.py` | `contract` | Revocation is the node: nothing from that source is read afterwards (D73). |
 | `test_runtime.py` | `integration` | 覆盖 runtime writes and removes ownership receipt、runtime rejects second owner for same data directory、nonpublishing maintenance owner still excludes a second core 等 4 个场景。 |
 | `test_runtime_client.py` | `contract` | 覆盖 runtime inspection authenticates the discovered instance、runtime inspection rejects untrusted receipts without probing、runtime inspection distinguishes stopped and identity mismatch 场景。 |
 | `test_sanitization_source_map.py` | `contract` | 覆盖 mapping matches existing sanitizer and exact original slices、synthetic replacements never claim original locations、repeated identical suffix is mapped by positions not string search 等 6 个场景。 |
@@ -354,17 +312,14 @@
 | `test_source_parsing.py` | `contract` | 覆盖 reminders are removed only at message edges、original supported outer context and query envelopes、attributed reminder is opaque before finding the outer query 等 11 个场景。 |
 | `test_source_permission_races.py` | `integration` | Permission execution regressions using temporary stores and Core ASGI instances. |
 | `test_source_query_preview.py` | `contract` | 覆盖 preserves exact user text and span、supported outer wrapper is stripped without paraphrasing、cursor host prefixes are not shown as the user query 等 8 个场景。 |
-| `test_source_read_revocation.py` | `contract` | 覆盖 revocation during model wait prevents late answer、source revocation stops every outward read but keeps other sources 场景。 |
 | `test_source_readers.py` | `contract` | 覆盖 jsonl is resumable and does not advance over an incomplete tail、sqlite reader uses monotonic row checkpoint、zstd jsonl reader resumes by completed record 等 7 个场景。 |
 | `test_source_registry_and_grants.py` | `contract` | 覆盖 catalog resolves defaults and marks environment overrides、recall hosts that can append join the live sync poller、declarations with no reader are named rather than mistaken for behaviour 等 15 个场景。 |
-| `test_source_revocation_parking.py` | `integration` | Revoking a source parks its unfinished extraction instead of failing it (D73). |
 | `test_source_root_identity_reboot.py` | `contract` | 覆盖 a grant survives the volume being renumbered after a restart、a replaced directory is still refused after a restart、the identity no longer depends on the device number 场景。 |
 | `test_source_session_count_api.py` | `integration` | 3925a kernel item 2 (BUG-01): the session count reaches the authorization page. |
 | `test_source_status_latency.py` | `integration` | Source status polling must not rediscover an already authorized history tree. |
 | `test_source_sync_idempotent.py` | `integration` | Final-state Harness sync is idempotent and resumes missed source work. |
 | `test_source_sync_permissions.py` | `integration` | S1.3 source permission tests use temporary files only, never real host history. |
 | `test_source_totals.py` | `contract` | 覆盖 the first ask is answered from the rows、same named sessions in two workspaces count as two conversations、insert during count is not marked as already counted 等 7 个场景。 |
-| `test_source_upload_intents.py` | `contract` | Upload identity binds retries without replacing file receipts or directory consent. |
 | `test_source_write_switch.py` | `contract` | A frozen Harness produces no extraction tasks. |
 | `test_sql_compat.py` | `contract` | The shared compatibility layer, especially 'rowcount'. |
 | `test_sqlite_semantics_gate.py` | `contract` | D56: prevent SQLite implementation details spreading outside the data layer. |
@@ -376,7 +331,6 @@
 | `test_subscription_visibility.py` | `unit` | A shared directory is not a read grant. |
 | `test_sync_facade.py` | `contract` | A2: the sync facade must keep the sync shape call sites already use. |
 | `test_tail_metadata_lane.py` | `contract` | Post-response metadata retries must be bounded and never block the route. |
-| `test_terminal_payload_reaping.py` | `contract` | Rule 14: dead-end payloads are actually reaped, not just reapable. |
 | `test_two_level_discovery.py` | `contract` | 3925a kernel item 1: two-level discovery. |
 | `test_ui_session.py` | `contract` | 覆盖 exchange is single use and creates a session、expired exchange cannot create a session、exchange is bound to the core instance 等 5 个场景。 |
 | `test_ui_session_api.py` | `integration` | 覆盖 ui session exchange sets httponly strict cookie、ui session requires bearer for exchange、ui session reports missing web assets 场景。 |
@@ -388,8 +342,7 @@
 | `test_windows_process_control.py` | `contract` | R-29：Windows 上 'os.kill' 不是发信号，是无条件杀进程。 |
 | `test_workbuddy_boundary.py` | `contract` | WorkBuddy only injects on SessionStart and UserPromptSubmit. |
 | `test_workbuddy_parsing.py` | `contract` | 覆盖 automation preserves query without claiming fresh human authorship、automation context attributes do not depend on order or quote style、quoted full automation envelope is not scheduled provenance 等 17 个场景。 |
-| `test_workbuddy_prompt_backfill.py` | `contract` | When the prompt hook's capture fails, the transcript file is what brings the words in. |
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 387 个测试文件。
+共 340 个测试文件。

@@ -439,9 +439,7 @@ class MemoryTaskRunner:
         # is one the writes below can tell from those its context already left out.
         sdk_authority = self.sdk_authority()
         derivation = (
-            None
-            if sdk_authority
-            else await in_the_background(self.governance.hy_derivation)
+            None if sdk_authority else await in_the_background(self.governance.hy_derivation)
         )
         if task.kind is not MemoryTaskKind.EXTRACT:
             return await in_the_background(
@@ -1128,6 +1126,13 @@ class MemoryTaskRunner:
         task: MemoryTask,
         chunk: tuple[EvidenceRecord, ...],
     ) -> HyMemoryIngestRequest:
+        return MemoryTaskRunner.request_for(task.request_id, chunk)
+
+    @staticmethod
+    def request_for(
+        request_id: str,
+        chunk: tuple[EvidenceRecord, ...],
+    ) -> HyMemoryIngestRequest:
         if not chunk:
             # A task with no inputs has nothing to name the request after and
             # nothing to attribute an answer to. Left alone this reached
@@ -1169,7 +1174,7 @@ class MemoryTaskRunner:
             or (not has_raw and record.content_kind is EvidenceContentKind.MEMORY_CONTENT)
         )
         return HyMemoryIngestRequest(
-            request_id=task.request_id,
+            request_id=request_id,
             user_id=source.user_id,
             source_id=source.source_id,
             agent_id=_hy_agent_id(chunk),
@@ -1566,6 +1571,57 @@ class MemoryProcessingSupervisor:
                 await self._refresh_read_bridge(completed[-1].profile_snapshot)
             return tuple(completed)
 
+    async def process_sdk_job(
+        self,
+        records: tuple[EvidenceRecord, ...],
+        *,
+        request_id: str,
+        before_hy_invocation: Callable[[], Awaitable[None]],
+    ) -> HyMemoryIngestResult:
+        """Execute one durable SDK-authority job as exactly one SDK write."""
+        if not self.sdk_authority():
+            raise HyMemoryBridgeError("sdk_memory_authority_required")
+        if not records:
+            raise HyMemoryBridgeError("hy_memory_task_without_inputs")
+        if self._sedimentation_stopped():
+            raise HyMemoryBridgeError("model_sedimentation_disabled")
+        if self.source_writes_permitted is not None and not await in_the_background(
+            self._source_may_write, list(records)
+        ):
+            raise HyMemoryBridgeError("hy_memory_source_disabled")
+        credentials = await self._active_credentials()
+        if credentials is None:
+            raise HyMemoryBridgeError("model_profile_not_active")
+        snapshot, secret = credentials
+        bridge = self._bridge(
+            snapshot,
+            secret,
+            self.data_dir,
+            scope_key=records[0].source_id,
+        )
+        prepare = getattr(bridge, "prepare", None)
+        if prepare is not None:
+            await prepare()
+        request = MemoryTaskRunner.request_for(request_id, records).model_copy(
+            update={"source_context": None}
+        )
+        contents = tuple(
+            sanitize_model_input(record.verbatim) for record in records if _imported_as_said(record)
+        )
+        only_contents = bool(contents) and all(_imported_as_said(record) for record in records)
+        await before_hy_invocation()
+        result = (
+            await bridge.ingest_extracted(request, contents)
+            if only_contents
+            else await bridge.ingest(request)
+        )
+        if not result.success:
+            raise HyMemoryBridgeError("hy_memory_runtime_failed")
+        if only_contents and not result.memories:
+            raise HyMemoryBridgeError("hy_memory_import_no_readable_output")
+        await self._refresh_read_bridge(snapshot)
+        return result
+
     async def reconcile_unknown_outputs(
         self,
         *,
@@ -1613,9 +1669,7 @@ class MemoryProcessingSupervisor:
                         task_id=task.task_id,
                         request_id=request.request_id,
                         raw_ids=sdk_result.raw_ids,
-                        memory_ids=tuple(
-                            memory.memory_id for memory in sdk_result.memories
-                        ),
+                        memory_ids=tuple(memory.memory_id for memory in sdk_result.memories),
                     )
                     outputs = sdk_result.memories
                 else:
@@ -2749,7 +2803,7 @@ class MemoryProcessingSupervisor:
         bridge = self._bridge(snapshot, secret, self.data_dir)
         if self.sdk_authority():
             agent_ids = await bridge.list_agent_ids(user_id="local")
-            digests = [
+            sdk_digests = [
                 {
                     "agent_id": agent_id,
                     "schemas_recorded": 0,
@@ -2763,13 +2817,11 @@ class MemoryProcessingSupervisor:
                 for agent_id in agent_ids
             ]
             return {
-                "success": all(
-                    result.get("success") is not False for result in digests
-                ),
-                "scope_count": len(digests),
+                "success": all(result.get("success") is not False for result in sdk_digests),
+                "scope_count": len(sdk_digests),
                 "skipped_conversation_scopes": 0,
                 "schemas_recorded": 0,
-                "digests": digests,
+                "digests": sdk_digests,
             }
         derivation = await in_the_background(self.governance.hy_derivation)
         agent_ids, skipped_conversation_scopes = await self._digest_scopes(bridge)

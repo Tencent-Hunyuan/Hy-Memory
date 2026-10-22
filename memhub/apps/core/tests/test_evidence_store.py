@@ -80,9 +80,7 @@ def test_sdk_staging_release_removes_new_raw_but_keeps_legacy_governance(tmp_pat
         )
         connection.commit()
 
-    removed = store.release_sdk_staging(
-        (transient.evidence_id, legacy.evidence_id)
-    )
+    removed = store.release_sdk_staging((transient.evidence_id, legacy.evidence_id))
 
     assert removed == 1
     assert store.get(transient.evidence_id) is None
@@ -184,9 +182,7 @@ def test_task_proof_ignores_legacy_written_by_metadata(tmp_path) -> None:
     )
     legacy_proof = {
         **proof,
-        "identity_hash": sha256(
-            json.dumps(legacy_identity, sort_keys=True).encode()
-        ).hexdigest(),
+        "identity_hash": sha256(json.dumps(legacy_identity, sort_keys=True).encode()).hexdigest(),
     }
 
     assert matches_evidence_ref(changed_author, proof) is True

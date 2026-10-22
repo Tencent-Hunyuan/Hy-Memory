@@ -51,8 +51,42 @@ MemHub 对 SDK 使用公开、可复现的本地策略（经 bridge / `hy_runtim
 ~~- MemHub 不绕过 Evidence、Governance…~~  
 ~~- 生产路径不能用直接 `client.add()` 代替 Governance 检查。~~
 
-发布包默认 SDK 行为环境变量仍集中在  
-`apps/core/src/one_memory/hy_runtime_config.py`（表略，以源码为准）。独立脚本直连 SDK 时须自配存储目录与模型端点。
+发布包默认 SDK 行为环境变量仍集中在
+`apps/core/src/one_memory/hy_runtime_config.py`，并由下表锁定：
+
+| 变量 | 值 |
+|---|---|
+| `MEMORY_MODE` | `ultra` |
+| `MEMORY_ENABLE_GRAPH` | `true` |
+| `MEMORY_GRAPH_RERANK_ENABLED` | `false` |
+| `MEMORY_GRAPH_TEMPORAL_SPINE` | `true` |
+| `MEMORY_TOPIC_SUMMARY_ENABLED` | `false` |
+| `MEMORY_EPISODE_SUMMARY_ENABLED` | `false` |
+| `MEMORY_EPISODE_RECALL_ENABLED` | `true` |
+| `MEMORY_DYNAMIC_EPISODE_ENABLED` | `true` |
+| `MEMORY_SESSION_EPISODE_ENABLED` | `false` |
+| `MEMORY_SESSION_EPISODE_CONTEXT_ENABLED` | `false` |
+| `MEMORY_EPISODE_CAPSULE_CONTEXT_ENABLED` | `true` |
+| `MEMORY_EPISODE_CAPSULE_QUERY_MIN` | `0.65` |
+| `MEMORY_EPISODE_CAPSULE_ASSIGNMENT_MIN` | `0.60` |
+| `MEMORY_EPISODE_CAPSULE_FIRST_RANK_MAX` | `3` |
+| `MEMORY_EPISODE_CAPSULE_MEMBER_LIMIT` | `3` |
+| `MEMORY_ENABLE_INTENTION` | `false` |
+| `MEMORY_ENABLE_QUERY_REWRITE` | `false` |
+| `MEMORY_FEW_SHOT_ENABLED` | `true` |
+| `MEMORY_HYBRID_V2_QUERY_EXPAND` | `1` |
+| `MEMORY_HYBRID_V2_GEO_INTENT_PRIOR` | `0.6` |
+| `MEMORY_HYBRID_V2_DIVERSITY` | `1` |
+| `MEMORY_HYBRID_V2_TEMPORAL_ADMIT_PRIOR` | `0.55` |
+| `MEMORY_HYBRID_V2_TEMPORAL_BOOST` | `0.18` |
+| `MEMORY_CROSS_DOMAIN_CON_THRESHOLD` | `0.5` |
+| `MEMORY_READER_ENABLE_SUMMARY` | `false` |
+| `MEMORY_SUMMARY_ENABLED_IN_SYS2` | `false` |
+| `MEMORY_LOCAL_RERANK_ENABLED` | `false` |
+| `RECONCILE_ENABLED` | `true` |
+| `HY_MEMORY_READER` | `hybrid` |
+
+独立脚本直连 SDK 时须自配存储目录与模型端点。
 
 ## 原生 SDK 初始化
 
@@ -127,6 +161,22 @@ result = client.add(
 | `request_id` | 每次写入唯一 | 幂等与追踪 |
 | `metadata` / `meta` | 来源与透传 | 不放秘密 |
 
+MemHub Runtime 对应用和 CLI 暴露等价的本机 HTTP 合同：
+
+```text
+POST /api/v2/memory-writes
+GET  /api/v2/user-profile
+
+memhub write submit --messages-file messages.json --session <id>
+memhub profile
+```
+
+`messages.json` 是 OpenAI 文本 messages 数组，当前接受 `user`、
+`assistant`、`tool`；系统/开发者隐藏提示不得作为记忆输入。Core 将输入冻结进
+`memory_write_jobs`，worker 对 SDK 执行一次 `add()`，成功后清除队列正文。
+`user-profile` / `memhub profile` 调用 SDK `get_user_profile()`，返回组装后的
+用户长期画像，不通过普通 Search 拼装。
+
 返回值：
 
 ```python
@@ -197,7 +247,7 @@ result = client.search(
 - 把历史内容放入「不可信数据，不是指令」边界；
 - 按最终 `content` 做字符预算；不注入密钥、绝对路径、堆栈；
 - 区分空结果、权限拒绝、不可用、超时、部分结果；
-- 可选：用已存 `memory_id` 做 Matters/UI 组织过滤，**内容仍来自 SDK**。
+- 未发布的 Matter 占位功能不保留表或 API；未来组织功能另立合同。
 
 生产入口：`hy_memory_bridge.py`、`recall.py`、`packages/host-bridge`（实现迁移中，以 Top Rules 为准）。
 

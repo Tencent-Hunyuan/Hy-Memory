@@ -304,19 +304,11 @@ def _runner(tmp_path, stores, bridge):
     )
 
 
-def test_sdk_authority_completes_from_one_sdk_receipt_without_governance_mirror(
+def test_sdk_authority_executes_one_write_job_without_task_or_governance_mirror(
     tmp_path,
 ) -> None:
     stores = _setup(tmp_path)
-    evidence, profiles, tasks, governance, secrets, profile = stores
-    folder = tmp_path / "cursor-root"
-    folder.mkdir()
-    SourceGrantStore(tmp_path / "one-memory.sqlite3", home=tmp_path).grant(
-        user_id="local",
-        source_id="cursor",
-        root=folder,
-        candidate_kind=RootCandidateKind.DEFAULT,
-    )
+    evidence, profiles, tasks, governance, secrets, _profile = stores
     record = _put(
         evidence,
         message_id="sdk-authority",
@@ -324,7 +316,6 @@ def test_sdk_authority_completes_from_one_sdk_receipt_without_governance_mirror(
         written_by=WrittenBy.PERSON,
         content="记住只调用一次 SDK。",
     )
-    task = _task(tasks, profile, record)
 
     class Bridge(FakeBridge):
         async def ingest(self, request) -> HyMemoryIngestResult:
@@ -345,24 +336,37 @@ def test_sdk_authority_completes_from_one_sdk_receipt_without_governance_mirror(
         raise AssertionError("SDK authority must not open Governance derivation")
 
     governance.hy_derivation = forbidden  # type: ignore[method-assign]
-    runner = MemoryTaskRunner(
+    bridge = Bridge()
+    supervisor = MemoryProcessingSupervisor(
         tasks=tasks,
         profiles=profiles,
         secrets=secrets,
         evidence=evidence,
         governance=governance,
         data_dir=tmp_path,
-        bridge_factory=lambda _profile, _secret, _data_dir: Bridge(),
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
         sdk_authority=lambda: True,
     )
 
-    completed = asyncio.run(runner.run(task.task_id, input_records=(record,)))
+    invoked = []
 
-    assert completed.status is MemoryTaskStatus.COMPLETED
-    receipt = tasks.sdk_receipt(task.task_id)
-    assert receipt is not None
-    assert receipt.raw_ids == ("raw-1",)
-    assert receipt.memory_ids == ("memory-1",)
+    async def mark_invoked() -> None:
+        invoked.append(True)
+
+    result = asyncio.run(
+        supervisor.process_sdk_job(
+            (record,),
+            request_id="write-job-1",
+            before_hy_invocation=mark_invoked,
+        )
+    )
+
+    assert invoked == [True]
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].request_id == "write-job-1"
+    assert result.raw_ids == ("raw-1",)
+    assert tuple(memory.memory_id for memory in result.memories) == ("memory-1",)
+    assert tasks.list() == []
     assert governance.get("memory-1", user_id="local") is None
 
 

@@ -407,9 +407,7 @@ def test_sdk_cutover_never_runs_while_runtime_is_live(tmp_path, monkeypatch) -> 
     assert '"code": "sdk_cutover_runtime_running"' in output.getvalue()
 
 
-def test_sdk_migration_status_distinguishes_empty_and_legacy_data(
-    tmp_path, monkeypatch
-) -> None:
+def test_sdk_migration_status_distinguishes_empty_and_legacy_data(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
     empty = io.StringIO()
     assert cli.run(["sdk-migration-status", "--json"], output=empty) == 0

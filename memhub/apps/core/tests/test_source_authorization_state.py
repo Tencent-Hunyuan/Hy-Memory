@@ -55,9 +55,7 @@ def test_a_live_grant_on_the_current_candidate_is_ok(tmp_path) -> None:
     store, _database, home = build_store(tmp_path)
     root = _grant(store, home, "workbuddy")
 
-    state = store.authorization_state(
-        user_id="local", source_id="workbuddy", candidate=root
-    )
+    state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=root)
 
     assert state is SourceAuthorizationState.OK
 
@@ -67,9 +65,7 @@ def test_a_revoked_grant_is_not_a_missing_one(tmp_path) -> None:
     root = _grant(store, home, "workbuddy")
     store.revoke(user_id="local", source_id="workbuddy")
 
-    state = store.authorization_state(
-        user_id="local", source_id="workbuddy", candidate=root
-    )
+    state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=root)
 
     assert state is SourceAuthorizationState.REVOKED_GRANT
 
@@ -80,9 +76,7 @@ def test_a_rebuilt_directory_is_not_a_moved_candidate(tmp_path) -> None:
     root.rmdir()
     root.mkdir()
 
-    state = store.authorization_state(
-        user_id="local", source_id="workbuddy", candidate=root
-    )
+    state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=root)
 
     assert state is SourceAuthorizationState.SOURCE_IDENTITY_CHANGED
 
@@ -92,9 +86,7 @@ def test_a_missing_directory_is_named_unavailable(tmp_path) -> None:
     root = _grant(store, home, "workbuddy")
     root.rmdir()
 
-    state = store.authorization_state(
-        user_id="local", source_id="workbuddy", candidate=root
-    )
+    state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=root)
 
     assert state is SourceAuthorizationState.SOURCE_ROOT_UNAVAILABLE
 
@@ -105,9 +97,7 @@ def test_a_grant_pointing_somewhere_else_is_a_moved_candidate(tmp_path) -> None:
     elsewhere = home / "workbuddy-elsewhere"
     elsewhere.mkdir()
 
-    state = store.authorization_state(
-        user_id="local", source_id="workbuddy", candidate=elsewhere
-    )
+    state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=elsewhere)
 
     assert state is SourceAuthorizationState.CANDIDATE_CHANGED
 
@@ -129,9 +119,7 @@ def test_capture_rejection_names_sync_disabled(tmp_path) -> None:
     store, database, home = build_store(tmp_path)
     _grant(store, home, "workbuddy")
 
-    assert (
-        capture_rejection(database, "workbuddy") is CaptureRejection.SYNC_DISABLED
-    )
+    assert capture_rejection(database, "workbuddy") is CaptureRejection.SYNC_DISABLED
 
 
 def test_capture_rejection_names_a_missing_then_a_revoked_grant(tmp_path) -> None:
@@ -166,11 +154,9 @@ def test_the_recorded_rejection_carries_no_turn_and_no_path(tmp_path) -> None:
     record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
 
     record = json.loads(
-        (
-            database.parent
-            / "logs"
-            / "capture-rejection-workbuddy-sync_disabled.json"
-        ).read_text(encoding="utf8")
+        (database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json").read_text(
+            encoding="utf8"
+        )
     )
     assert record["count"] == 2
     assert record["source_id"] == "workbuddy"

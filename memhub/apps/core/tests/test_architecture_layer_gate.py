@@ -96,9 +96,7 @@ SDK_PRIVATE_ACCESS_DEBT: dict[str, frozenset[str]] = {
 }
 
 SDK_PRIVATE_ATTRIBUTES = frozenset(
-    attribute
-    for attributes in SDK_PRIVATE_ACCESS_DEBT.values()
-    for attribute in attributes
+    attribute for attributes in SDK_PRIVATE_ACCESS_DEBT.values() for attribute in attributes
 )
 
 
@@ -262,9 +260,8 @@ def test_no_new_sdk_private_store_access() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         relative = _relative(path)
         names = _module_names(tree)
-        if (
-            relative not in SDK_PRIVATE_ACCESS_DEBT
-            and not any(_root(name) in HY_SDK_ROOTS for name in names)
+        if relative not in SDK_PRIVATE_ACCESS_DEBT and not any(
+            _root(name) in HY_SDK_ROOTS for name in names
         ):
             # Names such as `_registry` and `_collection` are common for
             # MemHub-owned objects too.  They become SDK-private access only

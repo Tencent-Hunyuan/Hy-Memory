@@ -91,6 +91,31 @@ it("reports an unreadable migration status as deferred", async () => {
   });
 });
 
+it("resumes legacy table cleanup under the maintenance fence", async () => {
+  const calls: string[] = [];
+  const result = await runStartupSdkMigration({
+    dataDir: "/data",
+    core,
+    runtimeBuild: "build-13",
+    execute: vi.fn(async (_core, args: string[]) => {
+      calls.push(args[0]);
+      return args[0] === "sdk-migration-status"
+        ? {
+            exitCode: 0,
+            document: {
+              authority: "sdk",
+              state: "cleanup_required",
+            },
+          }
+        : { exitCode: 0, document: { state: "clean" } };
+    }),
+    fence: async (_dataDir, action) => action(),
+  });
+
+  expect(result).toEqual({ state: "cutover" });
+  expect(calls).toEqual(["sdk-migration-status", "sdk-cleanup"]);
+});
+
 it("keeps legacy authority when backfill is blocked", async () => {
   const execute = vi.fn(async (_core, args: string[]) => {
     const command = args[0];

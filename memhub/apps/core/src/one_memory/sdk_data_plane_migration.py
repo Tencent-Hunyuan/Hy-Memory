@@ -55,6 +55,17 @@ class SdkDataPlaneMigrationStore:
         return datetime.now(UTC).isoformat()
 
     def authority(self) -> MemoryAuthority:
+        try:
+            with main_database(self.database_path).read() as connection:
+                row = connection.execute(
+                    "SELECT authority FROM memory_authority_state WHERE singleton=1"
+                ).fetchone()
+        except sqlite3.OperationalError as error:
+            if "no such table" not in str(error).lower():
+                raise
+        else:
+            if row is not None:
+                return MemoryAuthority(str(row[0]))
         return MemoryAuthority.SDK if self.cutover() is not None else MemoryAuthority.LEGACY
 
     def cutover(self) -> CutoverMarker | None:
@@ -189,8 +200,7 @@ class SdkDataPlaneMigrationStore:
         ) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM sdk_data_plane_migration_items "
-                "WHERE migration_id=? AND item_key=?",
+                "SELECT * FROM sdk_data_plane_migration_items WHERE migration_id=? AND item_key=?",
                 (migration_id, item_key),
             ).fetchone()
             if row is None:
@@ -219,18 +229,14 @@ class SdkDataPlaneMigrationStore:
                         "sdk_data_plane_migration_operation_conflict"
                     ) from error
             else:
-                if (
-                    str(row["state"]) in TERMINAL_ITEM_STATES
-                    and (
-                        source_id,
-                        source_revision,
-                        source_hash,
-                    )
-                    == (
-                        row["source_id"],
-                        row["source_revision"],
-                        row["source_hash"],
-                    )
+                if str(row["state"]) in TERMINAL_ITEM_STATES and (
+                    source_id,
+                    source_revision,
+                    source_hash,
+                ) == (
+                    row["source_id"],
+                    row["source_revision"],
+                    row["source_hash"],
                 ):
                     # A crash after an SDK side effect can make the next
                     # inventory classify the same source as verified/adopted
@@ -466,6 +472,15 @@ class SdkDataPlaneMigrationStore:
                     "WHERE migration_id=?",
                     (reconciliation_digest, now, now, migration_id),
                 )
+            connection.execute(
+                "INSERT INTO memory_authority_state "
+                "(singleton,authority,migration_id,updated_at) "
+                "VALUES (1,'sdk',?,?) "
+                "ON CONFLICT(singleton) DO UPDATE SET "
+                "authority='sdk',migration_id=excluded.migration_id,"
+                "updated_at=excluded.updated_at",
+                (migration_id, now),
+            )
             connection.execute("COMMIT")
         marker = self.cutover()
         if marker is None:

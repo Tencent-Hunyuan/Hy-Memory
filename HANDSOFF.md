@@ -9,13 +9,20 @@
 
 ---
 
+## IMPORTANT：测试执行规则
+
+1. 先完整运行目标测试套件一次，收集**全部失败 case**。
+2. 按根因分组并批量修复，不得用 `-x` 反复重跑已经通过的前置测试。
+3. 修复后只重跑上次失败的 case。
+4. 失败 case 全部通过后，才再完整运行一次目标套件作为最终 gate。
+
 ## Top Rules（现行根本）
 
 1. **所有对 memory 的读写（含存储 backend）都交给 SDK**，经 SDK config / env 配置。
 2. **MemHub 内对 memory 的原子操作也一律经 SDK**；缺接口 → **先补 SDK client**，禁止 Core 直改 VDB/Graph/SDK 私库或再维护正文权威。
 3. **MemHub 不存 memory 实体 / 引擎侧关系**（正文、supersede 权威、向量图副本等）。主责是管理面：harness、LLM model、异步写入队列、config、Core/Runtime 状态。  
    - **可以且应当存 `memory_id`**（SDK 给外层的唯一身份）及组织元数据。  
-   - Matters 等高级组织可留在 MemHub；**改 memory 必须走 SDK**。
+   - Matter 占位功能未发布，删除其表与入口；未来若重做，必须另立合同。
 
 **推论：**
 
@@ -61,12 +68,13 @@ Fresh install 直接创建最新管理面 schema，禁止创建 `evidence*`、`g
 
 - harness：`source_grants`、sync desired-state（`config.json`）、适配器扫描（产出进 SDK，不是 Evidence 权威库）
 - model profiles / 密钥边界 / 模型内容许可
-- `memory_write_jobs` / `memory_tasks` 异步队列、FIFO / event-time 调度与租约（始终属于 MemHub；调度，不是 memory 实体）
+- `memory_write_jobs` 单层异步队列、FIFO / event-time 调度与租约（始终属于 MemHub；调度，不是 memory 实体）。旧 `memory_tasks` 二级队列与 task receipt 删除。
   - pending job 尚未调用 SDK，因此没有 raw/memory ID；worker 对 SDK 只调用一次
     `add()`，SDK 内部完成 raw + extraction/reconciliation，成功后 MemHub 仅保存
     返回的 raw ID / memory IDs 与 outcome。禁止“先 import_raw 再排 extraction”。
 - Core / Runtime 收据与健康
-- Matters 等组织（`memory_id` 外键）
+- Matter 尚未形成已发布产品合同；删除全部 `matter*` 占位表与运行时入口。未来若重新开发，
+  以新合同重新设计，不为当前占位 schema 保留兼容层。
 - call_events 类审计元数据（不存记忆正文）
 - ~~session inbox / change_outbox 围绕 Evidence 外发~~ → 需按新规则重定义或标旧
 

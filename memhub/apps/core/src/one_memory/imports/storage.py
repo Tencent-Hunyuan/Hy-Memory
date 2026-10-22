@@ -1824,8 +1824,7 @@ class EvidenceStore:
                 else ""
             )
             changed = connection.execute(
-                f"DELETE FROM evidence WHERE evidence_id IN ({placeholders}) "
-                f"{legacy_guard}",
+                f"DELETE FROM evidence WHERE evidence_id IN ({placeholders}) {legacy_guard}",
                 ids,
             )
         return changed.rowcount
@@ -1837,14 +1836,15 @@ class EvidenceStore:
         with self._connect(writing=True) as connection:
             tables = {
                 str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
-            if not {
-                "memory_write_jobs",
-                "memory_write_job_evidence",
-            } <= tables:
+            if (
+                not {
+                    "memory_write_jobs",
+                    "memory_write_job_evidence",
+                }
+                <= tables
+            ):
                 return 0
             rows = connection.execute(
                 "SELECT DISTINCT linked.evidence_id "

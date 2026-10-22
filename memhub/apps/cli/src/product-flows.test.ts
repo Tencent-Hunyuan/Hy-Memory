@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { parseOpenAIMessages } from "./core-client.js";
 import {
   asPlanDocument,
   describe as describePlan,
@@ -259,92 +260,91 @@ describe("unknown flags are rejected", () => {
 
 describe("write", () => {
   const base = [
+    "submit",
     "--session",
     "s1",
-    "--from",
-    "1",
-    "--to",
-    "5",
-    "--evidence",
-    "e1",
+    "--messages-file",
+    "/tmp/messages.json",
   ];
 
   it("accepts a well-formed write", () => {
     const parsed = parseWriteCommand(base);
     expect(parsed).toEqual({
+      kind: "submit",
       session: "s1",
-      first_round: 1,
-      last_round: 5,
-      evidence_ids: ["e1"],
+      source: "memhub-cli",
+      messages_file: "/tmp/messages.json",
     });
   });
 
-  it("rejects a write with no evidence", () => {
-    expect(
-      parseWriteCommand(["--session", "s1", "--from", "1", "--to", "5"]),
-    ).toBeNull();
+  it("rejects a write with no messages file", () => {
+    expect(parseWriteCommand(["submit", "--session", "s1"])).toBeNull();
   });
 
-  it("rejects a descending round range", () => {
+  it("accepts source, request identity, and RFC3339 time", () => {
     expect(
       parseWriteCommand([
-        "--session",
-        "s1",
-        "--from",
-        "5",
-        "--to",
-        "1",
-        "--evidence",
-        "e1",
+        ...base,
+        "--source",
+        "cursor",
+        "--request-id",
+        "request-1",
+        "--memory-at",
+        "2026-10-22T00:00:00+08:00",
       ]),
-    ).toBeNull();
+    ).toMatchObject({
+      source: "cursor",
+      request_id: "request-1",
+      memory_at: "2026-10-22T00:00:00+08:00",
+    });
   });
 
-  it("rejects a round starting below one", () => {
+  it("rejects a timestamp without timezone", () => {
     expect(
-      parseWriteCommand([
-        "--session",
-        "s1",
-        "--from",
-        "0",
-        "--to",
-        "5",
-        "--evidence",
-        "e1",
-      ]),
+      parseWriteCommand([...base, "--memory-at", "2026-10-22T00:00:00"]),
     ).toBeNull();
   });
 
-  it("rejects a non-integer round", () => {
-    expect(
-      parseWriteCommand([
-        "--session",
-        "s1",
-        "--from",
-        "x",
-        "--to",
-        "5",
-        "--evidence",
-        "e1",
-      ]),
-    ).toBeNull();
-  });
-
-  it("accepts several evidence ids", () => {
-    const parsed = parseWriteCommand([...base, "--evidence", "e2"]);
-    expect(parsed?.evidence_ids).toEqual(["e1", "e2"]);
+  it("parses status under write", () => {
+    expect(parseWriteCommand(["status", "--id", "request-1"])).toEqual({
+      kind: "status",
+      id: "request-1",
+    });
   });
 
   it("marks --live as priority live", () => {
-    expect(parseWriteCommand([...base, "--live"])?.priority).toBe("live");
+    expect(parseWriteCommand([...base, "--live"])).toMatchObject({
+      kind: "submit",
+      priority: "live",
+    });
   });
 
   it("leaves priority unset by default", () => {
-    expect(parseWriteCommand(base)?.priority).toBeUndefined();
+    expect(parseWriteCommand(base)).not.toHaveProperty("priority");
   });
 
   it("rejects a repeated --json", () => {
     expect(parseWriteCommand([...base, "--json", "--json"])).toBeNull();
+  });
+
+  it("validates OpenAI text messages and requires a user turn", () => {
+    expect(
+      parseOpenAIMessages({
+        messages: [
+          { role: "user", content: "Remember Tuesday." },
+          { role: "assistant", content: "Understood.", ignored: true },
+        ],
+      }),
+    ).toEqual([
+      { role: "user", content: "Remember Tuesday." },
+      { role: "assistant", content: "Understood." },
+    ]);
+    expect(
+      parseOpenAIMessages([{ role: "assistant", content: "No user turn." }]),
+    ).toBeNull();
+    expect(
+      parseOpenAIMessages([{ role: "system", content: "Hidden prompt." }]),
+    ).toBeNull();
   });
 });
 

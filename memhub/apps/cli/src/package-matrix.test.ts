@@ -122,7 +122,9 @@ describe("package matrix harness", () => {
       process.execPath,
       [script, runtimeDist, "--stopped-commands", "--json"],
       { env: isolatedEnv },
-    );
+    ).catch((error: { stdout?: string; stderr?: string }) => {
+      throw new Error(`${error.stdout ?? ""}\n${error.stderr ?? ""}`);
+    });
     const document = JSON.parse(positive.stdout) as {
       state: string;
       commands: {
@@ -137,8 +139,8 @@ describe("package matrix harness", () => {
     };
     expect(document.state).toBe("verified");
     const results = document.commands.stopped_destructive.results;
-    // 11 destructive commands, each unknown/runtime_not_running with exit 3.
-    expect(Object.keys(results)).toHaveLength(11);
+    // Every destructive command fails closed while Runtime is stopped.
+    expect(Object.keys(results)).toHaveLength(7);
     for (const [name, result] of Object.entries(results)) {
       expect(result, `${name} did not fail closed`).toEqual({
         exit: 3,
@@ -162,7 +164,7 @@ describe("package matrix harness", () => {
     const shim = [
       "#!/usr/bin/env node",
       "const a=process.argv.slice(2);",
-      "if(['calls','import-file','notes','extraction','graph','models'].includes(a[0])||(a[0]==='processing'&&a[1]==='extract')){",
+      "if(['calls','notes','graph','models','memories'].includes(a[0])){",
       '  process.stdout.write(\'{"schema_version":1,"product":"memhub","state":"committed","operation_id":"x","receipt":{}}\\n\');',
       "  process.exit(0);",
       "}",
@@ -188,7 +190,7 @@ describe("package matrix harness", () => {
     expect(failure?.state).toBe("failed");
     expect(
       failure?.failures.filter((item) => item.includes("did not fail closed")),
-    ).toHaveLength(11);
+    ).toHaveLength(7);
   });
 
   it("can require an expected bundle SHA and reports bundle metadata", {
@@ -288,10 +290,9 @@ describe("package matrix harness", () => {
       "sources",
       "sync",
       "memories",
+      "profile",
       "calls",
-      "import-file",
       "notes",
-      "extraction",
       "graph",
       "models",
       "host",
@@ -314,7 +315,6 @@ describe("package matrix harness", () => {
       "scan",
       "progress",
       "jobs",
-      "processing",
       "path",
       "adapter",
       "write",
@@ -344,7 +344,7 @@ describe("package matrix harness", () => {
       'command "models" is missing usage "memhub models activate"',
     );
     expect(failures).toContain(
-      'command "import-file" is missing usage "memhub import-file discard"',
+      'command "memories" is missing usage "memhub memories update"',
     );
     expect(failures).toContain(
       'command "jobs" is missing usage "memhub jobs start"',

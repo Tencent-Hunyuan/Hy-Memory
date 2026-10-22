@@ -64,7 +64,6 @@ def test_empty_candidate_revisions_preserve_default_fingerprint(setup):
                 "overrides": False,
                 "full_rescan": False,
                 "onboarding": False,
-                "enable_sync": False,
             },
             sort_keys=True,
         ).encode()

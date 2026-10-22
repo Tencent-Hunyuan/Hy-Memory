@@ -288,6 +288,14 @@ def memory_write_jobs_sqlite_schema() -> tuple[str, ...]:
     return tuple(_split_statements(memory_write_jobs_ddl("sqlite")))
 
 
+def memory_write_jobs_target_sqlite_schema() -> tuple[str, ...]:
+    return tuple(
+        statement
+        for statement in memory_write_jobs_sqlite_schema()
+        if "memory_write_job_evidence" not in statement
+    )
+
+
 async def _003_scanner_cursors(cursor: Any) -> None:
     """Per-file scanner state, keyed for batch lookup.
 
@@ -3026,6 +3034,86 @@ async def _058_sdk_matter_notes(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def memory_authority_state_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS memory_authority_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    authority TEXT NOT NULL CHECK (authority IN ('legacy','sdk')),
+    migration_id TEXT,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO memory_authority_state(singleton,authority,migration_id,updated_at)
+VALUES (1,'legacy',NULL,CURRENT_TIMESTAMP)
+ON CONFLICT(singleton) DO NOTHING
+"""
+    return """
+CREATE TABLE IF NOT EXISTS memory_authority_state (
+    singleton TINYINT PRIMARY KEY,
+    authority VARCHAR(16) NOT NULL,
+    migration_id VARCHAR(128) NULL,
+    updated_at VARCHAR(64) NOT NULL,
+    CONSTRAINT memory_authority_state_singleton CHECK (singleton = 1),
+    CONSTRAINT memory_authority_state_value
+        CHECK (authority IN ('legacy','sdk'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO memory_authority_state(singleton,authority,migration_id,updated_at)
+VALUES (1,'legacy',NULL,CURRENT_TIMESTAMP)
+ON DUPLICATE KEY UPDATE singleton=singleton
+"""
+
+
+async def _059_memory_authority_state(cursor: Any) -> None:
+    for statement in _split_statements(memory_authority_state_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
+def memory_note_requests_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS memory_note_requests (
+    note_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS memory_note_requests (
+    note_id VARCHAR(256) PRIMARY KEY,
+    request_id VARCHAR(256) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    UNIQUE KEY memory_note_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+def fresh_management_ddl() -> str:
+    """Minimal root schema for a fresh SDK-authority installation."""
+    return """
+CREATE TABLE schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+CREATE TABLE memory_authority_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    authority TEXT NOT NULL CHECK (authority IN ('legacy','sdk')),
+    migration_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE memory_note_requests (
+    note_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+)
+"""
+
+
+async def _060_memory_note_requests(cursor: Any) -> None:
+    for statement in _split_statements(memory_note_requests_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3312,5 +3400,17 @@ MIGRATIONS: tuple[Migration, ...] = (
         "sdk_matter_notes",
         _058_sdk_matter_notes,
         ("matter_sdk_notes",),
+    ),
+    Migration(
+        59,
+        "memory_authority_state",
+        _059_memory_authority_state,
+        ("memory_authority_state",),
+    ),
+    Migration(
+        60,
+        "memory_note_requests",
+        _060_memory_note_requests,
+        ("memory_note_requests",),
     ),
 )

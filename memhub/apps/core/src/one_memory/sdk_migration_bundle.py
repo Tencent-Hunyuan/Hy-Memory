@@ -116,9 +116,7 @@ def create_sdk_migration_bundle(
                 try:
                     from one_memory.hy_memory_bridge import snapshot_hy_data_plane
                 except ImportError as error:
-                    raise MigrationBundleRejected(
-                        "sdk_migration_snapshot_unavailable"
-                    ) from error
+                    raise MigrationBundleRejected("sdk_migration_snapshot_unavailable") from error
                 snapshotter = snapshot_hy_data_plane
             try:
                 snapshotter(
@@ -157,7 +155,7 @@ def create_sdk_migration_bundle(
             "config": "management/config.json" if config.exists() else None,
             "files": files,
             "file_count": len(files),
-            "total_bytes": sum(int(item["bytes"]) for item in files),
+            "total_bytes": sum(int(str(item["bytes"])) for item in files),
         }
         manifest_path = staging / "manifest.json"
         manifest_path.write_text(
@@ -180,7 +178,7 @@ def create_sdk_migration_bundle(
         bundle_path=target,
         manifest_path=target / "manifest.json",
         file_count=len(files),
-        total_bytes=sum(int(item["bytes"]) for item in files),
+        total_bytes=sum(int(str(item["bytes"])) for item in files),
         bundle_id=bundle_id,
     )
 
@@ -237,12 +235,7 @@ def inspect_sdk_migration_bundle(
 ) -> dict[str, object]:
     home = data_dir.resolve()
     backups = (home / "backups").resolve()
-    if (
-        not bundle_id
-        or "/" in bundle_id
-        or "\\" in bundle_id
-        or bundle_id in {".", ".."}
-    ):
+    if not bundle_id or "/" in bundle_id or "\\" in bundle_id or bundle_id in {".", ".."}:
         raise MigrationBundleRejected("sdk_migration_bundle_id_invalid")
     bundle = (backups / f"{bundle_id}.sdk-bundle").resolve()
     if bundle.parent != backups or bundle.is_symlink() or not bundle.is_dir():
@@ -334,8 +327,8 @@ def restore_sdk_migration_bundle(
 
     return MigrationBundleRestoreResult(
         bundle_id=str(manifest["bundle_id"]),
-        restored_files=int(manifest["file_count"]),
-        restored_bytes=int(manifest["total_bytes"]),
+        restored_files=int(str(manifest["file_count"])),
+        restored_bytes=int(str(manifest["total_bytes"])),
         previous_database_path=database_previous,
         previous_sdk_root=getattr(restored, "previous_root", None),
     )

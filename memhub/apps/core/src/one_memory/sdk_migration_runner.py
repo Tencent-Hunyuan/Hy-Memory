@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from one_memory.database_access import main_database
+from one_memory.imports.storage import EvidenceStore
+from one_memory.memory_server.contracts import (
+    BatchIdentity,
+    WriteRequest,
+    internal_session_id_for,
+)
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.sdk_data_plane_migration import (
     CutoverMarker,
     DataPlaneMigrationError,
@@ -18,7 +25,6 @@ from one_memory.sdk_data_plane_migration import (
 from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
 from one_memory.sdk_migration_inventory import (
     SdkMigrationBridge,
-    backfill_sdk_matter_references,
     execute_memory_migration_plan,
     execute_raw_migration_plan,
     read_legacy_memory_inventory,
@@ -28,6 +34,7 @@ from one_memory.sdk_migration_inventory import (
     record_memory_migration_plan,
     record_raw_migration_plan,
 )
+from one_memory.target_schema import drop_legacy_tables
 
 
 @dataclass(frozen=True)
@@ -40,26 +47,113 @@ class BackfillResult:
     raw_items: int
 
 
+def prepare_legacy_write_queue_for_cutover(database_path: Path) -> tuple[int, int]:
+    """Freeze old jobs and move unstarted task rows into the surviving queue."""
+    with main_database(database_path).read(row_factory=sqlite3.Row) as database:
+        tables = {
+            str(row["name"])
+            for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "evidence" not in tables:
+            return (0, 0)
+        jobs = (
+            tuple(database.execute("SELECT job_id,payload_json FROM memory_write_jobs"))
+            if "memory_write_jobs" in tables
+            else ()
+        )
+    evidence = EvidenceStore(database_path)
+    frozen = 0
+    for row in jobs:
+        request = WriteRequest.model_validate_json(str(row["payload_json"]))
+        if request.input_records:
+            continue
+        records = tuple(evidence.get(identifier) for identifier in request.evidence_ids)
+        if any(record is None for record in records):
+            raise DataPlaneMigrationError(f"sdk_data_plane_write_job_input_missing:{row['job_id']}")
+        materialized = tuple(record for record in records if record is not None)
+        updated = request.model_copy(update={"input_records": materialized})
+        with main_database(database_path).write(autocommit=True) as database:
+            database.execute(
+                "UPDATE memory_write_jobs SET payload_json=? WHERE job_id=?",
+                (updated.model_dump_json(), str(row["job_id"])),
+            )
+        frozen += 1
+
+    if not {"memory_tasks", "memory_task_inputs"} <= tables:
+        return (frozen, 0)
+    with main_database(database_path).read(row_factory=sqlite3.Row) as database:
+        tasks = tuple(
+            database.execute(
+                "SELECT task.task_id,task.input_ref,task.status,"
+                "task.hy_invocation_count,inputs.refs_json "
+                "FROM memory_tasks task "
+                "LEFT JOIN memory_task_inputs inputs USING(task_id) "
+                "WHERE task.status IN "
+                "('pending','waiting_for_permission','waiting_for_model',"
+                "'deferred_outside_window','running')"
+            )
+        )
+    queue = DurableWriteQueue(database_path)
+    moved = 0
+    for task in tasks:
+        if int(task["hy_invocation_count"] or 0) > 0:
+            continue
+        references = json.loads(str(task["refs_json"])) if task["refs_json"] else []
+        identifiers = [
+            str(reference["evidence_id"])
+            for reference in references
+            if isinstance(reference, dict) and reference.get("evidence_id")
+        ] or [str(task["input_ref"])]
+        records = tuple(evidence.get(identifier) for identifier in identifiers)
+        if any(record is None for record in records):
+            raise DataPlaneMigrationError(
+                f"sdk_data_plane_memory_task_input_missing:{task['task_id']}"
+            )
+        materialized = tuple(record for record in records if record is not None)
+        source = materialized[0]
+        internal_session_id = internal_session_id_for(
+            source.conversation_id,
+            source.source_id,
+        )
+        queue.submit(
+            WriteRequest(
+                internal_session_id=internal_session_id,
+                source_id=source.source_id,
+                batch_identity=BatchIdentity(
+                    internal_session_id=internal_session_id,
+                    first_round=1,
+                    last_round=max(1, len(materialized)),
+                ),
+                evidence_ids=[record.evidence_id for record in materialized],
+                input_records=materialized,
+                idempotency_key=f"legacy-task:{task['task_id']}",
+                priority="normal",
+            )
+        )
+        with main_database(database_path).write(autocommit=True) as database:
+            database.execute(
+                "UPDATE memory_tasks SET status='cancelled',runner_token=NULL,"
+                "last_error_code='migrated_to_memory_write_job',updated_at=CURRENT_TIMESTAMP "
+                "WHERE task_id=?",
+                (str(task["task_id"]),),
+            )
+        moved += 1
+    return (frozen, moved)
+
+
 def sdk_cutover_blockers(database_path: Path) -> dict[str, int]:
     """Count legacy work that could write or duplicate data after cutover."""
     blockers: dict[str, int] = {}
     with main_database(database_path).read(row_factory=sqlite3.Row) as database:
         tables = {
             str(row["name"])
-            for row in database.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         checks = (
             (
-                "write_jobs",
-                "memory_write_jobs",
-                "state NOT IN ('completed','failed','cancelled','dead')",
-            ),
-            (
                 "memory_tasks",
                 "memory_tasks",
-                "status NOT IN ('completed','failed','cancelled')",
+                "status='unknown' OR (status='running' AND hy_invocation_count > 0)",
             ),
             (
                 "deletions",
@@ -71,34 +165,15 @@ def sdk_cutover_blockers(database_path: Path) -> dict[str, int]:
                 "evidence_pending_memory_dispatch",
                 "1=1",
             ),
-            (
-                "matter_runs",
-                "matter_runs",
-                "json_extract(body,'$.status')='running'",
-            ),
         )
         for name, table, where in checks:
             if table not in tables:
                 continue
             count = int(
-                database.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE {where}"
-                ).fetchone()[0]
+                database.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0]
             )
             if count:
                 blockers[name] = count
-        if {"matters", "matter_sdk_versions"} <= tables:
-            missing_matters = int(
-                database.execute(
-                    "SELECT COUNT(*) FROM matters current "
-                    "LEFT JOIN matter_sdk_versions projected "
-                    "ON projected.matter_id=current.matter_id "
-                    "AND projected.version=current.version "
-                    "WHERE projected.matter_id IS NULL"
-                ).fetchone()[0]
-            )
-            if missing_matters:
-                blockers["matter_references"] = missing_matters
     return blockers
 
 
@@ -113,6 +188,7 @@ def commit_reconciled_cutover(
 ) -> CutoverMarker:
     """Verify backup/work quiescence and atomically commit SDK authority."""
     inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id)
+    prepare_legacy_write_queue_for_cutover(database_path)
     blockers = sdk_cutover_blockers(database_path)
     if blockers:
         raise DataPlaneMigrationError(
@@ -133,13 +209,30 @@ def commit_reconciled_cutover(
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    return SdkDataPlaneMigrationStore(database_path).commit_cutover(
+    marker = SdkDataPlaneMigrationStore(database_path).commit_cutover(
         migration_id=migration_id,
         sdk_version=sdk_version,
         store_version=store_version,
         backup_bundle_id=bundle_id,
         reconciliation_digest=digest,
     )
+    inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=marker.backup_bundle_id)
+    drop_legacy_tables(database_path)
+    return marker
+
+
+def resume_legacy_cleanup(*, data_dir: Path, database_path: Path) -> tuple[str, ...]:
+    """Finish a cleanup interrupted after the durable authority switch."""
+    store = SdkDataPlaneMigrationStore(database_path)
+    if store.authority().value != "sdk":
+        raise DataPlaneMigrationError("sdk_data_plane_cleanup_before_cutover")
+    marker = store.cutover()
+    if marker is not None:
+        inspect_sdk_migration_bundle(
+            data_dir=data_dir,
+            bundle_id=marker.backup_bundle_id,
+        )
+    return drop_legacy_tables(database_path)
 
 
 async def run_sdk_data_plane_backfill(
@@ -198,11 +291,6 @@ async def run_sdk_data_plane_backfill(
         migration_id=migration_id,
         legacy=legacy_raw,
         decisions=raw_decisions,
-    )
-    backfill_sdk_matter_references(
-        database_path,
-        store,
-        migration_id=migration_id,
     )
     progress: MigrationProgress = store.progress(migration_id)
     if progress.counts.get("quarantine", 0):

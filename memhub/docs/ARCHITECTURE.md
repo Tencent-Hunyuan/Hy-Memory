@@ -20,7 +20,7 @@ Hy Memory = SDK / 引擎。MemHub = 产品与发布名；`one-memory` 仍出现�
 
 - ~~原文 Evidence 业务库~~ → **原文进入 SDK raw 层**；不再以 MemHub `evidence` 表为原文权威。
 - ~~Governance / `governed_*` 作为产品级 memory 权威~~ → **拆除方向**；列表/纠正/删除/召回过滤改为 **授权 + 调 SDK**；需要挂接处只存 `memory_id`。
-- Matters 等高级组织可以留在 MemHub，但 **改 memory 必须走 SDK**。
+- Matter 尚未形成已发布产品合同；当前全部 `matter*` 占位表和 API 入口删除。
 
 ---
 
@@ -34,7 +34,7 @@ MemHub is a local-first memory product.
 AI hosts / harnesses
   ├─ install / hooks / MCP / Skill / pairing
   ├─ authorized recall (Host Bridge → Core → SDK search)
-  └─ (optional) higher-level organization (e.g. Matters) keyed by memory_id
+  └─ future higher-level organization requires a new explicit contract
              │
              ▼
       Python Core / FastAPI   ← 管理面
@@ -69,7 +69,7 @@ AI hosts and local conversation files
       ├─ source adapters and grants
       ├─ Evidence and import jobs
       ├─ durable memory_write_jobs
-      ├─ per-job memory_tasks execution records
+      ├─ single-layer durable write execution records
       ├─ model-content permission checks
       ├─ Hy Memory bridge
       ├─ Governance and retrieval
@@ -131,12 +131,12 @@ authorized harness / user action
   -> HyMemoryBridge
   -> Hy Memory SDK write (raw / chat / coding / …)
   -> SDK stores (vector, graph, cache, history, coding, …) via SDK config/env
-  -> MemHub may persist memory_id (+ org metadata) for Matters / receipts / UI keys
+  -> MemHub may persist memory_id only for explicit management receipts / UI keys
   -> search / recall / UI via SDK read APIs (+ MemHub authz)
 ```
 
 - **原子 memory 变更**（create / update / delete / supersede 等）：只通过 SDK。缺接口则扩展 SDK client。
-- **异步队列**：`memory_write_jobs` / `memory_tasks`、FIFO / event-time、公平调度、租约、暂停与重试策略继续由 MemHub 持久化和执行；队列 payload 指向「要喂给 SDK 的输入」，不把 MemHub 表当作 memory 实体或沉淀结果权威。
+- **异步队列**：只保留 `memory_write_jobs`，其承载 FIFO / event-time、公平调度、租约、暂停、重试与 SDK 回执；一个 job 对应一次 SDK `add()`。旧 `memory_tasks` 与 task receipt 二级台账删除。
 - SDK `write_outcomes` 只回答某个 request 是否已由 SDK 提交及返回哪些 `memory_id`；它不是队列，也不接管调度。
 
 #### ~~旧：Evidence → Governance 路径（已废弃为目标架构）~~
@@ -148,7 +148,6 @@ authorized source
   -> memory_write_jobs
   -> persisted event-time window
   -> durable drain
-  -> memory_tasks
   -> sedimentation and source gates
   -> Hy Memory bridge
   -> write verification and Governance
@@ -161,8 +160,8 @@ authorized source
 ~~`memory_write_jobs` is the sole production intake…~~  
 **新：** 若保留同名队列表，其语义降级为 **SDK 调用调度器**，不再隐含「写入 Governance 台账才算产品成功」。
 
-~~`memory_tasks` remains as an internal execution record…~~  
-**新：** 任务/租约记录可保留作运维与排障；不得替代 SDK 查询结果作为 memory 真相。
+~~`memory_tasks` remains as an internal execution record…~~
+**新：** 该二级执行表与 task receipt 删除；运维状态直接来自 `memory_write_jobs`。
 
 ### HY / SDK and MemHub bridge
 
@@ -172,12 +171,12 @@ Hy Memory is the **only** extraction, memory entity, relationship, and semantic-
 
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job/task outcome。`import_raw()` 只用于历史数据的 exact migration，不拆分正常写路径。
-- Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。Matters 可用 `memory_id` 集合做组织过滤，但 **内容与生命周期以 SDK 为准**。
+- Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。
 - Context wire：cutover marker 提交前只使用 legacy Context v1；提交后 Host Bridge 只使用 SDK-native Context v2。两种 schema 原样校验、原样返回，不把 SDK item 补造成 v1 的 `revision`、`evidence_ids`、`paths` 或 `adoption`，已选择的 v2 路径失败时也不回退 legacy 权威。
 - Ask wire：marker 前保留 Governance Ask v1；marker 后 Web / Host Bridge 只调用 SDK Ask v2。v2 的引用只含 SDK 原生 `memory_id/content/layer/status/source/gmt_created`，生成过程中重复 `get` 校验同一 SDK 快照，不补造 revision、Evidence 或 scopes，SDK 失败不回退 v1。
-- Matter / UI raw：marker 后 Matter 版本仅保存 SDK memory/raw 引用和完整性 hash，正文与 quote 每次从 SDK 水合；首页、历史搜索、Matter 面板不再读取 legacy memory/Evidence 路由。旧表在离线迁移校验完成后物理删除，审计与 rollback 只依赖 verified bundle。
+- Matter：未形成已发布产品合同，不迁移占位数据；所有 `matter*` 表在升级清理时物理删除，fresh install 不创建，Runtime 不注册 Matter API。
 - 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。启动流程创建/校验完整 bundle、续跑 ledger、完成 SDK backfill 与 reconciliation，满足全部门禁后才提交 marker 并进入主界面。普通用户不需要另跑 CLI，也不按旧 App 内 SDK 版本分叉迁移。
-- Matters 等：MemHub 可存事项结构与 `memory_id[]`；改 memory 内容或生命周期 → SDK。
+- Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
 
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。
 
@@ -210,7 +209,7 @@ keyboard/mouse, clipboard, or background audio collection.
 | 存什么 | 谁拥有 | 怎么配 |
 | --- | --- | --- |
 | Memory 实体、raw、向量、图、coding、SDK cache/history | **Hy Memory SDK** | SDK config / env；目录落在 One Memory Home 下由 Runtime 约定 |
-| harness grants、sync desired-state、model profiles、队列/租约、Core 收据、Matters 等组织元数据、`memory_id` 引用 | **MemHub 管理库**（当前多为 `one-memory.sqlite3`） | Core 管理；**不**存 memory 正文 |
+| harness grants、sync desired-state、model profiles、队列/租约、Core 收据、必要的 `memory_id` 引用 | **MemHub 管理库**（当前多为 `one-memory.sqlite3`） | Core 管理；**不**存 memory 正文 |
 
 ~~SQLite is the sole authoritative MemHub business database… It stores Evidence, grants, import jobs, memory tasks, Governance, model profiles…~~  
 **新：** MemHub SQLite（或后继）是 **管理面** 权威库，不是 memory 实体权威库。
@@ -219,9 +218,9 @@ keyboard/mouse, clipboard, or background audio collection.
 **新表述：** HY/SDK stores **就是** memory 数据平面权威；MemHub 不得再镜像一套业务实体与之并行。
 
 Fresh install 直接 bootstrap 最新管理面 schema，不执行历史 Evidence /
-Governance migration 链。旧用户启动迁移可以临时读取旧表，但 cutover、Matter/raw
+Governance migration 链。旧用户启动迁移可以临时读取旧表，但 cutover、raw
 引用回填和 bundle restore 验证全部成功后，必须在 Runtime 对外服务前 DROP
-旧 Evidence/Governance/retrieval/Matter-body/session-shadow 表以及迁移专用 alias/ledger。
+旧 Evidence/Governance/retrieval/session-shadow、全部 Matter 占位表以及迁移专用 alias/ledger。
 
 ~~MySQL-only business storage was an earlier proposal… D56 selected SQLite…~~  
 **仍有效的工程约束：** 不要静默上 MemHub 业务双写 MySQL；SDK 侧 `MEMORY_CACHE_BACKEND=mysql` 等属 **SDK 合同**，与 MemHub 管理库无关。
@@ -234,13 +233,13 @@ Governance migration 链。旧用户启动迁移可以临时读取旧表，但 c
 ~~- `governed_memories*` / supersessions / versions 作列表与生命周期权威 → 改 SDK API + 可选 `memory_id` 引用~~  
 ~~- 以 Governance 为准的 visibility 正文缓存若依赖实体台账 → 随台账拆除或改为纯派生且可重建，且不得成为写权威~~
 
-**可保留方向（管理面）：** `source_grants`、model profile 相关表、队列/任务租约表、Matters 组织表（含 `memory_id`）、call_events 类审计元数据（不存对话/记忆正文）、Runtime 收据。
+**可保留方向（管理面）：** `source_grants`、model profile 相关表、队列/任务租约表、call_events 类审计元数据（不存对话/记忆正文）、Runtime 收据。
 
 ## Matters / call_events / session inbox（口径）
 
 | 能力 | 新口径 |
 | --- | --- |
-| **Matters** | SDK memory 之上的高级组织；MemHub 可管事项结构并持久化 `memory_id`；**改 memory 必须走 SDK**。 |
+| **Matters** | 未发布占位功能，现已删除表与 Runtime API；未来按新合同重新设计。 |
 | **call_events** | 本机调用元数据审计（非 memory 实体）；可留在管理面；展示记忆时用 id 调 SDK。 |
 | **session inbox / lease / change_outbox** | ~~旧：围绕 Evidence/变更外发的宿主增量管道~~。Evidence 权威拆除后，若仍需要宿主增量，应重定义为 **管理事件或 SDK 可订阅合同**，不得靠 MemHub 影子 memory 表推送正文。 |
 

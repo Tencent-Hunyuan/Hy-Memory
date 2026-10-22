@@ -85,6 +85,8 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
         return sdk_cutover(options, stream)
     if command == "sdk-migration-status":
         return sdk_migration_status(options, stream)
+    if command == "sdk-cleanup":
+        return sdk_cleanup(options, stream)
     if command == "boundary" and not options:
         from one_memory.workbuddy_boundary import write_hook
 
@@ -109,6 +111,7 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
             "|sdk-migrate --migration-id <id> --bundle-id <id> --yes [--json]"
             "|sdk-cutover --migration-id <id> --bundle-id <id> --yes [--json]"
             "|sdk-migration-status [--json]"
+            "|sdk-cleanup --yes [--json]"
             "|boundary [--peek|--ack TOKEN]|capture SOURCE]\n"
         )
         return 2
@@ -179,16 +182,42 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
     )
 
     is_sdk_bundle = source.endswith(".sdk-bundle")
-    try:
-        if is_sdk_bundle:
-            result = restore_sdk_migration_bundle(
+    if is_sdk_bundle:
+        try:
+            sdk_result = restore_sdk_migration_bundle(
                 data_dir=settings.data_dir,
                 source=source,
                 runtime_stopped=True,
             )
-        else:
-            result = restore_managed_backup(data_dir=settings.data_dir, source=source)
-    except (RestoreRejected, MigrationBundleRejected) as error:
+        except MigrationBundleRejected as error:
+            document = {
+                "schema_version": 1,
+                "state": "failed",
+                "code": error.code,
+            }
+            _write_restore(stream, as_json, document, f"恢复失败：{error.code}")
+            return 1
+        document = {
+            "schema_version": 1,
+            "state": "restored",
+            "bundle_id": sdk_result.bundle_id,
+            "restored_files": sdk_result.restored_files,
+            "restored_bytes": sdk_result.restored_bytes,
+            "previous_database_path": str(sdk_result.previous_database_path),
+            "previous_sdk_root": (
+                str(sdk_result.previous_sdk_root) if sdk_result.previous_sdk_root else None
+            ),
+        }
+        _write_restore(
+            stream,
+            as_json,
+            document,
+            f"已恢复完整迁移备份：{sdk_result.bundle_id}。",
+        )
+        return 0
+    try:
+        managed_result = restore_managed_backup(data_dir=settings.data_dir, source=source)
+    except RestoreRejected as error:
         document = {
             "schema_version": 1,
             "state": "failed",
@@ -196,37 +225,18 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
         }
         _write_restore(stream, as_json, document, f"恢复失败：{error.code}")
         return 1
-    if is_sdk_bundle:
-        document = {
-            "schema_version": 1,
-            "state": "restored",
-            "bundle_id": result.bundle_id,
-            "restored_files": result.restored_files,
-            "restored_bytes": result.restored_bytes,
-            "previous_database_path": str(result.previous_database_path),
-            "previous_sdk_root": (
-                str(result.previous_sdk_root) if result.previous_sdk_root else None
-            ),
-        }
-        _write_restore(
-            stream,
-            as_json,
-            document,
-            f"已恢复完整迁移备份：{result.bundle_id}。",
-        )
-        return 0
     document = {
         "schema_version": 1,
         "state": "restored",
-        "restored_bytes": result.restored_bytes,
-        "previous_backup_path": str(result.previous_backup_path),
-        "source_schema_version": result.source_schema_version,
+        "restored_bytes": managed_result.restored_bytes,
+        "previous_backup_path": str(managed_result.previous_backup_path),
+        "source_schema_version": managed_result.source_schema_version,
     }
     _write_restore(
         stream,
         as_json,
         document,
-        f"已恢复：{result.previous_backup_path} 为保护性备份。",
+        f"已恢复：{managed_result.previous_backup_path} 为保护性备份。",
     )
     return 0
 
@@ -271,10 +281,7 @@ def migration_bundle(options: Sequence[str], stream: TextIO) -> int:
         stream.write(f"one-memory: 参数无效：{option}\n")
         return 2
     if not bundle_id or not runtime_build:
-        stream.write(
-            "one-memory: migration-bundle 需要 "
-            "--bundle-id <id> --runtime-build <build>\n"
-        )
+        stream.write("one-memory: migration-bundle 需要 --bundle-id <id> --runtime-build <build>\n")
         return 2
 
     settings = load_settings()
@@ -382,10 +389,7 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         stream.write(f"one-memory: 参数无效：{option}\n")
         return 2
     if not migration_id or not bundle_id:
-        stream.write(
-            "one-memory: sdk-migrate 需要 "
-            "--migration-id <id> --bundle-id <id>\n"
-        )
+        stream.write("one-memory: sdk-migrate 需要 --migration-id <id> --bundle-id <id>\n")
         return 2
 
     settings = load_settings()
@@ -426,7 +430,7 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         MigrationBundleRejected,
         inspect_sdk_migration_bundle,
     )
-    from one_memory.sdk_migration_runner import run_sdk_data_plane_backfill
+    from one_memory.sdk_migration_runner import BackfillResult, run_sdk_data_plane_backfill
     from one_memory.secrets import KeyringSecretStore, SecretStoreUnavailableError
 
     database = settings.data_dir / "one-memory.sqlite3"
@@ -451,14 +455,17 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
     except SecretStoreUnavailableError:
         code = "secure_storage_unavailable"
     except Exception as error:
-        code = str(error) if str(error) in {
-            "model_profile_not_active",
-            "model_secret_unavailable",
-        } else "sdk_migration_preflight_failed"
+        code = (
+            str(error)
+            if str(error)
+            in {
+                "model_profile_not_active",
+                "model_secret_unavailable",
+            }
+            else "sdk_migration_preflight_failed"
+        )
     else:
-        namespace_fingerprint = hashlib.sha256(
-            HY_MEMORY_NAMESPACE.encode()
-        ).hexdigest()
+        namespace_fingerprint = hashlib.sha256(HY_MEMORY_NAMESPACE.encode()).hexdigest()
         backend_material = json.dumps(
             {
                 "namespace": HY_MEMORY_NAMESPACE,
@@ -475,7 +482,7 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         )
         backend_fingerprint = hashlib.sha256(backend_material.encode()).hexdigest()
 
-        async def run_backfill():
+        async def run_backfill() -> BackfillResult:
             bridge = HyMemoryBridge(
                 profile=profile,
                 api_key=secret,
@@ -552,10 +559,7 @@ def sdk_cutover(options: Sequence[str], stream: TextIO) -> int:
         stream.write(f"one-memory: 参数无效：{option}\n")
         return 2
     if not migration_id or not bundle_id:
-        stream.write(
-            "one-memory: sdk-cutover 需要 "
-            "--migration-id <id> --bundle-id <id>\n"
-        )
+        stream.write("one-memory: sdk-cutover 需要 --migration-id <id> --bundle-id <id>\n")
         return 2
     settings = load_settings()
     status = inspect_runtime(settings.data_dir)
@@ -634,37 +638,37 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         import sqlite3
 
         from one_memory.database_access import main_database
-        from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
+        from one_memory.sdk_data_plane_migration import (
+            MemoryAuthority,
+            SdkDataPlaneMigrationStore,
+        )
+        from one_memory.target_schema import legacy_tables_present
 
-        marker = SdkDataPlaneMigrationStore(database_path).cutover()
+        migration_store = SdkDataPlaneMigrationStore(database_path)
+        marker = migration_store.cutover()
+        authority = migration_store.authority()
         stat = database_path.stat()
-        generation = hashlib.sha256(
-            f"{stat.st_size}:{stat.st_mtime_ns}".encode()
-        ).hexdigest()[:16]
-        if marker is not None:
+        generation = hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+        if authority is MemoryAuthority.SDK:
+            legacy_tables = legacy_tables_present(database_path)
             document = {
                 "schema_version": 1,
                 "authority": "sdk",
-                "state": "complete",
-                "migration_id": marker.migration_id,
+                "state": "cleanup_required" if legacy_tables else "complete",
+                "migration_id": marker.migration_id if marker else None,
                 "generation": generation,
+                "legacy_tables": list(legacy_tables),
             }
         else:
-            with main_database(database_path).read(
-                row_factory=sqlite3.Row
-            ) as database:
+            with main_database(database_path).read(row_factory=sqlite3.Row) as database:
                 tables = {
                     str(row["name"])
-                    for row in database.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    )
+                    for row in database.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 }
                 counts = {
                     "memory": (
                         int(
-                            database.execute(
-                                "SELECT COUNT(*) FROM governed_memories"
-                            ).fetchone()[0]
+                            database.execute("SELECT COUNT(*) FROM governed_memories").fetchone()[0]
                         )
                         if "governed_memories" in tables
                         else 0
@@ -686,10 +690,66 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
     if as_json:
         stream.write(f"{json.dumps(document, ensure_ascii=False)}\n")
     else:
-        stream.write(
-            f"SDK migration: {document['state']} "
-            f"(authority={document['authority']})\n"
+        stream.write(f"SDK migration: {document['state']} (authority={document['authority']})\n")
+    return 0
+
+
+def sdk_cleanup(options: Sequence[str], stream: TextIO) -> int:
+    if set(options) - {"--yes", "--json"} or options.count("--yes") > 1:
+        stream.write("one-memory: sdk-cleanup 只接受 --yes [--json]\n")
+        return 2
+    confirmed = "--yes" in options
+    as_json = "--json" in options
+    settings = load_settings()
+    status = inspect_runtime(settings.data_dir)
+    if status.state != "stopped":
+        document = {
+            "schema_version": 1,
+            "state": "blocked",
+            "code": "sdk_cleanup_runtime_running",
+        }
+        _write_restore(stream, as_json, document, "Runtime 仍在运行；不能清理旧表。")
+        return 4
+    if not confirmed:
+        _write_restore(
+            stream,
+            as_json,
+            {
+                "schema_version": 1,
+                "state": "preview",
+                "requires_confirmation": True,
+            },
+            "加 --yes 后删除已迁移旧表。",
         )
+        return 4
+    from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
+    from one_memory.sdk_migration_bundle import MigrationBundleRejected
+    from one_memory.sdk_migration_runner import resume_legacy_cleanup
+
+    try:
+        dropped = resume_legacy_cleanup(
+            data_dir=settings.data_dir,
+            database_path=settings.data_dir / "one-memory.sqlite3",
+        )
+    except (DataPlaneMigrationError, MigrationBundleRejected) as error:
+        code = getattr(error, "code", str(error))
+        _write_restore(
+            stream,
+            as_json,
+            {"schema_version": 1, "state": "blocked", "code": code},
+            f"旧表清理未完成：{code}",
+        )
+        return 4
+    _write_restore(
+        stream,
+        as_json,
+        {
+            "schema_version": 1,
+            "state": "clean",
+            "dropped_tables": list(dropped),
+        },
+        "旧表已删除。",
+    )
     return 0
 
 

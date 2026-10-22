@@ -38,7 +38,7 @@ KNOWN_TOTAL = 144
 KNOWN_BY_CONSTRUCT = {
     "pragma": 31,
     "insert_or": 11,
-    "sqlite_json": 18,
+    "sqlite_json": 19,
     "rowid": 36,
     "begin_immediate": 12,
     "on_conflict": 36,

@@ -46,7 +46,11 @@ def put(
 
 def revoke(db, source, *, user="local"):
     db.execute(
-        "INSERT INTO source_grants VALUES (?,?,'/synthetic','default','2026-09-19','revoked')",
+        "INSERT INTO source_grants "
+        "(user_id,source_id,root_path,requested_path,root_identity,candidate_kind,"
+        "granted_at,revoked_at,revision) "
+        "VALUES (?,?,'/synthetic','/synthetic','fixture','default',"
+        "'2026-09-19','revoked',1)",
         (user, source),
     )
 
@@ -619,7 +623,6 @@ def test_invalid_neighbor_keeps_real_anchor_and_marks_partial_group(database):
     "column, value",
     [
         ("role", "assistant"),
-        ("written_by", "agent"),
         ("created_at", "2026-09-20T00:00:00+00:00"),
     ],
 )

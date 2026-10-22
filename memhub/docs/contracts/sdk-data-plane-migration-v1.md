@@ -17,8 +17,8 @@ Before the cutover marker is committed:
 
 - `evidence*` and `governed_*` remain the product read authority;
 - SDK stores are inspected and backfilled, but are not merged into live search;
-- new imports, writes, queue drains, corrections, deletes, Matters generation,
-  and session delivery are paused.
+- new imports, writes, queue drains, corrections, deletes and session delivery
+  are paused.
 
 After the cutover marker is committed:
 
@@ -34,7 +34,7 @@ The marker, not table existence, selects the authority.
 
 A fresh home does not execute the historical application schema chain. It
 bootstraps the latest management-plane schema directly with SDK authority and
-never creates Evidence, Governance, legacy retrieval, legacy Matter body, or
+never creates Evidence, Governance, legacy retrieval, any Matter, or
 session-shadow tables. Historical schema migrations are an input format reader
 for old homes only.
 
@@ -149,13 +149,9 @@ The MemHub management database owns operational migration tables:
   phase, cutover state and reconciliation digest;
 - `sdk_data_plane_migration_items`: source identity/revision/hash, target SDK
   identity/hash, deterministic operation key, state, attempts and error code;
-- `memory_id_aliases`: historical ID to canonical SDK ID for old Matters,
-  call-events, task receipts and links.
+- `memory_id_aliases`: historical ID to canonical SDK ID for call-events,
+  task receipts and links.
 - `raw_id_aliases`: legacy Evidence ID/item index to canonical SDK raw ID.
-- `matter_sdk_versions`: reference-only Matter organization; memory/raw
-  bodies are hydrated and hash-checked through SDK APIs.
-- `matter_sdk_notes`: pending note request IDs and eventual SDK raw IDs; no
-  note body is copied into this management table.
 - `sdk_data_plane_cutover`: the singleton authority marker and immutable
   SDK/backend/bundle/reconciliation fingerprints.
 
@@ -175,18 +171,16 @@ Queue rows and leases remain MemHub management state.
   of a two-stage normal write path.
 
 - `hy_invoked=0` may be safely retried after normal lease recovery.
-- `hy_invoked=1`, `memory_tasks.status=unknown`, or any non-terminal SDK outcome
-  must use `get_write_outcome(request_id)`.
+- `memory_write_jobs.hy_invoked=1`, `state=unknown`, or any non-terminal SDK
+  outcome must use `get_write_outcome(request_id)`.
 - `running`/`unknown` is not absence and must not be replayed.
 - confirmed SDK IDs become task receipts; Governance publication is not part of
   completion after cutover.
 
-## 9. Matters, call events and session delivery
+## 9. Call events and session delivery
 
-- Matters retain organization and canonical `memory_id` / SDK raw references.
-- Embedded memory bodies are replaced by read-time SDK resolution.
-- Matter citations retain only raw ID, item index, offsets and quote hash;
-  visible quotes are sliced from SDK raw and hash-checked at read time.
+- Matter was an unpublished placeholder. Its rows are not migrated and every
+  `matter*` table is deleted during cleanup.
 - Historical IDs remain resolvable through `memory_id_aliases`.
 - `call_events` remains metadata-only; reference titles/content resolve through
   SDK APIs.
@@ -214,7 +208,7 @@ Cutover requires:
 - complete raw coverage;
 - no unsafe unknown task;
 - pending corrections and deletions settled;
-- Matters/call-event references resolvable;
+- call-event references resolvable;
 - exact counts and hashes reconciled;
 - deterministic full-ID get verification;
 - a verified full migration bundle.
@@ -243,16 +237,23 @@ Changing only the Runtime `current` symlink is not data rollback.
 
 ## 12. Legacy cleanup
 
-Legacy tables are not a compatibility runtime. After every memory/raw/Matter
+Legacy tables are not a compatibility runtime. After every memory/raw
 reference resolves, the verified bundle has passed restore validation, and the
 SDK cutover marker is durable, the offline startup transaction drops:
 
 - every `evidence*` and `governed_*` table;
 - legacy retrieval/index tables;
-- legacy Matter body/dependency/note tables;
+- every `matter*` placeholder table;
 - legacy deletion/index-sync/task-output and session-shadow tables;
 - migration-only aliases and ledgers after their canonical references have
   been materialized into the surviving management tables.
+
+Before that DROP, every surviving `memory_write_jobs` row is made
+self-contained by freezing its source records into `payload_json`. Unstarted
+legacy `memory_tasks` rows are converted to deterministic
+`memory_write_jobs(idempotency_key="legacy-task:<task_id>")`; possibly-sent
+task rows remain a cutover blocker until SDK request-ID reconciliation proves
+their outcome.
 
 The verified bundle is the audit and rollback artifact; keeping duplicate
 plaintext tables in the live database is not. A cleanup failure keeps startup
@@ -270,7 +271,7 @@ The release gate covers:
 - unknown SDK outcome and crash after SDK commit;
 - interruption before/after each ledger transition;
 - full bundle restore and hash/count mismatch;
-- Matters/call-event alias preservation;
+- call-event alias preservation;
 - old Runtime against a post-cutover home;
 - successful migration followed by physical absence of every legacy table;
 - local and supported remote backend snapshot behavior.

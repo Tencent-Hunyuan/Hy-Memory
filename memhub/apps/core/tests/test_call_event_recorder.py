@@ -1,16 +1,13 @@
 from datetime import UTC, datetime
-from uuid import UUID
 
 from one_memory.api import ConversationSearchHit, ConversationSearchResponse
 from one_memory.call_event_recorder import (
     ask_call_event,
     context_call_event,
     conversation_call_event,
-    matter_call_event,
 )
 from one_memory.context_models import ContextPath, ContextPaths, ContextSearchResponse
 from one_memory.external_memory_access import ExternalMemoryAccess
-from one_memory.matters.models import MatterContext
 from one_memory.memory_governance import GovernedMemory, MemoryKind, MemoryOrigin, MemoryStatus
 from one_memory.memory_qa import MemoryAnswer
 
@@ -127,18 +124,3 @@ def test_ask_records_memory_refs_without_answer():
     assert event.memory_count == 1 and event.references[0].id == "m1"
     assert event.references[0].revision == 4
     assert "SECRET" not in encoded
-
-
-def test_matter_search_records_state_without_text():
-    context = MatterContext(
-        matter_id="matter-1",
-        version=2,
-        availability="ready",
-        text="SECRET_MATTER_BODY",
-    )
-    event = matter_call_event((context,), None, 4.0)
-    encoded = event.model_dump_json()
-    assert event.tool == "om_matters" and event.state == "grounded"
-    assert event.raw_count == 0 and event.memory_count == 0 and not event.references
-    assert "SECRET" not in encoded
-    assert UUID(event.event_id.hex)

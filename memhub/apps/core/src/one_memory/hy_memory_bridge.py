@@ -389,6 +389,7 @@ class HyMemoryClientProtocol(Protocol):
         user_id: str,
         agent_id: str,
         session_id: str,
+        source: str,
         metadata: Mapping[str, object],
         memory_at: datetime | None,
         scene: str | None,
@@ -454,6 +455,8 @@ class HyMemoryClientProtocol(Protocol):
 
     def delete(self, memory_id: str) -> Mapping[str, object]: ...
 
+    def get_user_profile(self, *, user_id: str) -> Mapping[str, object]: ...
+
     def search(
         self,
         query: str,
@@ -467,6 +470,8 @@ class HyMemoryClientProtocol(Protocol):
         intention_limit: int,
         scene: str = "normal",
         reader: str = "legacy",
+        include_sources: list[str] | None = None,
+        layers: list[str] | None = None,
     ) -> Mapping[str, object]: ...
 
 
@@ -833,9 +838,12 @@ class HyMemoryBridge:
             raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
         except Exception as error:
             raise HyMemoryBridgeError("hy_memory_raw_list_failed") from error
-        if not isinstance(raw, Mapping) or not isinstance(raw.get("raw"), list):
+        if not isinstance(raw, Mapping):
             raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
-        records = tuple(_sdk_raw_record(row) for row in raw["raw"])
+        rows = raw.get("raw")
+        if not isinstance(rows, list):
+            raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
+        records = tuple(_sdk_raw_record(row) for row in rows)
         total = raw.get("total")
         if not isinstance(total, int) or total < 0:
             raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
@@ -1110,6 +1118,34 @@ class HyMemoryBridge:
         return tuple(outputs)
 
     @_exclusive
+    async def get_user_profile(self, *, user_id: str) -> dict[str, object]:
+        """Return the SDK-native assembled long-term user profile."""
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                cast(Any, client).get_user_profile,
+                user_id=user_id,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_profile_read_failed") from error
+        if not isinstance(raw, Mapping):
+            raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
+        request_id = raw.get("request_id")
+        profile = raw.get("profile")
+        elapsed_ms = raw.get("elapsed_ms")
+        if (
+            not isinstance(request_id, str)
+            or (profile is not None and not isinstance(profile, Mapping))
+            or not isinstance(elapsed_ms, (int, float))
+        ):
+            raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
+        return {
+            "request_id": request_id,
+            "profile": None if profile is None else dict(profile),
+            "elapsed_ms": float(elapsed_ms),
+        }
+
+    @_exclusive
     async def digest(self, *, user_id: str, agent_id: str) -> dict[str, object]:
         client = await self._get_client()
         try:
@@ -1329,9 +1365,7 @@ class HyMemoryBridge:
             return await _coding_result(client, request, raw)
         raw_memory_id = raw.get("memory_id")
         source_raw_ids = (
-            (raw_memory_id,)
-            if isinstance(raw_memory_id, str) and raw_memory_id
-            else ()
+            (raw_memory_id,) if isinstance(raw_memory_id, str) and raw_memory_id else ()
         )
         raw_ids = raw.get("memory_ids")
         if not isinstance(raw_ids, list):
@@ -1761,7 +1795,7 @@ def snapshot_hy_data_plane(
     writers_stopped: bool,
 ) -> object:
     """Offline SDK snapshot entry; product modules do not import SDK stores."""
-    from hy_memory.snapshot import snapshot_local_data_plane
+    from hy_memory.snapshot import snapshot_local_data_plane  # type: ignore[import-untyped]
 
     return snapshot_local_data_plane(
         source_root=source_root,
@@ -2215,9 +2249,7 @@ async def _result_from_write_outcome(
         candidates.append(singular_id)
     raw_ids = (
         (singular_id,)
-        if isinstance(singular_id, str)
-        and singular_id
-        and result.get("scene") != "productivity"
+        if isinstance(singular_id, str) and singular_id and result.get("scene") != "productivity"
         else ()
     )
 
@@ -2273,17 +2305,11 @@ def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:
             supersedes=_string_tuple(raw.get("supersedes")),
             superseded_by=_string_tuple(raw.get("superseded_by")),
             tags=_string_tuple(raw.get("tags")),
-            owner=(
-                str(raw["owner"])
-                if raw.get("owner") in {"user", "agent"}
-                else None
-            ),
+            owner=(str(raw["owner"]) if raw.get("owner") in {"user", "agent"} else None),
             source_raw_ids=_sdk_source_raw_ids(raw),
             user_id=str(raw.get("user_id") or ""),
             agent_id=str(raw.get("agent_id") or ""),
-            session_id=(
-                str(raw["session_id"]) if isinstance(raw.get("session_id"), str) else None
-            ),
+            session_id=(str(raw["session_id"]) if isinstance(raw.get("session_id"), str) else None),
             source=str(raw["source"]) if isinstance(raw.get("source"), str) else None,
             memory_at=raw.get("memory_at") if isinstance(raw.get("memory_at"), int) else None,
             gmt_created=(
@@ -2305,11 +2331,7 @@ def _sdk_source_raw_ids(raw: Mapping[str, object]) -> tuple[str, ...]:
     if isinstance(singular, str):
         values.append(singular)
     return tuple(
-        dict.fromkeys(
-            value.strip()
-            for value in values
-            if isinstance(value, str) and value.strip()
-        )
+        dict.fromkeys(value.strip() for value in values if isinstance(value, str) and value.strip())
     )
 
 

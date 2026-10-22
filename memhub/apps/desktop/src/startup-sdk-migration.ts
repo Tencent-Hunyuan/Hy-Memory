@@ -47,6 +47,21 @@ export async function runStartupSdkMigration(
     return { state: "deferred", code: "sdk_migration_status_unavailable" };
   }
   if (
+    status.document.authority === "sdk" &&
+    status.document.state === "cleanup_required"
+  ) {
+    return fence(options.dataDir, async () => {
+      const cleanup = await execute(
+        options.core,
+        ["sdk-cleanup", "--yes", "--json"],
+        options.dataDir,
+      );
+      return cleanup.exitCode === 0 && cleanup.document.state === "clean"
+        ? { state: "cutover" }
+        : deferred(cleanup);
+    });
+  }
+  if (
     status.document.authority === "sdk" ||
     status.document.state !== "required"
   ) {
