@@ -1421,13 +1421,18 @@ def create_app(
             # starts its threads wherever the first work arrives from, and
             # from a busy loop that wait was 2.5 seconds.
             warm_bulk_pool()
-            _start_backfill(app)
-            _start_visibility_recompute(app)
-            app.state.deletion_sync = watched_task(
-                asyncio.get_running_loop(),
-                lambda: _memory_processing_supervisor(app).keep_deletions_in_sync(),
-                name="one-memory-deletion-sync",
-            )
+            if app.state.memory_authority is MemoryAuthority.LEGACY:
+                _start_backfill(app)
+                _start_visibility_recompute(app)
+                app.state.deletion_sync = watched_task(
+                    asyncio.get_running_loop(),
+                    lambda: _memory_processing_supervisor(app).keep_deletions_in_sync(),
+                    name="one-memory-deletion-sync",
+                )
+            else:
+                app.state.memory_backfill = None
+                app.state.memory_visibility_task = None
+                app.state.deletion_sync = None
             # Both times the loop was blocked here it was found from outside,
             # by hand, days later. This says so at the time, and says what was
             # holding it.
@@ -5089,6 +5094,9 @@ def _start_backfill(app: FastAPI) -> None:
     A running one is cancelled first: whoever asks for another has changed the
     model profile whose tasks the old walk was recording.
     """
+    if app.state.memory_authority is MemoryAuthority.SDK:
+        app.state.memory_backfill = None
+        return
     running = cast("asyncio.Task[None] | None", getattr(app.state, "memory_backfill", None))
     if running is not None and not running.done():
         running.cancel()
@@ -5140,7 +5148,10 @@ def _start_visibility_recompute(app: FastAPI) -> None:
     the triggers are still installed, so turning it on later finds a library
     already marked.
     """
-    if memory_visibility.mode() == "exact":
+    if (
+        app.state.memory_authority is MemoryAuthority.SDK
+        or memory_visibility.mode() == "exact"
+    ):
         app.state.memory_visibility_task = None
         return
     running = cast("asyncio.Task[None] | None", getattr(app.state, "memory_visibility_task", None))
