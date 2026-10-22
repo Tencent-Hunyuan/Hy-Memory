@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from one_memory.database_access import main_database
-from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkRawRecord
+from one_memory.hy_sdk_types import HySdkMemoryPage, HySdkRawPage
 from one_memory.sdk_data_plane_migration import SdkDataPlaneMigrationStore
 
 
@@ -103,8 +103,8 @@ SDK_LIFECYCLE_STATUSES = (
 )
 
 
-class SdkMigrationBridge(Protocol):
-    def list_sdk_memories(
+class SdkMigrationClient(Protocol):
+    def list_memories(
         self,
         *,
         user_id: str,
@@ -115,7 +115,7 @@ class SdkMigrationBridge(Protocol):
         order: str = "desc",
     ) -> Awaitable[HySdkMemoryPage]: ...
 
-    def import_sdk_memory_exact(
+    def import_memory_exact(
         self,
         *,
         content: str,
@@ -133,7 +133,7 @@ class SdkMigrationBridge(Protocol):
         request_id: str,
     ) -> Awaitable[dict[str, object]]: ...
 
-    def list_sdk_raw(
+    def list_raw(
         self,
         *,
         user_id: str,
@@ -143,9 +143,9 @@ class SdkMigrationBridge(Protocol):
         limit: int = 100,
         offset: int = 0,
         order: str = "desc",
-    ) -> Awaitable[tuple[tuple[HySdkRawRecord, ...], int]]: ...
+    ) -> Awaitable[HySdkRawPage]: ...
 
-    def import_sdk_raw_exact(
+    def import_raw(
         self,
         *,
         content: str,
@@ -360,7 +360,7 @@ def classify_memory_inventory(
 
 
 async def read_sdk_memory_inventory(
-    bridge: SdkMigrationBridge,
+    client: SdkMigrationClient,
     *,
     user_id: str = "local",
     page_size: int = 500,
@@ -368,7 +368,7 @@ async def read_sdk_memory_inventory(
     records: dict[str, SdkMemoryInventory] = {}
     offset = 0
     while True:
-        page = await bridge.list_sdk_memories(
+        page = await client.list_memories(
             user_id=user_id,
             statuses=SDK_LIFECYCLE_STATUSES,
             limit=page_size,
@@ -425,7 +425,7 @@ def record_memory_migration_plan(
 
 
 async def execute_memory_migration_plan(
-    bridge: SdkMigrationBridge,
+    client: SdkMigrationClient,
     store: SdkDataPlaneMigrationStore,
     *,
     migration_id: str,
@@ -457,7 +457,7 @@ async def execute_memory_migration_plan(
             continue
         if decision.action in {"delete", "verified_deleted"}:
             if decision.action == "delete":
-                await bridge.delete(decision.canonical_memory_id)
+                await client.delete(decision.canonical_memory_id)
             store.settle_item(
                 migration_id=migration_id,
                 item_key=decision.item_key,
@@ -472,12 +472,13 @@ async def execute_memory_migration_plan(
             request_id = hashlib.sha256(
                 f"{migration_id}:{decision.item_key}:import_exact".encode()
             ).hexdigest()
-            await bridge.import_sdk_memory_exact(
+            await client.import_memory_exact(
                 content=item.content,
                 memory_id=item.canonical_memory_id,
                 user_id=item.user_id,
                 agent_id=item.agent_id,
                 session_id=item.session_id,
+                source="legacy-governance",
                 layer=item.layer,
                 status=item.status,
                 owner=item.owner,
@@ -485,6 +486,8 @@ async def execute_memory_migration_plan(
                 supersedes=item.supersedes,
                 superseded_by=item.superseded_by,
                 is_latest=item.status == "active",
+                memory_at=None,
+                metadata={},
                 request_id=request_id,
             )
         if decision.action == "record_alias":
@@ -503,7 +506,7 @@ async def execute_memory_migration_plan(
 
 
 async def read_sdk_raw_inventory(
-    bridge: SdkMigrationBridge,
+    client: SdkMigrationClient,
     *,
     user_id: str = "local",
     page_size: int = 500,
@@ -511,13 +514,13 @@ async def read_sdk_raw_inventory(
     records: dict[str, SdkRawInventory] = {}
     offset = 0
     while True:
-        rows, total = await bridge.list_sdk_raw(
+        page = await client.list_raw(
             user_id=user_id,
             limit=page_size,
             offset=offset,
             order="asc",
         )
-        for raw in rows:
+        for raw in page.raw:
             raw_id = str(raw.raw_id)
             records[raw_id] = SdkRawInventory(
                 raw_id=raw_id,
@@ -527,9 +530,9 @@ async def read_sdk_raw_inventory(
                 source=str(raw.source),
                 content_hash=content_hash(str(raw.content)),
             )
-        consumed = len(rows)
+        consumed = len(page.raw)
         offset += consumed
-        if consumed == 0 or offset >= total:
+        if consumed == 0 or offset >= page.total:
             break
     return tuple(records[key] for key in sorted(records))
 
@@ -632,7 +635,7 @@ def record_raw_migration_plan(
 
 
 async def execute_raw_migration_plan(
-    bridge: SdkMigrationBridge,
+    client: SdkMigrationClient,
     store: SdkDataPlaneMigrationStore,
     *,
     migration_id: str,
@@ -656,7 +659,7 @@ async def execute_raw_migration_plan(
             request_id = hashlib.sha256(
                 f"{migration_id}:{decision.item_key}:import_raw".encode()
             ).hexdigest()
-            await bridge.import_sdk_raw_exact(
+            await client.import_raw(
                 content=item.content,
                 raw_id=decision.raw_id,
                 user_id=item.user_id,

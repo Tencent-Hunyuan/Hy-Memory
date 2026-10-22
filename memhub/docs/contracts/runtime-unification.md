@@ -28,9 +28,9 @@ model profiles, the durable SDK-call queue, configuration, diagnostics, and
 Runtime coordination.
 
 Memory entities, raw conversations, vectors, graph data, coding memory, and SDK
-cache/history belong to the Hy Memory SDK data plane. Core reaches that plane
-through `HyMemoryBridge`; no product module may write SDK private stores or
-maintain a second memory authority.
+cache/history belong to the Hy Memory SDK data plane. Core obtains a public
+`HyMemoryClient` through the shared runtime lease; no product module may write
+SDK private stores or maintain a second memory authority.
 
 ### Desktop and CLI
 

@@ -421,8 +421,9 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         return 4
 
     from one_memory.database_access import close_main_databases
-    from one_memory.hy_memory_bridge import HyMemoryBridge
     from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
+    from one_memory.hy_sdk_migration import HySdkMigration
+    from one_memory.hy_sdk_runtime import acquire_client
     from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
     from one_memory.memory_server.migrations import MIGRATIONS
     from one_memory.model_profiles import ModelProfileStore
@@ -483,15 +484,16 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         backend_fingerprint = hashlib.sha256(backend_material.encode()).hexdigest()
 
         async def run_backfill() -> BackfillResult:
-            bridge = HyMemoryBridge(
-                profile=profile,
+            lease = await asyncio.to_thread(
+                acquire_client,
+                profile,
                 api_key=secret,
                 data_dir=settings.data_dir,
             )
             try:
                 return await run_sdk_data_plane_backfill(
                     database_path=database,
-                    bridge=bridge,
+                    client=HySdkMigration(lease.client),
                     migration_id=migration_id,
                     bundle_id=bundle_id,
                     source_runtime_build=str(manifest.get("runtime_build") or ""),
@@ -501,7 +503,7 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
                     backend_fingerprint=backend_fingerprint,
                 )
             finally:
-                await bridge.close()
+                await asyncio.to_thread(lease.close)
 
         try:
             result = asyncio.run(run_backfill())

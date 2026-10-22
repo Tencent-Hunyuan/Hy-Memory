@@ -12,7 +12,8 @@
 2. MemHub 对 memory 的原子操作 **只经 SDK**；缺接口先补 SDK。
 3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进入 **SDK raw**。
 
-生产入口仍建议经 `HyMemoryBridge`（共享 Runtime、模型配置、密钥、harness/model 门禁），但 bridge **不得**再把 SDK 结果镜像成第二套 memory 正文权威。
+生产入口通过共享 Runtime 租约取得公开 `HyMemoryClient`；MemHub 只在调用前执行
+模型配置、密钥和 harness/model 门禁，不维护第二套 memory 正文权威。
 
 来源授权、模型授权和宿主召回授权仍是 MemHub 管理面门禁；memory
 数据平面的权威在 SDK。
@@ -30,46 +31,15 @@ reader:       hybrid
 
 ## MemHub 运行时边界
 
-MemHub 对 SDK 使用公开、可复现的本地策略（经 bridge / `hy_runtime_config` 注入）：
+MemHub 通过公开 `HyMemoryClient` 配置使用可复现的本地策略：
 
 - vector / graph / cache / history / coding 等 **一律 SDK config/env**；
 - 模型与 embedding 来自版本化 Model Profile；密钥进安全存储；
 - MemHub 管理库可存 harness/model/队列状态与 **`memory_id` 引用**。
 
-发布包默认 SDK 行为环境变量仍集中在
-`apps/core/src/one_memory/hy_runtime_config.py`，并由下表锁定：
-
-| 变量 | 值 |
-|---|---|
-| `MEMORY_MODE` | `ultra` |
-| `MEMORY_ENABLE_GRAPH` | `true` |
-| `MEMORY_GRAPH_RERANK_ENABLED` | `false` |
-| `MEMORY_GRAPH_TEMPORAL_SPINE` | `true` |
-| `MEMORY_TOPIC_SUMMARY_ENABLED` | `false` |
-| `MEMORY_EPISODE_SUMMARY_ENABLED` | `false` |
-| `MEMORY_EPISODE_RECALL_ENABLED` | `true` |
-| `MEMORY_DYNAMIC_EPISODE_ENABLED` | `true` |
-| `MEMORY_SESSION_EPISODE_ENABLED` | `false` |
-| `MEMORY_SESSION_EPISODE_CONTEXT_ENABLED` | `false` |
-| `MEMORY_EPISODE_CAPSULE_CONTEXT_ENABLED` | `true` |
-| `MEMORY_EPISODE_CAPSULE_QUERY_MIN` | `0.65` |
-| `MEMORY_EPISODE_CAPSULE_ASSIGNMENT_MIN` | `0.60` |
-| `MEMORY_EPISODE_CAPSULE_FIRST_RANK_MAX` | `3` |
-| `MEMORY_EPISODE_CAPSULE_MEMBER_LIMIT` | `3` |
-| `MEMORY_ENABLE_INTENTION` | `false` |
-| `MEMORY_ENABLE_QUERY_REWRITE` | `false` |
-| `MEMORY_FEW_SHOT_ENABLED` | `true` |
-| `MEMORY_HYBRID_V2_QUERY_EXPAND` | `1` |
-| `MEMORY_HYBRID_V2_GEO_INTENT_PRIOR` | `0.6` |
-| `MEMORY_HYBRID_V2_DIVERSITY` | `1` |
-| `MEMORY_HYBRID_V2_TEMPORAL_ADMIT_PRIOR` | `0.55` |
-| `MEMORY_HYBRID_V2_TEMPORAL_BOOST` | `0.18` |
-| `MEMORY_CROSS_DOMAIN_CON_THRESHOLD` | `0.5` |
-| `MEMORY_READER_ENABLE_SUMMARY` | `false` |
-| `MEMORY_SUMMARY_ENABLED_IN_SYS2` | `false` |
-| `MEMORY_LOCAL_RERANK_ENABLED` | `false` |
-| `RECONCILE_ENABLED` | `true` |
-| `HY_MEMORY_READER` | `hybrid` |
+MemHub 不再通过 import-time 环境变量覆盖 SDK 的提取、reconcile、episode、
+intention、few-shot、summary 或去重策略。产品只配置模型/密钥/endpoint、本地
+backend 路径、公开 embedding service，以及每次公开 Client 调用的参数。
 
 独立脚本直连 SDK 时须自配存储目录与模型端点。
 
@@ -77,7 +47,7 @@ MemHub 对 SDK 使用公开、可复现的本地策略（经 bridge / `hy_runtim
 
 下面是独立调试示例。
 
-产品代码经 `HyMemoryBridge` 获取已配置的 client（管理面门禁），memory I/O
+产品代码经 `hy_sdk_runtime.SdkClientHandle` 获取已配置的公开 client；memory I/O
 由 SDK 完成。
 
 ```python
@@ -228,7 +198,8 @@ result = client.search(
 - 区分空结果、权限拒绝、不可用、超时、部分结果；
 - 未发布的 Matter 占位功能不保留表或 API；未来组织功能另立合同。
 
-生产入口：`hy_memory_bridge.py`、`recall.py`、`packages/host-bridge`。
+生产入口：`hy_sdk_runtime.py`、`sdk_write_processor.py`、`recall.py` 和
+`packages/host-bridge`。
 
 ## 关闭客户端
 
@@ -245,8 +216,7 @@ Runtime 长期复用 client；仅在停止、配置切换或受控恢复时重�
 
 ```text
 harness / user action (+ authz, model, queue)
-  -> HyMemoryBridge
-  -> Hy Memory SDK
+  -> public HyMemoryClient
   -> SDK stores (config/env)
   -> optional MemHub persist memory_id / org metadata
   -> Recall Broker / UI (SDK read + MemHub authz)

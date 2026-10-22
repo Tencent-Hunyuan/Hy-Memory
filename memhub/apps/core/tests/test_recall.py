@@ -3,7 +3,7 @@ import hashlib
 
 import pytest
 
-from one_memory.hy_memory_bridge import HySdkMemoryRecord
+from one_memory.hy_sdk_types import HySdkMemoryRecord
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_governance import MemoryDraft, MemoryGovernanceStore, MemoryKind

@@ -91,9 +91,6 @@ ALLOWED = {
         "Chroma's own chroma.sqlite3, read-only, checked before Chroma opens it",
         opened_with='"?mode=ro"',
     ),
-    ("hy_memory_bridge.py", "reattach_legacy_vector_collection"): Allowed(
-        "HY's vector store chroma.sqlite3 under its persist directory, renaming a collection"
-    ),
     ("imports/sqlite_access.py", "open_sqlite_readonly"): Allowed(
         "a host app's own SQLite (Cursor state.vscdb / store.db): one direct "
         "read-only open when there is no WAL, and one read-only open of the "

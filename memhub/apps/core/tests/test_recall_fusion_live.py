@@ -127,9 +127,17 @@ def test_both_lanes_answer_through_one_real_hy_instance(tmp_path, monkeypatch):
             linked.raise_for_status()
             job = await app.state.import_supervisor.wait(linked.json()["jobs"][0]["job_id"])
             assert job.stored == 1 and job.errors == 0, job
-            processor = app.state.memory_processing_supervisor
-            await asyncio.gather(*tuple(processor._debounces.values()), return_exceptions=True)
-            await asyncio.wait_for(asyncio.gather(*tuple(processor._workers.values())), timeout=300)
+            deadline = asyncio.get_running_loop().time() + 300
+            while True:
+                counts = app.state.sdk_memory_runtime.status_counts()
+                if not any(
+                    counts.get(state, 0)
+                    for state in ("pending", "running", "waiting_for_model")
+                ):
+                    break
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise AssertionError(f"SDK write queue did not drain: {counts}")
+                await asyncio.sleep(0.05)
 
             # Imported content is not shared with every app by default. Sharing
             # it here is what the memory lane is later asked to find.

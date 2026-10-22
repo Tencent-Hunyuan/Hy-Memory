@@ -2,9 +2,9 @@
 
 from datetime import UTC, datetime
 
+from one_memory.conversation_processing import _conversation_chunks
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
-from one_memory.memory_processing import _conversation_chunks
 
 _WRITER = {"user": "person", "assistant": "agent", "tool": "tool"}
 
@@ -74,7 +74,7 @@ def test_one_window_is_capped_in_raw_bytes(tmp_path):
     reaches the model. Past the byte ceiling the window is cut, so no single
     call can grow without bound.
     """
-    from one_memory.memory_processing import _WINDOW_BYTE_CEILING
+    from one_memory.conversation_processing import _WINDOW_BYTE_CEILING
 
     records = _turn(
         tmp_path,
@@ -92,7 +92,7 @@ def test_one_window_is_capped_in_raw_bytes(tmp_path):
 def test_the_byte_ceiling_counts_bytes_not_characters(tmp_path):
     """One CJK character is three bytes; a character count would let three
     times as much through."""
-    from one_memory.memory_processing import _WINDOW_BYTE_CEILING, _window_bytes
+    from one_memory.conversation_processing import _WINDOW_BYTE_CEILING, _window_bytes
 
     assert _window_bytes(_turn(tmp_path, ("user", "中文"))[0]) > len("中文")
     assert _WINDOW_BYTE_CEILING == 2_000_000
@@ -138,7 +138,7 @@ def test_the_sdk_still_cuts_tool_results_the_way_this_assumes():
     )
     from hy_memory.pipelines.base import ChatMessage
 
-    from one_memory.memory_processing import _HY_TOOL_CHARACTERS
+    from one_memory.conversation_processing import _HY_TOOL_CHARACTERS
 
     assert DEFAULT_MAX_TOOL_RESULT_BYTES == 2048
     assert _HY_TOOL_CHARACTERS == 512

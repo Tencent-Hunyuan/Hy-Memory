@@ -6,7 +6,12 @@ import json
 import pytest
 
 from one_memory.database_access import close_main_databases, main_database
-from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
+from one_memory.hy_sdk_types import (
+    HySdkMemoryPage,
+    HySdkMemoryRecord,
+    HySdkRawPage,
+    HySdkRawRecord,
+)
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
@@ -410,7 +415,7 @@ def test_inventory_classification_covers_every_legacy_and_sdk_state():
     assert len(decisions) == 8
 
 
-class _Bridge:
+class _MigrationClient:
     def __init__(self, memories=()):
         self.memories = tuple(memories)
         self.imported = []
@@ -418,7 +423,7 @@ class _Bridge:
         self.deleted = []
         self.raw = ()
 
-    async def list_sdk_memories(self, *, limit, offset, **_kwargs):
+    async def list_memories(self, *, limit, offset, **_kwargs):
         page = self.memories[offset : offset + limit]
         return HySdkMemoryPage(
             memories=page,
@@ -427,7 +432,7 @@ class _Bridge:
             offset=offset,
         )
 
-    async def import_sdk_memory_exact(self, **kwargs):
+    async def import_memory_exact(self, **kwargs):
         self.imported.append(kwargs)
         return {"success": True, "memory_id": kwargs["memory_id"]}
 
@@ -435,11 +440,16 @@ class _Bridge:
         self.deleted.append(memory_id)
         return {"success": True, "deleted_count": 1}
 
-    async def list_sdk_raw(self, *, limit, offset, **_kwargs):
+    async def list_raw(self, *, limit, offset, **_kwargs):
         rows = self.raw[offset : offset + limit]
-        return rows, len(self.raw)
+        return HySdkRawPage(
+            raw=rows,
+            total=len(self.raw),
+            limit=limit,
+            offset=offset,
+        )
 
-    async def import_sdk_raw_exact(self, **kwargs):
+    async def import_raw(self, **kwargs):
         self.imported_raw.append(kwargs)
         return {"success": True, "raw_id": kwargs["raw_id"]}
 
@@ -466,14 +476,14 @@ def _record(memory_id, *, content="body", status="active"):
 
 
 def test_sdk_inventory_is_paged_without_dropping_lifecycle_records():
-    bridge = _Bridge(
+    client = _MigrationClient(
         (
             _record("active"),
             _record("old", status="superseded"),
             _record("shadow", status="shadow"),
         )
     )
-    inventory = asyncio.run(read_sdk_memory_inventory(bridge, page_size=2))
+    inventory = asyncio.run(read_sdk_memory_inventory(client, page_size=2))
     assert [(item.memory_id, item.status) for item in inventory] == [
         ("active", "active"),
         ("old", "superseded"),
@@ -502,10 +512,10 @@ def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
         legacy=legacy,
         sdk=sdk,
     )
-    bridge = _Bridge()
+    client = _MigrationClient()
     asyncio.run(
         execute_memory_migration_plan(
-            bridge,
+            client,
             store,
             migration_id="m1",
             legacy=legacy,
@@ -513,8 +523,8 @@ def test_recorded_plan_executes_import_delete_alias_and_adoption(store):
         )
     )
 
-    assert [item["memory_id"] for item in bridge.imported] == ["missing"]
-    assert bridge.deleted == ["delete-existing"]
+    assert [item["memory_id"] for item in client.imported] == ["missing"]
+    assert client.deleted == ["delete-existing"]
     progress = store.progress("m1")
     assert progress.counts == {"adopted": 1, "deleted": 2, "verified": 3}
 
@@ -590,23 +600,23 @@ def test_raw_inventory_matches_exact_scope_imports_missing_and_adopts_sdk_only(s
         legacy=legacy,
         sdk=sdk,
     )
-    bridge = _Bridge()
+    client = _MigrationClient()
     asyncio.run(
         execute_raw_migration_plan(
-            bridge,
+            client,
             store,
             migration_id="m1",
             legacy=legacy,
             decisions=recorded,
         )
     )
-    assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e2"]
+    assert [item["raw_id"] for item in client.imported_raw] == ["evidence:e2"]
     assert store.progress("m1").counts == {"adopted": 1, "verified": 2}
 
 
 def test_sdk_raw_inventory_pages_all_records():
-    bridge = _Bridge()
-    bridge.raw = (
+    client = _MigrationClient()
+    client.raw = (
         HySdkRawRecord(
             raw_id="r1",
             content="one",
@@ -624,7 +634,7 @@ def test_sdk_raw_inventory_pages_all_records():
             source="claude",
         ),
     )
-    inventory = asyncio.run(read_sdk_raw_inventory(bridge, page_size=1))
+    inventory = asyncio.run(read_sdk_raw_inventory(client, page_size=1))
     assert [item.raw_id for item in inventory] == ["r1", "r2"]
 
 
@@ -656,11 +666,11 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             """,
             (content_hash("verbatim"),),
         )
-    bridge = _Bridge()
+    client = _MigrationClient()
     result = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,
-            bridge=bridge,
+            client=client,
             migration_id="migration",
             bundle_id="bundle",
             source_runtime_build="v1.0.4",
@@ -674,15 +684,15 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     assert result.state == "ready"
     assert result.phase == "reconciled"
     assert result.counts == {"verified": 2}
-    assert [item["memory_id"] for item in bridge.imported] == ["memory-1"]
-    assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e1"]
+    assert [item["memory_id"] for item in client.imported] == ["memory-1"]
+    assert [item["raw_id"] for item in client.imported_raw] == ["evidence:e1"]
     assert store.authority() is MemoryAuthority.LEGACY
     # Simulate a process dying after both SDK side effects but before startup
     # could finish. The next inventory observes them as matched rather than
     # import_exact; that reclassification must resume the settled ledger
     # instead of conflicting with its original operation key.
-    bridge.memories = (_record("memory-1", content="preference"),)
-    bridge.raw = (
+    client.memories = (_record("memory-1", content="preference"),)
+    client.raw = (
         HySdkRawRecord(
             raw_id="evidence:e1",
             content="verbatim",
@@ -696,7 +706,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,
-            bridge=bridge,
+            client=client,
             migration_id="migration",
             bundle_id="bundle",
             source_runtime_build="v1.0.4",
@@ -708,8 +718,8 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     )
     assert resumed.state == "ready"
     assert resumed.counts == {"verified": 2}
-    assert len(bridge.imported) == 1
-    assert len(bridge.imported_raw) == 1
+    assert len(client.imported) == 1
+    assert len(client.imported_raw) == 1
 
 
 def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):
@@ -729,7 +739,7 @@ def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):
     result = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,
-            bridge=_Bridge(),
+            client=_MigrationClient(),
             migration_id="migration",
             bundle_id="bundle",
             source_runtime_build="v1.0.4",

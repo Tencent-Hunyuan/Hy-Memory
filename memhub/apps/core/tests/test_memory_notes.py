@@ -240,7 +240,7 @@ def test_sdk_memory_write_accepts_openai_messages_without_evidence_tables(tmp_pa
 @pytest.mark.fresh_sdk
 def test_sdk_user_profile_http_returns_native_assembled_profile(tmp_path):
     class Bridge:
-        async def get_user_profile(self, *, user_id: str):
+        def get_user_profile(self, *, user_id: str):
             assert user_id == "local"
             return {
                 "request_id": "profile-request",
@@ -253,13 +253,17 @@ def test_sdk_user_profile_http_returns_native_assembled_profile(tmp_path):
                 "elapsed_ms": 1.25,
             }
 
+    class Handle:
+        async def client(self):
+            return Bridge()
+
         async def close(self):
             return None
 
     async def scenario():
         app = application(tmp_path)
         async with app.router.lifespan_context(app), client_for(app) as client:
-            app.state.sdk_library_bridge = Bridge()
+            app.state.sdk_client_handle = Handle()
             response = await client.get("/api/v2/user-profile")
             assert response.status_code == 200, response.text
             assert response.json() == {

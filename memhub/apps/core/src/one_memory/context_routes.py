@@ -42,6 +42,13 @@ from one_memory.context_raw import revalidate_raw_context
 from one_memory.context_search import search_context
 from one_memory.diagnostic_log import diagnostic_event, diagnostic_exception
 from one_memory.external_memory_access import external_access
+from one_memory.hy_runtime_config import HY_MEMORY_READER
+from one_memory.hy_sdk_runtime import sdk_relevance_floor
+from one_memory.hy_sdk_types import (
+    HySdkMemoryRecord,
+    parse_sdk_raw_search,
+    parse_sdk_search,
+)
 from one_memory.imports.storage import EvidenceStore
 from one_memory.retrieval.raw_lane import read_raw_indexed_context
 from one_memory.semantic_deadline import hy_wait_budget, search_within
@@ -455,19 +462,33 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
         except Exception:
             raise HTTPException(503, "context_authority_unavailable") from None
 
-        bridge = getattr(request.app.state, "sdk_library_bridge", None)
-        if bridge is None:
+        client_handle = getattr(request.app.state, "sdk_client_handle", None)
+        if client_handle is None:
             raise HTTPException(503, "sdk_context_unavailable")
+        try:
+            client = await client_handle.client()
+        except Exception:
+            raise HTTPException(503, "sdk_context_unavailable") from None
 
         async def raw_lane() -> tuple[SdkRawContextItem, ...]:
             if "raw" not in value.kinds or not authority.raw_allowed:
                 return ()
-            hits = await bridge.search_sdk_raw(
+            raw = await asyncio.to_thread(
+                client.search,
                 value.query,
-                user_id="local",
-                source_ids=tuple(authority.raw_sources or ()),
+                user_ids=["local"],
+                agent_ids=[],
+                include_sources=list(authority.raw_sources or ()),
                 limit=value.limit,
+                min_score=0.0,
+                schema_min_score=0.0,
+                schema_limit=0,
+                intention_limit=0,
+                scene="chat",
+                reader=HY_MEMORY_READER,
+                layers=["l1_raw"],
             )
+            hits = parse_sdk_raw_search(raw)
             return tuple(
                 SdkRawContextItem(
                     raw_id=hit.raw_id,
@@ -487,15 +508,24 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
         async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
             if "memory" not in value.kinds or not authority.memory_allowed:
                 return ()
-            hits = await bridge.search_memories(
+            raw = await asyncio.to_thread(
+                client.search,
                 value.query,
-                user_id="local",
-                agent_id="*",
+                user_ids=["local"],
+                agent_ids=[],
                 limit=value.limit,
+                min_score=sdk_relevance_floor(),
+                schema_min_score=sdk_relevance_floor(),
+                schema_limit=value.limit,
+                intention_limit=value.limit,
+                scene="normal",
+                reader=HY_MEMORY_READER,
             )
+            hits = parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
             items: list[SdkMemoryContextItem] = []
             for hit in hits:
-                memory = await bridge.get_sdk_memory(hit.memory_id)
+                record = await asyncio.to_thread(client.get, hit.memory_id)
+                memory = None if record is None else HySdkMemoryRecord.from_sdk(record)
                 if memory is None or memory.status != "active":
                     continue
                 items.append(

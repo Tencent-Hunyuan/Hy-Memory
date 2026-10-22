@@ -41,7 +41,7 @@ AI hosts / harnesses
       ├─ model profiles & secrets boundary
       ├─ async write queue (schedule / drain / leases)
       ├─ config switches & Core/Runtime health
-      ├─ Hy Memory bridge (only SDK client entry for memory I/O)
+      ├─ SDK runtime lease + public HyMemoryClient
       └─ local HTTP API
           ▲        ▲         ▲
           │        │         └─ Host Bridge / recall broker
@@ -62,7 +62,7 @@ files or SDK private stores directly.
 
 | Path | Responsibility |
 | --- | --- |
-| `apps/core` | FastAPI 管理面：harness、model、队列、config、Runtime 协作，并经 bridge 调用 SDK。 |
+| `apps/core` | FastAPI 管理面：harness、model、队列、config、Runtime 协作，并调用公开 SDK client。 |
 | `apps/web` | React / TypeScript product UI and API client. |
 | `apps/desktop` | Electron shell; attaches to or starts the managed Runtime. |
 | `apps/cli` | Bootstrap, install, upgrade, service lifecycle, diagnostics. |
@@ -103,8 +103,7 @@ Periodic polling / fs watch live in Core. UI does not schedule scans.
 authorized harness / user action
   -> (optional) durable job row in MemHub queue  // 调度与租约，不是 memory 实体
   -> sedimentation / model / source gates         // 管理面门禁
-  -> HyMemoryBridge
-  -> Hy Memory SDK write (raw / chat / coding / …)
+  -> public HyMemoryClient write (raw / chat / coding / …)
   -> SDK stores (vector, graph, cache, history, coding, …) via SDK config/env
   -> MemHub may persist memory_id only for explicit management receipts / UI keys
   -> search / recall / UI via SDK read APIs (+ MemHub authz)
@@ -116,9 +115,18 @@ authorized harness / user action
 - 原文/raw 的持久化与失败保留由 SDK raw 合同承担。
 - 运维状态直接来自 `memory_write_jobs`，不另设 `memory_tasks` 二级执行表。
 
-### HY / SDK and MemHub bridge
+### HY SDK client boundary
 
-Hy Memory is the **only** extraction, memory entity, relationship, and semantic-retrieval engine. Product code enters it through `HyMemoryBridge`（共享 Runtime、模型配置、密钥边界），不在业务模块里私自 new 一套绕过门禁的 client。
+Hy Memory is the **only** extraction, memory entity, relationship, and
+semantic-retrieval engine. Product code obtains a public `HyMemoryClient`
+through `hy_sdk_runtime.SdkClientHandle`; only that runtime module constructs
+clients. MemHub does not patch prompts, private stores, writer/reader caches,
+reconcile operations, or response retries.
+
+The only product exception is the existing Graph visualization and Graph Width
+surface: `hy_graph_projection.py` and `hy_graph_admin.py` may query Kuzu
+directly for low-latency Cypher projection and store-width administration.
+This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。`import_raw()` 只用于历史数据的 exact migration，不拆分正常写路径。

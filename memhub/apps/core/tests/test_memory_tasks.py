@@ -861,7 +861,7 @@ def test_clearing_drops_payloads_of_a_failed_task_at_the_retry_ceiling(tmp_path)
 def test_clearing_never_touches_completed_tasks(tmp_path) -> None:
     """Completed inputs are evidence of what HY was actually given.
 
-    `memory_processing` compares them against the records sent to HY to prove
+    SDK write processing compares them against the records sent to HY to prove
     coverage, and `matters/discovery` reads them to report how many records HY
     saw. Clearing them would make a failed coverage check look like a pass.
     """

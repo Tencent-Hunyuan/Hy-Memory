@@ -40,6 +40,14 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Removed MemHub's private `hy_memory_bridge` implementation. MemHub now calls
+  public `HyMemoryClient` methods through explicit runtime, write, migration,
+  and read modules; prompt/reconcile/response monkey-patches and private
+  VDB/Coding access were deleted. Kuzu Graph projection/admin remains the one
+  documented product exception.
+- Extended public SDK `get()` to resolve Chat, Coding Experience, and Working
+  Fact IDs, including owner/session fields and explicit ambiguity handling;
+  added constructor-time public embedding-service injection.
 - Added a MemHub-managed native Hermes MemoryProvider with automatic prefetch,
   persistent per-session memory-ID deduplication, authorized Broker reads, and
   recall-context stripping to prevent memory recursion.

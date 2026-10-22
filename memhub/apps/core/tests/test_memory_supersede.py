@@ -509,10 +509,10 @@ def test_the_api_shows_the_chain_refuses_edits_and_still_deletes_through_hy(tmp_
 
             cascaded: list[str] = []
 
-            async def delete_hy_memory(memory_id: str) -> None:
+            async def finish_deletion(memory_id: str) -> None:
                 cascaded.append(memory_id)
 
-            app.state.memory_processing_supervisor.delete_hy_memory = delete_hy_memory
+            app.state.sdk_memory_runtime.finish_deletion = finish_deletion
             deleted = await client.post(
                 "/api/v1/memories/old/actions/delete",
                 json={"request_id": "delete-x", "expected_revision": replaced.revision},

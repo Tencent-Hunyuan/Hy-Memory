@@ -15,18 +15,18 @@ from pathlib import Path
 
 import pytest
 
-from one_memory.hy_memory_bridge import (
+from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     apply_graph_width_decision,
-    build_hy_memory_config,
     inspect_graph_width_mismatch,
 )
+from one_memory.hy_sdk_runtime import build_sdk_config
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind
-from tests.test_hy_memory_bridge import _kuzu_graph_with_embedding_width, snapshot
+from tests.graph_fixtures import kuzu_graph_with_embedding_width, model_snapshot
 
 
 def _narrow_profile() -> ModelProfileSnapshot:
-    base = snapshot(
+    base = model_snapshot(
         ProviderKind.OLLAMA,
         base_url="http://127.0.0.1:11434",
         has_api_key=False,
@@ -38,10 +38,10 @@ def _mismatched(tmp_path: Path) -> tuple[object, Path, Path]:
     """A 768 graph under a data dir, against a 512 profile."""
     data_dir = tmp_path / "data"
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=data_dir)
+    config = build_sdk_config(profile, api_key=None, data_dir=data_dir)
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
     return config, db_path, data_dir
 
 

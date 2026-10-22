@@ -6,13 +6,15 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict
 
 from one_memory.http_client import create_async_client
-from one_memory.hy_memory_bridge import HyMemoryBridge, HySdkMemoryRecord
+from one_memory.hy_runtime_config import HY_MEMORY_READER
+from one_memory.hy_sdk_runtime import sdk_relevance_floor
+from one_memory.hy_sdk_types import HySdkMemoryRecord, parse_sdk_search
 from one_memory.memory_qa import (
     MemoryAnswerError,
     _DeferredSecretStore,
@@ -34,6 +36,10 @@ from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 _NO_GROUNDING = "现有记忆不足以回答这个问题。"
 _GROUNDING_LIMIT = 6
 type _Recheck = Callable[[], Awaitable[None]]
+
+
+class SdkClientHandleLike(Protocol):
+    async def client(self) -> Any: ...
 
 
 class SdkAskMemory(BaseModel):
@@ -69,7 +75,7 @@ class SdkMemoryAnswerer:
     def __init__(
         self,
         *,
-        bridge: HyMemoryBridge,
+        client_handle: SdkClientHandleLike,
         profiles: ModelProfileStore,
         secrets: SecretStore,
         authorize_generation: Callable[
@@ -78,7 +84,7 @@ class SdkMemoryAnswerer:
         | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.bridge = bridge
+        self.client_handle = client_handle
         self.profiles = profiles
         self.secrets = secrets
         self.authorize_generation = authorize_generation
@@ -90,18 +96,27 @@ class SdkMemoryAnswerer:
         *,
         user_id: str = "local",
     ) -> tuple[SdkAskMemory, ...]:
-        hits = await self.bridge.search_memories(
+        client = await self.client_handle.client()
+        raw = await asyncio.to_thread(
+            client.search,
             question,
-            user_id=user_id,
-            agent_id="*",
+            user_ids=[user_id],
+            agent_ids=[],
             limit=12,
+            min_score=sdk_relevance_floor(),
+            schema_min_score=sdk_relevance_floor(),
+            schema_limit=12,
+            intention_limit=12,
+            scene="normal",
+            reader=HY_MEMORY_READER,
         )
+        hits = parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
         found: list[SdkAskMemory] = []
         seen: set[str] = set()
         for hit in hits:
             if hit.memory_id in seen:
                 continue
-            record = await self.bridge.get_sdk_memory(hit.memory_id)
+            record = await _get_memory(client, hit.memory_id)
             if record is None or record.status != "active" or not record.is_latest:
                 continue
             seen.add(record.memory_id)
@@ -211,8 +226,9 @@ class SdkMemoryAnswerer:
         self,
         memories: tuple[SdkAskMemory, ...],
     ) -> None:
+        client = await self.client_handle.client()
         for memory in memories:
-            current = await self.bridge.get_sdk_memory(memory.memory_id)
+            current = await _get_memory(client, memory.memory_id)
             if current is None or _wire_memory(current) != memory:
                 raise MemoryAnswerError("memory_answer_context_changed")
 
@@ -338,6 +354,11 @@ def _wire_memory(record: HySdkMemoryRecord) -> SdkAskMemory:
         source=record.source,
         gmt_created=record.gmt_created,
     )
+
+
+async def _get_memory(client: Any, memory_id: str) -> HySdkMemoryRecord | None:
+    raw = await asyncio.to_thread(client.get, memory_id)
+    return None if raw is None else HySdkMemoryRecord.from_sdk(raw)
 
 
 def _summary(memories: tuple[SdkAskMemory, ...]) -> str:

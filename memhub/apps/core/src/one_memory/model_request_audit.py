@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib import import_module
 from pathlib import Path
 from typing import TypedDict
 from uuid import uuid4
@@ -46,14 +45,7 @@ def audit_precipitation_request(request_id: str) -> Iterator[None]:
 
 
 def _current_prompt_stage() -> str:
-    try:
-        resolver = getattr(  # noqa: B009 - optional SDK version boundary
-            import_module("hy_memory.utils.model_call_context"),
-            "current_model_call_stage",
-        )
-    except (ImportError, AttributeError):
-        return "other"
-    return str(resolver())
+    return "other"
 
 
 class ModelRequestAuditStore:

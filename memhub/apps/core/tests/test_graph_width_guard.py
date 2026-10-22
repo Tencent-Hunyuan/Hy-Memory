@@ -13,22 +13,21 @@ from pathlib import Path
 
 import pytest
 
-from one_memory.hy_memory_bridge import (
+from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     GraphWidthMismatchError,
     apply_graph_width_decision,
-    build_hy_memory_config,
-    create_hy_memory_client,
     inspect_graph_width_mismatch,
 )
+from one_memory.hy_sdk_runtime import acquire_client, build_sdk_config
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind
-from tests.test_hy_memory_bridge import _kuzu_graph_with_embedding_width, snapshot
+from tests.graph_fixtures import kuzu_graph_with_embedding_width, model_snapshot
 
 
 def _narrow_profile(**overrides: object) -> ModelProfileSnapshot:
     # Width alone is what matters here. The built-in provider arrives in S1.3;
     # this guard has to hold for any 512-dim profile against a 768 graph.
-    base = snapshot(
+    base = model_snapshot(
         ProviderKind.OLLAMA,
         base_url="http://127.0.0.1:11434",
         has_api_key=False,
@@ -45,10 +44,10 @@ def test_a_768_graph_is_not_silently_archived_when_switching_to_512(
     tmp_path: Path,
 ) -> None:
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+    config = build_sdk_config(profile, api_key=None, data_dir=tmp_path)
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
 
     mismatch = inspect_graph_width_mismatch(config)
 
@@ -63,13 +62,13 @@ def test_creating_a_client_against_a_mismatched_graph_raises_instead_of_retiring
     tmp_path: Path,
 ) -> None:
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+    config = build_sdk_config(profile, api_key=None, data_dir=tmp_path)
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
 
     with pytest.raises(GraphWidthMismatchError) as caught:
-        create_hy_memory_client(profile, api_key=None, data_dir=tmp_path)
+        acquire_client(profile, api_key=None, data_dir=tmp_path)
 
     assert caught.value.mismatch.stored_width == 768
     assert caught.value.mismatch.expected_width == 512
@@ -81,10 +80,10 @@ def test_keep_existing_leaves_the_graph_and_refuses_the_new_width(
     tmp_path: Path,
 ) -> None:
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+    config = build_sdk_config(profile, api_key=None, data_dir=tmp_path)
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
 
     outcome = apply_graph_width_decision(config, GraphWidthDecision.KEEP_EXISTING)
 
@@ -98,10 +97,10 @@ def test_rebuild_archives_the_graph_and_lets_the_new_width_proceed(
     tmp_path: Path,
 ) -> None:
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+    config = build_sdk_config(profile, api_key=None, data_dir=tmp_path)
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
 
     outcome = apply_graph_width_decision(config, GraphWidthDecision.REBUILD_WITH_NEW)
 
@@ -114,10 +113,10 @@ def test_rebuild_archives_the_graph_and_lets_the_new_width_proceed(
 
 def test_export_first_leaves_the_graph_untouched(tmp_path: Path) -> None:
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path / "data")
+    config = build_sdk_config(profile, api_key=None, data_dir=tmp_path / "data")
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
 
     outcome = apply_graph_width_decision(
         config,
@@ -135,6 +134,6 @@ def test_export_first_leaves_the_graph_untouched(tmp_path: Path) -> None:
 
 def test_a_fresh_install_with_no_graph_raises_nothing(tmp_path: Path) -> None:
     profile = _narrow_profile()
-    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+    config = build_sdk_config(profile, api_key=None, data_dir=tmp_path)
 
     assert inspect_graph_width_mismatch(config) is None

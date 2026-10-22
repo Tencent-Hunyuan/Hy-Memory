@@ -69,8 +69,8 @@ _TYPE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 def safe_error_code(error: BaseException) -> str:
     """Reduce an exception to a storable code, never its message text.
 
-    A recognised code (the message *is* the code, as `HyMemoryBridgeError`
-    and the permission guard raise them) is kept so callers can classify it.
+    A recognised code (the message *is* a stable domain code) is kept so
+    callers can classify it.
     Everything else collapses to its exception type, which is a fixed
     identifier rather than content.
     """
@@ -239,8 +239,8 @@ PERMISSION_REQUIRED_CODES = frozenset(
     }
 )
 
-#: Model-side codes `process_records` raises *before* it can open the bridge
-#: (no active profile, missing credential, secure storage down). They prove
+#: Model-side codes the SDK write coordinator raises before it can lease a
+#: client (no active profile, missing credential, secure storage down). They prove
 #: nothing was sent, so the write parks instead of being lost. Transport codes
 #: that can arrive after a request was in flight stay `unknown`.
 MODEL_NOT_READY_CODES = frozenset(
@@ -251,9 +251,9 @@ MODEL_NOT_READY_CODES = frozenset(
     }
 )
 
-#: Deterministic, pre-bridge refusals: the frozen input no longer matches
+#: Deterministic, pre-SDK refusals: the frozen input no longer matches
 #: current Evidence, or a turn exceeds the model's input window. Both are
-#: raised while validating the records, before any bridge or HY call, so
+#: raised while validating the records, before any SDK call, so
 #: nothing was sent and retrying the same intent changes nothing — a terminal
 #: `failed`, not `unknown` (which would wrongly imply a possibly-applied
 #: write) and not a retry (which would fail identically).
@@ -358,12 +358,10 @@ class UnknownWriteJob:
 
     `request_id` is the durable queue's idempotency key. It identifies the row
     for queue inspection and is the value `DurableWriteQueue.get()` accepts.
-    It is **not** the HY request id: `MemoryProcessingSupervisor` derives the
-    HY handle from the task it creates, so an inquiry implementation must
-    obtain that task-layer handle separately rather than passing this value to
-    HY. This is discovery only: it does not decide whether HY has the write,
-    and it deliberately exposes no transition method that could turn
-    `unknown` back into retryable work.
+    It is the public SDK request id used for exact outcome inquiry. This is
+    discovery only: it does not decide whether HY has the write, and it
+    deliberately exposes no transition method that could turn `unknown` back
+    into retryable work.
     """
 
     job_id: str
@@ -1759,8 +1757,8 @@ class DurableWriteQueue:
         """Retire an `unknown` job after an inquiry, never by guessing.
 
         `unknown` means HY may already hold the write; the only safe way out is
-        to ask by request id (`hy_capabilities` measured that the SDK supports
-        this) and then record what the inquiry found. `found=True` closes it as
+        to call the public SDK `get_write_outcome(request_id)` and then record
+        what the inquiry found. `found=True` closes it as
         `completed`; `found=False` gives up and marks it `dead`. The state
         machine's legal transitions are the authority, so this refuses any
         change that `job_state.next_state` would reject — in particular it can
@@ -2258,12 +2256,11 @@ async def execute_job(
     admit_hy_invocation: Callable[[str, Callable[[], Awaitable[bool]]], Awaitable[bool]]
     | None = None,
 ) -> None:
-    """Run one durable job through the existing authorized processing path.
+    """Run one durable job through the SDK-authority processor.
 
-    The executor does not call HY directly: `process_records` owns the
-    permission guard, the runner and governance. `hy_invoked` is recorded
-    before that call, so a crash mid-write is later reclaimed to `unknown`
-    instead of being retried blindly.
+    ``process_sdk_job`` owns the one public SDK write. ``hy_invoked`` is
+    recorded immediately before that call, so a crash mid-write is later
+    reclaimed to ``unknown`` instead of being retried blindly.
     """
     # Every store call here is synchronous SQLite work on the single writer or
     # a reader; made from the loop it would block health checks and the API for
@@ -2336,38 +2333,13 @@ async def execute_job(
     try:
         level = ServiceLevel.REALTIME if request.priority == "live" else ServiceLevel.BACKGROUND
         with service_level_context(level):
-            authority = getattr(supervisor, "sdk_authority", None)
-            if callable(authority) and authority():
-                sdk_result = await supervisor.process_sdk_job(
-                    records,
-                    request_id=request.idempotency_key,
-                    before_hy_invocation=mark_hy_invocation,
-                )
-                raw_ids = sdk_result.raw_ids
-                memory_ids = tuple(memory.memory_id for memory in sdk_result.memories)
-            else:
-                completed_tasks = (
-                    await supervisor.process_records(
-                        records,
-                        before_hy_invocation=mark_hy_invocation,
-                        source_admitted=True,
-                    )
-                    or ()
-                )
-                receipts = []
-                for task in completed_tasks:
-                    receipt = await in_the_background(supervisor.tasks.sdk_receipt, task.task_id)
-                    if receipt is None:
-                        raise RuntimeError("sdk_write_receipt_missing")
-                    receipts.append(receipt)
-                raw_ids = tuple(
-                    dict.fromkeys(raw_id for receipt in receipts for raw_id in receipt.raw_ids)
-                )
-                memory_ids = tuple(
-                    dict.fromkeys(
-                        memory_id for receipt in receipts for memory_id in receipt.memory_ids
-                    )
-                )
+            sdk_result = await supervisor.process_sdk_job(
+                records,
+                request_id=request.idempotency_key,
+                before_hy_invocation=mark_hy_invocation,
+            )
+            raw_ids = sdk_result.raw_ids
+            memory_ids = sdk_result.memory_ids
     except Exception as error:  # noqa: BLE001 - classified below
         # Never persist the raw message: it may be a provider response or the
         # user's own text, and `last_error` is shown over HTTP as `detail`.
@@ -2382,7 +2354,7 @@ async def execute_job(
         ):
             await in_the_background(queue.release_unstarted, job_id, owner=owner)
             return
-        # The task layer classifies these before any bridge is opened, so HY
+        # The write coordinator classifies these before any SDK client is leased, so HY
         # was provably not called. They must not read as `failed`:
         # - authorization stop -> cancelled (the user turned it off);
         # - no permission yet -> waiting_for_permission (parked, re-admitted
@@ -2445,13 +2417,10 @@ async def execute_job(
         sdk_raw_ids=raw_ids,
         sdk_memory_ids=memory_ids,
     )
-    authority = getattr(supervisor, "sdk_authority", None)
     release = getattr(evidence, "release_sdk_staging", None)
     durable_receipt = await in_the_background(queue.sdk_receipt, job_id)
     if (
-        callable(authority)
-        and authority()
-        and callable(release)
+        callable(release)
         and durable_receipt is not None
         and (durable_receipt.raw_ids or durable_receipt.memory_ids)
     ):

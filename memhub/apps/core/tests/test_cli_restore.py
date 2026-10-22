@@ -301,11 +301,10 @@ def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch
     class Secrets:
         pass
 
-    class Bridge:
-        def __init__(self, **_kwargs):
-            pass
+    class Lease:
+        client = object()
 
-        async def close(self):
+        def close(self):
             return None
 
     async def backfill(**_kwargs):
@@ -320,7 +319,10 @@ def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch
 
     monkeypatch.setattr("one_memory.model_profiles.ModelProfileStore", Profiles)
     monkeypatch.setattr("one_memory.secrets.KeyringSecretStore", Secrets)
-    monkeypatch.setattr("one_memory.hy_memory_bridge.HyMemoryBridge", Bridge)
+    monkeypatch.setattr(
+        "one_memory.hy_sdk_runtime.acquire_client",
+        lambda *_args, **_kwargs: Lease(),
+    )
     monkeypatch.setattr(
         "one_memory.sdk_migration_runner.run_sdk_data_plane_backfill",
         backfill,

@@ -17,13 +17,18 @@ from pydantic import SecretStr
 
 from one_memory.api import create_app
 from one_memory.config import Settings
-from one_memory.hy_memory_bridge import build_hy_memory_config
+from one_memory.hy_sdk_runtime import build_sdk_config
 from one_memory.model_profiles import (
     ModelCapabilities,
     ModelProfileInput,
     ProviderKind,
 )
-from tests.test_hy_memory_bridge import _kuzu_graph_with_embedding_width
+from tests.graph_fixtures import kuzu_graph_with_embedding_width
+
+
+@pytest.fixture(autouse=True)
+def _enable_graph_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ONE_MEMORY_GRAPH_STORE", "kuzu")
 
 
 def _app(tmp_path: Path):
@@ -80,10 +85,10 @@ def _activate_builtin_profile(app):
 
 def _plant_wide_graph(app, data_dir: Path) -> Path:
     snapshot = _activate_builtin_profile(app)
-    config = build_hy_memory_config(snapshot, api_key=None, data_dir=data_dir)
+    config = build_sdk_config(snapshot, api_key=None, data_dir=data_dir)
     db_path = Path(config.graph_store.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _kuzu_graph_with_embedding_width(db_path, 768)
+    kuzu_graph_with_embedding_width(db_path, 768)
     return db_path
 
 

@@ -12,7 +12,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from one_memory.hy_memory_bridge import HySdkMemoryRecord
+from one_memory.hy_sdk_types import HySdkMemoryRecord
 from one_memory.memory_governance import GovernedMemory, MemoryStatus
 from one_memory.semantic_deadline import (
     SemanticMemoryHit,

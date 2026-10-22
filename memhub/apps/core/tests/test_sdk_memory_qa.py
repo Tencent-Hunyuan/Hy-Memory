@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
-from one_memory.hy_memory_bridge import HySdkMemoryRecord
+from one_memory.hy_sdk_types import HySdkMemoryRecord
 from one_memory.memory_qa import MemoryAnswerError
 from one_memory.sdk_memory_qa import SdkMemoryAnswerer
 
@@ -24,18 +23,29 @@ def record(content: str = "用户偏好本地优先。") -> HySdkMemoryRecord:
     )
 
 
-class Bridge:
+class Client:
     def __init__(self) -> None:
         self.current = record()
         self.searches = 0
 
-    async def search_memories(self, *_args, **_kwargs):
+    def search(self, *_args, **_kwargs):
         self.searches += 1
-        return (SimpleNamespace(memory_id="memory-1"),)
+        return {
+            "scene": "normal",
+            "memories": [{"memory_id": "memory-1", "score": 0.9}],
+        }
 
-    async def get_sdk_memory(self, memory_id):
+    def get(self, memory_id):
         assert memory_id == "memory-1"
-        return self.current
+        return self.current.model_dump()
+
+
+class Handle:
+    def __init__(self, client: Client) -> None:
+        self.value = client
+
+    async def client(self):
+        return self.value
 
 
 class Profiles:
@@ -45,10 +55,10 @@ class Profiles:
 
 
 def test_sdk_ask_uses_native_sdk_memory_without_governance_fields() -> None:
-    bridge = Bridge()
+    client = Client()
     answer = asyncio.run(
         SdkMemoryAnswerer(
-            bridge=bridge,  # type: ignore[arg-type]
+            client_handle=Handle(client),
             profiles=Profiles(),  # type: ignore[arg-type]
             secrets=object(),  # type: ignore[arg-type]
         ).answer("偏好是什么？")
@@ -65,18 +75,18 @@ def test_sdk_ask_uses_native_sdk_memory_without_governance_fields() -> None:
 
 
 def test_sdk_ask_revalidates_memory_before_returning_extract() -> None:
-    bridge = Bridge()
+    client = Client()
 
     class ChangingProfiles:
         @staticmethod
         def active(_secrets):
-            bridge.current = record("内容已变化")
+            client.current = record("内容已变化")
             return None
 
     with pytest.raises(MemoryAnswerError, match="memory_answer_context_changed"):
         asyncio.run(
             SdkMemoryAnswerer(
-                bridge=bridge,  # type: ignore[arg-type]
+                client_handle=Handle(client),
                 profiles=ChangingProfiles(),  # type: ignore[arg-type]
                 secrets=object(),  # type: ignore[arg-type]
             ).answer("偏好是什么？")
@@ -84,14 +94,14 @@ def test_sdk_ask_revalidates_memory_before_returning_extract() -> None:
 
 
 def test_sdk_ask_propagates_sdk_search_failure_without_legacy_fallback() -> None:
-    class Failed(Bridge):
-        async def search_memories(self, *_args, **_kwargs):
+    class Failed(Client):
+        def search(self, *_args, **_kwargs):
             raise RuntimeError("sdk unavailable")
 
     with pytest.raises(RuntimeError, match="sdk unavailable"):
         asyncio.run(
             SdkMemoryAnswerer(
-                bridge=Failed(),  # type: ignore[arg-type]
+                client_handle=Handle(Failed()),
                 profiles=Profiles(),  # type: ignore[arg-type]
                 secrets=object(),  # type: ignore[arg-type]
             ).answer("偏好是什么？")

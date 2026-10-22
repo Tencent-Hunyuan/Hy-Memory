@@ -3,7 +3,7 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -21,11 +21,10 @@ from one_memory.imports.models import (
 )
 from one_memory.imports.storage import EvidenceStore
 from one_memory.input_sanitization import sanitize_model_input
-from one_memory.memory_governance import MemoryStatus
-from one_memory.memory_processing import MemoryProcessingSupervisor
+from one_memory.memory_governance import MemoryGovernanceStore, MemoryStatus
 from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
-from one_memory.memory_tasks import MemoryTaskStatus
+from one_memory.memory_tasks import MemoryTaskStatus, MemoryTaskStore
 from one_memory.secrets import SecretStoreUnavailableError
 
 SOURCE_ID = "one-memory-manual"
@@ -82,11 +81,23 @@ class SavedMemoryNoteEvidence(BaseModel):
     verbatim: str
 
 
+class LegacyMemoryNoteReader:
+    """Read pre-cutover note receipts without retaining any write runtime."""
+
+    def __init__(
+        self,
+        tasks: MemoryTaskStore,
+        governance: MemoryGovernanceStore,
+    ) -> None:
+        self.tasks = tasks
+        self.governance = governance
+
+
 class MemoryNoteStore:
     def __init__(
         self,
         evidence: EvidenceStore,
-        processor: MemoryProcessingSupervisor,
+        processor: Any | None,
         intake: UnifiedWriteIntake | None = None,
         *,
         sdk_authority: bool = False,
@@ -252,6 +263,8 @@ class MemoryNoteStore:
                 memory_ids=(list(durable.sdk_memory_ids) if durable is not None else []),
                 error=durable.detail if durable is not None else "write_missing",
             )
+        if self.processor is None:
+            raise RuntimeError("legacy_memory_note_processor_unavailable")
         task = self.processor.tasks.task_for_evidence(evidence_id)
         memory_ids = []
         if task:
@@ -356,6 +369,8 @@ def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
         try:
             if notes.sdk_authority:
                 return await asyncio.to_thread(notes.receipt, record.evidence_id)
+            if notes.processor is None:
+                raise RuntimeError("legacy_memory_note_processor_unavailable")
             if notes.intake is None:
                 # Isolated tests construct the store without a queue.
                 await notes.processor.enqueue_conversation_off_thread(record)

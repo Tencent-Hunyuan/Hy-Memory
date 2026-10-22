@@ -224,7 +224,7 @@ def record_capture_rejection(
 def _submit_live_memory(store: EvidenceStore, record: EvidenceRecord, *, changed: bool) -> None:
     if not changed or not _sync_open(store.database_path, record.source_id):
         return
-    from one_memory.memory_processing import _conversation_chunks
+    from one_memory.conversation_processing import _conversation_chunks
     from one_memory.memory_server.durable_queue import DurableWriteQueue
     from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 

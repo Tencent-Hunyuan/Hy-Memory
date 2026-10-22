@@ -477,7 +477,7 @@ class MemoryTaskStore:
     #: Statuses whose input snapshot nothing reads back afterwards.
     #:
     #: Deliberately narrow. A `completed` task's inputs are read after the fact:
-    #: `memory_processing` compares them against the evidence actually sent to
+    #: SDK write processing compares them against the evidence actually sent to
     #: HY to prove coverage, and `matters/discovery` reads them to report how
     #: many records HY really saw. Clearing those would silently turn a
     #: verification into a pass and a report into a lie, which is far worse

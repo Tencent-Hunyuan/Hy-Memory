@@ -16,7 +16,6 @@ from hashlib import sha256
 import pytest
 
 from one_memory.database_access import main_database
-from one_memory.hy_memory_bridge import HyMemoryBridgeError
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import (
     CANCELLED,
@@ -821,20 +820,20 @@ def test_same_turn_replayed_by_live_sync_upgrades_priority_without_conflict(tmp_
 
 
 class _Recorder:
-    """Stands in for `MemoryProcessingSupervisor.process_records`."""
+    """Stands in for the SDK-authority processor."""
 
     def __init__(self, error: Exception | None = None, *, invoke_hy: bool = False) -> None:
         self.seen: list[tuple[str, ...]] = []
         self.error = error
         self.invoke_hy = invoke_hy
 
-    async def process_records(self, records, **_kwargs):
+    async def process_sdk_job(self, records, **_kwargs):
         self.seen.append(tuple(record.evidence_id for record in records))
         if self.invoke_hy:
             await _kwargs["before_hy_invocation"]()
         if self.error is not None:
             raise self.error
-        return ()
+        return type("Receipt", (), {"raw_ids": (), "memory_ids": ()})()
 
 
 class _TwoInvocationRecorder:
@@ -842,23 +841,27 @@ class _TwoInvocationRecorder:
         self.pause_after_first = pause_after_first
         self.invocations = 0
 
-    async def process_records(self, _records, **kwargs):
+    async def process_sdk_job(self, _records, **kwargs):
         await kwargs["before_hy_invocation"]()
         self.invocations += 1
         self.pause_after_first()
         await kwargs["before_hy_invocation"]()
         self.invocations += 1
-        return ()
+        return type("Receipt", (), {"raw_ids": (), "memory_ids": ()})()
 
 
 class _EvidenceStore:
     def __init__(self, known: set[str]) -> None:
         self.known = known
+        self.released: list[tuple[str, ...]] = []
 
     def get(self, evidence_id: str):
         if evidence_id not in self.known:
             return None
         return type("Record", (), {"evidence_id": evidence_id})()
+
+    def release_sdk_staging(self, evidence_ids: tuple[str, ...]) -> None:
+        self.released.append(evidence_ids)
 
 
 def _state(path, job_id: str) -> str:
@@ -879,7 +882,7 @@ def _claim_through_drain(queue: DurableWriteQueue, job_id: str) -> None:
 
 
 def test_a_durable_job_is_processed_through_the_authorized_path(tmp_path) -> None:
-    """The executor must not bypass `process_records` (permission + runner)."""
+    """The executor must use the SDK-authority processor."""
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     record = queue.submit(_request(evidence=("e1", "e2")))
@@ -906,7 +909,6 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
     _claim_through_drain(queue, record.job_id)
 
     class Supervisor:
-        sdk_authority = staticmethod(lambda: True)
         calls = 0
 
         @classmethod
@@ -918,21 +920,11 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
                 (),
                 {
                     "raw_ids": ("raw-1",),
-                    "memories": (
-                        type("Memory", (), {"memory_id": "memory-1"})(),
-                        type("Memory", (), {"memory_id": "memory-2"})(),
-                    ),
+                    "memory_ids": ("memory-1", "memory-2"),
                 },
             )()
 
-    class Evidence(_EvidenceStore):
-        released: tuple[str, ...] = ()
-
-        def release_sdk_staging(self, evidence_ids):
-            self.released = evidence_ids
-            return len(evidence_ids)
-
-    evidence = Evidence({"e1"})
+    evidence = _EvidenceStore({"e1"})
     asyncio.run(
         execute_job(
             record.job_id,
@@ -947,7 +939,210 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
     assert Supervisor.calls == 1
     assert receipt.raw_ids == ("raw-1",)
     assert receipt.memory_ids == ("memory-1", "memory-2")
-    assert evidence.released == ("e1",)
+    assert evidence.released == [("e1",)]
+
+
+class _SdkPublicClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object, dict[str, object]]] = []
+        self.events: list[str] = []
+        self.outcome: object = None
+
+    def add(self, data, **kwargs):
+        self.events.append("add")
+        self.calls.append(("add", data, kwargs))
+        return {
+            "success": True,
+            "raw_ids": ["raw-1"],
+            "memory_id": "memory-1",
+            "experience_ids": ["experience-1"],
+            "fact_ids": ["fact-1"],
+            "variant": "coding",
+        }
+
+    def add_extracted(self, contents, **kwargs):
+        self.events.append("add_extracted")
+        self.calls.append(("add_extracted", contents, kwargs))
+        return {"success": True, "memory_ids": ["memory-note"]}
+
+    def get_write_outcome(self, request_id):
+        self.calls.append(("get_write_outcome", request_id, {}))
+        return self.outcome
+
+
+class _SdkPublicHandle:
+    def __init__(self, client: _SdkPublicClient) -> None:
+        self.value = client
+
+    async def client(self):
+        return self.value
+
+    async def close(self):
+        pass
+
+
+def _sdk_evidence(
+    evidence_id: str,
+    *,
+    role: str = "user",
+    text: str = "hello",
+    memory_content: bool = False,
+    source: str = "cursor",
+    manual_note: bool = False,
+    created_at: datetime | None = None,
+):
+    from one_memory.imports.models import (
+        EvidenceContentKind,
+        EvidenceInput,
+        EvidenceOrigin,
+        OriginMetadata,
+        WrittenBy,
+        materialize_write_input,
+    )
+
+    origin = (
+        OriginMetadata(raw_meta={"input_mode": "direct_memory_note"})
+        if manual_note
+        else OriginMetadata()
+    )
+    return materialize_write_input(
+        EvidenceInput(
+            source_id=source,
+            workspace="repo-a",
+            conversation_id="session-1",
+            message_id=evidence_id,
+            content_kind=(
+                EvidenceContentKind.MEMORY_CONTENT
+                if memory_content
+                else EvidenceContentKind.RAW_CONVERSATION
+            ),
+            role=role,
+            written_by=WrittenBy.PERSON if role == "user" else WrittenBy.AGENT,
+            created_at=created_at,
+            verbatim=text,
+            origin_meta={EvidenceOrigin.MANUAL_IMPORT: origin},
+        )
+    )
+
+
+def test_sdk_write_processor_calls_add_once_with_public_scope_and_receipt() -> None:
+    from one_memory.sdk_write_processor import PRODUCT_AGENT_ID, SdkWriteProcessor, SdkWriteReceipt
+
+    client = _SdkPublicClient()
+    processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
+    memory_at = datetime(2026, 10, 22, 8, tzinfo=UTC)
+    records = (
+        _sdk_evidence("one", text="question", created_at=memory_at),
+        _sdk_evidence(
+            "two",
+            role="assistant",
+            text="answer",
+            created_at=memory_at + timedelta(seconds=1),
+        ),
+        _sdk_evidence("three", role="tool", text="result", created_at=memory_at),
+    )
+
+    async def run() -> SdkWriteReceipt:
+        async def before() -> None:
+            client.events.append("before")
+
+        return await processor.process_sdk_job(
+            records,
+            request_id="request-1",
+            before_hy_invocation=before,
+        )
+
+    receipt = asyncio.run(run())
+
+    assert client.events == ["before", "add"]
+    assert len(client.calls) == 1
+    method, messages, kwargs = client.calls[0]
+    assert method == "add"
+    assert messages == [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "tool", "content": "result"},
+    ]
+    assert kwargs["user_id"] == "local"
+    assert kwargs["agent_id"] == PRODUCT_AGENT_ID
+    assert kwargs["session_id"] == "session-1"
+    assert kwargs["source"] == "cursor"
+    assert kwargs["workspace_id"] == "repo-a"
+    assert kwargs["memory_at"] == memory_at + timedelta(seconds=1)
+    assert kwargs["request_id"] == "request-1"
+    assert kwargs["metadata"] == {
+        "source_id": "cursor",
+        "session_id": "session-1",
+        "workspace_ids": ["repo-a"],
+        "memory_at": (memory_at + timedelta(seconds=1)).isoformat(),
+        "evidence_ids": [record.evidence_id for record in records],
+        "input_kind": "raw_conversation",
+    }
+    assert receipt == SdkWriteReceipt(
+        raw_ids=("raw-1",),
+        memory_ids=("memory-1", "experience-1", "fact-1"),
+    )
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        _sdk_evidence("memory", text="remember this", memory_content=True),
+        _sdk_evidence(
+            "note",
+            text="save this note",
+            source="one-memory-manual",
+            manual_note=True,
+        ),
+    ),
+)
+def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_notes(record) -> None:
+    from one_memory.sdk_write_processor import SdkWriteProcessor, SdkWriteReceipt
+
+    client = _SdkPublicClient()
+    processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
+
+    async def run() -> SdkWriteReceipt:
+        async def before() -> None:
+            client.events.append("before")
+
+        return await processor.process_sdk_job(
+            (record,),
+            request_id=record.evidence_id,
+            before_hy_invocation=before,
+        )
+
+    assert asyncio.run(run()) == SdkWriteReceipt(memory_ids=("memory-note",))
+    assert client.events == ["before", "add_extracted"]
+    assert client.calls[0][1] == [record.verbatim]
+    assert len(client.calls) == 1
+
+
+def test_sdk_unknown_outcome_inquiry_uses_only_public_receipt() -> None:
+    from one_memory.sdk_write_processor import SdkWriteProcessor, SdkWriteReceipt
+
+    client = _SdkPublicClient()
+    processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
+    client.outcome = {"status": "unknown", "result": {"success": False}}
+    assert asyncio.run(processor.inquire_write_outcome("request-1")) is None
+
+    client.outcome = {
+        "status": "succeeded",
+        "result": {
+            "success": True,
+            "raw_ids": ["raw-1"],
+            "fact_ids": ["fact-1"],
+            "variant": "working",
+        },
+    }
+    assert asyncio.run(processor.inquire_write_outcome("request-1")) == SdkWriteReceipt(
+        raw_ids=("raw-1",),
+        memory_ids=("fact-1",),
+    )
+    assert [call[0] for call in client.calls] == [
+        "get_write_outcome",
+        "get_write_outcome",
+    ]
 
 
 def test_missing_evidence_is_refused_without_calling_the_model(tmp_path) -> None:
@@ -1978,7 +2173,7 @@ def test_execute_job_crash_after_marking_hy_invoked_becomes_sticky_unknown(tmp_p
     drain.claim(limit=1)
 
     class _CancelledBeforeReturn:
-        async def process_records(self, _records, **_kwargs):
+        async def process_sdk_job(self, _records, **_kwargs):
             raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
@@ -4978,7 +5173,7 @@ def test_a_refused_source_context_is_nonblocking_unknown(
             record.job_id,
             queue=queue,
             supervisor=_Recorder(
-                error=HyMemoryBridgeError("hy_memory_write_verification_context_scope"),
+                error=RuntimeError("hy_memory_write_verification_context_scope"),
                 invoke_hy=True,
             ),
             evidence=_EvidenceStore({"e1"}),
@@ -5006,7 +5201,7 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
     claimer = DurableWriteDrain(queue, execute=_never_execute, owner="after-call-owner")
     assert claimer.claim(limit=1) == (record.job_id,)
     recorder = _Recorder(
-        error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
+        error=RuntimeError("hy_memory_write_verification_authority_invalid"),
         invoke_hy=True,
     )
 

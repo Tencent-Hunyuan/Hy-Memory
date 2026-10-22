@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 340
-EXPECTED_TEST_FILES_SHA256 = "f69d3f33df5277febb09557d5bce7adb7d8719ed47e48a71f852e3e4ecf8fd74"
+EXPECTED_TEST_FILE_COUNT = 322
+EXPECTED_TEST_FILES_SHA256 = "d242783adb4015ebdbb5c099f3b5aa88a99c828ca6fddc8ca8d6c74c56e48945"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
@@ -62,7 +62,6 @@ INTEGRATION_FILES = frozenset(
         "test_d93_same_process_load.py",
         "test_diagnostic_trace.py",
         "test_diagnostic_trace_api.py",
-        "test_evidence_reconcile_primitive.py",
         "test_external_installation_permissions.py",
         "test_fault_matrix.py",
         "test_file_import_operations.py",
@@ -77,7 +76,6 @@ INTEGRATION_FILES = frozenset(
         "test_manual_transcript_import.py",
         "test_measure_c1_loop_blocking_contract.py",
         "test_memory_content_import.py",
-        "test_memory_correction_sync.py",
         "test_memory_freshness_integration_review.py",
         "test_memory_governance_api.py",
         "test_memory_graph_api.py",

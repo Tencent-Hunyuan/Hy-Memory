@@ -216,13 +216,13 @@ def test_retrieval_stop_failure_still_drains_other_owned_services(tmp_path, monk
         )
         with pytest.raises(failure):
             async with app.router.lifespan_context(app):
-                original = app.state.memory_processing_supervisor.shutdown
+                original = app.state.sdk_memory_runtime.shutdown
 
                 async def shutdown():
                     await original()
                     events.append("processing_drained")
 
-                monkeypatch.setattr(app.state.memory_processing_supervisor, "shutdown", shutdown)
+                monkeypatch.setattr(app.state.sdk_memory_runtime, "shutdown", shutdown)
         assert events == ["start", "retrieval_drained", "processing_drained"]
         assert not (tmp_path / "runtime.json").exists()
 

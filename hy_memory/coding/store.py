@@ -416,6 +416,36 @@ class CodingMemoryStore:
 
         self._initialized = False
 
+    @staticmethod
+    def database_path(
+        config: MemoryConfig,
+        db_path: Optional[str] = None,
+        variant: str = "working",
+    ) -> str:
+        """Return the authoritative SQLite path without creating anything."""
+        if db_path is None:
+            data_dir = (
+                os.path.dirname(config.history.db_path)
+                if config.history.db_path else "./data"
+            )
+            db_path = os.path.join(data_dir, "coding_memory.db")
+        normalized = (
+            "coding"
+            if str(variant or "").strip().lower() == "coding"
+            else "working"
+        )
+        return _variant_db_path(db_path, "_cv" if normalized == "coding" else "")
+
+    @classmethod
+    def database_exists(
+        cls,
+        config: MemoryConfig,
+        db_path: Optional[str] = None,
+        variant: str = "working",
+    ) -> bool:
+        """Whether a coding namespace has an existing SQLite database."""
+        return os.path.isfile(cls.database_path(config, db_path, variant))
+
     async def initialize(self) -> None:
         if self._initialized:
             return

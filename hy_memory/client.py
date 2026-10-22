@@ -38,6 +38,8 @@ from typing import List, Dict, Any, Optional, Tuple, Union, TYPE_CHECKING
 
 from .config import MemoryConfig
 from .core.embed_service import EmbedService, embed_endpoint_override
+from .embedding import EmbeddingDimensionMismatchError, EmbeddingService
+from .retrieval import AmbiguousMemoryIdError, MemoryKind, MemoryVariant
 from .data.vector_store import create_vector_store
 from .data.history_store import HistoryStore
 from .data.cache import create_cache
@@ -434,6 +436,8 @@ class HyMemoryClient:
     Args:
         config: 自定义 MemoryConfig（默认从环境变量加载）
         mode:   处理模式 ("lite" / "pro" / "ultra")，默认从环境变量 MEMORY_MODE 读取
+        embedding_service: 可选的调用方自管 embedding service；须满足公开的
+                           EmbeddingService Protocol，client 不接管其生命周期。
     """
 
     # 合法的 mode 值
@@ -445,12 +449,15 @@ class HyMemoryClient:
         mode: Optional[str] = None,
         coding_writer: Optional[str] = None,
         runtime: Optional["SharedRuntime"] = None,
+        embedding_service: Optional[EmbeddingService] = None,
     ):
         # 确保日志系统已配置（幂等，多次调用安全）
         setup_logging()
 
         # 配置
         self._config = config or MemoryConfig.from_env()
+        self._borrowed_embedding_service = embedding_service
+        self._validate_embedding_service(embedding_service)
 
         # coding_writer 显式传入则覆盖 config / env（默认 None → 沿用 config.coding.writer）
         # 取值: "legacy" | "agent"
@@ -537,8 +544,12 @@ class HyMemoryClient:
         )
         logger.info(f"[init] Default ThreadPoolExecutor max_workers={_max_workers}")
 
-        # 1. EmbedService（纯配置，首次调用时真正连接 API）
-        self._embed_service = EmbedService(self._config)
+        # 1. EmbedService（注入发生在 ComponentFactory / pipeline 预热之前）
+        self._embed_service = (
+            self._borrowed_embedding_service
+            if self._borrowed_embedding_service is not None
+            else EmbedService(self._config)
+        )
         logger.debug(
             f"[init] EmbedService created: model={self._config.embedder.model}"
         )
@@ -568,8 +579,10 @@ class HyMemoryClient:
             )
 
         # 4. ComponentFactory（注入已初始化的共享组件）
-        self._registry = ComponentFactory(config=self._config)
-        self._registry._shared_embed_service = self._embed_service
+        self._registry = ComponentFactory(
+            config=self._config,
+            embedding_service=self._embed_service,
+        )
         self._registry._shared_vector_store = self._vector_store
         self._registry._shared_vector_store_initialized = True
         if self._graph_store is not None:
@@ -703,6 +716,7 @@ class HyMemoryClient:
         cls,
         config_dict: Dict[str, Any],
         mode: Optional[str] = None,
+        embedding_service: Optional[EmbeddingService] = None,
     ) -> "HyMemoryClient":
         """
         从字典创建客户端（类似 mem0 风格）。
@@ -734,7 +748,49 @@ class HyMemoryClient:
         """
         config = MemoryConfig.from_dict(config_dict)
         resolved_mode = mode or config_dict.get("mode")
-        return cls(config=config, mode=resolved_mode)
+        return cls(
+            config=config,
+            mode=resolved_mode,
+            embedding_service=embedding_service,
+        )
+
+    def _validate_embedding_service(
+        self, embedding_service: Optional[EmbeddingService]
+    ) -> None:
+        """Validate a borrowed service before any store or pipeline is created."""
+        if embedding_service is None:
+            return
+        required = (
+            "embed",
+            "embed_with_meta",
+            "embed_batch",
+            "embed_queued",
+            "embed_queued_with_meta",
+            "get_embedding_dims",
+        )
+        missing = [
+            name for name in required
+            if not callable(getattr(embedding_service, name, None))
+        ]
+        if missing:
+            raise TypeError(
+                "embedding_service does not implement EmbeddingService; "
+                f"missing: {', '.join(missing)}"
+            )
+        try:
+            actual_dims = int(embedding_service.get_embedding_dims())
+        except Exception as exc:
+            raise TypeError(
+                "embedding_service.get_embedding_dims() must return an integer"
+            ) from exc
+        expected_dims = getattr(self._config.vector_store, "embedding_dims", None)
+        if expected_dims is None:
+            expected_dims = getattr(self._config.embedder, "embedding_dims", None)
+        if expected_dims is not None and actual_dims != int(expected_dims):
+            raise EmbeddingDimensionMismatchError(
+                "embedding service dimension mismatch: "
+                f"service={actual_dims}, vector_store={int(expected_dims)}"
+            )
 
     # ================================================================
     # 属性
@@ -1060,6 +1116,7 @@ class HyMemoryClient:
                 llm_provider=self._coding_llm_provider,
                 embed_service=self._embed_service,
                 cache=self._cache,
+                variant=variant,
             )
             self._coding_stores[variant] = store
             self._coding_writers[variant] = writer
@@ -1830,6 +1887,8 @@ class HyMemoryClient:
         memory_id: str,
         *,
         include_raw: bool = False,
+        kind: Optional[MemoryKind] = None,
+        variant: Optional[MemoryVariant] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         获取单条记忆。
@@ -1838,12 +1897,19 @@ class HyMemoryClient:
             memory_id: 记忆 ID
             include_raw: 是否允许返回 L1_RAW 原始记忆。默认 False，保持原有隐藏行为；
                          lite 模式的记忆均为 L1_RAW，需显式设为 True 才能按 ID 读取。
+            kind: 可选 namespace（"chat" / "experience" / "fact"）。
+            variant: 可选生产力变体（"working" / "coding"）。
 
         Returns:
-            {"memory_id", "content", "layer", "request_id", "elapsed_ms"} 或 None（不存在时）
+            带 kind/variant 的统一 memory dict，或 None（不存在时）。
         """
         return self._loop_thread.run(
-            self.async_get(memory_id, include_raw=include_raw)
+            self.async_get(
+                memory_id,
+                include_raw=include_raw,
+                kind=kind,
+                variant=variant,
+            )
         )
 
     def update(
@@ -2737,6 +2803,8 @@ class HyMemoryClient:
                     request_id=request_id,
                     source=source,
                 )
+                # Public receipt always identifies the productivity namespace.
+                resp["variant"] = scene_variant
                 # 版本演进链层（scene="coding" 独有）。放在 writer.write 之后、返回
                 # 之前，因为它只依赖对话原文，与向量层写入结果无关。
                 # best-effort：这层挂不上不影响本次 add 的向量层产出。
@@ -4374,35 +4442,104 @@ class HyMemoryClient:
     # CRUD API（异步）— get / update / delete / delete_all
     # ================================================================
 
+    async def _coding_store_for_exact_get(self, variant: str):
+        """Return an existing namespace store without creating an empty DB."""
+        stores = getattr(self, "_coding_stores", None) or {}
+        store = stores.get(variant)
+        if store is not None:
+            return store
+
+        from .coding.store import CodingMemoryStore
+
+        config = getattr(self, "_config", None)
+        coding_config = getattr(config, "coding", None)
+        if config is None or coding_config is None:
+            return None
+        if not CodingMemoryStore.database_exists(
+            config,
+            db_path=coding_config.db_path,
+            variant=variant,
+        ):
+            return None
+        await self._get_coding_writer(variant=variant)
+        return (getattr(self, "_coding_stores", None) or {}).get(variant)
+
+    @staticmethod
+    def _format_productivity_get(
+        item: Any,
+        *,
+        kind: str,
+        variant: str,
+        request_id: str,
+        elapsed_ms: float,
+    ) -> Dict[str, Any]:
+        payload = item.to_dict()
+        item_id = (
+            payload.get("experience_id")
+            if kind == "experience"
+            else payload.get("fact_id")
+        )
+        return {
+            "memory_id": item_id,
+            "kind": kind,
+            "variant": variant,
+            "scene": "productivity",
+            "content": (
+                payload.get("solution", "")
+                if kind == "experience"
+                else payload.get("statement", "")
+            ),
+            "layer": kind,
+            **payload,
+            "request_id": request_id,
+            "elapsed_ms": elapsed_ms,
+        }
+
     @_ensure_internal_loop
     async def async_get(
         self,
         memory_id: str,
         *,
         include_raw: bool = False,
+        kind: Optional[MemoryKind] = None,
+        variant: Optional[MemoryVariant] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         获取单条记忆（异步）。
 
-        VDB + Graph 双路并行查询，哪个有结果返回哪个。
+        默认查询 chat、working/coding experience 和 working/coding fact。
+        若同一 ID 命中多个 namespace，则 fail closed；调用方必须用 kind/variant
+        显式消歧。
 
         Args:
             memory_id: 记忆 ID
             include_raw: 是否允许返回 L1_RAW 原始记忆，默认 False。
+            kind: 可选 namespace（"chat" / "experience" / "fact"）。
+            variant: 可选生产力变体（"working" / "coding"）。
 
         Returns:
-            {"memory_id", "content", "layer", "source", "request_id", "elapsed_ms"} 或 None
+            统一 memory dict，或 None。
         """
-        import asyncio as _asyncio_get
         from .models.memory import MemoryLayer
+
+        if kind not in (None, "chat", "experience", "fact"):
+            raise ValueError(
+                "kind must be one of: chat, experience, fact"
+            )
+        if variant not in (None, "working", "coding"):
+            raise ValueError("variant must be one of: working, coding")
+        if kind == "chat" and variant is not None:
+            raise ValueError("variant is only valid for experience/fact lookups")
 
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
         t0 = time.perf_counter()
 
-        logger.info(f"[get] memory_id={memory_id}")
+        logger.info(
+            "[get] memory_id=%s kind=%s variant=%s",
+            memory_id, kind, variant,
+        )
 
-        # 双路并行
         async def _get_vdb():
             return await self._vector_store.get_by_id(memory_id)
 
@@ -4415,7 +4552,36 @@ class HyMemoryClient:
                 logger.debug(f"[get] graph_store query failed: {e}")
                 return None
 
-        vdb_node, graph_node = await _asyncio_get.gather(_get_vdb(), _get_graph())
+        query_chat = kind in (None, "chat") and variant is None
+        coding_kinds = (
+            ("experience", "fact") if kind is None else (kind,)
+        )
+        coding_variants = (variant,) if variant is not None else ("working", "coding")
+
+        stores = {}
+        if kind != "chat":
+            for candidate_variant in coding_variants:
+                store = await self._coding_store_for_exact_get(candidate_variant)
+                if store is not None:
+                    stores[candidate_variant] = store
+
+        tasks = []
+        task_names = []
+        if query_chat:
+            tasks.extend((_get_vdb(), _get_graph()))
+            task_names.extend(("chat:vdb", "chat:graph"))
+        for candidate_variant, store in stores.items():
+            if "experience" in coding_kinds:
+                tasks.append(store.get_by_id(memory_id))
+                task_names.append(f"{candidate_variant}:experience")
+            if "fact" in coding_kinds:
+                tasks.append(store.get_fact(memory_id))
+                task_names.append(f"{candidate_variant}:fact")
+
+        values = await asyncio.gather(*tasks) if tasks else []
+        by_name = dict(zip(task_names, values))
+        vdb_node = by_name.get("chat:vdb")
+        graph_node = by_name.get("chat:graph")
 
         # L1_RAW 默认不对外可见：按 ID 直取走主键查询、绕过向量库的 layer
         # filter，故在此统一挡掉。SDK 调用方可通过 include_raw=True 显式读取；
@@ -4437,17 +4603,32 @@ class HyMemoryClient:
         ):
             graph_node = None
 
-        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        matches = []
+        chat_node = vdb_node if vdb_node is not None else graph_node
+        if chat_node is not None:
+            matches.append(("chat", chat_node))
+        for name, value in by_name.items():
+            if not name.startswith("chat:") and value is not None:
+                matches.append((name, value))
 
-        # pipeline trace（best-effort，受 MEMORY_PIPELINE_TRACE_ENABLED 控制）
-        _hit_node = vdb_node if vdb_node is not None else graph_node
-        _source = "vdb" if vdb_node is not None else ("graph" if graph_node is not None else "")
+        if len(matches) > 1:
+            raise AmbiguousMemoryIdError(
+                memory_id, [namespace for namespace, _ in matches]
+            )
+
+        elapsed = round((time.perf_counter() - t0) * 1000, 2)
+        _hit_namespace, _hit_node = matches[0] if matches else ("", None)
+        _source = (
+            "vdb" if vdb_node is not None
+            else ("graph" if graph_node is not None else _hit_namespace)
+        )
         _ident = self._backend_identity()
         _parsed = {
             "memory_id": memory_id,
             **_ident,
             "hit": _hit_node is not None,
             "source": _source,
+            "namespace": _hit_namespace,
         }
         if _hit_node is not None:
             try:
@@ -4464,10 +4645,25 @@ class HyMemoryClient:
             elapsed_ms=elapsed,
         )
 
-        # VDB 优先（如果两边都有，以 VDB 为准）
+        if not matches:
+            logger.info(f"[get] not found: memory_id={memory_id}")
+            return None
+
+        if _hit_namespace != "chat":
+            hit_variant, hit_kind = _hit_namespace.split(":", 1)
+            return self._format_productivity_get(
+                _hit_node,
+                kind=hit_kind,
+                variant=hit_variant,
+                request_id=request_id,
+                elapsed_ms=elapsed,
+            )
+
         if vdb_node is not None:
             return {
                 "memory_id": vdb_node.node_id,
+                "kind": "chat",
+                "variant": None,
                 "content": vdb_node.content,
                 "layer": vdb_node.layer.value,
                 "status": vdb_node.status.value if vdb_node.status else "active",
@@ -4481,6 +4677,8 @@ class HyMemoryClient:
                 # 不透出 source_raw_memory_id：见 async_search 同处说明。
                 "user_id": vdb_node.user_id,
                 "agent_id": vdb_node.agent_id,
+                "session_id": vdb_node.session_id,
+                "owner": vdb_node.owner,
                 "confidence": vdb_node.confidence,
                 "custom": vdb_node.custom or {},
                 "meta": list((vdb_node.custom or {}).get("meta") or []),
@@ -4492,6 +4690,8 @@ class HyMemoryClient:
         if graph_node is not None:
             return {
                 "memory_id": graph_node.node_id,
+                "kind": "chat",
+                "variant": None,
                 "content": graph_node.content,
                 "layer": graph_node.layer.value if graph_node.layer else "",
                 "status": graph_node.status.value if graph_node.status else "active",
@@ -4505,6 +4705,8 @@ class HyMemoryClient:
                 # 不透出 source_raw_memory_id：见 async_search 同处说明。
                 "user_id": graph_node.user_id,
                 "agent_id": graph_node.agent_id,
+                "session_id": getattr(graph_node, "session_id", "") or "",
+                "owner": getattr(graph_node, "owner", None),
                 "confidence": graph_node.confidence,
                 "custom": getattr(graph_node, "custom", {}) or {},
                 "source": "graph",
@@ -4512,7 +4714,6 @@ class HyMemoryClient:
                 "elapsed_ms": elapsed,
             }
 
-        logger.info(f"[get] not found: memory_id={memory_id}")
         return None
 
     @_ensure_internal_loop

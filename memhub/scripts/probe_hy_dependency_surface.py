@@ -1,4 +1,4 @@
-"""Report the HY SDK surface required by the current One Memory bridge."""
+"""Report the public HY SDK surface required by MemHub."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from pathlib import Path
 _SANDBOX = Path(tempfile.mkdtemp(prefix="hy-probe-"))
 from one_memory.hy_runtime_config import (
     HY_MEMORY_DISTRIBUTION,
-    HY_MEMORY_MODE,
     HY_MEMORY_READER,
     HY_MEMORY_VERSION,
     configure_hy_runtime_environment,
@@ -18,7 +17,7 @@ from one_memory.hy_runtime_config import (
 configure_hy_runtime_environment(_SANDBOX)
 
 import hy_memory
-from hy_memory.config import MemoryConfig
+from hy_memory import HyMemoryClient, MemoryConfig
 
 results: list[tuple[str, str, str]] = []
 
@@ -35,7 +34,7 @@ def check(name: str, fn) -> None:
 print(f"hy_memory.__version__ = {hy_memory.__version__}")
 print(f"distribution/version  = {HY_MEMORY_DISTRIBUTION} {hy_memory_version()}")
 print(f"loaded from           = {Path(hy_memory.__file__).parent}")
-print(f"One Memory mode/reader= {HY_MEMORY_MODE} / {HY_MEMORY_READER}")
+print(f"MemHub mode/reader    = pro / {HY_MEMORY_READER}")
 print()
 
 config = MemoryConfig.from_env()
@@ -105,9 +104,7 @@ for section, fields in CONFIG_FIELDS.items():
             )
         )
 
-# Client methods the bridge calls, plus the ones the protocol declares.
-from hy_memory.client import HyMemoryClient
-
+# Public client methods MemHub calls.
 for method in (
     "add",
     "add_extracted",
@@ -148,7 +145,7 @@ with tempfile.TemporaryDirectory() as sandbox:
     config.embedder.api_key = "probe-not-used"
     config.embedder.base_url = "http://127.0.0.1:1/v1"
     try:
-        client = HyMemoryClient(config=config, mode=HY_MEMORY_MODE)
+        client = HyMemoryClient(config=config, mode="pro")
     except Exception as error:  # noqa: BLE001 - reporting, not handling
         results.append(("HyMemoryClient(config, mode='ultra')", "MISSING", str(error)))
     else:

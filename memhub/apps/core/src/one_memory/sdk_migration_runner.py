@@ -24,7 +24,7 @@ from one_memory.sdk_data_plane_migration import (
 )
 from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
 from one_memory.sdk_migration_inventory import (
-    SdkMigrationBridge,
+    SdkMigrationClient,
     execute_memory_migration_plan,
     execute_raw_migration_plan,
     read_legacy_memory_inventory,
@@ -238,7 +238,7 @@ def resume_legacy_cleanup(*, data_dir: Path, database_path: Path) -> tuple[str, 
 async def run_sdk_data_plane_backfill(
     *,
     database_path: Path,
-    bridge: SdkMigrationBridge,
+    client: SdkMigrationClient,
     migration_id: str,
     bundle_id: str,
     source_runtime_build: str,
@@ -261,7 +261,7 @@ async def run_sdk_data_plane_backfill(
     store.set_phase(migration_id, phase="inventory", state="running")
 
     legacy_memories = read_legacy_memory_inventory(database_path)
-    sdk_memories = await read_sdk_memory_inventory(bridge)
+    sdk_memories = await read_sdk_memory_inventory(client)
     memory_decisions = record_memory_migration_plan(
         store,
         migration_id=migration_id,
@@ -269,7 +269,7 @@ async def run_sdk_data_plane_backfill(
         sdk=sdk_memories,
     )
     legacy_raw = read_legacy_raw_inventory(database_path)
-    sdk_raw = await read_sdk_raw_inventory(bridge)
+    sdk_raw = await read_sdk_raw_inventory(client)
     raw_decisions = record_raw_migration_plan(
         store,
         migration_id=migration_id,
@@ -279,14 +279,14 @@ async def run_sdk_data_plane_backfill(
 
     store.set_phase(migration_id, phase="backfill", state="running")
     await execute_memory_migration_plan(
-        bridge,
+        client,
         store,
         migration_id=migration_id,
         legacy=legacy_memories,
         decisions=memory_decisions,
     )
     await execute_raw_migration_plan(
-        bridge,
+        client,
         store,
         migration_id=migration_id,
         legacy=legacy_raw,

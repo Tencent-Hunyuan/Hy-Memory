@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.database import enable_write_ahead_log
 from one_memory.database_access import main_database
-from one_memory.hy_lifecycle import HyLifecycle
+from one_memory.legacy_lifecycle_types import HyLifecycle
 from one_memory.library_upgrade import LibraryUpgradeError, PreparedLibrary, holds_legacy_rows
 from one_memory.memory_server.migrations import governance_ddl
 
