@@ -1,7 +1,6 @@
 """Executable dependency and memory-authority gates.
 
-The current target architecture is defined by ``HANDSOFF.md`` and
-``docs/ARCHITECTURE.md``:
+The public target architecture is defined by ``docs/ARCHITECTURE.md``:
 
 * Hy Memory SDK owns memory/raw/vector/graph/coding data;
 * MemHub owns the management plane and may retain ``memory_id`` references;

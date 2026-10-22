@@ -26,6 +26,7 @@ package-lock.json
 ui_walkthrough_*/
 
 # Internal release/open-source coordination must never enter the public tree.
+HANDSOFF.md
 OPEN_SOURCE_TODO.md
 release_todo.md
 
