@@ -16,8 +16,11 @@ vi.mock("./api", () => ({
 
 import {
   type CallEvent,
+  callDeliveryLabel,
   callDetailHeadline,
   callEventHeadline,
+  callHostName,
+  callReturnDeliveryLabel,
   callRowDetail,
   callRowHeadline,
   clearAllCallEvents,
@@ -59,6 +62,32 @@ beforeEach(() => {
   vi.resetAllMocks();
   fake.list.mockResolvedValue(structuredClone(page));
 });
+it("traduce entrega y límites sin atribuir adopción ni alterar anfitriones desconocidos", () => {
+  const delivered = {
+    ...event,
+    host_id: "Aplicación 中文",
+    delivery: "delivered" as const,
+  };
+  expect(callDeliveryLabel(delivered, "es")).toBe(
+    "Entregado a Aplicación 中文",
+  );
+  expect(callDeliveryLabel(delivered)).toBe("已提供给 Aplicación 中文");
+  expect(callDeliveryLabel(event, "es")).toBe("");
+  expect(callReturnDeliveryLabel(event, "es")).toBe("");
+  expect(
+    callReturnDeliveryLabel({ ...delivered, state: "timed_out" }, "es"),
+  ).toContain("Aplicación 中文 respondió sin memorias");
+  expect(
+    callReturnDeliveryLabel({ ...event, state: "denied" }, "es"),
+  ).toContain("No se entregaron memorias");
+  expect(callReturnDeliveryLabel({ ...event, state: "partial" }, "es")).toBe(
+    "Parte del contenido sigue procesándose.",
+  );
+  expect(callReturnDeliveryLabel({ ...event, state: "unavailable" })).toBe(
+    "MemHub 暂时不可用，这次回答没有带上记忆。",
+  );
+});
+
 it("reads exact bounded history and current reference metadata", async () => {
   expect(await getCallHistory()).toEqual(page);
   expect(fake.list).toHaveBeenCalledExactlyOnceWith({ limit: 20, offset: 0 });
@@ -198,4 +227,30 @@ it.each(
 )("rejects unrelated or unauthorized reference titles %#", async ({ refs }) => {
   fake.references.mockResolvedValue(refs);
   await expect(getCallReferences(event)).rejects.toThrow();
+});
+it("names a direct (host_id null) call in the locale it receives", () => {
+  const direct: CallEvent = { ...event, host_id: null, state: "empty" };
+  expect(callHostName(null, "es")).toBe("Consulta directa (diagnóstico)");
+  expect(callHostName(null)).toBe("直接调用（诊断）");
+  expect(callEventHeadline(direct, undefined, "es")).toBe(
+    "Consulta directa (diagnóstico) no encontró memorias relacionadas",
+  );
+  expect(callDetailHeadline(direct, undefined, "es")).toBe(
+    "Consulta directa (diagnóstico) no encontró memorias relacionadas",
+  );
+  const delivered: CallEvent = {
+    ...direct,
+    state: "grounded",
+    delivery: "delivered",
+  };
+  expect(callRowDetail(delivered, "es")).toBe(
+    "Entregado a Consulta directa (diagnóstico)",
+  );
+  for (const text of [
+    callEventHeadline(direct, undefined, "es"),
+    callRowDetail(delivered, "es"),
+  ])
+    expect(text).not.toMatch(/[\u4e00-\u9fff。（）]/);
+  // Unknown host ids are names, never catalog keys.
+  expect(callHostName("toString", "es")).toBe("toString");
 });

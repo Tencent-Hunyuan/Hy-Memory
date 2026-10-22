@@ -2,6 +2,7 @@ import type { ProviderKind } from "@one-memory/contracts";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { OptionMenu } from "./OptionMenu";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { R6ColdStartFrame } from "./R6ColdStartFrame";
 import { R6Button } from "./R6Controls";
 import "./onboarding-model-r6.css";
@@ -71,8 +72,13 @@ export interface OnboardingModelStepProps {
 }
 
 export function OnboardingModelStep(props: OnboardingModelStepProps) {
+  const { text, t, locale } = useOnboardingTranslation();
   const { draft, advancedOpen, onDraftChange, fieldErrors = {}, phase } = props;
   const id = useId();
+  // The Chinese label already names the destination; shorter translated labels
+  // need it as a description for assistive technology.
+  const skipDestination =
+    locale === "zh-CN" ? "" : t("onboardingModelSkipDestination");
   const fields = useRef<HTMLElement>(null);
   const advancedToggle = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);
@@ -113,7 +119,10 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
   const sourceSummary =
     props.sourceNames.length <= 3
       ? props.sourceNames.join(" · ")
-      : `${props.sourceNames.slice(0, 3).join(" · ")} 等 ${props.sourceNames.length} 个应用`;
+      : t("onboardingSourcesSummary", {
+          names: props.sourceNames.slice(0, 3).join(" · "),
+          count: props.sourceNames.length,
+        });
   async function run(action: Action) {
     if (flight.current || locked) return;
     if (action === "save-and-enable" && !canEnable) return;
@@ -153,11 +162,11 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
     const error = fieldErrors[key];
     return (
       <label className="onboarding-model-field" htmlFor={`${id}-${key}`}>
-        <span>{label}</span>
+        <span>{text(label)}</span>
         <input
           id={`${id}-${key}`}
           name={key}
-          aria-label={label}
+          aria-label={text(label)}
           type={options.type ?? "text"}
           autoComplete="off"
           spellCheck={false}
@@ -169,7 +178,9 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
           max={options.max}
           maxLength={options.maxLength}
           required={options.required}
-          placeholder={options.placeholder}
+          placeholder={
+            options.placeholder ? text(options.placeholder) : undefined
+          }
           onChange={(event) => {
             if (!flight.current && !fieldsLocked)
               onDraftChange({ [key]: event.target.value });
@@ -177,7 +188,7 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
         />
         {error && (
           <small id={`${id}-${key}-error`} className="onboarding-model-error">
-            {error}
+            {text(error)}
           </small>
         )}
       </label>
@@ -215,43 +226,57 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
     >
       <R6ColdStartFrame
         step={3}
-        eyebrow="沉淀记忆 · 使用你选择的模型"
-        title={pageTitle}
+        eyebrow={text("沉淀记忆 · 使用你选择的模型")}
+        title={text(pageTitle)}
         footer={
           <>
             <p className="onboarding-model-footer-note">
-              {!props.capability.saveAndEnable
-                ? "当前无法启用模型，已填写内容保留。"
-                : props.probe?.state === "passed"
-                  ? "模型连接测试通过，可以启用并开始沉淀记忆。"
-                  : "先测试模型连通性；测试通过后再启用。"}
+              {text(
+                !props.capability.saveAndEnable
+                  ? "当前无法启用模型，已填写内容保留。"
+                  : props.probe?.state === "passed"
+                    ? "模型连接测试通过，可以启用并开始沉淀记忆。"
+                    : "先测试模型连通性；测试通过后再启用。",
+              )}
             </p>
             <div className="onboarding-model-footer-actions">
+              {skipDestination && (
+                <span id={`${id}-skip-destination`} hidden>
+                  {skipDestination}
+                </span>
+              )}
               <R6Button
+                aria-describedby={
+                  skipDestination ? `${id}-skip-destination` : undefined
+                }
                 disabled={locked}
                 onClick={() => {
                   if (!flight.current && !locked)
                     (props.onSkip ?? props.onBack)();
                 }}
               >
-                跳过，先进入应用
+                {text("跳过，先进入应用")}
               </R6Button>
               <R6Button
                 disabled={locked || !props.canTest}
                 onClick={() => void run("test")}
               >
-                {displayedPhase === "testing"
-                  ? "正在测试模型…"
-                  : (props.testActionLabel ?? "测试模型连通性")}
+                {text(
+                  displayedPhase === "testing"
+                    ? "正在测试模型…"
+                    : (props.testActionLabel ?? "测试模型连通性"),
+                )}
               </R6Button>
               <R6Button
                 variant="primary"
                 disabled={locked || !canEnable}
                 onClick={() => void run("save-and-enable")}
               >
-                {displayedPhase === "enabling"
-                  ? "正在启用…"
-                  : (props.enableActionLabel ?? "确认启用")}
+                {text(
+                  displayedPhase === "enabling"
+                    ? "正在启用…"
+                    : (props.enableActionLabel ?? "确认启用"),
+                )}
               </R6Button>
             </div>
           </>
@@ -260,27 +285,29 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
         <div className="onboarding-model-layout">
           <section
             className="onboarding-model-form"
-            aria-label="模型配置"
+            aria-label={text("模型配置")}
             data-advanced={advancedOpen}
           >
             <section
               ref={fields}
               id={`${id}-fields`}
               className="onboarding-model-fields"
-              aria-label="模型参数"
+              aria-label={text("模型参数")}
               // biome-ignore lint/a11y/noNoninteractiveTabindex: The parameter pane needs keyboard scrolling.
               tabIndex={0}
             >
               {!advancedOpen ? (
                 <>
                   <p className="onboarding-model-intro">
-                    选择服务商，填入 API Key。核对已有配置后再继续。
+                    {text("选择服务商，填入 API Key。核对已有配置后再继续。")}
                   </p>
                   <label
                     className="onboarding-model-field onboarding-model-provider"
                     htmlFor={`${id}-provider`}
                   >
-                    <span id={`${id}-provider-label`}>模型服务商</span>
+                    <span id={`${id}-provider-label`}>
+                      {text("模型服务商")}
+                    </span>
                     <OptionMenu
                       id={`${id}-provider`}
                       labelledBy={`${id}-provider-label`}
@@ -288,11 +315,11 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                       disabled={fieldsLocked}
                       options={[
                         ...(!provider
-                          ? [{ value: "", label: "选择服务商" }]
+                          ? [{ value: "", label: text("选择服务商") }]
                           : []),
                         ...props.providers.map((item) => ({
                           value: item.id,
-                          label: item.label,
+                          label: text(item.label),
                           disabled: !item.supported,
                         })),
                       ]}
@@ -317,13 +344,15 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                     className="onboarding-model-key-note"
                     data-state={connectionFailed ? "failed" : "idle"}
                   >
-                    {connectionFailed
-                      ? "连接未通过，请检查 API Key、模型与接口地址后重试。配置已保留。"
-                      : props.profile?.credential_state === "unavailable"
-                        ? "需要允许 MemHub 访问钥匙串。系统询问时请选择“始终允许”。"
-                        : props.profile?.has_configured_api_key
-                          ? "留空保留已保存密钥；填写新密钥后需重新测试。"
-                          : "密钥保存在系统安全存储中，不写入对话或日志。"}
+                    {text(
+                      connectionFailed
+                        ? "连接未通过，请检查 API Key、模型与接口地址后重试。配置已保留。"
+                        : props.profile?.credential_state === "unavailable"
+                          ? "需要允许 MemHub 访问钥匙串。系统询问时请选择“始终允许”。"
+                          : props.profile?.has_configured_api_key
+                            ? "留空保留已保存密钥；填写新密钥后需重新测试。"
+                            : "密钥保存在系统安全存储中，不写入对话或日志。",
+                    )}
                   </p>
                   <button
                     ref={advancedToggle}
@@ -334,24 +363,27 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                     disabled={fieldsLocked}
                     onClick={() => changeAdvanced(true)}
                   >
-                    配置详情与高级设置{" "}
+                    {text("配置详情与高级设置")}{" "}
                     <ChevronDown size={16} aria-hidden="true" />
                   </button>
                   <p className="onboarding-model-profile">
-                    {provider?.label ?? "服务商待选择"} ·{" "}
-                    {draft.model || "模型待填写"}
+                    {provider ? text(provider.label) : text("服务商待选择")} ·{" "}
+                    {draft.model || text("模型待填写")}
                     <br />
-                    {safeEndpoint(draft.base_url)} ·{" "}
+                    {text(safeEndpoint(draft.base_url))} ·{" "}
                     {draft.embedding_mode === "local"
-                      ? "本地向量模型"
-                      : draft.embedding_model || "向量模型待填写"}{" "}
-                    · {draft.disable_thinking ? "思考已关闭" : "思考未关闭"}
+                      ? text("本地向量模型")
+                      : draft.embedding_model || text("向量模型待填写")}{" "}
+                    ·{" "}
+                    {text(draft.disable_thinking ? "思考已关闭" : "思考未关闭")}
                   </p>
                 </>
               ) : (
                 <>
                   <div className="onboarding-model-advanced-head">
-                    <p>预设已填好，只有自定义服务或特殊需求才需要修改。</p>
+                    <p>
+                      {text("预设已填好，只有自定义服务或特殊需求才需要修改。")}
+                    </p>
                     <button
                       ref={advancedToggle}
                       type="button"
@@ -361,7 +393,8 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                       disabled={fieldsLocked}
                       onClick={() => changeAdvanced(false)}
                     >
-                      返回服务商选择 <ChevronUp size={16} aria-hidden="true" />
+                      {text("返回服务商选择")}{" "}
+                      <ChevronUp size={16} aria-hidden="true" />
                     </button>
                   </div>
                   <div className="onboarding-model-advanced-grid">
@@ -390,15 +423,17 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                         className="onboarding-model-key-note"
                         data-state={connectionFailed ? "failed" : "idle"}
                       >
-                        {props.profile?.has_configured_api_key
-                          ? "留空保留已保存密钥；填写新密钥后需重新测试。"
-                          : "密钥保存在系统安全存储中，不写入对话或日志。"}
+                        {text(
+                          props.profile?.has_configured_api_key
+                            ? "留空保留已保存密钥；填写新密钥后需重新测试。"
+                            : "密钥保存在系统安全存储中，不写入对话或日志。",
+                        )}
                       </p>
                     </div>
                     <label className="onboarding-model-field">
-                      <span>协议</span>
+                      <span>{text("协议")}</span>
                       <select
-                        aria-label="协议"
+                        aria-label={text("协议")}
                         value={draft.provider_kind}
                         disabled={fieldsLocked}
                         onChange={(e) => {
@@ -413,17 +448,17 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                         </option>
                         <option value="ollama">Ollama</option>
                         <option value="anthropic" disabled>
-                          Anthropic（暂不支持）
+                          {text("Anthropic（暂不支持）")}
                         </option>
                         <option value="hy_default" disabled>
-                          HY 托管（当前不可用）
+                          {text("HY 托管（当前不可用）")}
                         </option>
                       </select>
                     </label>
                     <label className="onboarding-model-field">
-                      <span>向量模型</span>
+                      <span>{text("向量模型")}</span>
                       <select
-                        aria-label="向量模型"
+                        aria-label={text("向量模型")}
                         value={draft.embedding_mode}
                         disabled={fieldsLocked}
                         onChange={(e) => {
@@ -435,8 +470,10 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                             });
                         }}
                       >
-                        <option value="local">本地 ONNX · 内置</option>
-                        <option value="custom">自定义向量</option>
+                        <option value="local">
+                          {text("本地 ONNX · 内置")}
+                        </option>
+                        <option value="custom">{text("自定义向量")}</option>
                       </select>
                     </label>
                     <div className="onboarding-model-numbers">
@@ -469,12 +506,14 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                             });
                         }}
                       />
-                      关闭思考模式
+                      {text("关闭思考模式")}
                     </label>
                     <p className="onboarding-model-vector-note">
-                      自定义向量配置可展开；远程向量服务须遵守凭据边界。
+                      {text(
+                        "自定义向量配置可展开；远程向量服务须遵守凭据边界。",
+                      )}
                       <br />
-                      切换服务商或模型后，需要重新测试并启用。
+                      {text("切换服务商或模型后，需要重新测试并启用。")}
                     </p>
                     {draft.embedding_mode === "custom" && (
                       <>
@@ -483,9 +522,9 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                           maxLength: 256,
                         })}
                         <label className="onboarding-model-field">
-                          <span>向量协议</span>
+                          <span>{text("向量协议")}</span>
                           <select
-                            aria-label="向量协议"
+                            aria-label={text("向量协议")}
                             value={draft.embedding_provider_kind}
                             disabled={fieldsLocked}
                             onChange={(e) => {
@@ -498,9 +537,11 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                             }}
                           >
                             <option value="openai_compatible">
-                              同源 OpenAI-compatible（共用 Key）
+                              {text("同源 OpenAI-compatible（共用 Key）")}
                             </option>
-                            <option value="ollama">本机 Ollama</option>
+                            <option value="ollama">
+                              {text("本机 Ollama")}
+                            </option>
                           </select>
                         </label>
                         <div className="onboarding-model-wide">
@@ -509,7 +550,9 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                             required: true,
                           })}
                           <small>
-                            远程向量地址须与生成服务同源；本机地址仍需校验。
+                            {text(
+                              "远程向量地址须与生成服务同源；本机地址仍需校验。",
+                            )}
                           </small>
                         </div>
                       </>
@@ -524,7 +567,7 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                   disabled={locked}
                   onClick={() => void props.onRecoverCreation?.()}
                 >
-                  核对创建结果
+                  {text("核对创建结果")}
                 </R6Button>
               )}
               {props.onDiscardMissingCreation && (
@@ -533,17 +576,19 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                   disabled={locked}
                   onClick={() => void props.onDiscardMissingCreation?.()}
                 >
-                  放弃旧记录，重新配置
+                  {text("放弃旧记录，重新配置")}
                 </R6Button>
               )}
             </div>
             <div className="onboarding-model-feedback" tabIndex={-1}>
               {(displayedPhase === "testing" ||
                 displayedPhase === "enabling") && (
-                <p role="status" aria-label="模型提交状态">
-                  {displayedPhase === "testing"
-                    ? "正在测试连接…"
-                    : "正在提交保存与启用，请等待回执…"}
+                <p role="status" aria-label={text("模型提交状态")}>
+                  {text(
+                    displayedPhase === "testing"
+                      ? "正在测试连接…"
+                      : "正在提交保存与启用，请等待回执…",
+                  )}
                 </p>
               )}
               {props.probe && (
@@ -552,54 +597,60 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
                   data-state={props.probe.state}
                   role="status"
                 >
-                  {props.probe.message}
+                  {text(props.probe.message)}
                 </p>
               )}
               {(props.error || callbackFailed) && (
                 <p className="onboarding-model-error" role="alert">
-                  {props.error ||
-                    "操作结果未确认，已填写内容保留，请核对后重试。"}
+                  {text(
+                    props.error ||
+                      "操作结果未确认，已填写内容保留，请核对后重试。",
+                  )}
                 </p>
               )}
             </div>
           </section>
           <aside
             className="onboarding-model-summary"
-            aria-label="本次沉淀"
+            aria-label={text("本次沉淀")}
             data-full-height={advancedOpen || connectionFailed}
             // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll the full permission disclosure.
             tabIndex={0}
           >
             <div className="onboarding-model-summary-heading">
-              <p>本次沉淀</p>
-              <h2>让记忆从这里开始</h2>
+              <p>{text("本次沉淀")}</p>
+              <h2>{text("让记忆从这里开始")}</h2>
             </div>
             <div className="onboarding-model-connections">
-              <p>对话来源</p>
-              <strong>{sourceSummary || "尚无已选来源"}</strong>
+              <p>{text("对话来源")}</p>
+              <strong>{sourceSummary || text("尚无已选来源")}</strong>
               <small>
-                已导入 {props.importedConversationCount ?? 0}{" "}
-                条对话；来源开关继续控制之后同步到本机的内容。
+                {t("onboardingImportedConversations", {
+                  count: props.importedConversationCount ?? 0,
+                })}
               </small>
             </div>
             <div className="onboarding-model-summary-status">
               {connectionReceipt && (
                 <small className="onboarding-model-connection-receipt">
-                  {connectionReceipt}
+                  {text(connectionReceipt)}
                 </small>
               )}
               <small>
-                处理服务：{provider?.label ?? "待选择"}
+                {text("处理服务：")}
+                {text(provider?.label ?? "待选择")}
                 <br />
-                相关对话会发送给所选服务商。
+                {text("相关对话会发送给所选服务商。")}
               </small>
               <small>
-                测试连接只发送测试内容。启用后会使用此模型整理已导入和之后同步的会话。
+                {text(
+                  "测试连接只发送测试内容。启用后会使用此模型整理已导入和之后同步的会话。",
+                )}
               </small>
             </div>
             {!props.capability.saveAndEnable && (
               <p role="status">
-                {props.capability.reason || "当前不能在此启用模型。"}
+                {text(props.capability.reason || "当前不能在此启用模型。")}
               </p>
             )}
           </aside>

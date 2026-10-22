@@ -17,6 +17,7 @@ test("updates every release-bearing manifest in one transaction-sized command", 
     "apps/web/package.json",
     "packages/contracts/package.json",
     "packages/host-bridge/package.json",
+    "packages/i18n/package.json",
     "packages/operations/package.json",
     "packages/runtime-control/package.json",
   ];
@@ -45,7 +46,7 @@ test("updates every release-bearing manifest in one transaction-sized command", 
 
   const receipt = await setReleaseVersion("1.2.3-rc.1", root, 7);
 
-  assert.equal(receipt.changed.length, 11);
+  assert.equal(receipt.changed.length, 12);
   assert.equal(receipt.build_number, 7);
   for (const relative of packageFiles) {
     const document = JSON.parse(
@@ -81,6 +82,7 @@ test("maps an internal SemVer prerelease to deterministic PEP 440 metadata", asy
     "apps/web/package.json",
     "packages/contracts/package.json",
     "packages/host-bridge/package.json",
+    "packages/i18n/package.json",
     "packages/operations/package.json",
     "packages/runtime-control/package.json",
   ];
@@ -132,6 +134,7 @@ test("refuses an ambiguous Core lockfile instead of changing an arbitrary packag
     "apps/web/package.json",
     "packages/contracts/package.json",
     "packages/host-bridge/package.json",
+    "packages/i18n/package.json",
     "packages/operations/package.json",
     "packages/runtime-control/package.json",
   ];

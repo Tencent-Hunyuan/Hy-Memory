@@ -11,6 +11,16 @@ describe("startup screen", () => {
     expect(html).not.toContain("oneMemory");
     expect(html).not.toContain("ipcRenderer");
   });
+  it("speaks the interface language and keeps Chinese by default", () => {
+    expect(startupScreenHtml()).toContain('<html lang="zh-CN">');
+    expect(startupScreenHtml()).toContain("正在启动，正在准备记忆服务…");
+    const spanish = startupScreenHtml("es");
+    expect(spanish).toContain('<html lang="es">');
+    expect(spanish).toContain(
+      "Iniciando y preparando el servicio de memorias…",
+    );
+    expect(spanish).not.toMatch(/[一-鿿]/);
+  });
   it("is served from the app origin, not from the web bundle", () => {
     expect(STARTUP_SCREEN_URL).toBe("one-memory://app/__startup");
   });

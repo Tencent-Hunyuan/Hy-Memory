@@ -50,11 +50,14 @@ Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命�
 - `apps/web`：React / TypeScript 管理界面。
 - `apps/desktop`：Electron 桌面壳与图形安装入口。
 - `packages/contracts`：公共 API 类型。
+- `packages/i18n`：Web 与 Electron 共用的界面语言合同和 catalog。
 - `packages/host-bridge`：AI App 的 Skill、Hook、插件和 MCP 接入。
 - `packages/runtime-control`：Core、Host Gateway 和 Runtime 生命周期控制。
 
 架构详情见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 和
 [`docs/contracts/runtime-unification.md`](docs/contracts/runtime-unification.md)。
+界面语言架构与社区翻译规则见
+[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)。
 产品、测试和一线支持排查导入与记忆沉淀时，使用
 [`docs/PRODUCT_LOG_TROUBLESHOOTING.md`](docs/PRODUCT_LOG_TROUBLESHOOTING.md)。
 

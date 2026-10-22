@@ -34,8 +34,10 @@ export default defineConfig({
   noExternal: [
     "@one-memory/host-bridge",
     "@one-memory/contracts",
+    "@one-memory/i18n",
     "@one-memory/runtime-control",
     "axios",
+    "i18next",
     "https-proxy-agent",
     "proxy-from-env",
   ],

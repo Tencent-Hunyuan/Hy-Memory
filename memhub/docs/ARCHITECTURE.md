@@ -69,6 +69,7 @@ files or SDK private stores directly.
 | `packages/runtime-control` | Runtime discovery/lifecycle, install transactions, service management. |
 | `packages/host-bridge` | Loopback recall broker and host-facing MCP/Skill/Hook/plugin assets. Not a second memory engine. |
 | `packages/contracts` | Shared TypeScript API contracts. |
+| `packages/i18n` | Shared interface locales and catalogs for Web and Electron-native surfaces. |
 | `packages/operations` | Shared typed operation flows. |
 | `scripts` | Dev/privacy/test/packaging gates; not runtime product code. |
 

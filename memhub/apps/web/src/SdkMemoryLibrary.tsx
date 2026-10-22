@@ -1,11 +1,12 @@
 import type { SdkMemoryRecord, SdkMemoryStatus } from "@one-memory/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteSdkMemory,
   getSdkMemory,
   getSdkMemoryLibrary,
   updateSdkMemory,
 } from "./api";
+import { useGuiLanguage } from "./gui-language";
 import { R6Button } from "./R6Controls";
 
 export function SdkMemoryLibrary({
@@ -17,6 +18,9 @@ export function SdkMemoryLibrary({
   onChanged?(): void;
   focusedMemoryId?: string | null;
 }) {
+  const { t, tn } = useGuiLanguage();
+  const translation = useRef(t);
+  translation.current = t;
   const [status, setStatus] = useState<SdkMemoryStatus>("active");
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<SdkMemoryRecord[]>([]);
@@ -42,7 +46,7 @@ export function SdkMemoryLibrary({
       if (offset >= page.total && offset > 0)
         setOffset(Math.max(0, offset - limit));
     } catch {
-      setError("记忆库读取失败，请重试。");
+      setError(translation.current("sdk.memory.loadFailed"));
     } finally {
       setBusy(false);
     }
@@ -60,7 +64,7 @@ export function SdkMemoryLibrary({
       setSelected(memory);
       setDraft(memory.content);
     } catch {
-      setError("记忆详情读取失败。");
+      setError(translation.current("sdk.memory.detailLoadFailed"));
     } finally {
       setBusy(false);
     }
@@ -80,7 +84,7 @@ export function SdkMemoryLibrary({
       await refresh();
       onChanged?.();
     } catch {
-      setError("修改未完成，请重试。");
+      setError(t("sdk.memory.updateFailed"));
     } finally {
       setBusy(false);
     }
@@ -96,19 +100,19 @@ export function SdkMemoryLibrary({
       await refresh();
       onChanged?.();
     } catch {
-      setError("删除未完成，请重试。");
+      setError(t("sdk.memory.deleteFailed"));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <section className="sdk-memory-library" aria-label="SDK 记忆库">
-      <nav aria-label="记忆状态">
+    <section className="sdk-memory-library" aria-label={t("sdk.memory.title")}>
+      <nav aria-label={t("sdk.memory.status")}>
         {(
           [
-            ["active", "已可用"],
-            ["superseded", "已被取代"],
+            ["active", t("sdk.memory.status.active")],
+            ["superseded", t("sdk.memory.status.superseded")],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -126,9 +130,11 @@ export function SdkMemoryLibrary({
           </button>
         ))}
       </nav>
-      <p aria-live="polite">共 {total} 条</p>
+      <p aria-live="polite">{tn("sdk.memory.total", total)}</p>
       {error && <p role="alert">{error}</p>}
-      {busy && !rows.length ? <p role="status">正在读取记忆库…</p> : null}
+      {busy && !rows.length ? (
+        <p role="status">{t("sdk.memory.loading")}</p>
+      ) : null}
       <ul>
         {rows.map((memory) => (
           <li key={memory.memory_id}>
@@ -138,29 +144,29 @@ export function SdkMemoryLibrary({
           </li>
         ))}
       </ul>
-      <nav aria-label="SDK 记忆库分页">
+      <nav aria-label={t("sdk.memory.pagination")}>
         <R6Button
           variant="quiet"
           disabled={busy || offset === 0}
           onClick={() => setOffset(Math.max(0, offset - limit))}
         >
-          上一页
+          {t("sdk.memory.previous")}
         </R6Button>
         <R6Button
           variant="quiet"
           disabled={busy || offset + limit >= total}
           onClick={() => setOffset(offset + limit)}
         >
-          下一页
+          {t("sdk.memory.next")}
         </R6Button>
       </nav>
       {selected ? (
-        <aside aria-label="SDK 记忆详情">
+        <aside aria-label={t("sdk.memory.detail")}>
           <p>{selected.layer}</p>
           {selected.status === "active" ? (
             <>
               <textarea
-                aria-label="记忆内容"
+                aria-label={t("sdk.memory.content")}
                 value={draft}
                 disabled={busy}
                 onChange={(event) => setDraft(event.target.value)}
@@ -171,10 +177,10 @@ export function SdkMemoryLibrary({
                 pending={busy}
                 onClick={() => void save()}
               >
-                保存修改
+                {t("sdk.memory.save")}
               </R6Button>
               <R6Button pending={busy} onClick={() => void remove()}>
-                删除记忆
+                {t("sdk.memory.delete")}
               </R6Button>
             </>
           ) : (

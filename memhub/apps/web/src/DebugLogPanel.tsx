@@ -28,6 +28,7 @@ import type {
   DebugLogLevel,
   DebugLogSnapshot,
 } from "./debug-log-types";
+import { useGuiLanguage } from "./gui-language";
 import { ModelUsageView } from "./ModelUsageView";
 import {
   rendererDebugLogs,
@@ -53,6 +54,7 @@ const SERVICE_LABELS: Record<DebugLogEntry["service"], string> = {
 };
 
 export function DebugLogPanel() {
+  const { t, tnPlain, locale } = useGuiLanguage();
   const supported = typeof window.oneMemory?.getDebugLogs === "function";
   const [open, setOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -171,23 +173,23 @@ export function DebugLogPanel() {
       {open ? (
         <aside
           className={`debug-log-panel${fullscreen ? " is-fullscreen" : ""}`}
-          aria-label="Debug 日志"
+          aria-label={t("debugTitle")}
         >
           <header className="debug-log-header">
             <div>
-              <strong>诊断</strong>
+              <strong>{t("debugDiagnostics")}</strong>
               <span>
                 {tab === "logs"
-                  ? `${entries.length} 条日志，本次启动`
-                  : "记忆沉淀模型用量"}
+                  ? tnPlain("debugCount", entries.length)
+                  : t("debugUsageSubtitle")}
               </span>
             </div>
             <div className="debug-log-header-actions">
               <button
                 type="button"
                 className="debug-icon-button"
-                title={live ? "暂停实时刷新" : "继续实时刷新"}
-                aria-label={live ? "暂停实时刷新" : "继续实时刷新"}
+                title={live ? t("debugPause") : t("debugResume")}
+                aria-label={live ? t("debugPause") : t("debugResume")}
                 onClick={() => setLive((value) => !value)}
               >
                 {live ? <CirclePause size={17} /> : <CirclePlay size={17} />}
@@ -195,8 +197,8 @@ export function DebugLogPanel() {
               <button
                 type="button"
                 className="debug-icon-button"
-                title="立即刷新"
-                aria-label="立即刷新"
+                title={t("debugRefresh")}
+                aria-label={t("debugRefresh")}
                 onClick={() => {
                   if (tab === "logs") void refresh();
                   else setUsageRefreshToken((value) => value + 1);
@@ -210,8 +212,14 @@ export function DebugLogPanel() {
               <button
                 type="button"
                 className="debug-icon-button"
-                title={fullscreen ? "退出全屏" : "全屏显示"}
-                aria-label={fullscreen ? "退出全屏显示日志" : "全屏显示日志"}
+                title={t(
+                  fullscreen ? "debugExitFullscreen" : "debugFullscreen",
+                )}
+                aria-label={t(
+                  fullscreen
+                    ? "debugExitFullscreenLabel"
+                    : "debugFullscreenLabel",
+                )}
                 onClick={() => setFullscreen((value) => !value)}
               >
                 {fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
@@ -219,8 +227,8 @@ export function DebugLogPanel() {
               <button
                 type="button"
                 className="debug-icon-button"
-                title="关闭 Debug 日志"
-                aria-label="关闭 Debug 日志"
+                title={t("debugClose")}
+                aria-label={t("debugClose")}
                 onClick={() => {
                   setFullscreen(false);
                   setOpen(false);
@@ -233,7 +241,7 @@ export function DebugLogPanel() {
           <div
             className="debug-panel-tabs"
             role="tablist"
-            aria-label="诊断页面"
+            aria-label={t("debugTabs")}
           >
             <button
               type="button"
@@ -241,7 +249,7 @@ export function DebugLogPanel() {
               aria-selected={tab === "logs"}
               onClick={() => setTab("logs")}
             >
-              日志
+              {t("debugLogsTab")}
             </button>
             <button
               type="button"
@@ -249,7 +257,7 @@ export function DebugLogPanel() {
               aria-selected={tab === "usage"}
               onClick={() => setTab("usage")}
             >
-              模型用量
+              {t("debugUsageTab")}
             </button>
           </div>
           {tab === "logs" ? (
@@ -261,18 +269,18 @@ export function DebugLogPanel() {
                     type="search"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="搜索事件、组件、错误码或内容"
-                    aria-label="搜索日志"
+                    placeholder={t("debugSearchPlaceholder")}
+                    aria-label={t("debugSearch")}
                   />
                 </label>
                 <select
-                  aria-label="日志来源"
+                  aria-label={t("debugSource")}
                   value={service}
                   onChange={(event) =>
                     setService(event.target.value as typeof service)
                   }
                 >
-                  <option value="all">全部来源</option>
+                  <option value="all">{t("debugAllSources")}</option>
                   {Object.entries(SERVICE_LABELS).map(([value, label]) => (
                     <option key={value} value={value}>
                       {label}
@@ -280,9 +288,9 @@ export function DebugLogPanel() {
                   ))}
                 </select>
                 <label className="debug-capture-level">
-                  <span>采集级别</span>
+                  <span>{t("debugCapture")}</span>
                   <select
-                    aria-label="采集级别"
+                    aria-label={t("debugCapture")}
                     value={captureLevel}
                     disabled={capturePending}
                     onChange={(event) => {
@@ -303,7 +311,7 @@ export function DebugLogPanel() {
                 </label>
               </div>
               <fieldset className="debug-levels">
-                <legend>显示级别</legend>
+                <legend>{t("debugDisplay")}</legend>
                 {LEVELS.map((option) => (
                   <button
                     type="button"
@@ -311,16 +319,20 @@ export function DebugLogPanel() {
                     aria-pressed={level === option.value}
                     onClick={() => setLevel(option.value)}
                   >
-                    {option.label}
+                    {option.value === "all" ? t("debugAll") : option.label}
                   </button>
                 ))}
               </fieldset>
               <div className="debug-log-status" aria-live="polite">
-                <span>{filtered.length} 条匹配</span>
-                <span>{live ? "实时刷新" : "已暂停"}</span>
-                {snapshot?.truncated ? <span>日志过多，已截断</span> : null}
+                <span>{tnPlain("debugMatches", filtered.length)}</span>
+                <span>{live ? t("debugLive") : t("debugPaused")}</span>
+                {snapshot?.truncated ? (
+                  <span>{t("debugTruncated")}</span>
+                ) : null}
                 {readState === "error" ? (
-                  <span className="debug-read-error">读取失败</span>
+                  <span className="debug-read-error">
+                    {t("debugReadError")}
+                  </span>
                 ) : null}
               </div>
               <div
@@ -347,7 +359,7 @@ export function DebugLogPanel() {
                           ) : (
                             <ChevronRight size={14} />
                           )}
-                          <time>{logTime(entry.timestamp)}</time>
+                          <time>{logTime(entry.timestamp, locale)}</time>
                           <span className="debug-log-level">{entry.level}</span>
                           <span className="debug-log-service">
                             {SERVICE_LABELS[entry.service]}
@@ -369,8 +381,8 @@ export function DebugLogPanel() {
                 ) : (
                   <p className="debug-log-empty">
                     {readState === "loading"
-                      ? "正在读取日志…"
-                      : "没有匹配的日志"}
+                      ? t("debugLoading")
+                      : t("debugEmpty")}
                   </p>
                 )}
               </div>
@@ -383,8 +395,8 @@ export function DebugLogPanel() {
       <button
         type="button"
         className="debug-fab"
-        aria-label={open ? "Debug 日志已打开" : "打开 Debug 日志"}
-        title="打开 Debug 日志"
+        aria-label={open ? t("debugOpened") : t("debugOpen")}
+        title={t("debugOpen")}
         onClick={() => setOpen(true)}
       >
         <Bug size={20} aria-hidden="true" />
@@ -400,9 +412,9 @@ function searchableEntry(entry: DebugLogEntry): string {
   return JSON.stringify(entry).toLocaleLowerCase();
 }
 
-function logTime(timestamp: string): string {
+function logTime(timestamp: string, locale: string): string {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime())
     ? timestamp
-    : date.toLocaleTimeString("zh-CN", { hour12: false });
+    : date.toLocaleTimeString(locale, { hour12: false });
 }

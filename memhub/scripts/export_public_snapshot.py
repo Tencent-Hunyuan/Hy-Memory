@@ -38,6 +38,7 @@ PUBLIC_DOCS = frozenset(
         "docs/ARCHITECTURE.md",
         "docs/DEVELOPMENT_LOOP.md",
         "docs/INSTALLATION.md",
+        "docs/LOCALIZATION.md",
         "docs/cli/EXPERIENCE.md",
         "docs/contracts/diagnostic-logging.md",
         "docs/contracts/host-context-transport-v1.md",

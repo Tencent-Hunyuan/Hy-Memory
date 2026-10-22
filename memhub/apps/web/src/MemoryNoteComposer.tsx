@@ -8,6 +8,7 @@ import {
   processMemoryNote,
   saveMemoryNote,
 } from "./api";
+import { useMemoryLanguage } from "./memory-language";
 import { memoryWriteErrorText } from "./model-error-text";
 import { subscribePoll } from "./poll-scheduler";
 import { traceUiAction } from "./ui-trace";
@@ -42,6 +43,7 @@ export function MemoryNoteComposer({
   onPendingChange?(note: PendingMemoryNote | null): void;
   suspended?: boolean;
 }) {
+  const { text: copy } = useMemoryLanguage();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [notes, setNotes] = useState<MemoryNoteReceipt[]>([]);
@@ -274,11 +276,11 @@ export function MemoryNoteComposer({
         data-tour-id="memory-note-trigger"
         onClick={() => setOpen(true)}
       >
-        <FilePlus2 size={16} aria-hidden="true" /> 添加记忆
+        <FilePlus2 size={16} aria-hidden="true" /> {copy("添加记忆")}
       </button>
       {savedToast && (
         <p className="memory-note-toast" role="status">
-          {savedToast}
+          {copy(savedToast)}
         </p>
       )}
       {open && (
@@ -313,12 +315,12 @@ export function MemoryNoteComposer({
             }}
           >
             <header className="memory-note-heading">
-              <h2 id="memory-note-title">添加记忆</h2>
+              <h2 id="memory-note-title">{copy("添加记忆")}</h2>
               <button
                 className="quiet"
                 type="button"
-                aria-label="关闭新增记忆"
-                title="关闭"
+                aria-label={copy("关闭新增记忆")}
+                title={copy("关闭")}
                 disabled={busy}
                 onClick={close}
               >
@@ -332,7 +334,7 @@ export function MemoryNoteComposer({
               }}
             >
               <label className="memory-note-label" htmlFor="memory-note-text">
-                记下这件事
+                {copy("记下这件事")}
               </label>
               <textarea
                 id="memory-note-text"
@@ -340,20 +342,20 @@ export function MemoryNoteComposer({
                 maxLength={12000}
                 value={text}
                 disabled={busy}
-                placeholder="例如：项目周会不排在周五。"
+                placeholder={copy("例如：项目周会不排在周五。")}
                 onChange={(event) => setText(event.target.value)}
               />
               <p className="memory-note-model">
-                整理模型：
+                {copy("整理模型：")}
                 {model?.name ??
-                  (modelRead ? "尚未配置，原话仍可保存" : "正在读取")}
+                  copy(modelRead ? "尚未配置，原话仍可保存" : "正在读取")}
               </p>
               {error && (
                 <p className="error-banner" role="alert">
-                  {error}
+                  {copy(error)}
                 </p>
               )}
-              {notice && <p role="status">{notice}</p>}
+              {notice && <p role="status">{copy(notice)}</p>}
               <div className="consent-actions">
                 {modelRead && !model && (
                   <button
@@ -365,30 +367,35 @@ export function MemoryNoteComposer({
                       onConfigureModel();
                     }}
                   >
-                    配置模型
+                    {copy("配置模型")}
                   </button>
                 )}
                 <button type="submit" disabled={busy || !text.trim()}>
-                  {busy ? "保存中…" : "保存原话"}
+                  {copy(busy ? "保存中…" : "保存原话")}
                 </button>
               </div>
             </form>
             {notes.length > 0 && (
-              <section className="memory-note-recent" aria-label="最近添加">
-                <h3>最近添加</h3>
+              <section
+                className="memory-note-recent"
+                aria-label={copy("最近添加")}
+              >
+                <h3>{copy("最近添加")}</h3>
                 <ul>
                   {notes.map((note) => (
                     <li key={note.evidence_id}>
                       <p>{note.text}</p>
-                      <small>{states[note.state]}</small>
+                      <small>{copy(states[note.state])}</small>
                       {memoryWriteErrorText(note.error) && (
                         <p className="error-banner">
-                          {memoryWriteErrorText(note.error)}
+                          {copy(memoryWriteErrorText(note.error) ?? "")}
                         </p>
                       )}
                       {note.error === "hy_memory_model_payment_required" && (
                         <p className="error-banner">
-                          模型服务要求检查余额或付款状态，原话仍已保存。
+                          {copy(
+                            "模型服务要求检查余额或付款状态，原话仍已保存。",
+                          )}
                         </p>
                       )}
                       <div className="memory-note-actions">
@@ -402,7 +409,7 @@ export function MemoryNoteComposer({
                               onOpenMemory(id);
                             }}
                           >
-                            查看记忆
+                            {copy("查看记忆")}
                             {note.memory_ids.length > 1 ? ` ${index + 1}` : ""}
                           </button>
                         ))}
@@ -416,7 +423,7 @@ export function MemoryNoteComposer({
                             onClick={() => void retry(note)}
                           >
                             <RefreshCw size={14} aria-hidden="true" />
-                            重新整理
+                            {copy("重新整理")}
                           </button>
                         )}
                       </div>

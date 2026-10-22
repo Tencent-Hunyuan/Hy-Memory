@@ -118,11 +118,13 @@ button.r6-button[data-variant="quiet"]:disabled {
 
 .r6-stepper {
   width: 288px;
-  height: 40px;
+  max-width: 100%;
+  min-height: 40px;
   flex-shrink: 0;
 }
 .r6-stepper ol {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
   list-style: none;
   padding: 0;
@@ -134,8 +136,9 @@ button.r6-button[data-variant="quiet"]:disabled {
   align-items: center;
   gap: 7px;
   box-sizing: border-box;
-  width: 84px;
-  height: 40px;
+  min-width: 0;
+  min-height: 40px;
+  height: auto;
   padding-bottom: 12px;
   border-bottom: 2px solid #cbd6de;
   color: var(--r6-muted);
@@ -144,7 +147,8 @@ button.r6-button[data-variant="quiet"]:disabled {
     "PingFang SC",
     sans-serif;
   letter-spacing: 0;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: normal;
   transition: color 220ms ease;
 }
 /* The active rail is drawn as an overlay that wipes in, rather than by
@@ -171,6 +175,7 @@ button.r6-button[data-variant="quiet"]:disabled {
   transform: scaleX(1);
 }
 .r6-stepper li > span {
+  flex-shrink: 0;
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }

@@ -43,6 +43,10 @@ Hy Memory and MemHub are versioned and released independently.
 - Added a MemHub-managed native Hermes MemoryProvider with automatic prefetch,
   persistent per-session memory-ID deduplication, authorized Broker reads, and
   recall-context stripping to prevent memory recursion.
+- Added an extensible MemHub interface-localization layer with Simplified
+  Chinese, English, and Spanish catalogs shared by Web and Electron-native
+  surfaces. Interface language remains independent from memory content and
+  model processing language.
 - `search(..., layers=["l1_raw"])` now explicitly searches SDK raw records in
   pro/ultra mode and keeps existing user/agent/session/source filters; default
   search continues to hide raw.

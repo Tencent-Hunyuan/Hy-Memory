@@ -6,6 +6,7 @@ import type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "@one-memory/contracts";
+import type { LanguagePreference, LanguageSnapshot } from "@one-memory/i18n";
 import type { DebugLogSnapshot } from "./debug-log-types.js";
 
 export type RecallPermissionTool =
@@ -219,6 +220,13 @@ declare global {
         buildNumber: string;
         commit: string;
       };
+      getLanguagePreference?(): Promise<LanguageSnapshot>;
+      setLanguagePreference?(
+        preference: LanguagePreference,
+      ): Promise<LanguageSnapshot>;
+      onLanguagePreferenceChanged?(
+        listener: (snapshot: LanguageSnapshot) => void,
+      ): () => void;
       getDebugLogs?(): Promise<DebugLogSnapshot>;
       /** Renderer end of the four-step UI/kernel trace. */
       logUiTrace?(input: {

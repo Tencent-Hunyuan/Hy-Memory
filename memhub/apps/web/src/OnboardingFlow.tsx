@@ -29,6 +29,7 @@ import {
   hostWriteReason,
 } from "./host-state";
 import { OnboardingModelController } from "./OnboardingModelController";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { R6ColdStartFrame } from "./R6ColdStartFrame";
 import { R6Button } from "./R6Controls";
 import { traceUiAction } from "./ui-trace";
@@ -63,6 +64,7 @@ export function OnboardingFlow({
   imports: ImportSourcesController;
   onFinish(destination: OnboardingDestination): void;
 }) {
+  const { text, t } = useOnboardingTranslation();
   const [sources, setSources] = useState(imports.sources);
   const sourceGeneration = useRef({ value: imports.sources, epoch: 0 });
   if (sourceGeneration.current.value !== imports.sources) {
@@ -99,7 +101,21 @@ export function OnboardingFlow({
     "idle" | "applying" | "applied" | "partial" | "failed"
   >("idle");
   const [applyTick, setApplyTick] = useState(0);
-  const [connectionNote, setConnectionNote] = useState("");
+  const [connectionNote, setConnectionNote] = useState<
+    string | { success: number; failures: [string, string | null][] }
+  >("");
+  const renderedConnectionNote =
+    typeof connectionNote === "string"
+      ? text(connectionNote)
+      : t("onboardingConnectionPartial", {
+          success: connectionNote.success,
+          failed: connectionNote.failures.length,
+          names: connectionNote.failures
+            .map(([name, reason]) =>
+              reason ? `${name}（${text(reason)}）` : name,
+            )
+            .join("、"),
+        });
   const flight = useRef(false);
   const connectionAttempt = useRef<string | null>(null);
   const connectionQueue = useRef(Promise.resolve());
@@ -244,12 +260,10 @@ export function OnboardingFlow({
         }
         if (failed.size && alive.current) {
           connectionQueueFailed.current = true;
-          const names = [...failed].map(([name, reason]) =>
-            reason ? `${name}（${reason}）` : name,
-          );
-          setConnectionNote(
-            `${apps.size - failed.size} 个应用已接入，${failed.size} 个未完成：${names.join("、")}。可进入应用后单独处理。`,
-          );
+          setConnectionNote({
+            success: apps.size - failed.size,
+            failures: [...failed],
+          });
         }
         try {
           await refreshImports();
@@ -637,7 +651,7 @@ export function OnboardingFlow({
             }}
             connectionExecutionAvailable={connectionAvailable}
             hostConnectionAvailable={hostConnectionAvailable}
-            connectionNote={connectionNote}
+            connectionNote={renderedConnectionNote}
             acceptedJobIds={accepted?.jobs.map((job) => job.job_id)}
             onChangeJob={imports.changeJob}
             sourceIds={sourceIds}
@@ -646,7 +660,7 @@ export function OnboardingFlow({
             failedSources={accepted?.failed_sources}
             sourceSnapshot={imports.sourceSnapshot}
             busy={busy === "leaving"}
-            error={error}
+            error={error && text(error)}
             onContinue={(destination) => {
               if (busy === "leaving") return;
               const selection = {
@@ -710,8 +724,8 @@ export function OnboardingFlow({
     return (
       <R6ColdStartFrame
         step={1}
-        title="把熟悉的背景，带到这里"
-        eyebrow="你的记忆，从这里接上"
+        title={text("把熟悉的背景，带到这里")}
+        eyebrow={text("你的记忆，从这里接上")}
         footer={
           <>
             <R6Button
@@ -719,20 +733,22 @@ export function OnboardingFlow({
               disabled={busy !== null}
               onClick={() => finishOnce(exitDestination)}
             >
-              {exitDestination === "sources" ? "仍进入应用页" : "仍进入工作台"}
+              {text(
+                exitDestination === "sources" ? "仍进入应用页" : "仍进入工作台",
+              )}
             </R6Button>
             <R6Button
               variant="primary"
               disabled={busy !== null}
               onClick={() => void leave(exitDestination)}
             >
-              重试保存并进入
+              {text("重试保存并进入")}
             </R6Button>
           </>
         }
       >
         <p className="onboarding-r6-error" role="alert">
-          {error}
+          {error && text(error)}
         </p>
       </R6ColdStartFrame>
     );
@@ -740,8 +756,8 @@ export function OnboardingFlow({
   return (
     <R6ColdStartFrame
       step={1}
-      title="把熟悉的背景，带到这里"
-      eyebrow="你的记忆，从这里接上"
+      title={text("把熟悉的背景，带到这里")}
+      eyebrow={text("你的记忆，从这里接上")}
       footer={
         <>
           <R6Button
@@ -749,11 +765,11 @@ export function OnboardingFlow({
             disabled={locked}
             onClick={() => void leave("sources")}
           >
-            稍后添加，先进入
+            {text("稍后添加，先进入")}
           </R6Button>
           {error && (
             <p className="onboarding-r6-error" role="alert">
-              {error}
+              {error && text(error)}
             </p>
           )}
           <R6Button
@@ -762,7 +778,7 @@ export function OnboardingFlow({
             disabled={locked || count === 0}
             onClick={() => void startImport()}
           >
-            {busy === "submitting" ? "正在开始导入…" : "开始导入"}
+            {text(busy === "submitting" ? "正在开始导入…" : "开始导入")}
           </R6Button>
         </>
       }
@@ -773,33 +789,35 @@ export function OnboardingFlow({
           aria-labelledby="cold-start-phase"
         >
           <div className="onboarding-r6-intro">
-            <p>不用从头介绍自己。从常用的 App 开始，把已有背景带过来。</p>
-            <p>确认前只检查应用信息，不读取对话，也不安装连接。</p>
+            <p>
+              {text("不用从头介绍自己。从常用的 App 开始，把已有背景带过来。")}
+            </p>
+            <p>{text("确认前只检查应用信息，不读取对话，也不安装连接。")}</p>
           </div>
           <div className="onboarding-r6-list-heading">
             <h2 id="cold-start-phase" ref={heading} tabIndex={-1}>
-              本机 AI 应用
+              {text("本机 AI 应用")}
             </h2>
             <button
               type="button"
               className="onboarding-r6-quiet"
-              aria-label="重新检测位置"
+              aria-label={text("重新检测位置")}
               disabled={locked}
               onClick={() => void checkLocations()}
             >
-              {busy === "checking" ? "检测中…" : "重新检测"}
+              {text(busy === "checking" ? "检测中…" : "重新检测")}
             </button>
           </div>
           <SourceList
             className="onboarding-r6-list"
-            aria-label="候选应用"
+            aria-label={text("候选应用")}
             aria-busy={busy === "checking"}
             count={visibleApps.length}
             status={
               locationCheck === "checking"
-                ? "正在检测其他应用…"
+                ? text("正在检测其他应用…")
                 : locationCheck === "failed"
-                  ? "检测未完成"
+                  ? text("检测未完成")
                   : undefined
             }
             selection={
@@ -809,7 +827,7 @@ export function OnboardingFlow({
                 disabled={locked || allSelected || readableApps.length === 0}
                 onClick={selectAllSources}
               >
-                {allSelected ? "已全选" : "全选"}
+                {text(allSelected ? "已全选" : "全选")}
               </button>
             }
           >
@@ -818,7 +836,9 @@ export function OnboardingFlow({
                 <label>
                   <input
                     type="checkbox"
-                    aria-label={`导入 ${visibleApps[0].display_name} 历史`}
+                    aria-label={t("onboardingImportHistory", {
+                      name: visibleApps[0].display_name,
+                    })}
                     checked
                     disabled
                     readOnly
@@ -826,11 +846,11 @@ export function OnboardingFlow({
                   <R6SourceIcon id={visibleApps[0].source_id} />
                   <span className="onboarding-r6-row-info">
                     <strong>{visibleApps[0].display_name}</strong>
-                    <small>正在核对本机保存位置</small>
+                    <small>{text("正在核对本机保存位置")}</small>
                   </span>
                   <span className="onboarding-r6-badge" data-found="true">
                     <i aria-hidden="true" />
-                    已发现
+                    {text("已发现")}
                   </span>
                 </label>
               </li>
@@ -842,6 +862,7 @@ export function OnboardingFlow({
                 );
                 const note =
                   locationCheck === "ready" ? locationNote(item) : null;
+                const translatedNote = note ? text(note) : null;
                 return (
                   <li
                     className={`onboarding-r6-row${checked ? " is-selected" : ""}`}
@@ -853,7 +874,9 @@ export function OnboardingFlow({
                     <label>
                       <input
                         type="checkbox"
-                        aria-label={`导入 ${item.display_name} 历史`}
+                        aria-label={t("onboardingImportHistory", {
+                          name: item.display_name,
+                        })}
                         checked={checked}
                         disabled={
                           locked || locationCheck !== "ready" || !canRead(item)
@@ -865,13 +888,13 @@ export function OnboardingFlow({
                       <R6SourceIcon id={item.source_id} />
                       <span className="onboarding-r6-row-info">
                         <strong>{item.display_name}</strong>
-                        <small title={note ?? item.candidate_path}>
-                          {item.candidate_path || "位置待核对"} ·{" "}
-                          {pathKind(item)}
+                        <small title={translatedNote ?? item.candidate_path}>
+                          {item.candidate_path || text("位置待核对")} ·{" "}
+                          {text(pathKind(item))}
                         </small>
                         {itemErrors[item.source_id] && (
                           <small className="onboarding-r6-error">
-                            {failureLabel(itemErrors[item.source_id])}
+                            {failureLabel(itemErrors[item.source_id], text, t)}
                           </small>
                         )}
                       </span>
@@ -881,10 +904,10 @@ export function OnboardingFlow({
                           locationCheck === "ready" &&
                           item.location_state === "found"
                         }
-                        title={note ?? undefined}
+                        title={translatedNote ?? undefined}
                       >
                         <i aria-hidden="true" />
-                        {locationLabel(item, locationCheck)}
+                        {text(locationLabel(item, locationCheck))}
                       </span>
                     </label>
                   </li>
@@ -907,28 +930,30 @@ export function OnboardingFlow({
             {!visibleApps.length && busy !== "checking" && (
               <li className="onboarding-r6-empty">
                 {locationCheck === "ready"
-                  ? "当前没有候选来源。可以稍后在应用页添加历史包。"
-                  : "候选来源尚未加载。可以检测位置，或先进入工作台。"}
+                  ? text("当前没有候选来源。可以稍后在应用页添加历史包。")
+                  : text("候选来源尚未加载。可以检测位置，或先进入工作台。")}
               </li>
             )}
           </SourceList>
         </section>
-        <aside className="onboarding-r6-summary" aria-label="本次导入">
-          <p>本次导入</p>
+        <aside className="onboarding-r6-summary" aria-label={text("本次导入")}>
+          <p>{text("本次导入")}</p>
           <p
             className="onboarding-r6-count"
             aria-live="polite"
             data-unknown={locationCheck !== "ready"}
           >
-            {summaryCount}
+            {text(summaryCount)}
           </p>
-          <p>个 App 的历史对话</p>
+          <p>{text("个 App 的历史对话")}</p>
           <h2>
-            把零散的会话，
+            {text("把零散的会话，")}
             <br />
-            汇成完整的记忆
+            {text("汇成完整的记忆")}
           </h2>
-          <p className="onboarding-r6-signoff">少一些重复交代，多一些理解。</p>
+          <p className="onboarding-r6-signoff">
+            {text("少一些重复交代，多一些理解。")}
+          </p>
         </aside>
       </div>
       {custom && (
@@ -966,6 +991,7 @@ function SourceList({
   status?: string;
   selection: ReactNode;
 }) {
+  const { t, tnPlain } = useOnboardingTranslation();
   const list = useRef<HTMLUListElement>(null);
   const [more, setMore] = useState(0);
   const measure = useCallback(() => {
@@ -1014,9 +1040,9 @@ function SourceList({
         <span data-scroll-hint={!status && more > 0 ? "true" : "false"}>
           {status ??
             (more > 0
-              ? `向下查看更多 · 还有 ${more} 个应用`
+              ? tnPlain("onboardingMoreApps", more)
               : count > 3
-                ? `已显示全部 ${count} 个应用`
+                ? t("onboardingAllApps", { count })
                 : "")}
         </span>
         {selection}
@@ -1114,7 +1140,11 @@ function locationNote(source: SourceResponse) {
   return null;
 }
 
-function failureLabel(reason: string) {
+function failureLabel(
+  reason: string,
+  text: (value: string) => string,
+  t: ReturnType<typeof useOnboardingTranslation>["t"],
+) {
   const labels: Record<string, string> = {
     source_unavailable: "来源目录暂时不可读取，请核对位置和权限。",
     source_not_available: "来源目录暂时不可读取，请核对位置和权限。",
@@ -1124,7 +1154,9 @@ function failureLabel(reason: string) {
     environment_override_confirmation_required: "自定义来源位置需要重新确认。",
     imports_disabled: "当前 Core 未启用历史导入。",
   };
-  return labels[reason] ?? `尚未获准导入（${reason}）。请核对来源后重试。`;
+  return labels[reason]
+    ? text(labels[reason])
+    : t("onboardingImportRefused", { reason });
 }
 
 // S1.3 supplied app marks; WorkBuddy keeps the source geometry with flat fills.
@@ -1149,6 +1181,7 @@ function CustomLocationDialog({
   onCancel(): void;
   onConfirm(): void;
 }) {
+  const { text, t } = useOnboardingTranslation();
   const [confirmed, setConfirmed] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -1233,12 +1266,12 @@ function CustomLocationDialog({
         tabIndex={-1}
       >
         <header>
-          <h2 id="cold-start-custom-title">确认自定义位置</h2>
+          <h2 id="cold-start-custom-title">{text("确认自定义位置")}</h2>
           <button
             type="button"
             className="cold-start-icon-button"
-            aria-label="关闭位置确认"
-            title="关闭位置确认"
+            aria-label={text("关闭位置确认")}
+            title={text("关闭位置确认")}
             onClick={onCancel}
           >
             <X size={18} aria-hidden="true" />
@@ -1246,7 +1279,9 @@ function CustomLocationDialog({
         </header>
         <div className="cold-start-dialog-body">
           <p id="cold-start-custom-description">
-            此位置来自当前配置，并非应用默认目录。确认位置不会开始读取历史。
+            {text(
+              "此位置来自当前配置，并非应用默认目录。确认位置不会开始读取历史。",
+            )}
           </p>
           <strong>{source.display_name}</strong>
           <code>{source.candidate_path}</code>
@@ -1256,7 +1291,9 @@ function CustomLocationDialog({
               checked={confirmed}
               onChange={(event) => setConfirmed(event.target.checked)}
             />
-            <span>确认这是 {source.display_name} 的历史位置</span>
+            <span>
+              {t("onboardingConfirmHistory", { name: source.display_name })}
+            </span>
           </label>
         </div>
         <footer>
@@ -1265,7 +1302,7 @@ function CustomLocationDialog({
             className="cold-start-secondary"
             onClick={onCancel}
           >
-            取消
+            {text("取消")}
           </button>
           <button
             type="button"
@@ -1275,7 +1312,7 @@ function CustomLocationDialog({
             }}
           >
             <Check size={16} aria-hidden="true" />
-            确认此位置
+            {text("确认此位置")}
           </button>
         </footer>
       </div>

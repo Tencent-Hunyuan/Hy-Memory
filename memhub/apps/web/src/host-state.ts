@@ -257,14 +257,6 @@ export function hostRereadFailed(error: unknown) {
   return typeof error === "object" && error !== null && unverified.has(error);
 }
 
-/** What to add after a failure message: the reason, and whether what is on
- * screen could be re-read afterwards. */
-export function hostFailureNote(reason: string | null, rereadFailed: boolean) {
-  return `${reason ? `原因：${reason}。` : ""}${
-    rereadFailed ? "当前接入状态也未能重新读取，显示的可能不是最新状态。" : ""
-  }`;
-}
-
 type HostPatch = Partial<
   Pick<RecallHostStatus, "installed" | "permission" | "selfCheck">
 >;

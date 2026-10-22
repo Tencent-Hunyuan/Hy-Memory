@@ -9,9 +9,45 @@ const { getSdkRaw, searchSdkRaw } = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => ({ getSdkRaw, searchSdkRaw }));
 
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { SdkRawHistory } from "./SdkRawHistory";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+
+it("localizes controls without translating original conversation fields", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  getSdkRaw.mockResolvedValue({
+    items: [
+      {
+        raw_id: "raw-es",
+        content: "原始内容 sin traducir",
+        user_id: "local",
+        agent_id: "one-memory",
+        session_id: "sesión-original",
+        source: "cursor",
+        memory_at: null,
+        gmt_created: null,
+        custom: {},
+      },
+    ],
+    total: 1,
+    offset: 0,
+    limit: 100,
+  });
+  render(
+    <LanguageProvider>
+      <SdkRawHistory />
+    </LanguageProvider>,
+  );
+  expect(
+    await screen.findByLabelText("Buscar conversaciones originales"),
+  ).toBeTruthy();
+  expect(screen.getByText("原始内容 sin traducir")).toBeTruthy();
+  expect(screen.getByText(/sesión-original/)).toBeTruthy();
+});
 
 it("lists and searches SDK raw without legacy conversation APIs", async () => {
   getSdkRaw.mockResolvedValue({

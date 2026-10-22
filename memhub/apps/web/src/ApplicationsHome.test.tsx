@@ -17,7 +17,53 @@ import {
 import * as api from "./api";
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
+import { LanguageProvider } from "./gui-language";
 import { queryClient, resetClient } from "./query-client";
+
+it("localizes the whole home live without repeating reads or changing imported text", async () => {
+  let change:
+    | ((snapshot: {
+        preference: "es" | "zh-CN";
+        locale: "es" | "zh-CN";
+        revision: number;
+      }) => void)
+    | undefined;
+  Object.assign(window.oneMemory ?? {}, {
+    getLanguagePreference: vi
+      .fn()
+      .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+    onLanguagePreferenceChanged: vi.fn((listener) => {
+      change = listener;
+      return () => {};
+    }),
+  });
+  render(<LanguageProvider>{mountHome()}</LanguageProvider>);
+  await screen.findByRole("heading", { name: "Aplicaciones", level: 1 });
+  await screen.findByText("实际治理记忆");
+  expect(
+    screen.getByRole("region", { name: "Resumen de memorias" }),
+  ).toBeTruthy();
+  expect(screen.getByText("Servicio activo")).toBeTruthy();
+  expect(screen.getByText("2 aplicaciones conectadas")).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "Ver detalles" })).toHaveLength(
+    3,
+  );
+  const calls = summary.mock.calls.length;
+  fireEvent.click(
+    screen.getByRole("button", { name: "Ver las 5 aplicaciones" }),
+  );
+  act(() => change?.({ preference: "zh-CN", locale: "zh-CN", revision: 2 }));
+  expect(
+    screen.getByRole("heading", { name: "全部应用", level: 1 }),
+  ).toBeTruthy();
+  expect(screen.getByText("App 4")).toBeTruthy();
+  expect(summary).toHaveBeenCalledTimes(calls);
+  act(() => change?.({ preference: "es", locale: "es", revision: 3 }));
+  expect(
+    screen.getByRole("heading", { name: "Todas las aplicaciones", level: 1 }),
+  ).toBeTruthy();
+  expect(summary).toHaveBeenCalledTimes(calls);
+});
 
 const {
   summary,
@@ -113,6 +159,58 @@ beforeEach(() => {
       },
     ]),
   } as unknown as NonNullable<typeof window.oneMemory>;
+});
+it.each([
+  [true, "Organizando", "Organizando nuevas conversaciones"],
+  [false, "En pausa", "Se dejó de generar memorias nuevas"],
+])(
+  "renders the Spanish sedimentation state without extra requests: %s",
+  async (enabled, label, detail) => {
+    // Task rows still running must not override the sedimentation switch.
+    processing.mockResolvedValue({ running: 3, pending: 10 });
+    sedimentation.mockResolvedValue({
+      enabled,
+      pending_retained: true,
+      imports_unaffected: true,
+    });
+    Object.assign(window.oneMemory ?? {}, {
+      getLanguagePreference: vi
+        .fn()
+        .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+      onLanguagePreferenceChanged: vi.fn(() => () => {}),
+    });
+    render(<LanguageProvider>{mountHome()}</LanguageProvider>);
+    expect(await screen.findAllByText(label)).toHaveLength(2);
+    expect(screen.getByText(detail)).toBeTruthy();
+    expect(sedimentation).toHaveBeenCalledOnce();
+  },
+);
+it("localizes failure and empty states without leaking errors", async () => {
+  summary.mockRejectedValue(new Error("synthetic_private_error"));
+  Object.assign(window.oneMemory ?? {}, {
+    getLanguagePreference: vi
+      .fn()
+      .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+    onLanguagePreferenceChanged: vi.fn(() => () => {}),
+  });
+  render(
+    <LanguageProvider>
+      <ApplicationsHome
+        imports={{ ...imports, sources: [] }}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  expect(
+    await screen.findByText("No se puede leer el estado de las memorias"),
+  ).toBeTruthy();
+  expect(screen.getByText("Aún no hay aplicaciones para mostrar")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Reintentar lectura" }),
+  ).toBeTruthy();
+  expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
 it("hides a debug-frame dialogue excerpt from 最近更新 and falls back to memory", async () => {
   recentConversations.mockResolvedValue({
@@ -497,6 +595,41 @@ it("warns only after three consecutive timeouts and keeps them out of app rows",
     // D96: the warning stays, without a button into the call history.
     expect(screen.queryByRole("button", { name: "查看记录" })).toBeNull();
   }
+});
+it("shows the consecutive-timeout warning in Spanish with the host name", async () => {
+  history.mockResolvedValue({
+    available: true,
+    recording_error: false,
+    items: Array.from({ length: 3 }, (_, index) => ({
+      event_id: `timeout-es-${index}`,
+      host_id: "workbuddy",
+      tool: "om_recall",
+      state: "timed_out",
+      occurred_at: new Date(Date.now() - index * 1000).toISOString(),
+      memory_count: 0,
+      raw_count: 0,
+      references: [],
+    })),
+  });
+  Object.assign(window.oneMemory ?? {}, {
+    getLanguagePreference: vi
+      .fn()
+      .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+    onLanguagePreferenceChanged: vi.fn(() => () => {}),
+  });
+  render(
+    <LanguageProvider>
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+        onCalls={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  const warning = await screen.findByText(/Las últimas consultas de WorkBuddy/);
+  expect(warning.textContent).not.toMatch(/[\u4e00-\u9fff]/);
 });
 it("uses live-sync success time for an application row", async () => {
   liveSync.mockResolvedValue([
@@ -1293,4 +1426,37 @@ describe("运行状态卡：一次失败的刷新不能让卡片继续说在运�
     // running backfill and the write receipts.
     expect(screen.getByText("601")).toBeTruthy();
   });
+});
+
+it("words an automatic sync failure and its reason in Spanish", async () => {
+  localStorage.setItem(
+    "one-memory.connection-preferences.v1",
+    JSON.stringify({ version: 1, syncSourceIds: ["app-0"], hostSourceIds: [] }),
+  );
+  queryClient.setQueryData(["connection-auto"], {
+    running: [],
+    attempted: ["app-0"],
+    failures: [
+      {
+        kind: "sync",
+        sourceId: "app-0",
+        reason: "此应用的读取授权已撤销，请重新授权。",
+      },
+    ],
+  });
+  Object.assign(window.oneMemory ?? {}, {
+    getLanguagePreference: vi
+      .fn()
+      .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+    onLanguagePreferenceChanged: vi.fn(() => () => {}),
+  });
+  render(<LanguageProvider>{mountHome()}</LanguageProvider>);
+  const notice = await screen.findByText(
+    /No se pudo activar la sincronización continua de App 0\./,
+  );
+  expect(notice.textContent).toContain(
+    "Se revocó el permiso de lectura de esta aplicación. Vuelve a autorizarla.",
+  );
+  expect(notice.textContent).not.toMatch(/[一-鿿]/);
+  localStorage.removeItem("one-memory.connection-preferences.v1");
 });

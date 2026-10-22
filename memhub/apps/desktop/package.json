@@ -84,6 +84,7 @@
   "dependencies": {
     "@one-memory/contracts": "workspace:*",
     "@one-memory/host-bridge": "workspace:*",
+    "@one-memory/i18n": "workspace:*",
     "@one-memory/runtime-control": "workspace:*",
     "axios": "^1.20.0"
   }

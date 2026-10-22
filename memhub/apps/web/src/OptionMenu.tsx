@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useGuiLanguage } from "./gui-language";
 
 export interface OptionMenuItem {
   value: string;
@@ -18,6 +19,7 @@ export function OptionMenu(props: {
   options: readonly OptionMenuItem[];
   onChange: (value: string) => void;
 }) {
+  const { t } = useGuiLanguage();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const selected = props.options.find((item) => item.value === props.value);
@@ -60,7 +62,7 @@ export function OptionMenu(props: {
           }
         }}
       >
-        {selected?.label ?? "请选择"}
+        {selected?.label ?? t("wb.select")}
       </button>
       {open && (
         <div className="om-option-menu-panel" role="listbox">

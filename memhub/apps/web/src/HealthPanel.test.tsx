@@ -12,6 +12,11 @@ import {
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
 import { HealthPanel } from "./HealthPanel";
 import type { ImportSourcesController } from "./use-import-sources";
 
@@ -24,6 +29,37 @@ vi.mock("./api", () => ({
   getDetailedLogging: () => getDetailedLogging(),
   setDetailedLogging: (enabled: boolean) => setDetailedLogging(enabled),
 }));
+
+function HealthLanguageSwitch() {
+  const { setPreference } = useGuiLanguage();
+  return (
+    <button type="button" onClick={() => void setPreference("zh-CN")}>
+      Cambiar idioma
+    </button>
+  );
+}
+
+it("shows supported diagnostics in Spanish without toggling logging", async () => {
+  window.oneMemory = undefined;
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <HealthLanguageSwitch />
+      <HealthPanel imports={imports()} />
+    </LanguageProvider>,
+  );
+  await screen.findByRole("heading", { name: "Diagnóstico" });
+  expect(
+    screen.getByRole("button", { name: "Volver a leer el estado" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Servicio local" })).toBeTruthy();
+  const reads = getMemoryProcessing.mock.calls.length;
+  fireEvent.click(screen.getByText("Cambiar idioma"));
+  await screen.findByRole("heading", { name: "运行诊断" });
+  expect(getMemoryProcessing).toHaveBeenCalledTimes(reads);
+  expect(setDetailedLogging).not.toHaveBeenCalled();
+  localStorage.clear();
+});
 
 function source(
   sourceId: string,
@@ -151,7 +187,9 @@ describe("HealthPanel", () => {
     render(<HealthPanel imports={imports()} />);
 
     const details = await screen.findByLabelText("导入与整理详情");
-    expect(details.textContent).toContain("100000 条原文 · 50000 个完整 turn");
+    expect(details.textContent).toContain(
+      "100,000 条原文 · 50,000 个完整 turn",
+    );
     expect(details.textContent).toContain(
       "120 次调用 · 100 完成 · 1 结果不确定 · 2 失败 · 3 取消",
     );
@@ -639,6 +677,32 @@ describe("HealthPanel", () => {
       expect(block.textContent).not.toContain("数据已过期");
       expect(block.textContent).not.toContain("读取失败时间");
       expect(block.textContent).toContain("暂无需要处理的问题");
+    });
+
+    it("read receipt timestamps follow the Spanish interface language", async () => {
+      localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+      try {
+        render(
+          <LanguageProvider>
+            <HealthPanel imports={imports()} />
+          </LanguageProvider>,
+        );
+        await settle();
+        getMemoryProcessing.mockRejectedValue(new Error("offline"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        const stamps = Array.from(
+          document.querySelectorAll(".health-stamp time"),
+        );
+        expect(stamps.length).toBeGreaterThan(0);
+        for (const stamp of stamps) {
+          expect(stamp.textContent).toMatch(/^Hoy /);
+          expect(stamp.textContent).not.toContain("今天");
+        }
+      } finally {
+        localStorage.clear();
+      }
     });
 
     it("sourceSnapshot 过期不继续报服务运行中或来源空", async () => {

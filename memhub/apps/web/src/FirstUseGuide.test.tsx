@@ -1,9 +1,58 @@
 // @vitest-environment jsdom
 import type { MemoryDetail, SourceResponse } from "@one-memory/contracts";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FirstUseGuide, FirstUseInvitation } from "./FirstUseGuide";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
+
+function GuideLanguageSwitch() {
+  const { setPreference } = useGuiLanguage();
+  return (
+    <button type="button" onClick={() => void setPreference("zh-CN")}>
+      Cambiar idioma
+    </button>
+  );
+}
+
+it("localizes the supported guide without changing original memory or copying", async () => {
+  window.oneMemory = undefined;
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <GuideLanguageSwitch />
+      <FirstUseGuide sources={[source]} onSources={vi.fn()} onClose={vi.fn()} />
+    </LanguageProvider>,
+  );
+  await screen.findByRole("heading", {
+    name: "Retoma tu próxima conversación",
+  });
+  await screen.findByText(detail.memory.content, { selector: "blockquote" });
+  expect(
+    screen.getByRole("button", { name: "Copiar mensaje inicial" }),
+  ).toBeTruthy();
+  const reads = getMemory.mock.calls.length;
+  fireEvent.click(screen.getByText("Cambiar idioma"));
+  await screen.findByRole("heading", { name: "让下一次对话接得上" });
+  expect(getMemory).toHaveBeenCalledTimes(reads);
+  expect(
+    screen.getByText(detail.memory.content, { selector: "blockquote" }),
+  ).toBeTruthy();
+  expect(copyText).not.toHaveBeenCalled();
+  expect(openHandoff).not.toHaveBeenCalled();
+  localStorage.clear();
+});
 
 const getMemories = vi.fn(),
   getMemory = vi.fn(),

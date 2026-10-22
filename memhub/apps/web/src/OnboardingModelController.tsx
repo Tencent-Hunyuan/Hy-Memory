@@ -9,6 +9,7 @@ import {
   type OnboardingModelDraft,
   OnboardingModelStep,
 } from "./OnboardingModelStep";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { traceUiAction } from "./ui-trace";
 import { useModelProfiles } from "./use-model-profiles";
@@ -65,6 +66,7 @@ export function OnboardingModelController({
   onEnabled?(): void;
   connectionAlreadyApplied?: boolean;
 }) {
+  const { text, t } = useOnboardingTranslation();
   const models = useModelProfiles();
   const [draft, setDraft] = useState(initial);
   const [advanced, setAdvanced] = useState(false);
@@ -119,7 +121,7 @@ export function OnboardingModelController({
         value < min ||
         value > max
       )
-        next[key] = `请输入 ${min} 至 ${max} 的整数。`;
+        next[key] = "onboardingIntegerRange";
       return value;
     };
     const timeout = integer("timeout_seconds", 1, 600);
@@ -269,8 +271,22 @@ export function OnboardingModelController({
       canTest={!models.pendingProbe && !models.probeStorageFailed}
       canSaveDraft={!models.pendingCreation && !models.creationStorageFailed}
       inputsLocked={flight.current}
-      fieldErrors={fields}
-      error={error ?? models.error}
+      fieldErrors={Object.fromEntries(
+        Object.entries(fields).map(([key, value]) => [
+          key,
+          value === "onboardingIntegerRange"
+            ? t(
+                "onboardingIntegerRange",
+                key === "timeout_seconds"
+                  ? { min: 1, max: 600 }
+                  : key === "max_concurrency"
+                    ? { min: 1, max: 32 }
+                    : { min: 1024, max: 10_000_000 },
+              )
+            : text(value),
+        ]),
+      )}
+      error={error ?? (models.error ? text(models.error) : null)}
       probe={probe}
       profile={
         saved

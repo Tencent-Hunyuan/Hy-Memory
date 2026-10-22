@@ -2,7 +2,7 @@
 .r6-import-progress {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: calc((100% - 32px) / 3);
+  grid-auto-columns: max(140px, calc((100% - 32px) / 3));
   gap: 16px;
   width: 100%;
   overflow-x: auto;
@@ -22,7 +22,7 @@
 .r6-import-progress-card {
   box-sizing: border-box;
   position: relative;
-  height: 218px;
+  min-height: 218px;
   min-width: 0;
   padding: 16px 12px 12px;
   background:

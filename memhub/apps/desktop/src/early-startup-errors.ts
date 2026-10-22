@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import {
   diagnosticError,
   writeDiagnosticEventSync,
@@ -12,6 +13,8 @@ interface EarlyStartupErrorHandlerOptions {
   showError(title: string, message: string): void;
   exit(code: number): void;
   afterDiagnosticWrite?: () => void;
+  /** Only already initialized preferences; never read configuration during a fatal error. */
+  readLocale?: () => GuiLocale | undefined;
 }
 
 const SAFE_ERROR_CODE = /^[a-z][a-z0-9_]{0,127}$/;
@@ -56,7 +59,16 @@ export function installEarlyStartupErrorHandler(
       // The dialog is the only part of this a person ever reads, so it gets the
       // explanation, not the code. The code stays in the diagnostic event,
       // where support can still match it against a known failure.
-      options.showError("MemHub 无法启动", stableRuntimeUserMessage(error));
+      let locale: GuiLocale = "zh-CN";
+      try {
+        locale = options.readLocale?.() ?? "zh-CN";
+      } catch {
+        // Preferences may not exist yet; do not read files or guess the locale.
+      }
+      options.showError(
+        translate(locale, "nativeErrorTitle"),
+        stableRuntimeUserMessage(error),
+      );
       options.exit(1);
     }
   };
