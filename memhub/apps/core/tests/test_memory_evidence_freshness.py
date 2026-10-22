@@ -72,9 +72,11 @@ def test_register_returns_constant_true_predicate(case):
     with sqlite3.connect(path) as db:
         db.execute("BEGIN")
         assert register_memory_freshness(db) == "1"
-        assert db.execute("SELECT is_memory_evidence_current(?,?,?)", ("x", 1, "local")).fetchone() == (
-            1,
-        )
+        result = db.execute(
+            "SELECT is_memory_evidence_current(?,?,?)",
+            ("x", 1, "local"),
+        ).fetchone()
+        assert result == (1,)
 
 
 def test_revised_evidence_no_longer_hides_memory(case):

@@ -20,9 +20,9 @@ MemHub state or call the SDK directly.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Iterable
 from pathlib import Path
-import re
 
 import pytest
 
