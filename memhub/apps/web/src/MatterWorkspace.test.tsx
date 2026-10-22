@@ -31,6 +31,8 @@ const api = vi.hoisted(() => ({
   getMemories: vi.fn(),
   getMemoryGraph: vi.fn(),
   getMemory: vi.fn(),
+  getMemoryAuthority: vi.fn(),
+  getSdkMemory: vi.fn(),
 }));
 vi.mock("./api", () => api);
 vi.mock("./MemoryGraph3D", () => ({
@@ -97,6 +99,10 @@ const matter: Matter = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  api.getMemoryAuthority.mockResolvedValue({
+    authority: "legacy",
+    migration_id: null,
+  });
   api.getMatters.mockResolvedValue([matter]);
   api.getMatterRuns.mockResolvedValue([]);
   api.getMemories.mockResolvedValue([]);
@@ -118,6 +124,70 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+it("uses SDK memory reads after authority cutover without legacy library calls", async () => {
+  const sdkMatter: Matter = {
+    ...matter,
+    source_engine: "hy-memory",
+    claims: [
+      {
+        ...matter.claims[0],
+        memory_refs: [
+          {
+            memory_id: "sdk-memory-1",
+            revision: null,
+            status: "active",
+            content_hash: "hash",
+            authority: "sdk",
+            origin: "user",
+            engine: "hy-memory",
+          },
+        ],
+        citations: [
+          {
+            evidence_id: null,
+            raw_id: "raw-1",
+            item_index: 0,
+            quote: "SDK 原话",
+            revision: 0,
+            source_id: "cursor",
+            written_by: "person",
+            created_at: null,
+          },
+        ],
+      },
+    ],
+  };
+  api.getMemoryAuthority.mockResolvedValue({
+    authority: "sdk",
+    migration_id: "migration-1",
+  });
+  api.getMatters.mockResolvedValue([sdkMatter]);
+  api.getSdkMemory.mockResolvedValue({
+    memory_id: "sdk-memory-1",
+    content: "SDK 记忆",
+    layer: "l2_fact",
+    status: "active",
+    is_latest: true,
+    supersedes: [],
+    superseded_by: [],
+    tags: [],
+    user_id: "local",
+    agent_id: "one-memory",
+    session_id: "session",
+    source: "cursor",
+    memory_at: null,
+    gmt_created: null,
+  });
+
+  render(<MatterWorkspace onOpenSources={() => {}} />);
+
+  await waitFor(() =>
+    expect(api.getSdkMemory).toHaveBeenCalledWith("sdk-memory-1"),
+  );
+  expect(api.getMemories).not.toHaveBeenCalled();
+  expect(api.getMemoryGraph).not.toHaveBeenCalled();
+});
 
 it("separates write verification from provider failures without automatic retries", async () => {
   api.getMatters.mockResolvedValue([]);

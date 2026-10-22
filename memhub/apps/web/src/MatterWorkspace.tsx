@@ -9,6 +9,7 @@ import type {
   MemoryDetail,
   MemoryGraphNode,
   MemoryGraphResponse,
+  SdkMemoryRecord,
 } from "@one-memory/contracts";
 import {
   ArrowUp,
@@ -38,7 +39,9 @@ import {
   getMatters,
   getMemories,
   getMemory,
+  getMemoryAuthority,
   getMemoryGraph,
+  getSdkMemory,
   patchMatter,
   refreshMatter,
 } from "./api";
@@ -129,6 +132,15 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
     graph: MemoryGraphResponse | null;
   }>({ memories: [], graph: null });
   const [mapError, setMapError] = useState("");
+  const [memoryAuthority, setMemoryAuthority] = useState<
+    "unknown" | "legacy" | "sdk"
+  >("unknown");
+  const [sdkMatterMemories, setSdkMatterMemories] = useState<SdkMemoryRecord[]>(
+    [],
+  );
+  const [sdkSelectedMemoryId, setSdkSelectedMemoryId] = useState<string | null>(
+    null,
+  );
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [memoryRead, setMemoryRead] = useState<MatterRead<MemoryDetail> | null>(
     null,
@@ -244,6 +256,28 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
   const loadMap = useCallback(async () => {
     const request = ++mapRequest.current;
     try {
+      const authority = await getMemoryAuthority();
+      if (request !== mapRequest.current) return;
+      setMemoryAuthority(authority.authority);
+      if (authority.authority === "sdk") {
+        const ids = [
+          ...new Set(
+            matters.flatMap((item) =>
+              item.claims.flatMap((claim) =>
+                claim.memory_refs.map((reference) => reference.memory_id),
+              ),
+            ),
+          ),
+        ];
+        const records = await Promise.all(
+          ids.map((memoryId) => getSdkMemory(memoryId)),
+        );
+        if (request !== mapRequest.current) return;
+        setSdkMatterMemories(records);
+        setMapData({ memories: [], graph: null });
+        setMapError("");
+        return;
+      }
       const [memories, graph] = await Promise.all([
         getMemories(),
         getMemoryGraph(),
@@ -253,12 +287,13 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
       setMapData((current) =>
         JSON.stringify(current) === JSON.stringify(next) ? current : next,
       );
+      setSdkMatterMemories([]);
       setMapError("");
     } catch {
       if (request === mapRequest.current)
         setMapError("基础记忆暂时不可用，可重试读取。");
     }
-  }, []);
+  }, [matters]);
   useEffect(() => {
     if (matters.length) void loadMap();
     else setMapData({ memories: [], graph: null });
@@ -444,6 +479,16 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
     }
   }
   async function selectMemory(memoryId: string) {
+    if (memoryAuthority === "sdk") {
+      if (!sdkMatterMemories.some((memory) => memory.memory_id === memoryId))
+        return;
+      setSdkSelectedMemoryId(memoryId);
+      setSelectedNodeId(null);
+      setMemoryRead(null);
+      setMemoryLoading(false);
+      setInspectorOpen(true);
+      return;
+    }
     const node = projection.graph.nodes.find(
       (item) => item.memory_id === memoryId,
     );
@@ -1070,11 +1115,17 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
             </button>
           </header>
           <MatterMemoryPanel
-            memories={projection.memories}
+            memories={
+              memoryAuthority === "sdk"
+                ? sdkMatterMemories
+                : projection.memories
+            }
             selectedMemoryId={
-              projection.graph.nodes.find(
-                (node) => node.node_id === selectedNodeId,
-              )?.memory_id ?? null
+              memoryAuthority === "sdk"
+                ? sdkSelectedMemoryId
+                : (projection.graph.nodes.find(
+                    (node) => node.node_id === selectedNodeId,
+                  )?.memory_id ?? null)
             }
             detail={memoryDetail}
             loading={memoryLoading}

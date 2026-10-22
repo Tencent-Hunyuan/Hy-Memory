@@ -16,6 +16,7 @@ from one_memory.matters.models import (
     Claim,
     Matter,
     MatterContext,
+    MatterPatch,
     MemoryRef,
     SampleRecord,
 )
@@ -48,6 +49,10 @@ class SdkMatterStore:
             raise KeyError(matter_id)
         return [await self._hydrate(row) for row in rows]
 
+    async def patch(self, matter_id: str, patch: MatterPatch) -> Matter:
+        await asyncio.to_thread(self._patch_references, matter_id, patch)
+        return await self.get(matter_id)
+
     async def context(self, matter_id: str) -> MatterContext:
         matter = await self.get(matter_id)
         lines = [f"# {matter.title}", matter.purpose, matter.boundary]
@@ -74,6 +79,23 @@ class SdkMatterStore:
             if all(term in haystack for term in terms):
                 found.append(await self.context(matter.matter_id))
         return found
+
+    async def source_ids(self, matter_id: str) -> frozenset[str]:
+        row = await asyncio.to_thread(self._current_row, matter_id)
+        if row is None:
+            raise KeyError(matter_id)
+        references = json.loads(str(row["references_json"]))
+        sources = set()
+        for raw_id in {
+            str(raw_ref["raw_id"])
+            for claim in references.get("claims", [])
+            for raw_ref in claim.get("raw_refs", [])
+        }:
+            raw = await self.bridge.get_sdk_raw(raw_id)
+            if raw is None:
+                raise SdkMatterUnavailable("sdk_matter_raw_unavailable")
+            sources.add(raw.source)
+        return frozenset(sources)
 
     async def evidence(self, matter_id: str, raw_id: str) -> SampleRecord:
         row = await asyncio.to_thread(self._current_row, matter_id)
@@ -151,6 +173,49 @@ class SdkMatterStore:
                     "ORDER BY version",
                     (matter_id,),
                 )
+            )
+
+    def _patch_references(self, matter_id: str, patch: MatterPatch) -> None:
+        with main_database(self.database_path).write(
+            autocommit=True,
+            row_factory=sqlite3.Row,
+        ) as database:
+            row = database.execute(
+                "SELECT current.version,projected.references_json "
+                "FROM matters current JOIN matter_sdk_versions projected "
+                "ON projected.matter_id=current.matter_id "
+                "AND projected.version=current.version "
+                "WHERE current.matter_id=?",
+                (matter_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(matter_id)
+            if int(row["version"]) != patch.expected_version:
+                raise ValueError("matter_version_conflict")
+            references = json.loads(str(row["references_json"]))
+            for key, value in (
+                ("title", patch.title),
+                ("boundary", patch.boundary),
+                ("scope_confirmed", patch.scope_confirmed),
+                ("agent_access", patch.agent_access),
+            ):
+                if value is not None:
+                    references[key] = value
+            version = patch.expected_version + 1
+            now = datetime.now(UTC).isoformat()
+            database.execute(
+                "INSERT INTO matter_sdk_versions "
+                "(matter_id,version,references_json,created_at) VALUES (?,?,?,?)",
+                (
+                    matter_id,
+                    version,
+                    json.dumps(references, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            )
+            database.execute(
+                "UPDATE matters SET version=?,needs_update=0 WHERE matter_id=?",
+                (version, matter_id),
             )
 
     async def _hydrate(self, row: sqlite3.Row) -> Matter:

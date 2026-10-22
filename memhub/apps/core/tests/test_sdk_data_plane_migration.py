@@ -8,6 +8,7 @@ import pytest
 
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
+from one_memory.matters.models import MatterPatch
 from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
@@ -699,14 +700,22 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             custom={"role": "user", "written_by": "person"},
         ),
     )
-    hydrated = asyncio.run(
-        SdkMatterStore(database, bridge).get("matter-1")  # type: ignore[arg-type]
-    )
+    sdk_matters = SdkMatterStore(database, bridge)  # type: ignore[arg-type]
+    hydrated = asyncio.run(sdk_matters.get("matter-1"))
     assert hydrated.claims[0].statement == "preference"
     assert hydrated.claims[0].memory_refs[0].authority == "sdk"
     assert hydrated.claims[0].citations[0].raw_id == "evidence:e1"
     assert hydrated.claims[0].citations[0].evidence_id is None
     assert hydrated.claims[0].citations[0].quote == "verbatim"
+    patched = asyncio.run(
+        sdk_matters.patch(
+            "matter-1",
+            MatterPatch(expected_version=1, title="本地优先更新"),
+        )
+    )
+    assert patched.version == 2
+    assert patched.title == "本地优先更新"
+    assert len(asyncio.run(sdk_matters.history("matter-1"))) == 2
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,

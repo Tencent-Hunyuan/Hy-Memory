@@ -152,6 +152,7 @@ from one_memory.loop_watchdog import LoopWatchdog
 from one_memory.matters.discovery import MatterDiscovery
 from one_memory.matters.model import MatterModel
 from one_memory.matters.routes import matter_router
+from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.matters.store import MatterStore
 from one_memory.memory_governance import (
     DeletionStatus,
@@ -1023,16 +1024,21 @@ def create_app(
                 lambda: cleanup_stale_model_secrets(),
                 name="one-memory-model-secret-cleanup",
             )
-            app.state.matter_store = MatterStore(
+            app.state.legacy_matter_store = MatterStore(
                 database_path,
                 lifecycle_source=_matter_lifecycle_source(
                     app,
                     runtime_settings.data_dir,
                 ),
             )
-            app.state.matter_store.recover_runs()
+            app.state.legacy_matter_store.recover_runs()
+            app.state.matter_store = (
+                SdkMatterStore(database_path, _sdk_library_bridge(app))
+                if app.state.memory_authority is MemoryAuthority.SDK
+                else app.state.legacy_matter_store
+            )
             app.state.matter_discovery = MatterDiscovery(
-                app.state.matter_store,
+                app.state.legacy_matter_store,
                 MatterModel(app.state.model_profile_store, app.state.secret_store),
                 governance=app.state.memory_governance_store,
             )
