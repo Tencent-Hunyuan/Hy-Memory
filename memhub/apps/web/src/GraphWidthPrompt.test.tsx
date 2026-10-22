@@ -13,7 +13,11 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
-import { LanguageProvider, useGuiLanguage } from "./gui-language";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
 
 function LanguageSwitch() {
   const { setPreference } = useGuiLanguage();
@@ -58,7 +62,7 @@ describe("GraphWidthPrompt", () => {
   });
 
   it("translates the mismatch and live switch without requesting or confirming twice", async () => {
-    window.localStorage.setItem("one-memory.gui-language", "es");
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const user = userEvent.setup();
     render(
       <LanguageProvider>
@@ -92,7 +96,7 @@ describe("GraphWidthPrompt", () => {
         expect.any(String),
       ),
     );
-    window.localStorage.removeItem("one-memory.gui-language");
+    window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
   });
 
   it("moves focus into the modal and keeps Tab inside it", async () => {

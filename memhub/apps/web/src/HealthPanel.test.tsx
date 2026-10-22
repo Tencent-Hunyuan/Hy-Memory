@@ -12,7 +12,11 @@ import {
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LanguageProvider, useGuiLanguage } from "./gui-language";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
 import { HealthPanel } from "./HealthPanel";
 import type { ImportSourcesController } from "./use-import-sources";
 
@@ -37,7 +41,7 @@ function HealthLanguageSwitch() {
 
 it("shows supported diagnostics in Spanish without toggling logging", async () => {
   window.oneMemory = undefined;
-  localStorage.setItem("one-memory.gui-language", "es");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
   render(
     <LanguageProvider>
       <HealthLanguageSwitch />
@@ -676,7 +680,7 @@ describe("HealthPanel", () => {
     });
 
     it("read receipt timestamps follow the Spanish interface language", async () => {
-      localStorage.setItem("one-memory.gui-language", "es");
+      localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
       try {
         render(
           <LanguageProvider>

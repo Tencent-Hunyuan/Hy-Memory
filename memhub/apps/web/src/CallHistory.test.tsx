@@ -426,7 +426,7 @@ it("does not claim delivery for a call Core never completed", async () => {
   const detail = screen.getByRole("article", { name: "调用详情" });
   expect(within(detail).queryByText(/已返回给/)).toBeNull();
   expect(
-    within(detail).getByText("One Memory 暂时不可用，这次回答没有带上记忆。"),
+    within(detail).getByText("MemHub 暂时不可用，这次回答没有带上记忆。"),
   ).toBeTruthy();
 });
 it("does not restate an undelivered result as returned", async () => {
@@ -486,7 +486,7 @@ it.each([
     "查询超时，没有提供记忆",
     "直接调用（诊断） 这次没来得及查到记忆",
   ],
-  ["unavailable", "One Memory 暂时不可用", "直接调用（诊断） 暂时无法查记忆"],
+  ["unavailable", "MemHub 暂时不可用", "直接调用（诊断） 暂时无法查记忆"],
   ["denied", "当前未授权查询", "直接调用（诊断） 未获准查记忆"],
 ] as const)(
   "renders the %s state without claiming external adoption",
@@ -543,7 +543,7 @@ it("does not call an unavailable call returned", async () => {
   const detail = screen.getByRole("article", { name: "调用详情" });
   expect(within(detail).queryByText(/· 已返回/)).toBeNull();
   expect(
-    within(detail).getAllByText(/One Memory 暂时不可用/).length,
+    within(detail).getAllByText(/MemHub 暂时不可用/).length,
   ).toBeGreaterThan(0);
   expect(within(detail).queryByText(/采用未确认|Core/)).toBeNull();
 });

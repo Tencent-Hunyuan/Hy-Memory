@@ -84,7 +84,7 @@ it("traduce entrega y límites sin atribuir adopción ni alterar anfitriones des
     "Parte del contenido sigue procesándose.",
   );
   expect(callReturnDeliveryLabel({ ...event, state: "unavailable" })).toBe(
-    "One Memory 暂时不可用，这次回答没有带上记忆。",
+    "MemHub 暂时不可用，这次回答没有带上记忆。",
   );
 });
 

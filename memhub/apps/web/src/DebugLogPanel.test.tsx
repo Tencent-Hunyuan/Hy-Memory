@@ -11,7 +11,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DebugLogPanel } from "./DebugLogPanel";
-import { LanguageProvider, useGuiLanguage } from "./gui-language";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
 import {
   recordRendererDebugLog,
   resetRendererDebugLogsForTest,
@@ -117,7 +121,7 @@ it("translates controls live but preserves events and does not change capture", 
   // A language bridge is not required by this synthetic browser fixture.
   const read = vi.fn().mockResolvedValue(snapshot);
   window.oneMemory = undefined;
-  localStorage.setItem("one-memory.gui-language", "es");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
   const view = render(
     <LanguageProvider>
       <SwitchLanguage />
@@ -311,7 +315,7 @@ it("shows the diagnostics tabs and model usage in Spanish without Chinese copy",
   // Browser-mode language, then the desktop log bridge, as in the test above.
   const bridge = window.oneMemory;
   window.oneMemory = undefined;
-  localStorage.setItem("one-memory.gui-language", "es");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
   const view = render(
     <LanguageProvider>
       <DebugLogPanel />

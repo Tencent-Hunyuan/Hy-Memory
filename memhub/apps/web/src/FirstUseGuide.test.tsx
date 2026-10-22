@@ -11,7 +11,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FirstUseGuide, FirstUseInvitation } from "./FirstUseGuide";
-import { LanguageProvider, useGuiLanguage } from "./gui-language";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
 
 function GuideLanguageSwitch() {
   const { setPreference } = useGuiLanguage();
@@ -24,7 +28,7 @@ function GuideLanguageSwitch() {
 
 it("localizes the supported guide without changing original memory or copying", async () => {
   window.oneMemory = undefined;
-  localStorage.setItem("one-memory.gui-language", "es");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
   render(
     <LanguageProvider>
       <GuideLanguageSwitch />

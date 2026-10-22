@@ -12,7 +12,11 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LanguageProvider, useGuiLanguage } from "./gui-language";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
 import { ImportProgressStrip } from "./ImportProgressStrip";
 
 function job(overrides: Partial<ImportJob> = {}): ImportJob {
@@ -86,7 +90,7 @@ describe("ImportProgressStrip", () => {
   afterEach(cleanup);
 
   it("translates user-facing progress and live settings CTA without invoking actions", async () => {
-    localStorage.setItem("one-memory.gui-language", "es");
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     const open = vi.fn();
     function Switch() {
       const { setPreference } = useGuiLanguage();
