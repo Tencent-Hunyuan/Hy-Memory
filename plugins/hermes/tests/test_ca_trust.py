@@ -32,12 +32,30 @@ def certificates(tmp_path_factory):
     pairs = []
     for name in ("localhost", "other"):
         cert, key = directory / (name + ".crt"), directory / (name + ".key")
-        subprocess.run([
-            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-            "-keyout", str(key), "-out", str(cert), "-days", "1",
-            "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
-            "-addext", "basicConstraints=critical,CA:TRUE",
-        ], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                str(key),
+                "-out",
+                str(cert),
+                "-days",
+                "1",
+                "-subj",
+                "/CN=localhost",
+                "-addext",
+                "subjectAltName=DNS:localhost",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE",
+            ],
+            check=True,
+            capture_output=True,
+        )
         pairs.append((cert, key))
     return pairs
 
@@ -48,8 +66,10 @@ def test_invalid_ca_is_sanitized(tmp_path, monkeypatch, kind):
     if kind == "malformed":
         path.write_text("PRIVATE malformed PEM")
     if kind == "permission":
+
         def denied(*args, **kwargs):
             raise PermissionError("PRIVATE path or PEM")
+
         monkeypatch.setattr(ssl, "create_default_context", denied)
     monkeypatch.setenv("HY_MEMORY_CA_FILE", "" if kind == "empty" else str(path))
     provider = HyMemoryProvider()
@@ -102,6 +122,7 @@ def test_rotation_at_same_path_changes_identity(certificates, tmp_path, monkeypa
 def test_unset_retains_default_handler_and_official_https(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("unset CA must retain existing trust setup")
+
     monkeypatch.setattr(ssl, "create_default_context", forbidden)
     monkeypatch.setenv("HY_MEMORY_URL", "https://example.com")
     provider = HyMemoryProvider()
@@ -163,8 +184,12 @@ def test_real_localhost_tls(certificates, monkeypatch, mode):
                         raise ValueError("truncated HTTP body")
                     remaining -= len(chunk)
                 body = b'{"memories":[]}'
-                tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: "
-                            + str(len(body)).encode() + b"\r\n\r\n" + body)
+                tls.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: "
+                    + str(len(body)).encode()
+                    + b"\r\n\r\n"
+                    + body
+                )
         except ssl.SSLError:
             pass  # Expected peer rejection in negative cases.
         except Exception as exc:
@@ -180,11 +205,16 @@ def test_real_localhost_tls(certificates, monkeypatch, mode):
     worker = threading.Thread(target=serve)
     worker.start()
     try:
-        result = json.loads(provider.handle_tool_call("hy_memory_search", {"query": "q"}))
+        result = json.loads(
+            provider.handle_tool_call("hy_memory_search", {"query": "q"})
+        )
         if mode == "trusted":
             assert result == {"success": True, "memories": []}
         else:
-            assert result == {"success": False, "error": "transport_or_response_failure"}
+            assert result == {
+                "success": False,
+                "error": "transport_or_response_failure",
+            }
     finally:
         provider.shutdown()
         listener.close()
@@ -261,7 +291,9 @@ def test_context_without_ca_inspection(certificates, monkeypatch):
         def verify_mode(self, value):
             self.context.verify_mode = value
 
-    monkeypatch.setattr(ssl, "create_default_context", lambda **kw: Context(original(**kw)))
+    monkeypatch.setattr(
+        ssl, "create_default_context", lambda **kw: Context(original(**kw))
+    )
     monkeypatch.setenv("HY_MEMORY_CA_FILE", str(certificates[0][0]))
     provider = HyMemoryProvider()
     assert provider.is_available()
@@ -294,9 +326,12 @@ def test_single_read_rotation_snapshot(certificates, tmp_path, monkeypatch):
     provider = HyMemoryProvider()
     assert provider.is_available()
     assert reads == [str(path)]
-    assert provider.identity_signature()["hy_memory_ca_sha256"] == hashlib.sha256(
-        ssl.PEM_cert_to_DER_cert(snapshot.decode("ascii"))
-    ).hexdigest()
+    assert (
+        provider.identity_signature()["hy_memory_ca_sha256"]
+        == hashlib.sha256(
+            ssl.PEM_cert_to_DER_cert(snapshot.decode("ascii"))
+        ).hexdigest()
+    )
 
 
 def test_bundle_order_whitespace_and_der_identity(certificates, tmp_path, monkeypatch):
@@ -317,7 +352,15 @@ def test_bundle_order_whitespace_and_der_identity(certificates, tmp_path, monkey
     assert pem.identity_signature() == der.identity_signature()
 
 
-@pytest.mark.parametrize("contents", [b"", b"x" * 1048577, b"\xffPRIVATE", b"-----BEGIN CERTIFICATE-----\nPRIVATE\n-----END CERTIFICATE-----"])
+@pytest.mark.parametrize(
+    "contents",
+    [
+        b"",
+        b"x" * 1048577,
+        b"\xffPRIVATE",
+        b"-----BEGIN CERTIFICATE-----\nPRIVATE\n-----END CERTIFICATE-----",
+    ],
+)
 def test_invalid_ca_snapshot(tmp_path, monkeypatch, contents):
     path = tmp_path / "PRIVATE.pem"
     path.write_bytes(contents)
@@ -331,9 +374,11 @@ def test_invalid_ca_snapshot(tmp_path, monkeypatch, contents):
 
 def test_real_truststore_context(certificates, monkeypatch):
     import importlib.util
+
     if importlib.util.find_spec("truststore") is None:
         return  # Optional dependency; deterministic regression always runs above.
     import truststore
+
     calls = []
 
     def forbidden(*args, **kwargs):
@@ -358,6 +403,9 @@ def test_maximum_size_bundle_is_accepted(certificates, tmp_path, monkeypatch):
     monkeypatch.setenv("HY_MEMORY_CA_FILE", str(path))
     provider = HyMemoryProvider()
     assert provider.is_available()
-    assert provider.identity_signature()["hy_memory_ca_sha256"] == hashlib.sha256(
-        ssl.PEM_cert_to_DER_cert(snapshot.decode("ascii"))
-    ).hexdigest()
+    assert (
+        provider.identity_signature()["hy_memory_ca_sha256"]
+        == hashlib.sha256(
+            ssl.PEM_cert_to_DER_cert(snapshot.decode("ascii"))
+        ).hexdigest()
+    )

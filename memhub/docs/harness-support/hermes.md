@@ -1,105 +1,122 @@
-# Hermes 一键插入支持
+# Hermes 一键接入
 
-更新日期：2026-10-14
+更新日期：2026-10-22
 
-## 结论
+## 接入组成
 
-Hermes 的“一键插入应用”已开放，但它不是插件安装。它在 Electron 后台静默修改 YAML、写入 Skill、创建 Credential 并授权，所以 macOS 上通常看不到安装窗口或进度。
+Hermes 接入同时安装两条互补路径：
 
-## 接入方式和产品状态
-
-| 项目 | Hermes 当前实现 |
+| 能力 | 实现 |
 |---|---|
-| 一键插入产品状态 | 开放 |
-| Hermes 查询 MemHub | MCP Server |
-| 告诉模型何时查询 | `memhub-recall` Skill |
-| MemHub 自动向 Prompt 注入记忆 | 没有 |
-| Hermes 新会话实时送入 MemHub | 没有 Hook/Plugin；依赖 Core 扫描 |
-| 传统插件 | 没有 |
+| 每轮自动召回 | 原生 Python `MemoryProvider` 的 `queue_prefetch/prefetch` 生命周期 |
+| 显式查询与诊断 | MCP Server + `memhub-recall` Skill |
+| 会话写入 MemHub | Core 扫描 Hermes `state.db` / Session 文件 |
+| 原生 Provider 自动写入 | 不启用，避免召回内容回流形成套娃 |
 
-Hermes 对 MemHub 的使用方式是：模型在需要时主动调用 MCP 工具。当前没有 Prompt 前 Prefetch，也没有 memory-provider Hook 自动把记忆塞进上下文。
+Python Provider 源码位于仓库
+[`plugins/hermes/hy_memory`](../../../plugins/hermes/hy_memory)，发行构建将其作为
+Host Bridge 受管资源打包。
 
-## 两个开关分别做什么
+## 打开“一键接入”
 
-### 打开“一键插入应用”
+用户点击接入即确认 MemHub 可以切换 Hermes 的唯一
+`memory.provider` slot。安装事务：
 
-写入 `config.yaml` 的 MCP Server、安装 Skill、创建 Credential 并授予 Recall 权限。Hermes 随后可以主动调用 MemHub。
-
-### 关闭“一键插入应用”
-
-先撤销 Hermes Credential，再恢复或删除 MCP 配置、Skill 和 Journal。它不改变 MemHub 是否继续读取 Hermes 对话。
-
-### 打开“同步开关”
-
-Core 校验 `.hermes` Root，创建或恢复 history Job，扫描 Hermes 会话数据库中尚未处理的记录，并通过 Core 的轮询器持续发现新记录。
-
-### 关闭“同步开关”
-
-Core 停止扫描和 claim 未运行 Job；pending Job 冻结，running Job可结束。Hermes 没有 Capture Hook，因此关闭后不会再有另一条实时入库路径。已有 Memory 仍可查询。
-
-### 组合效果
-
-| 一键插入 | 同步 | 结果 |
-|---|---|---|
-| 关 | 关 | 双向都关闭 |
-| 开 | 关 | Hermes 可以查询已有 Memory，但 MemHub 不再读取 Hermes 新会话 |
-| 关 | 开 | MemHub 读取 Hermes 会话，但 Hermes 不能调用 MemHub |
-| 开 | 开 | 双向接通；Recall 仍由 Hermes 模型主动调用，不是自动 Prefetch |
-
-## 打开时的实际动作
+1. 创建 Hermes Installation、Credential 与 Recall Grant；
+2. 安装受管 Python Provider；
+3. 将 `memory.provider` 设为 `hy_memory`；
+4. 写入 MCP Server 与 `memhub-recall` Skill；
+5. 写安装 Journal，并执行连接 Probe。
 
 ```text
+~/.hermes/plugins/hy_memory/
+  __init__.py
+  plugin.yaml
+  provider.py
+  connection.json
+
 ~/.hermes/config.yaml
-  └── mcp_servers.one-memory
+  memory.provider: hy_memory
+  mcp_servers.one-memory: ...
 
 ~/.hermes/skills/memhub-recall/SKILL.md
-
 ~/.hermes/.one-memory/recall-install.json
 
 <MemHub dataDir>/host-permissions/...
-  └── Hermes Credential、Installation、Grant
+  Hermes Credential、Installation、Grant
 ```
 
-配置大致为：
+`connection.json` 只保存 Broker discovery 和 credential file 的路径，不保存
+Core token 或 memory 内容。Provider 每次请求重新读取 discovery/credential，经
+MemHub Broker `/context` 完成授权查询；不直连裸 Hy Memory HTTP server。
 
-```yaml
-mcp_servers:
-  one-memory:
-    command: /Applications/MemHub.app/Contents/MacOS/MemHub
-    args:
-      - /Applications/MemHub.app/Contents/Resources/mcp.cjs
-    env:
-      ELECTRON_RUN_AS_NODE: "1"
-      ONE_MEMORY_BROKER_DISCOVERY: "..."
-      ONE_MEMORY_MANAGED_BY: "one-memory"
-      ONE_MEMORY_HOST_CREDENTIAL_FILE: ".../credential"
-```
+Hermes 必须完全退出并重新启动，原生 Provider 才会可靠生效。
 
-Hermes Layout 定义在 [recall-installer.ts](../../packages/host-bridge/src/recall-installer.ts)，YAML 局部编辑在 [yaml-mcp.ts](../../packages/host-bridge/src/yaml-mcp.ts)。编辑器只维护 `mcp_servers.one-memory`，尽量保留模型、Gateway 和注释。
+## 自动 Recall 与 Session 去重
 
-## Skill、Capture 与权限
+Hermes 在 turn N 结束后后台执行 `queue_prefetch`，turn N+1 开始时由
+`prefetch` 消费已完成结果。前后 query 不要求完全相同；cache miss 不在当前轮次
+重复发起第二次搜索。
 
-- Skill：`~/.hermes/skills/memhub-recall/SKILL.md`。
-- Capture：当前不安装。Hermes 使用单一 memory-provider slot，自动占用可能覆盖用户已有 Provider。
-- 默认 Tools：`om_recall`、`om_conversations`、`om_diagnostic_trace`。
-- 默认 Scopes：`all-apps`、`source:hermes`。
+Hermes 不会清除历史轮次中已注入的 memory。Provider 因此按 Hermes
+`session_id` 保存已注入的 opaque `memory_id` 集合：
 
-## 重复打开
+- 本 session 已出现的 ID 不再注入；
+- 一次响应中的重复 ID 只保留首项；
+- 相同正文、不同 ID 仍视为不同 memory；
+- 切换 Session 使用各自的集合；
+- reset / rewind 清理目标 Session 的集合；
+- 搜索完成但没有实际注入的 ID 不进入集合。
 
-- 已安装且 `approved`：不重装，只修复 MemHub 命令路径并 Probe。
-- 文件存在但权限不完整：重新 Preview、安装、签发新 Credential 并授权。
-- 已有非 MemHub 管理的 `one-memory` Server：默认拒绝覆盖。
+集合以 session hash → opaque memory ID 的形式保存在
+`~/.hermes/.one-memory/hy-memory-seen.json`，不保存 memory 正文，因此 Hermes
+重启并恢复同一 Session 后仍可去重。
 
-## 关闭
+召回正文始终标记为不可信参考数据，不是指令。
+注入块使用受控的 `memhub_memory_context` 边界，并对正文中的保留 tag 做转义；
+即使宿主把注入内容写回历史，Source Adapter 也会在入库前剥离该块。
 
-正常关闭会先撤销 Credential，再：
+## 防止 memory 套娃
 
-- 删除或恢复 `mcp_servers.one-memory`；
-- 删除或恢复 `memhub-recall/SKILL.md`；
-- 删除安装 Journal。
+MemHub-managed Provider 是只读的：
 
-配置或 Skill 被用户修改后，MemHub 不会强删，只会尽量撤权并提示人工检查。
+- 自动 capture 关闭；
+- 不暴露 `hy_memory_add`；
+- Hermes 会话写入继续由 MemHub Source Adapter 扫描完成；
+- Adapter 排除 system 注入内容，Provider 也不会把 assistant 对召回内容的复述
+  作为另一条写入路径提交。
 
-## 生效与重启
+这样同一份 memory 不会因为被 prefetch 到 Hermes 后再次进入 memory 生成链路。
 
-Probe 成功只证明 MCP 命令能连接 MemHub，不证明正在运行的 Hermes 已热加载。建议完全退出 Hermes、重新打开并开始新会话。
+## 关闭与卸载
+
+通过 MemHub 关闭接入时：
+
+1. 先撤销 Hermes Credential；
+2. 如果 `memory.provider` 仍是 MemHub 安装的值，恢复接入前的 provider；
+3. 如果 Provider 文件与安装 hash 一致，删除或恢复受管目录；
+4. 恢复/删除 MCP、Skill 和 Journal。
+
+如果用户在安装后修改了 Provider 文件或配置，MemHub 停止自动清理并要求人工核对，
+不会覆盖用户的新值。
+
+用户直接从 `/Applications` 删除 MemHub 时，系统不保证有卸载回调，因此无法保证
+恢复 Hermes 配置。遗留 Provider 会失败安全：Broker 不可用时只是不召回，不影响
+Hermes 正常启动和对话。
+
+## 同步开关
+
+同步开关与一键接入相互独立：
+
+- 打开：Core 校验 `.hermes` Root，扫描历史和新增 Session，并调度 SDK 写入；
+- 关闭：停止发现和 claim 新 Job，已运行 Job 可以结束；
+- 关闭同步不会卸载 Provider、MCP 或 Skill；
+- 关闭一键接入不会删除已经进入 SDK 的 memory。
+
+## 安全边界
+
+- Provider 使用 host credential 和 Recall Grant，不持有 Core bearer。
+- Broker 只接受 loopback、拒绝 proxy/redirect，并在释放结果前重新校验授权。
+- `memory_id` 是去重身份，不是授权凭据。
+- 用户原文、memory 内容、token、路径和后端错误正文不写入诊断错误。
+- Python Provider 不安装 SDK、不启动 sidecar、不直接操作 memory store。

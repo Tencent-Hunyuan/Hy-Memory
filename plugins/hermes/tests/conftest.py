@@ -11,7 +11,9 @@ from dataclasses import dataclass
 
 snapshot = os.environ.get("HERMES_MEMORY_PROVIDER_SNAPSHOT")
 if snapshot:
-    real_spec = importlib.util.spec_from_file_location("agent.memory_provider", snapshot)
+    real_spec = importlib.util.spec_from_file_location(
+        "agent.memory_provider", snapshot
+    )
     module = importlib.util.module_from_spec(real_spec)
     sys.modules[real_spec.name] = module
     real_spec.loader.exec_module(module)

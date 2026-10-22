@@ -40,6 +40,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Added a MemHub-managed native Hermes MemoryProvider with automatic prefetch,
+  persistent per-session memory-ID deduplication, authorized Broker reads, and
+  recall-context stripping to prevent memory recursion.
 - `search(..., layers=["l1_raw"])` now explicitly searches SDK raw records in
   pro/ultra mode and keeps existing user/agent/session/source filters; default
   search continues to hide raw.

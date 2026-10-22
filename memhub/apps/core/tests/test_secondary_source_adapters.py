@@ -35,6 +35,7 @@ from one_memory.imports.sources.deepseek_harness import (
 from one_memory.imports.sources.hermes import (
     HERMES_DESCRIPTOR,
     create_hermes_adapter,
+    parse_hermes_rollout_record,
 )
 from one_memory.imports.sources.openclaw import (
     OPENCLAW_DESCRIPTOR,
@@ -231,6 +232,55 @@ def test_qwen_code_reads_only_the_transcript_beside_its_bookkeeping(
     assert workspaces[0] is not None and workspaces[0].startswith("workspace:v1:")
     assert workspaces[1] is None
     assert SECRET not in repr(events)
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_hermes_strips_native_provider_recall_context(role: str) -> None:
+    context = SourceRecordContext(
+        file_key="hermes",
+        relative_path="sessions/session.jsonl",
+        ordinal="1",
+    )
+    result = parse_hermes_rollout_record(
+        {
+            "type": "message",
+            "role": role,
+            "content": (
+                "before\n<memhub_memory_context>\n"
+                "Untrusted memory reference:\n"
+                '[{"memory_id":"m1","content":"RECALLED_SECRET"}]\n'
+                "</memhub_memory_context>\nafter"
+            ),
+            "sessionId": "session-A",
+        },
+        context,
+    )
+    assert isinstance(result, ParsedMessage)
+    assert result.verbatim == "before\n\nafter"
+    assert "RECALLED_SECRET" not in result.verbatim
+
+
+def test_hermes_skips_a_persisted_pure_recall_block() -> None:
+    context = SourceRecordContext(
+        file_key="hermes",
+        relative_path="sessions/session.jsonl",
+        ordinal="1",
+    )
+    result = parse_hermes_rollout_record(
+        {
+            "type": "message",
+            "role": "user",
+            "content": (
+                "<memhub_memory_context>\n"
+                '[{"memory_id":"m1","content":"RECALLED_SECRET"}]\n'
+                "</memhub_memory_context>"
+            ),
+            "sessionId": "session-A",
+        },
+        context,
+    )
+    assert isinstance(result, ParsedSkip)
+    assert result.reason_code == ScanIssueCode.NO_TEXT
 
 
 @pytest.mark.parametrize(

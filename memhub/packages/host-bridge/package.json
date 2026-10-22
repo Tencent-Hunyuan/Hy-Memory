@@ -8,7 +8,7 @@
     "./installer": "./src/recall-installer.ts"
   },
   "scripts": {
-    "build": "tsup && node scripts/build-hook-assets.mjs",
+    "build": "tsup && node scripts/build-hook-assets.mjs && node scripts/build-hermes-provider-assets.mjs",
     "build:sync-hook": "node scripts/build-hook-assets.mjs",
     "typecheck": "tsc --noEmit --pretty false",
     "test": "node ../../scripts/assert-test-isolation.mjs && pnpm build && vitest run --maxWorkers=1"

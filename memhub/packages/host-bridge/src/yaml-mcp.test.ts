@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { putYamlServer, readYamlServer, removeYamlServer } from "./yaml-mcp.js";
+import {
+  putYamlMemoryProvider,
+  putYamlServer,
+  readYamlMemoryProvider,
+  readYamlServer,
+  removeYamlServer,
+  restoreYamlMemoryProvider,
+} from "./yaml-mcp.js";
 
 /** Verbatim bytes Hermes 0.21.0 wrote when it installed our own server.
  *
@@ -128,5 +135,28 @@ describe("yaml mcp editing", () => {
   it("reports nothing rather than guessing when the entry is absent", () => {
     expect(readYamlServer(HOST_WRITTEN, "not-installed")).toBeNull();
     expect(readYamlServer("model:\n  default: x\n", "one-memory")).toBeNull();
+  });
+});
+
+describe("Hermes memory provider editing", () => {
+  it("updates only memory.provider and restores its prior value", () => {
+    const original =
+      "# keep\nmemory:\n  provider: existing\n  compact: true\nmodels:\n  default: test\n";
+    const previous = readYamlMemoryProvider(original);
+    const installed = putYamlMemoryProvider(original, "hy_memory");
+    expect(readYamlMemoryProvider(installed)).toEqual({
+      existed: true,
+      value: "hy_memory",
+    });
+    expect(installed).toContain("compact: true");
+    expect(restoreYamlMemoryProvider(installed, previous)).toBe(original);
+  });
+
+  it("adds and removes only the managed leaf", () => {
+    const original = "models:\n  default: test\n";
+    const previous = readYamlMemoryProvider(original);
+    const installed = putYamlMemoryProvider(original, "hy_memory");
+    expect(installed).toContain("memory:\n  provider: hy_memory\n");
+    expect(restoreYamlMemoryProvider(installed, previous)).toBe(original);
   });
 });

@@ -719,6 +719,11 @@ export async function createRuntimeService(
         recallCliPath: config.recallCliPath,
         captureCommand:
           config.hostRuntime?.captureCommand ?? config.coreCommand,
+        hermesProviderSource: path.join(
+          path.dirname(config.mcpEntryPath),
+          "hermes-provider",
+          "hy_memory",
+        ),
         dataDir: config.dataDir,
       };
       const permissionOwner = await HostPermissions.open(

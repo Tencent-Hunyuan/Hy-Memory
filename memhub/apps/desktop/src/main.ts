@@ -526,6 +526,11 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         "apps/core/.venv/bin",
         process.platform === "win32" ? "one-memory.exe" : "one-memory",
       ),
+    hermesProviderSource: path.join(
+      path.dirname(stable?.mcpEntryPath ?? path.join(hostBridgeDir, "mcp.cjs")),
+      "hermes-provider",
+      "hy_memory",
+    ),
     dataDir,
   };
   const standaloneRuntime =

@@ -29,7 +29,7 @@ Preview 不会弹出给用户；开关点击本身被视为确认。关闭时通
 
 | Harness | 一键插入产品状态 | Harness 如何查询 MemHub | Harness 如何把新会话送入 MemHub | 同步开关的数据来源 |
 |---|---|---|---|---|
-| [Hermes](hermes.md) | 开放 | MCP + Skill | 无自动 Hook；Core 扫描 | `.hermes` SQLite/文件扫描 |
+| [Hermes](hermes.md) | 开放 | 原生 MemoryProvider Prefetch + MCP + Skill | Provider 只读；Core 扫描写入 | `.hermes` SQLite/文件扫描 |
 | [Cursor](cursor.md) | 开放 | MCP + Skill | Capture Hooks | Cursor Adapter 扫描 + Hook 实时入口 |
 | [Claude Code](claude-code.md) | 开放 | MCP + Skill | Capture Hooks | `.claude/projects` 扫描 + Hook 实时入口 |
 | [Codex](codex.md) | 开放 | MCP + Skill | Capture Hooks | `.codex/sessions` 扫描 + Hook 实时入口 |

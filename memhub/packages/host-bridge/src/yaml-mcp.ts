@@ -34,10 +34,13 @@ interface Section {
   body: number[];
 }
 
-function findSection(lines: string[]): Section | null {
+function findSection(
+  lines: string[],
+  sectionName: string = SECTION,
+): Section | null {
   const header = lines.findIndex((line) => {
     const match = TOP_LEVEL_KEY.exec(line);
-    return match !== null && match[1] === SECTION;
+    return match !== null && match[1] === sectionName;
   });
   if (header === -1) return null;
   const body: number[] = [];
@@ -206,6 +209,77 @@ export function removeYamlServer(raw: string, serverName: string): string {
     all.length === 1 ? [section.header, ...section.body] : target.lines;
   const drop = new Set(removing);
   return lines.filter((_line, index) => !drop.has(index)).join("\n");
+}
+
+export interface YamlMemoryProvider {
+  existed: boolean;
+  value: string | null;
+}
+
+/** Read only the direct `memory.provider` scalar without reserializing YAML. */
+export function readYamlMemoryProvider(raw: string): YamlMemoryProvider {
+  const lines = raw.split("\n");
+  const section = findSection(lines, "memory");
+  if (section === null) return { existed: false, value: null };
+  const indent = childIndent(lines, section.body);
+  for (const index of section.body) {
+    const line = lines[index];
+    if ((/^\s*/.exec(line)?.[0] ?? "") !== indent) continue;
+    const match = /^\s*provider\s*:(.*)$/.exec(line);
+    if (match) return { existed: true, value: readScalar(match[1].trim()) };
+  }
+  return { existed: false, value: null };
+}
+
+/** Set the direct `memory.provider` scalar while preserving all other bytes. */
+export function putYamlMemoryProvider(raw: string, value: string): string {
+  const lines = raw.split("\n");
+  const section = findSection(lines, "memory");
+  if (section === null) {
+    const prefix = raw === "" || raw.endsWith("\n") ? raw : `${raw}\n`;
+    return `${prefix}memory:\n  provider: ${writeScalar(value)}\n`;
+  }
+  const indent = childIndent(lines, section.body);
+  for (const index of section.body) {
+    const line = lines[index];
+    if (
+      (/^\s*/.exec(line)?.[0] ?? "") === indent &&
+      /^\s*provider\s*:/.test(line)
+    ) {
+      lines[index] = `${indent}provider: ${writeScalar(value)}`;
+      return lines.join("\n");
+    }
+  }
+  lines.splice(
+    section.header + 1,
+    0,
+    `${indent}provider: ${writeScalar(value)}`,
+  );
+  return lines.join("\n");
+}
+
+/** Restore the exact prior provider value, or remove the leaf if it was absent. */
+export function restoreYamlMemoryProvider(
+  raw: string,
+  previous: YamlMemoryProvider,
+): string {
+  if (previous.existed) return putYamlMemoryProvider(raw, previous.value ?? "");
+  const lines = raw.split("\n");
+  const section = findSection(lines, "memory");
+  if (section === null) return raw;
+  const indent = childIndent(lines, section.body);
+  const provider = section.body.find(
+    (index) =>
+      (/^\s*/.exec(lines[index])?.[0] ?? "") === indent &&
+      /^\s*provider\s*:/.test(lines[index]),
+  );
+  if (provider === undefined) return raw;
+  lines.splice(provider, 1);
+  const refreshed = findSection(lines, "memory");
+  if (refreshed?.body.every((index) => lines[index].trim() === "")) {
+    lines.splice(refreshed.header, 1);
+  }
+  return lines.join("\n");
 }
 
 function render(
