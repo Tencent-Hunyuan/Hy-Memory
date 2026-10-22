@@ -135,6 +135,9 @@ This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 - Ask wire：marker 前保留 Governance Ask v1；marker 后 Web / Host Bridge 只调用 SDK Ask v2。v2 的引用只含 SDK 原生 `memory_id/content/layer/status/source/gmt_created`，生成过程中重复 `get` 校验同一 SDK 快照，不补造 revision、Evidence 或 scopes，SDK 失败不回退 v1。
 - Matter：未形成已发布产品合同，不迁移占位数据；所有 `matter*` 表在升级清理时物理删除，fresh install 不创建，Runtime 不注册 Matter API。
 - 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。启动流程创建/校验完整 bundle、续跑 ledger、完成 SDK backfill 与 reconciliation，满足全部门禁后才提交 marker 并进入主界面。普通用户不需要另跑 CLI，也不按旧 App 内 SDK 版本分叉迁移。
+- SDK backfill 只写同文件系统的私有 staging 副本；验证后先原子切换 SDK
+  root，再提交 authority marker。切换或 marker 提交失败必须恢复原 live root；
+  App 不得在 migration `deferred` 状态继续启动 Runtime。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
 
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。

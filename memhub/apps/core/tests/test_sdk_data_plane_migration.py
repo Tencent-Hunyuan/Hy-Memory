@@ -42,10 +42,15 @@ from one_memory.sdk_migration_inventory import (
     record_raw_migration_plan,
 )
 from one_memory.sdk_migration_runner import (
+    activate_sdk_migration_staging,
     commit_reconciled_cutover,
     prepare_legacy_write_queue_for_cutover,
+    prepare_sdk_migration_staging,
+    recover_sdk_migration_swap,
+    resume_legacy_cleanup,
     run_sdk_data_plane_backfill,
     sdk_cutover_blockers,
+    sdk_migration_staging,
 )
 from one_memory.target_schema import legacy_tables_present
 
@@ -217,6 +222,8 @@ def test_startup_cutover_freezes_pending_job_input_and_preserves_the_queue(store
         sdk_version="2.0.5.dev3",
     )
     assert marker.migration_id == "m1"
+    assert legacy_tables_present(store.database_path)
+    resume_legacy_cleanup(data_dir=data_dir, database_path=store.database_path)
     assert legacy_tables_present(store.database_path) == ()
     assert store.authority() is MemoryAuthority.SDK
     preserved = DurableWriteQueue(store.database_path, sdk_authority=True)
@@ -787,11 +794,21 @@ class _MigrationEmbedder:
         return [0.1, 0.2]
 
 
+class _MigrationGraphStore:
+    def __init__(self):
+        self.nodes = {}
+
+    async def upsert_memory_node(self, node):
+        self.nodes[node.node_id] = node
+        return node.node_id
+
+
 class _PrivilegedMigrationClient:
     def __init__(self):
         self._loop_thread = _MigrationLoop()
         self._vector_store = _MigrationVectorStore()
         self._embed_service = _MigrationEmbedder()
+        self._graph_store = _MigrationGraphStore()
 
     def list_memories(self, **_kwargs):
         return {"vdb": {"memories": [], "total": 0}, "request_id": "list"}
@@ -847,6 +864,7 @@ def test_offline_migration_writes_sdk_stores_without_public_client_import_method
     assert [item.raw_id for item in raw_page.raw] == ["raw-1"]
     assert client._vector_store.nodes["raw-1"].layer is MemoryLayer.L1_RAW
     assert client._vector_store.nodes["memory-1"].status is MemoryStatus.ACTIVE
+    assert client._graph_store.nodes["memory-1"].content == "prefers tea"
     assert not hasattr(client, "import_raw")
     assert not hasattr(client, "import_memory_exact")
 
@@ -878,3 +896,84 @@ def test_raw_http_dto_uses_the_unified_memory_list_shape():
     )
     assert page.raw[0].raw_id == "raw-1"
     assert page.raw[0].custom == {"role": "user"}
+
+
+def _staging_fixture(tmp_path, store):
+    data_dir = tmp_path / "home"
+    live = data_dir / "hy-memory" / "governed-v2"
+    live.mkdir(parents=True)
+    (live / "sdk-only.txt").write_text("old", encoding="utf-8")
+    paths = sdk_migration_staging(
+        data_dir=data_dir,
+        migration_id="migration-1",
+        namespace="governed-v2",
+    )
+    prepare_sdk_migration_staging(
+        paths=paths,
+        database_path=store.database_path,
+    )
+    return paths
+
+
+def test_staging_preserves_sdk_only_data_and_swaps_after_commit(tmp_path, store):
+    paths = _staging_fixture(tmp_path, store)
+    staged = paths.staging_root / "sdk-only.txt"
+    assert staged.read_text(encoding="utf-8") == "old"
+    staged.write_text("migrated", encoding="utf-8")
+    marker = object()
+
+    result = activate_sdk_migration_staging(
+        paths=paths,
+        database_path=store.database_path,
+        commit=lambda: marker,
+    )
+
+    assert result is marker
+    assert (paths.live_root / "sdk-only.txt").read_text(encoding="utf-8") == "migrated"
+    assert not paths.protective_root.exists()
+    assert not paths.staging_home.exists()
+
+
+def test_incomplete_staging_retry_restarts_from_unchanged_live_root(tmp_path, store):
+    paths = _staging_fixture(tmp_path, store)
+    (paths.staging_root / "sdk-only.txt").write_text("partial", encoding="utf-8")
+
+    prepare_sdk_migration_staging(
+        paths=paths,
+        database_path=store.database_path,
+    )
+
+    assert (paths.staging_root / "sdk-only.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_failed_cutover_restores_live_store_and_keeps_staging(tmp_path, store):
+    paths = _staging_fixture(tmp_path, store)
+    (paths.staging_root / "sdk-only.txt").write_text("migrated", encoding="utf-8")
+
+    def fail():
+        raise DataPlaneMigrationError("cutover_failed")
+
+    with pytest.raises(DataPlaneMigrationError, match="cutover_failed"):
+        activate_sdk_migration_staging(
+            paths=paths,
+            database_path=store.database_path,
+            commit=fail,
+        )
+
+    assert (paths.live_root / "sdk-only.txt").read_text(encoding="utf-8") == "old"
+    assert (paths.staging_root / "sdk-only.txt").read_text(encoding="utf-8") == "migrated"
+
+
+def test_restart_recovers_swap_when_authority_was_not_committed(tmp_path, store):
+    paths = _staging_fixture(tmp_path, store)
+    (paths.staging_root / "sdk-only.txt").write_text("migrated", encoding="utf-8")
+    paths.live_root.replace(paths.protective_root)
+    paths.staging_root.replace(paths.live_root)
+
+    recover_sdk_migration_swap(
+        paths=paths,
+        database_path=store.database_path,
+    )
+
+    assert (paths.live_root / "sdk-only.txt").read_text(encoding="utf-8") == "old"
+    assert (paths.staging_root / "sdk-only.txt").read_text(encoding="utf-8") == "migrated"

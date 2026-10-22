@@ -111,7 +111,7 @@ SDK_PRIVATE_ACCESS_EXCEPTIONS = {
     # non-runtime path allowed to manipulate SDK storage directly so that
     # migration-only mechanics never become public HyMemoryClient methods.
     f"{PACKAGE_LABEL}/hy_sdk_migration.py": frozenset(
-        {"_embed_service", "_loop_thread", "_vector_store"}
+        {"_embed_service", "_graph_store", "_loop_thread", "_vector_store"}
     ),
 }
 

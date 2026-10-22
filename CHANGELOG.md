@@ -62,7 +62,8 @@ Hy Memory and MemHub are versioned and released independently.
   idempotent durable write outcomes, and quiesced local data-plane
   snapshot/restore contracts for the MemHub authority migration. Exact legacy
   backfill is now an App-owned privileged offline operation rather than a
-  public `HyMemoryClient` API.
+  public `HyMemoryClient` API. Backfill runs against a complete staging copy;
+  cutover atomically swaps SDK roots and restores the previous root on failure.
 - Physical delete now reports incomplete VDB/Graph cleanup as a partial failure
   instead of claiming success after only one store was changed.
 - Coding search no longer injects the version-evolution diff block

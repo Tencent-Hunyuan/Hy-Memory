@@ -9,6 +9,14 @@ export interface StartupMigrationResult {
   code?: string;
 }
 
+export function requireCompletedStartupSdkMigration(
+  result: StartupMigrationResult,
+): void {
+  if (result.state === "deferred") {
+    throw new Error(result.code ?? "sdk_migration_incomplete");
+  }
+}
+
 interface CommandResult {
   exitCode: number;
   document: Record<string, unknown>;

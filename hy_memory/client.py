@@ -4253,7 +4253,8 @@ class HyMemoryClient:
                 "confidence": vdb_node.confidence,
                 "custom": vdb_node.custom or {},
                 "meta": list((vdb_node.custom or {}).get("meta") or []),
-                "source": "vdb",
+                "source": vdb_node.source,
+                "retrieval_source": "vdb",
                 "request_id": request_id,
                 "elapsed_ms": elapsed,
             }
@@ -4280,7 +4281,8 @@ class HyMemoryClient:
                 "owner": getattr(graph_node, "owner", None),
                 "confidence": graph_node.confidence,
                 "custom": getattr(graph_node, "custom", {}) or {},
-                "source": "graph",
+                "source": getattr(graph_node, "source", "") or "",
+                "retrieval_source": "graph",
                 "request_id": request_id,
                 "elapsed_ms": elapsed,
             }

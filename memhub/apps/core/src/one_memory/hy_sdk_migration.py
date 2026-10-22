@@ -41,6 +41,7 @@ class MigrationClient(Protocol):
     _loop_thread: Any
     _vector_store: Any
     _embed_service: Any
+    _graph_store: Any
 
     def list_memories(
         self,
@@ -66,6 +67,7 @@ class HySdkMigration:
         self._loop_thread = client._loop_thread
         self._vector_store = client._vector_store
         self._embed_service = client._embed_service
+        self._graph_store = client._graph_store
 
     async def list_memories(
         self,
@@ -178,6 +180,7 @@ class HySdkMigration:
             )
             if not all(identity):
                 raise ValueError("memory_id is already bound to different memory content")
+            await self._project_graph(existing)
             return {
                 "success": True,
                 "memory_id": memory_id,
@@ -210,12 +213,17 @@ class HySdkMigration:
         stored_id = await self._vector_store.upsert(node)
         if stored_id != memory_id:
             raise RuntimeError("exact migration changed the requested memory identity")
+        await self._project_graph(node)
         return {
             "success": True,
             "memory_id": memory_id,
             "memory_ids": [memory_id],
             "request_id": request_id,
         }
+
+    async def _project_graph(self, node: MemoryNode) -> None:
+        if self._graph_store is not None:
+            await self._graph_store.upsert_memory_node(node)
 
     async def read_raw_inventory(
         self,

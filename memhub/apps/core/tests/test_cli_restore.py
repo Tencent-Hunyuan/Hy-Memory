@@ -302,7 +302,12 @@ def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch
         pass
 
     class Lease:
-        client = object()
+        client = SimpleNamespace(
+            _loop_thread=None,
+            _vector_store=None,
+            _embed_service=None,
+            _graph_store=None,
+        )
 
         def close(self):
             return None
@@ -361,6 +366,14 @@ def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypat
             sdk_version="2.0.5.dev3",
             completed_at="2026-10-21T00:00:00Z",
         ),
+    )
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_runner.activate_sdk_migration_staging",
+        lambda *, commit, **_kwargs: commit(),
+    )
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_runner.resume_legacy_cleanup",
+        lambda **_kwargs: (),
     )
     output = io.StringIO()
 

@@ -116,7 +116,10 @@ import {
   startStableRuntimeRepair,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
-import { runStartupSdkMigration } from "./startup-sdk-migration";
+import {
+  requireCompletedStartupSdkMigration,
+  runStartupSdkMigration,
+} from "./startup-sdk-migration";
 import { resolveTrialProfile } from "./trial-profile";
 import { createWindowOptions } from "./window-options";
 
@@ -1097,6 +1100,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       ...(migration.code === undefined ? {} : { error_code: migration.code }),
       details: { state: migration.state },
     });
+    requireCompletedStartupSdkMigration(migration);
   };
 
   try {

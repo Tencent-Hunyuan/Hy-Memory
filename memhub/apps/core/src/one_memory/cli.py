@@ -431,7 +431,12 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         MigrationBundleRejected,
         inspect_sdk_migration_bundle,
     )
-    from one_memory.sdk_migration_runner import BackfillResult, run_sdk_data_plane_backfill
+    from one_memory.sdk_migration_runner import (
+        BackfillResult,
+        prepare_sdk_migration_staging,
+        run_sdk_data_plane_backfill,
+        sdk_migration_staging,
+    )
     from one_memory.secrets import KeyringSecretStore, SecretStoreUnavailableError
 
     database = settings.data_dir / "one-memory.sqlite3"
@@ -482,13 +487,27 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
             separators=(",", ":"),
         )
         backend_fingerprint = hashlib.sha256(backend_material.encode()).hexdigest()
+        staging = sdk_migration_staging(
+            data_dir=settings.data_dir,
+            migration_id=migration_id,
+            namespace=HY_MEMORY_NAMESPACE,
+        )
+        try:
+            staging_data_dir = prepare_sdk_migration_staging(
+                paths=staging,
+                database_path=database,
+            )
+        except Exception:
+            code = "sdk_migration_staging_failed"
+            staging_data_dir = None
 
         async def run_backfill() -> BackfillResult:
+            assert staging_data_dir is not None
             lease = await asyncio.to_thread(
                 acquire_client,
                 profile,
                 api_key=secret,
-                data_dir=settings.data_dir,
+                data_dir=staging_data_dir,
             )
             try:
                 return await run_sdk_data_plane_backfill(
@@ -506,10 +525,18 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
                 await asyncio.to_thread(lease.close)
 
         try:
-            result = asyncio.run(run_backfill())
+            result = (
+                asyncio.run(run_backfill())
+                if staging_data_dir is not None
+                else None
+            )
         except Exception:
             code = "sdk_migration_backfill_failed"
         else:
+            if result is None:
+                document = {"schema_version": 1, "state": "failed", "code": code}
+                _write_restore(stream, as_json, document, f"SDK backfill 失败：{code}")
+                return 1
             document = {
                 "schema_version": 1,
                 "state": result.state,
@@ -585,20 +612,39 @@ def sdk_cutover(options: Sequence[str], stream: TextIO) -> int:
         _write_restore(stream, as_json, document, "预览通过；加 --yes 后提交 SDK authority。")
         return 4
 
-    from one_memory.hy_runtime_config import HY_MEMORY_VERSION
+    from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE, HY_MEMORY_VERSION
     from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
     from one_memory.sdk_migration_bundle import MigrationBundleRejected
-    from one_memory.sdk_migration_runner import commit_reconciled_cutover
+    from one_memory.sdk_migration_runner import (
+        activate_sdk_migration_staging,
+        commit_reconciled_cutover,
+        resume_legacy_cleanup,
+        sdk_migration_staging,
+    )
 
     try:
-        marker = commit_reconciled_cutover(
+        database_path = settings.data_dir / "one-memory.sqlite3"
+        staging = sdk_migration_staging(
             data_dir=settings.data_dir,
-            database_path=settings.data_dir / "one-memory.sqlite3",
             migration_id=migration_id,
-            bundle_id=bundle_id,
-            sdk_version=HY_MEMORY_VERSION,
+            namespace=HY_MEMORY_NAMESPACE,
         )
-    except (DataPlaneMigrationError, MigrationBundleRejected) as error:
+        marker = activate_sdk_migration_staging(
+            paths=staging,
+            database_path=database_path,
+            commit=lambda: commit_reconciled_cutover(
+                data_dir=settings.data_dir,
+                database_path=database_path,
+                migration_id=migration_id,
+                bundle_id=bundle_id,
+                sdk_version=HY_MEMORY_VERSION,
+            ),
+        )
+        resume_legacy_cleanup(
+            data_dir=settings.data_dir,
+            database_path=database_path,
+        )
+    except (DataPlaneMigrationError, MigrationBundleRejected, OSError) as error:
         code = getattr(error, "code", str(error))
         document = {
             "schema_version": 1,
@@ -640,10 +686,12 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         import sqlite3
 
         from one_memory.database_access import main_database
+        from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
         from one_memory.sdk_data_plane_migration import (
             MemoryAuthority,
             SdkDataPlaneMigrationStore,
         )
+        from one_memory.sdk_migration_runner import sdk_migration_staging
         from one_memory.target_schema import legacy_tables_present
 
         migration_store = SdkDataPlaneMigrationStore(database_path)
@@ -653,10 +701,25 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         generation = hashlib.sha256(f"{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
         if authority is MemoryAuthority.SDK:
             legacy_tables = legacy_tables_present(database_path)
+            staging_cleanup = False
+            if marker is not None:
+                staging = sdk_migration_staging(
+                    data_dir=settings.data_dir,
+                    migration_id=marker.migration_id,
+                    namespace=HY_MEMORY_NAMESPACE,
+                )
+                staging_cleanup = (
+                    staging.protective_root.exists()
+                    or staging.staging_home.exists()
+                )
             document = {
                 "schema_version": 1,
                 "authority": "sdk",
-                "state": "cleanup_required" if legacy_tables else "complete",
+                "state": (
+                    "cleanup_required"
+                    if legacy_tables or staging_cleanup
+                    else "complete"
+                ),
                 "migration_id": marker.migration_id if marker else None,
                 "generation": generation,
                 "legacy_tables": list(legacy_tables),

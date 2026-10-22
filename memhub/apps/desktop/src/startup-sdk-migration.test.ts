@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { runStartupSdkMigration } from "./startup-sdk-migration";
+import {
+  requireCompletedStartupSdkMigration,
+  runStartupSdkMigration,
+} from "./startup-sdk-migration";
 
 const core = { command: "/core/one-memory", args: [] };
 
@@ -89,6 +92,9 @@ it("reports an unreadable migration status as deferred", async () => {
     state: "deferred",
     code: "sdk_migration_status_unavailable",
   });
+  expect(() => requireCompletedStartupSdkMigration(result)).toThrow(
+    "sdk_migration_status_unavailable",
+  );
 });
 
 it("resumes legacy table cleanup under the maintenance fence", async () => {

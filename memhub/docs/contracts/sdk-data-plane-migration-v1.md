@@ -163,6 +163,13 @@ Before cleanup, every surviving reference is rewritten to its canonical SDK
 ID. Alias, item-ledger, and detailed cutover tables are then dropped; the
 authority singleton and verified bundle remain.
 
+Backfill never mutates the live SDK root. Startup first copies the complete
+local SDK data plane, including SDK-only records, to a same-filesystem staging
+home. Exact legacy writes and reconciliation run there. Cutover renames the
+live root to a protective path, renames staging into place, and only then
+commits SDK authority. A failed commit restores the previous root; restart
+recovery resolves any interrupted rename before opening SDK stores.
+
 ## 8. Queue and unknown outcomes
 
 Queue rows and leases remain MemHub management state.

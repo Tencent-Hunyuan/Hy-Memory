@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +48,139 @@ class BackfillResult:
     counts: dict[str, int]
     memory_items: int
     raw_items: int
+
+
+@dataclass(frozen=True)
+class SdkMigrationStaging:
+    migration_id: str
+    staging_home: Path
+    live_root: Path
+    staging_root: Path
+    protective_root: Path
+    state_file: Path
+
+
+def sdk_migration_staging(
+    *,
+    data_dir: Path,
+    migration_id: str,
+    namespace: str,
+) -> SdkMigrationStaging:
+    """Return same-filesystem paths without trusting the migration ID as a path."""
+    token = hashlib.sha256(migration_id.encode()).hexdigest()[:16]
+    home = data_dir.resolve()
+    staging_home = home / ".sdk-migration" / token
+    live_root = home / "hy-memory" / namespace
+    return SdkMigrationStaging(
+        migration_id=migration_id,
+        staging_home=staging_home,
+        live_root=live_root,
+        staging_root=staging_home / "hy-memory" / namespace,
+        protective_root=live_root.parent / f".{namespace}.pre-migration-{token}",
+        state_file=staging_home / "swap-state.json",
+    )
+
+
+def _write_staging_state(paths: SdkMigrationStaging, phase: str) -> None:
+    paths.staging_home.mkdir(parents=True, exist_ok=True)
+    temporary = paths.state_file.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(
+            {"schema_version": 1, "migration_id": paths.migration_id, "phase": phase},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(paths.state_file)
+
+
+def recover_sdk_migration_swap(
+    *,
+    paths: SdkMigrationStaging,
+    database_path: Path,
+) -> None:
+    """Recover an interrupted directory swap before opening any SDK store."""
+    if not paths.protective_root.exists():
+        return
+    authority = SdkDataPlaneMigrationStore(database_path).authority()
+    if authority.value == "sdk":
+        if not paths.live_root.is_dir():
+            raise DataPlaneMigrationError("sdk_migration_committed_store_missing")
+        shutil.rmtree(paths.protective_root)
+        shutil.rmtree(paths.staging_home, ignore_errors=True)
+        return
+    if paths.live_root.exists():
+        if paths.staging_root.exists():
+            raise DataPlaneMigrationError("sdk_migration_swap_state_ambiguous")
+        paths.staging_root.parent.mkdir(parents=True, exist_ok=True)
+        paths.live_root.replace(paths.staging_root)
+    paths.protective_root.replace(paths.live_root)
+    _write_staging_state(paths, "recovered")
+
+
+def prepare_sdk_migration_staging(
+    *,
+    paths: SdkMigrationStaging,
+    database_path: Path,
+) -> Path:
+    """Build a private copy; incomplete retries restart from the unchanged live root."""
+    recover_sdk_migration_swap(paths=paths, database_path=database_path)
+    migration_store = SdkDataPlaneMigrationStore(database_path)
+    try:
+        progress = migration_store.progress(paths.migration_id)
+        reuse_ready = progress.state == "ready" and progress.phase == "reconciled"
+    except Exception:
+        reuse_ready = False
+    if paths.staging_root.exists():
+        if paths.staging_root.is_symlink() or not paths.staging_root.is_dir():
+            raise DataPlaneMigrationError("sdk_migration_staging_invalid")
+        if reuse_ready:
+            return paths.staging_home
+        shutil.rmtree(paths.staging_root)
+    paths.live_root.mkdir(parents=True, exist_ok=True)
+    from one_memory.hy_sdk_migration import snapshot_data_plane
+
+    snapshot_data_plane(
+        source_root=paths.live_root,
+        target_root=paths.staging_root,
+        writers_stopped=True,
+    )
+    _write_staging_state(paths, "prepared")
+    return paths.staging_home
+
+
+def activate_sdk_migration_staging(
+    *,
+    paths: SdkMigrationStaging,
+    database_path: Path,
+    commit: Callable[[], CutoverMarker],
+) -> CutoverMarker:
+    """Atomically expose staged SDK files and roll them back if cutover fails."""
+    recover_sdk_migration_swap(paths=paths, database_path=database_path)
+    if not paths.staging_root.is_dir():
+        raise DataPlaneMigrationError("sdk_migration_staging_missing")
+    paths.live_root.mkdir(parents=True, exist_ok=True)
+    _write_staging_state(paths, "activating")
+    paths.live_root.replace(paths.protective_root)
+    try:
+        paths.staging_root.replace(paths.live_root)
+        _write_staging_state(paths, "staging_live")
+        marker = commit()
+    except BaseException:
+        if paths.live_root.exists():
+            paths.staging_root.parent.mkdir(parents=True, exist_ok=True)
+            paths.live_root.replace(paths.staging_root)
+        if paths.protective_root.exists():
+            paths.protective_root.replace(paths.live_root)
+        _write_staging_state(paths, "rolled_back")
+        raise
+    with suppress(OSError):
+        _write_staging_state(paths, "committed")
+    # Authority is already committed; leftover paths are detected by
+    # sdk-migration-status and removed by sdk-cleanup on the next startup.
+    shutil.rmtree(paths.protective_root, ignore_errors=True)
+    shutil.rmtree(paths.staging_home, ignore_errors=True)
+    return marker
 
 
 def prepare_legacy_write_queue_for_cutover(database_path: Path) -> tuple[int, int]:
@@ -217,7 +353,6 @@ def commit_reconciled_cutover(
         reconciliation_digest=digest,
     )
     inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=marker.backup_bundle_id)
-    drop_legacy_tables(database_path)
     return marker
 
 
@@ -231,6 +366,16 @@ def resume_legacy_cleanup(*, data_dir: Path, database_path: Path) -> tuple[str, 
         inspect_sdk_migration_bundle(
             data_dir=data_dir,
             bundle_id=marker.backup_bundle_id,
+        )
+        from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
+
+        recover_sdk_migration_swap(
+            paths=sdk_migration_staging(
+                data_dir=data_dir,
+                migration_id=marker.migration_id,
+                namespace=HY_MEMORY_NAMESPACE,
+            ),
+            database_path=database_path,
         )
     return drop_legacy_tables(database_path)
 

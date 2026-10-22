@@ -152,6 +152,7 @@ class TestGetByIdReturnsExactLayer:
             user_id="u1",
             agent_id="a1",
             session_id="s1",
+            source="cursor",
             content="原始对话",
             layer=MemoryLayer.L1_RAW,
             status=MemoryStatus.ACTIVE,
@@ -168,6 +169,8 @@ class TestGetByIdReturnsExactLayer:
         assert result["memory_id"] == "raw-1"
         assert result["content"] == "原始对话"
         assert result["layer"] == MemoryLayer.L1_RAW.value
+        assert result["source"] == "cursor"
+        assert result["retrieval_source"] == "vdb"
         assert result["meta"] == [{"source": "test"}]
 
     def test_public_get_has_no_raw_visibility_switch(self):
