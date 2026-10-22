@@ -1,0 +1,4 @@
+name: hy_memory
+version: 0.1.0
+description: Native Hy Memory HTTP provider for Hermes
+type: memory
