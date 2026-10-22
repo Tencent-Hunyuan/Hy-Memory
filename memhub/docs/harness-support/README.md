@@ -1,11 +1,9 @@
 # Harness 一键插入支持索引
 
-
-> **架构变更（2026-10-21）：** 见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) Top Rules。宿主适配仍属 MemHub 管理面；~~导入进 MemHub Evidence 权威~~ 改为写入 **SDK（含 raw）**。各 harness 专页未改处冲突时以架构为准。
-
 更新日期：2026-10-14
 
 “一键插入应用”控制的是 **MemHub → Harness** 的 Recall 接入；“同步开关”控制的是 **Harness → MemHub** 的会话读取与处理。两者不是同一个功能。
+同步后的原始对话和记忆由 Hy Memory SDK 数据面持久化。
 
 打开一键插入通常会执行：
 
@@ -55,7 +53,7 @@ Core 会：
 5. 调度 pending Job，并恢复 paused、interrupted、failed Job；
 6. 把该来源加入轮询/文件 Watcher；
 7. 补扫历史尚未处理的 Session，并继续处理未来的新 Session；
-8. 如果启用了自动记忆处理，恢复对应的 Memory Task。
+8. 如果启用了自动记忆处理，恢复对应的 `memory_write_jobs`。
 
 ### 关闭同步开关
 

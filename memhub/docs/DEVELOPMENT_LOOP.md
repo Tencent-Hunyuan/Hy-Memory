@@ -1,8 +1,5 @@
 # 开发验收闭环
 
-
-> **架构变更（2026-10-21）：** 现行权威见 [`ARCHITECTURE.md`](ARCHITECTURE.md) **Top Rules**。~~MemHub Evidence / `governed_*` 作原文或 memory 权威~~ 已废弃为目标；memory 读写与 backend 只经 SDK；MemHub 可存 `memory_id` 引用。下文未逐段删线的历史表述，凡与 Top Rules 冲突处以架构文档为准。
-
 每个步骤只有经过以下状态才算完成：
 
 `Ready → In progress → Verify → Done`

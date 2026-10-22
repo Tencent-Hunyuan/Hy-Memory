@@ -1,7 +1,4 @@
-# One Memory Runtime 统一架构与实施合同
-
-
-> **架构变更（2026-10-21）：** 现行权威见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) **Top Rules**。~~MemHub Evidence / `governed_*` 作原文或 memory 权威~~ 已废弃为目标；memory 读写与 backend 只经 SDK；MemHub 可存 `memory_id` 引用。下文未逐段删线的历史表述，凡与 Top Rules 冲突处以架构文档为准。
+# MemHub Runtime 统一架构与实施合同
 
 更新：2026-10-12。关联 D02、D06、D07、D08、D26、D40、RT-D41、D56。
 
@@ -18,9 +15,9 @@ One Memory 对外提供两种主要安装入口：
 - macOS 图形 App；
 - 设计目标中的跨平台 `one-memory` 兼容 CLI；当前公开入口和平台范围以安装文档为准。
 
-二者不是两套产品。无论从哪个入口安装，最终都必须使用同一个 One Memory
-Runtime、同一份用户数据、同一套权限语义和同一条
-Evidence -> Hy Memory -> Governance -> Matters/Wiki 链路。
+二者不是两套产品。无论从哪个入口安装，最终都必须使用同一个 MemHub
+Runtime、同一份用户数据、同一套权限语义，以及由 Hy Memory SDK 负责的
+memory 数据面。
 
 产品不变量是“一次安装、一个 Runtime、一份数据、多种客户端”。
 
@@ -28,15 +25,15 @@ Evidence -> Hy Memory -> Governance -> Matters/Wiki 链路。
 
 ### Kernel / Core
 
-Python/FastAPI Core 是唯一记忆数据面和唯一记忆写入者，负责 Evidence、导入任务、
-Hy Memory、Governance、检索、问答、图投影和事项/Wiki。Core 不负责安装桌面窗口、
-修改宿主配置或注册操作系统服务。
+Python/FastAPI Core 是 MemHub 管理面，负责来源授权、模型配置、异步写入队列、
+SDK bridge、检索/问答 API 与 Runtime 协作。Memory/raw/vector/graph/coding
+数据面由 Hy Memory SDK 管理。Core 不负责安装桌面窗口、修改宿主配置或注册操作系统服务。
 
 ### Runtime
 
 Runtime 是可常驻的完整本地服务，由以下部分组成：
 
-- SQLite，作为 MemHub 唯一权威业务数据库，由 Core 独占写入；
+- SQLite，作为 MemHub 管理面数据库，由 Core 独占写入；
 - Core；
 - Host Gateway，包括 Recall Broker、Hook 通知和宿主授权校验；
 - Runtime discovery、本地认证、版本与健康状态；
@@ -96,12 +93,11 @@ One Memory Home/
   logs/
 ```
 
-~~2026-09-26 的 D56 已明确覆盖 D53：正式产品继续以 SQLite 作为 MemHub 唯一业务数据库，
-不安装或并行维护 MySQL。Evidence、任务、cursor、session、配置、权限、Governance 和审计
-都以同一 SQLite 数据实例为权威；Adapter 仍可只读宿主自身的 SQLite 文件，HY SDK 内部
-存储另按 HY 合同处理。~~
-
-**新（Top Rules）：** MemHub SQLite 仍是 **管理面** 权威（任务调度、cursor、session 管理、配置、权限、审计、Matters 组织与 `memory_id` 引用等），**不再**把 Evidence / Governance 当作原文或 memory 实体权威。Memory / raw / 向量 / 图等由 **HY SDK 存储合同** 拥有。Adapter 仍可只读宿主自身文件，但写入目标是 **SDK**。Runtime 仍负责数据目录单写、管理库 schema 升级、WAL、备份恢复、磁盘预算和卸载保留数据。MemHub 管理库不并行上 MySQL 双写（与 SDK 可选 `MEMORY_CACHE_BACKEND=mysql` 无关）。
+MemHub SQLite 是管理面权威，保存任务调度、cursor、配置、权限、审计和必要的
+`memory_id` 引用，不保存 memory 实体或原始对话正文。Memory、raw、向量、图和
+coding stores 由 Hy Memory SDK 管理。Adapter 可只读宿主自身文件，写入目标是 SDK。
+Runtime 负责数据目录单写、管理库 schema 升级、WAL、备份恢复、磁盘预算和卸载保留
+数据。MemHub 管理库不并行维护 MySQL 双写；SDK 自身可选 backend 不受此限制。
 
 `runtime.json` 不得包含 token。`runtime-token` 必须是 owner-only，实例退出时删除；
 Windows 在正式支持前必须实现并真机验证用户 SID/DACL，不能靠忽略 POSIX mode 过关。

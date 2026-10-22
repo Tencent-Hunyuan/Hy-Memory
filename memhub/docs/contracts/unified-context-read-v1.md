@@ -1,11 +1,9 @@
 # Unified Context Read v1
 
-
-> **架构变更（2026-10-21）：** 现行权威见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) **Top Rules**。~~MemHub Evidence / `governed_*` 作原文或 memory 权威~~ 已废弃为目标；memory 读写与 backend 只经 SDK；MemHub 可存 `memory_id` 引用。下文未逐段删线的历史表述，凡与 Top Rules 冲突处以架构文档为准。
-
-HC-06/08/09/10 and D47 integration slice. Implementation in progress, not host
-installation or real-data acceptance. No new user approval is inferred from this
-technical contract; the unified-read direction was explicitly approved.
+Status: legacy compatibility wire used only before the SDK data-plane cutover.
+After cutover, Host Bridge uses SDK-native Context v2. The two schemas are
+validated and returned independently; SDK data is never fabricated into v1
+revision or Evidence fields.
 
 ## Frozen Integration Surface
 
@@ -35,14 +33,13 @@ and trusted authority arguments. Raw adapter receives explicit permitted source
 IDs (None only for trusted local); memory receives permitted memory scopes (None
 only local). They return ContextLaneResult and never log private content.
 
-All permission/deleted/user predicates precede candidate limits.
-
-~~Use existing SQLite/FTS and governance semantics, not a new memory engine.~~  
-**新：** memory 车道走 **SDK search/get**（可加 MemHub 授权与 `memory_id` 过滤）；~~Governance SQLite 正文语义~~ 不作权威。raw 车道目标改为 **SDK raw**（迁移完成前实现可能仍读旧表，以架构 Top Rules 为准）。
-
-Read connections check deadline/progress; a timed-out thread must not run unbounded.
-~~Raw returns… evidence revision/author. Memory returns current confirmed content with revision and bounded evidence IDs…~~  
-**新：** raw/memory 正文与身份以 SDK 为准；MemHub 只做授权与组织引用。Exact query / lexical terms 可作为辅助，不替代 SDK 语义检索合同。
+All permission/deleted/user predicates precede candidate limits. V1 uses the
+legacy SQLite/FTS and governance semantics that existed before cutover. Read
+connections are read-only, check deadline/progress, and must not leave a timed-out
+thread running unbounded. Raw returns at most three independently authorized
+same-conversation messages per item; excerpts are bounded and carry the actual
+legacy evidence revision/author. Memory returns current confirmed content with
+revision and bounded evidence IDs, never evidence body without raw authorization.
 
 One aggregate limit and character budget applies to both lanes, fairly interleaved
 when both have results. Count raw message text and memory content once in the
@@ -67,12 +64,7 @@ not an encoding length and not a UTF-16 code-unit count, so a client in another
 language must not compare it against `String.length`: an emoji outside the BMP
 is one character here and two there.
 
-## Ownership and Verification
-
-Main owns models/API/external route guard/TS and integration. Workers own new
-raw adapter, memory adapter or aggregator/test files only, no existing schema,
-recall.py or model-processing changes. Other task owns Host integration in its
-separate worktree, consuming this contract after acknowledgment.
+## Verification
 
 Tests require no-model/no-HY, denied-lane zero invocation, source/user/workspace
 isolation before limits, revision/revoke races, long body/metadata, count/text/

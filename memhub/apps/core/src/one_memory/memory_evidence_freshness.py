@@ -7,7 +7,6 @@ segment-key breakage). Call sites still import this module; registration is
 now a no-op that always admits the row.
 
 Proof rows may still be written by the ingest path; they are ignored on read.
-See ``新鲜度_todo.md`` for the remaining teardown steps.
 """
 
 from __future__ import annotations

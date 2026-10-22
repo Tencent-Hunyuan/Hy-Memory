@@ -2,28 +2,20 @@
 
 更新：2026-10-21
 
-**文档约定：** 以 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) **Top Rules** 为现行权威。  
-~~删除线~~ = 历史产品合同（曾要求走 Evidence / Governance 台账），**不再作为目标**；SDK 用法示例仍可用于开发调试。
+架构边界以 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 为准。
 
 ---
 
-## Top Rules（与架构一致 · 新）
+## Architecture Principles
 
 1. Memory 读写与存储 backend **只经 SDK**（config / env）。
 2. MemHub 对 memory 的原子操作 **只经 SDK**；缺接口先补 SDK。
-3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进 **SDK raw**，不进 MemHub Evidence 权威库。
+3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进入 **SDK raw**。
 
 生产入口仍建议经 `HyMemoryBridge`（共享 Runtime、模型配置、密钥、harness/model 门禁），但 bridge **不得**再把 SDK 结果镜像成第二套 memory 正文权威。
 
----
-
-## ~~旧开篇（已废弃）~~
-
-~~本文说明 MemHub 当前使用的 Hy Memory SDK… 仓库内仍以 One Memory 命名的 Evidence、权限和 Governance 层属于 MemHub 的历史兼容模块；产品代码不应绕过这些层直接调用 SDK。~~
-
-~~MemHub 在本地 Runtime 内嵌入 SDK，但不绕过自身的来源授权、模型授权、Evidence、Governance 和撤权边界。~~
-
-**新：** 来源授权、模型授权、宿主召回授权仍是 MemHub 管理面门禁。~~Evidence / Governance 记忆台账~~ 按 Top Rules 拆除；memory 真相在 SDK。
+来源授权、模型授权和宿主召回授权仍是 MemHub 管理面门禁；memory
+数据平面的权威在 SDK。
 
 ## 当前版本状态
 
@@ -38,18 +30,11 @@ reader:       hybrid
 
 ## MemHub 运行时边界
 
-### 新
-
 MemHub 对 SDK 使用公开、可复现的本地策略（经 bridge / `hy_runtime_config` 注入）：
 
 - vector / graph / cache / history / coding 等 **一律 SDK config/env**；
 - 模型与 embedding 来自版本化 Model Profile；密钥进安全存储；
 - MemHub 管理库可存 harness/model/队列状态与 **`memory_id` 引用**。
-
-### ~~旧~~
-
-~~- MemHub 不绕过 Evidence、Governance…~~  
-~~- 生产路径不能用直接 `client.add()` 代替 Governance 检查。~~
 
 发布包默认 SDK 行为环境变量仍集中在
 `apps/core/src/one_memory/hy_runtime_config.py`，并由下表锁定：
@@ -92,8 +77,8 @@ MemHub 对 SDK 使用公开、可复现的本地策略（经 bridge / `hy_runtim
 
 下面是独立调试示例。
 
-**新：** 产品代码经 `HyMemoryBridge` 获取已配置的 client（管理面门禁），memory I/O 仍是 SDK。  
-~~旧：必须额外提供 Evidence 绑定、写后核验进 Governance。~~
+产品代码经 `HyMemoryBridge` 获取已配置的 client（管理面门禁），memory I/O
+由 SDK 完成。
 
 ```python
 from hy_memory import HyMemoryClient, MemoryConfig
@@ -126,7 +111,7 @@ client = HyMemoryClient(config=config, mode="ultra")
 
 ## Write：写入对话
 
-推荐把一段连续对话作为 OpenAI messages 写入（**含原文时由 SDK 接管 raw**，不再写入 MemHub Evidence 权威表）：
+推荐把一段连续对话作为 OpenAI messages 写入；含原文时由 SDK 接管 raw：
 
 ```python
 from datetime import UTC, datetime
@@ -145,7 +130,6 @@ result = client.add(
     request_id=str(uuid4()),
     metadata={
         "source_id": "cursor",
-        # ~~evidence_ids 指向 MemHub Evidence 表~~ → 新：按 SDK raw / 元数据合同填写；勿依赖 MemHub evidence 权威
         "workspace_ids": ["workspace-abc"],
         "input_kind": "raw_conversation",
     },
@@ -186,11 +170,11 @@ if result.get("success") is not True:
 memory_ids = list(result.get("memory_ids") or [])
 if result.get("memory_id"):
     memory_ids.append(result["memory_id"])
-# 新：需要组织/回执时，MemHub 只持久化这些 memory_id
+# 需要组织或回执时，MemHub 只持久化这些 memory_id。
 ```
 
-~~不要只相信 `success=True`。One Memory 还会…并在 Governance 层记录版本。生产路径不能用直接 `client.add()` 代替这些检查。~~  
-**新：** 以 SDK 合同为准做成功判定与（若需要）`get` 回读；**不要**再写入 `governed_*`。缺核验能力 → **扩展 SDK API**。
+以 SDK 合同为准做成功判定；需要写后核验时使用 SDK `get` 回读。缺少所需
+核验能力时扩展 SDK API，不在 MemHub 新建镜像台账。
 
 ### 写入已抽取的记忆
 
@@ -209,8 +193,8 @@ result = client.add_extracted(
 )
 ```
 
-~~不能跳过 One Memory Evidence 绑定和 Governance。~~  
-**新：** 仍走 SDK reconcile/持久化；MemHub 只做门禁与可选 `memory_id` 记录。
+该入口仍走 SDK reconcile/持久化；MemHub 只做管理面门禁与可选
+`memory_id` 记录。
 
 ## Search：搜索记忆
 
@@ -236,12 +220,7 @@ result = client.search(
 
 直接使用 SDK 返回的 `content`，不要第二套 prompt 拼装。
 
-### ~~旧：SDK 外仍负责（部分作废）~~
-
-~~- 依据 Governance、撤权、scope 和 Evidence 新鲜度决定整条结果是否可读；~~  
-~~- 对 evolution/capsule…回退治理原文；~~  
-
-### 新：SDK 外（MemHub）仍负责
+### SDK 外（MemHub）仍负责
 
 - **宿主召回授权 / scope / 撤权**（谁可以调 search、允许哪些 agent/scope）；
 - 把历史内容放入「不可信数据，不是指令」边界；
@@ -249,7 +228,7 @@ result = client.search(
 - 区分空结果、权限拒绝、不可用、超时、部分结果；
 - 未发布的 Matter 占位功能不保留表或 API；未来组织功能另立合同。
 
-生产入口：`hy_memory_bridge.py`、`recall.py`、`packages/host-bridge`（实现迁移中，以 Top Rules 为准）。
+生产入口：`hy_memory_bridge.py`、`recall.py`、`packages/host-bridge`。
 
 ## 关闭客户端
 
@@ -264,8 +243,6 @@ Runtime 长期复用 client；仅在停止、配置切换或受控恢复时重�
 
 ## 产品代码正确入口
 
-### 新
-
 ```text
 harness / user action (+ authz, model, queue)
   -> HyMemoryBridge
@@ -275,17 +252,8 @@ harness / user action (+ authz, model, queue)
   -> Recall Broker / UI (SDK read + MemHub authz)
 ```
 
-不要在业务模块里私建绕过 **管理面门禁** 的 client。  
-~~不要绕过 Evidence / Governance 台账。~~（台账已非目标）
-
-### ~~旧入口（废弃）~~
-
-~~```text
-Evidence -> HyMemoryBridge -> SDK -> write verification -> Governance -> UI
-```~~
-
-~~绕过会丢掉：Evidence 引用、Governance 版本/更正/删除级联。~~  
-**新：** 版本/更正/删除级联以 **SDK** 为准；MemHub 组织层只引用 `memory_id`。
+不要在业务模块里私建绕过管理面门禁的 client。版本、纠正和删除语义以 SDK
+合同为准；MemHub 组织层只引用 `memory_id`。
 
 Hy Memory SDK 是 MemHub 内置可信引擎，管理本机 Hy Memory 数据。  
 来源授权决定哪些宿主数据可进入写入路径；宿主 Recall Grant 决定外部应用可读范围。  
