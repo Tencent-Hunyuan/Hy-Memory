@@ -3,7 +3,6 @@ import {
   buildMemoryActionRequest,
   buildMemoryCorrectRequest,
   buildMemoryCreateRequest,
-  buildMemoryScopesRequest,
   MemoryOperationInputError,
   parseMemoryReceipt,
 } from "./memory-operation";
@@ -56,14 +55,7 @@ describe("memory operation requests", () => {
     });
   });
 
-  it("builds the CLI's scope and action bodies", () => {
-    expect(
-      buildMemoryScopesRequest("m1", 2, ["a", "b"], REQUEST).body,
-    ).toStrictEqual({
-      request_id: REQUEST,
-      expected_revision: 2,
-      scopes: ["a", "b"],
-    });
+  it("builds the CLI's action bodies", () => {
     expect(
       buildMemoryActionRequest("m1", "delete", 3, REQUEST).body,
     ).toStrictEqual({ request_id: REQUEST, expected_revision: 3 });

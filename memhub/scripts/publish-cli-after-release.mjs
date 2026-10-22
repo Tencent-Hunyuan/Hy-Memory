@@ -23,7 +23,8 @@ export async function publishCliAfterRelease(options, dependencies = {}) {
   const statImpl = dependencies.statImpl ?? stat;
   const buildEnvironment = {
     ...environment,
-    ONE_MEMORY_VERSION: options.version,
+    MEMHUB_NPM_VERSION: options.version,
+    MEMHUB_DEFAULT_RUNTIME_VERSION: options.runtimeVersion,
     ONE_MEMORY_BUILD_NUMBER: String(options.buildNumber),
     ONE_MEMORY_COMMIT: options.gitCommit,
   };
@@ -31,7 +32,7 @@ export async function publishCliAfterRelease(options, dependencies = {}) {
   const versionReceipt = await verifyVersion(
     [
       "--version",
-      options.version,
+      options.runtimeVersion,
       "--channel",
       options.channel,
       "--tag",
@@ -43,7 +44,7 @@ export async function publishCliAfterRelease(options, dependencies = {}) {
   );
   const releaseReceipt = await verifyRelease({
     manifestUrl: options.manifestUrl,
-    version: options.version,
+    version: options.runtimeVersion,
     gitCommit: options.gitCommit,
     channel: options.channel,
     platform: options.platform,
@@ -106,7 +107,8 @@ export async function publishCliAfterRelease(options, dependencies = {}) {
   return {
     schema_version: 1,
     product: "memhub-cli-publication",
-    version: versionReceipt.version,
+    version: options.version,
+    runtime_version: releaseReceipt.version,
     build_number: versionReceipt.build_number,
     tag: versionReceipt.tag,
     release: releaseReceipt,
@@ -196,6 +198,11 @@ function parseArgs(arguments_) {
       options.manifestUrl = value;
     else if (flag === "--version" && options.version === undefined)
       options.version = value;
+    else if (
+      flag === "--runtime-version" &&
+      options.runtimeVersion === undefined
+    )
+      options.runtimeVersion = value;
     else if (flag === "--git-commit" && options.gitCommit === undefined)
       options.gitCommit = value;
     else if (flag === "--channel" && options.channel === undefined)
@@ -219,6 +226,7 @@ function parseArgs(arguments_) {
   if (
     !options.manifestUrl ||
     !options.version ||
+    !options.runtimeVersion ||
     !options.gitCommit ||
     !options.channel ||
     !options.tag ||
@@ -230,7 +238,7 @@ function parseArgs(arguments_) {
     !options.npmTag
   ) {
     throw new Error(
-      "usage: publish-cli-after-release.mjs --manifest-url <https-url> --version <SemVer> --git-commit <sha> --channel <stable|prerelease> --tag <vSemVer> --build-number <integer> --platform <darwin|linux> --arch <x64|arm64> --registry <https-url> --npm-tag <tag> [--access <public|restricted>] [--provenance] [--allowed-host <hostname>] [--dry-run]",
+      "usage: publish-cli-after-release.mjs --manifest-url <https-url> --version <CLI SemVer> --runtime-version <Runtime SemVer> --git-commit <sha> --channel <stable|prerelease> --tag <vSemVer> --build-number <integer> --platform <darwin|linux> --arch <x64|arm64> --registry <https-url> --npm-tag <tag> [--access <public|restricted>] [--provenance] [--allowed-host <hostname>] [--dry-run]",
     );
   }
   return options;

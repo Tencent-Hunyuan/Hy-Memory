@@ -466,7 +466,13 @@ class WorkingFactReconciler:
             return [], []
 
         candidates = await self._retrieve_candidates(
-            drafts, user_id=user_id, source=source,
+            drafts,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            branch=branch,
+            source=source,
         )
 
         try:
@@ -499,7 +505,15 @@ class WorkingFactReconciler:
     # ------------------------------------------------------------
 
     async def _retrieve_candidates(
-        self, drafts: List[WorkingFactDraft], *, user_id: str, source: str
+        self,
+        drafts: List[WorkingFactDraft],
+        *,
+        user_id: str,
+        agent_id: str,
+        session_id: Optional[str],
+        workspace_id: Optional[str],
+        branch: Optional[str],
+        source: str,
     ) -> List[List[WorkingFact]]:
         """每条 draft 用 statement 召回同 user 的 top-N active 事实。
 
@@ -512,6 +526,10 @@ class WorkingFactReconciler:
         关掉时整份召回原样交给 LLM。适用于 subject 不是稳定实体名的数据集（自由文本、
         位置标签），那里精确字符串相等会把同实体判成不同主体，反而拦掉真实更新。
         """
+        # Empty/legacy session metadata remains readable, but cannot prove
+        # conversation authority for a destructive SUPERSEDE.
+        if not session_id:
+            return [[] for _ in drafts]
         try:
             embeddings = await self.embed_service.embed_batch(
                 [d.statement for d in drafts]
@@ -525,6 +543,10 @@ class WorkingFactReconciler:
             try:
                 hits = await self.store.search_facts(
                     emb, user_id=user_id, top=self.candidates_per_draft,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    branch=branch,
                     # 写入侧同样接词面通道：候选选错了 LLM 就没有机会判对。这里不传
                     # min_score——写入侧要的是"有哪些可能的前身"，让 LLM 看更宽的名单，
                     # 阈值过滤是读取侧的事。
@@ -571,6 +593,7 @@ class WorkingFactReconciler:
         resp = await self.llm_provider.complete(
             prompt=prompt,
             max_tokens=self.max_tokens,
+            audit_stage="coding_fact_reconcile",
         )
         return self._parse_ops(resp.content)
 
@@ -637,6 +660,7 @@ class WorkingFactReconciler:
             resp = await self.llm_provider.complete(
                 prompt=prompt,
                 max_tokens=_CHAIN_SUMMARY_MAX_TOKENS,
+                audit_stage="coding_fact_summary",
             )
         except Exception as e:
             logger.warning(f"[fact-reconcile] chain summary failed: {e}")
@@ -791,6 +815,15 @@ class WorkingFactReconciler:
             for old_id in targets:
                 old = await self.store.get_fact(old_id, user_id=user_id)
                 if old is None:
+                    continue
+                if (
+                    old.agent_id != agent_id
+                    or old.session_id != session_id
+                    or old.workspace_id != workspace_id
+                ):
+                    logger.warning(
+                        f"[fact-reconcile] refused cross-authority SUPERSEDE: {old.fact_id}"
+                    )
                     continue
                 # 闸门在候选阶段已经拦过一道，这里再拦一次：候选是按 statement 召回的，
                 # 而 LLM 只能覆盖候选名单里的 id，理论上到不了这儿。真到了就说明前面

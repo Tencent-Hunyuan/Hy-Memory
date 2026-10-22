@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -91,6 +92,67 @@ class SettledFixtureAdapter(IncrementalFixtureAdapter):
                 read_to_end=True,
             )
         }
+
+
+class BoundedOnboardingAdapter:
+    """No native baseline: bounded history must establish the live cursor."""
+
+    descriptor = IncrementalFixtureAdapter.descriptor
+
+    def __init__(self) -> None:
+        self.include_new = False
+
+    async def detect(self) -> bool:
+        return True
+
+    async def scan(self, options: ScanOptions):
+        current = options.cursors.get("e" * 64)
+        checkpoint = current.checkpoint if current is not None else None
+        if checkpoint not in {"byte:10", "byte:20"}:
+            yield ScannedEvidence(
+                evidence=EvidenceInput(
+                    source_id="fixture",
+                    conversation_id="old-conversation",
+                    message_id="old-message",
+                    role="user",
+                    written_by=WrittenBy.PERSON,
+                    created_at=datetime(2020, 1, 1, tzinfo=UTC),
+                    verbatim="old history",
+                    origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+                ),
+                cursor=SourceCursor(
+                    file_key="e" * 64,
+                    file_identity="bounded",
+                    checkpoint="byte:10",
+                    checkpoint_anchor="f" * 64,
+                    observed_size=20,
+                    observed_modified_ns=1,
+                ),
+            )
+            checkpoint = "byte:10"
+        if self.include_new and checkpoint != "byte:20":
+            yield ScannedEvidence(
+                evidence=EvidenceInput(
+                    source_id="fixture",
+                    conversation_id="new-conversation",
+                    message_id="new-message",
+                    role="user",
+                    written_by=WrittenBy.PERSON,
+                    created_at=datetime(2026, 10, 18, tzinfo=UTC),
+                    verbatim="new append",
+                    origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+                ),
+                cursor=SourceCursor(
+                    file_key="e" * 64,
+                    file_identity="bounded",
+                    checkpoint="byte:20",
+                    checkpoint_anchor="1" * 64,
+                    observed_size=20,
+                    observed_modified_ns=2,
+                    read_to_end=True,
+                ),
+            )
+        yield ScanProgressEvent(phase=ScanPhase.DONE)
 
 
 class HoldingHistoryAdapter:
@@ -321,6 +383,56 @@ def test_live_sync_does_not_resume_a_history_import_the_user_paused(tmp_path) ->
 
         assert synced is not None and synced.operation == "sync"
         assert jobs.require(history.job_id).status is ImportStatus.PAUSED
+        await live_sync.shutdown()
+        await imports.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_bounded_onboarding_history_establishes_cursor_before_first_sync(tmp_path) -> None:
+    async def scenario() -> None:
+        database = tmp_path / "one-memory.sqlite3"
+        evidence = EvidenceStore(database)
+        jobs = ImportJobStore(database)
+        adapter = BoundedOnboardingAdapter()
+        imports = ImportSupervisor(
+            adapters={"fixture": adapter},
+            evidence_store=evidence,
+            job_store=jobs,
+        )
+        live_sync = PollingLiveSyncSupervisor(
+            source_ids=("fixture",),
+            import_supervisor=imports,
+            job_store=jobs,
+        )
+        history = imports.create_job("fixture", operation="history")
+        with sqlite3.connect(database) as connection, connection:
+            connection.execute(
+                "UPDATE import_jobs SET history_after=? WHERE job_id=?",
+                (datetime(2026, 10, 15, tzinfo=UTC).isoformat(), history.job_id),
+            )
+
+        # With no native baseline, sync must wait instead of scanning from zero
+        # and bypassing the onboarding history window.
+        assert await live_sync.trigger("fixture") is None
+        assert not [job for job in jobs.list_jobs() if job.operation == "sync"]
+
+        imports.enqueue(history.job_id)
+        completed = await imports.wait(history.job_id)
+        assert completed.status is ImportStatus.COMPLETED
+        assert completed.stored == 0
+        assert completed.skipped == 1
+        assert evidence.count() == 0
+
+        # Once bounded history has advanced the cursor to EOF, normal realtime
+        # appends are admitted without retaining the three-day cutoff forever.
+        adapter.include_new = True
+        synced = await live_sync.trigger("fixture")
+        assert synced is not None
+        assert synced.status is ImportStatus.COMPLETED
+        assert synced.stored == 1
+        records = evidence.list_extractable()
+        assert [record.verbatim for record in records] == ["new append"]
         await live_sync.shutdown()
         await imports.shutdown()
 
@@ -1255,6 +1367,9 @@ def test_triggering_a_sync_leaves_the_loop_free_to_answer(tmp_path) -> None:
 
 def test_live_sync_diagnostics_only_emit_state_changes(tmp_path, monkeypatch):
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.DEBUG)
     receipt = configure_diagnostics(tmp_path)
     try:
         supervisor = PollingLiveSyncSupervisor(
@@ -1267,5 +1382,7 @@ def test_live_sync_diagnostics_only_emit_state_changes(tmp_path, monkeypatch):
         supervisor._set_health("codex", unavailable.model_copy(update={"source_id": "codex"}))
     finally:
         reset_diagnostics()
+        root.setLevel(previous)
     events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
     assert [event["event"] for event in events] == ["live_sync.state_changed"]
+    assert events[0]["level"] == "warn"

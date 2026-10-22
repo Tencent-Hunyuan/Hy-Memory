@@ -12,6 +12,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from one_memory.hy_memory_bridge import HySdkMemoryRecord
 from one_memory.memory_governance import GovernedMemory, MemoryStatus
 from one_memory.semantic_deadline import (
     SemanticMemoryHit,
@@ -108,6 +109,10 @@ class RecallTarget(Protocol):
     def recall(self, request: RecallRequest, *, user_id: str = "local") -> RecallReceipt: ...
 
 
+class SdkMemoryRead(Protocol):
+    async def __call__(self, memory_id: str) -> HySdkMemoryRecord | None: ...
+
+
 class RecallGovernance(Protocol):
     def find_confirmed_matching_terms(
         self,
@@ -184,6 +189,99 @@ def _probe_receipt(request: RecallRequest) -> RecallReceipt:
         used_characters=0,
         truncated=False,
     )
+
+
+class SdkRecallTarget:
+    """Host-authorized recall over SDK-owned memory bodies and lifecycle."""
+
+    def __init__(
+        self,
+        *,
+        semantic_search: SemanticSearch,
+        get_memory: SdkMemoryRead,
+    ) -> None:
+        self.semantic_search = semantic_search
+        self.get_memory = get_memory
+
+    async def recall_async(
+        self,
+        request: RecallRequest,
+        *,
+        user_id: str = "local",
+    ) -> RecallReceipt:
+        if request.query == PROBE_QUERY:
+            return _probe_receipt(request)
+        budget = request.timeout_ms / 1_000
+        deadline = time.monotonic() + budget
+        semantic_hits, outcome = await search_within(
+            self.semantic_search,
+            request.query,
+            hy_wait_budget(budget),
+        )
+        hits: list[RecallHit] = []
+        used = 0
+        truncated_by: TruncationBudget | None = (
+            TruncationBudget.TIMEOUT if outcome == "timed_out" else None
+        )
+        unexamined = 0
+        for index, hit in enumerate(semantic_hits):
+            if time.monotonic() >= deadline:
+                truncated_by = TruncationBudget.TIMEOUT
+                unexamined = len(semantic_hits) - index
+                break
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                memory = await asyncio.wait_for(
+                    self.get_memory(hit.memory_id),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                truncated_by = TruncationBudget.TIMEOUT
+                unexamined = len(semantic_hits) - index
+                break
+            if memory is None or memory.status != "active":
+                continue
+            formatted = (
+                hit.formatted_content
+                if hit.sdk_formatted and hit.formatting_complete and hit.formatted_content
+                else None
+            )
+            content = formatted or memory.content
+            if len(hits) >= request.limit:
+                truncated_by = TruncationBudget.COUNT
+                unexamined = len(semantic_hits) - index
+                break
+            if used + len(content) > request.character_budget:
+                truncated_by = TruncationBudget.CHARACTER
+                continue
+            created_at = (
+                datetime.fromtimestamp(memory.gmt_created, tz=UTC)
+                if memory.gmt_created is not None
+                else datetime(1970, 1, 1, tzinfo=UTC)
+            )
+            hits.append(
+                RecallHit(
+                    memory_id=memory.memory_id,
+                    content=content,
+                    kind=memory.layer,
+                    scopes=(),
+                    evidence_ids=(),
+                    updated_at=created_at,
+                    score=hit.score,
+                    content_format="hy-sdk" if formatted is not None else "plain",
+                )
+            )
+            used += len(content)
+        return RecallReceipt(
+            state=RecallState.GROUNDED if hits else RecallState.EMPTY,
+            query=request.query,
+            scope=request.scope,
+            hits=tuple(hits),
+            used_characters=used,
+            truncated=truncated_by is not None,
+            truncated_by=truncated_by,
+            unexamined_count=unexamined,
+        )
 
 
 class GovernedRecallTarget:

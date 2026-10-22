@@ -120,8 +120,10 @@ def test_excluded_sources_collects_the_source_names_directly(excluded_source):
 def test_a_readable_source_is_not_named_unreadable(excluded_source):
     with closing(sqlite3.connect(excluded_source)) as db, db:
         db.execute(
-            "INSERT INTO source_grants(user_id,source_id,root_path,candidate_kind,"
-            "granted_at,revoked_at) VALUES('local','codex','/synthetic','default',?,NULL)",
+            "INSERT INTO source_grants(user_id,source_id,root_path,requested_path,"
+            "root_identity,candidate_kind,granted_at,revoked_at,revision) "
+            "VALUES('local','codex','/synthetic','/synthetic','fixture',"
+            "'default',?,NULL,1)",
             (NOW,),
         )
 

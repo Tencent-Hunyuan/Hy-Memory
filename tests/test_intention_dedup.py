@@ -13,6 +13,7 @@ L7_INTENTION 层去重（0805 事故修复 · v2）单测。
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -54,7 +55,9 @@ class _FakeEmbedByHash:
 
     def vec_for(self, text: str) -> List[float]:
         v = [0.0] * self.dims
-        v[abs(hash(text)) % self.dims] = 1.0
+        # 确定性哈希：内建 hash() 每个进程随机化，会让不同文案偶发撞格、
+        # 被误判成复本，测试随 PYTHONHASHSEED 变 flaky。
+        v[int(hashlib.md5(text.encode()).hexdigest(), 16) % self.dims] = 1.0
         return v
 
     async def embed_batch(self, texts):
@@ -94,6 +97,8 @@ class _FakeVectorStore:
         self,
         *,
         query_embedding=None,
+        isolation_key: str = "",
+        isolation_keys=None,
         user_ids=None,
         agent_ids=None,
         layers=None,
@@ -107,6 +112,12 @@ class _FakeVectorStore:
         for nid, n in self._nodes.items():
             if layers and n.layer not in layers:
                 continue
+            if isolation_keys:
+                if n.get_isolation_key() not in isolation_keys:
+                    continue
+            elif isolation_key:
+                if n.get_isolation_key() != isolation_key:
+                    continue
             if user_ids and n.user_id not in user_ids:
                 continue
             if agent_ids and n.agent_id not in agent_ids:
@@ -253,6 +264,50 @@ def test_partition_duplicates_different_valid_until_keeps_both():
     assert delete_ids == []
 
 
+def test_partition_duplicates_different_users_keeps_both():
+    """不同用户的同一天、同意图文本不能被判为复本（更不能硬删他人数据）。"""
+    same_ma = datetime(2025, 8, 6)
+    same_vu = datetime(2025, 8, 8)
+    alice = _make_intention_node(
+        "用户明天要开会", user_id="alice", memory_at=same_ma, valid_until=same_vu,
+        gmt_created=datetime(2025, 8, 1),
+    )
+    bob = _make_intention_node(
+        "用户明天要开会", user_id="bob", memory_at=same_ma, valid_until=same_vu,
+        gmt_created=datetime(2025, 8, 2),
+    )
+    hits = [
+        {"node_id": alice.node_id, "node": alice, "score": 0.9},
+        {"node_id": bob.node_id, "node": bob, "score": 0.9},
+    ]
+    kept, delete_ids = _partition_duplicates(hits, threshold=0.95)
+    assert {h["node_id"] for h in kept} == {alice.node_id, bob.node_id}
+    assert delete_ids == []
+
+
+def test_partition_duplicates_different_agents_keeps_both():
+    """同 user 下不同 agent 的意图也属于不同作用域，不能互相覆盖。"""
+    same_ma = datetime(2025, 8, 6)
+    same_vu = datetime(2025, 8, 8)
+    a1 = _make_intention_node(
+        "用户明天要开会", user_id="u1", agent_id="agent_a",
+        memory_at=same_ma, valid_until=same_vu,
+        gmt_created=datetime(2025, 8, 1),
+    )
+    a2 = _make_intention_node(
+        "用户明天要开会", user_id="u1", agent_id="agent_b",
+        memory_at=same_ma, valid_until=same_vu,
+        gmt_created=datetime(2025, 8, 2),
+    )
+    hits = [
+        {"node_id": a1.node_id, "node": a1, "score": 0.9},
+        {"node_id": a2.node_id, "node": a2, "score": 0.9},
+    ]
+    kept, delete_ids = _partition_duplicates(hits, threshold=0.95)
+    assert {h["node_id"] for h in kept} == {a1.node_id, a2.node_id}
+    assert delete_ids == []
+
+
 def test_partition_duplicates_low_cosine_keeps_both():
     """content 不同（cosine 低）→ 不判重，即使 memory_at / valid_until 同。"""
     same_ma = datetime(2025, 8, 6)
@@ -363,6 +418,61 @@ def test_recall_intentions_dedup_and_async_delete_end_to_end():
     # p1（gmt 最早）应该留下，其余 2 条被异步删
     assert p_ids[0] in {h["node_id"] for h in result}
     assert set(vs.delete_calls) == {p_ids[1], p_ids[2]}
+
+
+def test_recall_intentions_forwards_isolation_keys():
+    """session 过滤路径只生成 isolation_keys；intention 必须原样透传给 VDB。"""
+
+    class _RecordingStore:
+        def __init__(self):
+            self.kwargs = None
+
+        async def search(self, **kwargs):
+            self.kwargs = kwargs
+            return []
+
+    vs = _RecordingStore()
+    _run(recall_intentions(
+        vs, [0.0], isolation_keys=["u1::a1::s1"], limit=5,
+    ))
+    assert vs.kwargs["isolation_keys"] == ["u1::a1::s1"]
+    assert vs.kwargs["user_ids"] is None
+    assert vs.kwargs["agent_ids"] is None
+
+    vs2 = _RecordingStore()
+    _run(recall_intentions(
+        vs2, [0.0], isolation_key="u1::a1::s1", limit=5,
+    ))
+    assert vs2.kwargs["isolation_key"] == "u1::a1::s1"
+
+
+def test_recall_intentions_isolation_keys_prevent_cross_user_leak():
+    """带 isolation_keys 时只能召回该作用域的意图，且不会误删其他用户。"""
+    vs = _FakeVectorStore()
+    emb = _FakeEmbedByHash(dims=32)
+    ma = datetime(2025, 8, 6)
+    vu = datetime(2025, 8, 8)
+
+    alice = _make_intention_node(
+        "用户明天要开会", user_id="u1", dims=32,
+        memory_at=ma, valid_until=vu,
+        embedding=emb.vec_for("用户明天要开会"),
+    )
+    bob = _make_intention_node(
+        "用户明天要开会", user_id="u2", dims=32,
+        memory_at=ma, valid_until=vu,
+        embedding=emb.vec_for("用户明天要开会"),
+    )
+    _run(vs.upsert(alice))
+    _run(vs.upsert(bob))
+
+    hits = _run(recall_intentions(
+        vs, emb.vec_for("用户明天要开会"),
+        isolation_keys=["u1::a1::s1"], limit=10,
+        now=datetime(2025, 8, 6, 12, 0),
+    ))
+    assert {h["node_id"] for h in hits} == {alice.node_id}
+    assert vs.delete_calls == []
 
 
 def test_recall_intentions_different_valid_until_all_returned():

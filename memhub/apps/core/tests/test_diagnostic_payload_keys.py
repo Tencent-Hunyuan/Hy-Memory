@@ -16,15 +16,14 @@ import pytest
 
 from one_memory.diagnostic_log import _DETAIL_KEYS
 
-SOURCES = (
-    "api.py",
-    "imports/async_bridge.py",
-    "imports/live_sync.py",
-    "imports/runner.py",
-    "memory_processing.py",
-)
-
 ROOT = Path(__file__).resolve().parent.parent / "src" / "one_memory"
+
+#: Every module, not a hand-picked list. The two payloads that caused real
+#: outages were in files nobody thought to add here, so the only shape of this
+#: check that can actually hold the line is "every module, always".
+SOURCES = tuple(
+    sorted(str(path.relative_to(ROOT)) for path in ROOT.rglob("*.py") if path.name != "__init__.py")
+)
 
 
 def _literal_calls(path: Path):

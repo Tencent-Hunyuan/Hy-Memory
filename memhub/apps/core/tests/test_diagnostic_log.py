@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from one_memory.diagnostic_log import (
     configure_diagnostics,
     current_trace_id,
     database_error_code,
+    diagnostic_event,
     diagnostic_exception,
     diagnostics_enabled,
     diagnostics_requested,
@@ -21,6 +23,32 @@ from one_memory.diagnostic_log import (
     reset_trace_id,
     resource_snapshot,
 )
+
+
+def test_debug_events_are_collected_only_at_debug_level(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    root = logging.getLogger()
+    previous = root.level
+    root.setLevel(logging.INFO)
+    receipt = configure_diagnostics(tmp_path)
+    try:
+        diagnostic_event(
+            level="debug",
+            component="core.poll",
+            event="poll.completed",
+            outcome="succeeded",
+        )
+        diagnostic_event(
+            level="info",
+            component="memory.task",
+            event="memory_task.finished",
+            outcome="completed",
+        )
+    finally:
+        reset_diagnostics()
+        root.setLevel(previous)
+    events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["memory_task.finished"]
 
 
 def test_high_frequency_success_events_are_summarized_but_warnings_are_not(
@@ -95,6 +123,53 @@ def test_arbitrary_detail_and_absolute_stack_are_rejected(tmp_path):
             outcome="failed",
             safe_stack=("/Users/me/private.py:1",),
         )
+
+
+def test_a_rejected_payload_does_not_break_the_caller(tmp_path, monkeypatch) -> None:
+    """Rejection protects the log; it must not become the caller's outage.
+
+    Two of our own nodes shipped with unlisted `details` keys. Both sat on a
+    request path, so the rejection surfaced as a 500 to the person using the
+    app — including the sedimentation switch, whose every request failed
+    because logging the toggle raised before the endpoint could answer.
+    """
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    receipt = configure_diagnostics(tmp_path)
+    try:
+        diagnostic_event(
+            level="info",
+            component="memory.sedimentation",
+            event="memory_sedimentation.toggled",
+            outcome="succeeded",
+            details={"prompt": "private"},
+        )
+    finally:
+        reset_diagnostics()
+    # Rejected, so nothing is written — but the call returned.
+    assert not receipt.path.exists() or receipt.path.read_text() == ""
+
+
+def test_the_sedimentation_toggle_payload_is_recorded(tmp_path, monkeypatch) -> None:
+    """`enabled` is a bounded boolean and has to be a legal detail key.
+
+    Omitting it from the allow-list is what made the switch's own endpoint
+    answer 500 while still saving the new value.
+    """
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    receipt = configure_diagnostics(tmp_path)
+    try:
+        diagnostic_event(
+            level="info",
+            component="memory.sedimentation",
+            event="memory_sedimentation.toggled",
+            outcome="succeeded",
+            details={"enabled": False},
+        )
+    finally:
+        reset_diagnostics()
+    events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
+    assert [event["event"] for event in events] == ["memory_sedimentation.toggled"]
+    assert events[0]["details"]["enabled"] is False
 
 
 def test_exception_diagnostic_keeps_code_location_not_message():

@@ -7,10 +7,11 @@ import {
 import type { AddressInfo } from "node:net";
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
-  ContextSearchResponse,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
+  HostContextSearchResponse,
+  MemoryAuthorityResponse,
   RecallReceipt,
   RecallRequest,
 } from "@one-memory/contracts";
@@ -45,11 +46,13 @@ const DELIVERY_BINDING_TTL_MS = 60_000;
 const CALL_EVENT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HOST_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/;
+const PAIRING_FAILURE_WINDOW_MS = 60_000;
+const MAX_PAIRING_FAILURES_PER_WINDOW = 10;
 
 export interface ConnectionControlRequest {
   schema_version: 1;
   instance_id: string;
-  action: "capability" | "preview" | "execute" | "receipt" | "host";
+  action: "capability" | "preview" | "execute" | "receipt" | "host" | "pairing";
   input: Record<string, unknown>;
 }
 
@@ -109,6 +112,8 @@ export class RecallBroker {
   >();
 
   private readerCircuitOpenUntil = 0;
+  private pairingFailureWindowStartedAt = 0;
+  private pairingFailureCount = 0;
 
   constructor(options: RecallBrokerOptions) {
     this.options = Object.freeze({ ...options });
@@ -335,6 +340,10 @@ export class RecallBroker {
       await this.controlConnections(request, response);
       return;
     }
+    if (request.url === "/pair") {
+      await this.exchangePairing(request, response);
+      return;
+    }
     if (request.url === "/source-changed") {
       await this.notifySourceChanged(request, response);
       return;
@@ -504,6 +513,76 @@ export class RecallBroker {
     }
   }
 
+  private async exchangePairing(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const store = this.options.hostGrantStore;
+    if (store === undefined) {
+      sendJson(response, 404, { error: "host_pairing_unavailable" });
+      return;
+    }
+    if (
+      request.headers.origin !== undefined ||
+      Object.keys(request.headers).some((key) =>
+        key.startsWith("sec-fetch-"),
+      ) ||
+      request.headers["content-type"]?.split(";", 1)[0]?.trim() !==
+        "application/json"
+    ) {
+      sendJson(response, 415, { error: "host_pairing_invalid" });
+      return;
+    }
+    const now = Date.now();
+    if (now - this.pairingFailureWindowStartedAt >= PAIRING_FAILURE_WINDOW_MS) {
+      this.pairingFailureWindowStartedAt = now;
+      this.pairingFailureCount = 0;
+    }
+    if (this.pairingFailureCount >= MAX_PAIRING_FAILURES_PER_WINDOW) {
+      sendJson(response, 429, { error: "host_pairing_rate_limited" });
+      return;
+    }
+    try {
+      const body = await readJsonBody(request, 10_000);
+      if (
+        !body ||
+        typeof body !== "object" ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        !("code" in body) ||
+        typeof body.code !== "string" ||
+        !/^\d{6}$/.test(body.code)
+      ) {
+        this.pairingFailureCount++;
+        sendJson(response, 400, { error: "host_pairing_invalid" });
+        return;
+      }
+      const issued = await store.exchangePairing(body.code);
+      this.pairingFailureCount = 0;
+      sendJson(response, 200, {
+        schema_version: 1,
+        host_id: issued.receipt.hostId,
+        installation_id: issued.receipt.installationId,
+        credential_type: "bearer",
+        credential: issued.secret,
+      });
+    } catch (error) {
+      this.pairingFailureCount++;
+      if (
+        error instanceof HostGrantError &&
+        error.code === "host_pairing_invalid"
+      ) {
+        sendJson(response, 401, { error: "host_pairing_invalid" });
+        return;
+      }
+      if (error instanceof BodyReadError) {
+        sendJson(response, error.status, { error: "host_pairing_invalid" });
+        return;
+      }
+      sendJson(response, 500, { error: "host_pairing_unavailable" });
+    }
+  }
+
   private async controlConnections(
     request: IncomingMessage,
     response: ServerResponse,
@@ -555,9 +634,14 @@ export class RecallBroker {
         !("instance_id" in body) ||
         body.instance_id !== this.options.instanceId ||
         !("action" in body) ||
-        !["capability", "preview", "execute", "receipt", "host"].includes(
-          String(body.action),
-        ) ||
+        ![
+          "capability",
+          "preview",
+          "execute",
+          "receipt",
+          "host",
+          "pairing",
+        ].includes(String(body.action)) ||
         !("input" in body) ||
         !body.input ||
         typeof body.input !== "object" ||
@@ -589,13 +673,7 @@ export class RecallBroker {
         throw Error("connection_control_response_limit");
       if (!response.destroyed) sendJson(response, 200, envelope);
       this.recordConnectionDiagnostic(value.action, false);
-      const fingerprint = connectionStateFingerprint(result);
-      const previous = this.connectionDiagnosticState.get(value.action);
-      if (
-        !["capability", "receipt", "host"].includes(value.action) ||
-        previous !== fingerprint
-      ) {
-        this.connectionDiagnosticState.set(value.action, fingerprint);
+      if (!["capability", "receipt", "host"].includes(value.action)) {
         this.emit({
           level: "info",
           component: "host.broker",
@@ -741,35 +819,62 @@ export class RecallBroker {
         return;
       }
       const authorized = await this.authorizeHost(request, body, "all-apps");
-      const result = {
-        data: await this.readViaReader<unknown>(
-          "/api/v1/context/search",
-          body,
-          authorized.headers,
-          (body.timeout_ms ?? 2000) + 1000,
-          async () => {
-            const r = await axios.post(
-              `${this.options.coreBaseUrl}/api/v1/context/search`,
-              body,
-              {
-                headers: authorized.headers,
-                proxy: false,
-                maxRedirects: 0,
-                timeout: (body.timeout_ms ?? 2000) + 1000,
-                maxContentLength: 2 * 1024 * 1024,
-                signal: abort.signal,
-              },
-            );
-            await authorized.verifyBeforeRelease();
-            return r.data;
+      const authorityResponse = await axios.get<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.options.coreApiToken}`,
+            "x-one-memory-trace-id": requestTraceId(request),
           },
-          abort.signal,
-        ),
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 1_500,
+          signal: abort.signal,
+        },
+      );
+      if (!isMemoryAuthorityResponse(authorityResponse.data))
+        throw new Error("invalid_memory_authority");
+      const authority = authorityResponse.data;
+      const contextPath =
+        authority.authority === "sdk"
+          ? "/api/v2/context/search"
+          : "/api/v1/context/search";
+      const readContext = async () => {
+        const result = await axios.post(
+          `${this.options.coreBaseUrl}${contextPath}`,
+          body,
+          {
+            headers: authorized.headers,
+            proxy: false,
+            maxRedirects: 0,
+            timeout: (body.timeout_ms ?? 2000) + 1000,
+            maxContentLength: 2 * 1024 * 1024,
+            signal: abort.signal,
+          },
+        );
+        await authorized.verifyBeforeRelease();
+        return result.data;
+      };
+      const result = {
+        data:
+          authority.authority === "legacy"
+            ? await this.readViaReader<unknown>(
+                contextPath,
+                body,
+                authorized.headers,
+                (body.timeout_ms ?? 2000) + 1000,
+                readContext,
+                abort.signal,
+              )
+            : await readContext(),
       };
       const invalidField = contextResponseInvalidField(result.data);
       const identity = authorized.identity;
       const responseFailure =
         invalidField ??
+        (!matchesContextAuthority(result.data, authority)
+          ? "schema_version"
+          : null) ??
         (!isContextResponseForRequest(result.data, body)
           ? "request_or_budget"
           : !identity
@@ -790,9 +895,10 @@ export class RecallBroker {
         throw new Error("invalid_context_response");
       }
       if (!identity) throw new Error("invalid_context_response");
-      const contextResult = result.data as ContextSearchResponse;
+      const contextResult = result.data as HostContextSearchResponse;
       await authorized.verifyBeforeRelease();
       if (
+        contextResult.schema_version === 1 &&
         identity.hostId === "workbuddy" &&
         CALL_EVENT_ID.test(contextResult.request_id)
       ) {
@@ -1123,10 +1229,25 @@ export class RecallBroker {
         "om_ask",
         body.scope ?? "all-apps",
       );
+      const authorityResponse = await axios.get<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.options.coreApiToken}`,
+            "x-one-memory-trace-id": requestTraceId(request),
+          },
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 1_500,
+        },
+      );
+      if (!isMemoryAuthorityResponse(authorityResponse.data))
+        throw new Error("invalid_memory_authority");
+      const authority = authorityResponse.data;
       // Ask may call a generation model; keep the broker timeout aligned with
       // the web client's 120s budget rather than the short recall budget.
-      const coreResponse = await axios.post<AskMemoryResponse>(
-        `${this.options.coreBaseUrl}/api/v1/memories/ask`,
+      const coreResponse = await axios.post<HostAskMemoryResponse>(
+        `${this.options.coreBaseUrl}/api/${authority.authority === "sdk" ? "v2" : "v1"}/memories/ask`,
         body,
         {
           headers: authorized.headers,
@@ -1135,6 +1256,8 @@ export class RecallBroker {
           timeout: 120_000,
         },
       );
+      if (!isHostAskResponse(coreResponse.data, authority.authority))
+        throw new Error("invalid_ask_response");
       await authorized.verifyBeforeRelease();
       sendJson(response, 200, coreResponse.data);
     } catch (error) {
@@ -1261,62 +1384,26 @@ export class RecallBroker {
       this.connectionDiagnosticSummary.set(action, current);
       return;
     }
-    this.emit({
-      level: current.errorCount ? "warn" : "info",
-      component: "host.broker",
-      event: "connection_control.summary",
-      outcome: "observed",
-      instance_id: this.options.instanceId,
-      details: {
-        action,
-        count: current.count,
-        error_count: current.errorCount,
-      },
-    });
+    if (current.errorCount) {
+      this.emit({
+        level: "warn",
+        component: "host.broker",
+        event: "connection_control.summary",
+        outcome: "observed",
+        instance_id: this.options.instanceId,
+        details: {
+          action,
+          count: current.count,
+          error_count: current.errorCount,
+        },
+      });
+    }
     this.connectionDiagnosticSummary.set(action, {
       startedAt: now,
       count: 0,
       errorCount: 0,
     });
   }
-}
-
-function connectionStateFingerprint(value: unknown): string {
-  const safe: Array<[string, string | number | boolean | null]> = [];
-  const visit = (item: unknown): void => {
-    if (Array.isArray(item)) {
-      for (const child of item) visit(child);
-      return;
-    }
-    if (!item || typeof item !== "object") return;
-    for (const [key, child] of Object.entries(item)) {
-      if (
-        [
-          "status",
-          "state",
-          "error",
-          "code",
-          "installed",
-          "approved",
-          "available",
-        ].includes(key) &&
-        (child === null ||
-          ["string", "number", "boolean"].includes(typeof child))
-      ) {
-        safe.push([key, child as string | number | boolean | null]);
-      } else if (child && typeof child === "object") {
-        visit(child);
-      }
-    }
-  };
-  visit(value);
-  return JSON.stringify(
-    safe.sort(([leftKey, left], [rightKey, right]) =>
-      `${leftKey}:${String(left)}`.localeCompare(
-        `${rightKey}:${String(right)}`,
-      ),
-    ),
-  );
 }
 
 function requestTraceId(request: IncomingMessage): string {
@@ -1537,6 +1624,79 @@ function sendJson(
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.end(`${JSON.stringify(value)}\n`);
+}
+
+function isMemoryAuthorityResponse(
+  value: unknown,
+): value is MemoryAuthorityResponse {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2 ||
+    !Object.hasOwn(record, "authority") ||
+    !Object.hasOwn(record, "migration_id")
+  )
+    return false;
+  return record.authority === "legacy"
+    ? record.migration_id === null
+    : record.authority === "sdk" &&
+        typeof record.migration_id === "string" &&
+        record.migration_id.length > 0 &&
+        record.migration_id.length <= 512;
+}
+
+function matchesContextAuthority(
+  value: unknown,
+  authority: MemoryAuthorityResponse,
+): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  return (
+    (value as { schema_version?: unknown }).schema_version ===
+    (authority.authority === "sdk" ? 2 : 1)
+  );
+}
+
+function isHostAskResponse(
+  value: unknown,
+  authority: "legacy" | "sdk",
+): value is HostAskMemoryResponse {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const response = value as Record<string, unknown>;
+  if (
+    typeof response.answer !== "string" ||
+    !["generated", "extractive", "empty"].includes(String(response.mode)) ||
+    !Array.isArray(response.memories)
+  )
+    return false;
+  if (authority === "legacy") return response.schema_version === undefined;
+  if (response.schema_version !== 2) return false;
+  return response.memories.every((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item))
+      return false;
+    const memory = item as Record<string, unknown>;
+    return (
+      Object.keys(memory).every((key) =>
+        [
+          "memory_id",
+          "content",
+          "layer",
+          "status",
+          "source",
+          "gmt_created",
+        ].includes(key),
+      ) &&
+      ["memory_id", "content", "layer", "status"].every(
+        (key) => typeof memory[key] === "string",
+      ) &&
+      (memory.source === null || typeof memory.source === "string") &&
+      (memory.gmt_created === null ||
+        (typeof memory.gmt_created === "number" &&
+          Number.isSafeInteger(memory.gmt_created)))
+    );
+  });
 }
 
 function isLoopback(address: string | undefined): boolean {

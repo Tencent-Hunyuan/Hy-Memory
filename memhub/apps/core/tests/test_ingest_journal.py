@@ -111,7 +111,7 @@ def test_import_metadata_changes_invalidate_without_authorizing_content(setup, c
 @pytest.mark.parametrize("cause", ["import", "maintenance"])
 @pytest.mark.parametrize(
     "column,value",
-    [("verbatim", "changed raw body"), ("written_by", "agent"), ("role", "assistant")],
+    [("verbatim", "changed raw body"), ("role", "assistant")],
 )
 def test_material_change_eligibility_depends_on_trusted_cause(setup, cause, column, value):
     db, store, _ = setup
@@ -124,6 +124,17 @@ def test_material_change_eligibility_depends_on_trusted_cause(setup, cause, colu
     assert new.fingerprint != old.fingerprint
     assert new.generation_eligible is (cause == "import")
     assert new.kind == ("revise" if cause == "import" else "metadata")
+
+
+def test_legacy_written_by_change_is_not_a_material_event(setup):
+    db, store, _ = setup
+    db.execute("BEGIN IMMEDIATE")
+    key = put(store, db)
+    journal.initialize(db)
+    old = journal.current(db, key)
+    db.execute("UPDATE evidence SET written_by='agent' WHERE evidence_id=?", (key,))
+
+    assert journal.record(db, key, cause="import") == old
 
 
 def test_complete_origin_metadata_changes_and_observation_noise(setup):

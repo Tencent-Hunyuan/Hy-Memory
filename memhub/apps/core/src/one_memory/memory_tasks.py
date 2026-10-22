@@ -17,8 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.database import take_the_write_lock_first
 from one_memory.database_access import main_database
-from one_memory.imports.models import EvidenceRecord
-from one_memory.memory_server.migrations import memory_tasks_ddl
+from one_memory.imports.models import EvidenceRecord, WrittenBy
+from one_memory.memory_server.migrations import (
+    memory_task_sdk_receipts_ddl,
+    memory_tasks_ddl,
+)
 from one_memory.model_profiles import ModelProfile, ModelProfileSnapshot
 
 
@@ -67,6 +70,12 @@ POLICY_STOPPED_CODES = (
     "hy_memory_evidence_changed",
 )
 
+#: HY completed a write, but Core could not prove that the selected mutation
+#: target belonged to this task's frozen authority. Reconciliation may inspect
+#: HY by request id, but neither automatic nor user-confirmed generic retry may
+#: invoke the model again for these codes.
+NON_RETRYABLE_POST_WRITE_CODES = ("hy_memory_write_verification_authority_invalid",)
+
 
 class MemoryTask(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -114,6 +123,24 @@ PROFILE_STOP_CODES = (
 #: first-run corpus can hold hundreds of thousands of legacy rows; marking
 #: them all while preparing the active window would hold the single writer.
 ACTIVE_WINDOW_DEFER_LIMIT = 2048
+
+
+def _task_only_unknown_clause(connection: sqlite3.Connection) -> str:
+    """Exclude tasks whose Evidence is already owned by the durable queue."""
+    linked_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_write_job_evidence'"
+    ).fetchone()
+    if linked_table is None:
+        return ""
+    return """
+        AND NOT EXISTS (
+            SELECT 1
+            FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+            JOIN memory_write_job_evidence AS linked
+              ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+            WHERE inputs.task_id=memory_tasks.task_id
+        )
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,29 +201,59 @@ def evidence_ref(record: EvidenceRecord) -> TaskEvidenceRef:
             "segment_end": int(marker["end"]),
             "segment_hash": str(marker["hash"]),
         }
-    identity = record.model_dump(mode="json", exclude={"origin_meta", "imported_at", "updated_at"})
     return {
         "evidence_id": record.evidence_id,
         "revision": record.revision,
         "content_hash": record.content_hash,
-        "identity_hash": sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
+        "identity_hash": _evidence_identity_hash(record, include_written_by=False),
     }
+
+
+def _evidence_identity_hash(record: EvidenceRecord, *, include_written_by: bool) -> str:
+    excluded = {"origin_meta", "imported_at", "updated_at"}
+    if not include_written_by:
+        excluded.add("written_by")
+    identity = record.model_dump(mode="json", exclude=excluded)
+    return sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def _identity_hash_matches(record: EvidenceRecord, expected: object) -> bool:
+    candidates = {_evidence_identity_hash(record, include_written_by=False)}
+    # Tasks created by pre-role-only builds keep their original proof. The
+    # legacy metadata could also have changed in place without a revision, so
+    # accept the old hash under every historical author guess.
+    for written_by in WrittenBy:
+        candidates.add(
+            _evidence_identity_hash(
+                record.model_copy(update={"written_by": written_by}),
+                include_written_by=True,
+            )
+        )
+    return expected in candidates
 
 
 def matches_evidence_ref(record: EvidenceRecord, ref: TaskEvidenceRef) -> bool:
     if "segment_hash" in ref:
         base = evidence_ref(record)
         if any(
-            base.get(key) != ref.get(key)
-            for key in ("evidence_id", "revision", "content_hash", "identity_hash")
+            base.get(key) != ref.get(key) for key in ("evidence_id", "revision", "content_hash")
         ):
+            return False
+        if not _identity_hash_matches(record, ref.get("identity_hash")):
             return False
         start, end = ref.get("segment_start"), ref.get("segment_end")
         if not isinstance(start, int) or not isinstance(end, int) or not (0 <= start < end):
             return False
         return sha256(record.verbatim[start:end].encode()).hexdigest() == ref["segment_hash"]
     current = evidence_ref(record)
-    return all(current.get(key) == value for key, value in ref.items())
+    return all(
+        (
+            _identity_hash_matches(record, value)
+            if key == "identity_hash"
+            else current.get(key) == value
+        )
+        for key, value in ref.items()
+    )
 
 
 def segment_evidence_record(
@@ -259,6 +316,16 @@ class MemoryTaskOutput(BaseModel):
     support_refs: tuple[TaskEvidenceRef, ...] = ()
 
 
+class SdkTaskReceipt(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    task_id: str
+    request_id: str
+    raw_ids: tuple[str, ...] = ()
+    memory_ids: tuple[str, ...] = ()
+    created_at: datetime
+
+
 #: Schema owned by `memory_server.migrations` (migration 14). No local copy.
 #:
 #: The `CHECK` on `memory_task_extractions` is preserved there too: content and
@@ -296,6 +363,7 @@ class MemoryTaskStore:
         self.database_path = database_path
         with self._connect(writing=True) as connection:
             connection.executescript(MEMORY_TASK_SCHEMA)
+            connection.executescript(memory_task_sdk_receipts_ddl("sqlite"))
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(memory_tasks)")}
             if "duration_seconds" not in columns:
                 connection.execute("ALTER TABLE memory_tasks ADD COLUMN duration_seconds REAL")
@@ -561,6 +629,70 @@ class MemoryTaskStore:
                 (task_id,),
             ).fetchall()
         return tuple(MemoryTaskOutput.model_validate_json(r[0]) for r in rows)
+
+    def save_sdk_receipt(
+        self,
+        *,
+        task_id: str,
+        request_id: str,
+        raw_ids: Sequence[str],
+        memory_ids: Sequence[str],
+    ) -> SdkTaskReceipt:
+        receipt = SdkTaskReceipt(
+            task_id=task_id,
+            request_id=request_id,
+            raw_ids=tuple(dict.fromkeys(raw_ids)),
+            memory_ids=tuple(dict.fromkeys(memory_ids)),
+            created_at=datetime.now(UTC),
+        )
+        body = (
+            json.dumps(receipt.raw_ids),
+            json.dumps(receipt.memory_ids),
+            receipt.created_at.isoformat(),
+        )
+        with self._connect(writing=True) as db:
+            db.execute(
+                "INSERT INTO memory_task_sdk_receipts "
+                "(task_id,request_id,raw_ids_json,memory_ids_json,created_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(task_id) DO NOTHING",
+                (task_id, request_id, *body),
+            )
+            row = db.execute(
+                "SELECT * FROM memory_task_sdk_receipts WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            raise MemoryTaskRequestConflictError("SDK task receipt disappeared")
+        saved = SdkTaskReceipt(
+            task_id=str(row["task_id"]),
+            request_id=str(row["request_id"]),
+            raw_ids=tuple(json.loads(str(row["raw_ids_json"]))),
+            memory_ids=tuple(json.loads(str(row["memory_ids_json"]))),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+        if (
+            saved.request_id != receipt.request_id
+            or saved.raw_ids != receipt.raw_ids
+            or saved.memory_ids != receipt.memory_ids
+        ):
+            raise MemoryTaskRequestConflictError("SDK task receipt differs")
+        return saved
+
+    def sdk_receipt(self, task_id: str) -> SdkTaskReceipt | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM memory_task_sdk_receipts WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SdkTaskReceipt(
+            task_id=str(row["task_id"]),
+            request_id=str(row["request_id"]),
+            raw_ids=tuple(json.loads(str(row["raw_ids_json"]))),
+            memory_ids=tuple(json.loads(str(row["memory_ids_json"]))),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
 
     def create(
         self,
@@ -977,6 +1109,42 @@ class MemoryTaskStore:
             error_code=error_code,
         )
 
+    def release_unstarted(
+        self,
+        task_id: str,
+        *,
+        runner_token: str,
+        error_code: str,
+    ) -> MemoryTask:
+        """Return a claimed task to pending when a user pause wins before HY.
+
+        Claim increments ``attempts``. A pause is not an execution failure, so
+        the attempt is returned as well; repeatedly pausing and resuming can
+        never exhaust an otherwise healthy task.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._connect(writing=True) as connection:
+            changed = connection.execute(
+                """
+                UPDATE memory_tasks
+                SET status=?, runner_token=NULL,
+                    attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,
+                    last_error_code=?, duration_seconds=NULL, updated_at=?
+                WHERE task_id=? AND status=? AND runner_token=?
+                """,
+                (
+                    MemoryTaskStatus.PENDING,
+                    error_code,
+                    now,
+                    task_id,
+                    MemoryTaskStatus.RUNNING,
+                    runner_token,
+                ),
+            )
+            if changed.rowcount != 1:
+                raise MemoryTaskOwnershipError("Memory task runner no longer owns this task")
+        return self.require(task_id)
+
     def park_for_permission(self, task_id: str, *, error_code: str) -> bool:
         """Park unstarted work until a later permission snapshot admits it."""
         now = datetime.now(UTC).isoformat()
@@ -1245,7 +1413,7 @@ class MemoryTaskStore:
         live_clause = f"task.task_id IN ({live_placeholders})" if live_ids else "0"
         not_live_clause = f"task.task_id NOT IN ({live_placeholders})" if live_ids else "1"
         excluded_clause = f"task.task_id NOT IN ({excluded_placeholders})" if excluded else "1"
-        common = f"""
+        common_base = f"""
             task.status IN (?,?,?,?)
             AND coalesce(task.last_error_code, '') NOT IN (
                 'hy_memory_input_exceeds_window', 'model_content_outcome_unknown'
@@ -1264,7 +1432,33 @@ class MemoryTaskStore:
         """
         moment = "coalesce(evidence.created_at, evidence.imported_at)"
 
+        def common_for(connection: sqlite3.Connection) -> str:
+            has_durable_queue = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                "AND name IN ('memory_write_jobs','memory_write_job_evidence')"
+            ).fetchone()[0]
+            if int(has_durable_queue) != 2:
+                return common_base
+            return (
+                common_base
+                + """
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+                    JOIN memory_write_job_evidence AS linked
+                      ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+                    JOIN memory_write_jobs AS job ON job.job_id=linked.job_id
+                    WHERE inputs.task_id=task.task_id
+                      AND job.state IN (
+                          'pending', 'running', 'unknown',
+                          'waiting_for_permission', 'waiting_for_model'
+                      )
+                )
+            """
+            )
+
         def run(connection: sqlite3.Connection, *, defer: bool) -> list[sqlite3.Row]:
+            common = common_for(connection)
             in_window = (
                 "1"
                 if extraction_since is None
@@ -1361,6 +1555,7 @@ class MemoryTaskStore:
         def has_defer_candidate(connection: sqlite3.Connection) -> bool:
             if extraction_since is None:
                 return False
+            common = common_for(connection)
             row = connection.execute(
                 f"""
                 SELECT 1
@@ -2077,6 +2272,7 @@ class MemoryTaskStore:
         *,
         limit: int = 128,
         after_cursor: tuple[str, str] | None = None,
+        exclude_error_codes: tuple[str, ...] = (),
     ) -> tuple[MemoryTask, ...]:
         """List `unknown` tasks that still need an external inquiry.
 
@@ -2091,6 +2287,9 @@ class MemoryTaskStore:
         """
         if type(limit) is not int or limit < 1:
             raise ValueError("limit must be positive")
+        excluded = tuple(dict.fromkeys(exclude_error_codes))
+        if not all(isinstance(code, str) and code for code in excluded):
+            raise ValueError("exclude_error_codes must contain non-empty strings")
         if after_cursor is not None:
             if (
                 not isinstance(after_cursor, tuple)
@@ -2104,13 +2303,19 @@ class MemoryTaskStore:
         else:
             cursor_clause = ""
             params = ()
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            excluded_clause = f"AND COALESCE(last_error_code, '') NOT IN ({placeholders})"
+        else:
+            excluded_clause = ""
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM memory_tasks "
                 "WHERE status=? "
                 f"{cursor_clause} "
+                f"{excluded_clause} "
                 "ORDER BY updated_at, task_id LIMIT ?",
-                (MemoryTaskStatus.UNKNOWN, *params, limit),
+                (MemoryTaskStatus.UNKNOWN, *params, *excluded, limit),
             ).fetchall()
         return tuple(self._to_task(row) for row in rows)
 
@@ -2142,20 +2347,68 @@ class MemoryTaskStore:
         """
         now = datetime.now(UTC).isoformat()
         with self._connect(writing=True) as connection:
+            task_only = _task_only_unknown_clause(connection)
+            blocked = ",".join("?" for _ in NON_RETRYABLE_POST_WRITE_CODES)
             changed = connection.execute(
-                """
+                f"""
                 UPDATE memory_tasks
                 SET status=?, runner_token=NULL, attempts=0,
                     last_error_code='model_content_manual_retry_requested', updated_at=?
                 WHERE task_id IN (
                     SELECT task_id FROM memory_tasks
-                    WHERE status=? ORDER BY updated_at, task_id LIMIT ?
+                    WHERE status=?
+                      AND COALESCE(last_error_code, '') NOT IN ({blocked})
+                      {task_only}
+                    ORDER BY updated_at, task_id LIMIT ?
                 )
                 """,
                 (
                     MemoryTaskStatus.PENDING,
                     now,
                     MemoryTaskStatus.UNKNOWN,
+                    *NON_RETRYABLE_POST_WRITE_CODES,
+                    limit,
+                ),
+            )
+        return changed.rowcount
+
+    def retry_first_unknown_after_reconcile(
+        self,
+        *,
+        older_than: datetime,
+        limit: int = 128,
+    ) -> int:
+        """Automatically retry a task-only unknown exactly once.
+
+        Reconciliation runs before this transition. Attempts are preserved, so
+        the retry claim moves `attempts=1` to two and another unknown is left
+        for explicit user recovery.
+        """
+        if type(limit) is not int or limit < 1:
+            raise ValueError("limit must be positive")
+        now = datetime.now(UTC).isoformat()
+        with self._connect(writing=True) as connection:
+            task_only = _task_only_unknown_clause(connection)
+            blocked = ",".join("?" for _ in NON_RETRYABLE_POST_WRITE_CODES)
+            changed = connection.execute(
+                f"""
+                UPDATE memory_tasks
+                SET status=?, runner_token=NULL,
+                    last_error_code='model_content_unknown_auto_retry', updated_at=?
+                WHERE task_id IN (
+                    SELECT task_id FROM memory_tasks
+                    WHERE status=? AND attempts=1 AND updated_at <= ?
+                      AND COALESCE(last_error_code, '') NOT IN ({blocked})
+                      {task_only}
+                    ORDER BY updated_at, task_id LIMIT ?
+                )
+                """,
+                (
+                    MemoryTaskStatus.PENDING,
+                    now,
+                    MemoryTaskStatus.UNKNOWN,
+                    older_than.isoformat(),
+                    *NON_RETRYABLE_POST_WRITE_CODES,
                     limit,
                 ),
             )

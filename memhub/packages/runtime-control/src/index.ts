@@ -1,4 +1,13 @@
 export {
+  DOMAIN_CODES,
+  type DomainCode,
+  DomainError,
+  diagnosticDomainError,
+  domainCodeOf,
+  isDomainCode,
+  isDomainError,
+} from "@one-memory/host-bridge";
+export {
   type BackgroundHealth,
   inspectBackgroundHealth,
 } from "./background-health.js";
@@ -143,6 +152,10 @@ export {
   type WaitForRuntimeOptions,
   waitForRuntimeProcess,
 } from "./runtime-launcher.js";
+export {
+  type RuntimeMaintenanceDependencies,
+  withRuntimeMaintenanceFence,
+} from "./runtime-maintenance.js";
 export {
   type ManagedRuntime,
   RuntimeService,

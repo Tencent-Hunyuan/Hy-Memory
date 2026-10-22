@@ -1,12 +1,17 @@
 import asyncio
+import gc
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from one_memory.background_work import (
     BULK_WORKERS,
     bulk_pool,
     in_interactive_read,
+    in_read_pool,
     in_the_background,
     shutdown_bulk_pool,
 )
@@ -110,3 +115,73 @@ def test_interactive_read_does_not_wait_behind_saturated_default_pool() -> None:
         shutdown_bulk_pool()
 
     assert waited < 0.25
+
+
+def test_an_abandoned_read_does_not_report_an_unretrieved_failure() -> None:
+    """A read that outlives its caller must not leave its failure lying about.
+
+    `in_read_pool` shields the worker, so giving up on an answer does not yank
+    a query out from under SQLite. The caller cancels; the read runs on. When
+    such an abandoned read then failed, nothing awaited its future any more and
+    asyncio reported an exception nobody retrieved -- which the loop handler
+    files as `core.loop.task_exception`, a red error sitting next to a lane
+    that had already degraded on its own budget and already said so.
+    """
+
+    def open_pool() -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-read-pool")
+
+    async def scenario() -> list[BaseException]:
+        loop = asyncio.get_running_loop()
+        reported: list[BaseException] = []
+        previous = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: reported.append(context.get("exception")))
+        gate = threading.Event()
+
+        def work() -> None:
+            gate.wait(5.0)
+            raise TimeoutError("raw_context_timeout")
+
+        pool = open_pool()
+        try:
+            read = asyncio.create_task(in_read_pool(pool, work))
+            await asyncio.sleep(0.05)
+            read.cancel()  # the lane ran out of budget; the read is still going
+            await asyncio.sleep(0.10)  # the cancellation settles first
+            gate.set()  # only now does the abandoned read fail
+            await asyncio.gather(read, return_exceptions=True)
+            # Let the shielded worker finish, then let asyncio notice anything
+            # that nobody ever retrieved. The reference has to go: asyncio only
+            # reports an unretrieved outcome when the future is collected.
+            del read
+            for _ in range(5):
+                await asyncio.sleep(0.02)
+            gc.collect()
+            await asyncio.sleep(0)
+        finally:
+            pool.shutdown(wait=True)
+            loop.set_exception_handler(previous)
+        return [error for error in reported if isinstance(error, TimeoutError)]
+
+    assert asyncio.run(scenario()) == []
+
+
+def test_an_awaited_read_still_raises_its_failure() -> None:
+    """Marking the outcome seen must not swallow it for a caller who waited."""
+
+    def open_pool() -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-read-pool")
+
+    async def scenario() -> str:
+        def work() -> None:
+            raise TimeoutError("raw_context_timeout")
+
+        pool = open_pool()
+        try:
+            with pytest.raises(TimeoutError):
+                await in_read_pool(pool, work)
+        finally:
+            pool.shutdown(wait=True)
+        return "raised"
+
+    assert asyncio.run(scenario()) == "raised"

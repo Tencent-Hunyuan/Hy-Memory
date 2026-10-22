@@ -146,9 +146,21 @@ async function fixture(
   const diagnostics: Array<Record<string, unknown>> = [];
   let status = 200;
   let result: unknown = empty;
+  let authorityResult: unknown = {
+    authority: "legacy",
+    migration_id: null,
+  };
   let beforeReply: () => Promise<void> = async () => {};
   let disconnected = false;
   const core = createServer(async (request, response) => {
+    if (
+      request.method === "GET" &&
+      request.url === "/api/v2/memory-authority"
+    ) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(authorityResult));
+      return;
+    }
     response.on("close", () => {
       if (!response.writableEnded) disconnected = true;
     });
@@ -211,6 +223,15 @@ async function fixture(
       result = value;
       status = code;
     },
+    setAuthority(value: "legacy" | "sdk") {
+      authorityResult = {
+        authority: value,
+        migration_id: value === "sdk" ? "migration-1" : null,
+      };
+    },
+    setAuthorityResponse(value: unknown) {
+      authorityResult = value;
+    },
     before(action: () => Promise<void>) {
       beforeReply = action;
     },
@@ -249,6 +270,73 @@ it.each(["codex", "cursor", "workbuddy", "claude-code"])(
     expect(result.data).toEqual(response);
   },
 );
+
+it("selects SDK Context v2 after cutover and passes native fields unchanged", async () => {
+  const f = await fixture();
+  const response = {
+    schema_version: 2,
+    request_id: "sdk-request",
+    state: "grounded",
+    items: [
+      {
+        kind: "raw",
+        raw_id: "raw-1",
+        content: "native raw",
+        source: "codex",
+        session_id: "session-1",
+        memory_at: "2026-10-21T00:00:00Z",
+        score: 0.9,
+        truncated: false,
+      },
+      {
+        kind: "memory",
+        memory_id: "memory-1",
+        content: "native memory",
+        layer: "l2_fact",
+        status: "active",
+        source: "codex",
+        updated_at: "2026-10-21T00:00:00Z",
+        score: 0.8,
+        truncated: false,
+      },
+    ],
+    used_characters: 23,
+    truncated: false,
+    total_ms: 1,
+  };
+  f.setAuthority("sdk");
+  f.respond(response);
+
+  const result = await f.post();
+
+  expect(result.status).toBe(200);
+  expect(result.data).toEqual(response);
+  expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
+  expect(JSON.stringify(result.data)).not.toMatch(
+    /revision|evidence_ids|adoption|paths/,
+  );
+});
+
+it("does not fall back to legacy context when the selected SDK response is invalid", async () => {
+  const f = await fixture();
+  f.setAuthority("sdk");
+  f.respond(empty);
+
+  const result = await f.post();
+
+  expect(result.status).toBe(502);
+  expect(f.calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
+});
+
+it("fails closed before reading context when the authority receipt is invalid", async () => {
+  const f = await fixture();
+  f.setAuthorityResponse({ authority: "sdk", migration_id: null });
+
+  const result = await f.post();
+
+  expect(result.status).toBe(502);
+  expect(f.calls).toEqual([]);
+});
 
 it("binds a one-shot WorkBuddy delivery report to the context installation", async () => {
   const f = await fixture(["om_recall"], ["all-apps"], false, "workbuddy");

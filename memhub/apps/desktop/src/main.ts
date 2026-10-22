@@ -6,7 +6,7 @@ import {
   checkSkillDrift,
   planRecallRepoint,
   readInstallSelfCheck,
-  renderConnectionMaterial,
+  renderCustomHarnessSkill,
   verifyRecallInstall,
 } from "@one-memory/host-bridge/installer";
 import {
@@ -18,6 +18,7 @@ import {
   defaultManagedInstallRoot,
   diagnosticError,
   disableRuntimeService,
+  domainCodeOf,
   type HostPermissionClient,
   installPackagedRuntime,
   installUserService,
@@ -108,6 +109,8 @@ import {
   stableRuntimeErrorCode,
   startStableRuntimeRepair,
 } from "./stable-runtime";
+import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
+import { runStartupSdkMigration } from "./startup-sdk-migration";
 import { resolveTrialProfile } from "./trial-profile";
 import { createWindowOptions } from "./window-options";
 
@@ -236,24 +239,7 @@ function prepareProtocol(): void {
   ]);
 }
 
-async function createWindow(isQuitting: () => boolean): Promise<void> {
-  void desktopDiagnostics?.log({
-    level: "info",
-    component: "desktop.window",
-    event: "window.requested",
-    outcome: "started",
-    ...(desktopStartupStartedAt
-      ? { duration_ms: Date.now() - desktopStartupStartedAt }
-      : {}),
-  });
-  const window = new BrowserWindow(
-    createWindowOptions(
-      path.join(__dirname, "preload.js"),
-      screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea,
-    ),
-  );
-  displayWindows.add(window);
-  window.once("closed", () => displayWindows.delete(window));
+function attachWindowGuards(window: BrowserWindow): void {
   window.webContents.on("will-navigate", (event, targetUrl) => {
     if (
       !isAllowedNavigation(targetUrl, {
@@ -265,6 +251,87 @@ async function createWindow(isQuitting: () => boolean): Promise<void> {
     }
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+}
+
+function newWindow(): BrowserWindow {
+  const window = new BrowserWindow(
+    createWindowOptions(
+      path.join(__dirname, "preload.js"),
+      screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea,
+    ),
+  );
+  displayWindows.add(window);
+  window.once("closed", () => displayWindows.delete(window));
+  attachWindowGuards(window);
+  return window;
+}
+
+let startupWindow: BrowserWindow | null = null;
+let appProtocolInstalled = false;
+
+/** Serve the packaged web bundle. Also the first thing the startup window
+ *  needs, so it is idempotent: the protocol may only be claimed once. */
+function installPackagedWebProtocol(): void {
+  if (!app.isPackaged || appProtocolInstalled) return;
+  installAppProtocol(path.join(process.resourcesPath, "web"), {
+    startupScreen: startupScreenHtml,
+  });
+  appProtocolInstalled = true;
+}
+
+/** Put a window on screen before the services exist.
+ *
+ * `initialize` installs a runtime and waits for Core, which is tens of seconds
+ * on a cold launch. Showing the placeholder first turns that wait from a dead
+ * screen into a visible app. The page it loads performs no IPC, so it cannot
+ * race the handlers `initialize` registers.
+ */
+async function createStartupWindow(isQuitting: () => boolean): Promise<void> {
+  if (!app.isPackaged) return;
+  installPackagedWebProtocol();
+  const window = newWindow();
+  startupWindow = window;
+  window.once("ready-to-show", () => {
+    if (!isQuitting() && !window.isDestroyed()) window.show();
+  });
+  try {
+    await window.loadURL(STARTUP_SCREEN_URL);
+  } catch (error) {
+    if (!window.isDestroyed()) window.destroy();
+    startupWindow = null;
+    throw error;
+  }
+}
+
+/** Swap the placeholder onto the real app once the services are up. */
+async function revealStartupWindow(isQuitting: () => boolean): Promise<void> {
+  const window = startupWindow;
+  startupWindow = null;
+  if (!window || window.isDestroyed() || isQuitting()) return;
+  window.once("ready-to-show", () => {
+    if (!isQuitting() && !window.isDestroyed()) window.show();
+  });
+  try {
+    await window.loadURL(
+      app.isPackaged ? `${APP_ORIGIN}/index.html` : developmentUrl,
+    );
+  } catch (error) {
+    if (!window.isDestroyed()) window.destroy();
+    throw error;
+  }
+}
+
+async function createWindow(isQuitting: () => boolean): Promise<void> {
+  void desktopDiagnostics?.log({
+    level: "info",
+    component: "desktop.window",
+    event: "window.requested",
+    outcome: "started",
+    ...(desktopStartupStartedAt
+      ? { duration_ms: Date.now() - desktopStartupStartedAt }
+      : {}),
+  });
+  const window = newWindow();
   window.once("ready-to-show", () => {
     if (!isQuitting() && !window.isDestroyed()) {
       window.show();
@@ -596,7 +663,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     event: string,
     action: () => Promise<T> | T,
     details: Record<string, string | number | boolean | null> = {},
-    errorCode = "desktop_action_failed",
+    fallbackCode = "desktop_action_failed",
   ): Promise<T> => {
     const traceId = randomUUID();
     const started = Date.now();
@@ -621,6 +688,10 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       });
       return result;
     } catch (error) {
+      // A thrown DomainError already says what failed; the caller's code is
+      // only the fallback for the failures nobody has classified yet. Logging
+      // the fallback over a real code is what made issue #29 undiagnosable:
+      // every refusal looked like the same generic action failure.
       await diagnostics.log({
         level: "error",
         component: "desktop.action",
@@ -628,7 +699,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         outcome: "failed",
         trace_id: traceId,
         duration_ms: Date.now() - started,
-        error_code: errorCode,
+        error_code: domainCodeOf(error) ?? fallbackCode,
         ...diagnosticError(error),
         details,
       });
@@ -718,12 +789,31 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       return { opened: true as const, reason: null };
     },
   );
-  ipcMain.handle("one-memory:connection-material", (event) => {
-    assertAllowedRenderer(event.senderFrame?.url);
-    if (hostRuntimeSelection?.state === "blocked")
-      throw new Error(hostRuntimeSelection.code);
-    return renderConnectionMaterial(recallRuntime);
-  });
+  ipcMain.handle(
+    "one-memory:create-custom-harness-skill",
+    async (event, displayName: unknown) => {
+      assertAllowedRenderer(event.senderFrame?.url);
+      if (hostRuntimeSelection?.state === "blocked")
+        throw new Error(hostRuntimeSelection.code);
+      if (
+        typeof displayName !== "string" ||
+        displayName !== displayName.trim() ||
+        displayName.length < 1 ||
+        displayName.length > 80 ||
+        /[\0\r\n]/.test(displayName)
+      )
+        throw new Error("custom_harness_name_invalid");
+      const pairing = connectionClient?.createPairing
+        ? await connectionClient.createPairing(displayName)
+        : await localPermissions?.createCustomPairing(displayName);
+      if (!pairing) throw new Error("host_pairing_unavailable");
+      return {
+        displayName: pairing.displayName,
+        expiresAt: pairing.expiresAt,
+        skill: renderCustomHarnessSkill(recallRuntime, pairing),
+      };
+    },
+  );
   ipcMain.handle("one-memory:get-login-preference", (event) => {
     assertAllowedRenderer(event.senderFrame?.url);
     return readLoginPreference(dataDir, process.platform, appManagedRuntime);
@@ -953,9 +1043,37 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       );
     },
   );
-  if (app.isPackaged) {
-    installAppProtocol(path.join(process.resourcesPath, "web"));
-  }
+  installPackagedWebProtocol();
+
+  const migrateAtStartup = async (core: {
+    command: string;
+    args: string[];
+    cwd?: string;
+  }) => {
+    const migration = await runStartupSdkMigration({
+      dataDir,
+      core,
+      runtimeBuild:
+        packagedBuildNumber === undefined
+          ? typeof app.getVersion === "function"
+            ? app.getVersion()
+            : "0.0.0"
+          : String(packagedBuildNumber),
+    });
+    await diagnostics.log({
+      level: migration.state === "deferred" ? "warn" : "info",
+      component: "desktop.sdk_migration",
+      event: "sdk_migration.startup",
+      outcome:
+        migration.state === "cutover"
+          ? "succeeded"
+          : migration.state === "deferred"
+            ? "blocked"
+            : "skipped",
+      ...(migration.code === undefined ? {} : { error_code: migration.code }),
+      details: { state: migration.state },
+    });
+  };
 
   try {
     disposeDisplayPreferences = installDisplayPreferences();
@@ -1004,6 +1122,9 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           ...(packagedCommit === undefined
             ? {}
             : { gitCommit: packagedCommit }),
+          // Only the packaged Desktop path opts into a valid same-build,
+          // different-commit takeover. CLI installs remain strict.
+          replaceSameBuild: true,
           serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
         });
         runtimeChanged = !installed.reused_current;
@@ -1011,6 +1132,16 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           home: app.getPath("home"),
           installRoot,
           platform: "darwin",
+        });
+      }
+      if (
+        !desktopBackgroundLaunch &&
+        !desktopTestIsolation &&
+        process.env.NODE_ENV !== "test"
+      ) {
+        await migrateAtStartup({
+          command: stable?.captureCommand ?? layout.coreCommand,
+          args: [],
         });
       }
       const alreadyRunning = runtimeChanged
@@ -1072,6 +1203,20 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       }
       preserveManagedRuntimeOnQuit = !transientRuntime;
     } else if (standaloneRuntime) {
+      if (
+        !desktopBackgroundLaunch &&
+        !desktopTestIsolation &&
+        process.env.NODE_ENV !== "test"
+      ) {
+        await migrateAtStartup(
+          resolveCoreLaunch({
+            packaged: app.isPackaged,
+            appPath: app.getAppPath(),
+            resourcesPath: process.resourcesPath,
+            platform: process.platform,
+          }),
+        );
+      }
       await ensureRuntimeProcess({
         dataDir,
         launch: runtimeLaunch(),
@@ -1165,6 +1310,9 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           if (process.platform !== "darwin" && process.platform !== "linux") {
             throw new Error("packaged_runtime_platform_unsupported");
           }
+          // Captured here, not at the call site: the install callback below is
+          // a nested function, and TypeScript drops property narrowing there.
+          const hostPlatform = process.platform;
           const installRoot = defaultManagedInstallRoot(
             process.platform,
             app.getPath("home"),
@@ -1174,7 +1322,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
             resourcesPath: process.resourcesPath,
             executablePath: process.execPath,
             installRoot,
-            platform: process.platform,
+            platform: hostPlatform,
             arch: process.arch,
             ...(packagedBuildNumber === undefined
               ? {}
@@ -1182,6 +1330,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
             ...(packagedCommit === undefined
               ? {}
               : { gitCommit: packagedCommit }),
+            replaceSameBuild: true,
             serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
           });
           await installBundledCliIfNeeded({
@@ -1303,16 +1452,20 @@ async function sha256File(target: string): Promise<string> {
 }
 
 const desktopVersion = desktopVersionOutput(process.argv, packagedVersion);
+const desktopBackgroundLaunch =
+  legacyLoginLaunch || process.argv.includes("--background");
 if (desktopVersion !== null) {
   process.stdout.write(desktopVersion, () => app.exit(0));
 } else
   startDesktopLifecycle({
     app,
     platform: process.platform,
-    background: legacyLoginLaunch || process.argv.includes("--background"),
+    background: desktopBackgroundLaunch,
     prepare: prepareProtocol,
     initialize,
     createWindow,
+    showStartupWindow: createStartupWindow,
+    revealStartupWindow,
     getWindows: () => [...displayWindows],
     installTray: (open) => {
       installApplicationMenu({

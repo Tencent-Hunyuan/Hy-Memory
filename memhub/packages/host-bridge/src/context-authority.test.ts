@@ -68,6 +68,7 @@ function memory(): ContextItem {
     memory_kind: "chat",
     updated_at: "2026-01-01T00:00:00Z",
     evidence_ids: [],
+    matched_by: ["lexical"],
     truncated: false,
   };
 }

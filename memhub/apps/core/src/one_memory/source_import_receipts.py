@@ -56,10 +56,10 @@ def build_source_import_receipt(
             "SELECT count(*) AS messages, "
             "count(DISTINCT conversation_id || char(0) || COALESCE(workspace, '')) "
             "AS conversations, "
-            "coalesce(sum(written_by='person'),0) AS person_messages, "
-            "coalesce(sum(written_by='agent'),0) AS agent_messages, "
-            "coalesce(sum(written_by='tool'),0) AS tool_messages, "
-            "coalesce(sum(written_by NOT IN ('person','agent','tool')),0) "
+            "coalesce(sum(role='user'),0) AS person_messages, "
+            "coalesce(sum(role='assistant'),0) AS agent_messages, "
+            "coalesce(sum(role='tool'),0) AS tool_messages, "
+            "coalesce(sum(role NOT IN ('user','assistant','tool')),0) "
             "AS unknown_author_messages, "
             "coalesce(sum(created_at IS NULL),0) AS unknown_time_messages "
             "FROM evidence WHERE user_id=? AND source_id=?",
@@ -68,7 +68,9 @@ def build_source_import_receipt(
         # Bound text reads before materializing snippets. These are samples, not a
         # recency ranking; sorting every large original body is unnecessary here.
         examples = db.execute(
-            "SELECT evidence_id, role, written_by, created_at, "
+            "SELECT evidence_id, role, CASE role "
+            "WHEN 'user' THEN 'person' WHEN 'assistant' THEN 'agent' "
+            "WHEN 'tool' THEN 'tool' ELSE 'unknown' END AS written_by, created_at, "
             "substr(verbatim,1,600) AS excerpt, length(verbatim)>600 AS truncated "
             "FROM evidence WHERE evidence_id IN ("
             "SELECT evidence_id FROM evidence WHERE user_id=? AND source_id=? LIMIT 3)",
@@ -80,10 +82,13 @@ def build_source_import_receipt(
         # Qualify before LIMIT: agent/system rows must not consume the three samples.
         query_filter = " AND evidence_id=?" if query_evidence_id is not None else ""
         queries = db.execute(
-            f"""SELECT evidence_id, revision AS evidence_revision, role, written_by, created_at,
-                CASE WHEN user_id=? AND source_id=? AND role='user' AND written_by='person'
+            f"""SELECT evidence_id, revision AS evidence_revision, role,
+                CASE role WHEN 'user' THEN 'person' WHEN 'assistant' THEN 'agent'
+                    WHEN 'tool' THEN 'tool' ELSE 'unknown' END AS written_by,
+                created_at,
+                CASE WHEN user_id=? AND source_id=? AND role='user'
                     AND length(verbatim)<=65536
-                    THEN display_query_projection(verbatim,role,written_by)
+                    THEN display_query_projection(verbatim,role,'person')
                     ELSE NULL END AS projection
                 FROM evidence WHERE user_id=? AND source_id=?{query_filter}
                     AND projection IS NOT NULL

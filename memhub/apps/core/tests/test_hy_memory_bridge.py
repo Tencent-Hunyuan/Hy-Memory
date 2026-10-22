@@ -6,7 +6,6 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +54,9 @@ class FakeHyMemoryClient:
         self.closed = False
         self.deleted: set[str] = set()
         self.list_result: Mapping[str, object] = {"vdb": {"memories": [], "total": 0}}
+        self.write_outcome: Mapping[str, object] | None = None
+        self.raw_result: Mapping[str, object] | None = None
+        self.raw_list_result: Mapping[str, object] = {"raw": [], "total": 0}
 
     def add(
         self,
@@ -63,6 +65,7 @@ class FakeHyMemoryClient:
         user_id: str,
         agent_id: str,
         session_id: str,
+        source: str,
         metadata: Mapping[str, object],
         memory_at: datetime | None,
         scene: str,
@@ -74,6 +77,7 @@ class FakeHyMemoryClient:
                 "user_id": user_id,
                 "agent_id": agent_id,
                 "session_id": session_id,
+                "source": source,
                 "metadata": metadata,
                 "memory_at": memory_at,
                 "scene": scene,
@@ -113,13 +117,16 @@ class FakeHyMemoryClient:
     def get(self, memory_id: str) -> Mapping[str, object] | None:
         if memory_id in self.deleted:
             return None
-        request_id = self.record_request_id or str(self.calls[-1]["request_id"])
+        last = self.calls[-1] if self.calls else {}
+        request_id = self.record_request_id or str(last.get("request_id") or "read")
         return {
             "memory_id": memory_id,
             "content": "Extracted memory",
-            "layer": "L0_BASIC_INFO",
-            "user_id": self.calls[-1]["user_id"],
-            "agent_id": self.calls[-1]["agent_id"],
+            "layer": "l2_fact",
+            "status": "active",
+            "is_latest": True,
+            "user_id": last.get("user_id") or "local",
+            "agent_id": last.get("agent_id") or "one-memory",
             "custom": {"request_id": request_id},
         }
 
@@ -130,6 +137,26 @@ class FakeHyMemoryClient:
     def list_memories(self, **kwargs) -> Mapping[str, object]:
         self.calls.append({"list_memories": dict(kwargs)})
         return self.list_result
+
+    def get_write_outcome(self, request_id: str) -> Mapping[str, object] | None:
+        self.calls.append({"get_write_outcome": request_id})
+        return self.write_outcome
+
+    def get_raw(self, raw_id: str) -> Mapping[str, object] | None:
+        self.calls.append({"get_raw": raw_id})
+        return self.raw_result
+
+    def list_raw(self, **kwargs) -> Mapping[str, object]:
+        self.calls.append({"list_raw": dict(kwargs)})
+        return self.raw_list_result
+
+    def import_memory_exact(self, content: str, **kwargs) -> Mapping[str, object]:
+        self.calls.append({"import_memory_exact": content, **kwargs})
+        return {
+            "success": True,
+            "memory_id": kwargs["memory_id"],
+            "request_id": kwargs["request_id"],
+        }
 
     def update(self, memory_id: str, content: str) -> Mapping[str, object]:
         self.calls.append({"update_memory_id": memory_id, "update_content": content})
@@ -310,6 +337,7 @@ def test_ollama_profile_ignores_ambient_remote_storage_and_models(
     monkeypatch.setenv("MEMORY_VECTOR_HOST", "remote.example.com")
     monkeypatch.setenv("MEMORY_COLLECTION_NAME", "hostile-collection")
     monkeypatch.setenv("MEMORY_EMBEDDING_DIMS", "99")
+    monkeypatch.delenv("MEMORY_CODING_TOOL_RESULT_MAX_BYTES", raising=False)
     profile = snapshot(
         ProviderKind.OLLAMA,
         base_url="http://127.0.0.1:11434",
@@ -333,6 +361,20 @@ def test_ollama_profile_ignores_ambient_remote_storage_and_models(
     assert config.vector_store.embedding_dims == 768
     assert config.graph_store.provider == "kuzu"
     assert str(tmp_path) in config.graph_store.db_path
+    assert config.coding.tool_result_max_bytes == 512
+
+
+def test_memhub_coding_tool_result_ceiling_is_configurable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MEMORY_CODING_TOOL_RESULT_MAX_BYTES", "1024")
+    profile = snapshot(
+        ProviderKind.OLLAMA,
+        base_url="http://127.0.0.1:11434",
+        has_api_key=False,
+    )
+
+    config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
+
+    assert config.coding.tool_result_max_bytes == 1024
 
 
 def _kuzu_graph_with_embedding_width(db_path: Path, width: int) -> None:
@@ -573,8 +615,14 @@ def test_bridge_warm_loads_first_write_tokenizer_off_the_event_loop(tmp_path, mo
     assert calls[0][1] != event_loop_thread
 
 
-def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> None:
-    client = FakeHyMemoryClient({"success": True, "memory_ids": ["memory-1"]})
+def test_bridge_returns_sdk_raw_and_memory_ids_from_one_add(tmp_path) -> None:
+    client = FakeHyMemoryClient(
+        {
+            "success": True,
+            "memory_id": "raw-1",
+            "memory_ids": ["memory-1"],
+        }
+    )
     bridge = HyMemoryBridge(
         profile=snapshot(
             ProviderKind.OLLAMA,
@@ -597,9 +645,11 @@ def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> 
     result = asyncio.run(bridge.ingest(request))
     asyncio.run(bridge.close())
 
+    assert result.raw_ids == ("raw-1",)
     assert tuple(memory.memory_id for memory in result.memories) == ("memory-1",)
     assert result.memories[0].content == "Extracted memory"
     assert client.calls[0]["agent_id"] == "one-memory"
+    assert client.calls[0]["source"] == "cursor"
     assert client.calls[0]["metadata"] == {
         "source_id": "cursor",
         "evidence_ids": ["evidence-1"],
@@ -610,8 +660,10 @@ def test_bridge_writes_evidence_refs_and_uses_source_as_provenance(tmp_path) -> 
     assert client.closed is True
 
 
-def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) -> None:
+def test_bridge_refuses_bounded_outcome_scan_without_sdk_contract(tmp_path) -> None:
     client = FakeHyMemoryClient({"success": True})
+    # Simulate an older SDK: bounded list scans are no longer accepted as proof.
+    client.get_write_outcome = None
     client.list_result = {
         "vdb": {
             "total": 3,
@@ -654,6 +706,37 @@ def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) 
         client=client,
     )
 
+    with pytest.raises(HyMemoryBridgeError, match="hy_memory_sdk_upgrade_required"):
+        asyncio.run(
+            bridge.outputs_for_request(
+                request_id="request-1",
+                user_id="local",
+                agent_id="one-memory",
+                evidence_ids=("evidence-1",),
+            )
+        )
+
+
+def test_bridge_prefers_exact_sdk_write_outcome_over_library_scan(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    client.write_outcome = {
+        "request_id": "request-1",
+        "user_id": "local",
+        "agent_id": "one-memory",
+        "status": "succeeded",
+        "result": {"success": True, "memory_ids": ["memory-1"]},
+    }
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
     outputs = asyncio.run(
         bridge.outputs_for_request(
             request_id="request-1",
@@ -663,8 +746,188 @@ def test_bridge_recovers_only_outputs_with_the_exact_request_identity(tmp_path) 
         )
     )
 
-    assert [output.memory_id for output in outputs] == ["matched"]
+    assert [output.memory_id for output in outputs] == ["memory-1"]
     assert outputs[0].evidence_ids == ("evidence-1",)
+    assert not any("list_memories" in call for call in client.calls)
+
+
+def test_bridge_reads_sdk_memory_lifecycle_without_governance(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    client.list_result = {
+        "vdb": {
+            "total": 1,
+            "memories": [
+                {
+                    "memory_id": "old-memory",
+                    "content": "Old wording",
+                    "layer": "l2_fact",
+                    "status": "superseded",
+                    "is_latest": False,
+                    "superseded_by": ["new-memory"],
+                    "user_id": "local",
+                    "agent_id": "one-memory",
+                    "session_id": "session-1",
+                    "tags": ["preference"],
+                    "owner": "user",
+                    "custom": {
+                        "source_raw_memory_ids": ["raw-1", "raw-2"],
+                    },
+                }
+            ],
+        }
+    }
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    page = asyncio.run(
+        bridge.list_sdk_memories(
+            user_id="local",
+            statuses=("superseded",),
+            limit=20,
+        )
+    )
+
+    assert page.total == 1
+    assert page.memories[0].status == "superseded"
+    assert page.memories[0].superseded_by == ("new-memory",)
+    assert page.memories[0].owner == "user"
+    assert page.memories[0].source_raw_ids == ("raw-1", "raw-2")
+    assert client.calls[-1]["list_memories"]["statuses"] == ["superseded"]
+
+
+def test_bridge_reads_raw_and_write_outcome_through_public_sdk(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    client.write_outcome = {
+        "request_id": "request-1",
+        "status": "succeeded",
+        "result": {"success": True, "memory_ids": ["memory-1"]},
+    }
+    client.raw_result = {
+        "raw_id": "raw-1",
+        "content": "verbatim",
+        "user_id": "local",
+        "agent_id": "one-memory",
+        "session_id": "session-1",
+        "source": "cursor",
+        "custom": {"role": "user"},
+    }
+    client.raw_list_result = {"raw": [client.raw_result], "total": 1}
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    outcome = asyncio.run(bridge.get_sdk_write_outcome("request-1"))
+    raw = asyncio.run(bridge.get_sdk_raw("raw-1"))
+    rows, total = asyncio.run(bridge.list_sdk_raw(user_id="local"))
+
+    assert outcome["status"] == "succeeded"
+    assert raw.content == "verbatim"
+    assert raw.custom == {"role": "user"}
+    assert total == 1
+    assert rows == (raw,)
+
+
+def test_bridge_searches_raw_through_existing_sdk_search_and_source_filter(tmp_path) -> None:
+    client = FakeHyMemoryClient(
+        {"success": True},
+        search_result={
+            "scene": "chat",
+            "memories": {
+                "schema": [],
+                "proactive": [],
+                "normal": [
+                    {
+                        "memory_id": "raw-1",
+                        "content": "verbatim",
+                        "layer": "l1_raw",
+                        "status": "active",
+                        "score": 0.8,
+                        "user_id": "local",
+                        "agent_id": "one-memory",
+                        "session_id": "session",
+                        "source": "cursor",
+                        "custom": {"role": "user"},
+                    }
+                ],
+            },
+        },
+    )
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    hits = asyncio.run(
+        bridge.search_sdk_raw(
+            "query",
+            user_id="local",
+            source_ids=("cursor",),
+        )
+    )
+
+    assert hits[0].raw_id == "raw-1"
+    assert hits[0].content == "verbatim"
+    assert client.search_calls[-1]["layers"] == ["l1_raw"]
+    assert client.search_calls[-1]["include_sources"] == ["cursor"]
+
+
+def test_bridge_imports_legacy_memory_exactly_without_governance(tmp_path) -> None:
+    client = FakeHyMemoryClient({"success": True})
+    bridge = HyMemoryBridge(
+        profile=snapshot(
+            ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            has_api_key=False,
+        ),
+        api_key=None,
+        data_dir=tmp_path,
+        client=client,
+    )
+
+    result = asyncio.run(
+        bridge.import_sdk_memory_exact(
+            content="old preference",
+            memory_id="memory-1",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="session-1",
+            layer="l2_fact",
+            status="superseded",
+            owner="user",
+            tags=("preference",),
+            supersedes=(),
+            superseded_by=("memory-2",),
+            is_latest=False,
+            request_id="migration-request",
+        )
+    )
+
+    assert result["memory_id"] == "memory-1"
+    call = client.calls[-1]
+    assert call["import_memory_exact"] == "old preference"
+    assert call["status"] == "superseded"
+    assert call["superseded_by"] == ["memory-2"]
 
 
 def test_hy_failure_log_identifies_stage_without_provider_content(tmp_path, monkeypatch) -> None:
@@ -1184,40 +1447,6 @@ def test_bridge_preserves_sdk_formatted_search_content(tmp_path) -> None:
     assert hits[0].formatting_complete is True
 
 
-def test_semantic_search_skips_native_store_while_a_write_is_active(tmp_path, monkeypatch) -> None:
-    client = FakeHyMemoryClient(
-        {"success": True},
-        search_result={"memories": [{"memory_id": "must-not-be-read"}]},
-    )
-    bridge = HyMemoryBridge(
-        profile=snapshot(
-            ProviderKind.OLLAMA,
-            base_url="http://127.0.0.1:11434",
-            has_api_key=False,
-        ),
-        api_key=None,
-        data_dir=tmp_path,
-        client=client,
-    )
-
-    @asynccontextmanager
-    async def busy_store():
-        yield False
-
-    monkeypatch.setattr("one_memory.hy_memory_bridge.native_store_read_slot", busy_store)
-
-    with pytest.raises(HyMemoryBridgeError, match="hy_memory_store_busy"):
-        asyncio.run(
-            bridge.search_ids(
-                "导入期间查询",
-                user_id="local",
-                agent_id="*",
-            )
-        )
-
-    assert client.search_calls == []
-
-
 def test_search_ids_does_not_create_nodes_tasks_or_collections(tmp_path) -> None:
     """Search is a read. Creating store objects here would invent a graph.
 
@@ -1326,7 +1555,7 @@ def test_hy_runtime_matches_public_sdk_without_reranker_or_service_backends(
     config = build_hy_memory_config(profile, api_key=None, data_dir=tmp_path)
 
     assert HY_MEMORY_DISTRIBUTION == "hy-memory"
-    assert HY_MEMORY_VERSION == "2.0.2"
+    assert HY_MEMORY_VERSION == "2.0.5.dev3"
     assert HY_MEMORY_MODE == "ultra"
     assert HY_MEMORY_READER == "hybrid"
     assert os.environ["MEMORY_MODE"] == "ultra"

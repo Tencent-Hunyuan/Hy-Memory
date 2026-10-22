@@ -5,14 +5,14 @@
 ## 安装与快速开始
 
 ```bash
-pip install hy-memory==2.0.2
+pip install hy-memory==2.0.4
 
 # 可选后端
-pip install 'hy-memory[qdrant]==2.0.1'
-pip install 'hy-memory[faiss]==2.0.1'
-pip install 'hy-memory[graph]==2.0.1'     # Neo4j；Kuzu 已在核心依赖中
-pip install 'hy-memory[mysql]==2.0.1'
-pip install 'hy-memory[rerank]==2.0.1'    # 本地多语言 cross-encoder rerank
+pip install 'hy-memory[qdrant]==2.0.4'
+pip install 'hy-memory[faiss]==2.0.4'
+pip install 'hy-memory[graph]==2.0.4'     # Neo4j；Kuzu 已在核心依赖中
+pip install 'hy-memory[mysql]==2.0.4'
+pip install 'hy-memory[rerank]==2.0.4'    # 本地多语言 cross-encoder rerank
 ```
 
 默认 LLM 和 Embedding 均使用 OpenAI-compatible 接口。使用 OpenAI 时可只设置：
@@ -105,6 +105,15 @@ result = client.add(
     embed_override=None,
 )
 ```
+
+`metadata` 与 `meta` 不是同一字段：
+
+- `metadata` 是兼容旧调用方保留的 SDK 处理选项，会进入内部
+  `WriteRequest.extra`，不保证持久化或随查询结果返回。
+- `meta` 是调用方的业务上下文，会持久化并在 `search()`、`get()` 等结果中返回。
+  同一记忆被多次合并时，各次 `meta` 会按写入顺序保存在列表中。
+
+需要以后读回的数据必须放在 `meta`，不要放在 `metadata`。
 
 `scene` 的公开取值：
 
@@ -201,7 +210,8 @@ result = client.search(
 ```
 
 `working` / `coding` 路径返回 `scene="productivity"`、`facts`、`experiences`，不使用
-chat 的三桶结构；`coding` 还会返回 `chain_block` 和 `chain_used`。
+chat 的三桶结构；`coding` 还会返回 `chain_block` 和 `chain_used` 字段（默认空；
+需 `MEMORY_CODING_CHAIN_BLOCK_ENABLED=true` 才注入 diff 块）。
 
 #### `search_mode`
 
@@ -263,6 +273,8 @@ catalog 也可以在没有基础 L0 时形成只读的合成画像。
 
 ```python
 memory = client.get("memory_id")
+# lite 模式写入的是 L1_RAW；按 ID 读取时必须显式选择返回原文。
+raw_memory = client.get("memory_id", include_raw=True)
 result = client.update("memory_id", "更新后的内容")
 result = client.delete("memory_id")
 result = client.delete_all(user_id="user_001")
@@ -281,6 +293,10 @@ result = client.clone_user("user_001", "user_002", agent_id=None)
 
 对应异步方法为 `async_get()`、`async_update()`、`async_delete()`、
 `async_delete_all()`、`async_list_memories()`、`async_clone_user()`。
+
+`get()` / `async_get()` 默认继续隐藏 `L1_RAW`，因此不会改变现有调用方的原文访问
+边界。只有显式传入 `include_raw=True` 才返回该层；这也是 lite 模式按 ID 读取
+写入内容及其 `meta` 的方式。MemHub 的 HTTP 读取接口不开放此参数。
 
 普通 `list_memories()` 返回 `vdb` 桶，并在 Graph 有结果时附带 `graph`；传入
 `workspace_id` 时返回生产力记忆的 `scene="productivity"` 和 `experiences`。

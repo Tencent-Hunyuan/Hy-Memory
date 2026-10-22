@@ -33,6 +33,73 @@ export interface PackagedRuntimeInstallReceipt extends LocalInstallReceipt {
   reused_current: boolean;
 }
 
+/** The directories of an App bundle that make up the managed runtime payload.
+ *
+ * `installPackagedRuntime` stages exactly these four, plus the two generated
+ * launchers under `bin/`, so the same relative paths describe both the bundle
+ * and the staged copy. */
+const PAYLOAD_DIRECTORIES = ["core", "host-bridge", "runtime", "web"] as const;
+
+/** How many payload files are hashed at once. Sequential hashing of the
+ *  Mac bundle costs about two seconds of pure read; a small pool keeps the
+ *  digests identical while overlapping the reads. */
+const DIGEST_CONCURRENCY = 8;
+
+/** The bundle payload as the staged copy would look, without copying a byte.
+ *
+ * Reuse is decided by comparing file digests, and nothing about that decision
+ * needs the files to live in a staging directory: the staged tree is a byte
+ * for byte copy of `resources/{core,host-bridge,runtime,web}` plus two
+ * generated launchers, so the same relative paths and digests can be read in
+ * place. Doing it this way keeps the 373MB copy off the reuse path entirely. */
+export async function describeBundlePayload(options: {
+  resources: string;
+  executable: string;
+  serviceEnableMarker?: string;
+}): Promise<{ version: string; files: Record<string, string> }> {
+  const files: Record<string, string> = {};
+  // Walked with the bundle root as the walker's root, not each directory on
+  // its own: a symlink is only legal while it stays inside the payload the
+  // staging step would copy, and that boundary is the resources directory.
+  const relatives: string[] = [];
+  for (const name of PAYLOAD_DIRECTORIES) {
+    const source = path.join(options.resources, name);
+    const info = await lstat(source).catch(() => null);
+    if (!info?.isDirectory() || info.isSymbolicLink()) continue;
+    relatives.push(...(await treeFiles(options.resources, source)));
+  }
+  Object.assign(files, await digestRelatives(options.resources, relatives));
+  const cli = path.join(options.resources, "cli", "one-memory.cjs");
+  const cliInfo = await lstat(cli).catch(() => null);
+  if (cliInfo?.isFile()) {
+    files["bin/one-memory.cjs"] = await sha256(cli);
+    files["bin/one-memory"] = sha256Text(cliLauncher());
+  }
+  // Generated from the App path, so it is known without writing the file. The
+  // comparison below skips it anyway: it is the one file that legitimately
+  // differs between two launches of the same build.
+  files["bin/node"] = sha256Text(
+    nodeLauncher(options.executable, options.serviceEnableMarker),
+  );
+  const ordered = Object.fromEntries(
+    Object.keys(files)
+      .sort()
+      .map((relative) => [relative, files[relative]]),
+  );
+  return { version: versionOf(ordered), files: ordered };
+}
+
+function versionOf(files: Record<string, string>): string {
+  const digest = createHash("sha256");
+  for (const relative of Object.keys(files).sort()) {
+    digest.update(relative);
+    digest.update("\0");
+    digest.update(files[relative]);
+    digest.update("\0");
+  }
+  return digest.digest("hex");
+}
+
 /** Copy this app bundle into the managed install, then point `current` at it.
  *
  * Host configs name `<install root>/current/bin/node`. That file is a launcher
@@ -51,6 +118,16 @@ export async function installPackagedRuntime(options: {
    * CLI-installed distribution. Callers that do know the bundle's build number
    * must pass it (see `docs/contracts/c0-anti-downgrade-versioning.md`). */
   buildNumber?: number;
+  /** Allow the bundle to take over from an already-selected runtime that
+   * reports this same `build_number` but different bytes.
+   *
+   * Off by default, which preserves `installed_version_conflict`. Desktop turns
+   * it on: the bundle it carries has passed notarization, so its payload is
+   * already trusted, and the same build number is re-released whenever a
+   * release is rebuilt from a new commit. Refusing that case leaves an affected
+   * machine with an app that exits on every launch, which is a worse outcome
+   * than replacing the runtime. The superseded tree is kept, not edited. */
+  replaceSameBuild?: boolean;
   gitCommit?: string;
   /** App-owned services use this marker to stop launchd before the App binary
    * is invoked after the bundle has been removed. */
@@ -82,6 +159,31 @@ export async function installPackagedRuntime(options: {
     const info = await lstat(path.join(resources, relative)).catch(() => null);
     if (!info?.isFile()) throw new Error("packaged_runtime_incomplete");
   }
+
+  // Before writing anything: the overwhelmingly common case is a machine that
+  // already runs this exact build, and staging it costs a 373MB copy plus two
+  // full passes of hashing that the reuse decision then throws away. Reading
+  // the bundle in place decides the same thing without any of that.
+  const payload = await describeBundlePayload({
+    resources,
+    executable,
+    ...(options.serviceEnableMarker === undefined
+      ? {}
+      : { serviceEnableMarker: options.serviceEnableMarker }),
+  });
+  const reused = await reuseSelectedSameBuild({
+    payload,
+    installRoot: options.installRoot,
+    platform: options.platform,
+    arch: options.arch,
+    buildNumber: options.buildNumber,
+    replaceSameBuild: options.replaceSameBuild === true,
+    executablePath: executable,
+    ...(options.serviceEnableMarker === undefined
+      ? {}
+      : { serviceEnableMarker: options.serviceEnableMarker }),
+  });
+  if (reused !== null) return reused;
 
   const stage = await mkdtemp(
     path.join(tmpdir(), "one-memory-packaged-runtime-"),
@@ -144,21 +246,12 @@ export async function installPackagedRuntime(options: {
       )}\n`,
       { encoding: "utf8", mode: 0o600 },
     );
-    const reused = await reuseSelectedSameBuild({
-      stage,
-      installRoot: options.installRoot,
-      platform: options.platform,
-      arch: options.arch,
-      buildNumber: options.buildNumber,
-      executablePath: executable,
-      serviceEnableMarker: options.serviceEnableMarker,
-    });
-    if (reused !== null) return reused;
     const plan = await planLocalInstall({
       source: stage,
       installRoot: options.installRoot,
       platform: options.platform,
       arch: options.arch,
+      allowSameBuildReplace: options.replaceSameBuild === true,
       requireProtocolCompatibility: true,
     });
     return Object.freeze({
@@ -171,13 +264,14 @@ export async function installPackagedRuntime(options: {
 }
 
 async function reuseSelectedSameBuild(options: {
-  stage: string;
+  payload: { version: string; files: Record<string, string> };
   installRoot: string;
   platform: "darwin" | "linux";
   arch: string;
   buildNumber: number | undefined;
+  replaceSameBuild: boolean;
   executablePath: string;
-  serviceEnableMarker: string | undefined;
+  serviceEnableMarker?: string;
 }): Promise<PackagedRuntimeInstallReceipt | null> {
   if (options.buildNumber === undefined) return null;
   const installRoot = path.resolve(options.installRoot);
@@ -219,12 +313,10 @@ async function reuseSelectedSameBuild(options: {
     options.arch,
   );
   if (selectedManifest.build_number !== options.buildNumber) return null;
-  const stageManifest = await verifyInstalledDistribution(
-    options.stage,
-    options.platform,
-    options.arch,
-  );
-  for (const [relative, digest] of Object.entries(stageManifest.files)) {
+  // The bundle's own payload, read in place. It has to agree with the selected
+  // tree file for file; there is no cheaper signal that is also exact, and a
+  // wrong reuse here is what `installed_version_conflict` exists to prevent.
+  for (const [relative, digest] of Object.entries(options.payload.files)) {
     if (relative === "bin/node") continue;
     if (relative === "bin/one-memory") {
       const selectedDigest = selectedManifest.files[relative];
@@ -239,11 +331,15 @@ async function reuseSelectedSameBuild(options: {
             )
           : null;
       if (selectedDigest !== digest && selectedDigest !== formalDigest) {
+        // Same build number, different bytes: not reusable. Hand the install
+        // back to the normal path so the bundle lands in its own directory.
+        if (options.replaceSameBuild) return null;
         throw new Error("installed_version_conflict");
       }
       continue;
     }
     if (selectedManifest.files[relative] !== digest) {
+      if (options.replaceSameBuild) return null;
       throw new Error("installed_version_conflict");
     }
   }
@@ -276,6 +372,8 @@ async function reuseSelectedSameBuild(options: {
     version: selectedManifest.version,
     build_number: selectedManifest.build_number ?? null,
     allow_downgrade: false,
+    // Nothing was replaced: the selected tree already matched this bundle.
+    same_build_replace: false,
     require_protocol_compatibility: true,
     platform: selectedManifest.platform,
     arch: selectedManifest.arch,
@@ -406,20 +504,39 @@ function sha256Text(value: string): string {
 }
 
 async function treeVersion(root: string): Promise<string> {
-  const digest = createHash("sha256");
-  for (const relative of await treeFiles(root)) {
-    digest.update(relative);
-    digest.update("\0");
-    digest.update(await sha256(path.join(root, relative)));
-    digest.update("\0");
-  }
-  return digest.digest("hex");
+  return versionOf(await fileDigests(root));
 }
 
 async function fileDigests(root: string): Promise<Record<string, string>> {
+  return digestRelatives(root, await treeFiles(root));
+}
+
+/** Hash `relatives` under `root` with a small worker pool.
+ *
+ * The resulting map is keyed in sorted order, so a manifest built from it is
+ * byte-identical to the one the sequential walk used to produce. */
+async function digestRelatives(
+  root: string,
+  relatives: string[],
+): Promise<Record<string, string>> {
+  const digests = new Map<string, string>();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < relatives.length) {
+      const relative = relatives[cursor];
+      cursor += 1;
+      digests.set(relative, await sha256(path.join(root, relative)));
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(DIGEST_CONCURRENCY, relatives.length) }, () =>
+      worker(),
+    ),
+  );
   const files: Record<string, string> = {};
-  for (const relative of await treeFiles(root)) {
-    files[relative] = await sha256(path.join(root, relative));
+  for (const relative of [...digests.keys()].sort()) {
+    const digest = digests.get(relative);
+    if (digest !== undefined) files[relative] = digest;
   }
   return files;
 }

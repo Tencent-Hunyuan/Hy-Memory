@@ -129,7 +129,7 @@ class _Source:
 
 
 def test_import_accounting_is_bounded_and_duplicate_free(tmp_path, monkeypatch, caplog):
-    caplog.set_level("INFO", logger="one_memory.imports.sources.common")
+    caplog.set_level("DEBUG", logger="one_memory.imports.sources.common")
     counters = _instrument(monkeypatch)
     fixture = _Source(tmp_path)
     path = fixture.root / "project" / "rollout-accounting.jsonl"

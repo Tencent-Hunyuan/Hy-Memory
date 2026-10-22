@@ -152,11 +152,13 @@ def test_custom_candidate_persists_without_authorizing_and_connects_exact_root(
                 ]
             assert restarted.state.source_grant_store.require_receipt(
                 user_id="local", source_id=source_id
-            ).sync_enabled
-            assert (await client.get("/api/v1/model-content-permission")).json() is None
+            )
+            assert restarted.state.config_store.sync_enabled(source_id)
+            assert (await client.get("/api/v1/model-content-permission")).status_code == 404
+            job_count = len(restarted.state.import_job_store.list_jobs())
             replay = await client.post("/api/v1/sources/connect", json=body)
             assert replay.json()["jobs"][0]["job_id"] == job_id
-            assert len(restarted.state.import_job_store.list_jobs()) == 1
+            assert len(restarted.state.import_job_store.list_jobs()) == job_count
 
     asyncio.run(scenario())
 

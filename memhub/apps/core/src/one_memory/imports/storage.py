@@ -57,7 +57,8 @@ _UNANSWERED_PREFIXES = (
 
 
 def _is_visible_user_row(role: str, written_by: str, verbatim: str) -> bool:
-    if role != "user" or written_by != WrittenBy.PERSON.value:
+    del written_by  # Legacy storage metadata; protocol role is authoritative.
+    if role != "user":
         return False
     return not verbatim.lstrip().lower().startswith(_UNANSWERED_PREFIXES)
 
@@ -468,16 +469,54 @@ class EvidenceStore:
             if anchored is not None:
                 self._write_origins(connection, anchored, evidence.origin_meta, now)
                 workspace, project = self._resolve_conversation_attribution(connection, evidence)
-                connection.execute(
-                    """
-                    UPDATE evidence
-                    SET workspace = COALESCE(workspace, ?),
-                        project = COALESCE(project, ?),
-                        updated_at = ?
-                    WHERE evidence_id = ?
-                    """,
-                    (workspace, project, now, anchored),
-                )
+                existing = connection.execute(
+                    "SELECT role,revision FROM evidence WHERE evidence_id=?",
+                    (anchored,),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError("anchored evidence disappeared")
+                if str(existing["role"]) != evidence.role:
+                    was_revised = True
+                    revision = int(existing["revision"]) + 1
+                    connection.execute(
+                        """
+                        UPDATE evidence
+                        SET workspace=COALESCE(workspace,?),
+                            project=COALESCE(project,?),
+                            content_kind=?,role=?,created_at=COALESCE(?,created_at),
+                            verbatim=?,content_hash=?,revision=?,updated_at=?
+                        WHERE evidence_id=?
+                        """,
+                        (
+                            workspace,
+                            project,
+                            evidence.content_kind,
+                            evidence.role,
+                            evidence.created_at.isoformat() if evidence.created_at else None,
+                            evidence.verbatim,
+                            evidence.content_hash,
+                            revision,
+                            now,
+                            anchored,
+                        ),
+                    )
+                    self._insert_current_version(
+                        connection,
+                        anchored,
+                        revision=revision,
+                        changed_at=now,
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE evidence
+                        SET workspace=COALESCE(workspace,?),
+                            project=COALESCE(project,?),
+                            updated_at=?
+                        WHERE evidence_id=?
+                        """,
+                        (workspace, project, now, anchored),
+                    )
                 record = self._get_with_connection(connection, anchored)
                 if record is None:
                     raise RuntimeError("anchored evidence disappeared")
@@ -485,7 +524,11 @@ class EvidenceStore:
                     from one_memory import ingest_journal
 
                     ingest_journal.record(connection, anchored, cause="import")
-                return PutEvidenceResult(record=record, was_created=False, was_revised=False)
+                return PutEvidenceResult(
+                    record=record,
+                    was_created=False,
+                    was_revised=was_revised,
+                )
             insert = connection.execute(
                 """
                 INSERT INTO evidence (
@@ -803,27 +846,20 @@ class EvidenceStore:
                 and same_scope[0]["idempotency_key"] != evidence.idempotency_key
             ):
                 return str(same_scope[0]["evidence_id"])
-        elif (legacy_id := claim_legacy_key(evidence.legacy_derived_idempotency_key)) is not None:
-            return legacy_id
-        if not evidence.message_id and not evidence.correlation_id:
-            # BUG-03 moved the derived key off the capture time and onto the
-            # pre-cleaning text. A replay of a row stored under the old scheme
-            # has to be recognized as the same message.
-            replayed = connection.execute(
-                """
-                SELECT evidence_id FROM evidence
-                WHERE idempotency_key = ? AND user_id = ? AND source_id = ?
-                  AND conversation_id = ?
-                """,
+        elif (
+            legacy_id := next(
                 (
-                    evidence.prior_derived_idempotency_key,
-                    evidence.user_id,
-                    evidence.source_id,
-                    evidence.conversation_id,
+                    anchored
+                    for key in (
+                        *evidence.written_by_derived_v3_idempotency_keys,
+                        *evidence.older_written_by_idempotency_keys,
+                    )
+                    if (anchored := claim_legacy_key(key)) is not None
                 ),
-            ).fetchone()
-            if replayed is not None:
-                return str(replayed["evidence_id"])
+                None,
+            )
+        ) is not None:
+            return legacy_id
         if (
             EvidenceOrigin.HOOK in evidence.origins
             and evidence.message_id is None
@@ -838,7 +874,7 @@ class EvidenceStore:
                   ON hook.evidence_id=e.evidence_id AND hook.origin='hook'
                 WHERE e.user_id=? AND e.source_id=? AND e.conversation_id=?
                   AND (e.workspace IS ? OR e.workspace IS NULL OR ? IS NULL)
-                  AND e.role=? AND e.written_by=? AND e.content_hash=?
+                  AND e.role=? AND e.content_hash=?
                   AND e.message_id IS NOT NULL AND hook.evidence_id IS NULL
                   AND ABS((julianday(e.created_at)-julianday(?))*86400.0) <= 5.0
                 ORDER BY ABS((julianday(e.created_at)-julianday(?))*86400.0), e.evidence_id
@@ -851,7 +887,6 @@ class EvidenceStore:
                     evidence.workspace,
                     evidence.workspace,
                     evidence.role,
-                    evidence.written_by,
                     evidence.content_hash,
                     evidence.created_at.isoformat(),
                     evidence.created_at.isoformat(),
@@ -872,7 +907,7 @@ class EvidenceStore:
               AND (e.workspace IS ? OR e.workspace IS NULL OR ? IS NULL)
               -- Unary plus keeps the coverage index from looking better than
               -- the message index, which narrows to this exact text.
-              AND e.role = ? AND +e.written_by = ? AND e.content_hash = ?
+              AND e.role = ? AND e.content_hash = ?
               AND e.message_id IS NULL
             """,
             (
@@ -882,7 +917,6 @@ class EvidenceStore:
                 evidence.workspace,
                 evidence.workspace,
                 evidence.role,
-                evidence.written_by,
                 evidence.content_hash,
             ),
         ).fetchall()
@@ -1247,7 +1281,7 @@ class EvidenceStore:
             rows = connection.execute(
                 """
                 SELECT evidence_id FROM evidence
-                WHERE user_id = 'local' AND role = 'user' AND written_by = 'person'
+                WHERE user_id = 'local' AND role = 'user'
                 ORDER BY imported_at, evidence_id
                 LIMIT ?
                 """,
@@ -1301,7 +1335,7 @@ class EvidenceStore:
             rows = connection.execute(
                 f"""
                 SELECT evidence_id FROM evidence
-                WHERE user_id = 'local' AND role = 'user' AND written_by = 'person'
+                WHERE user_id = 'local' AND role = 'user'
                   AND ({predicates})
                 ORDER BY imported_at, evidence_id
                 LIMIT ?
@@ -1333,7 +1367,7 @@ class EvidenceStore:
             rows = connection.execute(
                 f"""
                 SELECT evidence_id FROM evidence
-                WHERE user_id = 'local' AND role = 'user' AND written_by = 'person'
+                WHERE user_id = 'local' AND role = 'user'
                   AND workspace IS NOT NULL
                   AND ({predicates})
                 ORDER BY imported_at, evidence_id
@@ -1476,7 +1510,7 @@ class EvidenceStore:
         )
         values: list[object] = [user_id, *(source_ids or ())]
         visible_user = """
-            role='user' AND written_by='person' AND NOT (
+            role='user' AND NOT (
               lower(ltrim(verbatim)) LIKE '<codex_internal_context%' OR
               lower(ltrim(verbatim)) LIKE '<environment_context>%' OR
               lower(ltrim(verbatim)) LIKE '<heartbeat>%' OR
@@ -1485,7 +1519,7 @@ class EvidenceStore:
             )
         """
         selected_visible_user = """
-            e.role='user' AND e.written_by='person' AND NOT (
+            e.role='user' AND NOT (
               lower(ltrim(e.verbatim)) LIKE '<codex_internal_context%' OR
               lower(ltrim(e.verbatim)) LIKE '<environment_context>%' OR
               lower(ltrim(e.verbatim)) LIKE '<heartbeat>%' OR
@@ -1638,7 +1672,7 @@ class EvidenceStore:
         if seed is None:
             return ConversationTurnPage((), {}, 0, offset, limit)
         visible_user = """
-          role='user' AND written_by='person' AND NOT (
+          role='user' AND NOT (
             lower(ltrim(verbatim)) LIKE '<codex_internal_context%' OR
             lower(ltrim(verbatim)) LIKE '<environment_context>%' OR
             lower(ltrim(verbatim)) LIKE '<heartbeat>%' OR
@@ -1731,7 +1765,7 @@ class EvidenceStore:
                       AND first.conversation_id = evidence.conversation_id
                       AND first.workspace IS evidence.workspace
                       AND (
-                        (first.role = 'user' AND first.written_by = 'person')
+                        first.role = 'user'
                         OR first.content_kind = 'memory_content'
                       )
                     ORDER BY julianday(COALESCE(first.created_at, first.imported_at)),
@@ -1761,6 +1795,67 @@ class EvidenceStore:
                 if record is not None:
                     records.append(record)
             return records
+
+    def release_sdk_staging(self, evidence_ids: tuple[str, ...]) -> int:
+        """Remove post-cutover queue staging after SDK success.
+
+        Historical rows referenced by legacy Governance remain for the
+        compatibility release. SDK-authority imports create no such links and
+        stop being MemHub raw storage once the job has SDK receipts.
+        """
+        ids = tuple(dict.fromkeys(evidence_ids))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._connect(writing=True) as connection:
+            has_governance = (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='governed_memory_evidence'"
+                ).fetchone()
+                is not None
+            )
+            legacy_guard = (
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM governed_memory_evidence governed "
+                "WHERE governed.evidence_id=evidence.evidence_id"
+                ")"
+                if has_governance
+                else ""
+            )
+            changed = connection.execute(
+                f"DELETE FROM evidence WHERE evidence_id IN ({placeholders}) {legacy_guard}",
+                ids,
+            )
+        return changed.rowcount
+
+    def release_completed_sdk_staging(self, *, limit: int = 2_048) -> int:
+        """Resume cleanup if Core stopped after job settlement."""
+        if not 1 <= limit <= 100_000:
+            raise ValueError("limit must be between 1 and 100000")
+        with self._connect(writing=True) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if (
+                not {
+                    "memory_write_jobs",
+                    "memory_write_job_evidence",
+                }
+                <= tables
+            ):
+                return 0
+            rows = connection.execute(
+                "SELECT DISTINCT linked.evidence_id "
+                "FROM memory_write_jobs job "
+                "JOIN memory_write_job_evidence linked USING(job_id) "
+                "WHERE job.state='completed' "
+                "AND (job.sdk_raw_ids_json!='[]' OR job.sdk_memory_ids_json!='[]') "
+                "ORDER BY linked.evidence_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return self.release_sdk_staging(tuple(str(row[0]) for row in rows))
 
     def stage_memory_dispatch(
         self,
@@ -2125,8 +2220,6 @@ class EvidenceStore:
             (
                 existing["content_kind"] != evidence.content_kind,
                 existing["role"] != evidence.role,
-                evidence.written_by is not WrittenBy.UNKNOWN
-                and existing["written_by"] != evidence.written_by,
                 existing["content_hash"] != evidence.content_hash,
             )
         )

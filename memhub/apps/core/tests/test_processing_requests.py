@@ -8,8 +8,11 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-import one_memory.processing_requests as requests_module
-from one_memory.processing_requests import (
+requests_module = pytest.importorskip(
+    "one_memory.processing_requests",
+    reason="processing-request store is not part of the public Core snapshot",
+)
+from one_memory.processing_requests import (  # noqa: E402 - importorskip must run first
     ProcessingRequest,
     ProcessingRequestConflictError,
     ProcessingRequestState,

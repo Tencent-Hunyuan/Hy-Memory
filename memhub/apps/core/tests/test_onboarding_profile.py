@@ -13,6 +13,7 @@ basic info 那半边留在 Kuzu 里，本地看不见。
 """
 
 import asyncio
+import sqlite3
 
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
@@ -292,6 +293,68 @@ def test_finishing_onboarding_is_not_model_content_consent(tmp_path) -> None:
 
             assert finished.json()["status"] == "completed"
             assert calls == []
+
+    asyncio.run(scenario())
+
+
+def test_the_way_back_to_the_first_run_deletes_nothing(tmp_path) -> None:
+    """重置只动完成标记，记忆一条不少。
+
+    完成态和记忆放在同一个库里是有意的:重装一遍 App 不该把一个已经有记忆的人
+    当成新用户。代价是想再看一次冷启动，重装不管用。这条盯着那个出口:
+    状态回到首次运行，别的都不动。
+    """
+
+    async def scenario() -> None:
+        app = _app(tmp_path)
+        async with app.router.lifespan_context(app), _client(app) as client:
+            database = tmp_path / "data" / "one-memory.sqlite3"
+            with sqlite3.connect(database) as connection:
+                connection.execute(
+                    "INSERT INTO governed_memories "
+                    "(memory_id,user_id,kind,status,content,scopes_json,"
+                    "revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        "keep-me",
+                        "local",
+                        "chat",
+                        "confirmed",
+                        "记忆必须保留",
+                        '["all-apps"]',
+                        1,
+                        "2026-10-17T00:00:00+00:00",
+                        "2026-10-17T00:00:00+00:00",
+                    ),
+                )
+            finished = await client.post("/api/v1/onboarding/complete")
+
+            assert finished.json()["status"] == "completed"
+
+            reset = await client.post("/api/v1/onboarding/reset")
+
+            assert reset.status_code == 200
+            assert reset.json()["status"] == "not_started"
+            assert reset.json()["completed_at"] is None
+            # 落盘了，不是只在响应里改一下：下一次启动读到的也是首次运行。
+            assert (await client.get("/api/v1/onboarding")).json()["status"] == "not_started"
+            with sqlite3.connect(database) as connection:
+                assert connection.execute(
+                    "SELECT content,revision FROM governed_memories WHERE memory_id='keep-me'"
+                ).fetchone() == ("记忆必须保留", 1)
+
+    asyncio.run(scenario())
+
+
+def test_resetting_before_anything_was_completed_is_not_an_error(tmp_path) -> None:
+    """绿对照:新库里还没有那一行，重置不能炸。"""
+
+    async def scenario() -> None:
+        app = _app(tmp_path)
+        async with app.router.lifespan_context(app), _client(app) as client:
+            reset = await client.post("/api/v1/onboarding/reset")
+
+            assert reset.status_code == 200
+            assert reset.json()["status"] == "not_started"
 
     asyncio.run(scenario())
 

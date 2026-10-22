@@ -1136,6 +1136,9 @@ class CodingConfig:
     # LLM 失败或没有抽出 fact 时，是否把对话原文存成 working fact。
     # 默认关闭，避免 assistant/tool 轨迹以 statement 形式直接暴露给消费方。
     verbatim_fallback_enabled: bool = None
+    # search(scene="coding") 是否注入版本演进链块（diff / chain_block）。
+    # 默认关闭（opt-in）：中重度 coding 用户可省下大量 prompt token；写入侧仍可 observe。
+    chain_block_enabled: bool = None
 
     def __post_init__(self):
         if self.enable is None:
@@ -1152,6 +1155,10 @@ class CodingConfig:
         if self.verbatim_fallback_enabled is None:
             self.verbatim_fallback_enabled = _get_env_bool(
                 "MEMORY_CODING_VERBATIM_FALLBACK_ENABLED", False
+            )
+        if self.chain_block_enabled is None:
+            self.chain_block_enabled = _get_env_bool(
+                "MEMORY_CODING_CHAIN_BLOCK_ENABLED", False
             )
 
 

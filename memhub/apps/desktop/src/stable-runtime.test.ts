@@ -16,6 +16,7 @@ import {
   isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeUserMessage,
   startStableRuntimeRepair,
 } from "./stable-runtime";
 
@@ -252,5 +253,25 @@ describe("installServiceWithDisabledFallback", () => {
     expect(restoreOwner).toHaveBeenCalledOnce();
     expect(reportDisabled).not.toHaveBeenCalled();
     expect(startTransient).not.toHaveBeenCalled();
+  });
+});
+
+describe("startup install errors", () => {
+  it("explains the failure to the user instead of showing an error code", () => {
+    const conflict = stableRuntimeUserMessage(
+      new Error("installed_version_conflict"),
+    );
+    expect(conflict).toContain("记忆数据");
+    expect(conflict).not.toContain("installed_version_conflict");
+    expect(
+      stableRuntimeUserMessage(new Error("distribution_downgrade_refused")),
+    ).toContain("更新");
+    // An unrecognised failure still gets a sentence, never a raw code.
+    expect(
+      stableRuntimeUserMessage(new Error("something_unexpected")),
+    ).toContain("MemHub 启动失败");
+    expect(stableRuntimeUserMessage("not an error")).toContain(
+      "MemHub 启动失败",
+    );
   });
 });

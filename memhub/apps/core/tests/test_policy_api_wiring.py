@@ -3,7 +3,12 @@ import sqlite3
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from one_memory.api import _run_backfill
+from one_memory.api import (
+    _history_import_gate_released,
+    _run_backfill,
+    _sedimentation_claim_enabled,
+    _source_writes_on,
+)
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.config_state import ConfigStore
@@ -76,9 +81,10 @@ def test_backfill_puts_history_on_write_jobs_without_scheduling_memory_tasks(tmp
         task_table = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
         ).fetchone()
-        assert task_table is None or connection.execute(
-            "SELECT COUNT(*) FROM memory_tasks"
-        ).fetchone()[0] == 0
+        assert (
+            task_table is None
+            or connection.execute("SELECT COUNT(*) FROM memory_tasks").fetchone()[0] == 0
+        )
 
 
 def test_source_pause_skips_history_until_the_source_is_reenabled(tmp_path) -> None:
@@ -92,3 +98,77 @@ def test_source_pause_skips_history_until_the_source_is_reenabled(tmp_path) -> N
     asyncio.run(_run_backfill(app))
 
     assert app.state.memory_write_queue.unsubmitted_evidence_ids() == ()
+
+
+def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> None:
+    """A source that is not a connected app has no toggle to read.
+
+    `one-memory-manual` is admitted by its grant and never appears in the
+    configuration document, so any gate that reads the per-app toggle answers
+    False for it while the write gate answers True. The drain's claim gate used
+    to be that gate, and every manual note's job was skipped on every tick.
+    """
+    config = ConfigStore(tmp_path)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config_store=config,
+            model_profile_store=SimpleNamespace(active_identity=lambda: ("profile", 1)),
+            source_grant_store=SimpleNamespace(
+                receipt=lambda **_kwargs: SimpleNamespace(revoked_at=None)
+            ),
+        )
+    )
+
+    assert _source_writes_on(app, "one-memory-manual") is True
+    assert config.sync_enabled("one-memory-manual") is False
+
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is True
+    config.set_sedimentation_enabled(False)
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
+
+
+def test_claim_gate_waits_without_polling_when_no_model_is_active(tmp_path) -> None:
+    config = ConfigStore(tmp_path)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config_store=config,
+            model_profile_store=SimpleNamespace(active_identity=lambda: None),
+            source_grant_store=SimpleNamespace(
+                receipt=lambda **_kwargs: SimpleNamespace(revoked_at=None)
+            ),
+        )
+    )
+
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
+
+
+def test_first_import_gate_waits_for_every_selected_history_job() -> None:
+    state = SimpleNamespace(
+        status="importing",
+        selected_source_ids=("cursor", "codex"),
+        started_at=datetime(2026, 10, 18, tzinfo=UTC),
+    )
+    jobs = [
+        SimpleNamespace(
+            operation="history",
+            source_id="cursor",
+            created_at=datetime(2026, 10, 18, tzinfo=UTC),
+            status="completed",
+        ),
+        SimpleNamespace(
+            operation="history",
+            source_id="codex",
+            created_at=datetime(2026, 10, 18, tzinfo=UTC),
+            status="running",
+        ),
+    ]
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            onboarding_store=SimpleNamespace(get=lambda: state),
+            import_job_store=SimpleNamespace(list_jobs=lambda: jobs),
+        )
+    )
+
+    assert _history_import_gate_released(app) is False
+    jobs[1].status = "failed"
+    assert _history_import_gate_released(app) is True

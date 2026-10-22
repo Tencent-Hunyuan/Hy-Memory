@@ -8,6 +8,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  readlink,
   realpath,
   rm,
   stat,
@@ -320,6 +321,12 @@ async function distributionBytes(source) {
 
 async function sha256File(file) {
   const digest = createHash("sha256");
+  const info = await lstat(file);
+  if (info.isSymbolicLink()) {
+    digest.update("symlink\0");
+    digest.update(await readlink(file));
+    return digest.digest("hex");
+  }
   for await (const chunk of createReadStream(file)) digest.update(chunk);
   return digest.digest("hex");
 }

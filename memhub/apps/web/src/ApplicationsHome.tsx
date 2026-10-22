@@ -1,5 +1,5 @@
 import type {
-  HomeSummary,
+  HostHomeSummary,
   LiveSyncHealth,
   MemoryProcessingSummary,
   RecentConversationItem,
@@ -40,6 +40,7 @@ import {
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { prefetchDataRuntime } from "./runtime-state";
+import { refreshSedimentation, useSedimentation } from "./sedimentation-state";
 import type { useImportSources } from "./use-import-sources";
 import "./applications-home.css";
 
@@ -192,7 +193,8 @@ export function ApplicationsHome({
   // A failed poll keeps the last answer on screen; the page must say it is old.
   const hostStale = hostQuery.isError && hostQuery.data !== undefined;
   const auto = useAutoConnect();
-  const [summary, setSummary] = useState<HomeSummary | null>(null);
+  const sedimentation = useSedimentation();
+  const [summary, setSummary] = useState<HostHomeSummary | null>(null);
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
@@ -554,6 +556,7 @@ export function ApplicationsHome({
         getMemoryProcessing(),
         getLiveSyncHealth(),
         getRecentConversations({ limit: 1, recentActivity: true }),
+        refreshSedimentation(),
       ]);
       busy = false;
       if (stopped) return;
@@ -561,7 +564,8 @@ export function ApplicationsHome({
         setFailed(false);
         // stale=true 表示这轮读取超时，数字不代表现状：保留上一次的概览，
         // 等 10 秒后的下一轮轮询补上，绝不清零也不报错。
-        if (!home.value.stale) setSummary(home.value);
+        if (!("stale" in home.value) || !home.value.stale)
+          setSummary(home.value);
       } else {
         setFailed(true);
       }
@@ -651,20 +655,35 @@ export function ApplicationsHome({
   const apps = imports.sources.filter(
     (s) => s.authorized || s.detected === true || s.location_state === "found",
   );
-  const stateLabel = processing?.running
-    ? "整理中"
-    : processing?.blocked_stages?.some((stage) => stage.count > 0)
-      ? "排队处理中"
-      : processing?.waiting_for_model
-        ? "等待模型"
-        : processing?.failed
-          ? "需要处理"
-          : processing?.pending
-            ? "准备中"
-            : processing
-              ? "一切就绪"
-              : "待核对";
-  const latestClock = latest ? clockParts(latest.updated_at) : null;
+  const stateLabel =
+    sedimentation?.enabled === true
+      ? "整理中"
+      : sedimentation?.enabled === false
+        ? "已暂停"
+        : "待核对";
+  const stateDetail =
+    sedimentation?.enabled === false
+      ? "已停止生成新记忆"
+      : sedimentation?.enabled === true
+        ? "新的对话正在整理"
+        : "正在核对整理状态";
+  const latestUpdatedAt =
+    latest === null || latest === undefined
+      ? null
+      : "revision" in latest
+        ? latest.updated_at
+        : latest.gmt_created === null
+          ? null
+          : new Date(latest.gmt_created * 1000).toISOString();
+  const latestClock = latestUpdatedAt ? clockParts(latestUpdatedAt) : null;
+  const latestSourceIds =
+    latest === null || latest === undefined
+      ? []
+      : "revision" in latest
+        ? latest.source_ids
+        : latest.source
+          ? [latest.source]
+          : [];
   const time = latestClock?.clock ?? (latest ? "时间未知" : null);
   const checked = visible ? clockParts(visible.observed_at) : null;
   // A failed read leaves the last health in place on purpose: clearing it would
@@ -835,13 +854,7 @@ export function ApplicationsHome({
               <div>
                 <p>沉淀状态</p>
                 <strong className="r6-home-word">{stateLabel}</strong>
-                <small>
-                  {processing?.running
-                    ? "新的对话正在整理"
-                    : processing?.pending
-                      ? "等待队列开始处理"
-                      : "以当前处理状态为准"}
-                </small>
+                <small>{stateDetail}</small>
               </div>
               <div>
                 <p>最近更新</p>
@@ -906,10 +919,10 @@ export function ApplicationsHome({
                       size={26}
                     />
                   </div>
-                ) : activity === "memory" && latest?.source_ids[0] ? (
+                ) : activity === "memory" && latestSourceIds[0] ? (
                   (() => {
                     const source = imports.sources.find(
-                      (item) => item.source_id === latest.source_ids[0],
+                      (item) => item.source_id === latestSourceIds[0],
                     );
                     return source ? <SourceMark source={source} /> : null;
                   })()
@@ -934,7 +947,7 @@ export function ApplicationsHome({
                               callHostName(recentCall.host_id),
                           )
                         : activity === "memory" && latest
-                          ? `${latest.content}${latest.truncated ? "…" : ""}`
+                          ? `${latest.content}${"truncated" in latest && latest.truncated ? "…" : ""}`
                           : activity === "dialogue" && latestDialogue
                             ? `${latestDialogue.excerpt}${latestDialogue.truncated ? "…" : ""}`
                             : activity === "importing"
@@ -955,7 +968,9 @@ export function ApplicationsHome({
                       : activity === "call" && recentCall
                         ? `${stamped(recentCall.occurred_at)} · ${callRowDetail(recentCall)}${callState === "incomplete" ? " · 有几次调用没被记下来，列表可能不全" : ""}`
                         : activity === "memory" && latest
-                          ? `${time} · ${memoryAction(latest.action)} · ${latest.source_ids.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")} · 版本 ${latest.revision}`
+                          ? "revision" in latest
+                            ? `${time} · ${memoryAction(latest.action)} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")} · 版本 ${latest.revision}`
+                            : `${time} · SDK ${latest.layer} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")}`
                           : activity === "dialogue" && latestDialogue
                             ? `${clockParts(latestDialogue.created_at ?? latestDialogue.imported_at)?.clock ?? "时间未知"} ${latestDialogue.time_basis === "conversation" ? "对话时间" : "导入时间"} · ${imports.sources.find((source) => source.source_id === latestDialogue.source_id)?.display_name ?? latestDialogue.source_id}`
                             : activity === "importing"

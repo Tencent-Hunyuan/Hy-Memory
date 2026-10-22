@@ -13,7 +13,7 @@ from one_memory.imports.adapters import (
     SourceCursor,
 )
 from one_memory.imports.jobs import ImportJobStore, ImportStatus
-from one_memory.imports.models import WrittenBy
+from one_memory.imports.models import EvidenceOrigin, WrittenBy
 from one_memory.imports.runner import ImportRunner
 from one_memory.imports.sources.claude_code import create_claude_code_adapter
 from one_memory.imports.sources.codex import create_codex_adapter
@@ -131,6 +131,9 @@ def test_cursor_store_timestamp_envelope_keeps_only_the_user_query_text(tmp_path
 
     assert [item.evidence.verbatim for item in records] == [query]
     assert records[0].evidence.written_by is WrittenBy.PERSON
+    meta = records[0].evidence.origin_meta[EvidenceOrigin.FILE].raw_meta
+    assert meta["time_basis"] == "file_mtime"
+    assert meta["turn_event_at"] == "2026-09-22T23:34:00+00:00"
 
 
 def test_cursor_transcript_timestamp_envelope_keeps_only_the_user_query_text(tmp_path) -> None:
@@ -163,6 +166,9 @@ def test_cursor_transcript_timestamp_envelope_keeps_only_the_user_query_text(tmp
 
     assert [item.evidence.verbatim for item in records] == [query]
     assert records[0].evidence.written_by is WrittenBy.PERSON
+    meta = records[0].evidence.origin_meta[EvidenceOrigin.FILE].raw_meta
+    assert meta["time_basis"] == "file_mtime"
+    assert meta["turn_event_at"] == "2026-09-22T23:34:00+00:00"
 
 
 def test_cursor_transcript_uses_file_mtime_with_stable_record_order(tmp_path) -> None:

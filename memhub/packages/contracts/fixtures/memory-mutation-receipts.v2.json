@@ -23,24 +23,13 @@
       "memory_state": "present",
       "migrated_from": null
     },
-    "scope": {
-      "schema_version": 2,
-      "request_id": "c5a3e9d7-1f2b-4c6e-8a0d-3b7f5e1c9a28",
-      "state": "committed",
-      "operation": "set_scopes",
-      "memory_id": "0b6f7c1e-2d4a-4e8b-9c3d-5a1f0e2b7d64",
-      "result_revision": 3,
-      "result_status": "confirmed",
-      "memory_state": "present",
-      "migrated_from": null
-    },
     "delete": {
       "schema_version": 2,
       "request_id": "91b4d2f6-7e3a-4d8c-a5b1-0f6e2c9d4a37",
       "state": "committed",
       "operation": "delete",
       "memory_id": "0b6f7c1e-2d4a-4e8b-9c3d-5a1f0e2b7d64",
-      "result_revision": 4,
+      "result_revision": 3,
       "result_status": "deleted",
       "memory_state": "deleted",
       "migrated_from": null

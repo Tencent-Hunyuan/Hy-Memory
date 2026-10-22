@@ -1,4 +1,5 @@
 import hmac
+import ipaddress
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
@@ -35,7 +36,15 @@ def is_loopback_origin(origin: str) -> bool:
     host = parsed.hostname
     if not host:
         return False
-    return host in LOOPBACK_HOSTNAMES or host.startswith("127.")
+    if host in LOOPBACK_HOSTNAMES:
+        return True
+    # A prefix check is not enough: "127.attacker.example" is a perfectly valid
+    # DNS name that resolves wherever its owner wants (including 127.0.0.1 via
+    # DNS rebinding). Parse the address and ask the standard library.
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def local_api_guard(

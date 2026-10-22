@@ -151,6 +151,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             lease_expires_at TEXT,
             hy_invoked INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
+            event_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            time_quality TEXT NOT NULL DEFAULT 'approximate',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -164,6 +166,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
         ON memory_write_jobs(source_key, state, queue_seq);
         CREATE INDEX IF NOT EXISTS idx_write_jobs_fifo
         ON memory_write_jobs(queue_seq);
+        CREATE INDEX IF NOT EXISTS idx_write_jobs_event_claim
+        ON memory_write_jobs(state, event_at, queue_seq);
         CREATE INDEX IF NOT EXISTS idx_write_jobs_source_recent
         ON memory_write_jobs(source_key, updated_at DESC);
         CREATE TABLE IF NOT EXISTS memory_write_job_evidence (
@@ -172,7 +176,13 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             PRIMARY KEY (job_id, evidence_id)
         );
         CREATE INDEX IF NOT EXISTS idx_write_job_evidence_evidence
-        ON memory_write_job_evidence(evidence_id)
+        ON memory_write_job_evidence(evidence_id);
+        CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            window_anchor TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
         """
     return """
         CREATE TABLE IF NOT EXISTS memory_write_jobs (
@@ -192,6 +202,8 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             lease_expires_at DATETIME(6) NULL,
             hy_invoked TINYINT(1) NOT NULL DEFAULT 0,
             last_error TEXT NULL,
+            event_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            time_quality VARCHAR(32) NOT NULL DEFAULT 'approximate',
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                 ON UPDATE CURRENT_TIMESTAMP(6),
@@ -201,6 +213,7 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             KEY idx_write_jobs_source_claim (state, source_key, priority, created_at),
             KEY idx_write_jobs_source_fifo (source_key, state, queue_seq),
             KEY idx_write_jobs_fifo (queue_seq),
+            KEY idx_write_jobs_event_claim (state, event_at, queue_seq),
             KEY idx_write_jobs_source_recent (source_key, updated_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -209,6 +222,13 @@ def memory_write_jobs_ddl(dialect: str = "mysql") -> str:
             evidence_id VARCHAR(128) NOT NULL,
             PRIMARY KEY (job_id, evidence_id),
             KEY idx_write_job_evidence_evidence (evidence_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+            singleton INT PRIMARY KEY CHECK (singleton = 1),
+            window_anchor DATETIME(6) NOT NULL,
+            window_end DATETIME(6) NOT NULL,
+            updated_at DATETIME(6) NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
 
@@ -266,6 +286,14 @@ def memory_write_jobs_sqlite_schema() -> tuple[str, ...]:
     transaction.
     """
     return tuple(_split_statements(memory_write_jobs_ddl("sqlite")))
+
+
+def memory_write_jobs_target_sqlite_schema() -> tuple[str, ...]:
+    return tuple(
+        statement
+        for statement in memory_write_jobs_sqlite_schema()
+        if "memory_write_job_evidence" not in statement
+    )
 
 
 async def _003_scanner_cursors(cursor: Any) -> None:
@@ -1231,6 +1259,68 @@ CREATE TABLE IF NOT EXISTS model_request_budget_events (
 """
 
 
+def model_request_audit_ddl(dialect: str = "mysql") -> str:
+    """Content-free accounting for physical precipitation model requests."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS model_request_audit (
+    audit_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    profile_revision INTEGER NOT NULL,
+    provider_kind TEXT NOT NULL,
+    model TEXT NOT NULL,
+    request_kind TEXT NOT NULL,
+    prompt_stage TEXT NOT NULL DEFAULT 'other',
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    outcome TEXT NOT NULL CHECK(outcome IN ('in_flight','succeeded','failed')),
+    http_status INTEGER,
+    error_type TEXT,
+    provider_request_id TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    cached_prompt_tokens INTEGER,
+    reasoning_tokens INTEGER
+);
+CREATE INDEX IF NOT EXISTS model_request_audit_request
+ON model_request_audit(request_id, started_at);
+CREATE INDEX IF NOT EXISTS model_request_audit_started
+ON model_request_audit(started_at);
+"""
+    return """
+CREATE TABLE IF NOT EXISTS model_request_audit (
+    audit_id VARCHAR(128) PRIMARY KEY,
+    request_id VARCHAR(512) NOT NULL,
+    profile_id VARCHAR(128) NOT NULL,
+    profile_revision INT NOT NULL,
+    provider_kind VARCHAR(64) NOT NULL,
+    model VARCHAR(512) NOT NULL,
+    request_kind VARCHAR(64) NOT NULL,
+    prompt_stage VARCHAR(128) NOT NULL DEFAULT 'other',
+    started_at DATETIME(6) NOT NULL,
+    completed_at DATETIME(6) NULL,
+    outcome VARCHAR(32) NOT NULL CHECK(outcome IN ('in_flight','succeeded','failed')),
+    http_status INT NULL,
+    error_type VARCHAR(128) NULL,
+    provider_request_id VARCHAR(512) NULL,
+    prompt_tokens BIGINT NULL,
+    completion_tokens BIGINT NULL,
+    total_tokens BIGINT NULL,
+    cached_prompt_tokens BIGINT NULL,
+    reasoning_tokens BIGINT NULL,
+    KEY model_request_audit_request (request_id, started_at),
+    KEY model_request_audit_started (started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _052_model_request_audit(cursor: Any) -> None:
+    for statement in _split_statements(model_request_audit_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def model_probe_operations_ddl(dialect: str = "mysql") -> str:
     """Probe operations; `state` is CHECKed to a known set.
 
@@ -1412,6 +1502,97 @@ async def _026_hy_node_permissions(cursor: Any) -> None:
 
 async def _051_drop_hy_node_permissions(cursor: Any) -> None:
     await cursor.execute("DROP TABLE IF EXISTS hy_node_permissions")
+
+
+async def _053_memory_write_event_time(cursor: Any) -> None:
+    """Add event-time scheduling without re-keying any existing write."""
+
+    dialect = _dialect(cursor)
+    columns = await cursor.columns("memory_write_jobs")
+    added_event_at = "event_at" not in columns
+    if added_event_at:
+        await cursor.execute(
+            "ALTER TABLE memory_write_jobs ADD COLUMN event_at "
+            + ("TEXT" if dialect == "sqlite" else "DATETIME(6) NULL")
+        )
+    if "time_quality" not in columns:
+        await cursor.execute(
+            "ALTER TABLE memory_write_jobs ADD COLUMN time_quality "
+            + (
+                "TEXT NOT NULL DEFAULT 'approximate'"
+                if dialect == "sqlite"
+                else "VARCHAR(32) NOT NULL DEFAULT 'approximate'"
+            )
+        )
+    await cursor.execute(
+        """
+        UPDATE memory_write_jobs
+        SET event_at = COALESCE(
+            (
+                SELECT MAX(COALESCE(e.created_at, e.imported_at))
+                FROM memory_write_job_evidence AS linked
+                JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                WHERE linked.job_id = memory_write_jobs.job_id
+                  AND e.role = 'user'
+            ),
+            (
+                SELECT MIN(COALESCE(e.created_at, e.imported_at))
+                FROM memory_write_job_evidence AS linked
+                JOIN evidence AS e ON e.evidence_id = linked.evidence_id
+                WHERE linked.job_id = memory_write_jobs.job_id
+            ),
+            created_at
+        )
+        WHERE event_at IS NULL
+        """
+    )
+    if dialect == "sqlite":
+        await cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_write_jobs_event_claim "
+            "ON memory_write_jobs(state, event_at, queue_seq)"
+        )
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                window_anchor TEXT NOT NULL,
+                window_end TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    else:
+        if added_event_at:
+            await cursor.execute(
+                "CREATE INDEX idx_write_jobs_event_claim "
+                "ON memory_write_jobs(state, event_at, queue_seq)"
+            )
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_write_schedule_state (
+                singleton INT PRIMARY KEY CHECK (singleton = 1),
+                window_anchor DATETIME(6) NOT NULL,
+                window_end DATETIME(6) NOT NULL,
+                updated_at DATETIME(6) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+
+
+async def _054_legacy_possibly_sent_tasks(cursor: Any) -> None:
+    """Preserve the old sent marker before removing its retired permission table."""
+    columns = await cursor.columns("memory_task_continuous_permissions")
+    if "task_id" not in columns:
+        return
+    await cursor.execute(
+        """
+        UPDATE memory_tasks
+        SET hy_invocation_count=CASE
+            WHEN hy_invocation_count<1 THEN 1 ELSE hy_invocation_count END
+        WHERE task_id IN (SELECT task_id FROM memory_task_continuous_permissions)
+        """
+    )
+    await cursor.execute("DROP TABLE memory_task_continuous_permissions")
 
 
 def model_profiles_ddl(dialect: str = "mysql") -> str:
@@ -2612,6 +2793,327 @@ async def _035_scanner_state(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def sdk_data_plane_migration_ddl(dialect: str = "mysql") -> str:
+    """Management-only ledger for the one-time SDK-authority cutover."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migrations (
+    migration_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    source_runtime_build TEXT NOT NULL,
+    target_sdk_version TEXT NOT NULL,
+    source_schema_version INTEGER NOT NULL,
+    namespace_fingerprint TEXT NOT NULL,
+    backend_fingerprint TEXT NOT NULL,
+    backup_bundle_id TEXT,
+    reconciliation_digest TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cutover_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migration_items (
+    migration_id TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    source_revision TEXT,
+    source_hash TEXT NOT NULL,
+    target_memory_id TEXT,
+    target_hash TEXT,
+    operation_key TEXT NOT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error_code TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (migration_id, item_key),
+    UNIQUE (migration_id, operation_key)
+);
+CREATE INDEX IF NOT EXISTS sdk_migration_items_state
+ON sdk_data_plane_migration_items(migration_id, state, item_key);
+CREATE TABLE IF NOT EXISTS memory_id_aliases (
+    legacy_memory_id TEXT PRIMARY KEY,
+    canonical_memory_id TEXT NOT NULL,
+    migration_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memory_id_aliases_canonical
+ON memory_id_aliases(canonical_memory_id);
+CREATE TABLE IF NOT EXISTS sdk_data_plane_cutover (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    migration_id TEXT NOT NULL,
+    sdk_version TEXT NOT NULL,
+    store_version TEXT NOT NULL,
+    namespace_fingerprint TEXT NOT NULL,
+    backend_fingerprint TEXT NOT NULL,
+    backup_bundle_id TEXT NOT NULL,
+    reconciliation_digest TEXT NOT NULL,
+    completed_at TEXT NOT NULL
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migrations (
+    migration_id VARCHAR(128) PRIMARY KEY,
+    state VARCHAR(32) NOT NULL,
+    phase VARCHAR(64) NOT NULL,
+    source_runtime_build VARCHAR(128) NOT NULL,
+    target_sdk_version VARCHAR(64) NOT NULL,
+    source_schema_version INT NOT NULL,
+    namespace_fingerprint VARCHAR(128) NOT NULL,
+    backend_fingerprint VARCHAR(128) NOT NULL,
+    backup_bundle_id VARCHAR(128) NULL,
+    reconciliation_digest VARCHAR(128) NULL,
+    created_at VARCHAR(64) NOT NULL,
+    updated_at VARCHAR(64) NOT NULL,
+    cutover_at VARCHAR(64) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS sdk_data_plane_migration_items (
+    migration_id VARCHAR(128) NOT NULL,
+    item_key VARCHAR(384) NOT NULL,
+    source_kind VARCHAR(64) NOT NULL,
+    source_id VARCHAR(256) NOT NULL,
+    source_revision VARCHAR(128) NULL,
+    source_hash VARCHAR(128) NOT NULL,
+    target_memory_id VARCHAR(256) NULL,
+    target_hash VARCHAR(128) NULL,
+    operation_key VARCHAR(256) NOT NULL,
+    state VARCHAR(32) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    error_code VARCHAR(128) NULL,
+    updated_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (migration_id, item_key),
+    UNIQUE KEY sdk_migration_item_operation (migration_id, operation_key),
+    KEY sdk_migration_items_state (migration_id, state, item_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS memory_id_aliases (
+    legacy_memory_id VARCHAR(256) PRIMARY KEY,
+    canonical_memory_id VARCHAR(256) NOT NULL,
+    migration_id VARCHAR(128) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    KEY memory_id_aliases_canonical (canonical_memory_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS sdk_data_plane_cutover (
+    singleton TINYINT PRIMARY KEY,
+    migration_id VARCHAR(128) NOT NULL,
+    sdk_version VARCHAR(64) NOT NULL,
+    store_version VARCHAR(64) NOT NULL,
+    namespace_fingerprint VARCHAR(128) NOT NULL,
+    backend_fingerprint VARCHAR(128) NOT NULL,
+    backup_bundle_id VARCHAR(128) NOT NULL,
+    reconciliation_digest VARCHAR(128) NOT NULL,
+    completed_at VARCHAR(64) NOT NULL,
+    CONSTRAINT sdk_data_plane_cutover_singleton CHECK (singleton = 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _055_sdk_data_plane_migration(cursor: Any) -> None:
+    for statement in _split_statements(sdk_data_plane_migration_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
+def memory_task_sdk_receipts_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts (
+    task_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    raw_ids_json TEXT NOT NULL,
+    memory_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts (
+    task_id VARCHAR(128) PRIMARY KEY,
+    request_id VARCHAR(256) NOT NULL,
+    raw_ids_json JSON NOT NULL,
+    memory_ids_json JSON NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    UNIQUE KEY memory_task_sdk_receipt_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+def sdk_write_receipts_ddl(dialect: str = "mysql") -> str:
+    """SDK ids returned after one normal add(); pending jobs keep these empty."""
+    if dialect == "sqlite":
+        return """
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_raw_ids_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_memory_ids_json TEXT NOT NULL DEFAULT '[]';
+""" + memory_task_sdk_receipts_ddl("sqlite")
+    return """
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_raw_ids_json JSON NOT NULL DEFAULT ('[]');
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_memory_ids_json JSON NOT NULL DEFAULT ('[]');
+""" + memory_task_sdk_receipts_ddl("mysql")
+
+
+async def _056_sdk_write_receipts(cursor: Any) -> None:
+    for statement in _split_statements(sdk_write_receipts_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
+def sdk_matter_references_ddl(dialect: str = "mysql") -> str:
+    """Reference-only Matter projection for SDK authority."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS raw_id_aliases (
+    legacy_evidence_id TEXT NOT NULL,
+    item_index INTEGER NOT NULL DEFAULT 0,
+    canonical_raw_id TEXT NOT NULL,
+    migration_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (legacy_evidence_id, item_index)
+);
+CREATE INDEX IF NOT EXISTS raw_id_aliases_canonical
+ON raw_id_aliases(canonical_raw_id);
+CREATE TABLE IF NOT EXISTS matter_sdk_versions (
+    matter_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    references_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (matter_id, version)
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS raw_id_aliases (
+    legacy_evidence_id VARCHAR(256) NOT NULL,
+    item_index INT NOT NULL DEFAULT 0,
+    canonical_raw_id VARCHAR(256) NOT NULL,
+    migration_id VARCHAR(128) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (legacy_evidence_id, item_index),
+    KEY raw_id_aliases_canonical (canonical_raw_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS matter_sdk_versions (
+    matter_id VARCHAR(256) NOT NULL,
+    version INT NOT NULL,
+    references_json JSON NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (matter_id, version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _057_sdk_matter_references(cursor: Any) -> None:
+    for statement in _split_statements(sdk_matter_references_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
+def sdk_matter_notes_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS matter_sdk_notes (
+    matter_id TEXT NOT NULL,
+    note_id TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    raw_id TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (matter_id, note_id)
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS matter_sdk_notes (
+    matter_id VARCHAR(256) NOT NULL,
+    note_id VARCHAR(256) NOT NULL,
+    request_id VARCHAR(256) NOT NULL,
+    raw_id VARCHAR(256) NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (matter_id, note_id),
+    UNIQUE KEY matter_sdk_note_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _058_sdk_matter_notes(cursor: Any) -> None:
+    for statement in _split_statements(sdk_matter_notes_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
+def memory_authority_state_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS memory_authority_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    authority TEXT NOT NULL CHECK (authority IN ('legacy','sdk')),
+    migration_id TEXT,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO memory_authority_state(singleton,authority,migration_id,updated_at)
+VALUES (1,'legacy',NULL,CURRENT_TIMESTAMP)
+ON CONFLICT(singleton) DO NOTHING
+"""
+    return """
+CREATE TABLE IF NOT EXISTS memory_authority_state (
+    singleton TINYINT PRIMARY KEY,
+    authority VARCHAR(16) NOT NULL,
+    migration_id VARCHAR(128) NULL,
+    updated_at VARCHAR(64) NOT NULL,
+    CONSTRAINT memory_authority_state_singleton CHECK (singleton = 1),
+    CONSTRAINT memory_authority_state_value
+        CHECK (authority IN ('legacy','sdk'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+INSERT INTO memory_authority_state(singleton,authority,migration_id,updated_at)
+VALUES (1,'legacy',NULL,CURRENT_TIMESTAMP)
+ON DUPLICATE KEY UPDATE singleton=singleton
+"""
+
+
+async def _059_memory_authority_state(cursor: Any) -> None:
+    for statement in _split_statements(memory_authority_state_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
+def memory_note_requests_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS memory_note_requests (
+    note_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS memory_note_requests (
+    note_id VARCHAR(256) PRIMARY KEY,
+    request_id VARCHAR(256) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    UNIQUE KEY memory_note_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+def fresh_management_ddl() -> str:
+    """Minimal root schema for a fresh SDK-authority installation."""
+    return """
+CREATE TABLE schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+CREATE TABLE memory_authority_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    authority TEXT NOT NULL CHECK (authority IN ('legacy','sdk')),
+    migration_id TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE memory_note_requests (
+    note_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+)
+"""
+
+
+async def _060_memory_note_requests(cursor: Any) -> None:
+    for statement in _split_statements(memory_note_requests_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -2680,7 +3182,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         2,
         "memory_write_jobs",
         _002_write_jobs,
-        ("memory_write_jobs", "memory_write_job_evidence"),
+        (
+            "memory_write_jobs",
+            "memory_write_job_evidence",
+            "memory_write_schedule_state",
+        ),
     ),
     Migration(3, "source_file_cursors", _003_scanner_cursors, ("source_file_cursors",)),
     Migration(4, "change_outbox", _004_change_outbox, ("change_outbox",)),
@@ -2849,4 +3355,62 @@ MIGRATIONS: tuple[Migration, ...] = (
         _050_model_probe_operations_reserved_at,
     ),
     Migration(51, "drop_hy_node_permissions", _051_drop_hy_node_permissions),
+    Migration(
+        52,
+        "model_request_audit",
+        _052_model_request_audit,
+        ("model_request_audit",),
+    ),
+    Migration(
+        53,
+        "memory_write_event_time",
+        _053_memory_write_event_time,
+        ("memory_write_schedule_state",),
+    ),
+    Migration(
+        54,
+        "legacy_possibly_sent_tasks",
+        _054_legacy_possibly_sent_tasks,
+    ),
+    Migration(
+        55,
+        "sdk_data_plane_migration",
+        _055_sdk_data_plane_migration,
+        (
+            "sdk_data_plane_migrations",
+            "sdk_data_plane_migration_items",
+            "memory_id_aliases",
+            "sdk_data_plane_cutover",
+        ),
+    ),
+    Migration(
+        56,
+        "sdk_write_receipts",
+        _056_sdk_write_receipts,
+        ("memory_task_sdk_receipts",),
+    ),
+    Migration(
+        57,
+        "sdk_matter_references",
+        _057_sdk_matter_references,
+        ("raw_id_aliases", "matter_sdk_versions"),
+    ),
+    Migration(
+        58,
+        "sdk_matter_notes",
+        _058_sdk_matter_notes,
+        ("matter_sdk_notes",),
+    ),
+    Migration(
+        59,
+        "memory_authority_state",
+        _059_memory_authority_state,
+        ("memory_authority_state",),
+    ),
+    Migration(
+        60,
+        "memory_note_requests",
+        _060_memory_note_requests,
+        ("memory_note_requests",),
+    ),
 )

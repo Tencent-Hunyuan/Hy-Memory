@@ -66,12 +66,12 @@ def _field(text: str) -> ResumeField | None:
     return None
 
 
-def _raw_class(written_by: str, evidence_id: str, accepted: frozenset[str]) -> EvidenceClass:
-    if written_by == "person":
+def _raw_class(role: str, evidence_id: str, accepted: frozenset[str]) -> EvidenceClass:
+    if role == "user":
         return "person_statement"
-    if written_by == "agent":
+    if role == "assistant":
         return "agent_report"
-    if written_by == "tool" and evidence_id in accepted:
+    if role == "tool" and evidence_id in accepted:
         return "system_acceptance"
     return "tool_output"
 
@@ -118,7 +118,7 @@ def assemble_resume_packet(
                     field=_field(message.text) or "unclassified",
                     text=message.text,
                     evidence_class=_raw_class(
-                        message.written_by,
+                        message.role,
                         message.evidence_id,
                         verified_system_evidence_ids,
                     ),

@@ -4,7 +4,7 @@ Dev history: when the model extracted no fact, the coding extractor stored the
 raw dialogue as a working fact, and with no words of the person's it took the
 first 600 characters of the rendered trace. MemHub showed that as the memory
 content, which is where `[0] assistant: ... [1] tool(?): ...` came from
-(D87). The SDK fix is present in 2.0.2: it does not store that fallback by
+(D87). The SDK fix remains present in 2.0.4: it does not store that fallback by
 default.
 
 This pins the default here, so a future bump that turns it back on, or our own

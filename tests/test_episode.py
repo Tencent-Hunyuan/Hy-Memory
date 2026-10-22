@@ -173,6 +173,41 @@ class TestEpisodeCloseTriggersSummary:
         await w._resolve_episode_id(_req(t0 + timedelta(hours=3)), 3)
         assert scheduled == [ep1], "只在关闭时对刚关闭的那个 episode 触发一次"
 
+    @pytest.mark.asyncio
+    async def test_summary_uses_the_writer_vector_store(self, monkeypatch):
+        """后台摘要必须拿到 writer 已初始化的 vector store。
+
+        旧实现访问了不存在的 ``self.vector_store``，AttributeError 被
+        except 吞掉，L3 episode 摘要从不生成。
+        """
+        from types import SimpleNamespace
+
+        import hy_memory.agent.episode_summary as episode_summary
+
+        captured = {}
+
+        async def fake_summarize(**kwargs):
+            captured.update(kwargs)
+            return "episode-node"
+
+        monkeypatch.setattr(
+            episode_summary, "summarize_closed_episode", fake_summarize,
+        )
+
+        w = _writer(_FakeCache())
+        w.config.recall.episode_summary_enabled = True
+        w._mem_agent = SimpleNamespace(llm_provider=object())
+        w._embed_service = object()
+        vector_store = object()
+        w._external_vector_store = vector_store
+        w._vector_store = vector_store
+        w._vector_store_initialized = True
+
+        w._schedule_episode_summary(_req(datetime(2026, 9, 13)), "ep-1")
+        await asyncio.sleep(0.05)
+
+        assert captured["vector_store"] is vector_store
+
 
 # ======================================================================
 # Episode 摘要（写侧，省 token）
@@ -675,3 +710,20 @@ class TestInstrumentation:
         assert logged[1]["count"] == 5, "累计条数要落下来"
         assert logged[2]["reused"] is False
         assert all(r["gap"] == 1800.0 for r in logged)
+
+
+def test_series_memory_at_round_trips_local_wall_clock(monkeypatch):
+    """Series timestamps must not shift by the machine's UTC offset."""
+    import time as _time
+
+    from hy_memory.agent.episode_summary import _series_memory_at
+
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    _time.tzset()
+    try:
+        expected = datetime(2026, 1, 1, 12, 0)
+        assert _series_memory_at([int(expected.timestamp())]) == expected
+        assert _series_memory_at([]) is None
+    finally:
+        monkeypatch.delenv("TZ", raising=False)
+        _time.tzset()

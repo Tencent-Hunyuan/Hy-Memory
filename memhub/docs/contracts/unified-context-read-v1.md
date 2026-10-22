@@ -1,12 +1,13 @@
 # Unified Context Read v1
 
-HC-06/08/09/10 and D47 integration slice. Implementation in progress, not host
-installation or real-data acceptance. No new user approval is inferred from this
-technical contract; the unified-read direction was explicitly approved.
+Status: legacy compatibility wire used only before the SDK data-plane cutover.
+After cutover, Host Bridge uses SDK-native Context v2. The two schemas are
+validated and returned independently; SDK data is never fabricated into v1
+revision or Evidence fields.
 
-## Frozen Integration Surface
+## V1 compatibility surface
 
-- New `POST /api/v1/context/search`; proposed host tool `om_context` consumes it.
+- `POST /api/v1/context/search`; the host tool `om_context` consumes it.
   Existing recall/conversations tools retain their permission and response shape.
 - Pydantic source of truth: `context_models.py`. Request has query, kinds,
   **raw_source_ids**, total limit, character_budget and timeout_ms. The renamed
@@ -32,14 +33,13 @@ and trusted authority arguments. Raw adapter receives explicit permitted source
 IDs (None only for trusted local); memory receives permitted memory scopes (None
 only local). They return ContextLaneResult and never log private content.
 
-All permission/deleted/user predicates precede candidate limits. Use existing
-SQLite/FTS and governance semantics, not a new memory engine. Read connections
-are mode=ro and check deadline/progress; a timed-out thread must not run unbounded.
-Raw returns at most three independently authorized same-conversation messages
-per item; body excerpts are bounded and carry actual evidence revision/author.
-Memory returns current confirmed content with revision and bounded evidence IDs,
-never evidence body without raw authorization. Exact query and bounded lexical
-terms are acceptable for v1; this slice does not claim semantic-search parity.
+All permission/deleted/user predicates precede candidate limits. V1 uses the
+legacy SQLite/FTS and governance semantics that existed before cutover. Read
+connections are read-only, check deadline/progress, and must not leave a timed-out
+thread running unbounded. Raw returns at most three independently authorized
+same-conversation messages per item; excerpts are bounded and carry the actual
+legacy evidence revision/author. Memory returns current confirmed content with
+revision and bounded evidence IDs, never evidence body without raw authorization.
 
 One aggregate limit and character budget applies to both lanes, fairly interleaved
 when both have results. Count raw message text and memory content once in the
@@ -59,12 +59,12 @@ differs from unavailable; any incomplete requested path yields partial when some
 authorized query completed, even with no hits. All allowed reads failing yields
 unavailable. Safe fixed reason codes only; no private candidate counts/errors.
 
-## Ownership and Verification
+`used_characters` counts Unicode code points, matching Python's `len()`. It is
+not an encoding length and not a UTF-16 code-unit count, so a client in another
+language must not compare it against `String.length`: an emoji outside the BMP
+is one character here and two there.
 
-Main owns models/API/external route guard/TS and integration. Workers own new
-raw adapter, memory adapter or aggregator/test files only, no existing schema,
-recall.py or model-processing changes. Other task owns Host integration in its
-separate worktree, consuming this contract after acknowledgment.
+## Verification
 
 Tests require no-model/no-HY, denied-lane zero invocation, source/user/workspace
 isolation before limits, revision/revoke races, long body/metadata, count/text/

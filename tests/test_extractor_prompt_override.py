@@ -35,7 +35,7 @@ class _CapturingLLM:
         self.last_messages = None
 
     async def complete_messages(self, *, messages, max_tokens, temperature=None,
-                                tools=None, tool_choice=None):
+                                tools=None, tool_choice=None, **kwargs):
         self.last_messages = messages
         return LLMResponse(
             content='{"memory": [], "intentions": [], "basic_info": {}}',

@@ -16,7 +16,10 @@ const READ_ONLY_PATHS = [
   "/api/v1/memory-tasks",
   "/api/v1/model-profiles",
   "/api/v1/sources",
+  "/api/v2/memory-library",
+  "/api/v2/user-profile",
 ] as const;
+const SDK_MEMORY_DETAIL = /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
 
 /** Contract (C0, H25): the one-time loopback code exchange for `memhub ui`.
  * It is a POST because it mints a short-lived code; the CLI sends the bearer
@@ -195,6 +198,7 @@ export function isReadOnlyPath(path: string): boolean {
   if (IMPORT_JOB.test(path)) return true;
   if (OPERATION_RECEIPT.test(path)) return true;
   if (MEMORY_MUTATION_RECEIPT.test(path)) return true;
+  if (SDK_MEMORY_DETAIL.test(path)) return true;
   if (!MEMORY_DETAIL.test(path)) return false;
   const segment = path.slice("/api/v1/memories/".length);
   return !(RESERVED_MEMORY_SEGMENTS as readonly string[]).includes(segment);
@@ -211,6 +215,43 @@ export interface MemoryWriteReceipt {
   created_at: string;
   updated_at: string;
   detail?: string;
+  raw_ids?: string[];
+  memory_ids?: string[];
+}
+
+export interface OpenAIMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseOpenAIMessages(value: unknown): OpenAIMessage[] | null {
+  const candidate = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.messages)
+      ? value.messages
+      : null;
+  if (candidate === null || candidate.length < 1 || candidate.length > 200)
+    return null;
+  const messages: OpenAIMessage[] = [];
+  for (const item of candidate) {
+    if (!isRecord(item)) return null;
+    if (!["user", "assistant", "tool"].includes(String(item.role))) return null;
+    if (
+      typeof item.content !== "string" ||
+      item.content.length < 1 ||
+      item.content.length > 12_000
+    )
+      return null;
+    messages.push({
+      role: item.role as OpenAIMessage["role"],
+      content: item.content,
+    });
+  }
+  return messages.some((message) => message.role === "user") ? messages : null;
 }
 
 /** A6: submit a write through the durable entry every entry shares.
@@ -237,19 +278,23 @@ export async function submitMemoryWrite(
   attachment: RuntimeAttachmentLike,
   request: {
     session: string;
-    first_round: number;
-    last_round: number;
-    evidence_ids: readonly string[];
+    source: string;
+    request_id: string;
+    messages: readonly OpenAIMessage[];
+    memory_at?: string;
     priority?: "live" | "normal";
   },
 ): Promise<MemoryWriteReceipt> {
   const response = await axios.post<MemoryWriteReceipt>(
-    `${baseUrlOf(attachment)}/api/v1/memory-writes`,
+    `${baseUrlOf(attachment)}/api/v2/memory-writes`,
     {
-      internal_session_id: request.session,
-      first_round: request.first_round,
-      last_round: request.last_round,
-      evidence_ids: [...request.evidence_ids],
+      request_id: request.request_id,
+      session_id: request.session,
+      source_id: request.source,
+      messages: [...request.messages],
+      ...(request.memory_at === undefined
+        ? {}
+        : { memory_at: request.memory_at }),
       ...(request.priority === undefined ? {} : { priority: request.priority }),
     },
     {
@@ -380,7 +425,7 @@ export async function readMemoryWrite(
 ): Promise<MemoryWriteReceipt | null> {
   try {
     const response = await axios.get<MemoryWriteReceipt>(
-      `${baseUrlOf(attachment)}/api/v1/memory-writes/${encodeURIComponent(requestId)}`,
+      `${baseUrlOf(attachment)}/api/v2/memory-writes/${encodeURIComponent(requestId)}`,
       {
         headers: { Authorization: `Bearer ${attachment.apiToken}` },
         timeout: 10_000,
@@ -394,6 +439,41 @@ export async function readMemoryWrite(
     if (axios.isAxiosError(error) && error.response?.status === 404)
       return null;
     throw error;
+  }
+}
+
+export interface OnboardingState {
+  status: string;
+  selected_source_ids: string[];
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+/** Send onboarding back to its first-run state.
+ *
+ * Returns null when the endpoint is not there, so an older runtime degrades to
+ * "not available" instead of failing the command. Only the completion flag
+ * moves: memories, sources and settings live in other tables, which is what
+ * makes this the honest way to see the cold-start screens again.
+ */
+export async function resetOnboarding(
+  attachment: RuntimeAttachmentLike,
+): Promise<OnboardingState | null> {
+  try {
+    const response = await axios.post<OnboardingState>(
+      `${baseUrlOf(attachment)}/api/v1/onboarding/reset`,
+      undefined,
+      {
+        headers: { Authorization: `Bearer ${attachment.apiToken}` },
+        timeout: 15_000,
+        proxy: false,
+        maxRedirects: 0,
+        maxContentLength: MAX_RESPONSE_BYTES,
+      },
+    );
+    return response.data;
+  } catch {
+    return null;
   }
 }
 

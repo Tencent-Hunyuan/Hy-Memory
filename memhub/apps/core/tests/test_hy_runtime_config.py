@@ -5,6 +5,7 @@ Checking that contract automatically prevents a silently flipped rerank flag
 from going unnoticed.
 """
 
+import logging
 import re
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from one_memory.hy_runtime_config import (
     HY_MEMORY_MODE,
     HY_MEMORY_READER,
     HY_MEMORY_VERSION,
+    apply_diagnostic_log_level,
     hy_memory_version,
 )
 
@@ -69,3 +71,19 @@ def test_the_pin_matches_the_lock_file_and_its_wheel():
     )
     assert f"hy_memory-{HY_MEMORY_VERSION}-" in lock
     assert f'specifier = "=={HY_MEMORY_VERSION}"' in lock
+
+
+def test_info_level_suppresses_noisy_third_party_success_logs():
+    names = ("", "one_memory", "httpx", "httpcore", "watchfiles", "jieba")
+    previous = {name: logging.getLogger(name).level for name in names}
+    try:
+        apply_diagnostic_log_level("info")
+        assert logging.getLogger("one_memory").level == logging.INFO
+        for name in ("httpx", "httpcore", "watchfiles", "jieba"):
+            assert logging.getLogger(name).level == logging.WARNING
+        apply_diagnostic_log_level("debug")
+        for name in ("one_memory", "httpx", "httpcore", "watchfiles", "jieba"):
+            assert logging.getLogger(name).level == logging.DEBUG
+    finally:
+        for name, level in previous.items():
+            logging.getLogger(name).setLevel(level)

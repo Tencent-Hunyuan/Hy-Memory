@@ -17,16 +17,23 @@ import {
 import * as api from "./api";
 import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
-import { queryClient } from "./query-client";
+import { queryClient, resetClient } from "./query-client";
 
-const { summary, processing, history, liveSync, recentConversations } =
-  vi.hoisted(() => ({
-    summary: vi.fn(),
-    processing: vi.fn(),
-    history: vi.fn(),
-    liveSync: vi.fn(),
-    recentConversations: vi.fn(),
-  }));
+const {
+  summary,
+  processing,
+  sedimentation,
+  history,
+  liveSync,
+  recentConversations,
+} = vi.hoisted(() => ({
+  summary: vi.fn(),
+  processing: vi.fn(),
+  sedimentation: vi.fn(),
+  history: vi.fn(),
+  liveSync: vi.fn(),
+  recentConversations: vi.fn(),
+}));
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
   getCallHistory: history,
@@ -35,6 +42,7 @@ vi.mock("./api", () => ({
   getHomeSummary: summary,
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
+  getSedimentation: sedimentation,
   getRecentConversations: recentConversations,
   getSources: vi.fn().mockResolvedValue([]),
 }));
@@ -74,6 +82,11 @@ beforeEach(() => {
     observed_at: "2026-09-19T00:00:00Z",
   });
   processing.mockReset().mockResolvedValue({ running: 0, pending: 0 });
+  sedimentation.mockReset().mockResolvedValue({
+    enabled: true,
+    pending_retained: true,
+    imports_unaffected: true,
+  });
   liveSync.mockReset().mockResolvedValue([]);
   recentConversations.mockReset().mockResolvedValue({
     items: [],
@@ -538,6 +551,7 @@ it.each([
 
 afterEach(() => {
   cleanup();
+  resetClient();
   resetConnectionReconcile();
   window.localStorage.clear();
   vi.restoreAllMocks();
@@ -616,7 +630,7 @@ it("keeps authoritative home and processing data when only the source snapshot b
   expect(screen.getByText("601")).toBeTruthy();
   expect(screen.getByText("后台运行中")).toBeTruthy();
   expect(screen.getByText("2 个应用已接入")).toBeTruthy();
-  expect(screen.getAllByText("一切就绪")).toHaveLength(2);
+  expect(screen.getAllByText("整理中")).toHaveLength(2);
   expect(screen.queryByText("状态待核对")).toBeNull();
 });
 it("does not turn a failed home summary into zero or expose a private error", async () => {
@@ -647,11 +661,11 @@ it("never calls a recall event a success when only stored memories are available
 });
 
 it.each([
-  [{ running: 0, pending: 0 }, "一切就绪"],
-  [{ running: 0, pending: 0, waiting_for_model: 1 }, "等待模型"],
-  [{ running: 0, pending: 0, blocked_stages: [{ count: 1 }] }, "排队处理中"],
-  [{ running: 0, pending: 0, failed: 1 }, "需要处理"],
-])("does not confuse task state with readiness: %j", async (value, label) => {
+  { running: 0, pending: 0 },
+  { running: 0, pending: 0, waiting_for_model: 1 },
+  { running: 0, pending: 0, blocked_stages: [{ count: 1 }] },
+  { running: 0, pending: 0, failed: 1 },
+])("shows the enabled switch instead of task counters: %j", async (value) => {
   processing.mockResolvedValue(value);
   render(
     <ApplicationsHome
@@ -661,8 +675,29 @@ it.each([
       onSettings={() => {}}
     />,
   );
-  expect(await screen.findAllByText(label)).toHaveLength(2);
-  expect(screen.queryByText("已就绪")).toBeNull();
+  expect(await screen.findAllByText("整理中")).toHaveLength(2);
+});
+
+it("shows a paused switch immediately even when task rows still say running", async () => {
+  processing.mockResolvedValue({ running: 3, pending: 10 });
+  sedimentation.mockResolvedValue({
+    enabled: false,
+    pending_retained: true,
+    imports_unaffected: true,
+  });
+
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+
+  expect(await screen.findAllByText("已暂停")).toHaveLength(2);
+  expect(screen.getByText("已停止生成新记忆")).toBeTruthy();
+  expect(screen.queryByText("新的对话正在整理")).toBeNull();
 });
 
 it("keeps the import-in-progress empty state stable without a progress link", async () => {

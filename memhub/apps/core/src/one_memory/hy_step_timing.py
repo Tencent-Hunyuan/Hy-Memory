@@ -152,7 +152,7 @@ class HyStepTimer:
             if value is None:
                 continue
             diagnostic_event(
-                level="info",
+                level="debug",
                 component=STEP_COMPONENTS[name],
                 event="hy.step.completed",
                 outcome="succeeded",
@@ -168,7 +168,7 @@ class HyStepTimer:
             )
         model = measured.get("model")
         diagnostic_event(
-            level="info",
+            level="debug",
             component="hy.bridge",
             event="hy.steps.summary",
             outcome="succeeded",

@@ -62,7 +62,12 @@ class FakeWindow extends EventEmitter {
   isDestroyed() {
     return false;
   }
+  isMinimized() {
+    return false;
+  }
+  restore() {}
   show() {}
+  focus() {}
   async loadURL(url: string) {
     this.frame.url = url;
   }
@@ -121,8 +126,8 @@ vi.mock("electron", () => ({
   shell: { openExternal: vi.fn() },
 }));
 vi.mock("./permissions", () => ({ installDenyAllPermissionPolicy: vi.fn() }));
-vi.mock("./app-protocol", () => ({
-  APP_ORIGIN: "one-memory://app",
+vi.mock("./app-protocol", async (importOriginal) => ({
+  ...(await importOriginal()),
   installAppProtocol: vi.fn(),
 }));
 vi.mock("./core-supervisor", () => ({
@@ -188,10 +193,15 @@ vi.mock("@one-memory/host-bridge/installer", () => ({
   checkSkillDrift: fake.localRead,
   planRecallRepoint: fake.localRead,
   readInstallSelfCheck: fake.localRead,
-  renderConnectionMaterial: fake.localRead,
+  renderCustomHarnessSkill: fake.localRead,
   verifyRecallInstall: fake.localRead,
 }));
-vi.mock("@one-memory/host-bridge", () => ({
+// Spread the real module instead of whitelisting it. Main imports domain
+// helpers that runtime-control re-exports from host-bridge, so a partial mock
+// silently hands back undefined for them and every error path that calls one
+// fails with a TypeError instead of the code under test.
+vi.mock("@one-memory/host-bridge", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@one-memory/host-bridge")>()),
   RecallBroker: class {
     constructor(options: unknown) {
       fake.brokerConstructed(options);
@@ -332,7 +342,7 @@ describe("packaged Desktop host-control ownership", () => {
     expect(fake.verifyHostRuntime).not.toHaveBeenCalled();
   });
 
-  it("keeps an hourly host path failure out of connection material", async () => {
+  it("keeps an hourly host path failure out of custom Harness pairing", async () => {
     vi.stubEnv(
       "ONE_MEMORY_HOURLY_INSTANCE_ID",
       "1d3b0c1c-59d1-44c3-9e3b-24e5ecfa1b19",
@@ -352,9 +362,9 @@ describe("packaged Desktop host-control ownership", () => {
         },
       }),
     );
-    await expect(invoke("connection-material")).rejects.toThrow(
-      "host_runtime_current_unavailable",
-    );
+    await expect(
+      invoke("create-custom-harness-skill", "Kimi Code"),
+    ).rejects.toThrow("host_runtime_current_unavailable");
   });
 
   it("does not open local HostPermissions for a blocked embedded hourly path", async () => {
@@ -529,7 +539,11 @@ describe("packaged Desktop host-control ownership", () => {
       "runtime_broker_unavailable",
     );
     expect(fake.quit).toHaveBeenCalledTimes(1);
-    expect(fake.windows).toHaveLength(0);
+    // A window exists, but it is the startup placeholder raised before the
+    // services were tried. The app window itself was never opened.
+    expect(fake.windows.map((window) => window.frame.url)).toEqual([
+      "one-memory://app/__startup",
+    ]);
     expect(fake.open).not.toHaveBeenCalled();
     expect(fake.brokerConstructed).not.toHaveBeenCalled();
     expect(fake.brokerStart).not.toHaveBeenCalled();

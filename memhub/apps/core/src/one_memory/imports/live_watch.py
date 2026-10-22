@@ -156,7 +156,7 @@ class FileWatchLiveSync:
             if source is not None
         ):
             diagnostic_event(
-                level="info",
+                level="debug",
                 component="import.live_watch",
                 event="live_sync.hook_received",
                 outcome="queued",
@@ -190,7 +190,7 @@ class FileWatchLiveSync:
                 try:
                     await self._trigger_past(source_id, observed)
                     diagnostic_event(
-                        level="info",
+                        level="debug",
                         component="import.live_watch",
                         event="live_sync.hook_completed",
                         outcome="written",

@@ -52,6 +52,7 @@ export interface MemoryContextItem {
   memory_kind: string;
   updated_at: string;
   evidence_ids: string[];
+  matched_by: readonly ("lexical" | "governed_semantic")[];
   truncated: boolean;
 }
 
@@ -83,3 +84,43 @@ export interface ContextSearchResponse {
   total_ms: number;
   adoption: "unknown";
 }
+
+export interface SdkRawContextItem {
+  kind: "raw";
+  raw_id: string;
+  content: string;
+  source: string;
+  session_id: string;
+  memory_at: string | null;
+  score: number;
+  truncated: boolean;
+}
+
+export interface SdkMemoryContextItem {
+  kind: "memory";
+  memory_id: string;
+  content: string;
+  layer: string;
+  status: string;
+  source: string | null;
+  updated_at: string | null;
+  score: number;
+  truncated: boolean;
+}
+
+export type SdkContextItem = SdkRawContextItem | SdkMemoryContextItem;
+
+export interface SdkContextSearchResponse {
+  schema_version: 2;
+  request_id: string;
+  state: "grounded" | "empty" | "partial" | "unavailable";
+  items: SdkContextItem[];
+  used_characters: number;
+  truncated: boolean;
+  total_ms: number;
+}
+
+/** Native Host Bridge wire response. Schemas stay distinct and are never adapted. */
+export type HostContextSearchResponse =
+  | ContextSearchResponse
+  | SdkContextSearchResponse;

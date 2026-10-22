@@ -162,24 +162,29 @@ def test_import_request_trace_reaches_the_background_job_without_original_text(t
     ]
     names = [event["event"] for event in events]
     assert "import.request.started" in names
-    assert "import.queued" in names
-    assert "import.started" in names
     assert "import.finished" in names
+    finished = next(event for event in events if event["event"] == "import.finished")
+    assert {
+        "stored_count",
+        "revised_count",
+        "skipped_count",
+        "error_count",
+    } <= finished["details"].keys()
     assert secret not in written
 
 
-def test_import_run_logs_parse_stages_and_core_resources_without_content(tmp_path):
+def test_default_info_omits_parser_and_resource_internals(tmp_path, caplog):
+    caplog.set_level("INFO")
     written, job_id = _run_codex_import(tmp_path)
     events = list(map(json.loads, written.splitlines()))
     job_events = [event for event in events if event.get("job_id") == job_id]
     names = [event["event"] for event in job_events]
-    assert names.index("import.parse.started") < names.index("import.parse.completed")
-    assert "import.phase_changed" in names
-    completed = next(event for event in job_events if event["event"] == "import.parse.completed")
-    assert completed["outcome"] == "succeeded"
-    assert {"stored_count", "skipped_count", "error_count"} <= completed["details"].keys()
+    assert "import.parse.started" not in names
+    assert "import.parse.completed" not in names
+    assert "import.phase_changed" not in names
+    assert "import.finished" in names
     everything = [event["event"] for event in events]
-    assert "core.resource_snapshot" in everything
+    assert "core.resource_snapshot" not in everything
     assert everything.index("core.ready") < everything.index("core.stopped")
     assert IMPORT_SECRET not in written
 
@@ -223,4 +228,5 @@ def test_a_failing_import_finished_log_does_not_escape_the_supervisor_task(tmp_p
 
     monkeypatch.setattr(supervisor, "diagnostic_event", rejecting)
     written, _job_id = _run_codex_import(tmp_path)
-    assert "import.started" in written
+    assert "core.stopped" in written
+    assert "import.finished" not in written

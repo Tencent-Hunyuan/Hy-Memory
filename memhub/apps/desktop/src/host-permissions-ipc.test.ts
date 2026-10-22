@@ -101,8 +101,8 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("./permissions", () => ({ installDenyAllPermissionPolicy: vi.fn() }));
-vi.mock("./app-protocol", () => ({
-  APP_ORIGIN: "one-memory://app",
+vi.mock("./app-protocol", async (importOriginal) => ({
+  ...(await importOriginal()),
   installAppProtocol: vi.fn(),
 }));
 vi.mock("./core-supervisor", () => ({

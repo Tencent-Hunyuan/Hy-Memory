@@ -7,10 +7,11 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -18,6 +19,7 @@ import {
   type ModelSettingsActions,
   probeLabel,
 } from "./ModelSettings";
+import type { PendingModelProbe } from "./pending-model-probe";
 import { PROVIDER_PRESETS } from "./provider-presets";
 
 const create = vi.fn();
@@ -34,6 +36,7 @@ it("explains an insufficient model balance with the required recovery", () => {
 
 let profiles: ModelProfile[];
 let probes: Record<string, ModelProbeResult> = {};
+let pendingProbe: PendingModelProbe | null = null;
 
 const profile: ModelProfile = {
   profile_id: "profile-1",
@@ -73,6 +76,22 @@ const preset: ModelProfile = {
   disable_thinking: true,
 };
 
+/** Re-renders on demand so a cleared journal is picked up, like a real refresh. */
+function ProbeRecoveryHarness({
+  controls,
+}: {
+  controls: { current: ModelSettingsActions | null };
+}) {
+  const [, setTick] = useState(0);
+  return (
+    <ModelSettings
+      compactSingle
+      controlsRef={controls}
+      onProfilesChanged={() => setTick((value) => value + 1)}
+    />
+  );
+}
+
 vi.mock("./use-model-profiles", () => ({
   useModelProfiles: () => ({
     profiles,
@@ -84,6 +103,8 @@ vi.mock("./use-model-profiles", () => ({
     probeErrorFor: () => null,
     busy: null,
     error: null,
+    pendingProbe,
+    probeStorageFailed: false,
     create,
     probeProfile,
     activate,
@@ -125,6 +146,7 @@ describe("ModelSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     probes = {};
+    pendingProbe = null;
     profiles = [profile];
     create.mockResolvedValue(profile);
     update.mockResolvedValue({ ...preset, has_api_key: true, revision: 2 });
@@ -914,6 +936,48 @@ describe("ModelSettings", () => {
         screen.queryByRole("region", { name: "Saved provider" }),
       ).toBeNull();
       expect(screen.getByRole("button", { name: "测试连接" })).toBeTruthy();
+    });
+  });
+
+  it("reopens the form a pending probe refused, and does not re-send the test", async () => {
+    const user = userEvent.setup();
+    const controls = createRef<ModelSettingsActions>();
+    pendingProbe = {
+      operationId: "11111111-1111-1111-1111-111111111111",
+      profileId: profile.profile_id,
+      inputRevision: profile.revision,
+    };
+    profiles = [profile];
+    probeProfile.mockImplementationOnce(async (profileId: string) => {
+      // The backend reaches a terminal state and the journal entry is dropped.
+      pendingProbe = null;
+      return {
+        profile_id: profileId,
+        profile_revision: profile.revision,
+        stages: [],
+        capabilities: { ...profile.capabilities },
+      };
+    });
+    render(<ProbeRecoveryHarness controls={controls} />);
+
+    // The fence is untouched: opening the area did not loosen it.
+    act(() => {
+      expect(controls.current?.editProfile(profile)).toBe(false);
+    });
+    const nameField = () =>
+      screen.getByLabelText("配置名称") as HTMLInputElement;
+    expect(nameField().disabled).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "核对测试结果" }));
+
+    expect(probeProfile).toHaveBeenCalledExactlyOnceWith(profile.profile_id);
+    // The refused edit is replayed once the fence clears, so the person lands
+    // in the form they asked for instead of a blank one that invites a
+    // duplicate. Waiting rather than asserting immediately: reconciliation is
+    // an async handler plus a refresh, and settling is not instant.
+    await waitFor(() => {
+      expect(nameField().value).toBe(profile.name);
+      expect(nameField().disabled).toBe(false);
     });
   });
 });

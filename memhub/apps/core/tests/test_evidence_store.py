@@ -2,6 +2,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from hashlib import sha256
 
 import pytest
 from pydantic import ValidationError
@@ -14,6 +15,9 @@ from one_memory.imports.models import (
     WrittenBy,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
+from one_memory.memory_tasks import evidence_ref, matches_evidence_ref
 from one_memory.workspace_resolution import KnownWorkspace
 
 
@@ -25,6 +29,7 @@ def evidence(
     verbatim: str = "Remember the source, not the guess.",
     origin: EvidenceOrigin = EvidenceOrigin.FILE,
     written_by: WrittenBy = WrittenBy.PERSON,
+    role: str = "user",
     source_ordinal: str | None = None,
 ) -> EvidenceInput:
     return EvidenceInput(
@@ -35,7 +40,7 @@ def evidence(
         source_ordinal=source_ordinal
         if source_ordinal is not None
         else ("line:1" if message_id is None and correlation_id is None else None),
-        role="user",
+        role=role,
         written_by=written_by,
         created_at=datetime(2026, 8, 31, 12, 0, tzinfo=UTC),
         verbatim=verbatim,
@@ -57,6 +62,57 @@ def forget_repair(connection: sqlite3.Connection, name: str) -> None:
     a state no real database is ever in.
     """
     connection.execute("DELETE FROM evidence_repairs WHERE name = ?", (name,))
+
+
+def test_sdk_staging_release_removes_new_raw_but_keeps_legacy_governance(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    transient = store.put(evidence(message_id="transient")).record
+    legacy = store.put(evidence(message_id="legacy", verbatim="legacy")).record
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE governed_memory_evidence ("
+            "memory_id TEXT NOT NULL,evidence_id TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO governed_memory_evidence VALUES (?,?)",
+            ("memory-1", legacy.evidence_id),
+        )
+        connection.commit()
+
+    removed = store.release_sdk_staging((transient.evidence_id, legacy.evidence_id))
+
+    assert removed == 1
+    assert store.get(transient.evidence_id) is None
+    assert store.get(legacy.evidence_id) is not None
+
+
+def test_startup_resumes_sdk_staging_cleanup_after_completed_job(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    record = store.put(evidence(message_id="queued")).record
+    queue = DurableWriteQueue(database, evidence=store)
+    request = WriteRequest(
+        internal_session_id="conversation-1",
+        source_id="cursor",
+        batch_identity=BatchIdentity(
+            internal_session_id="conversation-1",
+            first_round=1,
+            last_round=1,
+        ),
+        evidence_ids=[record.evidence_id],
+        input_records=(record,),
+        idempotency_key="request-1",
+    )
+    job = queue.submit(request)
+    queue.settle(
+        job.job_id,
+        state=COMPLETED,
+        sdk_raw_ids=("raw-1",),
+    )
+
+    assert store.release_completed_sdk_staging() == 1
+    assert store.get(record.evidence_id) is None
 
 
 def test_same_source_message_merges_origins_without_duplication(tmp_path) -> None:
@@ -87,7 +143,7 @@ def test_rescanning_an_unchanged_file_does_not_write_the_message_again(tmp_path)
     """A rescan is idempotent because the identity is derived from the content.
 
     `EvidenceInput.idempotency_key` is a hash of the source, conversation,
-    author, ordinal and content hash, and `evidence_id` is a uuid5 over that
+    protocol role and content hash, and `evidence_id` is a uuid5 over that
     key, so replaying an unchanged file reproduces the same primary key and
     `ON CONFLICT` absorbs it. Verified: removing the anchoring logic still
     leaves this green, so this pins the contract, not one implementation.
@@ -99,6 +155,85 @@ def test_rescanning_an_unchanged_file_does_not_write_the_message_again(tmp_path)
     assert first.was_created is True
     assert second.was_created is False
     assert second.record.evidence_id == first.record.evidence_id
+    assert store.count() == 1
+
+
+def test_derived_identity_uses_role_not_host_author_guess(tmp_path) -> None:
+    store = EvidenceStore(tmp_path / "one-memory.sqlite3")
+    first = store.put(evidence(message_id=None, written_by=WrittenBy.UNKNOWN))
+    replay = store.put(evidence(message_id=None, written_by=WrittenBy.PERSON))
+    assistant = store.put(evidence(message_id=None, role="assistant", written_by=WrittenBy.AGENT))
+
+    assert replay.record.evidence_id == first.record.evidence_id
+    assert replay.was_created is False
+    assert assistant.record.evidence_id != first.record.evidence_id
+    assert store.count() == 2
+
+
+def test_task_proof_ignores_legacy_written_by_metadata(tmp_path) -> None:
+    store = EvidenceStore(tmp_path / "one-memory.sqlite3")
+    record = store.put(evidence()).record
+    proof = evidence_ref(record)
+
+    changed_author = record.model_copy(update={"written_by": WrittenBy.AGENT})
+    legacy_identity = record.model_dump(
+        mode="json",
+        exclude={"origin_meta", "imported_at", "updated_at"},
+    )
+    legacy_proof = {
+        **proof,
+        "identity_hash": sha256(json.dumps(legacy_identity, sort_keys=True).encode()).hexdigest(),
+    }
+
+    assert matches_evidence_ref(changed_author, proof) is True
+    assert matches_evidence_ref(changed_author, legacy_proof) is True
+
+
+def test_rescan_reuses_a_row_stored_under_written_by_derived_v3(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    item = evidence(message_id=None, written_by=WrittenBy.UNKNOWN)
+    original = store.put(item).record
+    with sqlite3.connect(database) as connection, connection:
+        connection.execute(
+            "UPDATE evidence SET idempotency_key=? WHERE evidence_id=?",
+            (item.written_by_derived_v3_idempotency_key, original.evidence_id),
+        )
+
+    replay = store.put(evidence(message_id=None, written_by=WrittenBy.PERSON))
+
+    assert replay.was_created is False
+    assert replay.record.evidence_id == original.evidence_id
+    assert store.count() == 1
+
+
+def test_legacy_identity_role_change_revises_the_existing_evidence(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    old = evidence(
+        message_id=None,
+        role="assistant",
+        written_by=WrittenBy.AGENT,
+    )
+    original = store.put(old).record
+    with sqlite3.connect(database) as connection, connection:
+        connection.execute(
+            "UPDATE evidence SET idempotency_key=? WHERE evidence_id=?",
+            (old.written_by_derived_v3_idempotency_key, original.evidence_id),
+        )
+
+    replay = store.put(
+        evidence(
+            message_id=None,
+            role="user",
+            written_by=WrittenBy.AGENT,
+        )
+    )
+
+    assert replay.record.evidence_id == original.evidence_id
+    assert replay.was_revised is True
+    assert replay.record.revision == original.revision + 1
+    assert replay.record.role == "user"
     assert store.count() == 1
 
 
@@ -146,6 +281,7 @@ def test_personal_candidate_prefilter_excludes_unrelated_user_turns(tmp_path) ->
         evidence(
             message_id="assistant",
             verbatim="我偏好简洁文案。",
+            role="assistant",
             written_by=WrittenBy.AGENT,
         )
     )

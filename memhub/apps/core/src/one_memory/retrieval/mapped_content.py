@@ -10,7 +10,6 @@ from one_memory.imports.models import (
     MAX_VERBATIM_CHARACTERS,
     EvidenceContentKind,
     EvidenceRecord,
-    WrittenBy,
 )
 from one_memory.imports.sources.parsing import (
     is_host_generated_user_turn,
@@ -164,10 +163,10 @@ def prepare_mapped_content(record: EvidenceRecord) -> PreparedMappedContent:
     The returned text is transient; only metadata is suitable for an outer manifest.
     That manifest must independently bind Evidence identity/revision/hash and grants.
     """
-    if record.content_kind is not EvidenceContentKind.RAW_CONVERSATION or not (
-        (record.role == "user" and record.written_by is WrittenBy.PERSON)
-        or (record.role == "assistant" and record.written_by is WrittenBy.AGENT)
-    ):
+    if record.content_kind is not EvidenceContentKind.RAW_CONVERSATION or record.role not in {
+        "user",
+        "assistant",
+    }:
         raise MappedContentError("mapped_content_ineligible")
     original = record.verbatim
     if len(original) > MAX_VERBATIM_CHARACTERS:

@@ -87,7 +87,7 @@ def build_acceptance_pack(
             """
             SELECT DISTINCT e.evidence_id
             FROM evidence e
-            WHERE e.role = 'user' AND e.written_by = 'person'
+            WHERE e.role = 'user'
               AND LENGTH(e.verbatim) <= 300
               AND (
                 e.verbatim LIKE '%我是一名%' OR e.verbatim LIKE '%我是一个%'
@@ -118,7 +118,7 @@ def build_acceptance_pack(
         for row in connection.execute(
             """
             SELECT evidence_id FROM evidence
-            WHERE role = 'user' AND written_by != 'person'
+            WHERE role != 'user'
             """
         ):
             strata["attribution_edge"].add(row["evidence_id"])
@@ -138,11 +138,7 @@ def build_acceptance_pack(
             quota,
         )
     if len(selected) < sample_size:
-        eligible = (
-            evidence_id
-            for evidence_id, row in evidence.items()
-            if row["role"] == "user" and row["written_by"] == "person"
-        )
+        eligible = (evidence_id for evidence_id, row in evidence.items() if row["role"] == "user")
         _extend_unique(selected, _stable_order(eligible, seed=f"{seed}:fill"), sample_size)
     selected = selected[:sample_size]
     if len(selected) < sample_size:
@@ -163,7 +159,11 @@ def build_acceptance_pack(
                 row_id=f"{index:03d}",
                 evidence_id=evidence_id,
                 source_id=source["source_id"],
-                written_by=source["written_by"],
+                written_by=(
+                    "person"
+                    if source["role"] == "user"
+                    else ("agent" if source["role"] == "assistant" else source["role"])
+                ),
                 character_count=len(source["verbatim"]),
                 content_hash=source["content_hash"],
                 strata=tuple(

@@ -44,7 +44,7 @@ await build({
   format: ["esm"],
   platform: "node",
   target: "node24",
-  noExternal: ["axios"],
+  noExternal: ["@one-memory/contracts", "axios"],
   banner: {
     js: 'import { createRequire as __hookCreateRequire } from "node:module"; const require = __hookCreateRequire(import.meta.url);',
   },

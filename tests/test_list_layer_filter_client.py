@@ -31,7 +31,12 @@ def run(coro):
 DIMS = 32
 
 
-def _node(user_id="u1", content="x", layer=MemoryLayer.L2_FACT):
+def _node(
+    user_id="u1",
+    content="x",
+    layer=MemoryLayer.L2_FACT,
+    status=MemoryStatus.ACTIVE,
+):
     import random
     n = MemoryNode(
         node_id=str(uuid.uuid4()),
@@ -40,8 +45,8 @@ def _node(user_id="u1", content="x", layer=MemoryLayer.L2_FACT):
         session_id="s1",
         content=content,
         layer=layer,
-        status=MemoryStatus.ACTIVE,
-        is_latest=True,
+        status=status,
+        is_latest=status == MemoryStatus.ACTIVE,
     )
     vec = [random.gauss(0, 1) for _ in range(DIMS)]
     norm = sum(v * v for v in vec) ** 0.5
@@ -104,6 +109,22 @@ class TestNormalizeLayers:
             HyMemoryClient._normalize_layers(["l3_identity"])
 
 
+class TestNormalizeStatuses:
+    def test_none_and_empty_preserve_active_default(self):
+        assert HyMemoryClient._normalize_statuses(None) is None
+        assert HyMemoryClient._normalize_statuses([]) is None
+
+    def test_string_and_enum_values_are_deduplicated(self):
+        got = HyMemoryClient._normalize_statuses(
+            ["superseded", MemoryStatus.SHADOW, "superseded"]
+        )
+        assert got == [MemoryStatus.SUPERSEDED, MemoryStatus.SHADOW]
+
+    def test_invalid_status_raises(self):
+        with pytest.raises(ValueError):
+            HyMemoryClient._normalize_statuses(["deleted"])
+
+
 class TestVdbBucketLayerFilter:
     def _seed(self, store):
         run(store.upsert_batch([
@@ -163,6 +184,24 @@ class TestVdbBucketLayerFilter:
         ))
         assert [m["content"] for m in got["memories"]] == ["fact"]
 
+    def test_status_filter_defaults_to_active_and_can_read_superseded(self, faiss_store):
+        run(faiss_store.upsert_batch([
+            _node(content="active", status=MemoryStatus.ACTIVE),
+            _node(content="old", status=MemoryStatus.SUPERSEDED),
+            _node(content="hidden", status=MemoryStatus.SHADOW),
+        ]))
+
+        default_page = run(_client_with(faiss_store)._list_vdb_bucket(
+            user_id="u1", agent_id=None, limit=100, offset=0, order="desc",
+        ))
+        assert [m["content"] for m in default_page["memories"]] == ["active"]
+
+        lifecycle_page = run(_client_with(faiss_store)._list_vdb_bucket(
+            user_id="u1", agent_id=None, limit=100, offset=0, order="desc",
+            statuses=[MemoryStatus.SUPERSEDED, MemoryStatus.SHADOW],
+        ))
+        assert {m["content"] for m in lifecycle_page["memories"]} == {"old", "hidden"}
+
     def test_layer_filter_composes_with_multi_user(self, faiss_store):
         """R3 与 R1 叠加：多用户 + 层级筛选同时生效。"""
         run(faiss_store.upsert_batch([
@@ -215,3 +254,37 @@ class TestGraphBucketLayerSkip:
             user_id="u1", agent_id=None, limit=10, offset=0, order="desc",
         ))
         assert calls == [1], "不传 layers 时行为与改动前一致"
+
+    def test_graph_status_filter_matches_vdb_contract(self):
+        active = _node(content="active graph", layer=MemoryLayer.L6_SCHEMA)
+        old = _node(
+            content="old graph",
+            layer=MemoryLayer.L6_SCHEMA,
+            status=MemoryStatus.SUPERSEDED,
+        )
+
+        class GraphStore:
+            async def get_all_nodes(self, *_args, **_kwargs):
+                return [active, old]
+
+            async def close(self):
+                return None
+
+        c = HyMemoryClient.__new__(HyMemoryClient)
+
+        async def _acquire():
+            return GraphStore(), True
+
+        c._acquire_graph_store_for_purge = _acquire
+        default_page = run(c._list_graph_bucket(
+            user_id="u1", agent_id=None, limit=10, offset=0, order="desc",
+            layers=[MemoryLayer.L6_SCHEMA],
+        ))
+        assert [item["content"] for item in default_page["nodes"]] == ["active graph"]
+
+        old_page = run(c._list_graph_bucket(
+            user_id="u1", agent_id=None, limit=10, offset=0, order="desc",
+            layers=[MemoryLayer.L6_SCHEMA],
+            statuses=[MemoryStatus.SUPERSEDED],
+        ))
+        assert [item["content"] for item in old_page["nodes"]] == ["old graph"]

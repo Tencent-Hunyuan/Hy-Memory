@@ -37,8 +37,9 @@ from one_memory.imports.jobs import (
     ImportStatus,
     InvalidJobTransitionError,
 )
-from one_memory.imports.models import EvidenceRecord
+from one_memory.imports.models import EvidenceRecord, materialize_write_input
 from one_memory.imports.storage import EvidenceStore, PendingMemoryDispatch
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.service_levels import ServiceLevel, service_level_context
 
 _SKIP_BATCH_SECONDS = 0.1
@@ -166,6 +167,8 @@ class ImportRunner:
         on_evidence: Callable[[EvidenceRecord], object] | None = None,
         on_stable_evidence: Callable[[EvidenceRecord], object] | None = None,
         heartbeat_interval_seconds: float = 10.0,
+        sdk_queue: DurableWriteQueue | None = None,
+        sdk_authority: Callable[[], bool] | None = None,
     ) -> None:
         if evidence_store.database_path.resolve() != job_store.database_path.resolve():
             raise ValueError("Evidence and import jobs must share one database")
@@ -175,6 +178,8 @@ class ImportRunner:
         self.on_evidence = on_evidence
         self.on_stable_evidence = on_stable_evidence
         self._live_import = False
+        self.sdk_queue = sdk_queue
+        self.sdk_authority = sdk_authority or (lambda: False)
 
     async def run(
         self,
@@ -199,7 +204,7 @@ class ImportRunner:
             raise ValueError("Import job source does not match adapter source")
         job, runner_token = await in_the_background(self.job_store.claim, job_id)
         diagnostic_event(
-            level="info",
+            level="debug",
             component="import.parser",
             event="import.parse.started",
             outcome="started",
@@ -310,7 +315,7 @@ class ImportRunner:
                 if event.kind == "progress" and str(event.phase) != last_phase:
                     phase = str(event.phase)
                     diagnostic_event(
-                        level="info",
+                        level="debug",
                         component="import.parser",
                         event="import.phase_changed",
                         outcome="changed",
@@ -516,7 +521,7 @@ class ImportRunner:
     async def _emit_parse_result(self, job: ImportJob, started: float) -> None:
         succeeded = job.status is ImportStatus.COMPLETED
         diagnostic_event(
-            level="info" if succeeded else "warn",
+            level="debug" if succeeded else "warn",
             component="import.parser",
             event="import.parse.completed",
             outcome="succeeded" if succeeded else str(job.status),
@@ -652,6 +657,18 @@ class ImportRunner:
                 count_skips()
                 if isinstance(event, ScanCursorTouch):
                     self.job_store._upsert_cursor(connection, row, event.cursor, now)
+                    if (
+                        self.sdk_authority()
+                        and self.sdk_queue is not None
+                        and event.cursor.read_to_end
+                    ):
+                        self.sdk_queue.finalize_sdk_file(
+                            user_id=current.user_id,
+                            source_id=current.source_id,
+                            file_key=event.cursor.file_key,
+                            connection=connection,
+                        )
+                        continue
                     if self.on_stable_evidence is not None and event.cursor.read_to_end:
                         # Read without consuming: the durable submit runs after
                         # this transaction closes, so the pending marker must
@@ -668,6 +685,23 @@ class ImportRunner:
                         pending_keys.append(
                             (current.user_id, current.source_id, event.cursor.file_key)
                         )
+                    continue
+                if self.sdk_authority() and self.sdk_queue is not None:
+                    record = materialize_write_input(event.evidence)
+                    self.sdk_queue.stage_sdk_input(
+                        record,
+                        file_key=event.cursor.file_key,
+                        connection=connection,
+                        priority="live" if self._live_import else "normal",
+                    )
+                    self.job_store.record_evidence(
+                        job_id,
+                        runner_token=runner_token,
+                        cursor=event.cursor,
+                        was_created=True,
+                        was_revised=False,
+                        connection=connection,
+                    )
                     continue
                 result = self.evidence_store.put(event.evidence, connection=connection)
                 self.job_store.record_evidence(

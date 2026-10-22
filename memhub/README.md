@@ -1,18 +1,30 @@
-# MemHub / One Memory
+# MemHub
 
-MemHub 是一个本地优先的共享记忆产品：把用户授权的多个 AI 产品中的历史对话和新增内容
-汇总到同一份记忆，并让这些 AI 在独立授权后复用它。Hy Memory 是 MemHub 使用的 Python
-SDK 和记忆引擎。One Memory / `one-memory` 是历史模块、数据目录、服务和兼容命令名称。
+MemHub是一个本地优先的共享记忆产品。它把用户明确授权的AI对话和编码记录汇总到一份本地记忆中，再由用户分别授权给支持的AI工具调用。你可以继续使用熟悉的客户端，同时保留跨工具延续的上下文。Hy Memory是MemHub使用的Python SDK和记忆引擎。
+
+# 💡❤️ MemHub 刚刚开源，欢迎一起优化共建！ ❤️💡 
+
+**# 💭 MemHub处于preview阶段，当前公开版本可以下载和体验，部分平台制品、安装路径与宿主体验仍在持续优化验证。安装前请先查看Release里的实际制品和版本说明。**
+
+> 🙋 如果你遇到问题/有建议：欢迎提交Issue，并附上MemHub版本、操作系统与芯片架构、复现步骤、预期结果、实际结果和经过脱敏的日志。请不要上传APIKey、真实对话、个人路径或其他敏感信息。
+
+> 我们会公开跟进可复现的问题，持续发布修复，并根据真实反馈完善安装、同步和召回体验。
+
+**# 感谢每一条反馈，期待你和我们一起打磨MemHub的体验 ：）**
+
+> 💗 MemHub has just been open-sourced and is under active development. The current public release is available for download andevaluation. Some platform packages, installation paths, and host integrations are still being completed and verified. Check the assets
+and release notes before installing.
+If you run into a problem, please open an Issue with the version, platform,reproduction steps, and sanitized logs, We wilreviewreports, publish fixes, and keep the support matrix up to date.
 
 ## 发行与平台合同
 
-公共 Python SDK 为 `hy-memory==2.0.2`。MemHub 源码版本为 `1.0.2`
-（build 6），GitHub 仓库为
+源码当前固定使用公开 PyPI 开发预览 `hy-memory==2.0.5.dev3`。MemHub 源码版本为 `1.0.4`
+（build 13），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-`v1.0.2` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
+`v1.0.4` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
 Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命周期验收；macOS
 制品由发行流水线完成 Developer ID 签名、公证和验收后手动上传。Windows 不支持。
 只有同时出现在 GitHub Release 与 `release-manifest.json` 中、且通过公开校验的制品才属于
@@ -25,14 +37,15 @@ Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命�
 ## 核心原则
 
 - 一次安装、一个 Runtime、一份数据、多种客户端。
-- Python Core 是唯一记忆数据面和唯一业务数据库写入者。
+- Hy Memory SDK 是 memory/raw/vector/graph/coding 数据面的唯一权威；Python Core
+  管理授权、模型、异步队列和 Runtime 状态。
 - 来源读取、模型处理和宿主读取是相互独立的授权边界。
-- 正式记忆链路保持 `Evidence -> Hy Memory -> Governance -> Matters/Wiki`。
+- 正式写链路为 `memory_write_jobs -> SDK add() -> raw/memory ID receipt`。
 - 产品不包含屏幕、Accessibility / AXTree、OCR、键鼠、剪贴板或后台录音采集。
 
 ## 仓库结构
 
-- `apps/core`：Python / FastAPI Kernel，负责 Evidence、Hy Memory、治理、检索与 API。
+- `apps/core`：Python / FastAPI Kernel，负责授权、模型、队列、SDK bridge 与 API。
 - `apps/cli`：安装、控制和诊断共享 Runtime 的 `one-memory` CLI。
 - `apps/web`：React / TypeScript 管理界面。
 - `apps/desktop`：Electron 桌面壳与图形安装入口。
@@ -42,6 +55,8 @@ Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命�
 
 架构详情见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 和
 [`docs/contracts/runtime-unification.md`](docs/contracts/runtime-unification.md)。
+产品、测试和一线支持排查导入与记忆沉淀时，使用
+[`docs/PRODUCT_LOG_TROUBLESHOOTING.md`](docs/PRODUCT_LOG_TROUBLESHOOTING.md)。
 
 ## 开发环境
 
@@ -99,7 +114,7 @@ MemHub 的 SQLite 数据默认位于 `~/.one-memory`，不在 npm 包或 Runtime
 
 ## Hy Memory
 
-当前开发依赖固定为公开 PyPI 包 `hy-memory==2.0.2`。SDK 配置、权限边界及 search
+SDK 依赖固定为公开 PyPI 开发预览 `hy-memory==2.0.5.dev3`。SDK 配置、权限边界及 search
 返回格式见 [`MEMORY.md`](MEMORY.md)。HY search 返回的 `content` 已包含 SDK 统一生成的
 逻辑时间和演化上下文；调用方不应再次转换时间戳或重复拼接 `When`。
 

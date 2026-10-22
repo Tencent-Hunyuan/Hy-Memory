@@ -255,52 +255,73 @@ export function restoreConfirmationMatches(
   return confirmPath === source;
 }
 
-export interface WriteCommand {
+export interface WriteSubmitCommand {
+  readonly kind: "submit";
   readonly session: string;
-  readonly first_round: number;
-  readonly last_round: number;
-  readonly evidence_ids: readonly string[];
+  readonly source: string;
+  readonly messages_file: string;
+  readonly request_id?: string;
+  readonly memory_at?: string;
   readonly priority?: "live" | "normal";
 }
 
-/** Parse `write`. Evidence is required: no write without something to cite. */
+export interface WriteStatusCommand {
+  readonly kind: "status";
+  readonly id: string;
+}
+
+export type WriteCommand = WriteSubmitCommand | WriteStatusCommand;
+
+/** Parse SDK-native `write submit|status`. */
 export function parseWriteCommand(
   args: readonly string[],
 ): WriteCommand | null {
   if (args.filter((item) => item === "--json").length > 1) return null;
+  const meaningful = args.filter((item) => item !== "--json");
+  if (meaningful[0] === "status") {
+    const status = parseTaskCommand(meaningful.slice(1));
+    return status === null ? null : { kind: "status", id: status.id };
+  }
+  const input = meaningful[0] === "submit" ? meaningful.slice(1) : meaningful;
   let session: string | undefined;
-  let first: number | undefined;
-  let last: number | undefined;
+  let source = "memhub-cli";
+  let messagesFile: string | undefined;
+  let requestId: string | undefined;
+  let memoryAt: string | undefined;
   let priority: "live" | "normal" | undefined;
-  const evidence: string[] = [];
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--json") continue;
+  for (let index = 0; index < input.length; index += 1) {
+    const arg = input[index];
     if (arg === "--live") {
       priority = "live";
       continue;
     }
-    const value = args[index + 1];
+    const value = input[index + 1];
     if (value === undefined || value.startsWith("--")) return null;
     index += 1;
     if (arg === "--session") session = value;
-    else if (arg === "--from") first = Number(value);
-    else if (arg === "--to") last = Number(value);
-    else if (arg === "--evidence") evidence.push(value);
+    else if (arg === "--source") source = value;
+    else if (arg === "--messages-file") messagesFile = value;
+    else if (arg === "--request-id") requestId = value;
+    else if (arg === "--memory-at") memoryAt = value;
     else return null;
   }
 
-  if (session === undefined || first === undefined || last === undefined)
+  if (session === undefined || messagesFile === undefined || !source)
     return null;
-  if (!Number.isInteger(first) || first < 1) return null;
-  if (!Number.isInteger(last) || last < first) return null;
-  if (evidence.length === 0) return null;
-  const command: WriteCommand = {
+  if (
+    memoryAt !== undefined &&
+    (!Number.isFinite(Date.parse(memoryAt)) ||
+      !/(?:Z|[+-]\d\d:\d\d)$/.test(memoryAt))
+  )
+    return null;
+  const command: WriteSubmitCommand = {
+    kind: "submit",
     session,
-    first_round: first,
-    last_round: last,
-    evidence_ids: evidence,
+    source,
+    messages_file: messagesFile,
+    ...(requestId === undefined ? {} : { request_id: requestId }),
+    ...(memoryAt === undefined ? {} : { memory_at: memoryAt }),
   };
   return priority === undefined ? command : { ...command, priority };
 }

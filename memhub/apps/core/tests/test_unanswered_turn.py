@@ -34,8 +34,8 @@ def test_a_heartbeat_is_not_a_question():
     assert last_row_opens_an_unanswered_turn(("user", "person", "<heartbeat>ping")) is False
 
 
-def test_a_message_written_by_the_agent_as_user_is_not_a_question():
-    assert last_row_opens_an_unanswered_turn(("user", "agent", "继续")) is False
+def test_protocol_user_role_opens_a_turn_regardless_of_legacy_author_guess():
+    assert last_row_opens_an_unanswered_turn(("user", "agent", "继续")) is True
 
 
 def test_a_conversation_with_no_rows_is_not_unanswered():

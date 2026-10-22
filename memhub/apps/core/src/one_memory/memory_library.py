@@ -290,7 +290,7 @@ def read_memory_library(
                            COALESCE(
                                MIN(
                                    CASE WHEN e.role = 'user'
-                                         AND e.written_by IN ('person', 'user')
+                                         AND e.role = 'user'
                                         THEN e.created_at END
                                ),
                                MIN(e.created_at)

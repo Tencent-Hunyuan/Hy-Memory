@@ -141,6 +141,15 @@ export function createConnectionControlService(options: Options) {
     if (request.action === "capability") {
       if (Object.keys(request.input).length) fail();
       result = { available: true };
+    } else if (request.action === "pairing") {
+      if (
+        Object.keys(request.input).length !== 1 ||
+        typeof request.input.displayName !== "string"
+      )
+        fail();
+      result = await options.permissions.createCustomPairing(
+        request.input.displayName,
+      );
     } else if (request.action === "host") {
       result = await hostControl.handle(request.input);
     } else if (request.action === "receipt") {

@@ -44,6 +44,16 @@ host-bridge、desktop 和 cli。单文件 4 MiB，保留 3 份轮转；额外清
 权限与安装操作、关键 IPC、失败分类、重试、耗时和终态。不记录无变化的高频轮询或逐条原文，
 导入使用阶段和计数汇总，避免日志反过来造成性能问题。
 
+产品进度判断使用以下稳定事件：
+
+- `import.finished`：`stored_count`、`revised_count`、`skipped_count`、`error_count`；
+- `hy.ingest.completed`：SDK 本次返回的 `result_count`；
+- `hy.reconcile.completed`：新增、更新、取代和删除数量；
+- `memory_task.finished`：最终 `result_count`、剩余 `pending_count` 和 `attempt`。
+
+其中 `memory_task.finished` 是产品侧判断沉淀是否持续推进的最终事件；不能只用
+`hy.ingest.completed` 代替，因为后者早于 SDK 结果确认和写入队列终态。
+
 ## 验收
 
 隐私测试必须先植入一条可检测的秘密作为正向对照，再证明真实链路日志和导出均不含该秘密。

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sqlite3
 
 import pytest
 
@@ -102,6 +103,88 @@ def test_governance_candidate_shadow_is_owned_by_migration_32() -> None:
     sqlite = governance_ddl("sqlite")
     assert "CREATE TABLE IF NOT EXISTS governed_memories_terms " in sqlite
     assert "CREATE TABLE IF NOT EXISTS governed_memories_terms_meta " in sqlite
+
+
+def test_sdk_data_plane_cutover_ledger_is_owned_by_migration_55() -> None:
+    from one_memory.memory_server.migrations import (
+        MIGRATIONS,
+        sdk_data_plane_migration_ddl,
+    )
+
+    migration = next(item for item in MIGRATIONS if item.version == 55)
+    assert set(migration.tables) == {
+        "sdk_data_plane_migrations",
+        "sdk_data_plane_migration_items",
+        "memory_id_aliases",
+        "sdk_data_plane_cutover",
+    }
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_data_plane_migration_ddl(dialect)
+        for table in migration.tables:
+            assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
+        assert "UNIQUE" in ddl
+        assert "operation_key" in ddl
+
+
+def test_sdk_write_receipts_are_owned_by_migration_56() -> None:
+    from one_memory.memory_server.migrations import MIGRATIONS, sdk_write_receipts_ddl
+
+    migration = next(item for item in MIGRATIONS if item.version == 56)
+    assert migration.tables == ("memory_task_sdk_receipts",)
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_write_receipts_ddl(dialect)
+        assert "sdk_raw_ids_json" in ddl
+        assert "sdk_memory_ids_json" in ddl
+        assert "CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts" in ddl
+
+
+def test_sdk_matter_references_are_owned_by_migration_57() -> None:
+    from one_memory.memory_server.migrations import MIGRATIONS, sdk_matter_references_ddl
+
+    migration = next(item for item in MIGRATIONS if item.version == 57)
+    assert set(migration.tables) == {"raw_id_aliases", "matter_sdk_versions"}
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_matter_references_ddl(dialect)
+        assert "CREATE TABLE IF NOT EXISTS raw_id_aliases" in ddl
+        assert "CREATE TABLE IF NOT EXISTS matter_sdk_versions" in ddl
+        assert "statement" not in ddl
+        assert "quote" not in ddl
+
+
+def test_sdk_matter_notes_are_owned_by_migration_58() -> None:
+    from one_memory.memory_server.migrations import MIGRATIONS, sdk_matter_notes_ddl
+
+    migration = next(item for item in MIGRATIONS if item.version == 58)
+    assert migration.tables == ("matter_sdk_notes",)
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_matter_notes_ddl(dialect)
+        assert "CREATE TABLE IF NOT EXISTS matter_sdk_notes" in ddl
+        assert "raw_id" in ddl
+        assert "text" not in ddl
+
+
+def test_fresh_bootstrap_contains_no_legacy_authority_tables(tmp_path) -> None:
+    from one_memory.target_schema import (
+        bootstrap_fresh_management_schema,
+        legacy_tables_present,
+    )
+
+    database = tmp_path / "one-memory.sqlite3"
+    assert bootstrap_fresh_management_schema(database) is True
+    assert legacy_tables_present(database) == ()
+    with sqlite3.connect(database) as connection:
+        tables = {
+            str(row[0])
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        authority = connection.execute(
+            "SELECT authority FROM memory_authority_state WHERE singleton=1"
+        ).fetchone()[0]
+        version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+    assert authority == "sdk"
+    assert version == MIGRATIONS[-1].version
+    assert {"schema_migrations", "memory_authority_state", "memory_note_requests"} <= tables
+    assert not any(name.startswith("matter") for name in tables)
 
 
 def test_plan_upgrade_from_zero_is_everything() -> None:
@@ -980,7 +1063,7 @@ def test_migration_38_upgrades_a_v37_database_and_records_the_index(tmp_path) ->
 
     # A late index-only migration may append after 41; the in-place
     # upgrade must still include every version newer than 37.
-    assert result.applied == tuple(range(38, MIGRATIONS[-1].version + 1))
+    assert result.applied == tuple(item.version for item in MIGRATIONS if item.version > 37)
     with main_database(path).read() as connection:
         assert (
             connection.execute(
@@ -988,32 +1071,7 @@ def test_migration_38_upgrades_a_v37_database_and_records_the_index(tmp_path) ->
             ).fetchone()
             is not None
         )
-    assert asyncio.run(SqliteMigrationStore(path).applied_versions()).issuperset({38, 39})
-
-
-def test_migration_39_repairs_a_v38_database_recorded_without_preview_table(tmp_path) -> None:
-    """A real v28 database records a version whose preview table was omitted.
-
-    Restoring the table only in the v28 DDL would leave that database with the
-    ledger already marked healthy while `retain_preview()` still fails. The
-    forward v39 migration must both recreate the table and let the startup
-    ledger audit through, while an ordinary missing table still fails closed.
-    """
-    import asyncio
-
-    from one_memory.database_access import main_database
-    from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
-    from one_memory.memory_server.migrations import MIGRATIONS
-
-    path = tmp_path / "one-memory.sqlite3"
-    through_38 = tuple(item for item in MIGRATIONS if item.version <= 38)
-    asyncio.run(migrate(SqliteMigrationStore(path), through_38))
-    with main_database(path).write() as connection, connection:
-        connection.execute("DROP TABLE model_content_previews")
-
-    result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
-
-    assert result.applied == tuple(range(39, MIGRATIONS[-1].version + 1))
+    assert asyncio.run(SqliteMigrationStore(path).applied_versions()).issuperset({38})
 
 
 def test_migration_41_adds_tail_handoff_lease_token_to_a_v40_database(tmp_path) -> None:
@@ -1033,7 +1091,7 @@ def test_migration_41_adds_tail_handoff_lease_token_to_a_v40_database(tmp_path) 
     assert "lease_token" not in columns
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
-    assert result.applied == tuple(range(41, MIGRATIONS[-1].version + 1))
+    assert result.applied == tuple(item.version for item in MIGRATIONS if item.version > 40)
     with main_database(path).read() as connection:
         upgraded = {
             str(row[1]) for row in connection.execute("PRAGMA table_info(tail_handoff)").fetchall()
@@ -1259,17 +1317,10 @@ def test_migration_47_cleans_heartbeat_from_every_codex_role(tmp_path) -> None:
         ).fetchone()[0]
     assert tuple(memory) == ("deleted", "[已清理：该记忆包含 Codex 内部提示]")
     assert active == 0
-    with main_database(path).read() as connection:
-        assert (
-            connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_content_previews'"
-            ).fetchone()
-            is not None
-        )
 
 
 def test_a_recorded_table_audit_still_refuses_a_table_without_a_repair_migration(tmp_path) -> None:
-    """The v39 bridge must not turn every missing table into a warning."""
+    """A recorded migration must not turn a missing table into a warning."""
     import asyncio
 
     from one_memory.database_access import main_database
@@ -1327,46 +1378,6 @@ def test_memory_tasks_keeps_the_extraction_pair_check() -> None:
     )
     with pytest.raises(sqlite3.IntegrityError):
         db.execute("INSERT INTO memory_task_extractions VALUES ('t','content',NULL,'2026')")
-
-
-def test_processing_requests_keeps_its_state_check() -> None:
-    """The state CHECK must actually reject an unknown state.
-
-    `state` is an enum in practice; without the constraint a writer could store
-    a value no reader handles, and the failure would surface far from the cause.
-    """
-    import sqlite3
-
-    import pytest
-
-    from one_memory.memory_server.migrations import processing_requests_ddl
-
-    db = sqlite3.connect(":memory:")
-    db.executescript(processing_requests_ddl("sqlite"))
-    with pytest.raises(sqlite3.IntegrityError):
-        db.execute(
-            "INSERT INTO processing_requests VALUES "
-            "('r','u',1,0,'p',1,'NOT_A_STATE',NULL,'2026','2026')"
-        )
-
-
-def test_import_job_snapshots_rejects_a_malformed_manifest_hash() -> None:
-    """A sha256 that is not 64 chars must be refused at write time.
-
-    Storing it and noticing later would make every subsequent comparison
-    meaningless; the CHECK is what keeps the stored value trustworthy.
-    """
-    import sqlite3
-
-    import pytest
-
-    from one_memory.memory_server.migrations import import_job_snapshots_ddl
-
-    db = sqlite3.connect(":memory:")
-    db.execute("CREATE TABLE import_jobs (job_id TEXT PRIMARY KEY)")
-    db.execute(import_job_snapshots_ddl("sqlite"))
-    with pytest.raises(sqlite3.IntegrityError):
-        db.execute("INSERT INTO import_job_snapshots VALUES ('j','s','tooshort')")
 
 
 def test_only_one_model_profile_can_be_active() -> None:
@@ -2103,7 +2114,7 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50, 51)
+    assert result.applied == tuple(item.version for item in MIGRATIONS if item.version > 48)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
@@ -2136,14 +2147,135 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (51,)
+    assert result.applied == tuple(item.version for item in MIGRATIONS if item.version > 50)
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     assert "hy_node_permissions" not in tables
     assert "governed_memories" in tables
     assert "evidence" in tables
+
+
+def test_migration_53_backfills_write_job_event_time_from_person_turn(
+    tmp_path,
+) -> None:
+    import sqlite3
+
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore
+
+    path = tmp_path / "legacy-write-jobs.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE memory_write_jobs (
+                job_id TEXT PRIMARY KEY,
+                queue_seq INTEGER NOT NULL,
+                session_key TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                batch_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                payload_json TEXT NOT NULL,
+                evidence_ids_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                attempts INTEGER NOT NULL,
+                max_attempts INTEGER NOT NULL,
+                lease_owner TEXT,
+                lease_expires_at TEXT,
+                hy_invoked INTEGER NOT NULL,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE evidence (
+                evidence_id TEXT PRIMARY KEY,
+                role TEXT NOT NULL,
+                written_by TEXT NOT NULL,
+                created_at TEXT,
+                imported_at TEXT NOT NULL
+            );
+            CREATE TABLE memory_write_job_evidence (
+                job_id TEXT NOT NULL,
+                evidence_id TEXT NOT NULL,
+                PRIMARY KEY (job_id, evidence_id)
+            );
+            INSERT INTO memory_write_jobs VALUES (
+                'job-1',1,'session','cursor','batch','idem','{}','[]',
+                'pending','normal',0,3,NULL,NULL,0,NULL,
+                '2026-10-18T08:00:00+00:00','2026-10-18T08:00:00+00:00'
+            );
+            INSERT INTO evidence VALUES (
+                'user-1','user','person','2026-10-16T01:02:03+00:00',
+                '2026-10-18T08:00:00+00:00'
+            );
+            INSERT INTO memory_write_job_evidence VALUES ('job-1','user-1');
+            """
+        )
+
+    migration = next(item for item in MIGRATIONS if item.version == 53)
+    result = asyncio.run(migrate(SqliteMigrationStore(path), (migration,)))
+
+    assert result.applied == (53,)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT event_at,time_quality FROM memory_write_jobs"
+        ).fetchone() == ("2026-10-16T01:02:03+00:00", "approximate")
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_write_schedule_state'"
+        ).fetchone() == (1,)
+
+
+def test_migration_54_preserves_legacy_possibly_sent_tasks(tmp_path) -> None:
+    import sqlite3
+
+    from one_memory.memory_server.migration_runner import SqliteMigrationStore
+
+    path = tmp_path / "one-memory.sqlite3"
+    through_53 = tuple(item for item in MIGRATIONS if item.version <= 53)
+    asyncio.run(migrate(SqliteMigrationStore(path), through_53))
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO memory_tasks (
+                task_id,request_id,user_id,kind,input_ref,status,
+                profile_id,profile_revision,profile_snapshot_json,
+                attempts,created_at,updated_at,hy_invocation_count
+            ) VALUES (?,?,?,?,?,?,?,?,?,0,?,?,0)
+            """,
+            (
+                "legacy-sent",
+                "legacy-sent-request",
+                "local",
+                "extract",
+                "evidence",
+                "running",
+                "profile",
+                1,
+                "{}",
+                "2026-10-18T00:00:00+00:00",
+                "2026-10-18T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "CREATE TABLE memory_task_continuous_permissions (task_id TEXT PRIMARY KEY)"
+        )
+        connection.execute(
+            "INSERT INTO memory_task_continuous_permissions VALUES (?)",
+            ("legacy-sent",),
+        )
+
+    asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT hy_invocation_count FROM memory_tasks WHERE task_id='legacy-sent'"
+        ).fetchone() == (1,)
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='memory_task_continuous_permissions'"
+            ).fetchone()
+            is None
+        )

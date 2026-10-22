@@ -196,7 +196,7 @@ def read_raw_context(
         if _prefers_declared_facts(request.query)
         else "1"
     )
-    person_authored = "CASE WHEN e.written_by='person' THEN 1 ELSE 0 END"
+    person_authored = "CASE WHEN e.role='user' THEN 1 ELSE 0 END"
     query_echo = (
         "CASE WHEN trim(e.verbatim)=? OR trim(e.verbatim)=? THEN 0 ELSE 1 END"
         if _prefers_declared_facts(request.query)
@@ -470,9 +470,8 @@ def revalidate_raw_context(
                     )
                 except (ValueError, TypeError):
                     break
-                if (row["role"], row["written_by"], created) != (
+                if (row["role"], created) != (
                     message.role,
-                    message.written_by,
                     message.created_at,
                 ):
                     break

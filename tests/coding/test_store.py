@@ -67,7 +67,8 @@ class TestStoreCRUD:
 
     async def test_update_overrides(self, coding_store, mock_embed):
         m = CodingMemory(experience_id="e1", user_id="u1", task="T",
-                         search_keys=["old1", "old2"], solution="old")
+                         search_keys=["old1", "old2"], solution="old",
+                         session_id="conversation-1")
         await coding_store.insert(m)
 
         # 旧 aspect 应可命中
@@ -89,6 +90,59 @@ class TestStoreCRUD:
         got = await coding_store.get_by_id("e1", user_id="u1")
         assert got.solution == "new"
         assert got.search_keys == ["new1"]
+
+    async def test_update_rejects_authority_scope_change(self, coding_store):
+        await coding_store.insert(CodingMemory(
+            experience_id="e1", user_id="u1", agent_id="scope-a",
+            workspace_id="repo-a", session_id="conversation-1",
+            task="T", solution="old",
+        ))
+        replacement = CodingMemory(
+            experience_id="e1", user_id="u1", agent_id="scope-b",
+            workspace_id="repo-a", session_id="conversation-1",
+            task="T", solution="new",
+        )
+
+        with pytest.raises(ValueError, match="coding_memory_update_authority_mismatch"):
+            await coding_store.update(replacement)
+
+        stored = await coding_store.get_by_id("e1", user_id="u1")
+        assert stored is not None
+        assert stored.agent_id == "scope-a"
+        assert stored.solution == "old"
+
+    async def test_update_rejects_conversation_change_and_legacy_empty_session(
+        self, coding_store
+    ):
+        for experience_id, old_session in (
+            ("different-conversation", "conversation-1"),
+            ("legacy-empty-session", None),
+        ):
+            await coding_store.insert(CodingMemory(
+                experience_id=experience_id,
+                user_id="u1",
+                agent_id="scope-a",
+                workspace_id="repo-a",
+                session_id=old_session,
+                task="T",
+                solution="old",
+            ))
+            replacement = CodingMemory(
+                experience_id=experience_id,
+                user_id="u1",
+                agent_id="scope-a",
+                workspace_id="repo-a",
+                session_id="conversation-2",
+                task="T",
+                solution="new",
+            )
+
+            with pytest.raises(ValueError, match="coding_memory_update_authority_mismatch"):
+                await coding_store.update(replacement)
+
+            stored = await coding_store.get_by_id(experience_id, user_id="u1")
+            assert stored is not None
+            assert stored.solution == "old"
 
     async def test_delete(self, coding_store):
         m = CodingMemory(experience_id="e1", user_id="u1", task="T",
@@ -486,6 +540,59 @@ class TestFactStore:
         hits = await coding_store.search_facts(emb, user_id="u1", top=5)
         assert [f.fact_id for f, _ in hits] == ["f1"]
         assert hits[0][1] > 0.9
+
+    async def test_search_facts_filters_agent_and_session_lists(self, coding_store):
+        for fact_id, agent_id, session_id in (
+            ("f_a1", "a1", "s1"),
+            ("f_a2", "a2", "s2"),
+        ):
+            await coding_store.insert_fact(WorkingFact(
+                fact_id=fact_id, user_id="u1", agent_id=agent_id,
+                session_id=session_id, statement="同一个事实",
+            ))
+        emb = await coding_store.embed_service.embed("同一个事实")
+
+        hits = await coding_store.search_facts(
+            emb, user_id="u1", agent_ids=["a1"], top=5,
+        )
+        assert [f.fact_id for f, _ in hits] == ["f_a1"]
+
+        hits = await coding_store.search_facts(
+            emb, user_id="u1", session_ids=["s2"], top=5,
+        )
+        assert [f.fact_id for f, _ in hits] == ["f_a2"]
+
+        hits = await coding_store.search_facts(
+            emb, user_id="u1", agent_ids=["a1", "a2"], top=5,
+        )
+        assert {f.fact_id for f, _ in hits} == {"f_a1", "f_a2"}
+
+    async def test_search_experiences_filters_agent_and_session_lists(self, coding_store):
+        for experience_id, agent_id, session_id in (
+            ("e_a1", "a1", "s1"),
+            ("e_a2", "a2", "s2"),
+        ):
+            await coding_store.insert(CodingMemory(
+                experience_id=experience_id, user_id="u1",
+                agent_id=agent_id, session_id=session_id,
+                task="同一个任务", search_keys=["同一个任务"], solution="S",
+            ))
+        emb = await coding_store.embed_service.embed("同一个任务")
+
+        hits = await coding_store.search_by_query_embedding(
+            emb, user_id="u1", agent_ids=["a1"], top=5,
+        )
+        assert {h["experience_id"] for h in hits} == {"e_a1"}
+
+        hits = await coding_store.search_by_query_embedding(
+            emb, user_id="u1", session_ids=["s2"], top=5,
+        )
+        assert {h["experience_id"] for h in hits} == {"e_a2"}
+
+        hits = await coding_store.search_by_query_embedding(
+            emb, user_id="u1", agent_ids=["a1", "a2"], top=5,
+        )
+        assert {h["experience_id"] for h in hits} == {"e_a1", "e_a2"}
 
     async def test_supersede_soft_deletes(self, coding_store):
         await coding_store.insert_fact(WorkingFact(

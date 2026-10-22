@@ -1323,7 +1323,6 @@ export function MemoryMap(props: Props) {
                   ] ?? null
                 }
                 suspended={overlaysSuspended}
-                onSaveScopes={props.onSaveScopes}
                 onChanged={(id) => props.onMutationComplete?.(id)}
                 hideActions
               />
@@ -1341,13 +1340,10 @@ export function MemoryMap(props: Props) {
             graph={projection}
             detail={inspectorDetail}
             draft={props.draft}
-            scopes={props.scopes}
             busy={busy}
             matterLabel={label}
             onDraft={props.onDraft}
-            onScopes={props.onScopes}
             onSave={props.onSave}
-            onSaveScopes={props.onSaveScopes}
             onAction={props.onAction}
             onSyncIndex={props.onSyncIndex}
             requestIds={props.requestIds}

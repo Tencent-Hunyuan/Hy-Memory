@@ -19,11 +19,41 @@ import {
 const diagnosticLevel = vi.hoisted(() => ({
   get: vi.fn(async () => "info" as const),
   set: vi.fn(async (level: "error" | "warning" | "info" | "debug") => level),
+  usage: vi.fn(async () => ({
+    schema_version: 1 as const,
+    summary: {
+      request_count: 3,
+      succeeded: 3,
+      failed: 0,
+      in_flight: 0,
+      prompt_tokens: 1200,
+      completion_tokens: 300,
+      total_tokens: 1500,
+      cached_prompt_tokens: 0,
+      reasoning_tokens: 0,
+      avg_prompt_tokens: 400,
+      avg_completion_tokens: 100,
+    },
+    by_minute: [
+      {
+        minute: "2026-10-17T12:47:00Z",
+        prompt_stage: "coding_judge",
+        request_count: 1,
+        prompt_tokens: 200,
+        completion_tokens: 50,
+        total_tokens: 250,
+        avg_prompt_tokens: 200,
+        avg_completion_tokens: 50,
+      },
+    ],
+    requests: [],
+  })),
 }));
 
 vi.mock("./api", () => ({
   getDiagnosticLogLevel: diagnosticLevel.get,
   setDiagnosticLogLevel: diagnosticLevel.set,
+  getModelUsage: diagnosticLevel.usage,
 }));
 
 const snapshot = {
@@ -60,6 +90,7 @@ beforeEach(() => {
   resetRendererDebugLogsForTest();
   diagnosticLevel.get.mockClear();
   diagnosticLevel.set.mockClear();
+  diagnosticLevel.usage.mockClear();
   window.oneMemory = {
     getDebugLogs: vi.fn().mockResolvedValue(snapshot),
   } as unknown as NonNullable<typeof window.oneMemory>;
@@ -126,6 +157,26 @@ it("keeps the underlying page interactive while the log panel is open", async ()
   expect(action).toHaveBeenCalledOnce();
 });
 
+it("toggles the diagnostics panel fullscreen", async () => {
+  render(<DebugLogPanel />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "打开 Debug 日志" }),
+  );
+  const panel = await screen.findByRole("complementary", {
+    name: "Debug 日志",
+  });
+
+  await userEvent.click(
+    within(panel).getByRole("button", { name: "全屏显示日志" }),
+  );
+  expect(panel.classList.contains("is-fullscreen")).toBe(true);
+
+  await userEvent.click(
+    within(panel).getByRole("button", { name: "退出全屏显示日志" }),
+  );
+  expect(panel.classList.contains("is-fullscreen")).toBe(false);
+});
+
 it("shows renderer logs immediately and polls desktop logs while live", async () => {
   vi.useFakeTimers();
   const read = window.oneMemory?.getDebugLogs;
@@ -181,4 +232,26 @@ it("changes the Core and HY capture level independently from display filtering",
       .getByRole("button", { name: "全部" })
       .getAttribute("aria-pressed"),
   ).toBe("true");
+});
+
+it("shows per-minute model usage in a separate tab", async () => {
+  render(<DebugLogPanel />);
+  await userEvent.click(
+    screen.getByRole("button", { name: "打开 Debug 日志" }),
+  );
+  const panel = await screen.findByRole("complementary", {
+    name: "Debug 日志",
+  });
+
+  await userEvent.click(within(panel).getByRole("tab", { name: "模型用量" }));
+
+  await waitFor(() => expect(diagnosticLevel.usage).toHaveBeenCalled());
+  expect(within(panel).getByText("Avg Prompt")).toBeTruthy();
+  expect(within(panel).getByText("400")).toBeTruthy();
+  expect(within(panel).getAllByText("Judge").length).toBeGreaterThan(0);
+  expect(
+    within(panel).getByRole("img", {
+      name: "按分钟显示各 Prompt 的 Token 花费",
+    }),
+  ).toBeTruthy();
 });

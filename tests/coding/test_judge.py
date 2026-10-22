@@ -119,6 +119,31 @@ class TestClassifyMessages:
         assert "Read" in last_prompt
         assert "重构 auth" in last_prompt or "user=" in last_prompt
 
+    async def test_long_user_content_keeps_only_head_and_tail(self):
+        head = "H" * 200
+        middle = "M" * 800
+        tail = "T" * 200
+        llm = MockLLMProvider('{"scene":"coding"}')
+
+        await classify_messages_scene(
+            [ChatMessage(role="user", content=head + middle + tail)],
+            llm,
+        )
+
+        prompt = llm.calls[-1]["prompt"]
+        assert head in prompt
+        assert tail in prompt
+        assert "M" * 201 not in prompt
+        assert "[...800 chars omitted...]" in prompt
+
+    async def test_user_content_at_limit_is_not_truncated(self):
+        content = "A" * 1_000
+        llm = MockLLMProvider('{"scene":"chat"}')
+
+        await classify_messages_scene([ChatMessage(role="user", content=content)], llm)
+
+        assert content in llm.calls[-1]["prompt"]
+
 
 @pytest.mark.asyncio
 class TestClassifyQueries:

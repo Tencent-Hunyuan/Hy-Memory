@@ -3,10 +3,10 @@ import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
-  ContextSearchResponse,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
+  HostContextSearchResponse,
   MatterContext,
   RecallReceipt,
   RecallRequest,
@@ -382,7 +382,7 @@ export async function contextThroughBroker(
   discoveryPath: string,
   asked: ContextSearchRequest,
   options?: BrokerClientOptions,
-): Promise<ContextSearchResponse> {
+): Promise<HostContextSearchResponse> {
   if (!isContextSearchRequest(asked))
     throw new BrokerClientError("context_invalid_request");
   const request = {
@@ -434,7 +434,7 @@ export async function askThroughBroker(
   discoveryPath: string,
   request: AskMemoryRequest,
   options?: BrokerClientOptions,
-): Promise<AskMemoryResponse> {
+): Promise<HostAskMemoryResponse> {
   return postThroughBroker(discoveryPath, "ask", request, 125_000, options);
 }
 

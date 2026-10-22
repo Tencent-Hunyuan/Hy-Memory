@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import re
@@ -21,7 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.diagnostic_log import diagnostic_event, diagnostic_exception, elapsed_ms
 from one_memory.hy_lifecycle import HyLifecycle, HyLifecycleUnreadable, read_hy_lifecycle
-from one_memory.hy_presence import HyPresence, confirm_deleted
 from one_memory.hy_runtime_config import (
     HY_MEMORY_MODE,
     HY_MEMORY_NAMESPACE,
@@ -31,8 +29,8 @@ from one_memory.hy_runtime_config import (
     diagnostic_log_level,
 )
 from one_memory.hy_source_context import HySourceContext, HyWriteBindings
-from one_memory.hy_store_concurrency import native_store_read_slot
 from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind, attach_disable_thinking
+from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.semantic_deadline import SemanticMemoryHit
 
 #: D102: how relevant HY has to call a hit before it counts. Raised from 0.25
@@ -143,6 +141,22 @@ class HyMemoryBridgeError(RuntimeError):
     pass
 
 
+MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES = 512
+
+
+def coding_tool_result_max_bytes() -> int:
+    """Return the per-tool payload ceiling used by MemHub's HY client."""
+
+    raw = os.environ.get("MEMORY_CODING_TOOL_RESULT_MAX_BYTES")
+    if raw is None:
+        return MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+    return value if value > 0 else MEMHUB_DEFAULT_CODING_TOOL_RESULT_MAX_BYTES
+
+
 def _exclusive[**P, T](
     method: Callable[P, Coroutine[Any, Any, T]],
 ) -> Callable[P, Coroutine[Any, Any, T]]:
@@ -240,6 +254,7 @@ class HyMemoryIngestResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     success: bool
+    raw_ids: tuple[str, ...] = ()
     memories: tuple["HyMemoryOutput", ...] = ()
     #: Ids HY deleted during this write; only a permission lease can observe them.
     retired_memory_ids: tuple[str, ...] = ()
@@ -279,6 +294,54 @@ class HyMemoryOutput(BaseModel):
     #: running all along and arriving here to be discarded.
     tags: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+
+
+class HySdkMemoryRecord(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memory_id: str
+    content: str
+    layer: str
+    status: str
+    is_latest: bool
+    supersedes: tuple[str, ...] = ()
+    superseded_by: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    owner: str | None = None
+    source_raw_ids: tuple[str, ...] = ()
+    user_id: str
+    agent_id: str
+    session_id: str | None = None
+    source: str | None = None
+    memory_at: int | None = None
+    gmt_created: int | None = None
+
+
+class HySdkMemoryPage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memories: tuple[HySdkMemoryRecord, ...]
+    total: int
+    limit: int
+    offset: int
+
+
+class HySdkRawRecord(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    raw_id: str
+    content: str
+    user_id: str
+    agent_id: str
+    session_id: str
+    source: str
+    memory_at: int | None = None
+    gmt_created: int | None = None
+    custom: dict[str, object] = Field(default_factory=dict)
+
+
+class HySdkRawHit(HySdkRawRecord):
+    score: float = Field(ge=0, le=1)
 
 
 # HyMemoryIngestResult names HyMemoryOutput before it exists, so pydantic left
@@ -326,6 +389,7 @@ class HyMemoryClientProtocol(Protocol):
         user_id: str,
         agent_id: str,
         session_id: str,
+        source: str,
         metadata: Mapping[str, object],
         memory_at: datetime | None,
         scene: str | None,
@@ -348,9 +412,50 @@ class HyMemoryClientProtocol(Protocol):
 
     def get(self, memory_id: str) -> Mapping[str, object] | None: ...
 
+    def list_memories(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+        statuses: list[str] | None = None,
+    ) -> Mapping[str, object]: ...
+
+    def get_write_outcome(self, request_id: str) -> Mapping[str, object] | None: ...
+
+    def get_raw(self, raw_id: str) -> Mapping[str, object] | None: ...
+
+    def list_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> Mapping[str, object]: ...
+
+    def import_memory_exact(
+        self,
+        content: str,
+        **kwargs: object,
+    ) -> Mapping[str, object]: ...
+
+    def import_raw(
+        self,
+        content: str,
+        **kwargs: object,
+    ) -> Mapping[str, object]: ...
+
     def update(self, memory_id: str, content: str) -> Mapping[str, object]: ...
 
     def delete(self, memory_id: str) -> Mapping[str, object]: ...
+
+    def get_user_profile(self, *, user_id: str) -> Mapping[str, object]: ...
 
     def search(
         self,
@@ -365,6 +470,8 @@ class HyMemoryClientProtocol(Protocol):
         intention_limit: int,
         scene: str = "normal",
         reader: str = "legacy",
+        include_sources: list[str] | None = None,
+        layers: list[str] | None = None,
     ) -> Mapping[str, object]: ...
 
 
@@ -414,8 +521,9 @@ class HyMemoryBridge:
 
     @_exclusive
     async def ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
-        async with self._write_lock:
-            return await self._ingest(request)
+        with audit_precipitation_request(request.request_id):
+            async with self._write_lock:
+                return await self._ingest(request)
 
     async def _ingest(self, request: HyMemoryIngestRequest) -> HyMemoryIngestResult:
         started = monotonic()
@@ -431,9 +539,7 @@ class HyMemoryBridge:
         guards = getattr(client, "_one_memory_write_guards", ())
         from one_memory.hy_response_guard import HyReconcileGuard
 
-        reconcile_guards = tuple(
-            guard for guard in guards if isinstance(guard, HyReconcileGuard)
-        )
+        reconcile_guards = tuple(guard for guard in guards if isinstance(guard, HyReconcileGuard))
         for guard in reconcile_guards:
             guard.begin_write()
         before = [len(guard.failures) for guard in guards]
@@ -475,6 +581,7 @@ class HyMemoryBridge:
                 user_id=request.user_id,
                 agent_id=request.agent_id,
                 session_id=request.session_id,
+                source=request.source_id,
                 metadata={
                     "source_id": request.source_id,
                     "evidence_ids": list(request.evidence_ids),
@@ -544,8 +651,9 @@ class HyMemoryBridge:
         request: HyMemoryIngestRequest,
         contents: Sequence[str],
     ) -> HyMemoryIngestResult:
-        async with self._write_lock:
-            return await self._ingest_extracted(request, contents)
+        with audit_precipitation_request(request.request_id):
+            async with self._write_lock:
+                return await self._ingest_extracted(request, contents)
 
     async def _ingest_extracted(
         self,
@@ -634,6 +742,231 @@ class HyMemoryBridge:
         return result
 
     @_exclusive
+    async def list_sdk_memories(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        statuses: tuple[str, ...] = ("active",),
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> HySdkMemoryPage:
+        """Read the SDK-owned memory library without Governance hydration."""
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                client.list_memories,
+                user_id=user_id,
+                agent_id=agent_id,
+                statuses=list(statuses),
+                limit=limit,
+                offset=offset,
+                order=order,
+            )
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_list_failed") from error
+        return _sdk_memory_page(raw, limit=limit, offset=offset)
+
+    @_exclusive
+    async def get_sdk_memory(self, memory_id: str) -> HySdkMemoryRecord | None:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(client.get, memory_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_get_failed") from error
+        if raw is None:
+            return None
+        return _sdk_memory_record(raw)
+
+    @_exclusive
+    async def get_sdk_write_outcome(
+        self,
+        request_id: str,
+    ) -> dict[str, object] | None:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(client.get_write_outcome, request_id)
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        if raw is None:
+            return None
+        if not isinstance(raw, Mapping):
+            raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
+        return dict(raw)
+
+    @_exclusive
+    async def get_sdk_raw(self, raw_id: str) -> HySdkRawRecord | None:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(client.get_raw, raw_id)
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_get_failed") from error
+        return _sdk_raw_record(raw) if raw is not None else None
+
+    @_exclusive
+    async def list_sdk_raw(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        order: str = "desc",
+    ) -> tuple[tuple[HySdkRawRecord, ...], int]:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                client.list_raw,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                limit=limit,
+                offset=offset,
+                order=order,
+            )
+        except (TypeError, AttributeError) as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_list_failed") from error
+        if not isinstance(raw, Mapping):
+            raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
+        rows = raw.get("raw")
+        if not isinstance(rows, list):
+            raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
+        records = tuple(_sdk_raw_record(row) for row in rows)
+        total = raw.get("total")
+        if not isinstance(total, int) or total < 0:
+            raise HyMemoryBridgeError("hy_memory_raw_list_shape_unknown")
+        return records, total
+
+    async def search_sdk_raw(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        source_ids: tuple[str, ...] = (),
+        limit: int = 8,
+    ) -> tuple[HySdkRawHit, ...]:
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                client.search,
+                query,
+                user_ids=[user_id],
+                agent_ids=[],
+                include_sources=list(source_ids),
+                limit=limit,
+                min_score=0.0,
+                schema_min_score=0.0,
+                schema_limit=0,
+                intention_limit=0,
+                scene="chat",
+                reader=HY_MEMORY_READER,
+                layers=["l1_raw"],
+            )
+        except TypeError as error:
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required") from error
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_search_failed") from error
+        return tuple(
+            _sdk_raw_hit(record)
+            for record in _replied_memories(raw, "hy_memory_raw_search_shape_unknown")
+        )
+
+    @_exclusive
+    async def import_sdk_memory_exact(
+        self,
+        *,
+        content: str,
+        memory_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        layer: str,
+        status: str,
+        owner: str | None,
+        tags: tuple[str, ...],
+        supersedes: tuple[str, ...],
+        superseded_by: tuple[str, ...],
+        is_latest: bool,
+        request_id: str,
+    ) -> dict[str, object]:
+        """Backfill one legacy semantic memory without extraction/reconcile."""
+        client = await self._get_client()
+        importer = getattr(client, "import_memory_exact", None)
+        if not callable(importer):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            raw = await _joined_thread(
+                importer,
+                content,
+                memory_id=memory_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                layer=layer,
+                status=status,
+                owner=owner,
+                tags=list(tags),
+                supersedes=list(supersedes),
+                superseded_by=list(superseded_by),
+                is_latest=is_latest,
+                request_id=request_id,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_exact_import_failed") from error
+        if not isinstance(raw, Mapping) or raw.get("success") is not True:
+            raise HyMemoryBridgeError("hy_memory_exact_import_failed")
+        return dict(raw)
+
+    @_exclusive
+    async def import_sdk_raw_exact(
+        self,
+        *,
+        content: str,
+        raw_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        memory_at: datetime | None,
+        metadata: Mapping[str, object],
+        request_id: str,
+    ) -> dict[str, object]:
+        client = await self._get_client()
+        importer = getattr(client, "import_raw", None)
+        if not callable(importer):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            raw = await _joined_thread(
+                importer,
+                content,
+                raw_id=raw_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                memory_at=memory_at,
+                metadata=dict(metadata),
+                request_id=request_id,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_raw_import_failed") from error
+        if not isinstance(raw, Mapping) or raw.get("success") is not True:
+            raise HyMemoryBridgeError("hy_memory_raw_import_failed")
+        return dict(raw)
+
+    @_exclusive
     async def list_agent_ids(self, *, user_id: str, limit: int = 1_000) -> tuple[str, ...]:
         """Return the HY scopes that actually hold memories for this user.
 
@@ -665,71 +998,60 @@ class HyMemoryBridge:
         user_id: str,
         agent_id: str,
         evidence_ids: tuple[str, ...],
-        scan_limit: int = 10_000,
     ) -> tuple[HyMemoryOutput, ...]:
-        """Read back durable HY nodes carrying one exact write request id.
+        """Read one exact durable SDK write outcome without scanning memories.
 
-        This is the safe side of unknown-outcome recovery: it does not invoke
-        the model or mutate HY. The public SDK listing is paged rather than
-        reading HY's private SQLite/Chroma schema, and every result is checked
-        against user, agent and request identity before it can reach
-        governance.
+        This is the safe side of unknown-outcome recovery: it never invokes the
+        model, mutates HY, or treats a bounded library scan as proof of absence.
         """
         client = await self._get_client()
-        page_size = 500
-        outputs: list[HyMemoryOutput] = []
-        seen: set[str] = set()
-        for offset in range(0, scan_limit, page_size):
-            try:
-                raw = await _joined_thread(
-                    cast(Any, client).list_memories,
-                    user_id=user_id,
-                    agent_id=agent_id,
-                    limit=page_size,
-                    offset=offset,
-                )
-            except Exception as error:
-                raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
-            records = _listed_memories(raw)
-            for record in records:
-                custom = record.get("custom")
-                if isinstance(custom, str):
-                    try:
-                        custom = json.loads(custom)
-                    except (TypeError, ValueError):
-                        custom = None
-                if (
-                    not isinstance(custom, Mapping)
-                    or custom.get("request_id") != request_id
-                    or record.get("user_id") != user_id
-                    or record.get("agent_id") != agent_id
-                ):
-                    continue
-                memory_id, content = record.get("memory_id"), record.get("content")
-                if (
-                    not isinstance(memory_id, str)
-                    or memory_id in seen
-                    or not isinstance(content, str)
-                    or not content.strip()
-                ):
-                    continue
-                seen.add(memory_id)
-                layer, owner = record.get("layer"), record.get("owner")
-                outputs.append(
-                    HyMemoryOutput(
-                        memory_id=memory_id,
-                        content=content,
-                        layer=layer if isinstance(layer, str) else None,
-                        owner=owner if owner in {"user", "agent"} else None,
-                        tags=_string_tuple(record.get("tags")),
-                        evidence_ids=evidence_ids,
-                    )
-                )
-            vdb = raw.get("vdb") if isinstance(raw, Mapping) else None
-            total = vdb.get("total") if isinstance(vdb, Mapping) else None
-            if len(records) < page_size or (isinstance(total, int) and offset + page_size >= total):
-                break
-        return tuple(outputs)
+        exact_inquiry = getattr(client, "get_write_outcome", None)
+        if not callable(exact_inquiry):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            outcome = await _joined_thread(exact_inquiry, request_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        if outcome is None:
+            return ()
+        result = await _result_from_write_outcome(
+            client,
+            outcome,
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            evidence_ids=evidence_ids,
+        )
+        return result.memories
+
+    @_exclusive
+    async def receipt_for_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        evidence_ids: tuple[str, ...],
+    ) -> HyMemoryIngestResult | None:
+        """Return the exact terminal SDK receipt, including raw and memory ids."""
+        client = await self._get_client()
+        exact_inquiry = getattr(client, "get_write_outcome", None)
+        if not callable(exact_inquiry):
+            raise HyMemoryBridgeError("hy_memory_sdk_upgrade_required")
+        try:
+            outcome = await _joined_thread(exact_inquiry, request_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        if outcome is None:
+            return None
+        return await _result_from_write_outcome(
+            client,
+            outcome,
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            evidence_ids=evidence_ids,
+        )
 
     @_exclusive
     async def profile_memories(
@@ -794,6 +1116,34 @@ class HyMemoryBridge:
                 )
             )
         return tuple(outputs)
+
+    @_exclusive
+    async def get_user_profile(self, *, user_id: str) -> dict[str, object]:
+        """Return the SDK-native assembled long-term user profile."""
+        client = await self._get_client()
+        try:
+            raw = await _joined_thread(
+                cast(Any, client).get_user_profile,
+                user_id=user_id,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_profile_read_failed") from error
+        if not isinstance(raw, Mapping):
+            raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
+        request_id = raw.get("request_id")
+        profile = raw.get("profile")
+        elapsed_ms = raw.get("elapsed_ms")
+        if (
+            not isinstance(request_id, str)
+            or (profile is not None and not isinstance(profile, Mapping))
+            or not isinstance(elapsed_ms, (int, float))
+        ):
+            raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
+        return {
+            "request_id": request_id,
+            "profile": None if profile is None else dict(profile),
+            "elapsed_ms": float(elapsed_ms),
+        }
 
     @_exclusive
     async def digest(self, *, user_id: str, agent_id: str) -> dict[str, object]:
@@ -874,35 +1224,20 @@ class HyMemoryBridge:
 
     @_exclusive
     async def delete(self, memory_id: str) -> dict[str, object]:
-        """Have HY forget a memory; one it no longer holds counts as forgotten.
-
-        HY's own answer settles nothing: `success: False` comes both when
-        there was no such memory and when removing it failed, and `success:
-        True` does not promise anything was deleted. So done means HY no
-        longer holds it, read back from each of its stores after every delete.
-        """
+        """Physically delete through the SDK's per-store completeness receipt."""
         client = await self._get_client()
-        result: dict[str, object] = {"success": False}
-        failure: Exception | None = None
         try:
             result = dict(await _joined_thread(client.delete, memory_id))
         except Exception as error:
-            # Read back anyway: HY failing to delete what it no longer holds
-            # leaves nothing to retry.
-            failure = error
-        try:
-            presence = await _joined_thread(confirm_deleted, client, memory_id)
-        except Exception as error:
-            raise HyMemoryBridgeError("hy_memory_delete_failed") from (failure or error)
-        if presence is HyPresence.ABSENT:
+            raise HyMemoryBridgeError("hy_memory_delete_failed") from error
+        error_code = result.get("error_code")
+        if error_code or result.get("partial") is True:
+            raise HyMemoryBridgeError(str(error_code or "hy_memory_delete_incomplete"))
+        if result.get("success") is True:
             return result
-        if failure is not None:
-            raise HyMemoryBridgeError("hy_memory_delete_failed") from failure
-        if presence is HyPresence.PRESENT:
-            raise HyMemoryBridgeError("hy_memory_delete_rejected")
-        if presence is HyPresence.UNKNOWN:
-            raise HyMemoryBridgeError("hy_memory_delete_unconfirmed")
-        return dict(result)
+        if result.get("deleted_count") == 0:
+            return {**result, "success": True, "already_absent": True}
+        raise HyMemoryBridgeError("hy_memory_delete_rejected")
 
     def lifecycle_now(self, user_id: str, ids: Collection[str] | None = None) -> HyLifecycle | None:
         """HY's set-aside memories, or None while this bridge has not opened HY.
@@ -967,27 +1302,29 @@ class HyMemoryBridge:
         caller could only rank by position — which forced semantic hits to be
         placed as a block ahead of everything the keyword lane found. The
         score is what lets the two lanes be ranked against each other.
+
+        Native search runs without a process-local write gate. MemHub expects
+        concurrent read during precipitation; store work is a short burst after
+        network-bound embed/LLM steps, and refusing reads with
+        ``hy_memory_store_busy`` only pushed callers onto weaker fallbacks.
         """
-        async with native_store_read_slot() as admitted:
-            if not admitted:
-                raise HyMemoryBridgeError("hy_memory_store_busy")
-            client = await self._get_client()
-            try:
-                result = await _joined_thread(
-                    client.search,
-                    query,
-                    user_ids=[user_id],
-                    agent_ids=[] if agent_id == "*" else [agent_id],
-                    limit=limit,
-                    min_score=hy_relevance_floor(),
-                    schema_min_score=hy_relevance_floor(),
-                    schema_limit=limit,
-                    intention_limit=limit,
-                    scene="normal",
-                    reader=HY_MEMORY_READER,
-                )
-            except Exception as error:
-                raise HyMemoryBridgeError("hy_memory_search_failed") from error
+        client = await self._get_client()
+        try:
+            result = await _joined_thread(
+                client.search,
+                query,
+                user_ids=[user_id],
+                agent_ids=[] if agent_id == "*" else [agent_id],
+                limit=limit,
+                min_score=hy_relevance_floor(),
+                schema_min_score=hy_relevance_floor(),
+                schema_limit=limit,
+                intention_limit=limit,
+                scene="normal",
+                reader=HY_MEMORY_READER,
+            )
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_search_failed") from error
         hits = _replied_memories(result, "hy_memory_search_shape_unknown")
         found: list[SemanticMemoryHit] = []
         seen: set[str] = set()
@@ -1026,6 +1363,10 @@ class HyMemoryBridge:
             raise HyMemoryBridgeError(_safe_error_code(raw))
         if raw.get("scene") == "productivity":
             return await _coding_result(client, request, raw)
+        raw_memory_id = raw.get("memory_id")
+        source_raw_ids = (
+            (raw_memory_id,) if isinstance(raw_memory_id, str) and raw_memory_id else ()
+        )
         raw_ids = raw.get("memory_ids")
         if not isinstance(raw_ids, list):
             single = raw.get("memory_id")
@@ -1094,7 +1435,11 @@ class HyMemoryBridge:
                     tags=_string_tuple(record.get("tags")),
                 )
             )
-        return HyMemoryIngestResult(success=True, memories=tuple(outputs))
+        return HyMemoryIngestResult(
+            success=True,
+            raw_ids=source_raw_ids,
+            memories=tuple(outputs),
+        )
 
     async def _get_client(self) -> HyMemoryClientProtocol:
         if self._client is not None:
@@ -1110,7 +1455,7 @@ class HyMemoryBridge:
                                 self.profile,
                                 api_key=self.api_key,
                                 data_dir=self.data_dir,
-                        http_transport_factory=self._http_transport_factory,
+                                http_transport_factory=self._http_transport_factory,
                             )
 
                     await _joined_thread(initialize)
@@ -1137,7 +1482,7 @@ class HyMemoryBridge:
                     )
                     raise HyMemoryBridgeError("hy_memory_init_failed") from error
                 diagnostic_event(
-                    level="info",
+                    level="debug",
                     component="hy.client",
                     event="hy.client_initialization.completed",
                     outcome="succeeded",
@@ -1328,9 +1673,7 @@ async def _with_native_mutation_delta(
     """
 
     retired = set(result.retired_memory_ids)
-    superseded = {
-        key: tuple(values) for key, values in result.superseded_memory_ids.items()
-    }
+    superseded = {key: tuple(values) for key, values in result.superseded_memory_ids.items()}
     chat_targets = {
         key
         for guard in reconcile_guards
@@ -1338,7 +1681,8 @@ async def _with_native_mutation_delta(
         if isinstance(key, str) and key
     }
 
-    for item in raw.get("ops", ()) if isinstance(raw.get("ops"), list) else ():
+    operations = raw.get("ops")
+    for item in operations if isinstance(operations, list) else ():
         if not isinstance(item, Mapping):
             continue
         if item.get("action") == "DELETE":
@@ -1346,7 +1690,8 @@ async def _with_native_mutation_delta(
             if isinstance(key, str) and key:
                 retired.add(key)
 
-    for item in raw.get("fact_ops", ()) if isinstance(raw.get("fact_ops"), list) else ():
+    fact_operations = raw.get("fact_ops")
+    for item in fact_operations if isinstance(fact_operations, list) else ():
         if not isinstance(item, Mapping) or item.get("action") != "SUPERSEDE":
             continue
         old, new = item.get("fact_id"), item.get("superseded_by")
@@ -1367,9 +1712,7 @@ async def _with_native_mutation_delta(
         if isinstance(replacement, str) and replacement:
             superseded[key] = (replacement,)
         elif isinstance(replacement, list):
-            values = tuple(
-                value for value in replacement if isinstance(value, str) and value
-            )
+            values = tuple(value for value in replacement if isinstance(value, str) and value)
             if values:
                 superseded[key] = values
 
@@ -1443,6 +1786,40 @@ def builtin_retrieval_snapshot() -> ModelProfileSnapshot:
 def hy_memory_store_exists(data_dir: Path) -> bool:
     """Whether extraction has ever written a store here."""
     return (data_dir / "hy-memory" / HY_MEMORY_NAMESPACE / "graph").exists()
+
+
+def snapshot_hy_data_plane(
+    *,
+    source_root: Path,
+    target_root: Path,
+    writers_stopped: bool,
+) -> object:
+    """Offline SDK snapshot entry; product modules do not import SDK stores."""
+    from hy_memory.snapshot import snapshot_local_data_plane  # type: ignore[import-untyped]
+
+    return snapshot_local_data_plane(
+        source_root=source_root,
+        target_root=target_root,
+        writers_stopped=writers_stopped,
+    )
+
+
+def restore_hy_data_plane(
+    *,
+    snapshot_root: Path,
+    target_root: Path,
+    writers_stopped: bool,
+    protective_root: Path | None = None,
+) -> object:
+    """Offline SDK restore entry; requires the released SDK snapshot contract."""
+    from hy_memory.snapshot import restore_local_data_plane
+
+    return restore_local_data_plane(
+        snapshot_root=snapshot_root,
+        target_root=target_root,
+        writers_stopped=writers_stopped,
+        protective_root=protective_root,
+    )
 
 
 class LocalHyEmbedService:
@@ -1697,6 +2074,7 @@ def build_hy_memory_config(
     config.history.db_path = str(memory_root / "history.sqlite3")
     config.coding.enable = True
     config.coding.db_path = str(memory_root / "coding.sqlite3")
+    config.coding.tool_result_max_bytes = coding_tool_result_max_bytes()
     config.recall.episode_recall_enabled = True
     config.recall.episode_summary_enabled = False
     config.recall.dynamic_episode_enabled = True
@@ -1834,6 +2212,198 @@ def _basic_info_memories(raw: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(memories, list):
         raise HyMemoryBridgeError("hy_memory_profile_shape_unknown")
     return tuple(memory for memory in memories if isinstance(memory, Mapping))
+
+
+async def _result_from_write_outcome(
+    client: HyMemoryClientProtocol,
+    outcome: object,
+    *,
+    request_id: str,
+    user_id: str,
+    agent_id: str,
+    evidence_ids: tuple[str, ...],
+) -> HyMemoryIngestResult:
+    if not isinstance(outcome, Mapping):
+        raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
+    if outcome.get("request_id") not in {None, request_id}:
+        raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
+    for key, expected in (("user_id", user_id), ("agent_id", agent_id)):
+        value = outcome.get(key)
+        if value is not None and value != expected:
+            raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
+    status = outcome.get("status")
+    if status == "failed":
+        return HyMemoryIngestResult(success=False)
+    if status != "succeeded":
+        raise HyMemoryBridgeError("hy_memory_outcome_not_terminal")
+    result = outcome.get("result")
+    if not isinstance(result, Mapping):
+        raise HyMemoryBridgeError("hy_memory_outcome_shape_unknown")
+    candidates: list[str] = []
+    for key in ("memory_ids", "experience_ids", "fact_ids"):
+        values = result.get(key)
+        if isinstance(values, list):
+            candidates.extend(value for value in values if isinstance(value, str))
+    singular_id = result.get("memory_id")
+    if isinstance(singular_id, str):
+        candidates.append(singular_id)
+    raw_ids = (
+        (singular_id,)
+        if isinstance(singular_id, str) and singular_id and result.get("scene") != "productivity"
+        else ()
+    )
+
+    outputs: list[HyMemoryOutput] = []
+    for memory_id in dict.fromkeys(candidates):
+        try:
+            record = await _joined_thread(client.get, memory_id)
+        except Exception as error:
+            raise HyMemoryBridgeError("hy_memory_outcome_inquiry_failed") from error
+        # The singular add memory_id may be the hidden L1 raw node. It is not a
+        # semantic memory output and public get correctly returns None for it.
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("user_id") != user_id or record.get("agent_id") != agent_id:
+            raise HyMemoryBridgeError("hy_memory_outcome_identity_mismatch")
+        content = record.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        layer = record.get("layer")
+        owner = record.get("owner")
+        outputs.append(
+            HyMemoryOutput(
+                memory_id=memory_id,
+                content=content,
+                layer=layer if isinstance(layer, str) else None,
+                owner=owner if owner in {"user", "agent"} else None,
+                tags=_string_tuple(record.get("tags")),
+                evidence_ids=evidence_ids,
+            )
+        )
+    return HyMemoryIngestResult(
+        success=True,
+        raw_ids=raw_ids,
+        memories=tuple(outputs),
+    )
+
+
+def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_record_shape_unknown")
+    if any(
+        not isinstance(raw.get(key), str) or not str(raw[key]).strip()
+        for key in ("memory_id", "content")
+    ):
+        raise HyMemoryBridgeError("hy_memory_record_shape_unknown")
+    try:
+        return HySdkMemoryRecord(
+            memory_id=str(raw["memory_id"]),
+            content=str(raw["content"]),
+            layer=str(raw.get("layer") or ""),
+            status=str(raw.get("status") or ""),
+            is_latest=bool(raw.get("is_latest", True)),
+            supersedes=_string_tuple(raw.get("supersedes")),
+            superseded_by=_string_tuple(raw.get("superseded_by")),
+            tags=_string_tuple(raw.get("tags")),
+            owner=(str(raw["owner"]) if raw.get("owner") in {"user", "agent"} else None),
+            source_raw_ids=_sdk_source_raw_ids(raw),
+            user_id=str(raw.get("user_id") or ""),
+            agent_id=str(raw.get("agent_id") or ""),
+            session_id=(str(raw["session_id"]) if isinstance(raw.get("session_id"), str) else None),
+            source=str(raw["source"]) if isinstance(raw.get("source"), str) else None,
+            memory_at=raw.get("memory_at") if isinstance(raw.get("memory_at"), int) else None,
+            gmt_created=(
+                raw.get("gmt_created") if isinstance(raw.get("gmt_created"), int) else None
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise HyMemoryBridgeError("hy_memory_record_shape_unknown") from error
+
+
+def _sdk_source_raw_ids(raw: Mapping[str, object]) -> tuple[str, ...]:
+    custom = raw.get("custom")
+    values: list[object] = []
+    if isinstance(custom, Mapping):
+        listed = custom.get("source_raw_memory_ids")
+        if isinstance(listed, list):
+            values.extend(listed)
+    singular = raw.get("source_raw_memory_id")
+    if isinstance(singular, str):
+        values.append(singular)
+    return tuple(
+        dict.fromkeys(value.strip() for value in values if isinstance(value, str) and value.strip())
+    )
+
+
+def _sdk_memory_page(raw: object, *, limit: int, offset: int) -> HySdkMemoryPage:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_list_shape_unknown")
+    rows: list[object] = []
+    total = 0
+    for bucket_name, rows_name in (("vdb", "memories"), ("graph", "nodes")):
+        bucket = raw.get(bucket_name)
+        if bucket is None and bucket_name == "graph":
+            continue
+        if not isinstance(bucket, Mapping) or not isinstance(bucket.get(rows_name), list):
+            raise HyMemoryBridgeError("hy_memory_list_shape_unknown")
+        bucket_total = bucket.get("total")
+        if not isinstance(bucket_total, int) or bucket_total < 0:
+            raise HyMemoryBridgeError("hy_memory_list_shape_unknown")
+        total += bucket_total
+        rows.extend(bucket[rows_name])
+    deduplicated: dict[str, HySdkMemoryRecord] = {}
+    for row in rows:
+        record = _sdk_memory_record(row)
+        deduplicated.setdefault(record.memory_id, record)
+    return HySdkMemoryPage(
+        memories=tuple(deduplicated.values()),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _sdk_raw_record(raw: object) -> HySdkRawRecord:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_raw_shape_unknown")
+    if any(
+        not isinstance(raw.get(key), str) or not str(raw[key]).strip()
+        for key in ("raw_id", "content", "user_id", "agent_id", "session_id", "source")
+    ):
+        raise HyMemoryBridgeError("hy_memory_raw_shape_unknown")
+    custom = raw.get("custom")
+    if not isinstance(custom, Mapping):
+        custom = {}
+    try:
+        return HySdkRawRecord(
+            raw_id=str(raw["raw_id"]),
+            content=str(raw["content"]),
+            user_id=str(raw["user_id"]),
+            agent_id=str(raw["agent_id"]),
+            session_id=str(raw["session_id"]),
+            source=str(raw["source"]),
+            memory_at=raw.get("memory_at") if isinstance(raw.get("memory_at"), int) else None,
+            gmt_created=(
+                raw.get("gmt_created") if isinstance(raw.get("gmt_created"), int) else None
+            ),
+            custom=dict(custom),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise HyMemoryBridgeError("hy_memory_raw_shape_unknown") from error
+
+
+def _sdk_raw_hit(raw: object) -> HySdkRawHit:
+    if not isinstance(raw, Mapping):
+        raise HyMemoryBridgeError("hy_memory_raw_search_shape_unknown")
+    raw_id = raw.get("memory_id")
+    score = raw.get("score")
+    if not isinstance(raw_id, str) or not isinstance(score, int | float):
+        raise HyMemoryBridgeError("hy_memory_raw_search_shape_unknown")
+    base = _sdk_raw_record({**raw, "raw_id": raw_id})
+    return HySdkRawHit(
+        **base.model_dump(),
+        score=max(0.0, min(1.0, float(score))),
+    )
 
 
 def _listed_memories(raw: object) -> tuple[Mapping[str, object], ...]:

@@ -326,12 +326,34 @@ class TestChainDecorate:
             os.environ.pop("HCM_BLOCK_OFF", None)
 
 
+def _ns_with_chain_block(**kwargs):
+    """胶水测需要显式 opt-in：默认 chain_block_enabled=False 会在进 store 前短路。"""
+    import types
+    from hy_memory.config import MemoryConfig
+
+    cfg = MemoryConfig()
+    cfg.coding.chain_block_enabled = True
+    ns = types.SimpleNamespace(_config=cfg, **kwargs)
+    ns._chain_block_enabled = HyMemoryClient._chain_block_enabled.__get__(
+        ns, type(ns))
+    return ns
+
+
 class TestDecorateGlue:
     """client._decorate_with_chain —— 胶水层的 fail-safe。"""
 
-    def test_returns_empty_when_chain_unavailable(self):
+    def test_returns_empty_when_disabled_by_default(self):
         import types
         ns = types.SimpleNamespace(
+            _chain_store=None, _chain_store_failed=False,
+            _get_chain_store=lambda owner="": object(),
+        )
+        ns._chain_block_enabled = HyMemoryClient._chain_block_enabled.__get__(
+            ns, type(ns))
+        assert HyMemoryClient._decorate_with_chain(ns, [dict(_FACT)]) == ("", [])
+
+    def test_returns_empty_when_chain_unavailable(self):
+        ns = _ns_with_chain_block(
             _chain_store=None, _chain_store_failed=True,
             _get_chain_store=lambda owner="": None,
         )
@@ -339,13 +361,12 @@ class TestDecorateGlue:
 
     def test_store_exception_degrades_not_raises(self):
         # 这层是增量, 挂了要退回纯向量双层而不是把整次 search 拖失败。
-        import types
 
         class _Boom:
             def decorate(self, *a, **k):
                 raise RuntimeError("boom")
 
-        ns = types.SimpleNamespace(_get_chain_store=lambda owner="": _Boom())
+        ns = _ns_with_chain_block(_get_chain_store=lambda owner="": _Boom())
         assert HyMemoryClient._decorate_with_chain(ns, [dict(_FACT)]) == ("", [])
 
 

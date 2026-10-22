@@ -1,9 +1,9 @@
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
-  ContextSearchResponse,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
+  HostContextSearchResponse,
   MatterContext,
   RecallRequest,
 } from "@one-memory/contracts";
@@ -52,7 +52,7 @@ type Recall = (
 type Ask = (
   discoveryPath: string,
   request: AskMemoryRequest,
-) => Promise<AskMemoryResponse>;
+) => Promise<HostAskMemoryResponse>;
 
 type SearchConversations = (
   discoveryPath: string,
@@ -109,7 +109,7 @@ export class McpSession {
       path: string,
       request: ContextSearchRequest,
       signal?: AbortSignal,
-    ) => Promise<ContextSearchResponse> = (path, request, signal) =>
+    ) => Promise<HostContextSearchResponse> = (path, request, signal) =>
       contextThroughBroker(path, request, { signal }),
     /** A3-02: both write tools default to the broker, so the MCP door and the
      * HTTP door reach the same durable entry rather than two paths to HY. */

@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -6,6 +7,8 @@ import pytest
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_queue import FRESH_WINDOW
+from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
+from one_memory.memory_server.migrations import MIGRATIONS
 from one_memory.memory_tasks import (
     TASK_MAX_ATTEMPTS,
     MemoryTaskKind,
@@ -42,6 +45,31 @@ def activate(
         secrets=secrets,
     )
     return profiles.activate(profile.profile_id, secrets)
+
+
+def test_sdk_receipt_records_ids_only_after_sdk_success(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
+    tasks = MemoryTaskStore(database)
+
+    assert tasks.sdk_receipt("task-1") is None
+    receipt = tasks.save_sdk_receipt(
+        task_id="task-1",
+        request_id="request-1",
+        raw_ids=("raw-1",),
+        memory_ids=("memory-1", "memory-1"),
+    )
+
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1",)
+    assert tasks.sdk_receipt("task-1") == receipt
+    with pytest.raises(MemoryTaskRequestConflictError):
+        tasks.save_sdk_receipt(
+            task_id="task-1",
+            request_id="request-1",
+            raw_ids=("raw-2",),
+            memory_ids=("memory-1",),
+        )
 
 
 def test_task_freezes_active_profile_revision_and_is_idempotent(tmp_path) -> None:
@@ -1070,6 +1098,152 @@ def test_confirmed_retry_requeues_task_only_unknown_without_a_durable_job(tmp_pa
     assert store.retry_unknown_confirmed() == 0
 
 
+def test_task_only_unknown_is_automatically_retried_only_once(tmp_path) -> None:
+    store, profile = _profile_and_tasks(tmp_path)
+    task = store.create(
+        request_id="auto-retry-unknown",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="orphan-evidence",
+        profile=profile,
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?,attempts=1,last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                MemoryTaskStatus.UNKNOWN,
+                "model_content_outcome_unknown",
+                "2026-01-01T00:00:00+00:00",
+                task.task_id,
+            ),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 1
+    retried = store.require(task.task_id)
+    assert retried.status is MemoryTaskStatus.PENDING
+    assert retried.attempts == 1
+
+    running, token = store.claim(task.task_id)
+    assert running.attempts == 2
+    store.mark_unknown(
+        task.task_id,
+        runner_token=token,
+        error_code="model_content_outcome_unknown",
+    )
+    assert (
+        store.retry_first_unknown_after_reconcile(
+            older_than=datetime.now(UTC) + timedelta(minutes=1)
+        )
+        == 0
+    )
+    assert store.require(task.task_id).status is MemoryTaskStatus.UNKNOWN
+
+
+def test_authority_invalid_task_is_never_reinvoked(tmp_path) -> None:
+    store, profile = _profile_and_tasks(tmp_path)
+    task = store.create(
+        request_id="authority-invalid",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref="authority-evidence",
+        profile=profile,
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?,attempts=1,last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                MemoryTaskStatus.UNKNOWN,
+                "hy_memory_write_verification_authority_invalid",
+                "2026-01-01T00:00:00+00:00",
+                task.task_id,
+            ),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 0
+    assert store.retry_unknown_confirmed() == 0
+    retained = store.require(task.task_id)
+    assert retained.status is MemoryTaskStatus.UNKNOWN
+    assert retained.attempts == 1
+    assert retained.last_error_code == "hy_memory_write_verification_authority_invalid"
+
+
+def test_linked_unknown_is_retried_only_by_the_durable_job(tmp_path) -> None:
+    from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+    from one_memory.memory_server.durable_queue import DurableWriteQueue
+
+    store, profile = _profile_and_tasks(tmp_path)
+    evidence = EvidenceStore(store.database_path)
+    record = evidence.put(
+        EvidenceInput(
+            source_id="cursor",
+            conversation_id="linked-conversation",
+            message_id="linked-message",
+            role="user",
+            written_by=WrittenBy.PERSON,
+            verbatim="linked unknown",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+        )
+    ).record
+    task = store.create(
+        request_id="linked-task",
+        user_id="local",
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=record.evidence_id,
+        profile=profile,
+        input_records=(record,),
+    )
+    queue = DurableWriteQueue(store.database_path, evidence=evidence)
+    job = queue.submit(
+        WriteRequest(
+            internal_session_id="linked-session",
+            batch_identity=BatchIdentity(
+                internal_session_id="linked-session",
+                first_round=1,
+                last_round=1,
+            ),
+            evidence_ids=[record.evidence_id],
+            idempotency_key="linked-job",
+            source_id="cursor",
+        )
+    )
+    with sqlite3.connect(store.database_path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_tasks SET status=?,attempts=1,last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                MemoryTaskStatus.UNKNOWN,
+                "model_content_outcome_unknown",
+                "2026-01-01T00:00:00+00:00",
+                task.task_id,
+            ),
+        )
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+            "last_error='model_content_outcome_unknown',updated_at=? WHERE job_id=?",
+            ("2026-01-01T00:00:00+00:00", job.job_id),
+        )
+
+    cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 0
+    assert store.require(task.task_id).status is MemoryTaskStatus.UNKNOWN
+    assert queue.retry_first_unknown_after_reconcile(older_than=cutoff) == 1
+    assert store.require(task.task_id).status is MemoryTaskStatus.PENDING
+    assert queue.get(job.request_id).state == "pending"
+    assert (
+        store.active_window(
+            now=datetime(2026, 1, 2, tzinfo=UTC),
+            fresh_window=timedelta(days=1),
+            extraction_window=None,
+        )
+        == []
+    )
+
+
 def test_orphan_recovery_preserves_active_running_tasks(tmp_path) -> None:
     store, profile = _profile_and_tasks(tmp_path)
     active = store.create(
@@ -1457,14 +1631,8 @@ def test_restart_splits_a_sent_continuous_task_from_an_unsent_one(tmp_path) -> N
         input_ref="evidence-unsent",
         profile=profile,
     )
-    with sqlite3.connect(store.database_path) as connection, connection:
-        connection.execute(
-            "CREATE TABLE memory_task_continuous_permissions (task_id TEXT PRIMARY KEY)"
-        )
-        connection.execute(
-            "INSERT INTO memory_task_continuous_permissions VALUES (?)", (sent.task_id,)
-        )
-    store.claim(sent.task_id)
+    _sent_task, sent_token = store.claim(sent.task_id)
+    store.record_hy_invocation(sent.task_id, runner_token=sent_token)
     store.claim(unsent.task_id)
 
     recovered = store.recover_running()

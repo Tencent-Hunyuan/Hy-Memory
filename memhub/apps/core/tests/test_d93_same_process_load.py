@@ -69,8 +69,11 @@ def _build_library(database: Path) -> None:
         setup.executescript(GRANT_SCHEMA)
         for source in ("cursor", "codex"):
             setup.execute(
-                "INSERT INTO source_grants VALUES ('local',?,?, 'default', ?, NULL)",
-                (source, f"/fixture/{source}", now),
+                "INSERT INTO source_grants "
+                "(user_id,source_id,root_path,requested_path,root_identity,"
+                "candidate_kind,granted_at,revoked_at,revision) "
+                "VALUES ('local',?,?,?,'fixture','default',?,NULL,1)",
+                (source, f"/fixture/{source}", f"/fixture/{source}", now),
             )
     evidence = EvidenceStore(database)
     tasks = MemoryTaskStore(database)

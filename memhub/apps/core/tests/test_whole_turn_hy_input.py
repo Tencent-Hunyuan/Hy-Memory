@@ -124,7 +124,7 @@ def test_the_sdk_strips_tool_messages_on_the_chat_path():
 
 
 def test_the_sdk_still_cuts_tool_results_the_way_this_assumes():
-    """D74 counts 2 KiB per tool record because the SDK cuts there.
+    """MemHub's window estimate follows its configured SDK tool ceiling.
 
     If an SDK upgrade moves that boundary or stops dropping tool records on
     the chat path, `_HY_TOOL_CHARACTERS` no longer describes what HY reads and
@@ -141,14 +141,14 @@ def test_the_sdk_still_cuts_tool_results_the_way_this_assumes():
     from one_memory.memory_processing import _HY_TOOL_CHARACTERS
 
     assert DEFAULT_MAX_TOOL_RESULT_BYTES == 2048
-    assert _HY_TOOL_CHARACTERS == 2048
+    assert _HY_TOOL_CHARACTERS == 512
     long = "z" * 20_000
-    cut = truncate_tool_result_text(long)
-    assert len(cut) <= DEFAULT_MAX_TOOL_RESULT_BYTES + 128
+    cut = truncate_tool_result_text(long, max_bytes=_HY_TOOL_CHARACTERS)
+    assert len(cut.encode()) <= _HY_TOOL_CHARACTERS + 128
 
     from hy_memory.coding.preproc import truncate_messages
 
     messages = [ChatMessage(role="tool", content=long)]
-    truncated = truncate_messages(messages)
+    truncated = truncate_messages(messages, max_bytes=_HY_TOOL_CHARACTERS)
     assert sum(len(item.content or "") for item in truncated) < len(long)
-    assert _HY_TOOL_CHARACTERS >= DEFAULT_HEAD_BYTES + DEFAULT_TAIL_BYTES
+    assert _HY_TOOL_CHARACTERS < DEFAULT_HEAD_BYTES + DEFAULT_TAIL_BYTES

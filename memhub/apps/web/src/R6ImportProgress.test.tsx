@@ -38,6 +38,71 @@ it("uses the selected job's message count, never the source total or fake percen
   expect(container.textContent).not.toContain("%");
   expect(container.textContent).not.toContain("持续导入中");
 });
+
+it("does not describe scanned-but-skipped history as saved", () => {
+  const { container } = render(
+    <R6ImportProgress
+      sourceIds={["cursor"]}
+      sources={[source]}
+      jobs={[
+        {
+          ...job,
+          status: "completed",
+          discovered: 12_375,
+          stored: 0,
+          skipped: 12_375,
+          history_after: "2026-10-15T00:00:00Z",
+        },
+      ]}
+    />,
+  );
+  expect(
+    screen.getByText("已扫描 12,375 条，本次没有符合时间范围的对话"),
+  ).toBeTruthy();
+  expect(screen.getByText("导入完成")).toBeTruthy();
+  expect(container.textContent).not.toContain("正在保存");
+  expect(container.textContent).not.toContain("已保存 12,375");
+});
+
+it("calls an active bounded scan filtering rather than saving", () => {
+  render(
+    <R6ImportProgress
+      sourceIds={["cursor"]}
+      sources={[source]}
+      jobs={[
+        {
+          ...job,
+          discovered: 3_522,
+          stored: 0,
+          history_after: "2026-10-15T00:00:00Z",
+        },
+      ]}
+    />,
+  );
+  expect(screen.getByText("已扫描 3,522 条，正在筛选最近 3 天")).toBeTruthy();
+});
+
+it("reports only stored rows as saved after a completed partial import", () => {
+  const { container } = render(
+    <R6ImportProgress
+      sourceIds={["cursor"]}
+      sources={[source]}
+      jobs={[
+        {
+          ...job,
+          status: "completed",
+          discovered: 25_177,
+          stored: 20_826,
+          skipped: 4_351,
+        },
+      ]}
+    />,
+  );
+  expect(screen.getByText("已保存 20,826 条消息")).toBeTruthy();
+  expect(screen.getByText("导入完成")).toBeTruthy();
+  expect(container.textContent).not.toContain("25,177");
+});
+
 it.each(["paused", "interrupted", "failed", "completed", "cancelled"] as const)(
   "does not animate %s as active work",
   (status) => {

@@ -1,4 +1,47 @@
 export const CORE_SERVICE = "one-memory-core" as const;
+
+/**
+ * The one host-id grammar.
+ *
+ * A host id is an opaque label for the app a recall grant belongs to. It is
+ * never a path component: the permission layer keys an installation by a
+ * digest of the whole id, so a colon is a label separator, not a directory
+ * separator.
+ *
+ * One app can be configured per profile, which is the reason for the single
+ * optional `:<profile>` segment — DeepSeek Harness reports
+ * `deepseek-harness:<profile>` and `host list` prints those ids.
+ *
+ * The CLI, the permission layer and the grant store all have to read the same
+ * shape: an id that `host list` prints must be an id `host install` accepts.
+ * There is one definition here rather than three regexes that drift.
+ */
+const HOST_SEGMENT_MAX = 64;
+const PROFILE_SEGMENT_MAX = 32;
+
+/**
+ * Lower-case letters, digits and hyphens; first character alphanumeric; at
+ * most one `:` followed by an alphanumeric-first profile segment.
+ *
+ * The trailing `(?![\s\S])` is "end of input". `$` alone would also match
+ * before a final newline, so `"codex\n"` would pass a pattern a caller reads
+ * as an exact match.
+ */
+export const HOST_ID_PATTERN = new RegExp(
+  `^[a-z0-9][a-z0-9-]{0,${HOST_SEGMENT_MAX - 1}}(?::[a-z0-9][a-z0-9-]{0,${PROFILE_SEGMENT_MAX - 1}})?(?![\\s\\S])`,
+);
+
+/** Longest id the grammar can produce: host + ":" + profile. */
+export const HOST_ID_MAX_LENGTH = HOST_SEGMENT_MAX + 1 + PROFILE_SEGMENT_MAX;
+
+export function isHostId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= HOST_ID_MAX_LENGTH &&
+    HOST_ID_PATTERN.test(value)
+  );
+}
+
 export type {
   ConnectionSetupCapability,
   ConnectionSetupExecute,
@@ -89,12 +132,28 @@ export interface SourceImportReceipt {
   }>;
 }
 
+/** Why a source cannot be read right now.
+ *
+ * `authorized: false` alone could not be acted on: a grant that was never
+ * made, one that was revoked, and a history directory that moved all need a
+ * different thing from the user, and used to get the same advice. Absent on a
+ * Core that does not report it, which then means "not measured".
+ */
+export type SourceAuthorizationState =
+  | "ok"
+  | "missing_grant"
+  | "revoked_grant"
+  | "source_identity_changed"
+  | "source_root_unavailable"
+  | "candidate_changed";
+
 export interface SourceResponse {
   source_id: string;
   display_name: string;
   storage_kinds: string[];
   available: boolean;
   authorized: boolean;
+  authorization_state?: SourceAuthorizationState;
   detected: boolean | null;
   root_label: string | null;
   candidate_path: string;
@@ -357,6 +416,15 @@ export interface HomeSummary {
   stale?: boolean;
 }
 
+export interface SdkHomeSummary {
+  schema_version: 2;
+  memory_count: number;
+  latest: SdkMemoryRecord | null;
+  observed_at: string;
+}
+
+export type HostHomeSummary = HomeSummary | SdkHomeSummary;
+
 export interface GovernedMemory {
   memory_id: string;
   user_id: string;
@@ -455,6 +523,70 @@ export interface MemoryDetail {
   index_sync: MemoryIndexSync | null;
 }
 
+export type SdkMemoryStatus =
+  | "active"
+  | "superseded"
+  | "shadow"
+  | "negated"
+  | "conflicted"
+  | "archived";
+
+export interface SdkMemoryRecord {
+  memory_id: string;
+  content: string;
+  layer: string;
+  status: SdkMemoryStatus;
+  is_latest: boolean;
+  supersedes: string[];
+  superseded_by: string[];
+  tags: string[];
+  owner: string | null;
+  source_raw_ids: string[];
+  user_id: string;
+  agent_id: string;
+  session_id: string | null;
+  source: string | null;
+  memory_at: number | null;
+  gmt_created: number | null;
+}
+
+export interface SdkMemoryPage {
+  memories: SdkMemoryRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SdkUserProfileResponse {
+  request_id: string;
+  profile: Record<string, unknown> | null;
+  elapsed_ms: number;
+}
+
+export interface MemoryAuthorityResponse {
+  authority: "legacy" | "sdk";
+  migration_id: string | null;
+}
+
+export interface SdkRawRecord {
+  raw_id: string;
+  content: string;
+  user_id: string;
+  agent_id: string;
+  session_id: string;
+  source: string;
+  memory_at: number | null;
+  gmt_created: number | null;
+  custom: Record<string, unknown>;
+}
+
+export interface SdkRawPage {
+  items: SdkRawRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface FileImportReceipt {
   upload_id: string;
   filename: string;
@@ -502,6 +634,24 @@ export interface AskMemoryResponse {
   mode: "generated" | "extractive" | "empty";
 }
 
+export interface SdkAskMemory {
+  memory_id: string;
+  content: string;
+  layer: string;
+  status: string;
+  source: string | null;
+  gmt_created: number | null;
+}
+
+export interface SdkAskMemoryResponse {
+  schema_version: 2;
+  answer: string;
+  memories: SdkAskMemory[];
+  mode: "generated" | "extractive" | "empty";
+}
+
+export type HostAskMemoryResponse = AskMemoryResponse | SdkAskMemoryResponse;
+
 export type AskMemoryEvent =
   | { type: "recall"; memories: GovernedMemory[] }
   | { type: "delta"; text: string }
@@ -512,6 +662,20 @@ export type AskMemoryEvent =
       mode: "generated" | "extractive" | "empty";
     }
   | { type: "error"; code: string };
+
+export type SdkAskMemoryEvent =
+  | { type: "recall"; memories: SdkAskMemory[] }
+  | { type: "delta"; text: string }
+  | {
+      type: "final";
+      schema_version: 2;
+      answer: string;
+      memories: SdkAskMemory[];
+      mode: "generated" | "extractive" | "empty";
+    }
+  | { type: "error"; code: string };
+
+export type HostAskMemoryEvent = AskMemoryEvent | SdkAskMemoryEvent;
 
 export interface RecallRequest {
   query: string;
@@ -847,8 +1011,13 @@ export type {
   ContextReason,
   ContextSearchRequest,
   ContextSearchResponse,
+  HostContextSearchResponse,
   MemoryContextItem,
   RawContextItem,
+  SdkContextItem,
+  SdkContextSearchResponse,
+  SdkMemoryContextItem,
+  SdkRawContextItem,
 } from "./context.js";
 export type {
   ContextExpandRequestV2,

@@ -16,6 +16,8 @@ from tempfile import NamedTemporaryFile
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
+from one_memory.memory_queue import ExtractionWindowPreset
+
 _SOURCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 
 
@@ -30,6 +32,13 @@ class ConfigDocument(BaseModel):
 
     schema_version: int = Field(default=1, ge=1, le=1)
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
+    #: Whether the configured model may turn imported conversations into
+    #: memories. Defaulting to on keeps every existing install doing what it
+    #: did before the switch existed; stopping it is the user's cost control
+    #: and leaves the model configuration itself untouched, so starting again
+    #: needs no re-entry of a key.
+    sedimentation_enabled: StrictBool = True
+    extraction_window_preset: ExtractionWindowPreset = ExtractionWindowPreset.THREE_MONTHS
 
     @field_validator("sources")
     @classmethod
@@ -37,6 +46,15 @@ class ConfigDocument(BaseModel):
         if any(_SOURCE_ID.fullmatch(source_id) is None for source_id in value):
             raise ValueError("invalid_source_id")
         return value
+
+    @field_validator("extraction_window_preset", mode="before")
+    @classmethod
+    def valid_extraction_window_preset(cls, value: object) -> ExtractionWindowPreset:
+        if isinstance(value, ExtractionWindowPreset):
+            return value
+        if isinstance(value, str):
+            return ExtractionWindowPreset(value)
+        raise ValueError("invalid_extraction_window_config")
 
 
 class ConfigFileError(RuntimeError):
@@ -62,6 +80,44 @@ class ConfigStore:
         with self._lock:
             source = self._document.sources.get(source_id)
             return bool(source and source.sync_enabled)
+
+    def sedimentation_enabled(self) -> bool:
+        with self._lock:
+            return bool(self._document.sedimentation_enabled)
+
+    def set_sedimentation_enabled(self, enabled: bool) -> ConfigDocument:
+        if type(enabled) is not bool:
+            raise ValueError("invalid_sedimentation_config")
+        with self._lock:
+            updated = self._document.model_copy(update={"sedimentation_enabled": enabled})
+            self._write(updated)
+            self._document = updated
+            return updated
+
+    def extraction_window_preset(self) -> ExtractionWindowPreset:
+        with self._lock:
+            return self._document.extraction_window_preset
+
+    def set_extraction_window_preset(self, preset: ExtractionWindowPreset) -> ConfigDocument:
+        if not isinstance(preset, ExtractionWindowPreset):
+            raise ValueError("invalid_extraction_window_config")
+        with self._lock:
+            updated = self._document.model_copy(update={"extraction_window_preset": preset})
+            self._write(updated)
+            self._document = updated
+            return updated
+
+    def migrate_extraction_window_preset(self, preset: ExtractionWindowPreset) -> ConfigDocument:
+        """Adopt the legacy SQL value only when config.json has no value."""
+        if not isinstance(preset, ExtractionWindowPreset):
+            raise ValueError("invalid_extraction_window_config")
+        with self._lock:
+            if "extraction_window_preset" in self._document.model_fields_set:
+                return self._document
+            updated = self._document.model_copy(update={"extraction_window_preset": preset})
+            self._write(updated)
+            self._document = updated
+            return updated
 
     def set_sync(self, source_id: str, enabled: bool) -> ConfigDocument:
         return self.set_sync_many({source_id: enabled})

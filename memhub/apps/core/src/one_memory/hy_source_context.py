@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from one_memory.imports.models import EvidenceContentKind, EvidenceRecord, WrittenBy
+from one_memory.imports.models import EvidenceContentKind, EvidenceRecord
 from one_memory.input_sanitization import sanitize_model_input
 
 
@@ -61,17 +61,7 @@ class HyWriteBindings:
                     seed.workspace,
                 )
                 or record.content_kind is not EvidenceContentKind.RAW_CONVERSATION
-                or (record.role, record.written_by)
-                not in {
-                    # D98: the same change as the turn assembly. A sub agent's
-                    # question is a `user` message marked written by the
-                    # agent; excluding it here would make the source context
-                    # disagree with what was actually sent.
-                    ("user", WrittenBy.PERSON),
-                    ("user", WrittenBy.AGENT),
-                    ("assistant", WrittenBy.AGENT),
-                    ("tool", WrittenBy.TOOL),
-                }
+                or record.role not in {"user", "assistant", "tool"}
             ):
                 raise ValueError("hy_memory_write_verification_context_scope")
         self.all_sources: list[dict[str, Any]] = [

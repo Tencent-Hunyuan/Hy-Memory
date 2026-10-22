@@ -968,7 +968,7 @@ class MemoryWriter(WritePipeline):
             async def _run():
                 try:
                     nid = await summarize_closed_episode(
-                        vector_store=self.vector_store,
+                        vector_store=await self._get_vector_store(),
                         embed_service=self.embed_service,
                         llm_provider=self.llm_provider,
                         episode_id=episode_id,

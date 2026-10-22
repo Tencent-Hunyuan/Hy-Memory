@@ -18,11 +18,31 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
+
+#: A namespace is a single path component, not a path. `\w` keeps Unicode
+#: names working while excluding separators, drive letters and NUL.
+_SAFE_SUBDIR = re.compile(r"[\w.-]{1,64}", re.UNICODE)
+
+
+def _safe_subdir(value: str) -> Optional[str]:
+    """Return ``value`` if it is safe as one directory name, else ``None``.
+
+    ``user_id`` is caller-controlled. Without this check a value such as
+    ``"/tmp/evil__u1"`` makes ``Path(base) / "/tmp/evil"`` discard ``base``
+    entirely; ``"../.."`` escapes it the same way.
+    """
+    candidate = (value or "").strip()
+    if not candidate or candidate in {".", ".."}:
+        return None
+    if not _SAFE_SUBDIR.fullmatch(candidate):
+        return None
+    return candidate
 
 # 兼容旧 import
 TraceFileWriter = None  # set after class definition
@@ -40,7 +60,7 @@ class PipelineLogWriter:
 
     def __init__(self, log_dir: str, default_subdir: str = "default"):
         self._log_dir = log_dir
-        self._default_subdir = default_subdir or "default"
+        self._default_subdir = _safe_subdir(default_subdir) or "default"
         try:
             (Path(self._log_dir) / self._default_subdir).mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -49,7 +69,7 @@ class PipelineLogWriter:
     def _resolve_subdir(self, user_id: str) -> str:
         """从 user_id 的 "{prefix}__{user_id}" 前缀取 prefix 作为子目录；无前缀则回落。"""
         if user_id and "__" in user_id:
-            prefix = user_id.split("__", 1)[0].strip()
+            prefix = _safe_subdir(user_id.split("__", 1)[0])
             if prefix:
                 return prefix
         return self._default_subdir
@@ -80,7 +100,11 @@ class PipelineLogWriter:
                 split_namespace_user,
             )
 
-            tokens = (prompt_tokens or 0) + (completion_tokens or 0) + (total_tokens or 0)
+            # Providers define total_tokens as prompt+completion. Adding all
+            # three fields doubled every cost estimate in this JSONL.
+            tokens = (total_tokens or 0) or (
+                (prompt_tokens or 0) + (completion_tokens or 0)
+            )
             namespace, uid = split_namespace_user(user_id or "")
             if not is_llm_content_logging_enabled():
                 prompt = redact_content(prompt)
@@ -111,7 +135,14 @@ class PipelineLogWriter:
             line = json.dumps(record, ensure_ascii=False, default=str)
             date_str = datetime.now().strftime("%Y-%m-%d")
             subdir = self._resolve_subdir(user_id)
-            log_dir = Path(self._log_dir) / subdir
+            base_dir = Path(self._log_dir).resolve()
+            log_dir = (base_dir / subdir).resolve()
+            # Defence in depth: even if a future change lets a suspicious
+            # component through, never write outside the configured root.
+            try:
+                log_dir.relative_to(base_dir)
+            except ValueError:
+                log_dir = base_dir / self._default_subdir
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / f"{date_str}.log"
             with open(log_file, "a", encoding="utf-8") as f:

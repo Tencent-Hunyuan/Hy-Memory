@@ -50,6 +50,10 @@ export interface LocalInstallPlan {
   /** Recorded so `applyLocalInstall` re-verifies with the same opt-in the plan
    * was created under; it does not itself authorize anything. */
   allow_downgrade: boolean;
+  /** True when this plan replaces an equal `build_number` whose bytes differ.
+   * The incoming build gets its own version directory and the superseded tree
+   * is left in place, so the transition is still reversible. */
+  same_build_replace: boolean;
   require_protocol_compatibility: boolean;
   platform: DistributionManifest["platform"];
   arch: string;
@@ -69,6 +73,10 @@ export async function planLocalInstall(options: {
   /** Explicit, per-invocation opt-in required to install a distribution whose
    * `build_number` is lower than the selected one. Default is refusal. */
   allowDowngrade?: boolean;
+  /** Explicit, per-invocation opt-in required to replace an equal
+   * `build_number` whose bytes differ. Default is refusal
+   * (`installed_version_conflict`); see `inspectBuildNumberTransition`. */
+  allowSameBuildReplace?: boolean;
   requireProtocolCompatibility?: boolean;
 }): Promise<LocalInstallPlan> {
   if (!isPlatform(options.platform))
@@ -86,11 +94,12 @@ export async function planLocalInstall(options: {
   if (options.requireProtocolCompatibility === true) {
     assertDistributionProtocolCompatibility(manifest);
   }
-  await assertBuildNumberTransition({
+  const transition = await inspectBuildNumberTransition({
     installRoot: options.installRoot,
     incoming: manifest,
     incomingSource: source,
     allowDowngrade: options.allowDowngrade === true,
+    allowSameBuildReplace: options.allowSameBuildReplace === true,
   });
   const files = Object.keys(manifest.files).sort();
   const installRoot = path.resolve(options.installRoot);
@@ -109,11 +118,18 @@ export async function planLocalInstall(options: {
     schema_version: 1,
     source,
     install_root: installRoot,
-    version_directory: path.join(installRoot, "versions", id),
+    version_directory: path.join(
+      installRoot,
+      "versions",
+      transition.sameBuildReplace
+        ? `${id}-r${manifestFingerprint(manifest)}`
+        : id,
+    ),
     current_link: path.join(installRoot, "current"),
     version: manifest.version,
     build_number: manifest.build_number ?? null,
     allow_downgrade: options.allowDowngrade === true,
+    same_build_replace: transition.sameBuildReplace,
     require_protocol_compatibility:
       options.requireProtocolCompatibility === true,
     platform: manifest.platform,
@@ -137,6 +153,7 @@ export async function applyLocalInstall(
     platform: plan.platform,
     arch: plan.arch,
     allowDowngrade: plan.allow_downgrade,
+    allowSameBuildReplace: plan.same_build_replace,
     requireProtocolCompatibility: plan.require_protocol_compatibility,
   });
   if (
@@ -145,6 +162,7 @@ export async function applyLocalInstall(
     path.resolve(plan.current_link) !== verified.current_link ||
     plan.version !== verified.version ||
     plan.build_number !== verified.build_number ||
+    plan.same_build_replace !== verified.same_build_replace ||
     plan.require_protocol_compatibility !==
       verified.require_protocol_compatibility ||
     plan.files !== verified.files
@@ -316,18 +334,29 @@ export async function rollbackLocalInstall(
  * selected version directory already contains byte-identical content —
  * otherwise the install would silently swap an equal-build package, which the
  * contract classifies as `installed_version_conflict`.
+ *
+ * `allowSameBuildReplace` is an explicit, per-invocation escape from that last
+ * rule, and it is off by default: a silent equal-build swap is precisely what
+ * the refusal protects against. It exists for one caller shape — a runtime
+ * shipped inside an app bundle that the OS has already signed and notarized.
+ * Such a payload is trusted by construction, and refusing it leaves an affected
+ * machine with an app that cannot start at all after a same-build re-release.
+ * The replacement never edits the selected tree in place: the incoming build
+ * lands in its own version directory and `current` moves atomically, so the
+ * superseded tree stays available as a rollback.
  */
-async function assertBuildNumberTransition(options: {
+async function inspectBuildNumberTransition(options: {
   installRoot: string;
   incoming: DistributionManifest;
   incomingSource: string;
   allowDowngrade: boolean;
-}): Promise<void> {
+  allowSameBuildReplace: boolean;
+}): Promise<{ sameBuildReplace: boolean }> {
   const installRoot = path.resolve(options.installRoot);
   const current = await lstat(path.join(installRoot, "current")).catch(
     () => null,
   );
-  if (!current) return;
+  if (!current) return { sameBuildReplace: false };
   if (!current.isSymbolicLink()) throw new Error("install_current_unmanaged");
   const target = path.resolve(
     installRoot,
@@ -338,28 +367,89 @@ async function assertBuildNumberTransition(options: {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("install_current_unmanaged");
   }
-  const selected = await readManifest(target).catch(() => null);
-  if (selected === null) return;
+  const selected = options.allowSameBuildReplace
+    ? await verifyDistribution(
+        target,
+        options.incoming.platform,
+        options.incoming.arch,
+      )
+    : await readManifest(target).catch(() => null);
+  if (selected === null) return { sameBuildReplace: false };
   // Pre-contract packages have no `build_number`. Comparing them against an
   // invented ordinal would either break the hourly chain or manufacture a
   // downgrade; fall back to the prior exact-version behavior until both sides
   // are numbered.
-  if (options.incoming.build_number === undefined) return;
-  if (selected.build_number === undefined) return;
-  if (options.incoming.build_number > selected.build_number) return;
+  if (options.incoming.build_number === undefined)
+    return { sameBuildReplace: false };
+  if (selected.build_number === undefined) return { sameBuildReplace: false };
+  if (options.incoming.build_number > selected.build_number)
+    return { sameBuildReplace: false };
   if (options.incoming.build_number === selected.build_number) {
     // Same build: an idempotent reinstall is fine only if the bytes match. The
     // incoming source is verified, so compare it against the selected tree.
     try {
       await verifySameTree(options.incomingSource, target);
     } catch {
-      throw new Error("installed_version_conflict");
+      if (!options.allowSameBuildReplace) {
+        throw new Error("installed_version_conflict");
+      }
+      if (
+        !isReleaseCommit(selected.git_commit) ||
+        !isReleaseCommit(options.incoming.git_commit) ||
+        selected.git_commit === options.incoming.git_commit
+      ) {
+        // Same commit with different bytes is not a new build: it is a
+        // non-reproducible or corrupted artifact and must stay rejected.
+        throw new Error("installed_version_conflict");
+      }
+      return { sameBuildReplace: true };
     }
-    return;
+    return { sameBuildReplace: false };
   }
   if (!options.allowDowngrade) {
     throw new Error("distribution_downgrade_refused");
   }
+  return { sameBuildReplace: false };
+}
+
+/** Short, stable digest of the complete normalized manifest identity.
+ *
+ * Two packages of the same `build_number` whose bytes differ must not share a
+ * version directory: `applyLocalInstall` compares the staged tree against the
+ * directory it is about to occupy and would refuse the replacement before
+ * `current` could move. Suffixing the directory with a payload fingerprint
+ * keeps the equal-build replacement a plain "install then switch" operation. */
+function manifestFingerprint(manifest: DistributionManifest): string {
+  const packageId = (
+    manifest as DistributionManifest & {
+      package_id?: unknown;
+    }
+  ).package_id;
+  const identity = {
+    schema_version: manifest.schema_version,
+    product: manifest.product,
+    version: manifest.version,
+    build_number: manifest.build_number ?? null,
+    git_commit: manifest.git_commit ?? null,
+    runtime_protocol: manifest.runtime_protocol ?? null,
+    supported_cli_protocol: manifest.supported_cli_protocol ?? null,
+    platform: manifest.platform,
+    arch: manifest.arch,
+    package_id: typeof packageId === "string" ? packageId : null,
+    files: Object.fromEntries(
+      Object.entries(manifest.files).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    ),
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(identity))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function isReleaseCommit(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
 }
 
 async function assertPrivateDirectory(target: string): Promise<void> {

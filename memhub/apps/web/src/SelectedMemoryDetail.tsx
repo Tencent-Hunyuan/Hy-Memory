@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiErrorCode, correctMemory, getMemory, mutateMemory } from "./api";
 import { clockStamp } from "./clock-stamp";
-import { MemoryRecallScope } from "./MemoryRecallScope";
 import { R6Button } from "./R6Controls";
 import { sourceNameOr } from "./source-label";
 import { traceUiAction } from "./ui-trace";
@@ -16,7 +15,6 @@ export function SelectedMemoryDetail({
   detail,
   sources,
   onChanged,
-  onSaveScopes,
   suspended = false,
   hideActions = false,
   conversationAt = null,
@@ -24,7 +22,6 @@ export function SelectedMemoryDetail({
   detail: MemoryDetail;
   sources: SourceResponse[];
   onChanged(id: string): void;
-  onSaveScopes?(scopes: string[]): Promise<void>;
   suspended?: boolean;
   hideActions?: boolean;
   /** D99: when the cited conversation happened, in the list's own terms. */
@@ -303,13 +300,6 @@ export function SelectedMemoryDetail({
         {!hideActions && (
           <details className="selected-memory-more">
             <summary>更多管理</summary>
-            {onSaveScopes && (
-              <MemoryRecallScope
-                detail={detail}
-                busy={busy}
-                onSave={onSaveScopes}
-              />
-            )}
             {detail.history.length > 1 && (
               <R6Button pending={busy} onClick={() => void govern("undo")}>
                 撤销上次修改

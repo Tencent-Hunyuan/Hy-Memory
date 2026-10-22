@@ -146,17 +146,16 @@ describe("memhub short-command contract", () => {
     ).join("\n");
     for (const shortForm of [
       "memhub calls clear",
-      "memhub import-file upload",
-      "memhub import-file commit",
-      "memhub import-file discard",
       "memhub notes add",
       "memhub notes process",
       "memhub models setup",
       "memhub models activate",
       "memhub models edit",
-      "memhub extraction set",
       "memhub graph width",
-      "memhub processing extract",
+      "memhub write submit",
+      "memhub write status",
+      "memhub memories update",
+      "memhub memories delete",
     ]) {
       expect(flattened).toContain(shortForm);
     }

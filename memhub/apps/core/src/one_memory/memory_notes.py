@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -16,16 +17,27 @@ from one_memory.imports.models import (
     EvidenceRecord,
     OriginMetadata,
     WrittenBy,
+    materialize_write_input,
 )
 from one_memory.imports.storage import EvidenceStore
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_governance import MemoryStatus
 from one_memory.memory_processing import MemoryProcessingSupervisor
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 from one_memory.memory_tasks import MemoryTaskStatus
 from one_memory.secrets import SecretStoreUnavailableError
 
 SOURCE_ID = "one-memory-manual"
+MemoryNoteState = Literal[
+    "waiting_for_model",
+    "waiting_for_permission",
+    "pending",
+    "running",
+    "failed",
+    "ready",
+    "no_memories",
+]
 
 
 class MemoryNoteInput(BaseModel):
@@ -50,15 +62,7 @@ class MemoryNoteReceipt(BaseModel):
     text: str
     scope: Literal["all-apps"] = "all-apps"
     created_at: datetime
-    state: Literal[
-        "waiting_for_model",
-        "waiting_for_permission",
-        "pending",
-        "running",
-        "failed",
-        "ready",
-        "no_memories",
-    ]
+    state: MemoryNoteState
     task_id: str | None = None
     memory_ids: list[str] = Field(default_factory=list)
     error: str | None = None
@@ -84,6 +88,9 @@ class MemoryNoteStore:
         evidence: EvidenceStore,
         processor: MemoryProcessingSupervisor,
         intake: UnifiedWriteIntake | None = None,
+        *,
+        sdk_authority: bool = False,
+        write_queue: DurableWriteQueue | None = None,
     ) -> None:
         self.evidence = evidence
         self.processor = processor
@@ -91,6 +98,8 @@ class MemoryNoteStore:
         # manual note reaches the durable queue like every other entry. It stays
         # optional so isolated tests can keep constructing the store directly.
         self.intake = intake
+        self.sdk_authority = sdk_authority
+        self.write_queue = write_queue
 
     def save(self, note: MemoryNoteInput) -> EvidenceRecord:
         now = datetime.now(UTC)
@@ -111,6 +120,35 @@ class MemoryNoteStore:
                 )
             },
         )
+        if self.sdk_authority:
+            if self.intake is None or self.write_queue is None:
+                raise RuntimeError("sdk_memory_note_intake_unavailable")
+            record = materialize_write_input(value, observed_at=now)
+            with main_database(self.write_queue.database_path).read() as database:
+                existing = database.execute(
+                    "SELECT request_id FROM memory_note_requests WHERE note_id=?",
+                    (record.evidence_id,),
+                ).fetchone()
+            if existing is not None:
+                current = self.require(record.evidence_id)
+                if current.verbatim != record.verbatim:
+                    raise ValueError("memory_note_request_conflict")
+                return current
+            receipt = self.intake.submit_records(
+                (record,),
+                priority="live",
+            )
+            with main_database(self.write_queue.database_path).write(autocommit=True) as database:
+                database.execute(
+                    "INSERT INTO memory_note_requests(note_id,request_id,created_at) "
+                    "VALUES (?,?,?) ON CONFLICT(note_id) DO NOTHING",
+                    (
+                        record.evidence_id,
+                        receipt.request_id,
+                        now.isoformat(),
+                    ),
+                )
+            return record
         with (
             main_database(self.evidence.database_path).write(
                 foreign_keys=True, busy_timeout_ms=15_000
@@ -150,6 +188,27 @@ class MemoryNoteStore:
         return self.require(value.evidence_id)
 
     def require(self, evidence_id: str) -> EvidenceRecord:
+        if self.sdk_authority:
+            if self.write_queue is None:
+                raise KeyError(evidence_id)
+            with main_database(self.write_queue.database_path).read() as database:
+                row = database.execute(
+                    "SELECT request_id FROM memory_note_requests WHERE note_id=?",
+                    (evidence_id,),
+                ).fetchone()
+            if row is None:
+                raise KeyError(evidence_id)
+            durable = self.write_queue.get(str(row[0]))
+            payload = self.write_queue.payload_for(durable.job_id) if durable is not None else None
+            if payload is None:
+                raise KeyError(evidence_id)
+            record = next(
+                (item for item in payload.input_records if item.evidence_id == evidence_id),
+                None,
+            )
+            if record is None:
+                raise KeyError(evidence_id)
+            return record
         record = self.evidence.get(evidence_id)
         if record is None or record.user_id != "local" or record.source_id != SOURCE_ID:
             raise KeyError(evidence_id)
@@ -167,6 +226,32 @@ class MemoryNoteStore:
 
     def receipt(self, evidence_id: str) -> MemoryNoteReceipt:
         record = self.require(evidence_id)
+        if self.sdk_authority:
+            assert self.write_queue is not None
+            with main_database(self.write_queue.database_path).read() as database:
+                request_id = database.execute(
+                    "SELECT request_id FROM memory_note_requests WHERE note_id=?",
+                    (evidence_id,),
+                ).fetchone()[0]
+            durable = self.write_queue.get(str(request_id))
+            durable_state = durable.state if durable is not None else "failed"
+            mapped: MemoryNoteState = {
+                "pending": "pending",
+                "running": "running",
+                "waiting_for_model": "waiting_for_model",
+                "waiting_for_permission": "waiting_for_permission",
+                "completed": (
+                    "ready" if durable is not None and durable.sdk_memory_ids else "no_memories"
+                ),
+            }.get(durable_state, "failed")
+            return MemoryNoteReceipt(
+                evidence_id=evidence_id,
+                text=sanitize_model_input(record.verbatim),
+                created_at=record.created_at or record.imported_at,
+                state=mapped,
+                memory_ids=(list(durable.sdk_memory_ids) if durable is not None else []),
+                error=durable.detail if durable is not None else "write_missing",
+            )
         task = self.processor.tasks.task_for_evidence(evidence_id)
         memory_ids = []
         if task:
@@ -174,15 +259,7 @@ class MemoryNoteStore:
                 memory = self.processor.governance.get(output.memory_id, user_id="local")
                 if memory and memory.status is MemoryStatus.CONFIRMED:
                     memory_ids.append(memory.memory_id)
-        state: Literal[
-            "waiting_for_model",
-            "waiting_for_permission",
-            "pending",
-            "running",
-            "failed",
-            "ready",
-            "no_memories",
-        ]
+        state: MemoryNoteState
         if task is None or task.status == MemoryTaskStatus.WAITING_FOR_MODEL:
             state = "waiting_for_model"
         elif task.status == MemoryTaskStatus.WAITING_FOR_PERMISSION:
@@ -209,23 +286,48 @@ class MemoryNoteStore:
         )
 
     def list(self) -> list[MemoryNoteReceipt]:
+        if self.sdk_authority:
+            assert self.write_queue is not None
+            with main_database(self.write_queue.database_path).read() as database:
+                ids = [
+                    str(row[0])
+                    for row in database.execute(
+                        "SELECT note_id FROM memory_note_requests ORDER BY created_at DESC LIMIT 50"
+                    )
+                ]
+            return [self.receipt(key) for key in ids]
         with main_database(self.evidence.database_path).read() as db:
             ids = [
                 row[0]
                 for row in db.execute(
-                    "SELECT e.evidence_id FROM evidence e "
+                    "SELECT e.evidence_id,o.raw_meta_json FROM evidence e "
                     "JOIN source_grants g USING(user_id,source_id) "
                     "JOIN evidence_origins o USING(evidence_id) WHERE e.user_id='local' "
                     "AND e.source_id=? AND g.revoked_at IS NULL AND o.origin='manual_import' "
-                    "AND json_extract(o.raw_meta_json,'$.input_mode')='direct_memory_note' "
                     "ORDER BY e.imported_at DESC,e.evidence_id LIMIT 50",
                     (SOURCE_ID,),
                 )
+                if json.loads(row[1]).get("input_mode") == "direct_memory_note"
             ]
         return [self.receipt(key) for key in ids]
 
     def receipt_for_request(self, request_id: UUID) -> MemoryNoteReceipt:
         identity = str(request_id)
+        if self.sdk_authority:
+            probe = EvidenceInput(
+                source_id=SOURCE_ID,
+                conversation_id=f"note:{identity}",
+                message_id=identity,
+                role="user",
+                written_by=WrittenBy.PERSON,
+                verbatim="lookup",
+                origin_meta={
+                    EvidenceOrigin.MANUAL_IMPORT: OriginMetadata(
+                        raw_meta={"input_mode": "direct_memory_note"}
+                    )
+                },
+            )
+            return self.receipt(probe.evidence_id)
         with main_database(self.evidence.database_path).read() as db:
             row = db.execute(
                 "SELECT evidence_id FROM evidence WHERE user_id='local' AND source_id=? "
@@ -252,6 +354,8 @@ def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
         readmit: bool = False,
     ) -> MemoryNoteReceipt:
         try:
+            if notes.sdk_authority:
+                return await asyncio.to_thread(notes.receipt, record.evidence_id)
             if notes.intake is None:
                 # Isolated tests construct the store without a queue.
                 await notes.processor.enqueue_conversation_off_thread(record)
@@ -326,6 +430,8 @@ def memory_note_router(dependencies: Sequence[Depends]) -> APIRouter:
     def evidence(evidence_id: str, request: Request) -> SavedMemoryNoteEvidence:
         try:
             notes = store(request)
+            if notes.sdk_authority:
+                raise HTTPException(409, "memory_note_evidence_retired")
             with notes.evidence._connect() as connection:
                 record = notes.evidence._get_with_connection(connection, evidence_id)
                 metadata = record.origin_meta.get(EvidenceOrigin.MANUAL_IMPORT) if record else None

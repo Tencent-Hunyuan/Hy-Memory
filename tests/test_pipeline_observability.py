@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -291,6 +290,53 @@ class TestPipelineLogSubdirSplit:
         # 只按第一个 __ 切分；user 部分自带 __ 不影响 subdir
         w.write_step(user_id="app1__user__with__underscores", step="X", response="r")
         assert (tmp_path / "app1").is_dir()
+
+    def test_user_id_prefix_cannot_escape_log_root(self, tmp_path):
+        from hy_memory.utils.pipeline_log_writer import PipelineLogWriter
+
+        log_root = tmp_path / "logs"
+        outside = tmp_path / "outside"
+        w = PipelineLogWriter(str(log_root), "default")
+        for user_id in (
+            f"{outside / 'evil'}__u1",
+            f"../../{outside.name}__u1",
+            "..__u1",
+            f"{outside.name}/nested__u1",
+        ):
+            w.write_step(user_id=user_id, step="X", response="r")
+
+        assert not outside.exists()
+        files = list(log_root.rglob("*.log"))
+        assert files
+        assert all(path.is_relative_to(log_root) for path in files)
+
+    def test_default_subdir_is_sanitized(self, tmp_path):
+        from hy_memory.utils.pipeline_log_writer import PipelineLogWriter
+
+        log_root = tmp_path / "logs"
+        w = PipelineLogWriter(str(log_root), "../../evil")
+        w.write_step(user_id="no_prefix", step="X", response="r")
+
+        assert not (tmp_path / "evil").exists()
+        assert (log_root / "default").is_dir()
+
+
+def test_pipeline_jsonl_does_not_add_total_tokens_twice(tmp_path):
+    from datetime import date
+
+    from hy_memory.utils.pipeline_log_writer import PipelineLogWriter
+
+    writer = PipelineLogWriter(str(tmp_path), "default")
+    writer.write_step(
+        step="EXTRACT",
+        prompt_tokens=120,
+        completion_tokens=30,
+        total_tokens=150,
+    )
+
+    log_file = tmp_path / "default" / f"{date.today().isoformat()}.log"
+    row = json.loads(log_file.read_text(encoding="utf-8").strip())
+    assert row["tokens"] == 150
 
 
 class TestPipelineLogContentPrivacy:

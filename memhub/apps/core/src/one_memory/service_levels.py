@@ -264,7 +264,7 @@ class ServiceLevelScheduler:
             self._quiet_admission_logged_at[key] = now
             if last is not None:
                 diagnostic_event(
-                    level="info",
+                    level="debug",
                     component="service_level.scheduler",
                     event="service_level.summary",
                     outcome="succeeded",
@@ -276,7 +276,7 @@ class ServiceLevelScheduler:
                 )
                 return
         diagnostic_event(
-            level="info",
+            level="debug",
             component="service_level.scheduler",
             event="service_level.admitted",
             outcome="succeeded",

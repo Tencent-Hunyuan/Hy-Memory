@@ -1,13 +1,14 @@
 import type {
-  AskMemoryResponse,
   ConversationTranscript,
   GovernedMemory,
+  HostAskMemoryResponse,
   MemoryDetail,
   MemoryEvidenceExcerpt,
   MemoryGraphEdge,
   MemoryGraphNode,
   MemoryGraphResponse,
   MemoryProcessingSummary,
+  SdkAskMemory,
   SourceResponse,
 } from "@one-memory/contracts";
 import { Check, PencilLine, RotateCcw, Trash2 } from "lucide-react";
@@ -21,7 +22,7 @@ import {
 import { getConversation } from "./api";
 import { HandoffBar } from "./HandoffBar";
 import { MemoryGraph3D } from "./MemoryGraph3D";
-import { MemoryRecallScope, memoryProvenanceLabel } from "./MemoryRecallScope";
+import { memoryProvenanceLabel } from "./MemoryRecallScope";
 import { extractionStateLabel } from "./memory-processing-labels";
 import {
   type Finding,
@@ -46,16 +47,13 @@ export function Workbench({
   loaded,
   detail,
   draft,
-  scopes,
   busy,
   answer,
   streaming,
   onDraft,
-  onScopes,
   onOpenMemory,
   onCloseDetail,
   onSave,
-  onSaveScopes,
   onAction,
   onSyncIndex,
   onAsk,
@@ -78,16 +76,16 @@ export function Workbench({
   } | null;
   overlayBlocked?: boolean;
   draft: string;
-  scopes: string;
   busy: boolean;
-  answer: AskMemoryResponse | null;
-  streaming: { text: string; memories: GovernedMemory[] } | null;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
   onDraft(next: string): void;
-  onScopes(next: string): void;
   onOpenMemory(memoryId: string): void;
   onCloseDetail(): void;
   onSave(event: FormEvent<HTMLFormElement>): void;
-  onSaveScopes?(scopes: string[]): Promise<void>;
   onAction(action: "undo" | "delete"): void;
   onSyncIndex(): void;
   onAsk(question: string): void;
@@ -352,15 +350,12 @@ export function Workbench({
             graph={shown}
             detail={detail}
             draft={draft}
-            scopes={scopes}
             busy={busy}
             matterLabel={
               matters.find((item) => item.scope === matter)?.label ?? "全部"
             }
             onDraft={onDraft}
-            onScopes={onScopes}
             onSave={onSave}
-            onSaveScopes={onSaveScopes}
             onAction={onAction}
             onSyncIndex={onSyncIndex}
             requestIds={requestIds}
@@ -560,7 +555,6 @@ export function NodeDetail({
   matterLabel,
   onDraft,
   onSave,
-  onSaveScopes,
   onAction,
   onSyncIndex,
   requestIds,
@@ -571,13 +565,10 @@ export function NodeDetail({
   graph: MemoryGraphResponse | null;
   detail: MemoryDetail | null;
   draft: string;
-  scopes: string;
   busy: boolean;
   matterLabel: string;
   onDraft(next: string): void;
-  onScopes(next: string): void;
   onSave(event: FormEvent<HTMLFormElement>): void;
-  onSaveScopes?(scopes: string[]): Promise<void>;
   onAction(action: "undo" | "delete"): void;
   onSyncIndex(): void;
   requestIds: RefObject<Map<string, string>>;
@@ -628,14 +619,6 @@ export function NodeDetail({
         )}
         {compact && !editing && (
           <p className="map-origin">{memoryProvenanceLabel(detail)}</p>
-        )}
-        {onSaveScopes && (
-          <MemoryRecallScope
-            key={`${memory.memory_id}:${memory.revision}`}
-            detail={detail}
-            busy={busy}
-            onSave={onSaveScopes}
-          />
         )}
         {editing && memory.status === "confirmed" ? (
           <form id={formId} onSubmit={onSave} aria-label="纠正记忆内容">
@@ -778,8 +761,11 @@ export function Answer({
   asPage,
   suspended = false,
 }: {
-  answer: AskMemoryResponse | null;
-  streaming: { text: string; memories: GovernedMemory[] } | null;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
   onOpenMemory(memoryId: string): void;
   onSaveAnswer(draft: SavedAnswer): void;
   asPage: boolean;
@@ -813,7 +799,11 @@ export function Answer({
             onSaveAnswer({
               content: groundedAnswer.answer,
               evidence_ids: [
-                ...new Set(shownMemories.flatMap((item) => item.evidence_ids)),
+                ...new Set(
+                  shownMemories.flatMap((item) =>
+                    "evidence_ids" in item ? item.evidence_ids : [],
+                  ),
+                ),
               ],
             })
           }

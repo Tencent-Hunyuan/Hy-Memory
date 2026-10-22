@@ -178,3 +178,28 @@ export async function installServiceWithDisabledFallback(options: {
     return "transient";
   }
 }
+
+/** What the user is told, instead of an internal error code.
+ *
+ * The codes are contractual and stay in the logs; this is the layer that turns
+ * them into something a person can act on. Every string says what happens to
+ * their memories, because that is the first thing anyone asks. */
+export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
+  installed_version_conflict:
+    "运行环境与这个安装包不一致，无法安全接管。请安装更新版本的 MemHub；你的记忆数据不会受到影响。",
+  distribution_downgrade_refused:
+    "已安装的运行环境比这个安装包更新，无法用旧安装包启动。请安装最新版本的 MemHub；你的记忆数据不会受到影响。",
+  install_current_unmanaged:
+    "运行环境的安装目录被改动过，无法安全接管。请重新安装 MemHub，你的记忆数据不会受到影响。",
+  desktop_start_failed:
+    "MemHub 启动失败。请重新启动；如果仍然打不开，请重新安装，你的记忆数据不会受到影响。",
+};
+
+export function stableRuntimeUserMessage(error: unknown): string {
+  const code = stableRuntimeErrorCode(error);
+  return (
+    STABLE_RUNTIME_USER_MESSAGES[code] ??
+    STABLE_RUNTIME_USER_MESSAGES.desktop_start_failed ??
+    ""
+  );
+}

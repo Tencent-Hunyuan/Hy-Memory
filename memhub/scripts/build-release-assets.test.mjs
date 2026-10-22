@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -119,6 +120,35 @@ test("builds versioned Runtime archives, checksums and a downloader-compatible m
     assert.ok(artifact.bytes > 0);
     if (artifact.kind === "runtime") assert.ok(artifact.unpacked_bytes > 0);
   }
+});
+
+test("verifies Runtime symlinks with the same identity rule as the installer", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "memhub-release-assets-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = await distribution(root, "linux", "x64");
+  const link = "memhub";
+  await symlink(link, path.join(source, "bin", "node"));
+  const manifestPath = path.join(source, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.files["bin/node"] = sha256(`symlink\0${link}`);
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const release = await buildReleaseAssets({
+    output: path.join(root, "release"),
+    version: "0.1.0-internal.1",
+    channel: "prerelease",
+    assetBaseUrl: "https://git.example.test/release/downloads/",
+    distributions: [source],
+  });
+
+  assert.ok(
+    release.artifacts.some(
+      (artifact) =>
+        artifact.kind === "runtime" &&
+        artifact.platform === "linux" &&
+        artifact.arch === "x64",
+    ),
+  );
 });
 
 test("refuses version, build and duplicate target drift", async (t) => {

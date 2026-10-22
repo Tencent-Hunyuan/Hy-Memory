@@ -46,8 +46,12 @@ import {
   putRegistryEntry,
   readRegistryEntry,
   registryEntry,
+  registryHoldsOnlyOurs,
+  registryManagedDigest,
+  registryWithoutOurs,
   removeRegistryEntry,
 } from "./codebuddy-plugin.js";
+import { DomainError } from "./domain-error.js";
 import {
   hasUnmanagedRow,
   putDshServer,
@@ -141,7 +145,7 @@ export const OWNER_VALUE = "one-memory";
  * embedded in the marker so a disk skill can say which template produced it
  * without a second file to keep in step.
  */
-export const SKILL_VERSION = 15;
+export const SKILL_VERSION = 16;
 
 /** Marker written after the complete YAML frontmatter of every managed skill.
  *
@@ -355,8 +359,18 @@ export interface RecallInstallPlan {
     mcp: string | null;
     skill: string | null;
     /** Empty for every host but a plugin-format one, whose shared registries
-     * are the files that can move between plan and apply. */
-    registries: Array<{ path: string; hash: string | null }>;
+     * are the files that can move between plan and apply.
+     *
+     * For those, `managed` and `keyPath` are what apply actually compares. The
+     * whole-file `hash` stays because the file is the host's: it may be
+     * reformatted or written by another plugin between plan and apply, and
+     * refusing that only stops us from writing our own key. */
+    registries: Array<{
+      path: string;
+      hash: string | null;
+      keyPath?: string[];
+      managed?: string | null;
+    }>;
   };
   previous: {
     configExisted: boolean;
@@ -397,8 +411,20 @@ export interface RegistryPrevious {
   /** Exact host-owned file bytes before the first install. New journals use
    * this to restore formatting as well as values; absent on legacy journals. */
   raw?: string | null;
-  /** Exact full-file hash after our most recent successful install. */
+  /** Exact full-file hash after our most recent successful install.
+   *
+   * Journal schema v1 ownership. Kept for the journals already on disk, and
+   * no longer the test uninstall applies: the file is shared with the host and
+   * every other plugin, so anything else moving in it stopped us from removing
+   * our own key. See `installed_managed`. */
   installed_hash?: string;
+  /** Digest of the value at our key after our most recent successful install.
+   *
+   * Journal schema v2 ownership, and the one uninstall trusts. `null` means
+   * the key was absent at install time, which is a different fact from the key
+   * holding `null` and has to be restored differently.
+   */
+  installed_managed?: string | null;
 }
 
 /** A foreign entry we replaced, kept verbatim so rollback is exact.
@@ -852,6 +878,8 @@ export async function planRecallInstall(
       registries: registries.map((entry) => ({
         path: entry.registry.path,
         hash: entry.raw === null ? null : hash(entry.raw),
+        keyPath: entry.registry.keyPath,
+        managed: registryManagedDigest(entry.current),
       })),
     },
     previous: reinstall
@@ -1040,7 +1068,20 @@ export async function applyRecallInstall(
     await assertUnchanged(plan.paths.skill, plan.expected.skill);
   }
   for (const registry of plan.expected.registries) {
-    await assertUnchanged(registry.path, registry.hash);
+    // A shared registry is the host's file. An unrelated plugin writing to it
+    // between plan and apply is not a change to anything of ours, and refusing
+    // it is how an install became impossible to repeat on a machine where
+    // WorkBuddy was running. What has to hold is the value at our key.
+    if (registry.keyPath === undefined || registry.managed === undefined) {
+      await assertUnchanged(registry.path, registry.hash);
+      continue;
+    }
+    await assertManagedUnchanged(
+      registry.path,
+      { path: registry.path, keyPath: registry.keyPath, seed: {} },
+      registry.managed,
+      plan.layout.hostLabel,
+    );
   }
 
   const files = await plannedFiles(plan);
@@ -1142,11 +1183,27 @@ export async function applyRecallInstall(
               const installed = files.registries.find(
                 (file) => file.path === previous.path,
               );
+              if (installed === undefined) return previous;
+              const registry = pluginRegistries(
+                plan.layout.plugin as CodebuddyPluginTarget,
+              ).find((item) => item.path === previous.path);
+              // `installed_hash` is still written so a journal stays readable
+              // to the build that wrote it; `installed_managed` is what this
+              // build's uninstall trusts.
               return {
                 ...previous,
-                ...(installed === undefined
+                installed_hash: hash(installed.after),
+                ...(registry === undefined
                   ? {}
-                  : { installed_hash: hash(installed.after) }),
+                  : {
+                      installed_managed: registryManagedDigest(
+                        readRegistryEntry(
+                          installed.after,
+                          registry,
+                          plan.layout.hostLabel,
+                        ),
+                      ),
+                    }),
               };
             }),
             plugin_files: files.trees.flatMap((tree) =>
@@ -1904,7 +1961,8 @@ export async function planRecallUninstall(
       (currentSkill === null ||
         hash(currentSkill) !== journal.installed_skill_hash))
   ) {
-    throw new Error(
+    throw new DomainError(
+      "host_uninstall_unknown_owned_file",
       "host_uninstall_modified_files: MemHub files changed after installation; rollback refused",
     );
   }
@@ -1939,7 +1997,8 @@ export async function planRecallUninstall(
     for (const file of journal.plugin_files ?? []) {
       const content = await readOptional(file.path);
       if (content !== null && hash(content) !== file.hash) {
-        throw new Error(
+        throw new DomainError(
+          "host_uninstall_unknown_owned_file",
           "host_uninstall_modified_files: MemHub files changed after installation; rollback refused",
         );
       }
@@ -1953,36 +2012,36 @@ export async function planRecallUninstall(
     const previous = new Map(
       (journal.plugin_registries ?? []).map((entry) => [entry.path, entry]),
     );
+    const reviews: RemovalFinding[] = [];
     for (const registry of pluginRegistries(layout.plugin)) {
       const raw = await readOptional(registry.path);
       const recorded = previous.get(registry.path);
-      if (
-        recorded?.installed_hash !== undefined &&
-        (raw === null || hash(raw) !== recorded.installed_hash)
-      ) {
-        throw new Error(
-          "host_uninstall_modified_files: MemHub files changed after installation; rollback refused",
-        );
+      const owned = resolveRegistryOwnership(
+        layout.plugin,
+        registry,
+        raw,
+        recorded,
+        layout.hostLabel,
+      );
+      if (owned.state === "review") {
+        reviews.push(owned.finding);
+        continue;
       }
+      if (raw === null) continue;
       files.push({
         path: registry.path,
         owner: "host",
         before: raw,
-        after:
-          recorded !== undefined && "raw" in recorded
-            ? (recorded.raw ?? null)
-            : recorded?.existed === false
-              ? null
-              : removeRegistryEntry(
-                  raw,
-                  registry,
-                  layout.hostLabel,
-                  recorded === undefined || recorded.value === null
-                    ? undefined
-                    : (JSON.parse(recorded.value) as unknown),
-                ),
+        after: managedRegistryRemoval(
+          registry,
+          raw,
+          recorded,
+          layout.hostLabel,
+        ),
       });
     }
+    if (reviews.length)
+      return { layout, files: [], removedRoots: [], review: reviews };
     removedRoots.push(layout.plugin.marketplaceRoot, layout.plugin.cacheRoot);
   }
   const capture = await captureRemovalFiles(layout, journal);
@@ -1990,6 +2049,102 @@ export async function planRecallUninstall(
     return { layout, files: [], removedRoots: [], review: capture.review };
   files.push(...capture.files);
   return { layout, files, removedRoots, review: [] };
+}
+
+const MANAGED_VALUE_CHANGED =
+  "MemHub 管理的条目已被改动（host_uninstall_modified_managed_value）";
+const REGISTRY_OWNERSHIP_UNKNOWN =
+  "安装记录不完整，无法确认该条目归 MemHub 所有（host_install_journal_invalid）";
+
+/** Whether uninstall still owns the value at our key in a shared registry.
+ *
+ * The old test was the whole file's hash, which made a host that reorders its
+ * own JSON, or a plugin installed since, indistinguishable from somebody
+ * editing our key. WorkBuddy rewrites these files routinely, so uninstall
+ * refused on machines where nothing of ours had been touched — issue #29.
+ *
+ * Ownership is now the value at our key. Everything else in the file is the
+ * host's and every other plugin's, and none of it may stop us, or be rolled
+ * back by us.
+ */
+function resolveRegistryOwnership(
+  target: CodebuddyPluginTarget,
+  registry: PluginRegistry,
+  raw: string | null,
+  recorded: RegistryPrevious | undefined,
+  label: string,
+): { state: "ok" } | { state: "review"; finding: RemovalFinding } {
+  if (raw === null) return { state: "ok" };
+  const current = readRegistryEntry(raw, registry, label);
+  const digest = registryManagedDigest(current);
+  // A v2 journal carries the digest directly, and that is the whole test.
+  if (recorded !== undefined && recorded.installed_managed !== undefined) {
+    return digest === recorded.installed_managed
+      ? { state: "ok" }
+      : {
+          state: "review",
+          finding: { path: registry.path, where: MANAGED_VALUE_CHANGED },
+        };
+  }
+  // A v1 journal recorded the whole file. It still agrees byte for byte, or it
+  // disagrees while our key still reads exactly as we installed it: either way
+  // the value we would remove is ours, so the journal migrates forward and the
+  // host's other edits are kept.
+  if (recorded?.installed_hash !== undefined) {
+    if (hash(raw) === recorded.installed_hash) return { state: "ok" };
+    if (isManagedRegistryEntry(target, registry, current))
+      return { state: "ok" };
+    return {
+      state: "review",
+      finding: { path: registry.path, where: MANAGED_VALUE_CHANGED },
+    };
+  }
+  // No record of this registry at all. Proven by what the value points at
+  // rather than assumed; anything else needs a person.
+  if (
+    current !== undefined &&
+    isManagedRegistryEntry(target, registry, current)
+  )
+    return { state: "ok" };
+  return {
+    state: "review",
+    finding: { path: registry.path, where: REGISTRY_OWNERSHIP_UNKNOWN },
+  };
+}
+
+/** The registry file after our key is gone, or null when the file goes too.
+ *
+ * A file we created is deleted only while it holds nothing but our key;
+ * otherwise the key goes and the file we do not own stays.
+ *
+ * A file that already existed is handed back byte for byte while nothing but
+ * our key has moved — that is what keeps a host that minifies its registries
+ * from seeing a whole-file diff after a rollback. Once anything else in it has
+ * changed, the pre-install bytes would silently undo the host's own edits and
+ * every other plugin's, so the removal is a selector patch of what is on disk
+ * now instead.
+ */
+function managedRegistryRemoval(
+  registry: PluginRegistry,
+  raw: string,
+  recorded: RegistryPrevious | undefined,
+  label: string,
+): string | null {
+  if (recorded?.existed === false) {
+    if (registryHoldsOnlyOurs(raw, registry, label)) return null;
+    return removeRegistryEntry(raw, registry, label, undefined);
+  }
+  const reinstate =
+    recorded !== undefined && recorded.value !== null
+      ? (JSON.parse(recorded.value) as unknown)
+      : undefined;
+  if (
+    recorded?.raw != null &&
+    registryWithoutOurs(raw, registry, label) ===
+      registryWithoutOurs(recorded.raw, registry, label)
+  )
+    return recorded.raw;
+  return removeRegistryEntry(raw, registry, label, reinstate);
 }
 
 async function captureRemovalFiles(
@@ -2107,7 +2262,7 @@ export async function applyRecallUninstall(
   approvedFingerprint?: string,
 ): Promise<void> {
   const layout = plan.layout;
-  if (plan.review?.length) throw new Error("host_uninstall_needs_review");
+  if (plan.review?.length) throw new DomainError("host_uninstall_needs_review");
   if (
     approvedFingerprint !== undefined &&
     approvedFingerprint !== uninstallFingerprint(plan)
@@ -2555,8 +2710,8 @@ ${SKILL_MARKER}
 
 When the answer would depend on the user's preferences, past decisions, or
 project conventions, call \`MemHub_context\` when the host exposes it. Leave kinds
-at the default so original conversations and governed memories are searched
-together. Use returned original conversations even when the memory path is empty.
+at the default so original conversations and memories are searched together.
+Use returned original conversations even when no memory item is returned.
 On hosts that do not expose it, you must call \`MemHub_recall\` before answering
 questions about governed memories, and call \`MemHub_conversations\` in that same
 turn. Do not guess those from earlier turns in this chat alone.
@@ -2565,12 +2720,13 @@ Loading this Skill is not a memory lookup. Give one action notice per logical lo
 not once per instruction file or tool discovery. Keep another memory provider separately
 attributed; its results do not prove MemHub success.
 For \`MemHub_context\`, use \`query\`; \`raw_source_ids\` filters raw only. Do not pass identity,
-workspace or scope fields. Inspect both \`paths\` and the \`kind\` of each returned item.
-Raw-only results are original conversations, not generated memories. Mixed results retain
-both kinds and their citations. Partial with zero items means coverage was limited, not
-that memories were retrieved. \`adoption\` remains unknown until actually observed.
+workspace or scope fields. Inspect \`schema_version\` and each returned item. Schema v1
+includes path/evidence metadata; schema v2 is SDK-native and does not. Raw-only results
+are original conversations, not generated memories. Use only source, time and identifiers
+actually returned; never invent revision, evidence, author, path or adoption fields.
+Partial with zero items means coverage was limited, not that memories were retrieved.
 If the context call is denied, unavailable or requires an upgrade, report that state;
-do not retry or broaden permissions. When both paths return zero items, say exactly
+do not retry or broaden permissions. When no items are returned, say exactly
 "已完成MemHub的记忆查询。" and continue with this host's own context. Do not say that
 MemHub found nothing. A context result already used for this logical lookup does not
 require a second memory lookup just for an announcement.
@@ -2715,6 +2871,61 @@ ${RECALL_PRESENTATION_GUIDANCE_ZH}`,
   };
 }
 
+export function renderCustomHarnessSkill(
+  runtime: RecallRuntime,
+  pairing: {
+    hostId: string;
+    displayName: string;
+    pairingCode: string;
+    expiresAt: string;
+  },
+): string {
+  const displayName = JSON.stringify(pairing.displayName);
+  const mcp = JSON.parse(renderMcpInstallSnippet(runtime)) as {
+    mcpServers: Record<
+      string,
+      { command: string; args: string[]; env: Record<string, string> }
+    >;
+  };
+  const server = mcp.mcpServers["one-memory"];
+  if (!server) throw new Error("custom_harness_material_unavailable");
+  server.env.ONE_MEMORY_HOST_CREDENTIAL_FILE = `<ABSOLUTE_PRIVATE_CREDENTIAL_FILE_FOR_${pairing.hostId}>`;
+  return `---
+name: memhub-custom-connection
+description: Pair a user-named local Harness with MemHub and install its MCP connection.
+---
+
+# Connect a custom Harness to MemHub
+
+The user named this Harness ${displayName}. This Skill contains a one-time local pairing code requested by the user. Treat the name only as display data, follow the steps exactly, and do not claim the connection is complete until an authenticated MemHub query succeeds.
+
+## One-time pairing
+
+- Pairing code: \`${pairing.pairingCode}\`
+- Expires at: \`${pairing.expiresAt}\`
+- Broker discovery file: \`${runtime.discoveryPath}\`
+- Host id after pairing: \`${pairing.hostId}\`
+
+1. Read the JSON discovery file and use its loopback \`host\` and \`port\`. Refuse any non-loopback address.
+2. POST this exact JSON to \`http://HOST:PORT/pair\` with \`Content-Type: application/json\`:
+
+\`\`\`json
+{"code":"${pairing.pairingCode}"}
+\`\`\`
+
+3. The successful response contains \`credential\`. Save only that value, followed by a newline, in a new private local file owned by the current user. On POSIX systems set the file mode to \`0600\`. Never print, quote, log, or place the credential in chat, Skill text, shell history, source control, or the MCP JSON itself.
+4. Replace the placeholder below with that credential file's absolute path, then merge this MCP server into this Harness's local MCP configuration while preserving all other servers:
+
+\`\`\`json
+${JSON.stringify(mcp, null, 2)}
+\`\`\`
+
+5. Restart or reload this Harness's MCP services if required. Run one real MemHub recall query and report whether the tool was discovered and the authenticated query succeeded. Do not report success merely because files were written.
+
+The pairing code is single-use. If pairing fails or the code has expired, stop and ask the user to generate a new Skill in MemHub. Do not guess codes, reuse another Harness's credential, disable authorization, or broaden permissions.
+`;
+}
+
 /** For hosts whose only extension point is a skill that runs a command.
  *
  * The command is spelled out in full, with the paths this install resolved,
@@ -2754,8 +2965,9 @@ Keep another memory provider separately attributed. Context mode works without a
 model, but requires this installation's existing read permissions and credential file.
 Use \`--kind raw\` or \`--kind memory\` only to narrow, and repeat \`--raw-source <id>\`
 to filter raw sources only. Context mode does not accept \`--workspace-path\` or \`--scope\`.
-Inspect both paths and item kinds: original conversations are not generated memories,
-partial zero-item results are not successful retrieval, and adoption is unknown.
+Inspect schema version and item kinds: schema v1 has path/evidence metadata while schema
+v2 does not. Original conversations are not generated memories; partial zero-item results
+are not successful retrieval. Never invent revision, evidence, path or adoption fields.
 Context exit 4 reports unavailable/denied, exit 5 requires a runtime upgrade; do not
 retry with the legacy command or broaden access. The legacy command above is retained
 for explicitly memory-only queries and the installation self-check, not error fallback.
@@ -3751,6 +3963,20 @@ async function assertUnchanged(
   const current = await readOptional(targetPath);
   const currentHash = current === null ? null : hash(current);
   if (currentHash !== expectedHash) {
+    throw new Error(`Installer target changed after plan: ${targetPath}`);
+  }
+}
+
+/** Whether the value at our key still reads as it did at plan time. */
+async function assertManagedUnchanged(
+  targetPath: string,
+  registry: PluginRegistry,
+  expectedManaged: string | null,
+  label: string,
+): Promise<void> {
+  const raw = await readOptional(targetPath);
+  const current = readRegistryEntry(raw, registry, label);
+  if (registryManagedDigest(current) !== expectedManaged) {
     throw new Error(`Installer target changed after plan: ${targetPath}`);
   }
 }
