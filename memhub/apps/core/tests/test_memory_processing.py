@@ -366,6 +366,34 @@ def test_sdk_authority_completes_from_one_sdk_receipt_without_governance_mirror(
     assert governance.get("memory-1", user_id="local") is None
 
 
+def test_sdk_authority_digest_never_publishes_governance_schema(tmp_path) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    bridge = FakeBridge()
+    bridge.stored_agent_ids = ("cursor",)
+
+    def forbidden():
+        raise AssertionError("SDK digest must not derive Governance authority")
+
+    governance.hy_derivation = forbidden  # type: ignore[method-assign]
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+        sdk_authority=lambda: True,
+    )
+
+    result = asyncio.run(supervisor.digest())
+
+    assert result["scope_count"] == 1
+    assert result["schemas_recorded"] == 0
+    assert bridge.digest_calls == [("local", "cursor")]
+
+
 def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
     stores = _setup(tmp_path)
     evidence, _profiles, tasks, _governance, _secrets, profile = stores

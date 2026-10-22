@@ -2747,6 +2747,30 @@ class MemoryProcessingSupervisor:
             raise HyMemoryBridgeError("model_profile_not_active")
         snapshot, secret = credentials
         bridge = self._bridge(snapshot, secret, self.data_dir)
+        if self.sdk_authority():
+            agent_ids = await bridge.list_agent_ids(user_id="local")
+            digests = [
+                {
+                    "agent_id": agent_id,
+                    "schemas_recorded": 0,
+                    **dict(
+                        await bridge.digest(
+                            user_id="local",
+                            agent_id=agent_id,
+                        )
+                    ),
+                }
+                for agent_id in agent_ids
+            ]
+            return {
+                "success": all(
+                    result.get("success") is not False for result in digests
+                ),
+                "scope_count": len(digests),
+                "skipped_conversation_scopes": 0,
+                "schemas_recorded": 0,
+                "digests": digests,
+            }
         derivation = await in_the_background(self.governance.hy_derivation)
         agent_ids, skipped_conversation_scopes = await self._digest_scopes(bridge)
         evidence_by_scope = self._digest_evidence()

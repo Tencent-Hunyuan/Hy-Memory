@@ -1609,6 +1609,8 @@ def create_app(
     @app.post("/api/v1/boundary/peek", dependencies=protected)
     async def boundary_peek(value: dict[str, Any], request: Request) -> dict[str, object]:
         require_workbuddy_boundary(request)
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(409, "sdk_boundary_retired")
         from one_memory.workbuddy_boundary import peek_output
 
         return await asyncio.to_thread(peek_output, value, _evidence_store(app).database_path)
@@ -1616,6 +1618,8 @@ def create_app(
     @app.post("/api/v1/boundary/ack", dependencies=protected)
     async def boundary_ack(value: BoundaryAckRequest, request: Request) -> dict[str, bool]:
         require_workbuddy_boundary(request)
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(409, "sdk_boundary_retired")
         from one_memory.session_inbox import CursorRejected
         from one_memory.workbuddy_boundary import confirm
 
