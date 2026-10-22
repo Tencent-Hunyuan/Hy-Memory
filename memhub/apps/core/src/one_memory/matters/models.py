@@ -128,14 +128,16 @@ class SourceCoverage(Contract):
 
 
 class SampleRecord(Contract):
-    evidence_id: str
+    evidence_id: str | None = None
+    raw_id: str | None = None
+    item_index: int | None = Field(default=None, ge=0)
     source_id: str
     conversation_id: str
     role: str
     written_by: str
     created_at: str | None
     observed_at: str
-    revision: int
+    revision: int | None = None
     content_hash: str
     project: str | None
     workspace: str | None

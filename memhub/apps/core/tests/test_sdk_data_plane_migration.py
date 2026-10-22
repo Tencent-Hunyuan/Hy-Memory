@@ -8,6 +8,7 @@ import pytest
 
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
+from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
@@ -386,6 +387,15 @@ class _Bridge:
         self.imported_raw.append(kwargs)
         return {"success": True, "raw_id": kwargs["raw_id"]}
 
+    async def get_sdk_memory(self, memory_id):
+        return next(
+            (memory for memory in self.memories if memory.memory_id == memory_id),
+            None,
+        )
+
+    async def get_sdk_raw(self, raw_id):
+        return next((raw for raw in self.raw if raw.raw_id == raw_id), None)
+
 
 def _record(memory_id, *, content="body", status="active"):
     return HySdkMemoryRecord(
@@ -633,6 +643,9 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
                 "now",
             ),
         )
+        connection.execute(
+            "INSERT INTO matters(matter_id,version,needs_update) VALUES ('matter-1',1,0)"
+        )
     bridge = _Bridge()
     result = asyncio.run(
         run_sdk_data_plane_backfill(
@@ -683,8 +696,17 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             agent_id="one-memory",
             session_id="session",
             source="cursor",
+            custom={"role": "user", "written_by": "person"},
         ),
     )
+    hydrated = asyncio.run(
+        SdkMatterStore(database, bridge).get("matter-1")  # type: ignore[arg-type]
+    )
+    assert hydrated.claims[0].statement == "preference"
+    assert hydrated.claims[0].memory_refs[0].authority == "sdk"
+    assert hydrated.claims[0].citations[0].raw_id == "evidence:e1"
+    assert hydrated.claims[0].citations[0].evidence_id is None
+    assert hydrated.claims[0].citations[0].quote == "verbatim"
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,

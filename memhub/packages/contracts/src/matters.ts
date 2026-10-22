@@ -73,14 +73,16 @@ export interface MatterContext {
 }
 
 export interface MatterEvidence {
-  evidence_id: string;
+  evidence_id?: string | null;
+  raw_id?: string | null;
+  item_index?: number | null;
   source_id: string;
   conversation_id: string;
   role: string;
   written_by: string;
   created_at: string | null;
   observed_at: string;
-  revision: number;
+  revision?: number | null;
   content_hash: string;
   project: string | null;
   workspace: string | null;

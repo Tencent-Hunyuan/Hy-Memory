@@ -854,6 +854,9 @@ def _matter_reference_document(
                 "tags",
                 "uncertainties",
                 "source_engine",
+                "scope_confirmed",
+                "agent_access",
+                "model",
             )
         },
         "claims": projected_claims,
