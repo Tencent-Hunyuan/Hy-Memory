@@ -3240,13 +3240,14 @@ def create_app(
         try:
             client = await _sdk_client_handle(app).client()
             value = await asyncio.to_thread(
-                client.list_raw,
+                client.list_memories,
                 user_id="local",
-                source=source,
+                layers=["l1_raw"],
+                include_sources=[source] if source else None,
                 offset=offset,
                 limit=limit,
             )
-            page = HySdkRawPage.from_sdk(value, limit=limit, offset=offset)
+            page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_raw_list_failed") from None
         return SdkRawPage(items=page.raw, total=page.total, offset=offset, limit=limit)

@@ -22,7 +22,7 @@ class HySdkRuntimeError(HySdkError):
 
 
 class HySdkMigrationError(HySdkError):
-    """A public SDK migration operation failed or returned an invalid shape."""
+    """The privileged offline SDK data-plane migration failed."""
 
 
 class HySdkReadError(HySdkError):
@@ -200,11 +200,21 @@ class HySdkRawPage(BaseModel):
     offset: int = Field(ge=0)
 
     @classmethod
-    def from_sdk(cls, raw: object, *, limit: int, offset: int) -> HySdkRawPage:
+    def from_memory_list(
+        cls,
+        raw: object,
+        *,
+        limit: int,
+        offset: int,
+    ) -> HySdkRawPage:
+        """Parse ``list_memories(layers=['l1_raw'])`` into the App raw DTO."""
         if not isinstance(raw, Mapping):
             raise HySdkReadError("hy_memory_raw_list_shape_unknown")
-        rows = raw.get("raw")
-        total = raw.get("total")
+        bucket = raw.get("vdb")
+        if not isinstance(bucket, Mapping):
+            raise HySdkReadError("hy_memory_raw_list_shape_unknown")
+        rows = bucket.get("memories")
+        total = bucket.get("total")
         if (
             not isinstance(rows, list)
             or not isinstance(total, int)
@@ -212,8 +222,13 @@ class HySdkRawPage(BaseModel):
             or total < 0
         ):
             raise HySdkReadError("hy_memory_raw_list_shape_unknown")
+        converted = []
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("layer") != "l1_raw":
+                raise HySdkReadError("hy_memory_raw_list_shape_unknown")
+            converted.append({**row, "raw_id": row.get("memory_id")})
         return cls(
-            raw=tuple(HySdkRawRecord.from_sdk(row) for row in rows),
+            raw=tuple(HySdkRawRecord.from_sdk(row) for row in converted),
             total=total,
             limit=limit,
             offset=offset,

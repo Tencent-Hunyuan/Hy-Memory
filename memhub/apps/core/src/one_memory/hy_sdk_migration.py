@@ -1,4 +1,10 @@
-"""Migration-only access to the HY SDK's public inventory and import APIs."""
+"""Privileged offline access to the HY SDK data plane during App migration.
+
+Runtime product code must use public ``HyMemoryClient`` methods.  This module
+is the deliberately isolated exception: App startup has stopped all writers,
+so the one-time legacy migration may access SDK stores directly without
+turning migration mechanics into public Client APIs.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,7 @@ import asyncio
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from hy_memory import (  # type: ignore[import-untyped]
     DataPlaneRestore,
@@ -14,6 +20,13 @@ from hy_memory import (  # type: ignore[import-untyped]
     restore_local_data_plane,
     snapshot_local_data_plane,
 )
+from hy_memory.models.memory import (  # type: ignore[import-untyped]
+    MemoryLayer,
+    MemoryNode,
+    MemoryStatus,
+    SourceType,
+)
+from hy_memory.utils.source_filter import normalize_source  # type: ignore[import-untyped]
 
 from one_memory.hy_sdk_types import (
     HySdkMemoryPage,
@@ -25,6 +38,10 @@ from one_memory.hy_sdk_types import (
 
 
 class MigrationClient(Protocol):
+    _loop_thread: Any
+    _vector_store: Any
+    _embed_service: Any
+
     def list_memories(
         self,
         *,
@@ -36,32 +53,19 @@ class MigrationClient(Protocol):
         order: str = "desc",
     ) -> Mapping[str, object]: ...
 
-    def import_memory_exact(self, content: str, **kwargs: object) -> Mapping[str, object]: ...
-
-    def list_raw(
-        self,
-        *,
-        user_id: str,
-        agent_id: str | None = None,
-        session_id: str | None = None,
-        source: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-        order: str = "desc",
-    ) -> Mapping[str, object]: ...
-
-    def import_raw(self, content: str, **kwargs: object) -> Mapping[str, object]: ...
-
     def delete(self, memory_id: str) -> Mapping[str, object]: ...
 
     def get_write_outcome(self, request_id: str) -> Mapping[str, object] | None: ...
 
 
 class HySdkMigration:
-    """Typed async adapter over the SDK's exact migration primitives."""
+    """Typed offline adapter over one initialized SDK data plane."""
 
     def __init__(self, client: MigrationClient) -> None:
         self.client = client
+        self._loop_thread = client._loop_thread
+        self._vector_store = client._vector_store
+        self._embed_service = client._embed_service
 
     async def list_memories(
         self,
@@ -85,7 +89,7 @@ class HySdkMigration:
         )
         return _memory_page(raw, limit=limit, offset=offset)
 
-    async def import_memory_exact(
+    async def write_legacy_memory(
         self,
         *,
         content: str,
@@ -107,27 +111,113 @@ class HySdkMigration:
     ) -> dict[str, object]:
         raw = await _sdk_call(
             "hy_sdk_memory_import_failed",
-            self.client.import_memory_exact,
-            content,
-            memory_id=memory_id,
+            self._loop_thread.run,
+            self._write_legacy_memory(
+                content=content,
+                memory_id=memory_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                layer=layer,
+                status=status,
+                owner=owner,
+                tags=tags,
+                supersedes=supersedes,
+                superseded_by=superseded_by,
+                is_latest=is_latest,
+                memory_at=memory_at,
+                metadata=metadata,
+                request_id=request_id,
+            ),
+        )
+        return _successful_result(raw, "hy_sdk_memory_import_failed")
+
+    async def _write_legacy_memory(
+        self,
+        *,
+        content: str,
+        memory_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        layer: str,
+        status: str,
+        owner: str | None,
+        tags: tuple[str, ...],
+        supersedes: tuple[str, ...],
+        superseded_by: tuple[str, ...],
+        is_latest: bool,
+        memory_at: datetime | None,
+        metadata: Mapping[str, object],
+        request_id: str,
+    ) -> dict[str, object]:
+        if not content or not memory_id or not user_id:
+            raise ValueError("content, memory_id and user_id are required")
+        normalized_layer = MemoryLayer.from_string(layer)
+        if normalized_layer is MemoryLayer.L1_RAW:
+            raise ValueError("raw content must use the raw migration lane")
+        normalized_status = MemoryStatus(status.lower())
+        normalized_source = normalize_source(source)
+        existing = await self._vector_store.get_by_id(memory_id)
+        if existing is not None:
+            identity = (
+                existing.content == content,
+                existing.user_id == user_id,
+                existing.agent_id == agent_id,
+                existing.session_id == session_id,
+                existing.source == normalized_source,
+                existing.layer == normalized_layer,
+                existing.status == normalized_status,
+                existing.owner == owner,
+                list(existing.tags or []) == list(tags),
+                list(existing.supersedes or []) == list(supersedes),
+                list(existing.superseded_by or []) == list(superseded_by),
+                existing.is_latest == is_latest,
+            )
+            if not all(identity):
+                raise ValueError("memory_id is already bound to different memory content")
+            return {
+                "success": True,
+                "memory_id": memory_id,
+                "memory_ids": [memory_id],
+                "request_id": request_id,
+                "replayed": True,
+            }
+        custom = dict(metadata)
+        custom["migration_request_id"] = request_id
+        embedding = await self._embed_service.embed(content)
+        node = MemoryNode(
+            node_id=memory_id,
             user_id=user_id,
             agent_id=agent_id,
             session_id=session_id,
-            source=source,
-            layer=layer,
-            status=status,
+            source=normalized_source,
+            layer=normalized_layer,
+            content=content,
+            source_type=SourceType.EXPLICIT,
+            status=normalized_status,
             owner=owner,
             tags=list(tags),
             supersedes=list(supersedes),
             superseded_by=list(superseded_by),
             is_latest=is_latest,
+            embedding=embedding,
             memory_at=memory_at,
-            metadata=dict(metadata),
-            request_id=request_id,
+            custom=custom,
         )
-        return _successful_result(raw, "hy_sdk_memory_import_failed")
+        stored_id = await self._vector_store.upsert(node)
+        if stored_id != memory_id:
+            raise RuntimeError("exact migration changed the requested memory identity")
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "memory_ids": [memory_id],
+            "request_id": request_id,
+        }
 
-    async def list_raw(
+    async def read_raw_inventory(
         self,
         *,
         user_id: str,
@@ -140,18 +230,57 @@ class HySdkMigration:
     ) -> HySdkRawPage:
         raw = await _sdk_call(
             "hy_sdk_raw_list_failed",
-            self.client.list_raw,
-            user_id=user_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            source=source,
-            limit=limit,
-            offset=offset,
-            order=order,
+            self._loop_thread.run,
+            self._read_raw_inventory(
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                limit=limit,
+                offset=offset,
+                order=order,
+            ),
         )
         return _raw_page(raw, limit=limit, offset=offset)
 
-    async def import_raw(
+    async def _read_raw_inventory(
+        self,
+        *,
+        user_id: str,
+        agent_id: str | None,
+        session_id: str | None,
+        source: str | None,
+        limit: int,
+        offset: int,
+        order: str,
+    ) -> dict[str, object]:
+        if not user_id:
+            raise ValueError("user_id is required")
+        nodes = await self._vector_store.list_by_user(
+            user_id=user_id,
+            agent_id=agent_id,
+            status_filter=[MemoryStatus.ACTIVE],
+            layers=[MemoryLayer.L1_RAW],
+            include_sources=[source] if source else None,
+            limit=100_000,
+            only_latest=False,
+            with_vectors=False,
+            allow_raw_layer=True,
+        )
+        if session_id:
+            nodes = [node for node in nodes if node.session_id == session_id]
+        nodes.sort(
+            key=_node_timestamp,
+            reverse=order.lower() != "asc",
+        )
+        return {
+            "raw": [_raw_node(node) for node in nodes[offset : offset + limit]],
+            "total": len(nodes),
+            "limit": limit,
+            "offset": offset,
+        }
+
+    async def write_legacy_raw(
         self,
         *,
         content: str,
@@ -166,18 +295,77 @@ class HySdkMigration:
     ) -> dict[str, object]:
         raw = await _sdk_call(
             "hy_sdk_raw_import_failed",
-            self.client.import_raw,
-            content,
-            raw_id=raw_id,
+            self._loop_thread.run,
+            self._write_legacy_raw(
+                content=content,
+                raw_id=raw_id,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                source=source,
+                memory_at=memory_at,
+                metadata=metadata,
+                request_id=request_id,
+            ),
+        )
+        return _successful_result(raw, "hy_sdk_raw_import_failed")
+
+    async def _write_legacy_raw(
+        self,
+        *,
+        content: str,
+        raw_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        source: str,
+        memory_at: datetime | None,
+        metadata: Mapping[str, object],
+        request_id: str,
+    ) -> dict[str, object]:
+        if not content or not raw_id or not user_id:
+            raise ValueError("content, raw_id and user_id are required")
+        normalized_source = normalize_source(source)
+        existing = await self._vector_store.get_by_id(raw_id)
+        if existing is not None:
+            identity = (
+                existing.layer is MemoryLayer.L1_RAW,
+                existing.content == content,
+                existing.user_id == user_id,
+                existing.agent_id == agent_id,
+                existing.session_id == session_id,
+                existing.source == normalized_source,
+            )
+            if not all(identity):
+                raise ValueError("raw_id is already bound to different source content")
+            return {
+                "success": True,
+                "raw_id": raw_id,
+                "request_id": request_id,
+                "replayed": True,
+            }
+        custom = dict(metadata)
+        custom["migration_request_id"] = request_id
+        embedding = await self._embed_service.embed(content)
+        node = MemoryNode(
+            node_id=raw_id,
             user_id=user_id,
             agent_id=agent_id,
             session_id=session_id,
-            source=source,
+            source=normalized_source,
+            layer=MemoryLayer.L1_RAW,
+            content=content,
+            source_type=SourceType.EXPLICIT,
+            status=MemoryStatus.ACTIVE,
+            is_latest=True,
+            embedding=embedding,
             memory_at=memory_at,
-            metadata=dict(metadata),
-            request_id=request_id,
+            custom=custom,
         )
-        return _successful_result(raw, "hy_sdk_raw_import_failed")
+        stored_id = await self._vector_store.upsert(node)
+        if stored_id != raw_id:
+            raise RuntimeError("exact migration changed the requested raw identity")
+        return {"success": True, "raw_id": raw_id, "request_id": request_id}
 
     async def delete(self, memory_id: str) -> dict[str, object]:
         raw = await _sdk_call(
@@ -336,6 +524,28 @@ def _raw_page(raw: object, *, limit: int, offset: int) -> HySdkRawPage:
         limit=limit,
         offset=offset,
     )
+
+
+def _node_timestamp(node: Any) -> float:
+    value = getattr(node, "memory_at", None) or getattr(node, "gmt_created", None)
+    return value.timestamp() if isinstance(value, datetime) else 0.0
+
+
+def _raw_node(node: Any) -> dict[str, object]:
+    def timestamp(value: object) -> int | None:
+        return int(value.timestamp()) if isinstance(value, datetime) else None
+
+    return {
+        "raw_id": node.node_id,
+        "content": node.content,
+        "user_id": node.user_id,
+        "agent_id": node.agent_id,
+        "session_id": node.session_id,
+        "source": node.source,
+        "memory_at": timestamp(node.memory_at),
+        "gmt_created": timestamp(node.gmt_created),
+        "custom": node.custom or {},
+    }
 
 
 def _raw_record(raw: object) -> HySdkRawRecord:

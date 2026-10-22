@@ -107,6 +107,12 @@ SDK_PRIVATE_ACCESS_EXCEPTIONS = {
     f"{PACKAGE_LABEL}/hy_graph_projection.py": frozenset(
         {"_graph_store", "_loop_thread", "_run"}
     ),
+    # Startup migration runs while Runtime writers are stopped. It is the one
+    # non-runtime path allowed to manipulate SDK storage directly so that
+    # migration-only mechanics never become public HyMemoryClient methods.
+    f"{PACKAGE_LABEL}/hy_sdk_migration.py": frozenset(
+        {"_embed_service", "_loop_thread", "_vector_store"}
+    ),
 }
 
 
@@ -241,7 +247,7 @@ def test_no_new_module_writes_legacy_memory_authority() -> None:
 
 
 def test_no_sdk_private_implementation_access() -> None:
-    """No debt allowlist: MemHub calls public client methods only."""
+    """Runtime uses public APIs; only Graph and stopped-writer migration are privileged."""
     offenders: list[str] = []
     for path in _all_module_files():
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -266,16 +272,18 @@ def test_no_sdk_private_implementation_access() -> None:
             if unexpected:
                 offenders.append(f"{relative}: {sorted(unexpected)}")
     assert not offenders, (
-        "SDK private implementation access is forbidden; add a public "
-        f"HyMemoryClient API instead: {offenders}"
+        "SDK private implementation access is forbidden outside the isolated "
+        f"Graph and offline-migration boundaries: {offenders}"
     )
 
 
 def test_sdk_modules_import_only_the_public_package_root() -> None:
-    """Implementation submodules are not a public product contract."""
+    """Runtime imports only public SDK symbols; offline migration is privileged."""
     offenders: list[str] = []
     for path in _all_module_files():
         relative = _relative(path)
+        if relative == f"{PACKAGE_LABEL}/hy_sdk_migration.py":
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import) and any(

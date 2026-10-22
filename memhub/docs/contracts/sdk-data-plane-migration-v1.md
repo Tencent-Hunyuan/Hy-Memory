@@ -172,8 +172,11 @@ Queue rows and leases remain MemHub management state.
 - Its worker calls SDK `add()` once. The SDK owns raw persistence plus
   extraction/reconciliation; a successful job stores only the returned raw ID,
   canonical memory IDs and terminal outcome.
-- Exact `import_raw()` is a historical migration primitive, not the first half
-  of a two-stage normal write path.
+- Legacy raw and semantic backfill is an App-owned privileged offline
+  operation while Runtime writers are stopped. It writes SDK stores directly;
+  no migration-only import/get/list method is added to public
+  `HyMemoryClient`, and this is not the first half of a two-stage normal write
+  path.
 
 - `hy_invoked=0` may be safely retried after normal lease recovery.
 - `memory_write_jobs.hy_invoked=1`, `state=unknown`, or any non-terminal SDK

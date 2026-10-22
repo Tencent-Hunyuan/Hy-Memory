@@ -41,13 +41,13 @@ Hy Memory and MemHub are versioned and released independently.
 ## Unreleased
 
 - Removed MemHub's private `hy_memory_bridge` implementation. MemHub now calls
-  public `HyMemoryClient` methods through explicit runtime, write, migration,
-  and read modules; prompt/reconcile/response monkey-patches and private
-  VDB/Coding access were deleted. Kuzu Graph projection/admin remains the one
-  documented product exception.
+  public `HyMemoryClient` methods at runtime; prompt/reconcile/response
+  monkey-patches and private VDB/Coding runtime access were deleted. Kuzu Graph
+  projection/admin and stopped-writer App migration are the documented product
+  exceptions.
 - Extended public SDK `get()` to resolve Chat, Coding Experience, and Working
-  Fact IDs, including owner/session fields and explicit ambiguity handling;
-  added constructor-time public embedding-service injection.
+  Fact IDs, including raw records, owner/session fields, and explicit ambiguity
+  handling; added constructor-time public embedding-service injection.
 - Added a MemHub-managed native Hermes MemoryProvider with automatic prefetch,
   persistent per-session memory-ID deduplication, authorized Broker reads, and
   recall-context stripping to prevent memory recursion.
@@ -58,13 +58,11 @@ Hy Memory and MemHub are versioned and released independently.
 - `search(..., layers=["l1_raw"])` now explicitly searches SDK raw records in
   pro/ultra mode and keeps existing user/agent/session/source filters; default
   search continues to hide raw.
-- Added `import_memory_exact` for idempotent migration of an existing semantic
-  memory with its canonical ID, lifecycle and supersession links, without
-  extraction or reconciliation.
 - Added SDK-authoritative lifecycle listing with explicit status filters,
-  idempotent durable write outcomes, exact raw import/get/list APIs, and
-  quiesced local data-plane snapshot/restore contracts for the MemHub
-  authority migration.
+  idempotent durable write outcomes, and quiesced local data-plane
+  snapshot/restore contracts for the MemHub authority migration. Exact legacy
+  backfill is now an App-owned privileged offline operation rather than a
+  public `HyMemoryClient` API.
 - Physical delete now reports incomplete VDB/Graph cleanup as a partial failure
   instead of claiming success after only one store was changed.
 - Coding search no longer injects the version-evolution diff block
@@ -87,9 +85,10 @@ Hy Memory and MemHub are versioned and released independently.
   retry scheduling for their memory tasks.
 - Clarified that `add(metadata=...)` carries legacy SDK processing options,
   while persistent caller business context belongs in `meta`.
-- Added an opt-in `get(..., include_raw=True)` path for reading `L1_RAW`
-  memories, including memories written in lite mode. The default remains
-  hidden for backward compatibility.
+- Unified exact reads and lists across memory layers: `get(memory_id)` returns
+  the matched layer, while `list_memories(layers=["l1_raw"])` explicitly lists
+  raw records. Separate raw get/list methods and the `include_raw` switch were
+  removed.
 - Removed MemHub's task-scoped HyPermission store wrappers and global
   model-content consent switch. The trusted embedded Hy Memory SDK now uses
   its native local stores directly.

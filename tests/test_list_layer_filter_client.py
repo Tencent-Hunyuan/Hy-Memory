@@ -36,13 +36,16 @@ def _node(
     content="x",
     layer=MemoryLayer.L2_FACT,
     status=MemoryStatus.ACTIVE,
+    session_id="s1",
+    source="default",
 ):
     import random
     n = MemoryNode(
         node_id=str(uuid.uuid4()),
         user_id=user_id,
         agent_id="a1",
-        session_id="s1",
+        session_id=session_id,
+        source=source,
         content=content,
         layer=layer,
         status=status,
@@ -159,30 +162,53 @@ class TestVdbBucketLayerFilter:
         ))
         assert {m["content"] for m in got["memories"]} == {"fact", "summary"}
 
-    def test_explicit_raw_is_blocked(self, faiss_store):
-        """显式只要 L1_RAW 也拿不到：raw 对外读路径一律不可见（契约变更）。
-
-        改动前：默认排除只是缺省策略，调用方点名 L1_RAW 即以调用方为准。
-        改动后：向量库侧 allow_raw_layer 默认 False，排除条件随请求下发，
-        raw 不出库；调用方无论传什么 layers 都拿不到原始对话。
-        仅内部管线（writer 拼对话历史、clone 全量复制）显式放行。
-        """
+    def test_explicit_raw_returns_raw(self, faiss_store):
+        """默认列表不含 raw；调用方点名 L1_RAW 时按统一 list 合同返回。"""
         self._seed(faiss_store)
         got = run(_client_with(faiss_store)._list_vdb_bucket(
             user_id="u1", agent_id=None, limit=100, offset=0, order="desc",
             layers=[MemoryLayer.L1_RAW],
         ))
-        assert got["memories"] == []
-        assert got["total"] == 0
+        assert [m["content"] for m in got["memories"]] == ["raw"]
+        assert got["memories"][0]["layer"] == MemoryLayer.L1_RAW.value
+        assert got["total"] == 1
 
-    def test_raw_mixed_with_other_layers_only_drops_raw(self, faiss_store):
-        """raw 与其他层混传时只剔除 raw，其余层照常返回。"""
+    def test_raw_mixed_with_other_layers_returns_both(self, faiss_store):
         self._seed(faiss_store)
         got = run(_client_with(faiss_store)._list_vdb_bucket(
             user_id="u1", agent_id=None, limit=100, offset=0, order="desc",
             layers=[MemoryLayer.L1_RAW, MemoryLayer.L2_FACT],
         ))
-        assert [m["content"] for m in got["memories"]] == ["fact"]
+        assert {m["content"] for m in got["memories"]} == {"raw", "fact"}
+
+    def test_raw_uses_generic_session_and_source_filters(self, faiss_store):
+        run(faiss_store.upsert_batch([
+            _node(
+                content="cursor raw",
+                layer=MemoryLayer.L1_RAW,
+                session_id="s1",
+                source="cursor",
+            ),
+            _node(
+                content="claude raw",
+                layer=MemoryLayer.L1_RAW,
+                session_id="s2",
+                source="claude",
+            ),
+        ]))
+        got = run(_client_with(faiss_store)._list_vdb_bucket(
+            user_id="u1",
+            agent_id=None,
+            limit=100,
+            offset=0,
+            order="desc",
+            layers=[MemoryLayer.L1_RAW],
+            session_ids=["s2"],
+            include_sources=["claude"],
+            exclude_sources=["cursor"],
+        ))
+        assert [item["content"] for item in got["memories"]] == ["claude raw"]
+        assert got["memories"][0]["source"] == "claude"
 
     def test_status_filter_defaults_to_active_and_can_read_superseded(self, faiss_store):
         run(faiss_store.upsert_batch([

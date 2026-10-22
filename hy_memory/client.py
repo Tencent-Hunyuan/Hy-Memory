@@ -1886,7 +1886,6 @@ class HyMemoryClient:
         self,
         memory_id: str,
         *,
-        include_raw: bool = False,
         kind: Optional[MemoryKind] = None,
         variant: Optional[MemoryVariant] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -1895,8 +1894,6 @@ class HyMemoryClient:
 
         Args:
             memory_id: 记忆 ID
-            include_raw: 是否允许返回 L1_RAW 原始记忆。默认 False，保持原有隐藏行为；
-                         lite 模式的记忆均为 L1_RAW，需显式设为 True 才能按 ID 读取。
             kind: 可选 namespace（"chat" / "experience" / "fact"）。
             variant: 可选生产力变体（"working" / "coding"）。
 
@@ -1906,7 +1903,6 @@ class HyMemoryClient:
         return self._loop_thread.run(
             self.async_get(
                 memory_id,
-                include_raw=include_raw,
                 kind=kind,
                 variant=variant,
             )
@@ -1978,6 +1974,9 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
         layers: Optional[List[Any]] = None,
         statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
@@ -2000,6 +1999,9 @@ class HyMemoryClient:
             user_ids: 可选，多用户批量列举。非空时优先于 user_id，返回并集
                       （分页在合并排序后统一施加）。
             agent_ids: 可选，多 agent 批量列举。非空时优先于 agent_id。
+            session_ids: 可选，只返回指定 session。
+            include_sources: 可选，只返回指定来源。
+            exclude_sources: 可选，排除指定来源；与 include_sources 冲突时排除优先。
             layers:   可选，只返回指定层级（字符串或 MemoryLayer）。不传时返回
                       L1_RAW 以外的全部层级，与改动前一致。
             statuses: 可选，只返回指定生命周期（字符串或 MemoryStatus）。不传时
@@ -2015,6 +2017,9 @@ class HyMemoryClient:
             self.async_list_memories(
                 user_id=user_id, agent_id=agent_id,
                 user_ids=user_ids, agent_ids=agent_ids,
+                session_ids=session_ids,
+                include_sources=include_sources,
+                exclude_sources=exclude_sources,
                 limit=limit, offset=offset, order=order,
                 workspace_id=workspace_id, branch=branch,
                 layers=layers, statuses=statuses, with_evolution=with_evolution,
@@ -2975,106 +2980,6 @@ class HyMemoryClient:
             include_runtime_diag=True,
         )
 
-    def import_raw(
-        self,
-        content: str,
-        *,
-        user_id: str,
-        agent_id: str = "default_agent",
-        session_id: str = "default_session",
-        source: str = "default",
-        memory_at: Optional[datetime] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        raw_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Persist one exact raw record without extraction or reconciliation."""
-        return self._loop_thread.run(
-            self.async_import_raw(
-                content,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                source=source,
-                memory_at=memory_at,
-                metadata=metadata,
-                raw_id=raw_id,
-                request_id=request_id,
-            ),
-            include_runtime_diag=True,
-        )
-
-    def import_memory_exact(
-        self,
-        content: str,
-        *,
-        memory_id: str,
-        user_id: str,
-        agent_id: str = "default_agent",
-        session_id: str = "default_session",
-        source: str = "default",
-        layer: Any = "l2_fact",
-        status: Any = "active",
-        owner: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        supersedes: Optional[List[str]] = None,
-        superseded_by: Optional[List[str]] = None,
-        is_latest: bool = True,
-        memory_at: Optional[datetime] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        request_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Import one existing semantic memory without extraction/reconcile."""
-        return self._loop_thread.run(
-            self.async_import_memory_exact(
-                content,
-                memory_id=memory_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                source=source,
-                layer=layer,
-                status=status,
-                owner=owner,
-                tags=tags,
-                supersedes=supersedes,
-                superseded_by=superseded_by,
-                is_latest=is_latest,
-                memory_at=memory_at,
-                metadata=metadata,
-                request_id=request_id,
-            ),
-            include_runtime_diag=True,
-        )
-
-    def get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
-        """Read one SDK raw record through the explicit raw API."""
-        return self._loop_thread.run(self.async_get_raw(raw_id))
-
-    def list_raw(
-        self,
-        *,
-        user_id: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        source: Optional[str] = None,
-        limit: int = 100,
-        offset: int = 0,
-        order: str = "desc",
-    ) -> Dict[str, Any]:
-        """List raw records for an authorized SDK owner/scope."""
-        return self._loop_thread.run(
-            self.async_list_raw(
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                source=source,
-                limit=limit,
-                offset=offset,
-                order=order,
-            )
-        )
-
     @_ensure_internal_loop
     async def async_add_extracted(
         self,
@@ -3227,316 +3132,6 @@ class HyMemoryClient:
         }
 
     @_ensure_internal_loop
-    async def async_import_raw(
-        self,
-        content: str,
-        *,
-        user_id: str,
-        agent_id: str = "default_agent",
-        session_id: str = "default_session",
-        source: str = "default",
-        memory_at: Optional[datetime] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        raw_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Persist exact source content as L1_RAW without running a model."""
-        from .utils.source_filter import normalize_source
-
-        if not isinstance(content, str) or not content:
-            raise ValueError("content is required")
-        if not user_id:
-            raise ValueError("user_id is required")
-        request_id = request_id or str(uuid.uuid4())
-        replay = await self._claim_write_outcome(
-            request_id=request_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            operation="import_raw",
-        )
-        if replay is not None:
-            return replay
-        try:
-            result = await self._async_import_raw_impl(
-                content,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                source=normalize_source(source),
-                memory_at=memory_at,
-                metadata=metadata,
-                raw_id=raw_id,
-                request_id=request_id,
-            )
-        except BaseException:
-            await self._mark_write_outcome_unknown(request_id)
-            raise
-        await self._finish_write_outcome(request_id, "succeeded", result)
-        return result
-
-    async def _async_import_raw_impl(
-        self,
-        content: str,
-        *,
-        user_id: str,
-        agent_id: str,
-        session_id: str,
-        source: str,
-        memory_at: Optional[datetime],
-        metadata: Optional[Dict[str, Any]],
-        raw_id: Optional[str],
-        request_id: str,
-    ) -> Dict[str, Any]:
-        from .models.memory import MemoryLayer, MemoryNode, MemoryStatus, SourceType
-
-        node_id = raw_id or str(uuid.uuid4())
-        existing = await self._vector_store.get_by_id(node_id)
-        if existing is not None:
-            identity = (
-                existing.layer == MemoryLayer.L1_RAW,
-                existing.content == content,
-                existing.user_id == user_id,
-                existing.agent_id == agent_id,
-                existing.session_id == session_id,
-                existing.source == source,
-            )
-            if not all(identity):
-                raise ValueError("raw_id is already bound to different source content")
-            return {
-                "success": True,
-                "raw_id": node_id,
-                "request_id": request_id,
-                "replayed": True,
-            }
-
-        custom = dict(metadata or {})
-        custom["request_id"] = request_id
-        custom["input_kind"] = "raw_exact_import"
-        embedding = await self._embed_service.embed(content)
-        node = MemoryNode(
-            node_id=node_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            source=source,
-            layer=MemoryLayer.L1_RAW,
-            content=content,
-            source_type=SourceType.EXPLICIT,
-            status=MemoryStatus.ACTIVE,
-            is_latest=True,
-            embedding=embedding,
-            memory_at=memory_at,
-            custom=custom,
-        )
-        stored_id = await self._vector_store.upsert(node)
-        if stored_id != node_id:
-            raise RuntimeError("raw import changed the requested identity")
-        return {"success": True, "raw_id": node_id, "request_id": request_id}
-
-    @_ensure_internal_loop
-    async def async_import_memory_exact(
-        self,
-        content: str,
-        *,
-        memory_id: str,
-        user_id: str,
-        agent_id: str = "default_agent",
-        session_id: str = "default_session",
-        source: str = "default",
-        layer: Any = "l2_fact",
-        status: Any = "active",
-        owner: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        supersedes: Optional[List[str]] = None,
-        superseded_by: Optional[List[str]] = None,
-        is_latest: bool = True,
-        memory_at: Optional[datetime] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        request_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Import a canonical memory node exactly, with no model invocation."""
-        from .models.memory import MemoryLayer, MemoryStatus
-        from .utils.source_filter import normalize_source
-
-        if not content or not memory_id or not user_id:
-            raise ValueError("content, memory_id and user_id are required")
-        normalized_layer = (
-            layer if isinstance(layer, MemoryLayer) else MemoryLayer.from_string(str(layer))
-        )
-        if normalized_layer == MemoryLayer.L1_RAW:
-            raise ValueError("use import_raw for L1_RAW")
-        normalized_status = (
-            status if isinstance(status, MemoryStatus) else MemoryStatus(str(status).lower())
-        )
-        request_id = request_id or str(uuid.uuid4())
-        replay = await self._claim_write_outcome(
-            request_id=request_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            operation="import_memory_exact",
-        )
-        if replay is not None:
-            return replay
-        try:
-            result = await self._async_import_memory_exact_impl(
-                content,
-                memory_id=memory_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                source=normalize_source(source),
-                layer=normalized_layer,
-                status=normalized_status,
-                owner=owner,
-                tags=tags or [],
-                supersedes=supersedes or [],
-                superseded_by=superseded_by or [],
-                is_latest=is_latest,
-                memory_at=memory_at,
-                metadata=metadata,
-                request_id=request_id,
-            )
-        except BaseException:
-            await self._mark_write_outcome_unknown(request_id)
-            raise
-        await self._finish_write_outcome(request_id, "succeeded", result)
-        return result
-
-    async def _async_import_memory_exact_impl(
-        self,
-        content: str,
-        *,
-        memory_id: str,
-        user_id: str,
-        agent_id: str,
-        session_id: str,
-        source: str,
-        layer,
-        status,
-        owner: Optional[str],
-        tags: List[str],
-        supersedes: List[str],
-        superseded_by: List[str],
-        is_latest: bool,
-        memory_at: Optional[datetime],
-        metadata: Optional[Dict[str, Any]],
-        request_id: str,
-    ) -> Dict[str, Any]:
-        from .models.memory import MemoryNode, SourceType
-
-        existing = await self._vector_store.get_by_id(memory_id)
-        if existing is not None:
-            identity = (
-                existing.content == content,
-                existing.user_id == user_id,
-                existing.agent_id == agent_id,
-                existing.session_id == session_id,
-                existing.source == source,
-                existing.layer == layer,
-                existing.status == status,
-                existing.owner == owner,
-                list(existing.tags or []) == tags,
-                list(existing.supersedes or []) == supersedes,
-                list(existing.superseded_by or []) == superseded_by,
-                existing.is_latest == is_latest,
-            )
-            if not all(identity):
-                raise ValueError("memory_id is already bound to different memory content")
-            return {
-                "success": True,
-                "memory_id": memory_id,
-                "memory_ids": [memory_id],
-                "request_id": request_id,
-                "replayed": True,
-            }
-
-        custom = dict(metadata or {})
-        custom["request_id"] = request_id
-        custom["input_kind"] = "memory_exact_import"
-        embedding = await self._embed_service.embed(content)
-        node = MemoryNode(
-            node_id=memory_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            source=source,
-            layer=layer,
-            content=content,
-            source_type=SourceType.EXPLICIT,
-            status=status,
-            owner=owner,
-            tags=list(tags),
-            supersedes=list(supersedes),
-            superseded_by=list(superseded_by),
-            is_latest=is_latest,
-            embedding=embedding,
-            memory_at=memory_at,
-            custom=custom,
-        )
-        stored_id = await self._vector_store.upsert(node)
-        if stored_id != memory_id:
-            raise RuntimeError("exact memory import changed the requested identity")
-        return {
-            "success": True,
-            "memory_id": memory_id,
-            "memory_ids": [memory_id],
-            "request_id": request_id,
-        }
-
-    @_ensure_internal_loop
-    async def async_get_raw(self, raw_id: str) -> Optional[Dict[str, Any]]:
-        from .models.memory import MemoryLayer
-
-        node = await self._vector_store.get_by_id(raw_id)
-        if node is None or node.layer != MemoryLayer.L1_RAW:
-            return None
-        return self._raw_node_to_public(node)
-
-    @_ensure_internal_loop
-    async def async_list_raw(
-        self,
-        *,
-        user_id: str,
-        agent_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        source: Optional[str] = None,
-        limit: int = 100,
-        offset: int = 0,
-        order: str = "desc",
-    ) -> Dict[str, Any]:
-        from .models.memory import MemoryLayer, MemoryStatus
-
-        if not user_id:
-            raise ValueError("user_id is required")
-        if limit < 1 or offset < 0:
-            raise ValueError("limit must be positive and offset must be non-negative")
-        nodes = await self._vector_store.list_by_user(
-            user_id=user_id,
-            agent_id=agent_id,
-            status_filter=[MemoryStatus.ACTIVE],
-            layers=[MemoryLayer.L1_RAW],
-            include_sources=[source] if source else None,
-            limit=100_000,
-            only_latest=False,
-            with_vectors=False,
-            allow_raw_layer=True,
-        )
-        if session_id:
-            nodes = [node for node in nodes if node.session_id == session_id]
-        nodes = self._sort_memory_nodes(nodes, order=order)
-        total = len(nodes)
-        return {
-            "raw": [
-                self._raw_node_to_public(node)
-                for node in nodes[offset: offset + limit]
-            ],
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
-
     async def _search_explicit_raw_layer(
         self,
         query: str,
@@ -4500,7 +4095,6 @@ class HyMemoryClient:
         self,
         memory_id: str,
         *,
-        include_raw: bool = False,
         kind: Optional[MemoryKind] = None,
         variant: Optional[MemoryVariant] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -4513,15 +4107,12 @@ class HyMemoryClient:
 
         Args:
             memory_id: 记忆 ID
-            include_raw: 是否允许返回 L1_RAW 原始记忆，默认 False。
             kind: 可选 namespace（"chat" / "experience" / "fact"）。
             variant: 可选生产力变体（"working" / "coding"）。
 
         Returns:
             统一 memory dict，或 None。
         """
-        from .models.memory import MemoryLayer
-
         if kind not in (None, "chat", "experience", "fact"):
             raise ValueError(
                 "kind must be one of: chat, experience, fact"
@@ -4582,26 +4173,6 @@ class HyMemoryClient:
         by_name = dict(zip(task_names, values))
         vdb_node = by_name.get("chat:vdb")
         graph_node = by_name.get("chat:graph")
-
-        # L1_RAW 默认不对外可见：按 ID 直取走主键查询、绕过向量库的 layer
-        # filter，故在此统一挡掉。SDK 调用方可通过 include_raw=True 显式读取；
-        # HTTP 接口不传该参数，继续保持隐藏。内部写链路不经过此方法。
-        #
-        # 置于 gather 之后、埋点之前：命中 raw 仍照常落 GET 埋点（保留可观测性，
-        # 便于发现有调用方拿 raw id 试探），只是不把内容返回给调用方。
-        # 对调用方的表现与"该 id 不存在"完全一致，不额外暴露"存在但被挡"的信息。
-        if (
-            not include_raw
-            and vdb_node is not None
-            and vdb_node.layer == MemoryLayer.L1_RAW
-        ):
-            vdb_node = None
-        if (
-            not include_raw
-            and graph_node is not None
-            and getattr(graph_node, "layer", None) == MemoryLayer.L1_RAW
-        ):
-            graph_node = None
 
         matches = []
         chat_node = vdb_node if vdb_node is not None else graph_node
@@ -5282,6 +4853,7 @@ class HyMemoryClient:
             "user_id": node.user_id,
             "agent_id": node.agent_id,
             "session_id": getattr(node, "session_id", None),
+            "source": getattr(node, "source", None),
             "speculate": getattr(node, "speculate", None),
             # 不透出 source_raw_memory_id：见 async_search 同处说明。
             "tags": node.tags or [],
@@ -5353,6 +4925,9 @@ class HyMemoryClient:
         order: str,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
         layers: Optional[List] = None,
         statuses: Optional[List] = None,
         with_evolution: bool = False,
@@ -5378,6 +4953,9 @@ class HyMemoryClient:
             status_filter=effective_statuses,
             layers=layers,
             with_vectors=False,
+            allow_raw_layer=bool(
+                layers is not None and MemoryLayer.L1_RAW in layers
+            ),
         )
 
         # L0 是 user-level，不应被 agent 过滤。默认列表或显式包含 L0 时，额外按
@@ -5398,6 +4976,22 @@ class HyMemoryClient:
                 for n in l0_nodes
             ])
             all_nodes.extend(hit["node"] for hit in l0_hits if hit.get("node") is not None)
+
+        if session_ids:
+            wanted_sessions = set(session_ids)
+            all_nodes = [
+                node for node in all_nodes if node.session_id in wanted_sessions
+            ]
+        if include_sources:
+            wanted_sources = set(include_sources)
+            all_nodes = [
+                node for node in all_nodes if node.source in wanted_sources
+            ]
+        if exclude_sources:
+            blocked_sources = set(exclude_sources)
+            all_nodes = [
+                node for node in all_nodes if node.source not in blocked_sources
+            ]
 
         all_nodes = self._sort_memory_nodes(all_nodes, order=order)
         total = len(all_nodes)
@@ -5462,6 +5056,9 @@ class HyMemoryClient:
         order: str,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
         layers: Optional[List] = None,
         statuses: Optional[List] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -5509,6 +5106,21 @@ class HyMemoryClient:
                 node for node in graph_nodes
                 if getattr(node, "status", None) in effective_statuses
             ]
+            if session_ids:
+                wanted_sessions = set(session_ids)
+                graph_nodes = [
+                    node for node in graph_nodes if node.session_id in wanted_sessions
+                ]
+            if include_sources:
+                wanted_sources = set(include_sources)
+                graph_nodes = [
+                    node for node in graph_nodes if node.source in wanted_sources
+                ]
+            if exclude_sources:
+                blocked_sources = set(exclude_sources)
+                graph_nodes = [
+                    node for node in graph_nodes if node.source not in blocked_sources
+                ]
 
             graph_nodes = self._sort_memory_nodes(graph_nodes, order=order)
             total = len(graph_nodes)
@@ -5620,6 +5232,9 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
+        session_ids: Optional[List[str]] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
         layers: Optional[List[Any]] = None,
         statuses: Optional[List[Any]] = None,
         with_evolution: bool = False,
@@ -5696,6 +5311,9 @@ class HyMemoryClient:
         vdb = await self._list_vdb_bucket(
             user_id=user_id, agent_id=agent_id,
             user_ids=user_ids, agent_ids=agent_ids,
+            session_ids=session_ids,
+            include_sources=include_sources,
+            exclude_sources=exclude_sources,
             limit=limit, offset=offset, order=order,
             layers=effective_layers, statuses=effective_statuses,
             with_evolution=with_evolution,
@@ -5703,6 +5321,9 @@ class HyMemoryClient:
         graph = await self._list_graph_bucket(
             user_id=user_id, agent_id=agent_id,
             user_ids=user_ids, agent_ids=agent_ids,
+            session_ids=session_ids,
+            include_sources=include_sources,
+            exclude_sources=exclude_sources,
             limit=limit, offset=offset, order=order,
             layers=effective_layers, statuses=effective_statuses,
         )

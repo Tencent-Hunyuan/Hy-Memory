@@ -9,7 +9,9 @@
 ## Architecture Principles
 
 1. Memory 读写与存储 backend **只经 SDK**（config / env）。
-2. MemHub 对 memory 的原子操作 **只经 SDK**；缺接口先补 SDK。
+2. MemHub 运行时对 memory 的原子操作 **只经 SDK 公共 Client**；缺正常业务
+   接口先补 SDK。Runtime writers 停止后的 App 启动迁移可直接操作底层存储，
+   但不得把迁移专用方法加入公共 Client。
 3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进入 **SDK raw**。
 
 生产入口通过共享 Runtime 租约取得公开 `HyMemoryClient`；MemHub 只在调用前执行

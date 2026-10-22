@@ -115,7 +115,7 @@ class SdkMigrationClient(Protocol):
         order: str = "desc",
     ) -> Awaitable[HySdkMemoryPage]: ...
 
-    def import_memory_exact(
+    def write_legacy_memory(
         self,
         *,
         content: str,
@@ -133,7 +133,7 @@ class SdkMigrationClient(Protocol):
         request_id: str,
     ) -> Awaitable[dict[str, object]]: ...
 
-    def list_raw(
+    def read_raw_inventory(
         self,
         *,
         user_id: str,
@@ -145,7 +145,7 @@ class SdkMigrationClient(Protocol):
         order: str = "desc",
     ) -> Awaitable[HySdkRawPage]: ...
 
-    def import_raw(
+    def write_legacy_raw(
         self,
         *,
         content: str,
@@ -472,7 +472,7 @@ async def execute_memory_migration_plan(
             request_id = hashlib.sha256(
                 f"{migration_id}:{decision.item_key}:import_exact".encode()
             ).hexdigest()
-            await client.import_memory_exact(
+            await client.write_legacy_memory(
                 content=item.content,
                 memory_id=item.canonical_memory_id,
                 user_id=item.user_id,
@@ -514,7 +514,7 @@ async def read_sdk_raw_inventory(
     records: dict[str, SdkRawInventory] = {}
     offset = 0
     while True:
-        page = await client.list_raw(
+        page = await client.read_raw_inventory(
             user_id=user_id,
             limit=page_size,
             offset=offset,
@@ -657,9 +657,9 @@ async def execute_raw_migration_plan(
             raise RuntimeError(f"missing legacy raw inventory for {decision.item_key}")
         if decision.action == "import_exact":
             request_id = hashlib.sha256(
-                f"{migration_id}:{decision.item_key}:import_raw".encode()
+                f"{migration_id}:{decision.item_key}:write_legacy_raw".encode()
             ).hexdigest()
-            await client.import_raw(
+            await client.write_legacy_raw(
                 content=item.content,
                 raw_id=decision.raw_id,
                 user_id=item.user_id,

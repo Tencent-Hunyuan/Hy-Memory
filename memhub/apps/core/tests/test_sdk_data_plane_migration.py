@@ -4,8 +4,10 @@ import asyncio
 import json
 
 import pytest
+from hy_memory.models.memory import MemoryLayer, MemoryStatus
 
 from one_memory.database_access import close_main_databases, main_database
+from one_memory.hy_sdk_migration import HySdkMigration
 from one_memory.hy_sdk_types import (
     HySdkMemoryPage,
     HySdkMemoryRecord,
@@ -432,7 +434,7 @@ class _MigrationClient:
             offset=offset,
         )
 
-    async def import_memory_exact(self, **kwargs):
+    async def write_legacy_memory(self, **kwargs):
         self.imported.append(kwargs)
         return {"success": True, "memory_id": kwargs["memory_id"]}
 
@@ -440,7 +442,7 @@ class _MigrationClient:
         self.deleted.append(memory_id)
         return {"success": True, "deleted_count": 1}
 
-    async def list_raw(self, *, limit, offset, **_kwargs):
+    async def read_raw_inventory(self, *, limit, offset, **_kwargs):
         rows = self.raw[offset : offset + limit]
         return HySdkRawPage(
             raw=rows,
@@ -449,7 +451,7 @@ class _MigrationClient:
             offset=offset,
         )
 
-    async def import_raw(self, **kwargs):
+    async def write_legacy_raw(self, **kwargs):
         self.imported_raw.append(kwargs)
         return {"success": True, "raw_id": kwargs["raw_id"]}
 
@@ -754,3 +756,125 @@ def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):
     assert result.phase == "review_required"
     assert result.counts == {"quarantine": 1}
     assert store.authority() is MemoryAuthority.LEGACY
+
+
+class _MigrationLoop:
+    def run(self, coroutine):
+        return asyncio.run(coroutine)
+
+
+class _MigrationVectorStore:
+    def __init__(self):
+        self.nodes = {}
+
+    async def get_by_id(self, memory_id):
+        return self.nodes.get(memory_id)
+
+    async def upsert(self, node):
+        self.nodes[node.node_id] = node
+        return node.node_id
+
+    async def list_by_user(self, *, user_id, layers, **_kwargs):
+        return [
+            node
+            for node in self.nodes.values()
+            if node.user_id == user_id and node.layer in layers
+        ]
+
+
+class _MigrationEmbedder:
+    async def embed(self, _content):
+        return [0.1, 0.2]
+
+
+class _PrivilegedMigrationClient:
+    def __init__(self):
+        self._loop_thread = _MigrationLoop()
+        self._vector_store = _MigrationVectorStore()
+        self._embed_service = _MigrationEmbedder()
+
+    def list_memories(self, **_kwargs):
+        return {"vdb": {"memories": [], "total": 0}, "request_id": "list"}
+
+    def delete(self, _memory_id):
+        return {"success": True, "deleted_count": 1}
+
+    def get_write_outcome(self, _request_id):
+        return None
+
+
+def test_offline_migration_writes_sdk_stores_without_public_client_import_methods():
+    client = _PrivilegedMigrationClient()
+    migration = HySdkMigration(client)
+
+    raw_result = asyncio.run(
+        migration.write_legacy_raw(
+            content="verbatim",
+            raw_id="raw-1",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="session",
+            source="cursor",
+            memory_at=None,
+            metadata={"role": "user"},
+            request_id="migrate-raw-1",
+        )
+    )
+    memory_result = asyncio.run(
+        migration.write_legacy_memory(
+            content="prefers tea",
+            memory_id="memory-1",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="session",
+            source="legacy-governance",
+            layer="l2_fact",
+            status="active",
+            owner="user",
+            tags=("preference",),
+            supersedes=(),
+            superseded_by=(),
+            is_latest=True,
+            memory_at=None,
+            metadata={},
+            request_id="migrate-memory-1",
+        )
+    )
+    raw_page = asyncio.run(migration.read_raw_inventory(user_id="local"))
+
+    assert raw_result["raw_id"] == "raw-1"
+    assert memory_result["memory_id"] == "memory-1"
+    assert [item.raw_id for item in raw_page.raw] == ["raw-1"]
+    assert client._vector_store.nodes["raw-1"].layer is MemoryLayer.L1_RAW
+    assert client._vector_store.nodes["memory-1"].status is MemoryStatus.ACTIVE
+    assert not hasattr(client, "import_raw")
+    assert not hasattr(client, "import_memory_exact")
+
+
+def test_raw_http_dto_uses_the_unified_memory_list_shape():
+    page = HySdkRawPage.from_memory_list(
+        {
+            "vdb": {
+                "memories": [
+                    {
+                        "memory_id": "raw-1",
+                        "content": "verbatim",
+                        "layer": "l1_raw",
+                        "status": "active",
+                        "user_id": "local",
+                        "agent_id": "one-memory",
+                        "session_id": "session",
+                        "source": "cursor",
+                        "custom": {"role": "user"},
+                    }
+                ],
+                "total": 1,
+                "limit": 100,
+                "offset": 0,
+            }
+        },
+        limit=100,
+        offset=0,
+    )
+    assert page.raw[0].raw_id == "raw-1"
+    assert page.raw[0].custom == {"role": "user"}
