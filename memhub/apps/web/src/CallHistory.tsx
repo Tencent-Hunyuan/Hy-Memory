@@ -1,4 +1,4 @@
-import type { GuiLocale, MessageKey } from "@one-memory/contracts/gui-i18n";
+import type { GuiLocale, MessageKey } from "@one-memory/i18n";
 import {
   ArrowLeft,
   ChevronLeft,

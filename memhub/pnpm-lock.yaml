@@ -60,6 +60,9 @@ importers:
       '@one-memory/host-bridge':
         specifier: workspace:*
         version: link:../../packages/host-bridge
+      '@one-memory/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@one-memory/runtime-control':
         specifier: workspace:*
         version: link:../../packages/runtime-control
@@ -116,6 +119,9 @@ importers:
       '@one-memory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@one-memory/i18n':
+        specifier: workspace:*
+        version: link:../../packages/i18n
       '@one-memory/operations':
         specifier: workspace:*
         version: link:../../packages/operations
@@ -193,6 +199,19 @@ importers:
       tsup:
         specifier: ^8.5.1
         version: 8.5.1(jiti@2.7.0)(postcss@8.5.26)(supports-color@10.2.2)(typescript@7.0.2)
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@types/node@26.4.0)(jsdom@30.0.1(@noble/hashes@2.4.0))(vite@8.2.2(@types/node@26.4.0)(esbuild@0.27.7)(jiti@2.7.0))
+
+  packages/i18n:
+    dependencies:
+      i18next:
+        specifier: ^25.8.13
+        version: 25.10.10(typescript@7.0.2)
+    devDependencies:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -1619,7 +1638,7 @@ packages:
 
   glob@7.2.0:
     resolution: {integrity: sha512-lmLf6gtyrPq8tTjSmrO94wBeQbFR3HbLHbuyD69wuyQkImp2hWqMGB47OX65FBkPffO641IP9jWa1z4ivqG26Q==}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
@@ -1663,6 +1682,14 @@ packages:
   https-proxy-agent@7.0.0:
     resolution: {integrity: sha512-0euwPCRyAPSgGdzD1IVN9nJYHtBhJwb6XPfbpQcYbPCwrBidX6GzxmchnaF4sfF/jPb74Ojx5g4yTg3sixlyPw==}
     engines: {node: '>= 14'}
+
+  i18next@25.10.10:
+    resolution: {integrity: sha512-cqUW2Z3EkRx7NqSyywjkgCLK7KLCL6IFVFcONG7nVYIJ3ekZ1/N5jUsihHV6Bq37NfhgtczxJcxduELtjTwkuQ==}
+    peerDependencies:
+      typescript: ^5 || ^6
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   inflight@1.0.6:
     resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
@@ -3836,6 +3863,12 @@ snapshots:
       debug: 4.4.3(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
+
+  i18next@25.10.10(typescript@7.0.2):
+    dependencies:
+      '@babel/runtime': 7.29.7
+    optionalDependencies:
+      typescript: 7.0.2
 
   inflight@1.0.6:
     dependencies:

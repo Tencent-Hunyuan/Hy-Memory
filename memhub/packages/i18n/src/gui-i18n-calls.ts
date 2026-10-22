@@ -9,7 +9,7 @@ export const callsChineseMessages = {
   "calls.headline.found": "{host} 查到 {count} 条相关内容",
   "calls.headline.found.one": "{host} 查到 {count} 条相关内容",
   "calls.detail.timedOut": "后台正在整理记忆，查询超时，这次回答没有带上记忆",
-  "calls.detail.unavailable": "One Memory 暂时不可用，这次回答没有带上记忆",
+  "calls.detail.unavailable": "MemHub 暂时不可用，这次回答没有带上记忆",
   "calls.detail.denied": "当前授权不允许这次查询",
   "calls.detail.partialDelivered": "已提供给 {host} · 部分内容还在整理中",
   "calls.detail.partial": "部分内容还在整理中",
@@ -87,11 +87,11 @@ export const callsChineseMessages = {
   "calls.state.empty": "查询成功，没有找到相关记忆",
   "calls.state.partial": "查询成功，部分内容还在整理中",
   "calls.state.timed_out": "查询超时，没有提供记忆",
-  "calls.state.unavailable": "One Memory 暂时不可用",
+  "calls.state.unavailable": "MemHub 暂时不可用",
   "calls.state.denied": "当前未授权查询",
   "calls.return.timed_out":
-    "One Memory 正在导入和整理你的记忆，这次没能及时查完，所以 {host} 这次是在没有记忆的情况下回答的。整理完成后会恢复正常。",
-  "calls.return.unavailable": "One Memory 暂时不可用，这次回答没有带上记忆。",
+    "MemHub 正在导入和整理你的记忆，这次没能及时查完，所以 {host} 这次是在没有记忆的情况下回答的。整理完成后会恢复正常。",
+  "calls.return.unavailable": "MemHub 暂时不可用，这次回答没有带上记忆。",
   "calls.return.denied": "当前授权不允许这次查询，没有向应用提供记忆。",
   "calls.return.partial": "部分内容还在整理中。",
   "clock.unknown": "时间未知",
@@ -112,7 +112,7 @@ export const callsSpanishMessages: Record<
   "calls.detail.timedOut":
     "La consulta agotó el tiempo mientras se organizaban las memorias; la respuesta no incluyó memorias",
   "calls.detail.unavailable":
-    "One Memory no está disponible; la respuesta no incluyó memorias",
+    "MemHub no está disponible; la respuesta no incluyó memorias",
   "calls.detail.denied": "Los permisos actuales no permiten esta consulta",
   "calls.detail.partialDelivered":
     "Entregado a {host} · Parte del contenido sigue procesándose",
@@ -200,12 +200,12 @@ export const callsSpanishMessages: Record<
   "calls.state.partial":
     "Consulta completada; parte del contenido sigue procesándose",
   "calls.state.timed_out": "Consulta agotada; no se entregaron memorias",
-  "calls.state.unavailable": "One Memory no está disponible",
+  "calls.state.unavailable": "MemHub no está disponible",
   "calls.state.denied": "La consulta no está autorizada",
   "calls.return.timed_out":
-    "One Memory está importando y organizando tus memorias y no terminó la consulta a tiempo. Por eso, {host} respondió sin memorias. Volverá a funcionar normalmente al terminar el procesamiento.",
+    "MemHub está importando y organizando tus memorias y no terminó la consulta a tiempo. Por eso, {host} respondió sin memorias. Volverá a funcionar normalmente al terminar el procesamiento.",
   "calls.return.unavailable":
-    "One Memory no está disponible; la respuesta no incluyó memorias.",
+    "MemHub no está disponible; la respuesta no incluyó memorias.",
   "calls.return.denied":
     "Los permisos actuales no permiten esta consulta. No se entregaron memorias a la aplicación.",
   "calls.return.partial": "Parte del contenido sigue procesándose.",

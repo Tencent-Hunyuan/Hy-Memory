@@ -3,7 +3,7 @@ import type {
   MemoryProcessingSummary,
   SourceResponse,
 } from "@one-memory/contracts";
-import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import { modelBlock, splitBlockedStages } from "./memory-processing-labels";
 
 export type MemoryArrivalPhase =

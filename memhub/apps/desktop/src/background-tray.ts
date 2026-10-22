@@ -1,5 +1,5 @@
 import path from "node:path";
-import { type MessageKey, translate } from "@one-memory/contracts/gui-i18n";
+import { type MessageKey, translate } from "@one-memory/i18n";
 import type {
   App,
   Menu,

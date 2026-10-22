@@ -1,5 +1,5 @@
 import type { MemoryIndexSync } from "@one-memory/contracts";
-import type { GuiLocale } from "@one-memory/contracts/gui-i18n";
+import type { GuiLocale } from "@one-memory/i18n";
 import { memoryText } from "./memory-language";
 
 export type IndexSyncAction = "retry" | "configure" | "refresh" | "none";

@@ -1,4 +1,4 @@
-import { translate } from "@one-memory/contracts/gui-i18n";
+import { translate } from "@one-memory/i18n";
 import type { Menu, MenuItemConstructorOptions } from "electron";
 import type { NativeLanguageSource } from "./native-language";
 

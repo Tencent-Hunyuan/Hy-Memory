@@ -239,7 +239,7 @@ export const settingsSpanishMessages = {
   导出日志: "Exportar registros",
   "把本机运行日志打包成一个文件，发给开发排查。":
     "Empaqueta los registros locales en un archivo para su diagnóstico.",
-  "确定退出 One Memory 界面吗？": "¿Cerrar la interfaz de One Memory?",
+  "确定退出 One Memory 界面吗？": "¿Cerrar la interfaz de MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "El servicio en segundo plano seguirá sincronizando, organizando y ofreciendo memorias.",
   取消: "Cancelar",
@@ -332,6 +332,7 @@ export const settingsSpanishMessages = {
 const chineseOverrides: Partial<
   Record<keyof typeof settingsSpanishMessages, string>
 > = {
+  "确定退出 One Memory 界面吗？": "确定退出 MemHub 界面吗？",
   appSettingsTitle: "{name} 应用设置",
   appMemoryScope: "让 {name} 查询已授权范围内的记忆。",
   appRestart:

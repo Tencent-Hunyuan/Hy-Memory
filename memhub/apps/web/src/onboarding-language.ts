@@ -2,7 +2,7 @@ import {
   isMessageKey,
   type MessageKey,
   translate,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import { useGuiLanguage } from "./gui-language";
 
 /** Translate presentation copy at render time, retaining external names and unknown errors. */

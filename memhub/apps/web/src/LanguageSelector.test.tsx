@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { translate } from "@one-memory/contracts/gui-i18n";
+import { translate } from "@one-memory/i18n";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["zh-CN", "es"] as const)(
+it.each(["zh-CN", "en", "es"] as const)(
   "hides the compact label while preserving its accessible name in %s",
   (locale) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
@@ -29,11 +29,12 @@ it.each(["zh-CN", "es"] as const)(
     expect(label.htmlFor).toBe(selector.id);
     expect(screen.getByRole("region", { name })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Español" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "English" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "简体中文" })).toBeTruthy();
   },
 );
 
-it.each(["zh-CN", "es"] as const)(
+it.each(["zh-CN", "en", "es"] as const)(
   "keeps the normal settings label visible and accessible in %s",
   (locale) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
@@ -58,6 +59,7 @@ it.each(["zh-CN", "es"] as const)(
 );
 
 it("offers an accessible selector, persists and updates its label", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
   render(
     <LanguageProvider>
       <LanguageSelector />
@@ -66,7 +68,7 @@ it("offers an accessible selector, persists and updates its label", async () => 
   const selector = screen.getByRole("combobox", {
     name: translate("zh-CN", "languageLabel"),
   });
-  expect(screen.getAllByRole("option")).toHaveLength(3);
+  expect(screen.getAllByRole("option")).toHaveLength(4);
   expect(selector.getAttribute("aria-describedby")).toBeTruthy();
   await userEvent.selectOptions(selector, "es");
   expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("es");
@@ -77,6 +79,7 @@ it("offers an accessible selector, persists and updates its label", async () => 
 });
 
 it("announces storage errors without replacing the confirmed choice", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
   render(
     <LanguageProvider>
       <LanguageSelector />
@@ -90,6 +93,6 @@ it("announces storage errors without replacing the confirmed choice", async () =
     translate("zh-CN", "languageSaveError"),
   );
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
-    "system",
+    "zh-CN",
   );
 });

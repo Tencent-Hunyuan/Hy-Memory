@@ -1,4 +1,4 @@
-import type { LanguageSnapshot } from "@one-memory/contracts/gui-i18n";
+import type { LanguageSnapshot } from "@one-memory/i18n";
 
 /** Shared committed GUI language for native menus, tray, and dialogs. */
 export interface NativeLanguageSource {

@@ -75,10 +75,10 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
   const { text, t, locale } = useOnboardingTranslation();
   const { draft, advancedOpen, onDraftChange, fieldErrors = {}, phase } = props;
   const id = useId();
-  // The Chinese label already names the destination; the shorter Spanish one
-  // ("Omitir por ahora") needs it as a description for assistive technology.
+  // The Chinese label already names the destination; shorter translated labels
+  // need it as a description for assistive technology.
   const skipDestination =
-    locale === "es" ? t("onboardingModelSkipDestination") : "";
+    locale === "zh-CN" ? "" : t("onboardingModelSkipDestination");
   const fields = useRef<HTMLElement>(null);
   const advancedToggle = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);

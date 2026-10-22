@@ -1,4 +1,4 @@
-import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import { APP_ORIGIN, STARTUP_SCREEN_PATH } from "./app-protocol";
 
 export const STARTUP_SCREEN_URL = `${APP_ORIGIN}${STARTUP_SCREEN_PATH}`;

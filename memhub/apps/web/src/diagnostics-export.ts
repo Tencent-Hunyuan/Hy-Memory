@@ -1,4 +1,4 @@
-import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 
 // Log export is offered from two places (the health view and the settings
 // help card). Both must report the same outcome wording, so the desktop

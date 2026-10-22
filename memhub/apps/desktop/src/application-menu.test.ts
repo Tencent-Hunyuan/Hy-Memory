@@ -1,4 +1,4 @@
-import type { LanguageSnapshot } from "@one-memory/contracts/gui-i18n";
+import type { LanguageSnapshot } from "@one-memory/i18n";
 import { expect, it, vi } from "vitest";
 
 import { installApplicationMenu } from "./application-menu";

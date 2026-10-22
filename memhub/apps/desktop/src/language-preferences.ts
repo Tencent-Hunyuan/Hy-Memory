@@ -6,7 +6,7 @@ import {
   type LanguagePreference,
   type LanguageSnapshot,
   resolveGuiLocale,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 
 interface Storage {
   read(file: string): Promise<string>;

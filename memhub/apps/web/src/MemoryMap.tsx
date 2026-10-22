@@ -5,7 +5,7 @@ import type {
   MemoryLibraryPage,
   RecentConversationItem,
 } from "@one-memory/contracts";
-import type { GuiLocale } from "@one-memory/contracts/gui-i18n";
+import type { GuiLocale } from "@one-memory/i18n";
 import {
   ArrowUp,
   ChevronLeft,

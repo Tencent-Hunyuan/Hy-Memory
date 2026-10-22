@@ -1,5 +1,5 @@
 import type { SourceResponse } from "@one-memory/contracts";
-import type { MessageKey } from "@one-memory/contracts/gui-i18n";
+import type { MessageKey } from "@one-memory/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppMark } from "./app-mark";
 import { connectionHostId, preferenceHasSource } from "./connection-hosts";

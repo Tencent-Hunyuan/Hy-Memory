@@ -7,7 +7,7 @@ import {
   resolveGuiLocale,
   translate,
   translateCount,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import {
   createContext,
   type ReactNode,
@@ -17,7 +17,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-export const LANGUAGE_STORAGE_KEY = "one-memory.gui-language";
+export const LANGUAGE_STORAGE_KEY = "memhub.ui-language";
 type LanguageError = "languageLoadError" | "languageSaveError" | null;
 type State = LanguageSnapshot & { error: LanguageError };
 const initial: State = {

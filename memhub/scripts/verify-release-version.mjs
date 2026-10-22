@@ -25,6 +25,7 @@ const packageFiles = [
   "apps/web/package.json",
   "packages/contracts/package.json",
   "packages/host-bridge/package.json",
+  "packages/i18n/package.json",
   "packages/operations/package.json",
   "packages/runtime-control/package.json",
 ];

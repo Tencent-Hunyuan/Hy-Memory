@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { translate } from "@one-memory/contracts/gui-i18n";
+import { translate } from "@one-memory/i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 interface FakeFrame {
@@ -539,7 +539,7 @@ describe("language preference preload", () => {
       "es",
     );
     fake.invoke.mockClear();
-    await expect(api.setLanguagePreference("en")).rejects.toThrow();
+    await expect(api.setLanguagePreference("fr")).rejects.toThrow();
     expect(fake.invoke).not.toHaveBeenCalled();
     const listener = vi.fn();
     const unsubscribe = api.onLanguagePreferenceChanged(listener);

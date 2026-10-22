@@ -7,6 +7,10 @@ import {
   callsSpanishMessages,
 } from "./gui-i18n-calls.js";
 import {
+  currentChineseMessages,
+  currentSpanishMessages,
+} from "./gui-i18n-current.js";
+import {
   guideChineseMessages,
   guideSpanishMessages,
 } from "./gui-i18n-guide.js";
@@ -14,10 +18,6 @@ import {
   healthChineseMessages,
   healthSpanishMessages,
 } from "./gui-i18n-health.js";
-import {
-  mattersChineseMessages,
-  mattersSpanishMessages,
-} from "./gui-i18n-matters.js";
 import {
   memoryChineseMessages,
   memorySpanishMessages,
@@ -45,6 +45,7 @@ const languageChineseMessages = {
   languageLabel: "语言",
   languageSystem: "跟随系统",
   languageChinese: "简体中文",
+  languageEnglish: "英语",
   languageSpanish: "西班牙语",
   languageDescription: "选择界面语言。此设置不会更改你的对话或记忆内容。",
   languageSaveError: "无法保存语言设置，请重试。",
@@ -62,6 +63,7 @@ const languageSpanishMessages: Record<
   languageLabel: "Idioma",
   languageSystem: "Usar el idioma del sistema",
   languageChinese: "Chino simplificado",
+  languageEnglish: "Inglés",
   languageSpanish: "Español",
   languageDescription:
     "Elige el idioma de la interfaz. Esta opción no modifica tus conversaciones ni tus memorias.",
@@ -80,9 +82,9 @@ type Catalog = {
 /** Every domain catalog, in a fixed order; exported for collision tests. */
 export const guiCatalogs: readonly Catalog[] = [
   {
-    name: "matters",
-    chinese: mattersChineseMessages,
-    spanish: mattersSpanishMessages,
+    name: "current",
+    chinese: currentChineseMessages,
+    spanish: currentSpanishMessages,
   },
   {
     name: "workbench",
@@ -175,7 +177,7 @@ export const chineseMessages = merged.chinese as typeof guideChineseMessages &
   typeof callsChineseMessages &
   typeof languageChineseMessages &
   typeof workbenchChineseMessages &
-  typeof mattersChineseMessages;
+  typeof currentChineseMessages;
 
 /** Spanish may be partial; untranslated messages use the Chinese catalog. */
 export const spanishMessages = merged.spanish as Partial<

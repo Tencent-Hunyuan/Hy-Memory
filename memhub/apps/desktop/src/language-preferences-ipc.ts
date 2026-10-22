@@ -1,7 +1,7 @@
 import {
   isLanguagePreference,
   type LanguageSnapshot,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import type { LanguagePreferences } from "./language-preferences";
 
 const GET = "one-memory:get-language-preference";

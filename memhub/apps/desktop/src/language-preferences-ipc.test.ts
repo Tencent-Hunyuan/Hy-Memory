@@ -33,7 +33,7 @@ describe("language preference IPC", () => {
     if (!read || !write) throw Error("Missing language handlers");
     await expect(read("foreign")).rejects.toThrow("untrusted");
     await expect(write("iframe", "es")).rejects.toThrow("untrusted");
-    await expect(write("trusted", "en")).rejects.toThrow();
+    await expect(write("trusted", "fr")).rejects.toThrow();
     await expect(write("trusted", "es", "extra")).rejects.toThrow();
     expect(save).not.toHaveBeenCalled();
     expect(await read("trusted")).toEqual({
@@ -41,10 +41,10 @@ describe("language preference IPC", () => {
       locale: "es",
       revision: 0,
     });
-    await write("trusted", "zh-CN");
+    await write("trusted", "en");
     expect(broadcast).toHaveBeenCalledExactlyOnceWith({
-      preference: "zh-CN",
-      locale: "zh-CN",
+      preference: "en",
+      locale: "en",
       revision: 1,
     });
     dispose();

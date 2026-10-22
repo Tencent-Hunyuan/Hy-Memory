@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { translate } from "@one-memory/i18n";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installEarlyStartupErrorHandler } from "./early-startup-errors";
 import { stableRuntimeUserMessage } from "./stable-runtime";
@@ -67,7 +68,7 @@ describe("early desktop startup errors", () => {
     dispose();
   });
 
-  it.each(["es", undefined] as const)(
+  it.each(["en", "es", undefined] as const)(
     "uses a safe title for initialized locale %s and retains the technical code",
     async (locale) => {
       const dataDir = await mkdtemp(
@@ -90,7 +91,7 @@ describe("early desktop startup errors", () => {
         new Error("desktop_startup_failed"),
       );
       expect(showError).toHaveBeenCalledExactlyOnceWith(
-        locale === "es" ? "MemHub no pudo iniciarse" : "MemHub 无法启动",
+        translate(locale ?? "zh-CN", "nativeErrorTitle"),
         stableRuntimeUserMessage(new Error("desktop_startup_failed")),
       );
       expect(exit).toHaveBeenCalledExactlyOnceWith(1);

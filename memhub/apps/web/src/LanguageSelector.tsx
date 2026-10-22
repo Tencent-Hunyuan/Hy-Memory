@@ -1,4 +1,4 @@
-import { isLanguagePreference } from "@one-memory/contracts/gui-i18n";
+import { isLanguagePreference } from "@one-memory/i18n";
 import { useId, useState } from "react";
 import { useGuiLanguage } from "./gui-language";
 
@@ -38,6 +38,9 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
           <option value="system">{t("languageSystem")}</option>
           <option value="zh-CN" lang={compact ? "zh-CN" : undefined}>
             {compact ? "简体中文" : t("languageChinese")}
+          </option>
+          <option value="en" lang={compact ? "en" : undefined}>
+            {compact ? "English" : t("languageEnglish")}
           </option>
           <option value="es" lang={compact ? "es" : undefined}>
             {compact ? "Español" : t("languageSpanish")}

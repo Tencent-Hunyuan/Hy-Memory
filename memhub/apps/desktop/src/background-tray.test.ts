@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { LanguageSnapshot } from "@one-memory/contracts/gui-i18n";
+import type { LanguageSnapshot } from "@one-memory/i18n";
 import type {
   App,
   Menu,

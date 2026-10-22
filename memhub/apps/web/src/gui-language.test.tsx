@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { LanguageSnapshot } from "@one-memory/contracts/gui-i18n";
+import type { LanguageSnapshot } from "@one-memory/i18n";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";

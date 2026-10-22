@@ -1,4 +1,4 @@
-import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 
 /**
  * One clock format for every user-facing timestamp.

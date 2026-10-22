@@ -1,4 +1,4 @@
-import type { MessageKey } from "@one-memory/contracts/gui-i18n";
+import type { MessageKey } from "@one-memory/i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getModelUsage,

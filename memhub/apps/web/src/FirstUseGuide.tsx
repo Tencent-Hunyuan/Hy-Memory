@@ -3,7 +3,7 @@ import type {
   MemoryDetail,
   SourceResponse,
 } from "@one-memory/contracts";
-import type { MessageKey } from "@one-memory/contracts/gui-i18n";
+import type { MessageKey } from "@one-memory/i18n";
 import {
   ArrowLeft,
   ArrowRight,

@@ -45,7 +45,7 @@ describe("GUI language preferences", () => {
     ).toBe("system");
     expect(await readdir(root)).toEqual(["gui-language.json"]);
   });
-  it.each(["{broken", '{"preference":"en"}', "null", "[]"])(
+  it.each(["{broken", '{"preference":"fr"}', "null", "[]"])(
     "does not overwrite invalid input %s while loading",
     async (content) => {
       const root = await profile();

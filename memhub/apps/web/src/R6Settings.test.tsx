@@ -95,7 +95,7 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
   expect(screen.getByRole("combobox")).toBeTruthy();
-  expect(screen.getAllByRole("option")).toHaveLength(3);
+  expect(screen.getAllByRole("option")).toHaveLength(4);
   await user.click(screen.getByRole("button", { name: "帮助与诊断" }));
   expect(screen.getByRole("heading", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "导出日志" })).toBeTruthy();

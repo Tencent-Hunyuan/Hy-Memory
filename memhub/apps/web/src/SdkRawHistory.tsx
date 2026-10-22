@@ -1,8 +1,12 @@
 import type { SdkRawContextItem, SdkRawRecord } from "@one-memory/contracts";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { getSdkRaw, searchSdkRaw } from "./api";
+import { useGuiLanguage } from "./gui-language";
 
 export function SdkRawHistory() {
+  const { locale, t, tn } = useGuiLanguage();
+  const translation = useRef(t);
+  translation.current = t;
   const [recent, setRecent] = useState<SdkRawRecord[]>([]);
   const [results, setResults] = useState<SdkRawContextItem[] | null>(null);
   const [query, setQuery] = useState("");
@@ -16,7 +20,7 @@ export function SdkRawHistory() {
         if (current) setRecent(page.items);
       },
       () => {
-        if (current) setError("原始对话暂时无法读取。");
+        if (current) setError(translation.current("sdk.raw.loadFailed"));
       },
     );
     return () => {
@@ -32,7 +36,7 @@ export function SdkRawHistory() {
     try {
       setResults(await searchSdkRaw(query.trim()));
     } catch {
-      setError("原始对话搜索失败，请重试。");
+      setError(t("sdk.raw.searchFailed"));
     } finally {
       setBusy(false);
     }
@@ -40,22 +44,24 @@ export function SdkRawHistory() {
 
   const items = results ?? recent.map(asContextItem);
   return (
-    <section aria-label="SDK 原始对话">
+    <section aria-label={t("sdk.raw.title")}>
       <form onSubmit={(event) => void submit(event)}>
         <label>
-          搜索原始对话
+          {t("sdk.raw.searchLabel")}
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
         <button type="submit" disabled={busy || !query.trim()}>
-          {busy ? "搜索中…" : "搜索"}
+          {busy ? t("sdk.raw.searching") : t("sdk.raw.search")}
         </button>
       </form>
       {error ? <p role="alert">{error}</p> : null}
       <p aria-live="polite">
-        {results === null ? "最近原始对话" : `找到 ${items.length} 条`}
+        {results === null
+          ? t("sdk.raw.recent")
+          : tn("sdk.raw.found", items.length)}
       </p>
       <ol>
         {items.map((item) => (
@@ -64,7 +70,7 @@ export function SdkRawHistory() {
             <small>
               {item.source} · {item.session_id}
               {item.memory_at
-                ? ` · ${new Date(item.memory_at).toLocaleString("zh-CN")}`
+                ? ` · ${new Date(item.memory_at).toLocaleString(locale)}`
                 : ""}
             </small>
           </li>

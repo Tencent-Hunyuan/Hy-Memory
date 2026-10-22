@@ -4,7 +4,7 @@ import {
   type MessageKey,
   translate,
   translateCount,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import { useGuiLanguage } from "./gui-language";
 
 // Presentation-only adapter over the shared "apps." catalog: never translate

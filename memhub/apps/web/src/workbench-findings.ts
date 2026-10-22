@@ -8,7 +8,7 @@ import {
   type GuiLocale,
   translate,
   translateCount,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 
 /** One row of the left column: a topic, with what is actually under it. */
 export interface Matter {
@@ -235,7 +235,7 @@ function scopesText(memory: GovernedMemory, locale: GuiLocale): string {
   return memory.scopes.length
     ? memory.scopes
         .map((scope) => scopeLabel(scope, locale))
-        .join(locale === "es" ? ", " : "、")
+        .join(locale === "zh-CN" ? "、" : ", ")
     : translate(locale, "wb.unclassified");
 }
 

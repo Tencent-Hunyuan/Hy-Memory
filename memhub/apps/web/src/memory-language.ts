@@ -4,7 +4,7 @@ import {
   plainCount,
   translate,
   translateCount,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import { useGuiLanguage } from "./gui-language";
 
 type Params = Record<string, string | number>;

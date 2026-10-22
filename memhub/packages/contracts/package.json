@@ -8,10 +8,6 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
-    },
-    "./gui-i18n": {
-      "types": "./src/gui-i18n.ts",
-      "default": "./src/gui-i18n.ts"
     }
   },
   "scripts": {

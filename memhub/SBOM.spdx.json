@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "one-memory",
-  "documentNamespace": "https://one-memory.local/spdx/2026-10-17T13:52:48Z",
+  "documentNamespace": "https://one-memory.local/spdx/2026-10-22T08:09:31Z",
   "creationInfo": {
-    "created": "2026-10-17T13:52:48Z",
+    "created": "2026-10-22T08:09:31Z",
     "creators": [
       "Tool: one-memory-generate-sbom"
     ]
@@ -85,6 +85,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/https-proxy-agent@7.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-npm-i18next",
+      "name": "i18next",
+      "versionInfo": "25.10.10",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/i18next@25.10.10"
         }
       ]
     },
@@ -2379,6 +2396,11 @@
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-npm-https-proxy-agent"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-npm-i18next"
     },
     {
       "spdxElementId": "SPDXRef-Package-one-memory",

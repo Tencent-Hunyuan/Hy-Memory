@@ -11,7 +11,7 @@ import {
   isLanguageSnapshot,
   type LanguagePreference,
   type LanguageSnapshot,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import type {
   RecallInstallPreview,
   RecallUninstallPreview,

@@ -9,7 +9,7 @@ import type {
 import type {
   LanguagePreference,
   LanguageSnapshot,
-} from "@one-memory/contracts/gui-i18n";
+} from "@one-memory/i18n";
 import type { DebugLogSnapshot } from "./debug-log-types.js";
 
 export type RecallPermissionTool =

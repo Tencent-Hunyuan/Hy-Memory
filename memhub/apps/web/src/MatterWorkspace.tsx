@@ -45,11 +45,9 @@ import {
   patchMatter,
   refreshMatter,
 } from "./api";
-import { useGuiLanguage } from "./gui-language";
 import { MatterMemoryPanel } from "./MatterMemoryPanel";
 import { MemoryGraph3D } from "./MemoryGraph3D";
 import { projectMatterMap } from "./matter-map";
-import { useMemoryLanguage } from "./memory-language";
 import { memoryWriteErrorText } from "./model-error-text";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal } from "./write-outcome";
@@ -109,46 +107,17 @@ const runErrors: Record<string, string> = {
   hy_memory_model_output_truncated: "记忆模型输出不完整，本轮提取未完成。",
   hy_memory_model_request_failed: "记忆模型请求失败，本轮提取未完成。",
 };
+const time = (value: string) =>
+  new Date(value).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 type MatterRead<T> = { version: string | null; value: T };
 
 export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
-  const { text, locale } = useMemoryLanguage();
-  const { t, tn, tnPlain } = useGuiLanguage();
-  function observation(value: string): string {
-    if (locale === "zh-CN") return value;
-    let match = /^本轮使用 (\d+) 条完整消息；预算外 (\d+) 条未处理。$/.exec(
-      value,
-    );
-    if (match)
-      return t("matter.observation.records", {
-        selected: match[1],
-        omitted: match[2],
-      });
-    match = /^其中 (\d+) 条消息时间未知，不用入库时间代替。$/.exec(value);
-    if (match) return t("matter.observation.time", { unknown: match[1] });
-    match = /^排除 (\d+) 条明确探针，去掉 (\d+) 条重复文本。$/.exec(value);
-    if (match)
-      return t("matter.observation.probes", {
-        probes: match[1],
-        duplicates: match[2],
-      });
-    match = /^HY 实际输入 (\d+) 条；排除 (\d+) 条空白或宿主系统内容。$/.exec(
-      value,
-    );
-    if (match)
-      return t("matter.observation.hy", {
-        input: match[1],
-        excluded: match[2],
-      });
-    return value;
-  }
-  const time = (value: string) =>
-    new Date(value).toLocaleString(locale, {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
   const [matters, setMatters] = useState<Matter[]>([]);
   const [runs, setRuns] = useState<MatterRun[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -579,47 +548,45 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
       <header className="matter-topbar">
         <div>
           <p className="matter-brand">MemHub</p>
-          <h1>{text("工作台")}</h1>
+          <h1>工作台</h1>
         </div>
         <div className="matter-top-actions">
           <span className="local-state">
-            <ShieldCheck size={14} /> {text("本地资料库")}
+            <ShieldCheck size={14} /> 本地资料库
           </span>
           <button type="button" className="secondary" onClick={onOpenSources}>
-            <Link2 size={15} /> {text("来源与连接")}
+            <Link2 size={15} /> 来源与连接
           </button>
           <button
             type="button"
             disabled={busy || !!running}
             onClick={() => void action((traceId) => discoverMatters(traceId))}
           >
-            <RefreshCw size={15} /> {text("整理历史")}
+            <RefreshCw size={15} /> 整理历史
           </button>
         </div>
       </header>
       {error && (
         <div className="matter-error" role="alert">
-          {text(error)}
+          {error}
           <button type="button" className="quiet" onClick={() => void load()}>
-            {text("重试")}
+            重试
           </button>
         </div>
       )}
       {notice && (
         <p className="matter-notice" role="status">
-          {text(notice)}
+          {notice}
         </p>
       )}
       {running && (
         <section className="matter-progress" aria-live="polite">
           <div>
-            <strong>{text(running.phase)}</strong>
+            <strong>{running.phase}</strong>
             <span>
-              {t("matter.batches", {
-                completed: running.completed_batches,
-                total: running.total_batches || "…",
-                seconds: Math.round(running.elapsed_seconds),
-              })}
+              基础记忆 {running.completed_batches} /{" "}
+              {running.total_batches || "…"} 批 ·{" "}
+              {Math.round(running.elapsed_seconds)} 秒
             </span>
           </div>
           <progress
@@ -627,57 +594,49 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
             value={running.completed_batches}
           />
           {running.observations.map((item) => (
-            <p key={item}>{observation(item)}</p>
+            <p key={item}>{item}</p>
           ))}
         </section>
       )}
       {!running && runs[0]?.status === "failed" && (
         <div className="matter-error" role="status">
-          {text("上次整理未完成")} ·{" "}
-          {text(
-            memoryWriteErrorText(runs[0].error) ??
-              runErrors[runs[0].error ?? ""] ??
-              "模型结果未通过校验，请重试。",
-          )}
+          上次整理未完成 ·{" "}
+          {memoryWriteErrorText(runs[0].error) ??
+            runErrors[runs[0].error ?? ""] ??
+            "模型结果未通过校验，请重试。"}
         </div>
       )}
       {!running && runs[0] && (
         <div className="matter-run-receipt" role="status">
           <span>
-            {text(
-              runs[0].coverage_complete ? "本轮读取完整" : "本轮读取未完整",
-            )}
+            {runs[0].coverage_complete ? "本轮读取完整" : "本轮读取未完整"}
           </span>
-          <span>{tnPlain("matter.read", runs[0].selected_records)}</span>
-          <span>{tnPlain("matter.hy", runs[0].hy_input_records ?? 0)}</span>
+          <span>已读取 {runs[0].selected_records} 条</span>
+          <span>HY 输入 {runs[0].hy_input_records ?? 0} 条</span>
           {runs[0].omitted_records > 0 && (
-            <span>{tnPlain("matter.omitted", runs[0].omitted_records)}</span>
+            <span>{runs[0].omitted_records} 条未处理</span>
           )}
-          {runs[0].status === "completed" && <span>{text("档案待核对")}</span>}
-          {runs[0].failed_phase && (
-            <span>
-              {text("未通过：{phase}", { phase: text(runs[0].failed_phase) })}
-            </span>
-          )}
+          {runs[0].status === "completed" && <span>档案待核对</span>}
+          {runs[0].failed_phase && <span>未通过：{runs[0].failed_phase}</span>}
         </div>
       )}
       <div className="matter-columns">
-        <aside className="matter-sidebar" aria-label={text("事项列表")}>
+        <aside className="matter-sidebar" aria-label="事项列表">
           <div className="matter-sidebar-head">
-            <span>{text("我的事项")}</span>
+            <span>我的事项</span>
             <span>
               {loading
-                ? text("核对中")
+                ? "核对中"
                 : mattersReadFailed
-                  ? text("待核对")
+                  ? "待核对"
                   : matters.length}
             </span>
           </div>
           <label className="matter-search">
             <Search size={14} />
             <input
-              aria-label={text("搜索事项")}
-              placeholder={text("搜索事项")}
+              aria-label="搜索事项"
+              placeholder="搜索事项"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -686,7 +645,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
             <div
               className="matter-skeleton"
               role="status"
-              aria-label={text("正在读取事项")}
+              aria-label="正在读取事项"
             />
           )}
           {filtered.map((item) => (
@@ -701,35 +660,34 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
               <span>
                 <strong>{item.title}</strong>
                 <small>
-                  {tnPlain("matter.claims", item.claims.length)} ·{" "}
-                  {tnPlain("matter.sources", item.source_count)}
+                  {item.claims.length} 个记忆点 · {item.source_count} 个来源
                 </small>
-                <em>{text(item.scope_confirmed ? "范围已确认" : "待校准")}</em>
+                <em>{item.scope_confirmed ? "范围已确认" : "待校准"}</em>
               </span>
             </button>
           ))}
           {!!search && !filtered.length && (
             <p className="matter-muted">
               {mattersReadFailed
-                ? text("事项读取失败，保留待核对状态。")
-                : text("没有匹配的事项")}
+                ? "事项读取失败，保留待核对状态。"
+                : "没有匹配的事项"}
             </p>
           )}
           <footer className="matter-sidebar-footer">
             {runs[0] ? (
               <>
+                <span>{runs[0].selected_records} 条消息参与本轮</span>
                 <span>
-                  {tnPlain("matter.selected", runs[0].selected_records)}
+                  {runs[0].omitted_records.toLocaleString()} 条不在本轮范围
                 </span>
-                <span>{tn("matter.outside", runs[0].omitted_records)}</span>
               </>
             ) : (
               <span>
                 {loading
-                  ? text("正在读取事项")
+                  ? "正在读取事项"
                   : mattersReadFailed
-                    ? text("事项读取失败，当前为待核对状态")
-                    : text("仅显示已生成的档案")}
+                    ? "事项读取失败，当前为待核对状态"
+                    : "仅显示已生成的档案"}
               </span>
             )}
           </footer>
@@ -738,7 +696,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
           {!matter && !loading && !error && (
             <div className="matter-empty">
               <BookOpen size={32} />
-              <h2>{text("尚未整理事项")}</h2>
+              <h2>尚未整理事项</h2>
               <button
                 type="button"
                 disabled={busy || !!running}
@@ -746,17 +704,15 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   void action((traceId) => discoverMatters(traceId))
                 }
               >
-                {text("从授权历史整理")}
+                从授权历史整理
               </button>
             </div>
           )}
           {matter && (
             <>
               <div className="matter-breadcrumb">
-                {text("我的事项")} <ChevronRight size={13} />{" "}
-                <span>
-                  {text("档案 v{version}", { version: matter.version })}
-                </span>
+                我的事项 <ChevronRight size={13} />{" "}
+                <span>档案 v{matter.version}</span>
               </div>
               <header className="matter-heading">
                 <div>
@@ -766,8 +722,8 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                 <button
                   type="button"
                   className="quiet icon-button"
-                  title={text("编辑事项范围")}
-                  aria-label={text("编辑事项范围")}
+                  title="编辑事项范围"
+                  aria-label="编辑事项范围"
                   disabled={
                     busy ||
                     !["ready", "needs_update"].includes(matter.availability)
@@ -782,19 +738,16 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                 </button>
               </header>
               <div className="matter-metadata">
-                <span>{text("内容待核对")}</span>
+                <span>内容待核对</span>
                 <span>
                   {matter.source_engine === "hy-memory"
-                    ? text("HY Memory 提取")
-                    : text("历史探索结果 · 未经 HY")}
+                    ? "HY Memory 提取"
+                    : "历史探索结果 · 未经 HY"}
                 </span>
                 <span>
-                  <ShieldCheck size={13} />{" "}
-                  {tnPlain("matter.evidence", matter.evidence_count)}
+                  <ShieldCheck size={13} /> {matter.evidence_count} 条证据
                 </span>
-                <span>
-                  {text("{time} 更新", { time: time(matter.updated_at) })}
-                </span>
+                <span>{time(matter.updated_at)} 更新</span>
                 <span>{matter.model}</span>
               </div>
               <label className="matter-agent-access" hidden={tab === "map"}>
@@ -819,13 +772,13 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                     )
                   }
                 />
-                {text("允许已连接 Agent 读取此事项")}
+                允许已连接 Agent 读取此事项
               </label>
               {matter.availability !== "ready" && (
                 <div className="matter-update-warning">
                   {matter.availability === "needs_update"
-                    ? text("新资料待整理，旧结论暂不提供给 Agent。")
-                    : text("来源或基础记忆已变化，旧档案已隐藏。")}
+                    ? "新资料待整理，旧结论暂不提供给 Agent。"
+                    : "来源或基础记忆已变化，旧档案已隐藏。"}
                   <button
                     type="button"
                     className="quiet"
@@ -836,14 +789,14 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                       )
                     }
                   >
-                    <RefreshCw size={14} /> {text("更新档案")}
+                    <RefreshCw size={14} /> 更新档案
                   </button>
                 </div>
               )}
               {!matter.scope_confirmed && matter.availability === "ready" && (
                 <div className="matter-calibration">
                   <div>
-                    <strong>{text("最近是在推进这件事吗？")}</strong>
+                    <strong>最近是在推进这件事吗？</strong>
                     <p>{matter.boundary}</p>
                   </div>
                   <button
@@ -863,7 +816,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                       )
                     }
                   >
-                    <Check size={14} /> {text("确认事项范围")}
+                    <Check size={14} /> 确认事项范围
                   </button>
                 </div>
               )}
@@ -887,7 +840,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   }}
                 >
                   <label>
-                    {text("事项名称")}
+                    事项名称
                     <input
                       value={title}
                       maxLength={100}
@@ -897,7 +850,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                     />
                   </label>
                   <label>
-                    {text("事项范围")}
+                    事项范围
                     <textarea
                       value={boundary}
                       maxLength={800}
@@ -907,27 +860,27 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   </label>
                   <div>
                     <button type="submit" disabled={busy}>
-                      {text("保存")}
+                      保存
                     </button>
                     <button
                       type="button"
                       className="quiet"
                       onClick={() => setEdit(false)}
                     >
-                      {text("取消")}
+                      取消
                     </button>
                   </div>
                 </form>
               )}
               <div className="matter-tabs">
-                <div role="tablist" aria-label={text("档案视图")}>
+                <div role="tablist" aria-label="档案视图">
                   <button
                     type="button"
                     role="tab"
                     aria-selected={tab === "map"}
                     onClick={() => setTab("map")}
                   >
-                    <Network size={14} /> {text("记忆地图")}
+                    <Network size={14} /> 记忆地图
                   </button>
                   <button
                     type="button"
@@ -935,7 +888,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                     aria-selected={tab === "wiki"}
                     onClick={() => setTab("wiki")}
                   >
-                    <FileText size={14} /> {text("知识档案")}
+                    <FileText size={14} /> 知识档案
                   </button>
                   <button
                     type="button"
@@ -943,7 +896,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                     aria-selected={tab === "history"}
                     onClick={() => setTab("history")}
                   >
-                    <History size={14} /> {text("版本记录")}
+                    <History size={14} /> 版本记录
                   </button>
                 </div>
                 <button
@@ -952,13 +905,13 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   disabled={busy || matter.availability !== "ready"}
                   onClick={() => void action(openContext, "read")}
                 >
-                  <Copy size={14} /> {text("任务上下文")}
+                  <Copy size={14} /> 任务上下文
                 </button>
                 <button
                   type="button"
                   className="quiet icon-button"
-                  title={text("基础记忆与原文")}
-                  aria-label={text("打开记忆检查器")}
+                  title="基础记忆与原文"
+                  aria-label="打开记忆检查器"
                   onClick={() => setInspectorOpen(true)}
                 >
                   <PanelRightOpen size={16} />
@@ -967,13 +920,13 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
               <div className="matter-map-stage" hidden={tab !== "map"}>
                 {mapError && (
                   <p className="matter-error" role="status">
-                    {text(mapError)}{" "}
+                    {mapError}{" "}
                     <button
                       type="button"
                       className="quiet"
                       onClick={() => void loadMap()}
                     >
-                      {text("重试读取")}
+                      重试读取
                     </button>
                   </p>
                 )}
@@ -986,26 +939,23 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                     />
                     <fieldset
                       className="memory-map-legend matter-map-legend"
-                      aria-label={text("图谱图例")}
+                      aria-label="图谱图例"
                     >
-                      <span data-kind="memory">{text("基础记忆")}</span>
-                      <span data-kind="source">{text("来源")}</span>
-                      <span data-kind="schema">{text("模式")}</span>
-                      <span data-kind="topic">{text("主题")}</span>
+                      <span data-kind="memory">基础记忆</span>
+                      <span data-kind="source">来源</span>
+                      <span data-kind="schema">模式</span>
+                      <span data-kind="topic">主题</span>
                       <span>
-                        {tnPlain("matter.memories", projection.memories.length)}{" "}
-                        ·{" "}
-                        {tnPlain("matter.edges", projection.graph.edges.length)}
+                        {projection.memories.length} 条记忆 ·{" "}
+                        {projection.graph.edges.length} 条关联
                       </span>
                     </fieldset>
                   </>
                 ) : (
                   <p className="matter-map-empty">
                     {matter.source_engine === "legacy_direct"
-                      ? text(
-                          "历史探索结果没有 HY 基础记忆，可在知识档案中查看。",
-                        )
-                      : text("暂无可展示的基础记忆关联。")}
+                      ? "历史探索结果没有 HY 基础记忆，可在知识档案中查看。"
+                      : "暂无可展示的基础记忆关联。"}
                   </p>
                 )}
               </div>
@@ -1017,7 +967,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                       <section className="matter-claim-section" key={kind}>
                         <h3>
                           <span className={`kind-dot ${kind}`} />
-                          {text(kinds[kind])}
+                          {kinds[kind]}
                           <small>{claims.length}</small>
                         </h3>
                         {claims.map((claim, index) => (
@@ -1032,16 +982,16 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                               </p>
                             )}
                             <div className="claim-meta">
-                              <span>{text(authors[claim.basis])}</span>
+                              <span>{authors[claim.basis]}</span>
                               {claim.state && claim.state !== "current" && (
                                 <span>
-                                  {text(
-                                    claim.state === "historical"
-                                      ? "历史记录"
-                                      : claim.state === "superseded"
-                                        ? "已被替代"
-                                        : "待核对",
-                                  )}
+                                  {
+                                    {
+                                      historical: "历史记录",
+                                      superseded: "已被替代",
+                                      unresolved: "待核对",
+                                    }[claim.state]
+                                  }
                                 </span>
                               )}
                               {claim.scope && <span>{claim.scope}</span>}
@@ -1050,25 +1000,11 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                                   type="button"
                                   className="citation-link"
                                   key={`${cite.evidence_id}-${cite.quote}`}
-                                  aria-label={text(
-                                    "查看原话 {source} {claim}-{citation}",
-                                    {
-                                      source:
-                                        cite.source_id === "one-memory-manual"
-                                          ? text("手动添加")
-                                          : (sources[cite.source_id] ??
-                                            cite.source_id),
-                                      claim: index + 1,
-                                      citation: i + 1,
-                                    },
-                                  )}
+                                  aria-label={`查看原话 ${sources[cite.source_id] ?? cite.source_id} ${index + 1}-${i + 1}`}
                                   onClick={() => void openEvidence(cite)}
                                 >
                                   <Link2 size={12} />
-                                  {cite.source_id === "one-memory-manual"
-                                    ? text("手动添加")
-                                    : (sources[cite.source_id] ??
-                                      cite.source_id)}
+                                  {sources[cite.source_id] ?? cite.source_id}
                                 </button>
                               ))}
                             </div>
@@ -1079,7 +1015,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   })}
                   {!!matter.uncertainties.length && (
                     <section className="matter-uncertainties">
-                      <h3>{text("信息缺口与待核对")}</h3>
+                      <h3>信息缺口与待核对</h3>
                       <ul>
                         {matter.uncertainties.map((item) => (
                           <li key={item}>{item}</li>
@@ -1096,9 +1032,9 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                       <div>
                         <strong>{item.title}</strong>
                         <p>
-                          {time(item.updated_at)} ·{" "}
-                          {tnPlain("matter.claims", item.claims.length)} ·{" "}
-                          {text(item.scope_confirmed ? "范围已确认" : "未校准")}
+                          {time(item.updated_at)} · {item.claims.length}{" "}
+                          个记忆点 ·{" "}
+                          {item.scope_confirmed ? "范围已确认" : "未校准"}
                         </p>
                       </div>
                     </li>
@@ -1124,11 +1060,11 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   });
                 }}
               >
-                <label htmlFor="matter-note">{text("补充或更正")}</label>
+                <label htmlFor="matter-note">补充或更正</label>
                 <div>
                   <textarea
                     id="matter-note"
-                    placeholder={text("关于这件事，还有…")}
+                    placeholder="关于这件事，还有…"
                     value={note}
                     maxLength={20000}
                     onChange={(e) => setNote(e.target.value)}
@@ -1136,8 +1072,8 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                   <button
                     type="submit"
                     className="icon-button"
-                    title={text("保存补充")}
-                    aria-label={text("保存补充")}
+                    title="保存补充"
+                    aria-label="保存补充"
                     disabled={
                       busy ||
                       !note.trim() ||
@@ -1155,24 +1091,24 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
           <button
             type="button"
             className="matter-inspector-backdrop"
-            aria-label={text("收起记忆检查器")}
+            aria-label="收起记忆检查器"
             onClick={() => setInspectorOpen(false)}
           />
         )}
         <aside
           className={`matter-evidence ${inspectorOpen ? "is-open" : ""}`}
-          aria-label={text("原始证据")}
+          aria-label="原始证据"
           onKeyDown={(event) => {
             if (event.key === "Escape") setInspectorOpen(false);
           }}
         >
           <header className="matter-inspector-heading">
-            <h3>{text("记忆与原文")}</h3>
+            <h3>记忆与原文</h3>
             <button
               type="button"
               className="quiet icon-button"
-              title={text("关闭检查器")}
-              aria-label={text("关闭记忆检查器")}
+              title="关闭检查器"
+              aria-label="关闭记忆检查器"
               onClick={() => setInspectorOpen(false)}
             >
               <X size={16} />
@@ -1196,13 +1132,13 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
             onSelect={(id) => void selectMemory(id)}
           />
           <header>
-            <h3>{text("原始证据")}</h3>
+            <h3>原始证据</h3>
             {citation && (
               <button
                 type="button"
                 className="quiet icon-button"
-                title={text("关闭原话")}
-                aria-label={text("关闭原话")}
+                title="关闭原话"
+                aria-label="关闭原话"
                 onClick={() => {
                   evidenceRequest.current += 1;
                   setCitation(null);
@@ -1217,49 +1153,45 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
             <div
               className="matter-skeleton"
               role="status"
-              aria-label={text("正在读取原文")}
+              aria-label="正在读取原文"
             />
           ) : evidence ? (
             <>
               <div className="evidence-source">
                 <span className="source-monogram">
-                  {(evidence.source_id === "one-memory-manual"
-                    ? text("手动添加")
-                    : (sources[evidence.source_id] ?? evidence.source_id)
-                  ).slice(0, 1)}
+                  {(sources[evidence.source_id] ?? evidence.source_id).slice(
+                    0,
+                    1,
+                  )}
                 </span>
                 <div>
                   <strong>
-                    {evidence.source_id === "one-memory-manual"
-                      ? text("手动添加")
-                      : (sources[evidence.source_id] ?? evidence.source_id)}
+                    {sources[evidence.source_id] ?? evidence.source_id}
                   </strong>
                   <small>
                     {evidence.written_by === "person"
-                      ? text("用户原话")
-                      : text("Agent 发言")}
+                      ? "用户原话"
+                      : "Agent 发言"}
                   </small>
                 </div>
               </div>
               <p className="evidence-time">
                 {evidence.created_at
                   ? time(evidence.created_at)
-                  : text("消息时间未知")}
+                  : "消息时间未知"}
               </p>
               <p className="evidence-time">
-                {text("观测于 {time}", { time: time(evidence.observed_at) })}
+                观测于 {time(evidence.observed_at)}
               </p>
               <div className="evidence-verbatim">
                 {highlight(evidence.text, citation?.quote ?? "")}
               </div>
-              <p className="evidence-id">
-                {text("证据 {id}", { id: evidence.evidence_id })}
-              </p>
+              <p className="evidence-id">证据 {evidence.evidence_id}</p>
             </>
           ) : !memoryDetail && !memoryLoading ? (
             <div className="evidence-empty">
               <Link2 size={25} />
-              <p>{text("暂无选中的原话")}</p>
+              <p>暂无选中的原话</p>
             </div>
           ) : null}
         </aside>
@@ -1277,28 +1209,24 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
               aria-labelledby="context-title"
             >
               <header>
-                <h2 id="context-title">
-                  {text("任务上下文 · v{version}", {
-                    version: context.version,
-                  })}
-                </h2>
+                <h2 id="context-title">任务上下文 · v{context.version}</h2>
                 <button
                   type="button"
                   className="quiet icon-button"
-                  title={text("关闭上下文")}
-                  aria-label={text("关闭上下文")}
+                  title="关闭上下文"
+                  aria-label="关闭上下文"
                   onClick={() => setContext(null)}
                 >
                   <X size={18} />
                 </button>
               </header>
               <textarea
-                aria-label={text("任务上下文内容")}
+                aria-label="任务上下文内容"
                 readOnly
                 value={context.text}
               />
               <footer>
-                <span>{text("历史参考 · 保留来源与核验状态")}</span>
+                <span>历史参考 · 保留来源与核验状态</span>
                 <button
                   type="button"
                   onClick={async () => {
@@ -1310,7 +1238,7 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
                     }
                   }}
                 >
-                  <Copy size={14} /> {text(copied ? "已复制" : "复制上下文")}
+                  <Copy size={14} /> {copied ? "已复制" : "复制上下文"}
                 </button>
               </footer>
             </section>

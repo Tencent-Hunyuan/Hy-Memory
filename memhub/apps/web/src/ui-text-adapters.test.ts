@@ -1,5 +1,5 @@
 import type { SourceResponse } from "@one-memory/contracts";
-import { isMessageKey, translate } from "@one-memory/contracts/gui-i18n";
+import { isMessageKey, translate } from "@one-memory/i18n";
 import { describe, expect, it } from "vitest";
 
 import { applicationsText } from "./applications-language";
@@ -23,6 +23,7 @@ const unknown = [
 describe("presentation adapters", () => {
   it.each(unknown)("memoryText returns unknown text %j untouched", (value) => {
     expect(memoryText("es", value)).toBe(value);
+    expect(memoryText("en", value)).toBe(value);
     expect(memoryText("zh-CN", value)).toBe(value);
   });
 
@@ -32,6 +33,7 @@ describe("presentation adapters", () => {
       // Simulates a key that drifted out of the catalog at runtime.
       const key = value as Parameters<typeof applicationsText>[1];
       expect(applicationsText("es", key)).toBe(value);
+      expect(applicationsText("en", key)).toBe(value);
       expect(applicationsText("zh-CN", key)).toBe(value);
     },
   );
@@ -45,6 +47,9 @@ describe("presentation adapters", () => {
     );
     expect(applicationsText("zh-CN", "viewAll", { count: 1 })).toBe(
       "查看全部 1 个应用",
+    );
+    expect(applicationsText("en", "viewAll", { count: 3 })).not.toMatch(
+      /[一-鿿]/,
     );
   });
 
@@ -90,12 +95,15 @@ describe("presentation adapters", () => {
   ])("memoryText translates %j and keeps the Chinese as is", (label) => {
     expect(memoryText("zh-CN", label)).toBe(label);
     const spanish = memoryText("es", label);
+    const english = memoryText("en", label);
     expect(spanish).not.toBe(label);
     expect(spanish).not.toMatch(/[一-鿿]/);
+    expect(english).not.toBe(label);
+    expect(english).not.toMatch(/[一-鿿]/);
   });
 
   it("words an action as a verb inside sentences and as a noun in history", () => {
-    const action = (locale: "zh-CN" | "es") =>
+    const action = (locale: "zh-CN" | "en" | "es") =>
       memoryText(locale, "删除（操作）");
     expect(action("zh-CN")).toBe("删除");
     expect(
@@ -113,6 +121,8 @@ describe("presentation adapters", () => {
     expect(memoryText("zh-CN", "删除（记录）")).toBe("删除");
     expect(memoryText("es", "删除（记录）")).toBe("Eliminación");
     expect(memoryText("es", "删除")).toBe("Eliminar");
+    expect(memoryText("en", "删除（记录）")).toBe("Deletion");
+    expect(memoryText("en", "删除")).toBe("Delete");
   });
 });
 
@@ -135,6 +145,7 @@ describe("source authorization notes", () => {
       if (!isMessageKey(message)) continue;
       expect(translate("zh-CN", message)).toBe(message);
       expect(translate("es", message)).not.toMatch(/[一-鿿]/);
+      expect(translate("en", message)).not.toMatch(/[一-鿿]/);
     }
   });
 });

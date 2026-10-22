@@ -1,4 +1,4 @@
-import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import { Download, Flag, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {

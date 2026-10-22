@@ -3,7 +3,7 @@ import type {
   SourceImportReceipt as Receipt,
   SourceResponse,
 } from "@one-memory/contracts";
-import type { GuiLocale } from "@one-memory/contracts/gui-i18n";
+import type { GuiLocale } from "@one-memory/i18n";
 import { FileText, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getConversation, getSourceImportReceipt } from "./api";

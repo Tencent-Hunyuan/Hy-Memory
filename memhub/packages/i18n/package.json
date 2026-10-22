@@ -1,0 +1,25 @@
+{
+  "name": "@one-memory/i18n",
+  "version": "1.0.4",
+  "private": true,
+  "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit --pretty false",
+    "test": "node ../../scripts/assert-test-isolation.mjs && vitest run"
+  },
+  "dependencies": {
+    "i18next": "^25.8.13"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

@@ -40,6 +40,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Added an extensible MemHub interface-localization layer with Simplified
+  Chinese, English, and Spanish catalogs shared by Web and Electron-native
+  surfaces. Interface language remains independent from memory content and
+  model processing language.
 - `search(..., layers=["l1_raw"])` now explicitly searches SDK raw records in
   pro/ultra mode and keeps existing user/agent/session/source filters; default
   search continues to hide raw.

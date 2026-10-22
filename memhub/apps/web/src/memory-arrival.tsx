@@ -1,4 +1,4 @@
-import { type GuiLocale, translate } from "@one-memory/contracts/gui-i18n";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import { FileText, Link2, LoaderCircle, Settings2 } from "lucide-react";
 import { useGuiLanguage } from "./gui-language";
 import {

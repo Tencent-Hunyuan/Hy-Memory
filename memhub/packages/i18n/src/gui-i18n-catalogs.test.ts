@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  connectionPrompt,
   isMessageKey,
   type MessageKey,
   translate,
@@ -14,7 +13,12 @@ import {
   callsChineseMessages,
   callsSpanishMessages,
 } from "./gui-i18n-calls.js";
-import { connectionSpanishMessages } from "./gui-i18n-connection.js";
+import {
+  currentChineseMessages,
+  currentEnglishMessages,
+  currentSpanishMessages,
+} from "./gui-i18n-current.js";
+import { englishMessages } from "./gui-i18n-english.js";
 import {
   memoryChineseMessages,
   memorySpanishMessages,
@@ -30,22 +34,24 @@ const placeholders = (text: string) =>
   [...text.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]).sort();
 
 import {
-  mattersChineseMessages,
-  mattersSpanishMessages,
-} from "./gui-i18n-matters.js";
-
-import {
   workbenchChineseMessages,
   workbenchSpanishMessages,
 } from "./gui-i18n-workbench.js";
 
 const migrated = [
+  ["current", currentChineseMessages, currentSpanishMessages],
   ["workbench", workbenchChineseMessages, workbenchSpanishMessages],
-  ["matters", mattersChineseMessages, mattersSpanishMessages],
   ["applications", applicationsChineseMessages, applicationsSpanishMessages],
   ["memory", memoryChineseMessages, memorySpanishMessages],
   ["calls", callsChineseMessages, callsSpanishMessages],
 ] as const;
+
+// The parent integration merges this shard into gui-i18n-english.ts. Keep the
+// shard independently type-safe without mutating that shared file here.
+const completeEnglishMessages = {
+  ...englishMessages,
+  ...currentEnglishMessages,
+};
 
 describe("mergeCatalogs", () => {
   it("throws when two catalogs give one key divergent texts", () => {
@@ -193,41 +199,56 @@ describe("translate interpolation", () => {
   });
 });
 
-describe("connectionPrompt", () => {
-  const material = {
-    mcp: '{"a":"{shell}","b":"$&"}\n',
-    shell: "'/synthetic' '{mcp}'\nline\n",
-    prompt: "中文提示词\n",
-  };
-
-  it("returns the bridge's Chinese prompt byte for byte", () => {
-    expect(connectionPrompt("zh-CN", material)).toBe(material.prompt);
-  });
-
-  it("inserts both snippets exactly once and verbatim in Spanish", () => {
-    const value = connectionPrompt("es", material);
-    expect(value.split(material.mcp)).toHaveLength(2);
-    expect(value.split(material.shell)).toHaveLength(2);
-    expect(value).not.toContain("{shellBlock}");
-    expect(value).not.toContain(material.prompt);
-  });
-
-  it("drops only the shell section when shell is missing", () => {
-    const withShell = connectionPrompt("es", material);
-    const noShell = connectionPrompt("es", { ...material, shell: null });
-    const block = connectionSpanishMessages["connection.promptShell"].replace(
-      "{shell}",
-      material.shell,
+describe("English catalog", () => {
+  it("covers every shipped key with matching placeholders", () => {
+    expect(Object.keys(completeEnglishMessages).sort()).toEqual(
+      Object.keys(chineseMessages).sort(),
     );
-    expect(withShell.replace(block, "")).toBe(noShell);
+    for (const [key, text] of Object.entries(chineseMessages)) {
+      expect(
+        placeholders(completeEnglishMessages[key as MessageKey]),
+        key,
+      ).toEqual(placeholders(text));
+      expect(completeEnglishMessages[key as MessageKey], key).not.toMatch(
+        /[一-鿿]/,
+      );
+    }
   });
 
-  it("keeps only the expected placeholders in the template", () => {
+  it("uses CLDR English singular and plural forms", () => {
     expect(
-      placeholders(connectionSpanishMessages["connection.prompt"]),
-    ).toEqual(["mcp", "shellBlock"]);
+      translateCount("en", "calls.headline.found", 1, {
+        host: "Cursor",
+        count: 1,
+      }),
+    ).toContain("1");
     expect(
-      placeholders(connectionSpanishMessages["connection.promptShell"]),
-    ).toEqual(["shell"]);
+      translateCount("en", "calls.headline.found", 2, {
+        host: "Cursor",
+        count: 2,
+      }),
+    ).toContain("2");
+  });
+});
+
+describe("Spanish catalog", () => {
+  it("covers every shipped key with matching placeholders", () => {
+    expect(Object.keys(spanishMessages).sort()).toEqual(
+      Object.keys(chineseMessages).sort(),
+    );
+    for (const [key, text] of Object.entries(chineseMessages)) {
+      const spanish = spanishMessages[key as MessageKey];
+      expect(spanish, key).toBeDefined();
+      if (spanish === undefined) continue;
+      const translated = placeholders(spanish);
+      const expected = placeholders(text);
+      if (key !== "connectionFallback.promptTemplate")
+        expect(spanish, key).not.toMatch(/[一-鿿]/);
+      if (key.endsWith(".one")) {
+        for (const name of translated) expect(expected, key).toContain(name);
+      } else {
+        expect(translated, key).toEqual(expected);
+      }
+    }
   });
 });

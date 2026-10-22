@@ -18,6 +18,7 @@ vi.mock("./api", () => ({
   updateSdkMemory,
 }));
 
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 
 const memory = {
@@ -52,7 +53,26 @@ describe("SDK memory library", () => {
     );
     deleteSdkMemory.mockResolvedValue(undefined);
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("localizes controls while leaving memory content unchanged", async () => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+    render(
+      <LanguageProvider>
+        <SdkMemoryLibrary active />
+      </LanguageProvider>,
+    );
+    expect(
+      await screen.findByRole("navigation", {
+        name: "Estado de la memoria",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "original" })).toBeTruthy();
+    expect(screen.getByText("1 memoria")).toBeTruthy();
+  });
 
   it("edits the same memory id and physically deletes without revision or undo", async () => {
     render(<SdkMemoryLibrary active />);
