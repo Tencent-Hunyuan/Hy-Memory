@@ -3652,8 +3652,8 @@ def create_app(
             try:
                 async for event in answerer.answer_stream(request.question):
                     yield _sse(_serialize_ask_event(event))
-            except MemoryAnswerError as error:
-                yield _sse({"type": "error", "code": str(error)})
+            except MemoryAnswerError:
+                yield _sse({"type": "error", "code": "memory_answer_failed"})
 
         return StreamingResponse(
             events(),
