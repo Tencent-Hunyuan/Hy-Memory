@@ -11,9 +11,11 @@ import { R6Button } from "./R6Controls";
 export function SdkMemoryLibrary({
   active,
   onChanged,
+  focusedMemoryId,
 }: {
   active: boolean;
   onChanged?(): void;
+  focusedMemoryId?: string | null;
 }) {
   const [status, setStatus] = useState<SdkMemoryStatus>("active");
   const [offset, setOffset] = useState(0);
@@ -50,7 +52,7 @@ export function SdkMemoryLibrary({
     void refresh();
   }, [refresh]);
 
-  async function open(memoryId: string) {
+  const open = useCallback(async (memoryId: string) => {
     setBusy(true);
     setError("");
     try {
@@ -62,7 +64,11 @@ export function SdkMemoryLibrary({
     } finally {
       setBusy(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (active && focusedMemoryId) void open(focusedMemoryId);
+  }, [active, focusedMemoryId, open]);
 
   async function save() {
     if (!selected || !draft.trim()) return;

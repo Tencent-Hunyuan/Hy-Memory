@@ -3,9 +3,9 @@ import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
   HostContextSearchResponse,
   MatterContext,
   RecallReceipt,
@@ -434,7 +434,7 @@ export async function askThroughBroker(
   discoveryPath: string,
   request: AskMemoryRequest,
   options?: BrokerClientOptions,
-): Promise<AskMemoryResponse> {
+): Promise<HostAskMemoryResponse> {
   return postThroughBroker(discoveryPath, "ask", request, 125_000, options);
 }
 

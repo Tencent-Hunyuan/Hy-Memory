@@ -569,6 +569,23 @@ def test_sdk_context_v2_accepts_the_same_composed_external_grants(tmp_path):
     asyncio.run(scenario())
 
 
+def test_sdk_ask_v2_is_an_explicit_external_om_ask_route(tmp_path):
+    async def scenario():
+        async with library(tmp_path) as (_, client, *_):
+            response = await client.post(
+                "/api/v2/memories/ask",
+                json={"question": "needle"},
+                headers=envelope(
+                    tools=("om_ask",),
+                    scopes=("all-apps",),
+                ),
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == "legacy_memory_authority_required"
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("tool", TOOLS)
 def test_source_revocation_keeps_surviving_data_and_blocks_revoked_bodies(tmp_path, tool):
     async def scenario():

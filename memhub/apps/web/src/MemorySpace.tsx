@@ -1,11 +1,12 @@
 import type {
-  AskMemoryResponse,
   ExtractionWindowPreset,
   GovernedMemory,
+  HostAskMemoryResponse,
   ImportJob,
   MemoryDetail,
   MemoryGraphResponse,
   MemoryProcessingSummary,
+  SdkAskMemory,
   SourceResponse,
 } from "@one-memory/contracts";
 import {
@@ -76,6 +77,7 @@ import {
 } from "./memory-processing-labels";
 
 type MemoryMode = "map" | "ask" | "library" | "history";
+type AskMemory = GovernedMemory | SdkAskMemory;
 type MemoryStatusFilter = "confirmed" | "deleted" | "superseded";
 type BulkAction = "delete";
 type BulkTarget = {
@@ -143,9 +145,9 @@ export function MemorySpace({
   const [query, setQuery] = useState("");
   const [askScope, setAskScope] = useState<"all-apps" | "*">("all-apps");
   const [mode, setMode] = useState<MemoryMode>("map");
-  const [memoryAuthority, setMemoryAuthority] = useState<"legacy" | "sdk">(
-    "legacy",
-  );
+  const [memoryAuthority, setMemoryAuthority] = useState<
+    "unknown" | "legacy" | "sdk"
+  >("unknown");
   const [managementOpen, setManagementOpen] = useState(false);
   const displayedMode = simplified
     ? managementOpen
@@ -260,11 +262,14 @@ export function MemorySpace({
     };
   }, [active]);
   const [graph, setGraph] = useState<MemoryGraphResponse | null>(null);
-  const [answer, setAnswer] = useState<AskMemoryResponse | null>(null);
+  const [answer, setAnswer] = useState<HostAskMemoryResponse | null>(null);
   const [streaming, setStreaming] = useState<{
     text: string;
-    memories: GovernedMemory[];
+    memories: AskMemory[];
   } | null>(null);
+  const [sdkFocusedMemoryId, setSdkFocusedMemoryId] = useState<string | null>(
+    null,
+  );
   const [draft, setDraft] = useState("");
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const bulkInFlight = useRef(false);
@@ -432,11 +437,12 @@ export function MemorySpace({
   const detailRef = useRef(detail);
   detailRef.current = detail;
   const answerEpoch = useRef(0);
-  const answerMemories = useRef<GovernedMemory[]>([]);
+  const answerMemories = useRef<AskMemory[]>([]);
   const dataEpoch = useRef(0);
   const invalidateAnswers = useCallback((items: GovernedMemory[]) => {
     if (
       !answerMemories.current.some((memory) => {
+        if (!("revision" in memory)) return false;
         const current = items.find(
           (item) => item.memory_id === memory.memory_id,
         );
@@ -847,6 +853,8 @@ export function MemorySpace({
    * user the one screen that explains what this app is for. */
 
   async function ask(question: string, scope = askScope) {
+    if (memoryAuthority === "unknown")
+      throw new Error("memory_authority_unavailable");
     const epoch = ++answerEpoch.current;
     answerMemories.current = [];
     setAnswer(null);
@@ -872,13 +880,15 @@ export function MemorySpace({
         scope,
         undefined,
         trace.traceId,
+        memoryAuthority,
       )) {
         if (epoch !== answerEpoch.current) return;
         if (event.type === "recall") {
-          answerMemories.current = event.memories;
+          const memories: AskMemory[] = [...event.memories];
+          answerMemories.current = memories;
           setStreaming((current) => ({
             text: current?.text ?? "",
-            memories: event.memories,
+            memories,
           }));
         } else if (event.type === "delta") {
           setStreaming((current) => ({
@@ -886,12 +896,22 @@ export function MemorySpace({
             memories: current?.memories ?? [],
           }));
         } else if (event.type === "final") {
-          answerMemories.current = event.memories;
-          setAnswer({
-            answer: event.answer,
-            memories: event.memories,
-            mode: event.mode,
-          });
+          const memories: AskMemory[] = [...event.memories];
+          answerMemories.current = memories;
+          setAnswer(
+            "schema_version" in event
+              ? {
+                  schema_version: 2,
+                  answer: event.answer,
+                  memories: event.memories,
+                  mode: event.mode,
+                }
+              : {
+                  answer: event.answer,
+                  memories: event.memories,
+                  mode: event.mode,
+                },
+          );
         } else {
           throw new Error(event.code);
         }
@@ -909,6 +929,15 @@ export function MemorySpace({
       settle("unknown", "ask_abandoned");
       if (epoch === answerEpoch.current) setStreaming(null);
     }
+  }
+
+  function openAskMemory(memory: AskMemory) {
+    if ("revision" in memory) {
+      open(memory.memory_id);
+      return;
+    }
+    setSdkFocusedMemoryId(memory.memory_id);
+    setMode("library");
   }
 
   async function saveAnswer(draft: { content: string }) {
@@ -1044,9 +1073,9 @@ export function MemorySpace({
     dataEpoch.current++;
     graphEpoch.current++;
     invalidateAnswers(
-      answerMemories.current.map((item) =>
-        item.memory_id === updated.memory_id ? updated : item,
-      ),
+      answerMemories.current
+        .filter((item): item is GovernedMemory => "revision" in item)
+        .map((item) => (item.memory_id === updated.memory_id ? updated : item)),
     );
     setMemories((current) =>
       current.map((item) =>
@@ -1730,7 +1759,13 @@ export function MemorySpace({
         answer={answer}
         streaming={streaming}
         onDraft={setDraft}
-        onOpenMemory={(memoryId) => void open(memoryId)}
+        onOpenMemory={(memoryId) => {
+          const recalled = answerMemories.current.find(
+            (memory) => memory.memory_id === memoryId,
+          );
+          if (recalled) openAskMemory(recalled);
+          else void open(memoryId);
+        }}
         onCloseDetail={closeDetail}
         onSave={save}
         onAction={(name) => void action(name)}
@@ -1779,7 +1814,7 @@ export function MemorySpace({
             <ol>
               {(answer ?? streaming)?.memories.map((memory) => (
                 <li key={memory.memory_id}>
-                  <button type="button" onClick={() => open(memory.memory_id)}>
+                  <button type="button" onClick={() => openAskMemory(memory)}>
                     {memory.content}
                   </button>
                 </li>
@@ -1812,7 +1847,10 @@ export function MemorySpace({
         hidden={displayedMode !== "library"}
       >
         {memoryAuthority === "sdk" ? (
-          <SdkMemoryLibrary active={active} />
+          <SdkMemoryLibrary
+            active={active}
+            focusedMemoryId={sdkFocusedMemoryId}
+          />
         ) : (
           <>
             <div>

@@ -561,6 +561,7 @@ describe("MemorySpace", () => {
         "*",
         undefined,
         expect.any(String),
+        "legacy",
       );
       expectNoTeachingWrites();
     });
@@ -1979,8 +1980,65 @@ describe("MemorySpace", () => {
         "*",
         undefined,
         expect.any(String),
+        "legacy",
       ),
     );
+  });
+
+  it("uses SDK Ask v2 after authority cutover", async () => {
+    getMemoryAuthority.mockResolvedValue({
+      authority: "sdk",
+      migration_id: "migration-1",
+    });
+    askMemoriesStream.mockImplementation(async function* () {
+      yield {
+        type: "recall",
+        memories: [
+          {
+            memory_id: "sdk-memory-1",
+            content: "SDK 原生记忆",
+            layer: "l2_fact",
+            status: "active",
+            source: "cursor",
+            gmt_created: null,
+          },
+        ],
+      };
+      yield {
+        type: "final",
+        schema_version: 2,
+        answer: "SDK 回答",
+        memories: [
+          {
+            memory_id: "sdk-memory-1",
+            content: "SDK 原生记忆",
+            layer: "l2_fact",
+            status: "active",
+            source: "cursor",
+            gmt_created: null,
+          },
+        ],
+        mode: "extractive",
+      };
+    });
+    render(<MemorySpace />);
+    await userEvent.type(
+      await screen.findByLabelText("向记忆提问"),
+      "SDK 问题",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "发送问题" }));
+
+    await waitFor(() =>
+      expect(askMemoriesStream).toHaveBeenCalledWith(
+        "SDK 问题",
+        "*",
+        undefined,
+        expect.any(String),
+        "sdk",
+      ),
+    );
+    expect((await screen.findAllByText("SDK 回答")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/revision|evidence_ids/)).toBeNull();
   });
 
   it("hands a saved answer to HY as a note instead of writing the memory itself", async () => {

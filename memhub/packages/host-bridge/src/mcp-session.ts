@@ -1,8 +1,8 @@
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
   HostContextSearchResponse,
   MatterContext,
   RecallRequest,
@@ -52,7 +52,7 @@ type Recall = (
 type Ask = (
   discoveryPath: string,
   request: AskMemoryRequest,
-) => Promise<AskMemoryResponse>;
+) => Promise<HostAskMemoryResponse>;
 
 type SearchConversations = (
   discoveryPath: string,

@@ -27,6 +27,8 @@ _ENVELOPE_HEADERS = frozenset(
 _BROKER_ROUTES = {
     ("POST", "/api/v1/recall"): "om_recall",
     ("POST", "/api/v1/memories/ask"): "om_ask",
+    ("POST", "/api/v2/memories/ask"): "om_ask",
+    ("POST", "/api/v2/memories/ask/stream"): "om_ask",
     ("GET", "/api/v1/conversations/search"): "om_conversations",
     ("POST", "/api/v1/matters/context/search"): "om_matters",
     ("POST", "/api/v1/diagnostics/trace"): "om_diagnostic_trace",

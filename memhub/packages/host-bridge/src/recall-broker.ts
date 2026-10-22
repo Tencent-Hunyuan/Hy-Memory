@@ -7,9 +7,9 @@ import {
 import type { AddressInfo } from "node:net";
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
   HostContextSearchResponse,
   MemoryAuthorityResponse,
   RecallReceipt,
@@ -1229,10 +1229,25 @@ export class RecallBroker {
         "om_ask",
         body.scope ?? "all-apps",
       );
+      const authorityResponse = await axios.get<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.options.coreApiToken}`,
+            "x-one-memory-trace-id": requestTraceId(request),
+          },
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 1_500,
+        },
+      );
+      if (!isMemoryAuthorityResponse(authorityResponse.data))
+        throw new Error("invalid_memory_authority");
+      const authority = authorityResponse.data;
       // Ask may call a generation model; keep the broker timeout aligned with
       // the web client's 120s budget rather than the short recall budget.
-      const coreResponse = await axios.post<AskMemoryResponse>(
-        `${this.options.coreBaseUrl}/api/v1/memories/ask`,
+      const coreResponse = await axios.post<HostAskMemoryResponse>(
+        `${this.options.coreBaseUrl}/api/${authority.authority === "sdk" ? "v2" : "v1"}/memories/ask`,
         body,
         {
           headers: authorized.headers,
@@ -1241,6 +1256,8 @@ export class RecallBroker {
           timeout: 120_000,
         },
       );
+      if (!isHostAskResponse(coreResponse.data, authority.authority))
+        throw new Error("invalid_ask_response");
       await authorized.verifyBeforeRelease();
       sendJson(response, 200, coreResponse.data);
     } catch (error) {
@@ -1639,6 +1656,47 @@ function matchesContextAuthority(
     (value as { schema_version?: unknown }).schema_version ===
     (authority.authority === "sdk" ? 2 : 1)
   );
+}
+
+function isHostAskResponse(
+  value: unknown,
+  authority: "legacy" | "sdk",
+): value is HostAskMemoryResponse {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const response = value as Record<string, unknown>;
+  if (
+    typeof response.answer !== "string" ||
+    !["generated", "extractive", "empty"].includes(String(response.mode)) ||
+    !Array.isArray(response.memories)
+  )
+    return false;
+  if (authority === "legacy") return response.schema_version === undefined;
+  if (response.schema_version !== 2) return false;
+  return response.memories.every((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item))
+      return false;
+    const memory = item as Record<string, unknown>;
+    return (
+      Object.keys(memory).every((key) =>
+        [
+          "memory_id",
+          "content",
+          "layer",
+          "status",
+          "source",
+          "gmt_created",
+        ].includes(key),
+      ) &&
+      ["memory_id", "content", "layer", "status"].every(
+        (key) => typeof memory[key] === "string",
+      ) &&
+      (memory.source === null || typeof memory.source === "string") &&
+      (memory.gmt_created === null ||
+        (typeof memory.gmt_created === "number" &&
+          Number.isSafeInteger(memory.gmt_created)))
+    );
+  });
 }
 
 function isLoopback(address: string | undefined): boolean {

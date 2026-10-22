@@ -221,6 +221,11 @@ from one_memory.sdk_data_plane_migration import (
     MemoryAuthority,
     SdkDataPlaneMigrationStore,
 )
+from one_memory.sdk_memory_qa import (
+    SdkAskMemory,
+    SdkMemoryAnswer,
+    SdkMemoryAnswerer,
+)
 from one_memory.secrets import (
     KeyringSecretStore,
     SecretStore,
@@ -3386,6 +3391,8 @@ def create_app(
     async def ask_memories(
         request: AskMemoryRequest, http_request: Request, response: Response
     ) -> AskMemoryResponse:
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="sdk_memory_authority_required")
         started = time.monotonic()
         access = external_access(http_request.headers)
         await _require_external_recall_scope(
@@ -3429,6 +3436,8 @@ def create_app(
     async def ask_memories_stream(
         request: AskMemoryRequest, http_request: Request
     ) -> StreamingResponse:
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="sdk_memory_authority_required")
         await _require_external_recall_scope(
             app, http_request, request.scope, request.workspace_path, "om_ask"
         )
@@ -3470,6 +3479,61 @@ def create_app(
                             )
                         ),
                     )
+            except MemoryAnswerError as error:
+                yield _sse({"type": "error", "code": str(error)})
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post(
+        "/api/v2/memories/ask",
+        response_model=SdkMemoryAnswer,
+        dependencies=protected,
+    )
+    async def ask_sdk_memories(
+        request: AskMemoryRequest,
+        http_request: Request,
+    ) -> SdkMemoryAnswer:
+        if app.state.memory_authority is not MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="legacy_memory_authority_required")
+        await _require_external_recall_scope(
+            app,
+            http_request,
+            request.scope,
+            request.workspace_path,
+            "om_ask",
+        )
+        try:
+            return await _sdk_request_answerer(app).answer(request.question)
+        except MemoryAnswerError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+
+    @app.post(
+        "/api/v2/memories/ask/stream",
+        dependencies=protected,
+    )
+    async def ask_sdk_memories_stream(
+        request: AskMemoryRequest,
+        http_request: Request,
+    ) -> StreamingResponse:
+        if app.state.memory_authority is not MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="legacy_memory_authority_required")
+        await _require_external_recall_scope(
+            app,
+            http_request,
+            request.scope,
+            request.workspace_path,
+            "om_ask",
+        )
+        answerer = _sdk_request_answerer(app)
+
+        async def events() -> AsyncIterator[str]:
+            try:
+                async for event in answerer.answer_stream(request.question):
+                    yield _sse(_serialize_ask_event(event))
             except MemoryAnswerError as error:
                 yield _sse({"type": "error", "code": str(error)})
 
@@ -4192,6 +4256,55 @@ async def _request_answerer(
         known = await asyncio.to_thread(_evidence_store(app).known_workspaces, user_id="local")
         answerer.resolve_workspace = lambda path: resolve_workspace_scopes(path, known)
     return answerer
+
+
+def _sdk_request_answerer(app: FastAPI) -> SdkMemoryAnswerer:
+    return SdkMemoryAnswerer(
+        bridge=_sdk_library_bridge(app),
+        profiles=_model_profile_store(app),
+        secrets=_secret_store(app),
+        authorize_generation=lambda profile, question, grounding: (
+            _authorize_sdk_answer_generation(
+                app,
+                profile,
+                question,
+                grounding,
+            )
+        ),
+    )
+
+
+async def _authorize_sdk_answer_generation(
+    app: FastAPI,
+    profile: ModelProfile,
+    question: str,
+    grounding: tuple[SdkAskMemory, ...],
+) -> Callable[[], Awaitable[None]]:
+    if not question.strip() or not grounding:
+        raise MemoryAnswerError("memory_answer_generation_not_authorized")
+
+    async def recheck() -> None:
+        identity = await asyncio.to_thread(_model_profile_store(app).active_identity)
+        if identity != (profile.profile_id, profile.revision):
+            raise MemoryAnswerError("memory_answer_generation_not_authorized")
+        bridge = _sdk_library_bridge(app)
+        for memory in grounding:
+            current = await bridge.get_sdk_memory(memory.memory_id)
+            if current is None:
+                raise MemoryAnswerError("memory_answer_generation_not_authorized")
+            projected = SdkAskMemory(
+                memory_id=current.memory_id,
+                content=current.content,
+                layer=current.layer,
+                status=current.status,
+                source=current.source,
+                gmt_created=current.gmt_created,
+            )
+            if projected != memory:
+                raise MemoryAnswerError("memory_answer_generation_not_authorized")
+
+    await recheck()
+    return recheck
 
 
 async def _authorize_answer_generation(

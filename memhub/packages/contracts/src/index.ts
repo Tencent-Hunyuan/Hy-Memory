@@ -617,6 +617,24 @@ export interface AskMemoryResponse {
   mode: "generated" | "extractive" | "empty";
 }
 
+export interface SdkAskMemory {
+  memory_id: string;
+  content: string;
+  layer: string;
+  status: string;
+  source: string | null;
+  gmt_created: number | null;
+}
+
+export interface SdkAskMemoryResponse {
+  schema_version: 2;
+  answer: string;
+  memories: SdkAskMemory[];
+  mode: "generated" | "extractive" | "empty";
+}
+
+export type HostAskMemoryResponse = AskMemoryResponse | SdkAskMemoryResponse;
+
 export type AskMemoryEvent =
   | { type: "recall"; memories: GovernedMemory[] }
   | { type: "delta"; text: string }
@@ -627,6 +645,20 @@ export type AskMemoryEvent =
       mode: "generated" | "extractive" | "empty";
     }
   | { type: "error"; code: string };
+
+export type SdkAskMemoryEvent =
+  | { type: "recall"; memories: SdkAskMemory[] }
+  | { type: "delta"; text: string }
+  | {
+      type: "final";
+      schema_version: 2;
+      answer: string;
+      memories: SdkAskMemory[];
+      mode: "generated" | "extractive" | "empty";
+    }
+  | { type: "error"; code: string };
+
+export type HostAskMemoryEvent = AskMemoryEvent | SdkAskMemoryEvent;
 
 export interface RecallRequest {
   query: string;

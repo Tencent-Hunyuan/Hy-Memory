@@ -1,13 +1,14 @@
 import type {
-  AskMemoryResponse,
   ConversationTranscript,
   GovernedMemory,
+  HostAskMemoryResponse,
   MemoryDetail,
   MemoryEvidenceExcerpt,
   MemoryGraphEdge,
   MemoryGraphNode,
   MemoryGraphResponse,
   MemoryProcessingSummary,
+  SdkAskMemory,
   SourceResponse,
 } from "@one-memory/contracts";
 import { Check, PencilLine, RotateCcw, Trash2 } from "lucide-react";
@@ -76,8 +77,11 @@ export function Workbench({
   overlayBlocked?: boolean;
   draft: string;
   busy: boolean;
-  answer: AskMemoryResponse | null;
-  streaming: { text: string; memories: GovernedMemory[] } | null;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
   onDraft(next: string): void;
   onOpenMemory(memoryId: string): void;
   onCloseDetail(): void;
@@ -757,8 +761,11 @@ export function Answer({
   asPage,
   suspended = false,
 }: {
-  answer: AskMemoryResponse | null;
-  streaming: { text: string; memories: GovernedMemory[] } | null;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
   onOpenMemory(memoryId: string): void;
   onSaveAnswer(draft: SavedAnswer): void;
   asPage: boolean;
@@ -792,7 +799,11 @@ export function Answer({
             onSaveAnswer({
               content: groundedAnswer.answer,
               evidence_ids: [
-                ...new Set(shownMemories.flatMap((item) => item.evidence_ids)),
+                ...new Set(
+                  shownMemories.flatMap((item) =>
+                    "evidence_ids" in item ? item.evidence_ids : [],
+                  ),
+                ),
               ],
             })
           }

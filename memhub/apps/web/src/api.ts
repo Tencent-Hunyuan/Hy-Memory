@@ -6,8 +6,6 @@ import type {
   MatterRun,
 } from "@one-memory/contracts";
 import {
-  type AskMemoryEvent,
-  type AskMemoryResponse,
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type ConversationBrowserPage,
@@ -23,6 +21,8 @@ import {
   type GraphWidthStatus,
   type HealthResponse,
   type HomeSummary,
+  type HostAskMemoryEvent,
+  type HostAskMemoryResponse,
   type ImportIssue,
   type ImportJob,
   type LiveSyncHealth,
@@ -966,9 +966,10 @@ export async function getMemories(query = ""): Promise<GovernedMemory[]> {
 export async function askMemories(
   question: string,
   scope = "all-apps",
-): Promise<AskMemoryResponse> {
-  const response = await client.post<AskMemoryResponse>(
-    "/api/v1/memories/ask",
+  authority: "legacy" | "sdk",
+): Promise<HostAskMemoryResponse> {
+  const response = await client.post<HostAskMemoryResponse>(
+    `/api/${authority === "sdk" ? "v2" : "v1"}/memories/ask`,
     { question, scope },
     { timeout: 120_000 },
   );
@@ -980,7 +981,9 @@ export async function* askMemoriesStream(
   scope = "all-apps",
   signal?: AbortSignal,
   traceId?: string,
-): AsyncGenerator<AskMemoryEvent> {
+  authority?: "legacy" | "sdk",
+): AsyncGenerator<HostAskMemoryEvent> {
+  if (authority === undefined) throw new Error("memory_authority_unavailable");
   const desktopBridge =
     typeof window === "undefined" ? undefined : window.oneMemory;
   // Same rule as the axios interceptor: a present bridge is the only authority
@@ -999,20 +1002,24 @@ export async function* askMemoriesStream(
         // would not.
         import.meta.env.VITE_CORE_API_TOKEN
       : undefined;
-  const response = await fetch(`${baseUrl}/api/v1/memories/ask/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      // This path uses raw `fetch`, so it does not go through the axios
-      // interceptor that stamps every other call. Without the header here Core
-      // still logs its own request, but under a different id from the
-      // renderer's `ui.action`/`ui.result`, so the four lines never group.
-      ...(traceId ? { "X-One-Memory-Trace-Id": traceId } : {}),
+  const version = authority === "sdk" ? "v2" : "v1";
+  const response = await fetch(
+    `${baseUrl}/api/${version}/memories/ask/stream`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        // This path uses raw `fetch`, so it does not go through the axios
+        // interceptor that stamps every other call. Without the header here Core
+        // still logs its own request, but under a different id from the
+        // renderer's `ui.action`/`ui.result`, so the four lines never group.
+        ...(traceId ? { "X-One-Memory-Trace-Id": traceId } : {}),
+      },
+      body: JSON.stringify({ question, scope }),
+      signal,
     },
-    body: JSON.stringify({ question, scope }),
-    signal,
-  });
+  );
   if (!response.ok || !response.body) {
     throw new Error(`ask_stream_failed_${response.status}`);
   }
@@ -1029,7 +1036,7 @@ export async function* askMemoriesStream(
     for (const frame of frames) {
       const line = frame.trim();
       if (!line.startsWith("data:")) continue;
-      yield JSON.parse(line.slice(5).trim()) as AskMemoryEvent;
+      yield JSON.parse(line.slice(5).trim()) as HostAskMemoryEvent;
     }
   }
 }

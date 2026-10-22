@@ -264,7 +264,7 @@ describe("ui trace write coverage", () => {
     const view = source("MemorySpace.tsx");
     expect(view).toMatch(/traceUiAction\("memory", "submit"\)/);
     expect(view).toMatch(
-      /askMemoriesStream\(\s*question,\s*scope,\s*undefined,\s*trace\.traceId,?\s*\)/,
+      /askMemoriesStream\(\s*question,\s*scope,\s*undefined,\s*trace\.traceId,\s*memoryAuthority,?\s*\)/,
     );
     const api = source("api.ts");
     const start = api.indexOf("export async function* askMemoriesStream(");
