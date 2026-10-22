@@ -142,6 +142,11 @@ The MemHub management database owns operational migration tables:
   identity/hash, deterministic operation key, state, attempts and error code;
 - `memory_id_aliases`: historical ID to canonical SDK ID for old Matters,
   call-events, task receipts and links.
+- `raw_id_aliases`: legacy Evidence ID/item index to canonical SDK raw ID.
+- `matter_sdk_versions`: reference-only Matter organization; memory/raw
+  bodies are hydrated and hash-checked through SDK APIs.
+- `matter_sdk_notes`: pending note request IDs and eventual SDK raw IDs; no
+  note body is copied into this management table.
 - `sdk_data_plane_cutover`: the singleton authority marker and immutable
   SDK/backend/bundle/reconciliation fingerprints.
 
@@ -171,6 +176,8 @@ Queue rows and leases remain MemHub management state.
 
 - Matters retain organization and canonical `memory_id` / SDK raw references.
 - Embedded memory bodies are replaced by read-time SDK resolution.
+- Matter citations retain only raw ID, item index, offsets and quote hash;
+  visible quotes are sliced from SDK raw and hash-checked at read time.
 - Historical IDs remain resolvable through `memory_id_aliases`.
 - `call_events` remains metadata-only; reference titles/content resolve through
   SDK APIs.
