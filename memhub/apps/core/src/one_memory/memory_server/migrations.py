@@ -2996,6 +2996,34 @@ async def _057_sdk_matter_references(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def sdk_matter_notes_ddl(dialect: str = "mysql") -> str:
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS matter_sdk_notes (
+    matter_id TEXT NOT NULL,
+    note_id TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (matter_id, note_id)
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS matter_sdk_notes (
+    matter_id VARCHAR(256) NOT NULL,
+    note_id VARCHAR(256) NOT NULL,
+    request_id VARCHAR(256) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (matter_id, note_id),
+    UNIQUE KEY matter_sdk_note_request (request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _058_sdk_matter_notes(cursor: Any) -> None:
+    for statement in _split_statements(sdk_matter_notes_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3276,5 +3304,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         "sdk_matter_references",
         _057_sdk_matter_references,
         ("raw_id_aliases", "matter_sdk_versions"),
+    ),
+    Migration(
+        58,
+        "sdk_matter_notes",
+        _058_sdk_matter_notes,
+        ("matter_sdk_notes",),
     ),
 )

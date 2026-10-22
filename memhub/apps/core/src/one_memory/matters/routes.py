@@ -111,26 +111,25 @@ def matter_router(dependencies: Sequence[Depends]) -> APIRouter:
         return await _call_async(_store(request).evidence, matter_id, evidence_id)
 
     @router.post("/{matter_id}/notes", response_model=SampleRecord, status_code=201)
-    def add_note(matter_id: str, note: MatterNote, request: Request) -> SampleRecord:
-        if getattr(_store(request), "authority", "legacy") == "sdk":
-            raise HTTPException(409, "sdk_matter_note_required")
-        record = _call(
+    async def add_note(matter_id: str, note: MatterNote, request: Request) -> SampleRecord:
+        store = _store(request)
+        record = await _call_async(
             _store(request).add_note,
             matter_id,
             note.text,
             expected_version=note.expected_version,
         )
+        if getattr(store, "authority", "legacy") == "sdk":
+            return record
         return next(
             note
-            for note in _store(request).notes(matter_id)
+            for note in store.notes(matter_id)
             if note.evidence_id == record.evidence_id
         )
 
     @router.get("/{matter_id}/notes", response_model=list[SampleRecord])
-    def notes(matter_id: str, request: Request) -> list[SampleRecord]:
-        if getattr(_store(request), "authority", "legacy") == "sdk":
-            raise HTTPException(409, "sdk_matter_note_required")
-        return _call(_store(request).notes, matter_id)
+    async def notes(matter_id: str, request: Request) -> list[SampleRecord]:
+        return await _call_async(_store(request).notes, matter_id)
 
     @router.post("/{matter_id}/refresh", response_model=DiscoveryStatus, status_code=202)
     async def refresh(matter_id: str, options: DiscoveryInput, request: Request) -> DiscoveryStatus:

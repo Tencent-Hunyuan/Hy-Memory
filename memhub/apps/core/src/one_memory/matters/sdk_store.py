@@ -8,9 +8,17 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from one_memory.database_access import main_database
 from one_memory.hy_memory_bridge import HyMemoryBridge
+from one_memory.imports.models import (
+    EvidenceInput,
+    EvidenceOrigin,
+    OriginMetadata,
+    WrittenBy,
+)
+from one_memory.imports.storage import EvidenceStore
 from one_memory.matters.models import (
     Citation,
     Claim,
@@ -20,6 +28,8 @@ from one_memory.matters.models import (
     MemoryRef,
     SampleRecord,
 )
+from one_memory.memory_server.durable_queue import DurableWriteQueue
+from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 
 
 class SdkMatterUnavailable(RuntimeError):
@@ -32,6 +42,20 @@ class SdkMatterStore:
     def __init__(self, database_path: Path, bridge: HyMemoryBridge) -> None:
         self.database_path = database_path
         self.bridge = bridge
+        self.evidence_store: EvidenceStore | None = None
+        self.write_intake: UnifiedWriteIntake | None = None
+        self.write_queue: DurableWriteQueue | None = None
+
+    def configure_notes(
+        self,
+        *,
+        evidence_store: EvidenceStore,
+        write_intake: UnifiedWriteIntake,
+        write_queue: DurableWriteQueue,
+    ) -> None:
+        self.evidence_store = evidence_store
+        self.write_intake = write_intake
+        self.write_queue = write_queue
 
     async def list(self) -> list[Matter]:
         rows = await asyncio.to_thread(self._current_rows)
@@ -142,6 +166,72 @@ class SdkMatterStore:
             text=quote,
         )
 
+    async def add_note(
+        self,
+        identifier: str,
+        text: str,
+        *,
+        expected_version: int,
+    ) -> SampleRecord:
+        matter = await self.get(identifier)
+        if matter.version != expected_version:
+            raise ValueError("matter_version_conflict")
+        if self.evidence_store is None or self.write_intake is None:
+            raise SdkMatterUnavailable("sdk_matter_note_intake_unavailable")
+        now = datetime.now(UTC)
+        result = await asyncio.to_thread(
+            self.evidence_store.put,
+            EvidenceInput(
+                source_id="one-memory-manual",
+                conversation_id=f"matter:{identifier}",
+                message_id=str(uuid4()),
+                role="user",
+                written_by=WrittenBy.PERSON,
+                created_at=now,
+                verbatim=text,
+                project=matter.title,
+                origin_meta={
+                    EvidenceOrigin.MANUAL_IMPORT: OriginMetadata(
+                        raw_meta={"matter_id": identifier}
+                    )
+                },
+            ),
+        )
+        receipt = await asyncio.to_thread(
+            self.write_intake.submit_records,
+            (result.record,),
+        )
+        await asyncio.to_thread(
+            self._record_note,
+            identifier,
+            result.record.evidence_id,
+            receipt.request_id,
+            now.isoformat(),
+        )
+        return _sample_from_evidence(result.record)
+
+    async def notes(self, identifier: str) -> list[SampleRecord]:
+        await self.get(identifier)
+        rows = await asyncio.to_thread(self._note_rows, identifier)
+        found = []
+        for row in rows:
+            request_id = str(row["request_id"])
+            durable = self.write_queue.get(request_id) if self.write_queue else None
+            if durable is not None and durable.sdk_raw_ids:
+                raw = await self.bridge.get_sdk_raw(durable.sdk_raw_ids[0])
+                if raw is None:
+                    raise SdkMatterUnavailable("sdk_matter_note_raw_unavailable")
+                found.append(_sample_from_raw(raw, str(row["created_at"])))
+                continue
+            record = (
+                self.evidence_store.get(str(row["note_id"]))
+                if self.evidence_store is not None
+                else None
+            )
+            if record is not None:
+                found.append(_sample_from_evidence(record))
+        return found
+
     def _current_rows(self) -> tuple[sqlite3.Row, ...]:
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as database:
             return tuple(
@@ -171,6 +261,30 @@ class SdkMatterStore:
                 database.execute(
                     "SELECT * FROM matter_sdk_versions WHERE matter_id=? "
                     "ORDER BY version",
+                    (matter_id,),
+                )
+            )
+
+    def _record_note(
+        self,
+        matter_id: str,
+        note_id: str,
+        request_id: str,
+        created_at: str,
+    ) -> None:
+        with main_database(self.database_path).write(autocommit=True) as database:
+            database.execute(
+                "INSERT INTO matter_sdk_notes "
+                "(matter_id,note_id,request_id,created_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(request_id) DO NOTHING",
+                (matter_id, note_id, request_id, created_at),
+            )
+
+    def _note_rows(self, matter_id: str) -> tuple[sqlite3.Row, ...]:
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as database:
+            return tuple(
+                database.execute(
+                    "SELECT * FROM matter_sdk_notes WHERE matter_id=? ORDER BY created_at",
                     (matter_id,),
                 )
             )
@@ -312,4 +426,45 @@ def _timestamp(value: int | None) -> str | None:
         datetime.fromtimestamp(value, tz=UTC).isoformat()
         if value is not None
         else None
+    )
+
+
+def _sample_from_evidence(record) -> SampleRecord:
+    return SampleRecord(
+        evidence_id=record.evidence_id,
+        raw_id=None,
+        source_id=record.source_id,
+        conversation_id=record.conversation_id,
+        role=record.role,
+        written_by=str(record.written_by),
+        created_at=record.created_at.isoformat() if record.created_at else None,
+        observed_at=record.imported_at.isoformat(),
+        revision=record.revision,
+        content_hash=record.content_hash,
+        project=record.project,
+        workspace=record.workspace,
+        text=record.verbatim,
+    )
+
+
+def _sample_from_raw(raw, observed_at: str) -> SampleRecord:
+    return SampleRecord(
+        evidence_id=None,
+        raw_id=raw.raw_id,
+        item_index=0,
+        source_id=raw.source,
+        conversation_id=raw.session_id,
+        role=str(raw.custom.get("role") or "user"),
+        written_by=str(raw.custom.get("written_by") or ""),
+        created_at=_timestamp(raw.memory_at),
+        observed_at=observed_at,
+        revision=None,
+        content_hash=hashlib.sha256(raw.content.encode()).hexdigest(),
+        project=None,
+        workspace=(
+            str(raw.custom["workspace"])
+            if isinstance(raw.custom.get("workspace"), str)
+            else None
+        ),
+        text=raw.content,
     )

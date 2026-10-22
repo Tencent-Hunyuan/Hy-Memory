@@ -8,12 +8,15 @@ import pytest
 
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
+from one_memory.imports.storage import EvidenceStore
+from one_memory.ingest_journal import initialize as initialize_ingest_journal
 from one_memory.matters.models import MatterPatch
 from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
 from one_memory.memory_server.migrations import MIGRATIONS
+from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 from one_memory.sdk_data_plane_migration import (
     DataPlaneMigrationError,
     MemoryAuthority,
@@ -595,7 +598,8 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
                 imported_at,updated_at,ingest_seq
             ) VALUES (
                 'e1','key','local','cursor','session','raw_conversation',
-                'user','person','verbatim',?,1,'now','now',1
+                'user','person','verbatim',?,1,
+                '2026-10-21T00:00:00+00:00','2026-10-21T00:00:00+00:00',1
             )
             """,
             (content_hash("verbatim"),),
@@ -716,6 +720,53 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     assert patched.version == 2
     assert patched.title == "本地优先更新"
     assert len(asyncio.run(sdk_matters.history("matter-1"))) == 2
+    evidence_store = EvidenceStore(database)
+    with main_database(database).write() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        initialize_ingest_journal(connection)
+        connection.execute("COMMIT")
+    queue = DurableWriteQueue(database, evidence=evidence_store)
+    sdk_matters.configure_notes(
+        evidence_store=evidence_store,
+        write_intake=UnifiedWriteIntake(queue),
+        write_queue=queue,
+    )
+    pending_note = asyncio.run(
+        sdk_matters.add_note(
+            "matter-1",
+            "新备注",
+            expected_version=2,
+        )
+    )
+    assert pending_note.raw_id is None
+    with main_database(database).read(row_factory=sqlite3.Row) as connection:
+        note_job = connection.execute(
+            "SELECT job_id FROM memory_write_jobs "
+            "WHERE idempotency_key IN "
+            "(SELECT request_id FROM matter_sdk_notes WHERE matter_id='matter-1')"
+        ).fetchone()
+    queue.settle(
+        str(note_job["job_id"]),
+        state=COMPLETED,
+        sdk_raw_ids=("raw-note-1",),
+    )
+    bridge.raw = (
+        *bridge.raw,
+        HySdkRawRecord(
+            raw_id="raw-note-1",
+            content="新备注",
+            user_id="local",
+            agent_id="one-memory",
+            session_id="matter:matter-1",
+            source="one-memory-manual",
+            custom={"role": "user", "written_by": "person"},
+        ),
+    )
+    notes = asyncio.run(sdk_matters.notes("matter-1"))
+    assert notes[0].raw_id == "raw-note-1"
+    assert notes[0].evidence_id is None
+    assert notes[0].text == "新备注"
+    evidence_store.release_sdk_staging((str(pending_note.evidence_id),))
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,
@@ -730,7 +781,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         )
     )
     assert resumed.state == "ready"
-    assert resumed.counts == {"verified": 3}
+    assert resumed.counts == {"adopted": 1, "verified": 3}
     assert len(bridge.imported) == 1
     assert len(bridge.imported_raw) == 1
 

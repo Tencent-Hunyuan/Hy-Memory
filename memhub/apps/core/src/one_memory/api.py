@@ -1241,6 +1241,12 @@ def create_app(
                 memory_write_queue,
                 source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
             )
+            if isinstance(app.state.matter_store, SdkMatterStore):
+                app.state.matter_store.configure_notes(
+                    evidence_store=app.state.evidence_store,
+                    write_intake=app.state.memory_write_intake,
+                    write_queue=memory_write_queue,
+                )
             app.state.start_memory_backfill = lambda: _start_backfill(app)
 
             async def enqueue_stable_evidence(record: EvidenceRecord) -> None:
