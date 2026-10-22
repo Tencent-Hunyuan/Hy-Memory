@@ -12,7 +12,7 @@ test("installation docs disclose publication and lifecycle boundaries", async ()
     "utf8",
   );
 
-  assert.match(readme, /公共 Python SDK 为 `hy-memory==2\.0\.4`/);
+  assert.match(readme, /`hy-memory==2\.0\.5\.dev3`/);
   assert.match(readme, /`v1\.0\.4` 的发行目标是 Linux x64\/arm64 Runtime/);
   assert.match(readme, /Linux 制品由 GitHub Actions/);
   assert.match(readme, /macOS.*Developer ID 签名、公证/s);

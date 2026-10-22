@@ -37,14 +37,16 @@ Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命�
 ## 核心原则
 
 - 一次安装、一个 Runtime、一份数据、多种客户端。
-- Python Core 是唯一记忆数据面和唯一业务数据库写入者。
+- Hy Memory SDK 是 memory/raw/vector/graph/coding 数据面的唯一权威；Python Core
+  管理授权、模型、异步队列、Runtime 状态与 Matters 引用。
 - 来源读取、模型处理和宿主读取是相互独立的授权边界。
-- 正式记忆链路保持 `Evidence -> Hy Memory -> Governance -> Matters/Wiki`。
+- 正式写链路为 `memory_write_jobs -> SDK add() -> raw/memory ID receipt`；
+  Matter/Wiki 只保存并解析 SDK ID 引用。
 - 产品不包含屏幕、Accessibility / AXTree、OCR、键鼠、剪贴板或后台录音采集。
 
 ## 仓库结构
 
-- `apps/core`：Python / FastAPI Kernel，负责 Evidence、Hy Memory、治理、检索与 API。
+- `apps/core`：Python / FastAPI Kernel，负责授权、模型、队列、SDK bridge、Matters 与 API。
 - `apps/cli`：安装、控制和诊断共享 Runtime 的 `one-memory` CLI。
 - `apps/web`：React / TypeScript 管理界面。
 - `apps/desktop`：Electron 桌面壳与图形安装入口。
