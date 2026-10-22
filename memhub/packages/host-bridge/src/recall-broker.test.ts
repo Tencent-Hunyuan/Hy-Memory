@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { readDiscovery } from "./discovery.js";
 import { expectRestrictedFileMode } from "./expect-restricted-mode.js";
+import { HostGrantStore } from "./host-grants.js";
 import { RecallBroker } from "./recall-broker.js";
 
 const closers: Array<() => Promise<void>> = [];
@@ -17,6 +18,47 @@ afterEach(async () => {
 });
 
 describe("RecallBroker", () => {
+  it("exchanges a one-time custom Harness code for an existing host credential", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "om-broker-pairing-"));
+    const store = await HostGrantStore.initialize(path.join(root, "grants"));
+    const pairing = await store.createPairing({ displayName: "Kimi Code" });
+    const broker = new RecallBroker({
+      coreBaseUrl: "http://127.0.0.1:1",
+      coreApiToken: "pairing-control-secret",
+      discoveryPath: path.join(root, "broker.json"),
+      instanceId: "pairing-instance",
+      preferredPort: 0,
+      hostGrantStore: store,
+    });
+    await broker.start();
+    closers.push(() => broker.stop());
+    const first = await axios.post(
+      `http://127.0.0.1:${broker.port}/pair`,
+      { code: pairing.pairingCode },
+      { headers: { "Content-Type": "application/json" } },
+    );
+    expect(first.data).toMatchObject({
+      schema_version: 1,
+      host_id: pairing.hostId,
+      credential_type: "bearer",
+      credential: expect.stringMatching(/^omhg_v1_[A-Za-z0-9_-]{43}$/),
+    });
+    expect(await store.authenticate(first.data.credential)).toMatchObject({
+      hostId: pairing.hostId,
+      status: "approved",
+    });
+    const second = await axios.post(
+      `http://127.0.0.1:${broker.port}/pair`,
+      { code: pairing.pairingCode },
+      {
+        headers: { "Content-Type": "application/json" },
+        validateStatus: () => true,
+      },
+    );
+    expect(second.status).toBe(401);
+    expect(second.data).toEqual({ error: "host_pairing_invalid" });
+  });
+
   it("does not log successful connection polling", async () => {
     const diagnostics: Array<Record<string, unknown>> = [];
     const root = await mkdtemp(path.join(os.tmpdir(), "om-broker-poll-log-"));
@@ -165,9 +207,17 @@ describe("RecallBroker", () => {
     "answers %s without waiting for a slow diagnostic write",
     async (endpoint) => {
       const events: string[] = [];
-      const core = createServer((_request, response) => {
+      const core = createServer((request, response) => {
         response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({ state: "empty" }));
+        response.end(
+          JSON.stringify(
+            request.url === "/api/v2/memory-authority"
+              ? { authority: "legacy", migration_id: null }
+              : request.url === "/api/v1/memories/ask"
+                ? { answer: "empty", memories: [], mode: "empty" }
+                : { state: "empty" },
+          ),
+        );
       });
       const corePort = await listen(core, 0);
       closers.push(() => close(core));
@@ -210,9 +260,17 @@ describe("RecallBroker", () => {
       closers.push(async () => {
         process.off("unhandledRejection", onRejection);
       });
-      const core = createServer((_request, response) => {
+      const core = createServer((request, response) => {
         response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({ state: "empty" }));
+        response.end(
+          JSON.stringify(
+            request.url === "/api/v2/memory-authority"
+              ? { authority: "legacy", migration_id: null }
+              : request.url === "/api/v1/memories/ask"
+                ? { answer: "empty", memories: [], mode: "empty" }
+                : { state: "empty" },
+          ),
+        );
       });
       const corePort = await listen(core, 0);
       closers.push(() => close(core));
@@ -250,7 +308,14 @@ describe("RecallBroker", () => {
     "preserves %s scope denial instead of claiming Core is offline",
     async (endpoint) => {
       const diagnostics: Array<Record<string, unknown>> = [];
-      const core = createServer((_request, response) => {
+      const core = createServer((request, response) => {
+        if (request.url === "/api/v2/memory-authority") {
+          response.setHeader("Content-Type", "application/json");
+          response.end(
+            JSON.stringify({ authority: "legacy", migration_id: null }),
+          );
+          return;
+        }
         response.statusCode = 403;
         response.setHeader("Content-Type", "application/json");
         response.end(

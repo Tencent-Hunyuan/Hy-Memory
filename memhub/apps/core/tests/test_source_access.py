@@ -224,6 +224,11 @@ def test_live_adapter_keeps_symlink_refusal_in_existing_issue_taxonomy() -> None
     )
 
 
+def test_live_adapter_reports_an_oversized_file_as_file_too_large() -> None:
+    """The open path and the discovery path must agree on the size reason."""
+    assert _scan_failure_code(SourceAccessErrorCode.FILE_TOO_LARGE) is ScanIssueCode.FILE_TOO_LARGE
+
+
 def test_live_adapter_runner_persists_symlink_refusal_as_unsupported_schema(
     tmp_path, monkeypatch
 ) -> None:

@@ -41,32 +41,27 @@ def test_the_collector_is_one_per_process_not_one_per_client() -> None:
     assert MetricsCollector.get() is MetricsCollector.get()
 
 
-def test_a_second_event_loop_gets_no_background_tasks_and_is_not_told(
+def test_metrics_collector_can_stop_and_restart_on_a_second_event_loop(
     monkeypatch,
 ) -> None:
-    """The pinned SDK defect, stated as an expectation so an upgrade breaks it.
-
-    `start_background_tasks` returns successfully on the second loop and
-    starts nothing, so metrics stop flushing with no error anywhere. When the
-    SDK grows a stop, or drops the sticky flag, this test fails and the
-    workaround below can be removed.
-    """
+    """The current SDK owns an explicit lifecycle and restarts cleanly."""
     from hy_memory.metrics import MetricsCollector
 
     # A fresh collector, so an earlier test in the session cannot decide this.
     monkeypatch.setattr(MetricsCollector, "_instance", None)
     collector = MetricsCollector.get()
 
-    async def start() -> int:
+    async def cycle() -> tuple[int, int]:
         await collector.start_background_tasks()
-        return background_loop_count()
+        started = background_loop_count()
+        await collector.stop_background_tasks()
+        return started, background_loop_count()
 
-    first = asyncio.run(start())
-    second = asyncio.run(start())
+    first = asyncio.run(cycle())
+    second = asyncio.run(cycle())
 
-    assert first == 2, "the collector did not start its flush and cleanup loops at all"
-    assert second == 0, "the SDK grew a working restart; drop the single-loop workaround"
-    assert not hasattr(collector, "stop_background_tasks")
+    assert first == (2, 0)
+    assert second == (2, 0)
 
 
 def test_the_runtime_reuses_one_client_per_profile_revision(tmp_path: Path) -> None:

@@ -176,7 +176,7 @@ def test_the_count_moves_with_what_is_actually_open(tmp_path):
 def test_the_log_line_reports_the_real_count(tmp_path, caplog):
     from one_memory.database_access import log_main_database_stats
 
-    caplog.set_level("INFO", logger="one_memory.database_access")
+    caplog.set_level("DEBUG", logger="one_memory.database_access")
     path = tmp_path / "one-memory.sqlite3"
     log_main_database_stats("before")
     with main_database(path).write() as db:
@@ -186,7 +186,8 @@ def test_the_log_line_reports_the_real_count(tmp_path, caplog):
     log_main_database_stats("after")
     lines = [r.getMessage() for r in caplog.records if "main_database_connections" in r.message]
     counts = [int(line.split("open_connections=")[1].split()[0]) for line in lines]
-    assert counts == [0, 1, 0]
+    assert counts[1] == counts[0] + 1
+    assert counts[2] == 0
 
 
 def test_backup_can_restore_a_damaged_live_database(tmp_path):

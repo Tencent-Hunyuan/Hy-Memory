@@ -335,7 +335,7 @@ class TestDualLayerWrite:
         from hy_memory.coding.types import CodingMemory
         await coding_store.insert(CodingMemory(
             experience_id="e1", user_id="u1", task="老 task", solution="旧 solution",
-            source_fact_ids=["f_before"],
+            source_fact_ids=["f_before"], session_id="test-session",
         ))
         llm = MockLLMProvider([
             _extract_resp(
@@ -348,7 +348,9 @@ class TestDualLayerWrite:
         ])
         writer = self._writer(coding_store, mock_embed, llm)
 
-        resp = await writer.write(_coding_messages(), user_id="u1")
+        resp = await writer.write(
+            _coding_messages(), user_id="u1", session_id="test-session"
+        )
         exp = await coding_store.get_by_id("e1", user_id="u1")
         assert exp.solution == "新 solution"
         assert exp.source_fact_ids == ["f_before", resp["fact_ids"][0]]

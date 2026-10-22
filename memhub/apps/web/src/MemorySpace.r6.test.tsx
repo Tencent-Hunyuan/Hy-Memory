@@ -103,6 +103,10 @@ const { reads } = vi.hoisted(() => ({
 }));
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<object>()),
+  getMemoryAuthority: async () => ({
+    authority: "legacy",
+    migration_id: null,
+  }),
   getMemories: reads.memories,
   getMemoryGraph: reads.graph,
   getMemoryProcessing: reads.processing,

@@ -78,7 +78,8 @@ default 多-query 超过 `MEMORY_QUERY_REWRITE_MAX_CHARS` 时不改写：Coding 
 Coding 关闭则直接使用最后一条 query。
 
 路由到 `working` / `coding` 后，Search 读取独立生产力记忆库，返回 `facts` /
-`experiences`，不使用 chat 三通道结构。`coding` 还返回 `chain_block` / `chain_used`。
+`experiences`，不使用 chat 三通道结构。`coding` 还返回 `chain_block` / `chain_used`
+（默认空；需 `MEMORY_CODING_CHAIN_BLOCK_ENABLED` 才注入 diff 块）。
 
 ## Chat 成功返回结构
 
@@ -152,7 +153,7 @@ client = HyMemoryClient.from_config({
 安装可选依赖：
 
 ```bash
-pip install 'hy-memory[rerank]==2.0.1'
+pip install 'hy-memory[rerank]==2.0.4'
 ```
 
 启用后，`HyMemoryClient(...)` 构造阶段会完成模型下载/读取、device 放置和一次 dummy

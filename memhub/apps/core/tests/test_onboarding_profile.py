@@ -339,8 +339,7 @@ def test_the_way_back_to_the_first_run_deletes_nothing(tmp_path) -> None:
             assert (await client.get("/api/v1/onboarding")).json()["status"] == "not_started"
             with sqlite3.connect(database) as connection:
                 assert connection.execute(
-                    "SELECT content,revision FROM governed_memories "
-                    "WHERE memory_id='keep-me'"
+                    "SELECT content,revision FROM governed_memories WHERE memory_id='keep-me'"
                 ).fetchone() == ("记忆必须保留", 1)
 
     asyncio.run(scenario())

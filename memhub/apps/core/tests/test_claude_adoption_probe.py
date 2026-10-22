@@ -6,10 +6,13 @@ from pathlib import Path
 
 import pytest
 
+PROBE = Path(__file__).resolve().parents[3] / "scripts" / "claude_adoption_probe.py"
+if not PROBE.is_file():
+    pytest.skip("claude adoption probe is not part of this checkout", allow_module_level=True)
+
 
 def verifier():
-    path = Path(__file__).resolve().parents[3] / "scripts" / "claude_adoption_probe.py"
-    spec = importlib.util.spec_from_file_location("claude_adoption_probe", path)
+    spec = importlib.util.spec_from_file_location("claude_adoption_probe", PROBE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.verify_events

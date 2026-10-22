@@ -69,21 +69,17 @@ def test_no_idempotency_key_means_unknown_must_remain() -> None:
 
 
 def test_measured_sdk_verdict_is_recorded() -> None:
-    """Pin the measured answer for `hy-memory==2.0.4`.
+    """Pin the measured answer for `hy-memory==2.0.5.dev3`.
 
-    The finding: `add()` takes a `request_id` but nothing de-duplicates on it,
-    while `MemoryInspector.get_pipeline_logs(request_id=...)` can look the
-    outcome up afterwards. So a crash between "HY succeeded" and "recorded"
-    must NOT be retried, but it CAN be investigated later.
-
-    If a future SDK starts honouring a dedupe key, this test fails and that is
-    the intended signal to revisit the `unknown` requirement, not a bug.
+    The SDK claims request_id before invoking the write, folds terminal replays,
+    blocks running/unknown replays, and exposes the durable result directly.
     """
     report = probe_hy_write_idempotency()
     assert report["accepts_request_id"] is True
-    assert report["add_declares_idempotency"] is False
+    assert report["add_declares_idempotency"] is True
+    assert report["durable_write_outcome"] is True
     assert report["inspector_lookup_by_request_id"] is True
-    assert report["idempotency"] == HyIdempotencySupport.NONE.value
+    assert report["idempotency"] == HyIdempotencySupport.KEY.value
     assert report["result_lookup"] == HyResultLookupSupport.BY_REQUEST_ID.value
 
 

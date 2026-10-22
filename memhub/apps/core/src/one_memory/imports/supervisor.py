@@ -17,6 +17,7 @@ from one_memory.imports.jobs import (
 from one_memory.imports.models import EvidenceRecord
 from one_memory.imports.runner import ImportRunner
 from one_memory.imports.storage import EvidenceStore
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.service_levels import (
     ResourceLimit,
     ServiceLevel,
@@ -47,6 +48,8 @@ class ImportSupervisor:
         source_enabled: Callable[[str], bool] | None = None,
         prepare_adapter: Callable[[ImportJob, SourceAdapter], Awaitable[SourceAdapter]]
         | None = None,
+        sdk_queue: DurableWriteQueue | None = None,
+        sdk_authority: Callable[[], bool] | None = None,
     ) -> None:
         if max_work_events_per_slice < 1:
             raise ValueError("max_work_events_per_slice must be positive")
@@ -61,6 +64,8 @@ class ImportSupervisor:
         self.on_stable_evidence = on_stable_evidence
         self.source_enabled = source_enabled
         self.prepare_adapter = prepare_adapter
+        self.sdk_queue = sdk_queue
+        self.sdk_authority = sdk_authority or (lambda: False)
         self.max_work_events_per_slice = max_work_events_per_slice
         self.max_work_seconds_per_slice = max_work_seconds_per_slice
         self.retry_base_seconds = retry_base_seconds
@@ -230,6 +235,8 @@ class ImportSupervisor:
                         job_store=self.job_store,
                         on_evidence=self.on_evidence,
                         on_stable_evidence=self.on_stable_evidence,
+                        sdk_queue=self.sdk_queue,
+                        sdk_authority=self.sdk_authority,
                     )
                     adapter = self.adapters[job.source_id]
                     if self.prepare_adapter is not None:

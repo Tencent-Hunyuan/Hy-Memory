@@ -77,6 +77,28 @@ class TestReadRequestWiring:
             HyMemoryClient._normalize_layers(["l3_identity"])
 
 
+class TestDedupKindPairing:
+    """dedup 的 _memory_kind 必须与它的 public item 来自同一条 reader 结果。"""
+
+    def test_memory_kind_follows_source_after_layer_filter(self):
+        memories = [
+            {"memory_id": "raw", "layer": "l1_raw", "content": "raw"},
+            {
+                "memory_id": "canon",
+                "layer": "l2_fact",
+                "content": "canon",
+                "_memory_kind": "canonical_state",
+            },
+        ]
+        all_mems, dedup_mems = HyMemoryClient._public_search_views(
+            memories,
+            wanted_layers={"l2_fact"},
+            lite_mode=False,
+        )
+        assert [m["memory_id"] for m in all_mems] == ["canon"]
+        assert dedup_mems[0]["_memory_kind"] == "canonical_state"
+
+
 class TestHybridDirectedRecall:
     """共享 reader 主流程必须把 request.layers 下推到召回阶段。"""
 

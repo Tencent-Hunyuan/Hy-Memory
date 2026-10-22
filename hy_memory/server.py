@@ -29,7 +29,7 @@ import logging
 import os
 import re
 import signal
-import sys
+import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
@@ -495,6 +495,16 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         _json_response(self, 200, result)
 
 
+def _request_shutdown(server: ThreadingHTTPServer) -> None:
+    """Ask ``serve_forever`` to stop without blocking the calling thread.
+
+    ``BaseServer.shutdown()`` waits for the ``serve_forever`` loop to exit. A
+    signal handler runs on the very thread executing that loop, so calling it
+    there deadlocks forever. Hand the call to a helper thread instead.
+    """
+    threading.Thread(target=server.shutdown, daemon=True).start()
+
+
 def run_server(port: int = 19527, host: str = "127.0.0.1"):
     """Start the HTTP server (blocking)."""
     # Configure logging — basicConfig for root; hy_memory level set after client init
@@ -523,13 +533,12 @@ def run_server(port: int = 19527, host: str = "127.0.0.1"):
     logger.info(f"[server] Listening on http://{host}:{port}")
     logger.info(f"[server] Health check: http://{host}:{port}/healthz")
 
-    # Graceful shutdown
+    # Graceful shutdown. The signal handler only asks a helper thread to stop
+    # the loop; cleanup runs after serve_forever() returns so it cannot race
+    # the request threads or deadlock the serving thread.
     def _shutdown(signum, frame):
         logger.info("[server] Shutting down...")
-        server.shutdown()
-        if _client is not None:
-            _client.close()
-        sys.exit(0)
+        _request_shutdown(server)
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
@@ -538,6 +547,10 @@ def run_server(port: int = 19527, host: str = "127.0.0.1"):
         server.serve_forever()
     except KeyboardInterrupt:
         _shutdown(None, None)
+    finally:
+        server.server_close()
+        if _client is not None:
+            _client.close()
 
 
 def main():

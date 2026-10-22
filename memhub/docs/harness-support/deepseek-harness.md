@@ -1,18 +1,18 @@
 # DeepSeek Harness 一键插入支持
 
-更新日期：2026-10-14
+更新日期：2026-10-18
 
 ## 结论
 
-DeepSeek Harness 的 Profile 级 MCP 安装器已经实现，但当前桌面 Profile 安装会因 Host ID 校验 Bug 在 Preview 阶段失败。
+DeepSeek Harness 的 Profile 级 MCP 安装器已经实现，Profile Scoped Host ID（`deepseek-harness:<profile>`）在权限层按不透明标签处理，可正常走完 Preview 与安装。
 
 ## 接入方式和产品状态
 
 | 项目 | DeepSeek Harness 当前实现 |
 |---|---|
 | 应用详情页一键插入 | 有意排除，因为无法选择 Profile |
-| 来源管理页 Profile 安装 | UI 显示，但当前因 Host ID Bug 失败 |
-| Harness 查询 MemHub | 理论上通过 Profile 级 Cordis MCP Client |
+| 来源管理页 Profile 安装 | 可用；每个 Profile 独立 Patch、Credential 与 Grant |
+| Harness 查询 MemHub | 通过 Profile 级 Cordis MCP Client |
 | Skill | 没有 |
 | Prompt 前自动 Prefetch | 没有 |
 | Capture Hook/Plugin | 没有 |
@@ -22,7 +22,7 @@ DeepSeek Harness 的 Profile 级 MCP 安装器已经实现，但当前桌面 Pro
 
 ### “一键插入应用”
 
-应用详情页不可用。来源管理页理论上对每个 Profile 写 `cordis.patch.yml`、创建独立 Credential 并授权；但当前 `deepseek-harness:<profile>` 含冒号，被权限层拒绝，所以实际不写文件。
+应用详情页不可用。来源管理页对每个 Profile 写 `cordis.patch.yml`、创建独立 Credential 并授权；Host ID 形如 `deepseek-harness:<profile>`，冒号只作为标签存在，权限层的安装目录按 Host ID 摘要生成，不参与路径拼接。
 
 ### 打开“同步开关”
 
@@ -89,9 +89,9 @@ DeepSeek Harness 不安装 Skill，也不安装 Capture Hook；新会话进入 M
 - 首次导入批量连接也排除它。
 - 来源管理页会列出每个 Profile，并显示独立安装按钮。
 
-## 当前确定 Bug
+## 已修复：Profile Host ID 校验
 
-来源管理页安装实际会失败：
+此前来源管理页安装会在写入 `cordis.patch.yml` 和创建 Credential 之前失败，原因是：
 
 ```text
 系统生成 hostId = deepseek-harness:<profile>
@@ -99,7 +99,7 @@ HostPermissions 只接受 [a-z][a-z0-9-]*
 HostGrantStore 也不接受冒号
 ```
 
-因此安装在写入 `cordis.patch.yml` 和创建 Credential 之前就被拒绝。这不是 DeepSeek Harness 不支持 MCP，而是 Profile Host ID 格式与权限校验不一致。
+Host ID 是不可解释的标签：安装目录对它取摘要，不会把它拼进路径。现在权限层与 Grant 存储都接受一个可选的 `:<profile>` 段，因此 Profile 安装可以正常走完。这不是 DeepSeek Harness 不支持 MCP 的问题，而是 Profile Host ID 格式与权限校验不一致，现已对齐。
 
 ## 修复后的权限语义风险
 
@@ -109,7 +109,7 @@ HostGrantStore 也不接受冒号
 - `all-apps`；
 - 所有已授权 Source 和 Workspace。
 
-这比应用详情页通用授权更宽。修复 Host ID 后应确认是否希望每个 Profile 默认获得如此宽的权限。
+这比应用详情页通用授权更宽。Host ID 修复后仍应确认是否希望每个 Profile 默认获得如此宽的权限。
 
 ## 重复安装与卸载
 

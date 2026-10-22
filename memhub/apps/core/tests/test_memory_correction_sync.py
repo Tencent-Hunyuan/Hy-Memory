@@ -180,7 +180,7 @@ def _attach(app, hy: FakeHy) -> None:
     supervisor.bridge_factory = lambda _profile, _secret, _data_dir: hy
 
 
-def test_remote_correction_embedding_requires_separate_content_consent(tmp_path):
+def test_remote_correction_updates_sdk_without_retired_content_consent(tmp_path):
     async def scenario():
         app = create_app(_settings(tmp_path))
         async with app.router.lifespan_context(app), _client(app) as client:
@@ -219,10 +219,7 @@ def test_remote_correction_embedding_requires_separate_content_consent(tmp_path)
             )
             assert changed.status_code == 200
             assert changed.json()["content"] == "updated"
-            assert hy.updates == []
-            assert app.state.memory_governance_store.pending_index_syncs(
-                user_id="local", memory_ids=(memory_id,)
-            )
+            assert hy.updates == [(memory_id, "updated")]
 
     asyncio.run(scenario())
 

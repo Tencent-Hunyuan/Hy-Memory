@@ -134,6 +134,16 @@ describe("WorkBuddy injection hook as the host runs it", () => {
     await writeFile(credentialFile, `${issued.secret}\n`, { mode: 0o600 });
     const core = createServer((request, response) => {
       void (async () => {
+        if (
+          request.method === "GET" &&
+          request.url === "/api/v2/memory-authority"
+        ) {
+          response.setHeader("Content-Type", "application/json");
+          response.end(
+            JSON.stringify({ authority: "legacy", migration_id: null }),
+          );
+          return;
+        }
         for await (const _chunk of request);
         response.setHeader("Content-Type", "application/json");
         if (request.url === "/api/v1/context/search") {

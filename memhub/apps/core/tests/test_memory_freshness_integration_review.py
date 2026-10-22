@@ -102,17 +102,11 @@ def revise(case):
     ).record
 
 
-def test_complete_stale_proof_hides_all_four_reads_without_mutation(case):
-    # D22: the app-facing totals (library total, homepage count) count with
-    # the cheap permission filters only, so a stale proof no longer removes a
-    # row from the totals; the freshness gate still hides it from every read
-    # that returns rows (context, source read access).
+def test_revised_evidence_remains_readable_after_freshness_retirement(case):
+    """Evidence revision no longer hides library / context / source reads."""
     assert visible(case) == (1, 1, 1, 1)
     revise(case)
-    total, home, context_items, source_items = visible(case)
-    # D22: home total counts cheaply and may keep the stale row; the reads
-    # that return rows still hide it.
-    assert (home, context_items, source_items) == (1, 0, 0)
+    assert visible(case) == (1, 1, 1, 1)
     assert case.governance.get(case.memory.memory_id, user_id="local") == case.memory
     assert case.tasks.outputs(case.output.task_id) == (case.output,)
 
@@ -120,11 +114,10 @@ def test_complete_stale_proof_hides_all_four_reads_without_mutation(case):
 @pytest.mark.parametrize(
     "revise_first", [False, True], ids=["scope-before-revision", "scope-after-revision"]
 )
-def test_scope_only_revision_must_not_resurrect_stale_derived_content(case, revise_first):
+def test_scope_only_revision_keeps_memory_readable_after_evidence_change(case, revise_first):
     if revise_first:
         revise(case)
-        _, home, context_items, source_items = visible(case)
-        assert (context_items, source_items) == (0, 0)
+        assert visible(case) == (1, 1, 1, 1)
     changed = as_person(case.governance).set_scopes(
         case.memory.memory_id,
         user_id="local",
@@ -136,8 +129,7 @@ def test_scope_only_revision_must_not_resurrect_stale_derived_content(case, revi
     if not revise_first:
         assert visible(case, changed) == (1, 1, 1, 1)
         revise(case)
-    _, home, context_items, source_items = visible(case, changed)
-    assert (context_items, source_items) == (0, 0)
+    assert visible(case, changed) == (1, 1, 1, 1)
 
 
 def test_explicit_correct_remains_readable_but_never_overrides_revocation(case):
@@ -152,7 +144,10 @@ def test_explicit_correct_remains_readable_but_never_overrides_revocation(case):
     assert visible(case, corrected) == (1, 1, 1, 1)
     with closing(sqlite3.connect(case.path)) as db, db:
         db.execute(
-            "INSERT INTO source_grants VALUES ('local','cursor','/fixture','default',?,?)",
+            """INSERT INTO source_grants
+            (user_id,source_id,root_path,requested_path,root_identity,
+             candidate_kind,granted_at,revoked_at,revision)
+            VALUES ('local','cursor','/fixture','/fixture','fixture','default',?,?,1)""",
             ("2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z"),
         )
     assert visible(case, corrected) == (0, 0, 0, 0)
@@ -181,7 +176,10 @@ def test_revocation_before_freshness_snapshot_cannot_release_memory(case, monkey
         # Revocation commits before any SELECT pins the freshness transaction.
         with closing(sqlite3.connect(case.path)) as writer, writer:
             writer.execute(
-                "INSERT INTO source_grants VALUES ('local','cursor','/fixture','default',?,?)",
+                """INSERT INTO source_grants
+                (user_id,source_id,root_path,requested_path,root_identity,
+                 candidate_kind,granted_at,revoked_at,revision)
+                VALUES ('local','cursor','/fixture','/fixture','fixture','default',?,?,1)""",
                 ("2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z"),
             )
         changes.append(True)
@@ -194,7 +192,7 @@ def test_revocation_before_freshness_snapshot_cannot_release_memory(case, monkey
     assert returned == []
 
 
-def test_udf_uses_caller_snapshot_then_observes_revision_in_next_transaction(case):
+def test_udf_stays_current_across_evidence_revision(case):
     with closing(sqlite3.connect(case.path)) as reader:
         reader.execute("PRAGMA journal_mode=WAL")
         reader.execute("BEGIN")
@@ -206,7 +204,7 @@ def test_udf_uses_caller_snapshot_then_observes_revision_in_next_transaction(cas
         reader.commit()
         reader.execute("BEGIN")
         register_memory_freshness(reader)
-        assert reader.execute(sql).fetchone() == (0,)
+        assert reader.execute(sql).fetchone() == (1,)
 
 
 def _oversize(case, bad):
@@ -227,20 +225,16 @@ def test_material_too_large_to_verify_reads_as_current(case, bad):
 
 
 @pytest.mark.parametrize("bad", ["duplicate-key"])
-def test_bad_material_is_unavailable_not_successful_empty(case, bad):
+def test_bad_proof_material_no_longer_makes_reads_unavailable(case, bad):
     with closing(sqlite3.connect(case.path)) as db, db:
         db.execute(
             "UPDATE memory_task_outputs SET body=?",
             ('{"memory_revision":2,"memory_revision":2}',),
         )
+    assert visible(case) == (1, 1, 1, 1)
     result = context(case)
-    assert result.status == "unavailable" and result.reason == "read_unavailable"
-    assert result.items == ()
-    for read in (read_memory_library, read_home_summary):
-        with pytest.raises(sqlite3.Error):
-            read(case.path)
-    with pytest.raises(sqlite3.Error):
-        SourceReadAccess(case.path).memories([case.memory])
+    assert result.status != "unavailable"
+    assert len(result.items) == 1
 
 
 def test_route_serves_memories_whose_proof_is_too_large(case, tmp_path):

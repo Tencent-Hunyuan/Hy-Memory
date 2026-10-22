@@ -91,8 +91,7 @@ def _state(connection: sqlite3.Connection, evidence_id: str) -> dict[str, str | 
         {
             key: item
             for key, item in value.items()
-            if key
-            not in {"verbatim", "written_by", "origin_meta", "imported_at", "updated_at"}
+            if key not in {"verbatim", "written_by", "origin_meta", "imported_at", "updated_at"}
         }
     )
     return dict(

@@ -304,11 +304,10 @@ declare global {
       ): () => void;
       getApiToken(): Promise<string>;
       getApiBaseUrl(): Promise<string>;
-      /** Optional while a dev renderer is attached to an older desktop shell. */
-      getConnectionMaterial?(): Promise<{
-        mcp: string;
-        shell: string | null;
-        prompt: string;
+      createCustomHarnessSkill?(displayName: string): Promise<{
+        displayName: string;
+        expiresAt: string;
+        skill: string;
       }>;
       copyText?(text: string): Promise<void>;
       getRecallHosts(): Promise<RecallHostStatus[]>;

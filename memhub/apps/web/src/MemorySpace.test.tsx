@@ -71,13 +71,15 @@ const detail: MemoryDetail = {
 const {
   apiErrorCode,
   getMemories,
+  getMemoryAuthority,
+  getSdkRaw,
+  searchSdkRaw,
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
   askMemoriesStream,
   mutateMemory,
   correctMemory,
-  setMemoryScopes,
   syncMemoryIndex,
   setExtractionWindow,
   manualExtract,
@@ -97,13 +99,15 @@ const {
 } = vi.hoisted(() => ({
   apiErrorCode: vi.fn(),
   getMemories: vi.fn(),
+  getMemoryAuthority: vi.fn(),
+  getSdkRaw: vi.fn(),
+  searchSdkRaw: vi.fn(),
   getMemory: vi.fn(),
   getMemoryGraph: vi.fn(),
   getMemoryProcessing: vi.fn(),
   askMemoriesStream: vi.fn(),
   mutateMemory: vi.fn(),
   correctMemory: vi.fn(),
-  setMemoryScopes: vi.fn(),
   syncMemoryIndex: vi.fn(),
   setExtractionWindow: vi.fn(),
   manualExtract: vi.fn(),
@@ -127,13 +131,15 @@ const LIBRARY_REFRESH_MS = 10_000;
 vi.mock("./api", () => ({
   apiErrorCode,
   getMemories,
+  getMemoryAuthority,
+  getSdkRaw,
+  searchSdkRaw,
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
   askMemoriesStream,
   mutateMemory,
   correctMemory,
-  setMemoryScopes,
   syncMemoryIndex,
   setExtractionWindow,
   manualExtract,
@@ -168,6 +174,17 @@ describe("MemorySpace", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    getMemoryAuthority.mockResolvedValue({
+      authority: "legacy",
+      migration_id: null,
+    });
+    getSdkRaw.mockResolvedValue({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 100,
+    });
+    searchSdkRaw.mockResolvedValue([]);
     apiErrorCode.mockReturnValue(null);
     getMemories.mockResolvedValue([memory]);
     getMemory.mockResolvedValue(detail);
@@ -216,11 +233,6 @@ describe("MemorySpace", () => {
     correctMemory.mockResolvedValue({
       ...memory,
       content: "Corrected",
-      revision: 2,
-    });
-    setMemoryScopes.mockResolvedValue({
-      ...memory,
-      scopes: ["private"],
       revision: 2,
     });
     syncMemoryIndex.mockResolvedValue({
@@ -297,7 +309,6 @@ describe("MemorySpace", () => {
       for (const write of [
         mutateMemory,
         correctMemory,
-        setMemoryScopes,
         syncMemoryIndex,
         setExtractionWindow,
         manualExtract,
@@ -449,14 +460,6 @@ describe("MemorySpace", () => {
           fireEvent.change(within(inspector).getByLabelText("记忆内容"), {
             target: { value: "Library correction draft" },
           });
-        if (status === "confirmed") {
-          await userEvent.click(
-            within(inspector).getByRole("button", { name: "调整召回范围" }),
-          );
-          await userEvent.click(
-            within(inspector).getByRole("radio", { name: "停止外部记忆召回" }),
-          );
-        }
         // Tabs are the only way to change mode now, and a tab click clears the
         // answer and closes the detail by design. The invariant still worth
         // pinning is that suspending and resuming the surface keeps the
@@ -486,14 +489,6 @@ describe("MemorySpace", () => {
               ) as HTMLTextAreaElement
             ).value,
           ).toBe("Library correction draft");
-        if (status === "confirmed")
-          expect(
-            (
-              within(inspector).getByRole("radio", {
-                name: "停止外部记忆召回",
-              }) as HTMLInputElement
-            ).checked,
-          ).toBe(true);
         expect(getMemory).toHaveBeenCalledTimes(1);
         expect(getMemories).toHaveBeenCalledTimes(1);
         expectNoTeachingWrites();
@@ -579,6 +574,7 @@ describe("MemorySpace", () => {
         "*",
         undefined,
         expect.any(String),
+        "legacy",
       );
       expectNoTeachingWrites();
     });
@@ -1555,7 +1551,6 @@ describe("MemorySpace", () => {
     );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(mutateMemory).not.toHaveBeenCalled();
-    expect(setMemoryScopes).not.toHaveBeenCalled();
   });
 
   it.each(["success", "failure"])(
@@ -1998,8 +1993,67 @@ describe("MemorySpace", () => {
         "*",
         undefined,
         expect.any(String),
+        "legacy",
       ),
     );
+  });
+
+  it("uses SDK Ask v2 after authority cutover", async () => {
+    getMemoryAuthority.mockResolvedValue({
+      authority: "sdk",
+      migration_id: "migration-1",
+    });
+    askMemoriesStream.mockImplementation(async function* () {
+      yield {
+        type: "recall",
+        memories: [
+          {
+            memory_id: "sdk-memory-1",
+            content: "SDK 原生记忆",
+            layer: "l2_fact",
+            status: "active",
+            source: "cursor",
+            gmt_created: null,
+          },
+        ],
+      };
+      yield {
+        type: "final",
+        schema_version: 2,
+        answer: "SDK 回答",
+        memories: [
+          {
+            memory_id: "sdk-memory-1",
+            content: "SDK 原生记忆",
+            layer: "l2_fact",
+            status: "active",
+            source: "cursor",
+            gmt_created: null,
+          },
+        ],
+        mode: "extractive",
+      };
+    });
+    render(<MemorySpace />);
+    await userEvent.type(
+      await screen.findByLabelText("向记忆提问"),
+      "SDK 问题",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "发送问题" }));
+
+    await waitFor(() =>
+      expect(askMemoriesStream).toHaveBeenCalledWith(
+        "SDK 问题",
+        "*",
+        undefined,
+        expect.any(String),
+        "sdk",
+      ),
+    );
+    expect((await screen.findAllByText("SDK 回答")).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/revision|evidence_ids/)).toBeNull();
+    expect(getMemories).not.toHaveBeenCalled();
+    expect(getMemoryGraph).not.toHaveBeenCalled();
   });
 
   it("hands a saved answer to HY as a note instead of writing the memory itself", async () => {
@@ -2181,152 +2235,6 @@ describe("MemorySpace", () => {
       ),
     );
     expect(screen.getByText("Original words", visibleText)).toBeTruthy();
-  });
-
-  it("saves scope independently of an unsaved wording edit or confirmation", async () => {
-    render(<MemorySpace />);
-    await userEvent.click(
-      await screen.findByRole("button", { name: /Initial memory/ }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "纠正" }));
-    await userEvent.clear(screen.getByRole("textbox", { name: "记忆内容" }));
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "记忆内容" }),
-      "Unsaved wording",
-    );
-    await userEvent.click(screen.getByRole("button", { name: "调整召回范围" }));
-    await userEvent.click(
-      screen.getByRole("radio", { name: "停止外部记忆召回" }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "保存召回范围" }));
-    await waitFor(() =>
-      expect(setMemoryScopes).toHaveBeenCalledWith(
-        "memory-1",
-        1,
-        ["private"],
-        expect.any(String),
-        expect.any(String),
-      ),
-    );
-    expect(correctMemory).not.toHaveBeenCalled();
-    expect(mutateMemory).not.toHaveBeenCalled();
-    expect(screen.getByText("Original words", visibleText)).toBeTruthy();
-  });
-
-  it("a late scope save cannot reopen an earlier selection", async () => {
-    const second = {
-      ...memory,
-      memory_id: "memory-2",
-      content: "Second memory",
-    };
-    getMemories.mockResolvedValue([memory, second]);
-    getMemory.mockImplementation((id: string) =>
-      Promise.resolve(
-        id === "memory-1"
-          ? detail
-          : {
-              ...detail,
-              memory: second,
-              evidence: [
-                { ...detail.evidence[0], verbatim: "Second original" },
-              ],
-            },
-      ),
-    );
-    let finish: (value: GovernedMemory) => void = () => {};
-    setMemoryScopes.mockReturnValue(
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-    );
-    render(<MemorySpace />);
-    await userEvent.click(
-      await screen.findByRole("button", { name: /Initial memory/ }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "调整召回范围" }));
-    await userEvent.click(
-      screen.getByRole("radio", { name: "停止外部记忆召回" }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "保存召回范围" }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Second memory/ }),
-    );
-    expect(
-      await screen.findByText("Second original", visibleText),
-    ).toBeTruthy();
-    await act(async () =>
-      finish({ ...memory, scopes: ["private"], revision: 2 }),
-    );
-    expect(screen.getByText("Second original", visibleText)).toBeTruthy();
-    expect(screen.queryByText("Original words")).toBeNull();
-  });
-
-  it.each(["memories", "graph"])(
-    "does not call a saved scope unsaved when the following %s refresh fails",
-    async (panel) => {
-      render(<MemorySpace />);
-      await userEvent.click(
-        await screen.findByRole("button", { name: /Initial memory/ }),
-      );
-      await userEvent.click(screen.getByRole("button", { name: "纠正" }));
-      fireEvent.change(screen.getByRole("textbox", { name: "记忆内容" }), {
-        target: { value: "Unsaved wording" },
-      });
-      await userEvent.click(
-        screen.getByRole("button", { name: "调整召回范围" }),
-      );
-      await userEvent.click(
-        screen.getByRole("radio", { name: "停止外部记忆召回" }),
-      );
-      const reader = panel === "graph" ? getMemoryGraph : getMemories;
-      reader.mockRejectedValueOnce(new Error("refresh unavailable"));
-      await userEvent.click(
-        screen.getByRole("button", { name: "保存召回范围" }),
-      );
-      if (panel === "graph") {
-        await waitFor(
-          () => expect(getMemoryGraph.mock.calls.length).toBeGreaterThan(1),
-          { timeout: 3500 },
-        );
-        expect(screen.queryByText(/记忆图谱读取失败/)).toBeNull();
-      } else {
-        expect(
-          (await screen.findByRole("alert", {}, { timeout: 3500 })).textContent,
-        ).toContain("召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。");
-      }
-      expect(
-        (
-          screen.getByRole("textbox", {
-            name: "记忆内容",
-          }) as HTMLTextAreaElement
-        ).value,
-      ).toBe("Unsaved wording");
-      expect(
-        (screen.getByRole("button", { name: "保存纠正" }) as HTMLButtonElement)
-          .disabled,
-      ).toBe(false);
-      expect(setMemoryScopes).toHaveBeenCalledTimes(1);
-      expect(correctMemory).not.toHaveBeenCalled();
-      expect(mutateMemory).not.toHaveBeenCalled();
-      expect(screen.getByText("Original words", visibleText)).toBeTruthy();
-      expect(screen.getByText("已停止外部记忆召回", visibleText)).toBeTruthy();
-      expect(screen.queryByText("保存结果尚未确认，请重试。")).toBeNull();
-    },
-  );
-
-  it("Enter on a scope radio cannot submit a separate content correction", async () => {
-    render(<MemorySpace />);
-    await userEvent.click(
-      await screen.findByRole("button", { name: /Initial memory/ }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "纠正" }));
-    await userEvent.click(screen.getByRole("button", { name: "调整召回范围" }));
-    await userEvent.click(
-      screen.getByRole("radio", { name: "停止外部记忆召回" }),
-    );
-    await userEvent.keyboard("{Enter}");
-    expect(correctMemory).not.toHaveBeenCalled();
-    expect(setMemoryScopes).not.toHaveBeenCalled();
   });
 
   it("says search is behind, and offers to try again", async () => {

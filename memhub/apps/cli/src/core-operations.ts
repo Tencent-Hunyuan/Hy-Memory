@@ -6,6 +6,7 @@ const WRITE_PATHS = [
 ] as const;
 const MEMORY_WRITE_PATH =
   /^\/api\/v1\/memories(?:\/[A-Za-z0-9][\w.-]{0,127}\/(?:correct|scopes|actions\/delete))?$/;
+const SDK_MEMORY_PATH = /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
 const MODEL_PROBE_PATH =
   /^\/api\/v1\/model-profiles\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/probe$/;
 const MODEL_PROFILE_PATH =
@@ -170,7 +171,7 @@ export function createCoreOperations(attachment: {
       body: Record<string, unknown>,
       signal?: AbortSignal,
     ) {
-      if (path !== EXTRACTION_SETTINGS_PATH) {
+      if (path !== EXTRACTION_SETTINGS_PATH && !SDK_MEMORY_PATH.test(path)) {
         throw new Error("core_operation_path_not_allowed");
       }
       let response: { status: number; data: unknown };
@@ -232,7 +233,7 @@ export function createCoreOperations(attachment: {
       };
     },
     async delete<T>(path: string, signal?: AbortSignal) {
-      if (!IMPORT_FILE.test(path)) {
+      if (!IMPORT_FILE.test(path) && !SDK_MEMORY_PATH.test(path)) {
         throw new Error("core_operation_path_not_allowed");
       }
       let response: { status: number; data: unknown };

@@ -115,6 +115,37 @@ class CacheBase(ABC):
         ...
 
     # ================================================================
+    # Durable write outcomes
+    # ================================================================
+
+    @abstractmethod
+    async def claim_write_outcome(
+        self,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        operation: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Claim one idempotent write; return the existing row if already claimed."""
+        ...
+
+    @abstractmethod
+    async def finish_write_outcome(
+        self,
+        request_id: str,
+        status: str,
+        result: Dict[str, Any],
+    ) -> bool:
+        """Persist the terminal/unknown result for a claimed write."""
+        ...
+
+    @abstractmethod
+    async def get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Read one durable write outcome by exact request id."""
+        ...
+
+    # ================================================================
     # Summary Buffer（rolling summary 的未消费 turn 暂存）
     #
     # 默认 no-op，便于无需该能力的后端直接继承。

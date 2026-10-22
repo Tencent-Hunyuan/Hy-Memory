@@ -3,13 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiErrorCode, correctMemory, getMemory, mutateMemory } from "./api";
 import { clockStamp } from "./clock-stamp";
-import { MemoryRecallScope } from "./MemoryRecallScope";
 import { R6Button } from "./R6Controls";
 import { sourceNameOr } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 import "./selected-memory.css";
-import { useMemoryLanguage } from "./memory-language";
 
 type Page = "read" | "edit" | "original" | "delete";
 
@@ -17,7 +15,6 @@ export function SelectedMemoryDetail({
   detail,
   sources,
   onChanged,
-  onSaveScopes,
   suspended = false,
   hideActions = false,
   conversationAt = null,
@@ -25,13 +22,11 @@ export function SelectedMemoryDetail({
   detail: MemoryDetail;
   sources: SourceResponse[];
   onChanged(id: string): void;
-  onSaveScopes?(scopes: string[]): Promise<void>;
   suspended?: boolean;
   hideActions?: boolean;
   /** D99: when the cited conversation happened, in the list's own terms. */
   conversationAt?: { at: string; basis: "conversation" | "import" } | null;
 }) {
-  const { locale, text } = useMemoryLanguage();
   const [page, setPage] = useState<Page>("read");
   const [draft, setDraft] = useState(detail.memory.content);
   const [base, setBase] = useState(detail.memory.revision);
@@ -61,12 +56,7 @@ export function SelectedMemoryDetail({
         : memory.status === "superseded"
           ? "已被取代"
           : "状态待核对";
-  const source =
-    evidence?.source_id === "one-memory-manual"
-      ? text("手动添加")
-      : evidence?.source_id === "memory-content-export"
-        ? text("导入的已有记忆")
-        : sourceNameOr(sources, evidence?.source_id, text("来源待核对"));
+  const source = sourceNameOr(sources, evidence?.source_id, "来源待核对");
   const dirty = page === "edit" && draft !== memory.content;
   useEffect(() => {
     if (page === "edit" && memory.revision > base) setConflictFound(true);
@@ -95,7 +85,7 @@ export function SelectedMemoryDetail({
   }, [dirty]);
   function close() {
     if (busy) return;
-    if (dirty && !window.confirm(text("放弃尚未保存的修改？"))) return;
+    if (dirty && !window.confirm("放弃尚未保存的修改？")) return;
     setPage("read");
     setError("");
     setConflictFound(false);
@@ -231,7 +221,7 @@ export function SelectedMemoryDetail({
       : evidence?.written_by === "agent" || evidence?.written_by === "assistant"
         ? "助手原话"
         : "作者待核对";
-  const timestamp = clockStamp(evidence?.created_at, locale);
+  const timestamp = clockStamp(evidence?.created_at);
   const split = memory.content.search(/[。\n]/);
   const heading =
     split > 0 && split < 85
@@ -246,20 +236,17 @@ export function SelectedMemoryDetail({
         data-hide-actions={hideActions ? "true" : "false"}
       >
         <p className="selected-memory-status">
-          {text(statusLabel)} ·{" "}
-          {text("第 {revision} 版", { revision: memory.revision })}
+          {statusLabel} · 第 {memory.revision} 版
         </p>
         <h3>{heading}</h3>
         {body && <p className="selected-memory-body">{body}</p>}
         <p className="selected-memory-source">
-          {text("来源")} {source} · {timestamp}
+          来源 {source} · {timestamp}
         </p>
         <p className="selected-memory-times">
-          {text("对话时间 ")}
-          {clockStamp(conversationAt?.at ?? evidence?.created_at, locale)}
+          对话时间 {clockStamp(conversationAt?.at ?? evidence?.created_at)}
           {" · "}
-          {text("沉淀时间 ")}
-          {clockStamp(memory.updated_at, locale)}
+          沉淀时间 {clockStamp(memory.updated_at)}
         </p>
         {!hideActions && (
           <R6Button
@@ -273,20 +260,16 @@ export function SelectedMemoryDetail({
               setPage("edit");
             }}
           >
-            {text("编辑")}
+            编辑
           </R6Button>
         )}
         <section className="selected-memory-evidence">
-          <h4>{text("原始依据")}</h4>
+          <h4>原始依据</h4>
           <small>
-            {text(author)} · {text("原对话 ")}
-            {timestamp}
-            {text("冒号")}
+            {author} · 原对话 {timestamp}：
           </small>
           <blockquote>
-            {evidence?.available
-              ? evidence.verbatim
-              : text("这段原文当前不可查看。")}
+            {evidence?.available ? evidence.verbatim : "这段原文当前不可查看。"}
           </blockquote>
           {!hideActions && (
             <R6Button
@@ -295,22 +278,20 @@ export function SelectedMemoryDetail({
                 setPage("original");
               }}
             >
-              {text("查看原文")}
+              查看原文
             </R6Button>
           )}
         </section>
         {!hideActions && (
           <R6Button variant="quiet" onClick={() => setShowHistory((v) => !v)}>
-            {text("版本记录")}
+            版本记录
           </R6Button>
         )}
         {!hideActions && showHistory && (
           <ol className="selected-memory-history">
             {detail.history.map((v) => (
               <li key={v.revision}>
-                <small>
-                  {text("第 {revision} 版", { revision: v.revision })}
-                </small>
+                <small>第 {v.revision} 版</small>
                 <p>{v.content}</p>
               </li>
             ))}
@@ -318,17 +299,10 @@ export function SelectedMemoryDetail({
         )}
         {!hideActions && (
           <details className="selected-memory-more">
-            <summary>{text("更多管理")}</summary>
-            {onSaveScopes && (
-              <MemoryRecallScope
-                detail={detail}
-                busy={busy}
-                onSave={onSaveScopes}
-              />
-            )}
+            <summary>更多管理</summary>
             {detail.history.length > 1 && (
               <R6Button pending={busy} onClick={() => void govern("undo")}>
-                {text("撤销上次修改")}
+                撤销上次修改
               </R6Button>
             )}
             <R6Button
@@ -338,11 +312,11 @@ export function SelectedMemoryDetail({
                 setPage("delete");
               }}
             >
-              {text("删除记忆")}
+              删除记忆
             </R6Button>
           </details>
         )}
-        {error && page === "read" && <p role="alert">{text(error)}</p>}
+        {error && page === "read" && <p role="alert">{error}</p>}
       </article>
       {page !== "read" &&
         createPortal(
@@ -351,10 +325,10 @@ export function SelectedMemoryDetail({
             hidden={suspended}
             aria-label={
               page === "edit"
-                ? text("编辑记忆")
+                ? "编辑记忆"
                 : page === "original"
-                  ? text("原始对话")
-                  : text("删除记忆")
+                  ? "原始对话"
+                  : "删除记忆"
             }
             onKeyDown={(event) => {
               if (event.key === "Tab") {
@@ -386,20 +360,20 @@ export function SelectedMemoryDetail({
             <header>
               <h1 ref={focus} tabIndex={-1}>
                 {page === "edit"
-                  ? text("编辑记忆")
+                  ? "编辑记忆"
                   : page === "original"
-                    ? text("原始对话")
-                    : text("删除记忆")}
+                    ? "原始对话"
+                    : "删除记忆"}
               </h1>
               {page === "original" && (
-                <R6Button onClick={close}>{text("返回记忆")}</R6Button>
+                <R6Button onClick={close}>返回记忆</R6Button>
               )}
             </header>
             {page === "edit" ? (
               <div className="selected-editor">
-                <p>{text("修改这条记忆，原始对话保持不变。")}</p>
+                <p>修改这条记忆，原始对话保持不变。</p>
                 <textarea
-                  aria-label={text("记忆内容")}
+                  aria-label="记忆内容"
                   name="memory-content"
                   value={draft}
                   disabled={busy}
@@ -409,18 +383,16 @@ export function SelectedMemoryDetail({
                     request.current = null;
                   }}
                 />
-                <p>{text("使用范围保持不变")}</p>
+                <p>使用范围保持不变</p>
                 {conflictFound && (
                   <section className="selected-conflict">
-                    <h2>{text("已有新版本")}</h2>
-                    <p>
-                      {text("你的草稿已保留，先查看新版本再决定如何修改。")}
-                    </p>
+                    <h2>已有新版本</h2>
+                    <p>你的草稿已保留，先查看新版本再决定如何修改。</p>
                     <R6Button
                       pending={busy}
                       onClick={() => void refreshConflict()}
                     >
-                      {text("查看新版本")}
+                      查看新版本
                     </R6Button>
                     {conflict && (
                       <>
@@ -432,7 +404,7 @@ export function SelectedMemoryDetail({
                             request.current = null;
                           }}
                         >
-                          {text("基于此版本继续编辑")}
+                          基于此版本继续编辑
                         </R6Button>
                       </>
                     )}
@@ -440,7 +412,7 @@ export function SelectedMemoryDetail({
                 )}
                 <div className="selected-page-actions">
                   <R6Button disabled={busy} onClick={close}>
-                    {text("取消")}
+                    取消
                   </R6Button>
                   <R6Button
                     variant="primary"
@@ -448,7 +420,7 @@ export function SelectedMemoryDetail({
                     disabled={!draft.trim() || conflictFound}
                     onClick={() => void save()}
                   >
-                    {text("保存修改")}
+                    保存修改
                   </R6Button>
                 </div>
               </div>
@@ -457,61 +429,54 @@ export function SelectedMemoryDetail({
                 <small>
                   {source} · {timestamp}
                 </small>
-                <p>{text(author)}</p>
+                <p>{author}</p>
                 {detail.evidence.map((item) => (
                   <section key={item.evidence_id}>
                     <small>
-                      {sourceNameOr(
-                        sources,
-                        item.source_id,
-                        text("来源待核对"),
-                      )}{" "}
-                      ·{" "}
+                      {sourceNameOr(sources, item.source_id, "来源待核对")} ·{" "}
                       {item.written_by === "person"
-                        ? text("你")
+                        ? "你"
                         : item.written_by === "agent"
-                          ? text("助手")
-                          : text("作者待核对")}
+                          ? "助手"
+                          : "作者待核对"}
                     </small>
                     <blockquote>
                       {item.available
                         ? item.verbatim
-                        : text("来源权限已变化或原文不可用。")}
+                        : "来源权限已变化或原文不可用。"}
                     </blockquote>
                   </section>
                 ))}
-                <small>{text("对应记忆")}</small>
+                <small>对应记忆</small>
                 <h2>{heading}</h2>
-                <R6Button onClick={close}>{text("查看记忆")}</R6Button>
+                <R6Button onClick={close}>查看记忆</R6Button>
               </div>
             ) : (
               <div className="selected-delete">
-                <h2>{text("删除这条记忆？")}</h2>
+                <h2>删除这条记忆？</h2>
                 <p>{heading}</p>
                 <p>
-                  {text(
-                    "删除后不再用于新的召回，来源 App 中的原始对话不会删除。",
-                  )}
+                  删除后不再用于新的召回，来源 App 中的原始对话不会删除。
                   <br />
-                  {text("已经发送给应用的内容无法远程收回。")}
+                  已经发送给应用的内容无法远程收回。
                 </p>
                 <div className="selected-page-actions">
                   <R6Button disabled={busy} onClick={close}>
-                    {text("取消")}
+                    取消
                   </R6Button>
                   <R6Button
                     variant="primary"
                     pending={busy}
                     onClick={() => void remove()}
                   >
-                    {text("删除记忆")}
+                    删除记忆
                   </R6Button>
                 </div>
               </div>
             )}
             {error && (
               <p className="selected-page-error" role="alert">
-                {text(error)}
+                {error}
               </p>
             )}
           </section>,

@@ -114,8 +114,11 @@ describe("ensureRuntimeProcess", () => {
           args: ["/app/runtime/runtime.cjs", "serve"],
           env: { ELECTRON_RUN_AS_NODE: "1" },
         },
-        attempts: 10,
-        delayMs: 1,
+        // The receipt write is intentionally asynchronous. Keep enough wall
+        // clock for it even when the workspace suite runs CPU-heavy tests in
+        // parallel; ten 1ms polls made this a scheduler race.
+        attempts: 200,
+        delayMs: 5,
         spawnProcess,
         processIsAlive: () => true,
         probeIdentity: async () => ({

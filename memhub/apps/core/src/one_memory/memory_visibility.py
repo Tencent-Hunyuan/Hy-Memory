@@ -200,10 +200,12 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_link_update
         AFTER UPDATE ON governed_memory_evidence
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (OLD.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (OLD.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -294,6 +296,10 @@ def install_triggers(db: sqlite3.Connection) -> None:
         str(row["name"])
         for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
+    # CREATE TRIGGER IF NOT EXISTS cannot repair the legacy definition. Replace
+    # this derived-cache trigger transactionally on every startup so old
+    # libraries get the row-level conflict handling without a schema migration.
+    cursor.execute("DROP TRIGGER IF EXISTS memory_visibility_dirty_on_link_update")
     for table, statement in _trigger_sql():
         if table not in present:
             continue
@@ -303,11 +309,15 @@ def install_triggers(db: sqlite3.Connection) -> None:
 def startup(database_path: Path) -> None:
     """Idempotent: create the derived tables and triggers. No version change.
 
-    Runs through the write connection because the triggers are schema. It is
-    one short transaction and happens once per start.
+    Runs through the write connection because the triggers are schema. The
+    trigger replacement is one short transaction and happens once per start.
     """
-    with main_database(database_path).write() as db:
+    with main_database(database_path).write() as db, db:
         ensure_tables(db)
+        # ensure_tables uses executescript(), which commits any pending legacy
+        # transaction. Begin only afterward so replacing the installed trigger
+        # is one atomic schema change and a failed CREATE restores the old one.
+        db.execute("BEGIN IMMEDIATE")
         install_triggers(db)
 
 

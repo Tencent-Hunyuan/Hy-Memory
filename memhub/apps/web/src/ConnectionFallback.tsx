@@ -1,37 +1,26 @@
-import {
-  type ConnectionMaterial,
-  connectionPrompt,
-} from "@one-memory/contracts/gui-i18n";
 import { Copy, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { copyText } from "./copy-text";
-import { useOnboardingTranslation } from "./onboarding-language";
 
-type Material = ConnectionMaterial;
-type Mode = keyof Material;
+type Material = { displayName: string; expiresAt: string; skill: string };
 
 export function ConnectionFallback() {
-  const { locale, text } = useOnboardingTranslation();
+  const [displayName, setDisplayName] = useState("");
   const [material, setMaterial] = useState<Material | null>(null);
-  const [mode, setMode] = useState<Mode>("prompt");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [notice, setNotice] = useState("");
-  const available = !!window.oneMemory?.getConnectionMaterial;
-  // Localize only the template prose; never parse or rewrite technical material.
-  const value = material
-    ? mode === "prompt"
-      ? connectionPrompt(locale, material)
-      : (material[mode] ?? "")
-    : "";
+  const available = !!window.oneMemory?.createCustomHarnessSkill;
 
-  async function load() {
+  async function generate() {
     const bridge = window.oneMemory;
-    if (!bridge?.getConnectionMaterial || loading) return;
+    const name = displayName.trim();
+    if (!bridge?.createCustomHarnessSkill || loading || !name) return;
     setLoading(true);
     setError(false);
+    setNotice("");
     try {
-      setMaterial(await bridge.getConnectionMaterial());
+      setMaterial(await bridge.createCustomHarnessSkill(name));
     } catch {
       setError(true);
     } finally {
@@ -40,100 +29,82 @@ export function ConnectionFallback() {
   }
 
   return (
-    <details
-      className="connection-fallback"
-      onToggle={(event) => {
-        if (event.currentTarget.open && !material && !loading && !error)
-          void load();
-      }}
-    >
-      <summary>{text("连接其他工具")}</summary>
+    <details className="connection-fallback">
+      <summary>连接其他工具</summary>
       {!available ? (
-        <p>{text("本机连接材料仅在桌面 App 中可用。")}</p>
+        <p>本机配对仅在桌面 App 中可用。</p>
       ) : (
         <>
           <p className="connection-boundary">
-            {text("仅本机 MCP / 命令工具。纯网页聊天不支持直接连接本机。")}
+            为未列出的本机 Harness 生成一次性配对
+            Skill。纯网页聊天、远端容器或另一台机器不能直接连接本机。
           </p>
-          <p>{text("列表内工具请用上方一键安装，此处仅供未列出的工具。")}</p>
-          {loading && <p role="status">{text("正在读取本机连接配置…")}</p>}
+          <label className="custom-harness-name">
+            Harness 名称
+            <input
+              value={displayName}
+              maxLength={80}
+              placeholder="例如 Kimi Code"
+              onChange={(event) => {
+                setDisplayName(event.target.value);
+                setMaterial(null);
+                setError(false);
+                setNotice("");
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={loading || !displayName.trim()}
+            onClick={() => void generate()}
+          >
+            {loading ? "正在生成…" : "生成配对 Skill"}
+          </button>
           {error && (
             <p role="alert">
-              {text("未能读取连接配置。")}
+              未能生成配对 Skill。
               <button
                 type="button"
                 className="quiet"
-                onClick={() => void load()}
+                onClick={() => void generate()}
               >
                 <RefreshCw size={15} aria-hidden="true" />
-                {text("重试")}
+                重试
               </button>
             </p>
           )}
           {material && (
             <>
-              <div
-                role="tablist"
-                aria-label={text("连接材料格式")}
-                className="connection-modes"
-              >
-                {(
-                  [
-                    ["prompt", "连接提示词"],
-                    ["mcp", "MCP 配置"],
-                    ["shell", "命令"],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="tab"
-                    aria-selected={mode === id}
-                    disabled={material[id] === null}
-                    onClick={() => {
-                      setMode(id);
-                      setNotice("");
-                    }}
-                  >
-                    {text(label)}
-                  </button>
-                ))}
-              </div>
+              <p>
+                已为 {material.displayName} 生成一次性配对 Skill，有效期至{" "}
+                {new Date(material.expiresAt).toLocaleTimeString()}。
+              </p>
               <textarea
-                aria-label={text("本机连接材料")}
+                aria-label="配对 Skill"
                 readOnly
-                value={value}
+                value={material.skill}
                 spellCheck={false}
               />
-              <p>
-                {text(
-                  "包含本机路径，不含记忆和密钥。片段会运行本机 MemHub 连接程序；粘贴前请确认，MemHub 需保持运行。",
-                )}
-              </p>
               <button
                 type="button"
                 className="secondary"
                 onClick={async () => {
                   try {
-                    await copyText(value);
-                    setNotice("已复制，尚未建立连接。");
+                    await copyText(material.skill);
+                    setNotice(
+                      "已复制配对 Skill。请粘贴到对应 Harness 中执行。",
+                    );
                   } catch {
                     setNotice("复制失败，可在上方选中文本复制。");
                   }
                 }}
               >
                 <Copy size={15} aria-hidden="true" />
-                {text(
-                  mode === "prompt"
-                    ? "复制提示词"
-                    : mode === "mcp"
-                      ? "复制配置"
-                      : "复制命令",
-                )}
+                复制 Skill
               </button>
-              {notice && <p role="status">{text(notice)}</p>}
             </>
           )}
+          {notice && <p role="status">{notice}</p>}
         </>
       )}
     </details>

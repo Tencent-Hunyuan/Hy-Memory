@@ -66,7 +66,7 @@ def test_all_chat_groups_preserve_rows_and_order_without_reinterpreting_metadata
         "rewrite": {"used": False, "scene": "normal"},
         "elapsed_ms": 1,
     }
-    assert _replied_memories(reply, ERROR) == (profile, proactive, CHAT)
+    assert _replied_memories(reply, ERROR) == (schema, proactive, CHAT)
 
 
 @pytest.mark.parametrize(

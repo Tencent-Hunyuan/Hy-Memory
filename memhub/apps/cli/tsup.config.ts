@@ -41,7 +41,10 @@ export default defineConfig({
   // The shared operations package ships TypeScript sources, so it must be
   // inlined into the CJS bundle the same way runtime-control is; otherwise the
   // emitted bundle tries to `require` a `.js` file that only exists as `.ts`.
+  // `@one-memory/contracts` is the same kind of package and is imported for a
+  // value (the host-id grammar), so it has to be inlined too.
   noExternal: [
+    "@one-memory/contracts",
     "@one-memory/operations",
     "@one-memory/runtime-control",
     "axios",

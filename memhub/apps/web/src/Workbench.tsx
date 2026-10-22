@@ -1,22 +1,16 @@
 import type {
-  AskMemoryResponse,
   ConversationTranscript,
   GovernedMemory,
+  HostAskMemoryResponse,
   MemoryDetail,
   MemoryEvidenceExcerpt,
   MemoryGraphEdge,
   MemoryGraphNode,
   MemoryGraphResponse,
   MemoryProcessingSummary,
+  SdkAskMemory,
   SourceResponse,
 } from "@one-memory/contracts";
-import {
-  type GuiLocale,
-  isMessageKey,
-  type MessageKey,
-  translate,
-  translateCount,
-} from "@one-memory/contracts/gui-i18n";
 import { Check, PencilLine, RotateCcw, Trash2 } from "lucide-react";
 import {
   type FormEvent,
@@ -26,11 +20,9 @@ import {
   useState,
 } from "react";
 import { getConversation } from "./api";
-import { useGuiLanguage } from "./gui-language";
 import { HandoffBar } from "./HandoffBar";
 import { MemoryGraph3D } from "./MemoryGraph3D";
-import { MemoryRecallScope, memoryProvenanceLabel } from "./MemoryRecallScope";
-import { memoryText } from "./memory-language";
+import { memoryProvenanceLabel } from "./MemoryRecallScope";
 import { extractionStateLabel } from "./memory-processing-labels";
 import {
   type Finding,
@@ -55,16 +47,13 @@ export function Workbench({
   loaded,
   detail,
   draft,
-  scopes,
   busy,
   answer,
   streaming,
   onDraft,
-  onScopes,
   onOpenMemory,
   onCloseDetail,
   onSave,
-  onSaveScopes,
   onAction,
   onSyncIndex,
   onAsk,
@@ -87,16 +76,16 @@ export function Workbench({
   } | null;
   overlayBlocked?: boolean;
   draft: string;
-  scopes: string;
   busy: boolean;
-  answer: AskMemoryResponse | null;
-  streaming: { text: string; memories: GovernedMemory[] } | null;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
   onDraft(next: string): void;
-  onScopes(next: string): void;
   onOpenMemory(memoryId: string): void;
   onCloseDetail(): void;
   onSave(event: FormEvent<HTMLFormElement>): void;
-  onSaveScopes?(scopes: string[]): Promise<void>;
   onAction(action: "undo" | "delete"): void;
   onSyncIndex(): void;
   onAsk(question: string): void;
@@ -108,7 +97,6 @@ export function Workbench({
    * reuses the request id prepared for text the user has since replaced. */
   requestIds: RefObject<Map<string, string>>;
 }) {
-  const { t, tnPlain, locale } = useGuiLanguage();
   const [matter, setMatter] = useState("");
   const [selectedNode, setSelectedNode] = useState<MemoryGraphNode | null>(
     null,
@@ -134,9 +122,8 @@ export function Workbench({
     [memories, matter],
   );
   const findings = useMemo(
-    () =>
-      findingsOf({ memories: inMatter, processing, now: new Date(), locale }),
-    [inMatter, processing, locale],
+    () => findingsOf({ memories: inMatter, processing, now: new Date() }),
+    [inMatter, processing],
   );
   // Counted across the whole library, not this matter. A tag used once here
   // and once elsewhere is a tag used twice; scoping this to the matter would
@@ -150,12 +137,8 @@ export function Workbench({
     // fails. Keying the skeleton on null meant the one screen it existed for
     // never saw it.
     const drawn = graph ? narrow(graph, inMatter, matter) : null;
-    return drawn?.nodes.length ? drawn : skeleton(sources, graph, locale);
-  }, [graph, inMatter, matter, sources, locale]);
-  // The "all" row and a matter no longer listed both read as 全部, as before.
-  const matterLabel =
-    (matter && matters.find((item) => item.scope === matter)?.label) ||
-    t("wb.all");
+    return drawn?.nodes.length ? drawn : skeleton(sources, graph);
+  }, [graph, inMatter, matter, sources]);
   const evidence = useMemo(
     () => orderEvidence(detail, highlighted, memories),
     [detail, highlighted, memories],
@@ -181,7 +164,7 @@ export function Workbench({
   const nameOf = (sourceId: string | null) =>
     sources.find((item) => item.source_id === sourceId)?.display_name ??
     sourceId ??
-    t("wb.unknownSource");
+    "未知来源";
 
   return (
     <div className="workbench">
@@ -193,15 +176,16 @@ export function Workbench({
             belongs to — is a workspace scope, and its plaintext name lives on
             the evidence rows in Core; nothing here can recover it from the
             hash, so calling this column 事项 named something it was not. */}
-        <nav className="wb-matters" aria-label={t("wb.topics")}>
-          <p className="wb-column-label">{t("wb.topics")}</p>
+        <nav className="wb-matters" aria-label="主题">
+          <p className="wb-column-label">主题</p>
           {allTags.length ? (
             // Says the two numbers the column actually shows: how many
             // topics took shape, and how many tags did not. Reporting one
             // total meant reading "22 个主题标签" above six rows.
             <p className="wb-tag-tally">
-              {tnPlain("wb.topicCount", allTags.length - onceOnly.size)}
-              {onceOnly.size ? tnPlain("wb.singletons", onceOnly.size) : ""}
+              {onceOnly.size === 0
+                ? `${allTags.length - onceOnly.size} 个主题成形`
+                : `${allTags.length - onceOnly.size} 个主题成形，另有 ${onceOnly.size} 个标签只出现过一次`}
             </p>
           ) : null}
           {matters.map((item) => (
@@ -217,12 +201,10 @@ export function Workbench({
                   setTranscript(null);
                 }}
               >
-                {item.scope ? item.label : t("wb.all")}
+                {item.label}
                 <small>
-                  {tnPlain("wb.memories", item.memoryCount)}
-                  {item.sourceCount
-                    ? ` · ${tnPlain("wb.sources", item.sourceCount)}`
-                    : ""}
+                  {item.memoryCount} 条记忆
+                  {item.sourceCount ? ` · ${item.sourceCount} 个来源` : ""}
                 </small>
               </button>
               {/* The graph is a canvas: clicking a circle is a mouse-only
@@ -267,7 +249,9 @@ export function Workbench({
                               className="wb-tag"
                               data-once={onceOnly.has(tag) ? "true" : undefined}
                               title={
-                                onceOnly.has(tag) ? t("wb.once") : undefined
+                                onceOnly.has(tag)
+                                  ? "这个主题只出现在这一条上。可能是它只发生过一次，也可能是同一个主题被拆成了两个名字。"
+                                  : undefined
                               }
                             >
                               {tag}
@@ -286,15 +270,14 @@ export function Workbench({
         <div className="wb-stage">
           <div className="wb-graph" data-testid="workbench-graph">
             <p className="wb-graph-title">
-              {shown.nodes.length
-                ? t("wb.graphTitle", { label: matterLabel })
-                : matterLabel}
+              {matters.find((item) => item.scope === matter)?.label ?? "全部"}
+              {shown.nodes.length ? " 的关系图" : ""}
             </p>
             <div className="wb-graph-legend">
-              <span data-kind="memory">{t("wb.type.memory")}</span>
-              <span data-kind="schema">{t("wb.type.schema")}</span>
-              <span data-kind="topic">{t("wb.type.topic")}</span>
-              <span data-kind="source">{t("wb.type.source")}</span>
+              <span data-kind="memory">记忆</span>
+              <span data-kind="schema">HY 归纳</span>
+              <span data-kind="topic">主题</span>
+              <span data-kind="source">来源 App</span>
             </div>
             {/* Laid out by the row, not by offsets. Both were absolutely
                 positioned with a right edge each, and measuring them found
@@ -309,15 +292,16 @@ export function Workbench({
                   className="quiet"
                   disabled={busy}
                   onClick={() => {
+                    const label =
+                      matters.find((item) => item.scope === matter)?.label ??
+                      "全部";
                     setPageOf(matter);
                     onAsk(
-                      t("wb.summaryPrompt", {
-                        label: matterLabel,
-                      }),
+                      `把「${label}」这件事讲清楚：现在到哪一步了、已经定下来的有哪些、还有什么没定。`,
                     );
                   }}
                 >
-                  {t("wb.readSummary")}
+                  读这个事项的综述
                 </button>
               ) : null}
               <button
@@ -326,7 +310,7 @@ export function Workbench({
                 disabled={busy || !graph?.nodes.length}
                 onClick={onBuildRelations}
               >
-                {t(busy ? "wb.building" : "wb.build")}
+                {busy ? "正在归纳…" : "用 HY Memory 生成关系"}
               </button>
             </div>
             {shown.nodes.length ? (
@@ -354,12 +338,10 @@ export function Workbench({
           </div>
           {graph?.nodes.length ? (
             <p className="wb-receipt">
-              {t("wb.drawn", {
-                shown: shown.nodes.filter((node) => node.node_type === "memory")
-                  .length,
-                total: graph.total_memories,
-              })}
-              <span>{graphReceipt(shown, locale)}</span>
+              画的是{" "}
+              {shown.nodes.filter((node) => node.node_type === "memory").length}{" "}
+              / 全部 {graph.total_memories} 条记忆
+              <span>{graphReceipt(shown)}</span>
             </p>
           ) : null}
 
@@ -368,13 +350,12 @@ export function Workbench({
             graph={shown}
             detail={detail}
             draft={draft}
-            scopes={scopes}
             busy={busy}
-            matterLabel={matterLabel}
+            matterLabel={
+              matters.find((item) => item.scope === matter)?.label ?? "全部"
+            }
             onDraft={onDraft}
-            onScopes={onScopes}
             onSave={onSave}
-            onSaveScopes={onSaveScopes}
             onAction={onAction}
             onSyncIndex={onSyncIndex}
             requestIds={requestIds}
@@ -395,7 +376,7 @@ export function Workbench({
             }}
           >
             <div className="wb-chips">
-              {chipsFor(inMatter, locale).map((chip) => (
+              {chipsFor(inMatter).map((chip) => (
                 <button
                   key={chip}
                   type="button"
@@ -411,13 +392,13 @@ export function Workbench({
             </div>
             <div className="wb-ask-row">
               <input
-                aria-label={t("wb.askLabel")}
-                placeholder={t("wb.askPlaceholder")}
+                aria-label="就着这个事项提问"
+                placeholder="就着这个事项问，回答只用已确认的记忆"
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
               />
               <button type="submit" disabled={!question.trim()}>
-                {t("wb.ask")}
+                问
               </button>
             </div>
             {answer || streaming ? (
@@ -435,16 +416,18 @@ export function Workbench({
             memories={inMatter.filter(
               (memory) => memory.memory_id === detail?.memory.memory_id,
             )}
-            matterLabel={matterLabel}
+            matterLabel={
+              matters.find((item) => item.scope === matter)?.label ?? "全部"
+            }
           />
         </div>
 
-        <aside className="wb-evidence" aria-label={t("wb.originals")}>
-          <p className="wb-column-label">{t("wb.originals")}</p>
+        <aside className="wb-evidence" aria-label="原始对话">
+          <p className="wb-column-label">原始对话</p>
           <p className="wb-evidence-note">
             {detail
-              ? tnPlain("wb.evidenceNote", evidence.length)
-              : t("wb.pickCircle")}
+              ? `这条记忆出自下面 ${evidence.length} 段原话，按时间排`
+              : "点图上任意一个圈，这里显示它出自哪些原话"}
           </p>
           {evidence.map((item) => (
             <article
@@ -465,19 +448,16 @@ export function Workbench({
               >
                 <span className="wb-evidence-meta">
                   <b>{nameOf(item.source_id)}</b>
-                  <span>{when(item.created_at, locale)}</span>
+                  <span>{when(item.created_at)}</span>
                 </span>
                 {item.extraction_state &&
                 item.extraction_state !== "extracted" ? (
                   <small className="wb-evidence-state">
-                    {memoryText(
-                      locale,
-                      extractionStateLabel(item.extraction_state),
-                    )}
+                    {extractionStateLabel(item.extraction_state)}
                   </small>
                 ) : null}
                 <span className="wb-evidence-excerpt">
-                  {item.available ? item.verbatim : t("wb.unavailable")}
+                  {item.available ? item.verbatim : "来源原话已不可读取"}
                 </span>
               </button>
               {openEvidence === item.evidence_id ? (
@@ -487,23 +467,17 @@ export function Workbench({
                     className="secondary"
                     onClick={() => void openTranscript(item.evidence_id)}
                   >
-                    {t("wb.fullConversation")}
+                    看完整对话
                   </button>
                   {transcriptError ? (
-                    <p className="wb-transcript-error">
-                      {t("wb.transcriptGone")}
-                    </p>
+                    <p className="wb-transcript-error">{transcriptError}</p>
                   ) : null}
                   {transcript ? (
                     <ol className="wb-transcript">
                       {transcript.messages.map((message) => (
                         <li key={message.evidence_id}>
                           <span className="wb-transcript-role">
-                            {t(
-                              message.written_by === "user"
-                                ? "wb.you"
-                                : "wb.assistant",
-                            )}
+                            {message.written_by === "user" ? "你" : "助手"}
                           </span>
                           {message.verbatim}
                         </li>
@@ -515,16 +489,18 @@ export function Workbench({
             </article>
           ))}
           {!detail && !memories.length && loaded ? (
-            <p className="wb-evidence-note">{t("wb.noMemories")}</p>
+            <p className="wb-evidence-note">
+              还没有记忆。已经导入的原话可以在「历史对话」里直接搜。
+            </p>
           ) : null}
         </aside>
       </div>
 
       {processing?.blocked_stages.length ? (
         <p className="wb-floor">
-          {t("wb.waiting")}
+          有对话排在队里等一个条件。原文已经在库里，随时搜得到。
           <button type="button" className="quiet" onClick={onConfigureModel}>
-            {t("wb.conditions")}
+            去看看缺什么
           </button>
         </p>
       ) : null}
@@ -539,13 +515,12 @@ function Findings({
   findings: Finding[];
   onPick(finding: Finding): void;
 }) {
-  const { t } = useGuiLanguage();
   if (!findings.length) return null;
   return (
-    <section className="wb-findings" aria-label={t("wb.findings")}>
+    <section className="wb-findings" aria-label="我替你看出这几件事">
       <div className="wb-findings-head">
-        <b>{t("wb.findings")}</b>
-        <span>{t("wb.findingsNote")}</span>
+        <b>我替你看出这几件事</b>
+        <span>都是本机记录算出来的，点一条会在图上标出它依据的记忆</span>
       </div>
       {findings.map((finding) => (
         <div key={finding.id} className="wb-finding">
@@ -559,7 +534,7 @@ function Findings({
                 className="quiet wb-finding-link"
                 onClick={() => onPick(finding)}
               >
-                {t("wb.showGraph")}
+                在图上看
               </button>
             ) : null}
           </div>
@@ -580,7 +555,6 @@ export function NodeDetail({
   matterLabel,
   onDraft,
   onSave,
-  onSaveScopes,
   onAction,
   onSyncIndex,
   requestIds,
@@ -591,41 +565,29 @@ export function NodeDetail({
   graph: MemoryGraphResponse | null;
   detail: MemoryDetail | null;
   draft: string;
-  scopes: string;
   busy: boolean;
   matterLabel: string;
   onDraft(next: string): void;
-  onScopes(next: string): void;
   onSave(event: FormEvent<HTMLFormElement>): void;
-  onSaveScopes?(scopes: string[]): Promise<void>;
   onAction(action: "undo" | "delete"): void;
   onSyncIndex(): void;
   requestIds: RefObject<Map<string, string>>;
   onClose(): void;
   compact?: boolean;
 }) {
-  const { t, locale } = useGuiLanguage();
   const [editing, setEditing] = useState(!compact);
   const formId = useId();
   if (detail) {
     const memory = detail.memory;
     return (
-      <article className="wb-detail" aria-label={t("wb.memory")}>
+      <article className="wb-detail" aria-label="这条记忆">
         <div className="wb-detail-head">
           <span className={`wb-status s-${memory.status}`}>
-            {t(
-              memory.status === "confirmed"
-                ? "wb.available"
-                : memory.status === "superseded"
-                  ? "wb.superseded"
-                  : "wb.deleted",
-            )}
+            {statusLabel(memory.status)}
           </span>
-          <span className="wb-detail-rev">
-            {t("wb.revision", { revision: memory.revision })}
-          </span>
+          <span className="wb-detail-rev">第 {memory.revision} 版</span>
           <button type="button" className="quiet" onClick={onClose}>
-            {t("wb.collapse")}
+            收起
           </button>
         </div>
         {detail.index_sync?.status === "pending" ? (
@@ -633,13 +595,13 @@ export function NodeDetail({
           // the memory here reads correctly and search does not, and nobody
           // would guess that from a sync badge.
           <p className="notice" role="status">
-            {t("wb.oldSearch")}
+            搜索里还是改之前那句话。
             {detail.index_sync.last_error_code ===
             "hy_memory_update_rejected" ? (
               // HY has no such memory to re-embed, so retrying cannot end
               // differently. Offering the button anyway would have the user
               // pressing it until they gave up.
-              t("wb.missingIndex")
+              "HY Memory 里没有这条记忆，重试也补不上。"
             ) : (
               <button
                 type="button"
@@ -647,7 +609,7 @@ export function NodeDetail({
                 disabled={busy}
                 onClick={onSyncIndex}
               >
-                {t("wb.retrySync")}
+                重试同步
               </button>
             )}
           </p>
@@ -656,23 +618,15 @@ export function NodeDetail({
           <p className="map-memory-reading">{memory.content}</p>
         )}
         {compact && !editing && (
-          <p className="map-origin">{memoryProvenanceLabel(detail, locale)}</p>
-        )}
-        {onSaveScopes && (
-          <MemoryRecallScope
-            key={`${memory.memory_id}:${memory.revision}`}
-            detail={detail}
-            busy={busy}
-            onSave={onSaveScopes}
-          />
+          <p className="map-origin">{memoryProvenanceLabel(detail)}</p>
         )}
         {editing && memory.status === "confirmed" ? (
-          <form id={formId} onSubmit={onSave} aria-label={t("wb.correctForm")}>
+          <form id={formId} onSubmit={onSave} aria-label="纠正记忆内容">
             <label>
-              {t("wb.content")}
+              记忆内容
               <textarea
                 name="memory-content"
-                aria-label={t("wb.content")}
+                aria-label="记忆内容"
                 autoComplete="off"
                 required
                 rows={3}
@@ -693,13 +647,13 @@ export function NodeDetail({
               onClick={() => setEditing(true)}
             >
               <PencilLine size={14} aria-hidden="true" />
-              {t("wb.correct")}
+              纠正
             </button>
           )}
           {editing && memory.status === "confirmed" ? (
             <button type="submit" form={formId} disabled={busy}>
               <Check size={14} aria-hidden="true" />
-              {t("wb.saveCorrection")}
+              保存纠正
             </button>
           ) : null}
           {compact && editing && (
@@ -713,7 +667,7 @@ export function NodeDetail({
                 setEditing(false);
               }}
             >
-              {t("wb.cancelEdit")}
+              取消编辑
             </button>
           )}
           {detail.history.length > 1 && memory.status !== "deleted" ? (
@@ -722,8 +676,8 @@ export function NodeDetail({
               className="secondary"
               disabled={busy}
               onClick={() => onAction("undo")}
-              title={t("wb.undo")}
-              aria-label={t("wb.undo")}
+              title="撤销上次修改"
+              aria-label="撤销上次修改"
             >
               <RotateCcw size={15} aria-hidden="true" />
             </button>
@@ -736,7 +690,7 @@ export function NodeDetail({
               onClick={() => onAction("delete")}
             >
               <Trash2 size={14} aria-hidden="true" />
-              {t("wb.delete")}
+              删除
             </button>
           ) : null}
         </div>
@@ -748,26 +702,24 @@ export function NodeDetail({
     const trace = graph ? traceFrom(graph, node.node_id, 2) : [];
     const direct = trace.filter((step) => step.hop === 1);
     return (
-      <article className="wb-detail" aria-label={t("wb.node")}>
+      <article className="wb-detail" aria-label="这个节点">
         <div className="wb-detail-head">
-          <span className="wb-status">{t(nodeTypeKey(node.node_type))}</span>
+          <span className="wb-status">{nodeTypeLabel(node.node_type)}</span>
           <strong>{node.label}</strong>
         </div>
         <p className="wb-detail-note">
-          {t("wb.nodeNote", {
-            direct: direct.length,
-            indirect: trace.length - direct.length,
-          })}
+          这不是一条记忆，是记忆挂靠的东西。直接关系 {direct.length} 条，
+          两跳可达 {trace.length - direct.length} 条。
         </p>
         <ul className="wb-trace">
           {trace.slice(0, 8).map((step) => (
             <li key={`${step.edge.edge_id}:${step.hop}`}>
               <span className="wb-trace-hop">
-                {t(step.hop === 1 ? "wb.direct" : "wb.twoHops")}
+                {step.hop === 1 ? "直接" : "两跳"}
               </span>
-              {relationLabel(step.edge.relation, locale)} · {step.node.label}
+              {relationLabel(step.edge.relation)} · {step.node.label}
               <span className="wb-trace-origin">
-                {t(edgeOriginKey(step.edge.origin))}
+                {edgeOriginLabel(step.edge.origin)}
               </span>
             </li>
           ))}
@@ -777,11 +729,13 @@ export function NodeDetail({
   }
 
   return (
-    <article className="wb-detail wb-detail-idle" aria-label={t("wb.matter")}>
+    <article className="wb-detail wb-detail-idle" aria-label="这个事项">
       <div className="wb-detail-head">
         <strong>{matterLabel}</strong>
       </div>
-      <p className="wb-detail-note">{t("wb.idle")}</p>
+      <p className="wb-detail-note">
+        图上的圈是记忆，线是它们被同一段对话提到过。选中一个，这里会变成它的来历和改法。左边换一个事项，图跟着换。
+      </p>
     </article>
   );
 }
@@ -807,14 +761,16 @@ export function Answer({
   asPage,
   suspended = false,
 }: {
-  answer: AskMemoryResponse | null;
-  streaming: { text: string; memories: GovernedMemory[] } | null;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
   onOpenMemory(memoryId: string): void;
   onSaveAnswer(draft: SavedAnswer): void;
   asPage: boolean;
   suspended?: boolean;
 }) {
-  const { t, tnPlain } = useGuiLanguage();
   const shownMemories = (answer ?? streaming)?.memories ?? [];
   // Only a finished answer, and only one that stands on something. Filing
   // back what a stream is halfway through writing would keep a sentence that
@@ -829,19 +785,11 @@ export function Answer({
     groundedAnswer.answer.length > ANSWER_AS_MEMORY_LIMIT;
   return (
     <div className="wb-answer" aria-live="polite">
-      <p>{answer ? answer.answer : streaming?.text || t("wb.searching")}</p>
+      <p>{answer ? answer.answer : streaming?.text || "正在检索记忆…"}</p>
       <p className="wb-answer-source">
         {answer
-          ? tnPlain("wb.answerSource", shownMemories.length, {
-              mode: t(
-                answer.mode === "generated"
-                  ? "wb.generated"
-                  : answer.mode === "extractive"
-                    ? "wb.extractive"
-                    : "wb.noHit",
-              ),
-            })
-          : tnPlain("wb.recalled", shownMemories.length)}
+          ? `${answer.mode === "generated" ? "模型综合" : answer.mode === "extractive" ? "原文摘录" : "没有命中"} · 依据 ${shownMemories.length} 条已确认记忆`
+          : `已召回 ${shownMemories.length} 条`}
       </p>
       {groundedAnswer && !tooLong ? (
         <button
@@ -851,22 +799,32 @@ export function Answer({
             onSaveAnswer({
               content: groundedAnswer.answer,
               evidence_ids: [
-                ...new Set(shownMemories.flatMap((item) => item.evidence_ids)),
+                ...new Set(
+                  shownMemories.flatMap((item) =>
+                    "evidence_ids" in item ? item.evidence_ids : [],
+                  ),
+                ),
               ],
             })
           }
         >
-          {t("wb.saveMemory")}
+          存为记忆
         </button>
       ) : null}
-      {tooLong ? <p className="wb-answer-source">{t("wb.tooLong")}</p> : null}
+      {tooLong ? (
+        <p className="wb-answer-source">
+          这个回答太长，超过当前保存上限，暂不能存为记忆。
+        </p>
+      ) : null}
       {asPage ? (
         // Not offered as a memory, and said out loud why. A synthesis is
         // rebuilt from the memories under it every time it is read, which is
         // the only reason it is safe to let a model write it: a stored
         // summary drifts from what it summarised and nothing notices, and a
         // rebuilt one cannot.
-        <p className="wb-answer-source">{t("wb.summary")}</p>
+        <p className="wb-answer-source">
+          这是综述，不是记忆。每次都会重新生成，所以它不会和下面这些记忆走散。
+        </p>
       ) : null}
       <ol>
         {shownMemories.map((memory) => (
@@ -885,7 +843,7 @@ export function Answer({
         <HandoffBar
           memories={shownMemories}
           suspended={suspended}
-          matterLabel={t("wb.thisAnswer")}
+          matterLabel="这次回答"
           answerText={answer.answer}
         />
       )}
@@ -900,21 +858,22 @@ function EmptyStage({
   loaded: boolean;
   onConnect(): void;
 }) {
-  const { t } = useGuiLanguage();
   if (!loaded) {
     return (
       <div className="wb-graph-empty">
-        <p>{t("wb.loading")}</p>
-        <small>{t("wb.coreStarting")}</small>
+        <p>正在读取记忆…</p>
+        <small>本地 Core 启动后会自动出现，不用刷新。</small>
       </div>
     );
   }
   return (
     <div className="wb-graph-empty">
-      <p>{t("wb.nothingToConnect")}</p>
-      <small>{t("wb.skeletonNote")}</small>
+      <p>这里还没有东西可以连起来。</p>
+      <small>
+        授权一个来源之后，先出现的是来源和主题的骨架，记忆会陆续挂上去。
+      </small>
       <button type="button" onClick={onConnect}>
-        {t("wb.authorize")}
+        去授权一个来源
       </button>
     </div>
   );
@@ -953,7 +912,6 @@ function narrow(
 function skeleton(
   sources: SourceResponse[],
   graph: MemoryGraphResponse | null,
-  locale: GuiLocale = "zh-CN",
 ): MemoryGraphResponse {
   const withHistory = sources.filter(
     (item) => item.authorized && item.imported_conversations > 0,
@@ -965,7 +923,7 @@ function skeleton(
     nodes: withHistory.map((item) => ({
       node_id: `source:${item.source_id}`,
       node_type: "source" as const,
-      label: `${item.display_name} · ${translateCount(locale, "wb.conversations", item.imported_conversations, { count: item.imported_conversations })}`,
+      label: `${item.display_name} · ${item.imported_conversations} 段`,
       memory_id: null,
       source_id: item.source_id,
       kind: null,
@@ -1013,34 +971,34 @@ function evidenceOf(
 
 /** Questions built from what is actually in this matter, so a chip never
  * offers to answer something there is no record of. */
-function chipsFor(
-  memories: GovernedMemory[],
-  locale: GuiLocale = "zh-CN",
-): string[] {
+function chipsFor(memories: GovernedMemory[]): string[] {
   if (!memories.length) return [];
-  const chips = [translate(locale, "wb.chipChanges")];
-  if (memories.length >= 3) chips.push(translate(locale, "wb.chipSummarize"));
+  const chips = ["这里最近有什么变化"];
+  if (memories.length >= 3) chips.push("把这些归纳成几条");
   return chips;
 }
 
-function when(iso: string | null, locale: GuiLocale = "zh-CN"): string {
-  if (!iso) return translate(locale, "wb.unknownTime");
+function when(iso: string | null): string {
+  if (!iso) return "时间不明";
   const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return translate(locale, "wb.unknownTime");
-  if (locale === "es")
-    return at.toLocaleString(locale, {
-      month: "numeric",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+  if (Number.isNaN(at.getTime())) return "时间不明";
   return `${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 
-function graphReceipt(
-  graph: MemoryGraphResponse,
-  locale: GuiLocale = "zh-CN",
-): string {
+function statusLabel(status: GovernedMemory["status"]): string {
+  if (status === "confirmed") return "已可用";
+  if (status === "superseded") return "已被取代";
+  return "已删除";
+}
+
+function nodeTypeLabel(type: MemoryGraphNode["node_type"]): string {
+  if (type === "source") return "来源 App";
+  if (type === "topic") return "主题";
+  if (type === "schema") return "HY 归纳";
+  return "记忆";
+}
+
+function graphReceipt(graph: MemoryGraphResponse): string {
   const counts = {
     provenance: 0,
     same_conversation: 0,
@@ -1048,43 +1006,44 @@ function graphReceipt(
     hy_relation: 0,
   };
   for (const edge of graph.edges) counts[edge.origin] += 1;
-  const count = (origin: keyof typeof counts) =>
-    translateCount(locale, "wb.edgeCount", counts[origin], {
-      label: translate(locale, `wb.origin.${origin}`),
-      count: counts[origin],
-    });
-  const parts = [count("provenance"), count("same_conversation")];
+  const parts = [
+    `原话来源 ${counts.provenance} 条`,
+    `同一次对话 ${counts.same_conversation} 条`,
+  ];
   // Only mentioned once there is one. A young library has no shared tag yet,
   // and a line reading 0 would be one more thing to read past.
-  if (counts.shared_tag > 0) parts.push(count("shared_tag"));
+  if (counts.shared_tag > 0) parts.push(`同一个主题 ${counts.shared_tag} 条`);
   if (counts.hy_relation > 0) {
-    parts.push(count("hy_relation"));
+    parts.push(`HY Memory 归纳 ${counts.hy_relation} 条`);
     return parts.join(" · ");
   }
   parts.push(
     graph.hy_graph_available
-      ? translate(locale, "wb.noRelations")
-      : translate(locale, "wb.noModelRelations"),
+      ? "HY Memory 还没归纳出关系，点击上方按钮运行 System 2"
+      : "还没配置可用模型，无法读取 HY Memory 的归纳关系",
   );
   return parts.join(" · ");
 }
-
-// An unrecognised value from Core still gets a word, as it did before
-// localization: the chains ended in 记忆 and 原话来源.
-function nodeTypeKey(type: string): MessageKey {
-  const key = `wb.type.${type}`;
-  return isMessageKey(key) ? key : "wb.type.memory";
+function edgeOriginLabel(origin: MemoryGraphEdge["origin"]): string {
+  if (origin === "hy_relation") return "HY Memory 归纳";
+  if (origin === "same_conversation") return "同一次对话";
+  // Named before the fallthrough. The chain ends in 原话来源, so a missing
+  // case here is not an error — it is a line that says the wrong thing.
+  if (origin === "shared_tag") return "同一个主题";
+  return "原话来源";
 }
 
-function edgeOriginKey(origin: string): MessageKey {
-  const key = `wb.origin.${origin}`;
-  return isMessageKey(key) ? key : "wb.origin.provenance";
-}
 /** Walk out from one node so each drawn line can be checked by hand. */
-function relationLabel(relation: string, locale: GuiLocale = "zh-CN"): string {
-  const key = `wb.relation.${relation}`;
-  if (isMessageKey(key)) return translate(locale, key);
-  return relation.replaceAll("_", " ");
+function relationLabel(relation: string): string {
+  const labels: Record<string, string> = {
+    evidence_source: "来源于",
+    same_conversation: "同一次对话",
+    shared_tag: "同一个主题",
+    derived_from: "归纳自",
+    tagged_with: "属于主题",
+    related_to: "相关",
+  };
+  return labels[relation] ?? relation.replaceAll("_", " ");
 }
 
 /** Two numbers rather than one total.

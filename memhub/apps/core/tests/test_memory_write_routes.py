@@ -130,6 +130,36 @@ def test_durable_queue_can_back_the_same_route_contract(tmp_path) -> None:
     assert "already accepted" in replay.json()["detail"]
 
 
+def test_completed_write_status_returns_sdk_raw_and_memory_ids(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    app = FastAPI()
+    registry = DurableWriteRegistry(path)
+    app.state.memory_write_registry = registry
+    app.include_router(router())
+    client = TestClient(app)
+    created = client.post("/api/v1/memory-writes", json=_payload())
+    request_id = created.json()["request_id"]
+    with sqlite3.connect(path) as database:
+        job_id = str(
+            database.execute(
+                "SELECT job_id FROM memory_write_jobs WHERE idempotency_key=?",
+                (request_id,),
+            ).fetchone()[0]
+        )
+    registry.queue.settle(
+        job_id,
+        state="completed",
+        sdk_raw_ids=("raw-1",),
+        sdk_memory_ids=("memory-1",),
+    )
+
+    status = client.get(f"/api/v1/memory-writes/{request_id}")
+
+    assert status.status_code == 200
+    assert status.json()["raw_ids"] == ["raw-1"]
+    assert status.json()["memory_ids"] == ["memory-1"]
+
+
 def test_route_selects_durable_registry_when_a_path_is_configured(tmp_path) -> None:
     """C0 only has to hand the route a database path.
 

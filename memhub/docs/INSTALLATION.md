@@ -1,6 +1,6 @@
 # MemHub 安装与发行
 
-MemHub `v1.0.3`（build 7）的发行目标如下：
+MemHub `v1.0.4`（build 13）的发行目标如下：
 
 | 平台 | 发行物 | 构建与验收 |
 | --- | --- | --- |
@@ -106,9 +106,10 @@ Downloader 使用标准 `HTTPS_PROXY`/`https_proxy` 与 `NO_PROXY`/`no_proxy` �
 - `memhub delete-data`：唯一删除 Memory 的命令；Runtime 必须已停止，并要求 `--yes` 与
   `--confirm <精确数据路径>` 两次确认。
 
-默认数据目录是 `~/.one-memory`。Python Core 是唯一业务数据写入者，SQLite 数据不位于
-npm package、App 临时目录或受管 Runtime 的版本目录中。Python Core 及其依赖由 Runtime
-携带，不会向用户的系统 Python 安装 package。
+默认数据目录是 `~/.one-memory`。Python Core 是 MemHub 管理库的唯一写入者；
+memory/raw 数据平面只通过 Hy Memory SDK 写入。SQLite 数据不位于 npm package、
+App 临时目录或受管 Runtime 的版本目录中。Python Core 及其依赖由 Runtime 携带，
+不会向用户的系统 Python 安装 package。
 
 ## 代理、镜像和离线来源
 

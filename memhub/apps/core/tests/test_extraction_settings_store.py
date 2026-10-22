@@ -1,17 +1,11 @@
-"""The migrated store must behave identically on SQLite and on MySQL.
-
-This is the batch-1 template: the point is not that it works on one engine but
-that the *same* store class produces the *same* observable results on both.
-A migration verified on only one engine is unverified on the other.
-"""
+"""Extraction-window desired state belongs in config.json, not a SQL table."""
 
 from __future__ import annotations
 
-from one_memory.extraction_settings import (
-    UPSERT_MYSQL,
-    UPSERT_SQLITE,
-    ExtractionSettingsStore,
-)
+import json
+import sqlite3
+
+from one_memory.extraction_settings import ExtractionSettingsStore
 from one_memory.memory_queue import ExtractionWindowPreset
 
 
@@ -24,6 +18,8 @@ def test_set_then_get_round_trips(tmp_path) -> None:
     store = ExtractionSettingsStore(tmp_path / "s.sqlite3")
     store.set_window_preset(ExtractionWindowPreset.ALL)
     assert store.get().window_preset == ExtractionWindowPreset.ALL
+    assert json.loads((tmp_path / "config.json").read_text())["extraction_window_preset"] == "all"
+    assert not (tmp_path / "s.sqlite3").exists()
 
 
 def test_setting_twice_updates_rather_than_duplicating(tmp_path) -> None:
@@ -49,13 +45,34 @@ def test_a_new_store_sees_the_persisted_value(tmp_path) -> None:
     assert reopened.get().window_preset == ExtractionWindowPreset.ALL
 
 
-def test_the_two_upserts_differ_only_in_dialect() -> None:
-    """Engine-specific upserts exist because the syntaxes are not portable.
+def test_legacy_sql_value_moves_to_config_without_recreating_the_table(tmp_path) -> None:
+    database = tmp_path / "s.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE extraction_settings "
+            "(singleton INTEGER PRIMARY KEY, window_preset TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO extraction_settings VALUES (1,'1y')")
 
-    Pinned so nobody "simplifies" them into one string that works on SQLite and
-    silently no-ops on MySQL.
-    """
-    assert "ON CONFLICT" in UPSERT_SQLITE
-    assert "ON DUPLICATE KEY UPDATE" in UPSERT_MYSQL
-    assert UPSERT_SQLITE != UPSERT_MYSQL
-    assert "?" in UPSERT_SQLITE and "%s" in UPSERT_MYSQL
+    store = ExtractionSettingsStore(database)
+
+    assert store.get().window_preset == ExtractionWindowPreset.ONE_YEAR
+    assert json.loads((tmp_path / "config.json").read_text())["extraction_window_preset"] == "1y"
+
+
+def test_explicit_config_wins_over_legacy_sql_value(tmp_path) -> None:
+    database = tmp_path / "s.sqlite3"
+    (tmp_path / "config.json").write_text(
+        '{"schema_version":1,"sources":{},'
+        '"sedimentation_enabled":true,"extraction_window_preset":"6m"}'
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE extraction_settings "
+            "(singleton INTEGER PRIMARY KEY, window_preset TEXT NOT NULL)"
+        )
+        connection.execute("INSERT INTO extraction_settings VALUES (1,'all')")
+
+    assert (
+        ExtractionSettingsStore(database).get().window_preset == ExtractionWindowPreset.SIX_MONTHS
+    )

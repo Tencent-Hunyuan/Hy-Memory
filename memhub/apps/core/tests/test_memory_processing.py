@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -56,7 +56,12 @@ from one_memory.memory_processing import (
 )
 from one_memory.memory_queue import classify
 from one_memory.memory_server.config_state import ConfigStore
-from one_memory.memory_tasks import MemoryTaskKind, MemoryTaskStatus, MemoryTaskStore
+from one_memory.memory_tasks import (
+    NON_RETRYABLE_POST_WRITE_CODES,
+    MemoryTaskKind,
+    MemoryTaskStatus,
+    MemoryTaskStore,
+)
 from one_memory.model_profiles import (
     ModelCapabilities,
     ModelProfileInput,
@@ -297,6 +302,100 @@ def _runner(tmp_path, stores, bridge):
         data_dir=tmp_path,
         bridge_factory=lambda _profile, _secret, _data_dir: bridge,
     )
+
+
+def test_sdk_authority_executes_one_write_job_without_task_or_governance_mirror(
+    tmp_path,
+) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    record = _put(
+        evidence,
+        message_id="sdk-authority",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="记住只调用一次 SDK。",
+    )
+
+    class Bridge(FakeBridge):
+        async def ingest(self, request) -> HyMemoryIngestResult:
+            self.requests.append(request)
+            return HyMemoryIngestResult(
+                success=True,
+                raw_ids=("raw-1",),
+                memories=(
+                    HyMemoryOutput(
+                        memory_id="memory-1",
+                        content="只调用一次 SDK。",
+                        layer="L2_FACT",
+                    ),
+                ),
+            )
+
+    def forbidden():
+        raise AssertionError("SDK authority must not open Governance derivation")
+
+    governance.hy_derivation = forbidden  # type: ignore[method-assign]
+    bridge = Bridge()
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+        sdk_authority=lambda: True,
+    )
+
+    invoked = []
+
+    async def mark_invoked() -> None:
+        invoked.append(True)
+
+    result = asyncio.run(
+        supervisor.process_sdk_job(
+            (record,),
+            request_id="write-job-1",
+            before_hy_invocation=mark_invoked,
+        )
+    )
+
+    assert invoked == [True]
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].request_id == "write-job-1"
+    assert result.raw_ids == ("raw-1",)
+    assert tuple(memory.memory_id for memory in result.memories) == ("memory-1",)
+    assert tasks.list() == []
+    assert governance.get("memory-1", user_id="local") is None
+
+
+def test_sdk_authority_digest_never_publishes_governance_schema(tmp_path) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, _profile = stores
+    bridge = FakeBridge()
+    bridge.stored_agent_ids = ("cursor",)
+
+    def forbidden():
+        raise AssertionError("SDK digest must not derive Governance authority")
+
+    governance.hy_derivation = forbidden  # type: ignore[method-assign]
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+        sdk_authority=lambda: True,
+    )
+
+    result = asyncio.run(supervisor.digest())
+
+    assert result["scope_count"] == 1
+    assert result["schemas_recorded"] == 0
+    assert bridge.digest_calls == [("local", "cursor")]
 
 
 def test_memory_task_logs_six_step_durations_without_content(tmp_path) -> None:
@@ -2613,6 +2712,123 @@ def test_an_unknown_task_without_inputs_does_not_end_the_reconcile_pass(tmp_path
     assert [memory.memory_id for memory in governance.list(user_id="local")] == ["hy-recovered"]
 
 
+def test_sticky_authority_unknowns_do_not_starve_ordinary_reconciliation(tmp_path) -> None:
+    stores = _setup(tmp_path)
+    evidence, profiles, tasks, governance, secrets, profile = stores
+    record = _put(
+        evidence,
+        message_id="fair-unknown",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="ordinary unknown remains reconcilable",
+    )
+    sticky = [
+        tasks.create(
+            request_id=f"sticky-authority-{index}",
+            user_id=record.user_id,
+            kind=MemoryTaskKind.EXTRACT,
+            input_ref=record.evidence_id,
+            profile=profile,
+            input_records=(record,),
+        )
+        for index in range(129)
+    ]
+    ordinary = tasks.create(
+        request_id="ordinary-unknown-after-sticky",
+        user_id=record.user_id,
+        kind=MemoryTaskKind.EXTRACT,
+        input_ref=record.evidence_id,
+        profile=profile,
+        input_records=(record,),
+    )
+    anchor = datetime(2026, 1, 1, tzinfo=UTC)
+    with sqlite3.connect(tasks.database_path) as connection, connection:
+        connection.executescript(
+            """
+            CREATE TABLE source_grants (
+                user_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                root_path TEXT NOT NULL, candidate_kind TEXT NOT NULL,
+                granted_at TEXT NOT NULL, revoked_at TEXT,
+                PRIMARY KEY (user_id, source_id)
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO source_grants VALUES (?,?,?,?,?,NULL)",
+            (
+                record.user_id,
+                record.source_id,
+                "/authorized",
+                "default",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        for index, task in enumerate(sticky):
+            connection.execute(
+                "UPDATE memory_tasks SET status='unknown',last_error_code=?,updated_at=? "
+                "WHERE task_id=?",
+                (
+                    "hy_memory_write_verification_authority_invalid",
+                    (anchor + timedelta(seconds=index)).isoformat(),
+                    task.task_id,
+                ),
+            )
+        connection.execute(
+            "UPDATE memory_tasks SET status='unknown',last_error_code=?,updated_at=? "
+            "WHERE task_id=?",
+            (
+                "model_content_outcome_unknown",
+                (anchor + timedelta(minutes=3)).isoformat(),
+                ordinary.task_id,
+            ),
+        )
+
+    class InquiryOnlyBridge(FakeBridge):
+        def __init__(self) -> None:
+            super().__init__(
+                outputs=(
+                    HyMemoryOutput(
+                        memory_id="ordinary-recovered",
+                        content="ordinary unknown remains reconcilable",
+                        layer="L2_FACT",
+                        owner="user",
+                        evidence_ids=(record.evidence_id,),
+                    ),
+                )
+            )
+            self.inquiries: list[str] = []
+
+        async def outputs_for_request(self, **kwargs) -> tuple[HyMemoryOutput, ...]:
+            self.inquiries.append(str(kwargs["request_id"]))
+            return self.outputs or ()
+
+    bridge = InquiryOnlyBridge()
+    supervisor = MemoryProcessingSupervisor(
+        tasks=tasks,
+        profiles=profiles,
+        secrets=secrets,
+        evidence=evidence,
+        governance=governance,
+        data_dir=tmp_path,
+        runner_factory=lambda: _runner(tmp_path, stores, FakeBridge()),
+        bridge_factory=lambda _profile, _secret, _data_dir: bridge,
+    )
+
+    assert (
+        asyncio.run(
+            supervisor.reconcile_unknown_outputs(
+                limit=128,
+                exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
+            )
+        )
+        == 1
+    )
+    assert bridge.inquiries == ["ordinary-unknown-after-sticky"]
+    assert bridge.requests == []
+    assert tasks.require(ordinary.task_id).status is MemoryTaskStatus.COMPLETED
+    assert all(tasks.require(task.task_id).status is MemoryTaskStatus.UNKNOWN for task in sticky)
+
+
 def test_two_workspaces_with_one_conversation_id_prepare_apart(tmp_path) -> None:
     """Cursor can reuse a conversation id across projects.
 
@@ -3439,6 +3655,58 @@ def test_digest_scopes_separate_applications_and_dates(tmp_path) -> None:
         ),
     )
     assert len({_hy_agent_id((record,)) for record in records}) == 3
+
+
+def test_workspace_requests_carry_conversation_authority_beyond_agent_scope(tmp_path) -> None:
+    """Same-day workspace scopes collide by design; session_id must separate writes."""
+    evidence, _profiles, tasks, _governance, _secrets, profile = _setup(tmp_path)
+    first = _put(
+        evidence,
+        message_id="conversation-a",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="same workspace, first conversation",
+        conversation_id="conversation-a",
+        workspace="repo-a",
+        created_at=datetime(2026, 10, 18, 8, tzinfo=UTC),
+    )
+    second = _put(
+        evidence,
+        message_id="conversation-b",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="same workspace, second conversation",
+        conversation_id="conversation-b",
+        workspace="repo-a",
+        created_at=datetime(2026, 10, 18, 9, tzinfo=UTC),
+    )
+    next_day = _put(
+        evidence,
+        message_id="conversation-a-next-day",
+        role="user",
+        written_by=WrittenBy.PERSON,
+        content="same conversation on the next day",
+        conversation_id="conversation-a",
+        workspace="repo-a",
+        created_at=datetime(2026, 10, 19, 8, tzinfo=UTC),
+    )
+
+    requests = []
+    for record in (first, second, next_day):
+        task = tasks.create(
+            request_id=f"authority:{record.evidence_id}",
+            user_id=record.user_id,
+            kind=MemoryTaskKind.EXTRACT,
+            input_ref=record.evidence_id,
+            profile=profile,
+            input_records=(record,),
+        )
+        requests.append(MemoryTaskRunner._request(task, (record,)))
+
+    assert requests[0].agent_id == requests[1].agent_id
+    assert requests[0].session_id == "conversation-a"
+    assert requests[1].session_id == "conversation-b"
+    assert requests[2].agent_id != requests[0].agent_id
 
 
 def test_cancelled_multi_source_lock_acquisition_releases_earlier_source(tmp_path) -> None:

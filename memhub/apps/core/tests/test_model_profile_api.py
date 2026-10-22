@@ -260,8 +260,8 @@ def test_activation_survives_a_corpus_already_imported(tmp_path) -> None:
                 secrets=secrets,
             )
             readmissions: list[bool] = []
-            app.state.memory_write_queue.readmit_model_profile_waiters = (
-                lambda: readmissions.append(True) or 0
+            app.state.memory_write_queue.readmit_model_profile_waiters = lambda: (
+                readmissions.append(True) or 0
             )
 
             activated = await client.post(f"/api/v1/model-profiles/{profile_id}/activate")

@@ -4,7 +4,9 @@ import asyncio
 import sqlite3
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import cast
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.params import Depends
@@ -31,6 +33,10 @@ from one_memory.context_models import (
     ContextSemanticStatus,
     MemoryContextItem,
     RawContextItem,
+    SdkContextItem,
+    SdkContextSearchResponse,
+    SdkMemoryContextItem,
+    SdkRawContextItem,
 )
 from one_memory.context_raw import revalidate_raw_context
 from one_memory.context_search import search_context
@@ -418,5 +424,156 @@ def context_router(dependencies: Sequence[Depends]) -> APIRouter:
                 response.headers["X-One-Memory-Call-Recorded"] = "false"
                 request.app.state.call_event_recording_error = True
         return final
+
+    return router
+
+
+def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
+    """SDK-native context: no Evidence/Governance ids or fabricated revisions."""
+    router = APIRouter(prefix="/api/v2/context", dependencies=dependencies)
+
+    @router.post("/search", response_model=SdkContextSearchResponse)
+    async def search(
+        value: ContextSearchRequest,
+        request: Request,
+        response: Response,
+    ) -> SdkContextSearchResponse:
+        response.headers["Cache-Control"] = "no-store"
+        started = time.monotonic()
+        access = external_access(request.headers)
+        database = cast(EvidenceStore, request.app.state.evidence_store).database_path
+        try:
+            authority = await asyncio.to_thread(
+                resolve_context_authority,
+                value,
+                access,
+                database,
+                deadline=started + value.timeout_ms / 1000,
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, "context_authority_unavailable") from None
+
+        bridge = getattr(request.app.state, "sdk_library_bridge", None)
+        if bridge is None:
+            raise HTTPException(503, "sdk_context_unavailable")
+
+        async def raw_lane() -> tuple[SdkRawContextItem, ...]:
+            if "raw" not in value.kinds or not authority.raw_allowed:
+                return ()
+            hits = await bridge.search_sdk_raw(
+                value.query,
+                user_id="local",
+                source_ids=tuple(authority.raw_sources or ()),
+                limit=value.limit,
+            )
+            return tuple(
+                SdkRawContextItem(
+                    raw_id=hit.raw_id,
+                    content=hit.content,
+                    source=hit.source,
+                    session_id=hit.session_id,
+                    memory_at=(
+                        datetime.fromtimestamp(hit.memory_at, tz=UTC)
+                        if hit.memory_at is not None
+                        else None
+                    ),
+                    score=hit.score,
+                )
+                for hit in hits
+            )
+
+        async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
+            if "memory" not in value.kinds or not authority.memory_allowed:
+                return ()
+            hits = await bridge.search_memories(
+                value.query,
+                user_id="local",
+                agent_id="*",
+                limit=value.limit,
+            )
+            items: list[SdkMemoryContextItem] = []
+            for hit in hits:
+                memory = await bridge.get_sdk_memory(hit.memory_id)
+                if memory is None or memory.status != "active":
+                    continue
+                items.append(
+                    SdkMemoryContextItem(
+                        memory_id=memory.memory_id,
+                        content=(
+                            hit.formatted_content
+                            if hit.sdk_formatted
+                            and hit.formatting_complete
+                            and hit.formatted_content
+                            else memory.content
+                        ),
+                        layer=memory.layer,
+                        status=memory.status,
+                        source=memory.source,
+                        updated_at=(
+                            datetime.fromtimestamp(memory.gmt_created, tz=UTC)
+                            if memory.gmt_created is not None
+                            else None
+                        ),
+                        score=hit.score,
+                    )
+                )
+            return tuple(items)
+
+        lanes = (raw_lane(), memory_lane())
+        try:
+            raw_items, memory_items = await asyncio.wait_for(
+                asyncio.gather(*lanes, return_exceptions=True),
+                timeout=value.timeout_ms / 1000,
+            )
+        except TimeoutError:
+            return SdkContextSearchResponse(
+                request_id=str(uuid4()),
+                state="unavailable",
+                items=(),
+                used_characters=0,
+                truncated=True,
+                total_ms=(time.monotonic() - started) * 1000,
+            )
+        partial = isinstance(raw_items, Exception) or isinstance(memory_items, Exception)
+        raw_candidates = (
+            () if isinstance(raw_items, Exception) else cast(tuple[SdkContextItem, ...], raw_items)
+        )
+        memory_candidates = (
+            ()
+            if isinstance(memory_items, Exception)
+            else cast(tuple[SdkContextItem, ...], memory_items)
+        )
+        candidates: list[SdkContextItem] = [
+            *raw_candidates,
+            *memory_candidates,
+        ]
+        candidates.sort(key=lambda item: item.score, reverse=True)
+        selected: list[SdkContextItem] = []
+        used = 0
+        truncated = False
+        for item in candidates:
+            if len(selected) >= value.limit:
+                truncated = True
+                break
+            content = item.content
+            remaining = value.character_budget - used
+            if remaining <= 0:
+                truncated = True
+                break
+            if len(content) > remaining:
+                item = item.model_copy(update={"content": content[:remaining], "truncated": True})
+                truncated = True
+            selected.append(item)
+            used += len(item.content)
+        return SdkContextSearchResponse(
+            request_id=str(uuid4()),
+            state=("partial" if partial else "grounded" if selected else "empty"),
+            items=tuple(selected),
+            used_characters=used,
+            truncated=truncated,
+            total_ms=(time.monotonic() - started) * 1000,
+        )
 
     return router

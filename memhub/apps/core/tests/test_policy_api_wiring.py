@@ -81,9 +81,10 @@ def test_backfill_puts_history_on_write_jobs_without_scheduling_memory_tasks(tmp
         task_table = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
         ).fetchone()
-        assert task_table is None or connection.execute(
-            "SELECT COUNT(*) FROM memory_tasks"
-        ).fetchone()[0] == 0
+        assert (
+            task_table is None
+            or connection.execute("SELECT COUNT(*) FROM memory_tasks").fetchone()[0] == 0
+        )
 
 
 def test_source_pause_skips_history_until_the_source_is_reenabled(tmp_path) -> None:
@@ -111,9 +112,7 @@ def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> No
     app = SimpleNamespace(
         state=SimpleNamespace(
             config_store=config,
-            model_profile_store=SimpleNamespace(
-                active_identity=lambda: ("profile", 1)
-            ),
+            model_profile_store=SimpleNamespace(active_identity=lambda: ("profile", 1)),
             source_grant_store=SimpleNamespace(
                 receipt=lambda **_kwargs: SimpleNamespace(revoked_at=None)
             ),

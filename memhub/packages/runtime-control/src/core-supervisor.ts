@@ -339,7 +339,11 @@ export class CoreSupervisor {
     }
     this.useOwnedIdentity();
     try {
-      return await this.attempt();
+      const health = await this.attempt();
+      if (this.options.readerEnabled) {
+        await this.startReader();
+      }
+      return health;
     } catch (error) {
       // A standalone Runtime may have won the race after our initial
       // discovery read but before our child acquired the data lock. Verify it
@@ -347,7 +351,12 @@ export class CoreSupervisor {
       let raced: HealthResponse | null = null;
       try {
         raced = await this.attachExisting();
-        if (raced !== null) return raced;
+        if (raced !== null) {
+          if (this.options.readerEnabled) {
+            await this.startReader();
+          }
+          return raced;
+        }
       } catch (attachError) {
         // A stale receipt can fail identity validation after the owned Core
         // exited. Treat that as a cleanup candidate, not as a new startup
@@ -387,7 +396,11 @@ export class CoreSupervisor {
       this.exitSignal = null;
       this.spawnError = null;
       try {
-        return await this.attempt();
+        const health = await this.attempt();
+        if (this.options.readerEnabled) {
+          await this.startReader();
+        }
+        return health;
       } catch (retryError) {
         await this.logStartFailure(retryError);
         throw retryError;
@@ -696,6 +709,9 @@ export class CoreSupervisor {
           await delay(delayMs);
           if (this.stopping) return;
           try {
+            // The old Reader pointed at the Core that just died. Stop it so
+            // the relaunched Core gets a Reader with the current token/port.
+            await this.stopReader();
             // Keep the configured port stable across relaunches. The packaged
             // renderer and discovery receipts point at this port, so moving to
             // an ephemeral port would make a recovered Core unreachable.
@@ -706,6 +722,9 @@ export class CoreSupervisor {
             this.exited = false;
             this.spawnError = null;
             const health = await this.attempt();
+            if (this.options.readerEnabled) {
+              await this.startReader();
+            }
             await this.options.diagnostics?.log({
               level: "info",
               component: "runtime.core",
@@ -824,6 +843,14 @@ export class CoreSupervisor {
       cwd: this.options.launch.cwd,
     });
     this.readerChild = child;
+    // A Reader exits when its Core goes away. Clear the handle so the restart
+    // path can spawn a fresh one instead of returning early forever.
+    child.on("exit", () => {
+      if (this.readerChild === child) {
+        this.readerChild = null;
+        this.activeReaderPort = null;
+      }
+    });
     // Wait briefly for the reader to publish its port on stderr.
     this.activeReaderPort = await new Promise<number | null>((resolve) => {
       let settled = false;

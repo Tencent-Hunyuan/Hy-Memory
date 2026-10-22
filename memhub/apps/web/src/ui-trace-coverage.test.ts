@@ -21,8 +21,8 @@ function source(file: string): string {
 describe("ui trace write coverage", () => {
   it("passes a trace id on every traced memory write", () => {
     const api = source("api.ts");
-    // The three memory write functions accept a trace id and forward it.
-    for (const fn of ["mutateMemory", "correctMemory", "setMemoryScopes"]) {
+    // The remaining legacy memory write functions accept a trace id and forward it.
+    for (const fn of ["mutateMemory", "correctMemory"]) {
       const start = api.indexOf(`export async function ${fn}(`);
       expect(start, `${fn} not found`).toBeGreaterThan(-1);
       const body = api.slice(start, api.indexOf("\n}", start));
@@ -38,11 +38,10 @@ describe("ui trace write coverage", () => {
     expect(source("SourcesView.tsx")).toMatch(
       /imports\.setSync\(source, enabled, trace\.traceId\)/,
     );
-    // MemorySpace passes the id on all three traced governance writes.
+    // MemorySpace passes the id on both remaining governance writes.
     const memory = source("MemorySpace.tsx");
     expect(memory).toMatch(/mutateMemory\([\s\S]{0,160}trace\.traceId/);
     expect(memory).toMatch(/correctMemory\([\s\S]{0,200}trace\.traceId/);
-    expect(memory).toMatch(/setMemoryScopes\([\s\S]{0,160}trace\.traceId/);
     // SelectedMemoryDetail traces its correction, delete and undo.
     const detail = source("SelectedMemoryDetail.tsx");
     expect(detail).toMatch(/correctMemory\([\s\S]{0,200}trace\.traceId/);
@@ -265,7 +264,7 @@ describe("ui trace write coverage", () => {
     const view = source("MemorySpace.tsx");
     expect(view).toMatch(/traceUiAction\("memory", "submit"\)/);
     expect(view).toMatch(
-      /askMemoriesStream\(\s*question,\s*scope,\s*undefined,\s*trace\.traceId,?\s*\)/,
+      /askMemoriesStream\(\s*question,\s*scope,\s*undefined,\s*trace\.traceId,\s*memoryAuthority,?\s*\)/,
     );
     const api = source("api.ts");
     const start = api.indexOf("export async function* askMemoriesStream(");

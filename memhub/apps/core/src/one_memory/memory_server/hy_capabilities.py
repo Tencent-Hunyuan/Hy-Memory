@@ -3,16 +3,13 @@
 The result decides whether the `unknown` job state can ever be retired, so it
 is probed against the installed SDK rather than written down from memory.
 
-What was verified against `hy-memory==2.0.4`:
+What is verified against `hy-memory==2.0.5.dev3`:
 
 - `HyMemoryClient.add(..., request_id=...)` accepts a caller-supplied id and
-  echoes it back. It is described as a request/receipt handle, and the SDK
-  contains no `idempotency` key, no dedupe table and no "already written"
-  short-circuit. So: **no idempotency key**.
-- `hy_memory.inspector.MemoryInspector` exposes pipeline-log lookups keyed by
-  that `n` (request_id): `get_pipeline_logs(n=...)`, plus step helpers. So:
-  **result lookup exists, keyed by request_id**, gated by
-  `MEMORY_PIPELINE_TRACE_ENABLED` for the SQLite trace it reads.
+  atomically claims it in the SDK cache before invoking a write. Replays return
+  the durable terminal result; running/unknown claims are not invoked again.
+- `HyMemoryClient.get_write_outcome(request_id)` reads that durable outcome
+  directly; it does not depend on optional pipeline tracing.
 
 A first pass at this probe got both answers wrong, and the failure mode is
 worth keeping in mind: searching SDK source for the string "idempotent" hits a
@@ -21,9 +18,9 @@ about search over-sampling. Neither is write idempotency. So the probe checks
 the `add` path specifically and names the inspector class explicitly, instead
 of grepping for a word that appears in unrelated prose.
 
-Net: a crash between "HY succeeded" and "we recorded it" cannot be retried
-safely, but it *can* be investigated later by request_id. That is exactly the
-`unknown` semantics A0-03 says to freeze when no idempotency key exists.
+Net: MemHub can query and settle an uncertain request without blind replay.
+`unknown` remains a legitimate operational state while the SDK claim itself is
+non-terminal, but the same request id cannot write twice.
 """
 
 from __future__ import annotations
@@ -106,8 +103,11 @@ def _add_path_declares_idempotency() -> bool:
             continue
     if not sources:
         return False
-    # Only a parameter actually named as a dedupe key counts. A `request_id`
-    # that is merely echoed back is a receipt handle, not a dedupe key.
+    if _has_callable(client, "get_write_outcome"):
+        claim = getattr(client, "_claim_write_outcome", None)
+        if claim is not None:
+            return True
+    # Older SDKs may expose an explicit key under one of these names.
     markers = ("idempotency_key", "idempotent_key", "dedupe_key", "dedup_key")
     return any(marker in source for source in sources for marker in markers)
 
@@ -144,10 +144,13 @@ def _probe_idempotency() -> HyIdempotencySupport:
 
 
 def _probe_result_lookup() -> HyResultLookupSupport:
+    client_mod = _module("hy_memory.client")
+    client = getattr(client_mod, "HyMemoryClient", None) if client_mod is not None else None
+    if _has_callable(client, "get_write_outcome"):
+        return HyResultLookupSupport.BY_REQUEST_ID
     if _inspector_can_lookup_by_request_id():
         return HyResultLookupSupport.BY_REQUEST_ID
-    client_mod = _module("hy_memory.client")
-    if client_mod is not None and _has_callable(getattr(client_mod, "HyMemoryClient", None), "get"):
+    if _has_callable(client, "get"):
         return HyResultLookupSupport.BY_MEMORY_ID_ONLY
     return HyResultLookupSupport.NONE
 
@@ -170,6 +173,9 @@ def probe_hy_write_idempotency() -> dict[str, Any]:
         "add_signature": str(inspect.signature(add)) if add is not None else "",
         "accepts_request_id": hy_write_accepts_request_id(),
         "add_declares_idempotency": _add_path_declares_idempotency(),
+        "durable_write_outcome": (
+            client is not None and _has_callable(client, "get_write_outcome")
+        ),
         "inspector_lookup_by_request_id": _inspector_can_lookup_by_request_id(),
         "idempotency": _probe_idempotency().value,
         "result_lookup": _probe_result_lookup().value,

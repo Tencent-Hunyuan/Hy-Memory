@@ -98,9 +98,10 @@ def test_the_debug_tier_does_not_turn_the_master_switch_on(tmp_path, monkeypatch
         reset_diagnostics()
 
 
-def test_step_trace_emits_when_both_tiers_are_on(tmp_path, monkeypatch) -> None:
+def test_step_trace_emits_when_both_tiers_are_on(tmp_path, monkeypatch, caplog) -> None:
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
     monkeypatch.setenv("ONE_MEMORY_HY_STEP_TRACE", "1")
+    caplog.set_level("DEBUG")
     receipt = configure_diagnostics(tmp_path, session_id="tier-2")
     try:
         timer = HyStepTimer()

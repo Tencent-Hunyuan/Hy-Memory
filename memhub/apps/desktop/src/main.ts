@@ -7,7 +7,7 @@ import {
   checkSkillDrift,
   planRecallRepoint,
   readInstallSelfCheck,
-  renderConnectionMaterial,
+  renderCustomHarnessSkill,
   verifyRecallInstall,
 } from "@one-memory/host-bridge/installer";
 import {
@@ -116,6 +116,7 @@ import {
   startStableRuntimeRepair,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
+import { runStartupSdkMigration } from "./startup-sdk-migration";
 import { resolveTrialProfile } from "./trial-profile";
 import { createWindowOptions } from "./window-options";
 
@@ -807,12 +808,31 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       return { opened: true as const, reason: null };
     },
   );
-  ipcMain.handle("one-memory:connection-material", (event) => {
-    assertAllowedRenderer(event.senderFrame?.url);
-    if (hostRuntimeSelection?.state === "blocked")
-      throw new Error(hostRuntimeSelection.code);
-    return renderConnectionMaterial(recallRuntime);
-  });
+  ipcMain.handle(
+    "one-memory:create-custom-harness-skill",
+    async (event, displayName: unknown) => {
+      assertAllowedRenderer(event.senderFrame?.url);
+      if (hostRuntimeSelection?.state === "blocked")
+        throw new Error(hostRuntimeSelection.code);
+      if (
+        typeof displayName !== "string" ||
+        displayName !== displayName.trim() ||
+        displayName.length < 1 ||
+        displayName.length > 80 ||
+        /[\0\r\n]/.test(displayName)
+      )
+        throw new Error("custom_harness_name_invalid");
+      const pairing = connectionClient?.createPairing
+        ? await connectionClient.createPairing(displayName)
+        : await localPermissions?.createCustomPairing(displayName);
+      if (!pairing) throw new Error("host_pairing_unavailable");
+      return {
+        displayName: pairing.displayName,
+        expiresAt: pairing.expiresAt,
+        skill: renderCustomHarnessSkill(recallRuntime, pairing),
+      };
+    },
+  );
   ipcMain.handle("one-memory:get-login-preference", (event) => {
     assertAllowedRenderer(event.senderFrame?.url);
     return readLoginPreference(dataDir, process.platform, appManagedRuntime);
@@ -1044,6 +1064,36 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
   );
   installPackagedWebProtocol();
 
+  const migrateAtStartup = async (core: {
+    command: string;
+    args: string[];
+    cwd?: string;
+  }) => {
+    const migration = await runStartupSdkMigration({
+      dataDir,
+      core,
+      runtimeBuild:
+        packagedBuildNumber === undefined
+          ? typeof app.getVersion === "function"
+            ? app.getVersion()
+            : "0.0.0"
+          : String(packagedBuildNumber),
+    });
+    await diagnostics.log({
+      level: migration.state === "deferred" ? "warn" : "info",
+      component: "desktop.sdk_migration",
+      event: "sdk_migration.startup",
+      outcome:
+        migration.state === "cutover"
+          ? "succeeded"
+          : migration.state === "deferred"
+            ? "blocked"
+            : "skipped",
+      ...(migration.code === undefined ? {} : { error_code: migration.code }),
+      details: { state: migration.state },
+    });
+  };
+
   try {
     if (languagePreferences) {
       disposeLanguagePreferences = installLanguagePreferencesIpc({
@@ -1123,6 +1173,16 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           platform: "darwin",
         });
       }
+      if (
+        !desktopBackgroundLaunch &&
+        !desktopTestIsolation &&
+        process.env.NODE_ENV !== "test"
+      ) {
+        await migrateAtStartup({
+          command: stable?.captureCommand ?? layout.coreCommand,
+          args: [],
+        });
+      }
       const alreadyRunning = runtimeChanged
         ? false
         : await waitForRuntimeProcess({ dataDir, attempts: 4 }).then(
@@ -1182,6 +1242,20 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       }
       preserveManagedRuntimeOnQuit = !transientRuntime;
     } else if (standaloneRuntime) {
+      if (
+        !desktopBackgroundLaunch &&
+        !desktopTestIsolation &&
+        process.env.NODE_ENV !== "test"
+      ) {
+        await migrateAtStartup(
+          resolveCoreLaunch({
+            packaged: app.isPackaged,
+            appPath: app.getAppPath(),
+            resourcesPath: process.resourcesPath,
+            platform: process.platform,
+          }),
+        );
+      }
       await ensureRuntimeProcess({
         dataDir,
         launch: runtimeLaunch(),
@@ -1427,13 +1501,15 @@ async function sha256File(target: string): Promise<string> {
 }
 
 const desktopVersion = desktopVersionOutput(process.argv, packagedVersion);
+const desktopBackgroundLaunch =
+  legacyLoginLaunch || process.argv.includes("--background");
 if (desktopVersion !== null) {
   process.stdout.write(desktopVersion, () => app.exit(0));
 } else
   startDesktopLifecycle({
     app,
     platform: process.platform,
-    background: legacyLoginLaunch || process.argv.includes("--background"),
+    background: desktopBackgroundLaunch,
     prepare: prepareProtocol,
     beforeNativeUi: async () => {
       languagePreferences = await LanguagePreferences.open(

@@ -654,9 +654,7 @@ def diagnostic_event(**values: object) -> None:
     active = _active
     if active is None:
         return
-    if values.get("level") == "debug" and not logging.getLogger().isEnabledFor(
-        logging.DEBUG
-    ):
+    if values.get("level") == "debug" and not logging.getLogger().isEnabledFor(logging.DEBUG):
         return
     try:
         active.write(**values)  # type: ignore[arg-type]

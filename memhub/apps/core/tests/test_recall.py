@@ -3,10 +3,17 @@ import hashlib
 
 import pytest
 
+from one_memory.hy_memory_bridge import HySdkMemoryRecord
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_governance import MemoryDraft, MemoryGovernanceStore, MemoryKind
-from one_memory.recall import GovernedRecallTarget, RecallRequest, RecallState
+from one_memory.recall import (
+    GovernedRecallTarget,
+    RecallRequest,
+    RecallState,
+    SdkRecallTarget,
+)
+from one_memory.semantic_deadline import SemanticMemoryHit
 from tests.person_door import as_person
 
 
@@ -23,6 +30,51 @@ def _confirmed_memory(governance, evidence, *, content: str, scope: str):
         request_id=f"create:{request_key}",
     )
     return memory
+
+
+def test_sdk_recall_does_not_invent_per_memory_harness_acl() -> None:
+    async def search(_query):
+        return (
+            SemanticMemoryHit(
+                memory_id="personal",
+                score=0.9,
+                formatted_content="formatted personal plus private member",
+                member_ids=("member",),
+                sdk_formatted=True,
+                formatting_complete=True,
+            ),
+            SemanticMemoryHit(
+                memory_id="private",
+                score=0.8,
+                formatted_content="private",
+                sdk_formatted=True,
+                formatting_complete=True,
+            ),
+        )
+
+    async def get_memory(memory_id):
+        return HySdkMemoryRecord(
+            memory_id=memory_id,
+            content="personal root" if memory_id == "personal" else "private",
+            layer="l2_fact",
+            status="active",
+            is_latest=True,
+            user_id="local",
+            agent_id="one-memory",
+            gmt_created=1_700_000_000,
+        )
+
+    receipt = asyncio.run(
+        SdkRecallTarget(
+            semantic_search=search,
+            get_memory=get_memory,
+        ).recall_async(RecallRequest(query="preference"))
+    )
+
+    assert receipt.state is RecallState.GROUNDED
+    assert [hit.memory_id for hit in receipt.hits] == ["personal", "private"]
+    assert receipt.hits[0].content == "formatted personal plus private member"
+    assert receipt.hits[0].scopes == ()
 
 
 def test_recall_is_confirmed_only_grounded_and_scope_bound(tmp_path) -> None:

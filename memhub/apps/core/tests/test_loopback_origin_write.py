@@ -61,3 +61,19 @@ def test_a_page_from_anywhere_else_is_still_refused() -> None:
             "http://10.0.0.7:8765",
         ]
     ) == [403, 403, 403]
+
+
+def test_dns_names_that_only_start_with_127_are_refused() -> None:
+    # A prefix check treated any "127.*" hostname as loopback. These are
+    # ordinary DNS names an attacker can point at 127.0.0.1 (DNS rebinding).
+    assert _statuses(
+        [
+            "http://127.0.0.1.attacker.example:8765",
+            "https://127.attacker.example",
+            "http://127.0.0.1.nip.io:8765",
+        ]
+    ) == [403, 403, 403]
+
+
+def test_ipv6_loopback_is_still_accepted() -> None:
+    assert _statuses(["http://[::1]:8765"]) == [200]

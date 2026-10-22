@@ -173,7 +173,8 @@ def test_import_request_trace_reaches_the_background_job_without_original_text(t
     assert secret not in written
 
 
-def test_default_info_omits_parser_and_resource_internals(tmp_path):
+def test_default_info_omits_parser_and_resource_internals(tmp_path, caplog):
+    caplog.set_level("INFO")
     written, job_id = _run_codex_import(tmp_path)
     events = list(map(json.loads, written.splitlines()))
     job_events = [event for event in events if event.get("job_id") == job_id]

@@ -206,7 +206,6 @@ const EMPTY_GRAPH = {
 function mount(props: Partial<Parameters<typeof Workbench>[0]> = {}) {
   const handlers = {
     onDraft: vi.fn(),
-    onScopes: vi.fn(),
     onOpenMemory: vi.fn(),
     onCloseDetail: vi.fn(),
     onSave: vi.fn(),
@@ -244,7 +243,6 @@ function mount(props: Partial<Parameters<typeof Workbench>[0]> = {}) {
       loaded
       detail={null}
       draft=""
-      scopes=""
       busy={false}
       answer={null}
       streaming={null}
@@ -542,7 +540,6 @@ describe("记忆可以改也可以删", () => {
     const { onAction } = mount({
       detail,
       draft: "统一用 axios 封装",
-      scopes: "all-apps",
     });
 
     expect(screen.getByLabelText("记忆内容")).toBeTruthy();
@@ -558,7 +555,6 @@ describe("记忆可以改也可以删", () => {
     mount({
       detail,
       draft: "统一用 axios 封装",
-      scopes: "all-apps",
       requestIds,
     });
 
@@ -574,7 +570,6 @@ describe("记忆可以改也可以删", () => {
         memory: { ...detail.memory, status: "deleted" },
       } as MemoryDetail,
       draft: "统一用 axios 封装",
-      scopes: "all-apps",
     });
 
     expect(screen.queryByRole("button", { name: "删除" })).toBeNull();

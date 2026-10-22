@@ -61,9 +61,7 @@ def test_sedimentation_route_persists_and_resumes_without_restart(tmp_path) -> N
     )
     with TestClient(app, headers={"Authorization": "Bearer test"}) as client:
         assert client.get("/api/v1/sedimentation").json()["enabled"] is True
-        stopped = client.put(
-            "/api/v1/sedimentation", json={"enabled": False}
-        )
+        stopped = client.put("/api/v1/sedimentation", json={"enabled": False})
         assert stopped.status_code == 200
         assert stopped.json()["enabled"] is False
         assert client.get("/api/v1/sedimentation").json()["enabled"] is False
@@ -224,9 +222,7 @@ def test_stopped_switch_classifies_no_work_and_keeps_it_pending(tmp_path) -> Non
 
 def test_stopped_switch_refuses_direct_durable_processing(tmp_path) -> None:
     flag = _Flag(False)
-    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(
-        tmp_path, flag
-    )
+    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(tmp_path, flag)
     task = _task(evidence, tasks, active, index=1)
     record = evidence.get(task.input_ref)
     assert record is not None
@@ -239,9 +235,7 @@ def test_stopped_switch_refuses_direct_durable_processing(tmp_path) -> None:
 
 def test_pause_returns_a_claimed_task_attempt(tmp_path) -> None:
     flag = _Flag(True)
-    evidence, tasks, active, _supervisor, _profiles, _secrets = _stores(
-        tmp_path, flag
-    )
+    evidence, tasks, active, _supervisor, _profiles, _secrets = _stores(tmp_path, flag)
     task = _task(evidence, tasks, active, index=1)
     claimed, token = tasks.claim(task.task_id)
     assert claimed.attempts == 1
@@ -258,9 +252,7 @@ def test_pause_returns_a_claimed_task_attempt(tmp_path) -> None:
 
 def test_stopping_after_scheduler_classification_starts_no_worker(tmp_path) -> None:
     flag = _Flag(True)
-    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(
-        tmp_path, flag
-    )
+    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(tmp_path, flag)
     task = _task(evidence, tasks, active, index=1)
     work = supervisor._classify([task])
     assert len(work) == 1
@@ -330,9 +322,7 @@ def test_stopped_switch_prepares_no_backfill(tmp_path) -> None:
 
 def test_absent_switch_keeps_sedimenting(tmp_path) -> None:
     """A Core without the setting behaves exactly as it did before it existed."""
-    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(
-        tmp_path, _Flag(True)
-    )
+    evidence, tasks, active, supervisor, _profiles, _secrets = _stores(tmp_path, _Flag(True))
     supervisor.sedimentation_enabled = None
     task = _task(evidence, tasks, active, index=1)
 
@@ -365,9 +355,7 @@ def test_bounded_backfill_returns_when_the_queue_is_already_full(tmp_path) -> No
         supervisor._queue.add(supervisor._classify([task])[0])
 
     started = time.monotonic()
-    asyncio.run(
-        asyncio.wait_for(supervisor.backfill_off_thread(cohort_size=8), timeout=3)
-    )
+    asyncio.run(asyncio.wait_for(supervisor.backfill_off_thread(cohort_size=8), timeout=3))
     assert time.monotonic() - started < 3
 
 

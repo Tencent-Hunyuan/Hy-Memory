@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 HY_MEMORY_DISTRIBUTION = "hy-memory"
-HY_MEMORY_VERSION = "2.0.4"
+HY_MEMORY_VERSION = "2.0.5.dev3"
 HY_MEMORY_NAMESPACE = "governed-v2"
 DiagnosticLogLevel = Literal["error", "warning", "info", "debug"]
 
@@ -36,7 +36,7 @@ _NOISY_LIBRARY_LOGGERS = ("httpx", "httpcore", "watchfiles", "jieba")
 # One Memory deliberately stays on ultra because its existing, user-visible
 # profile/graph flow calls digest(), which the pinned public SDK exposes only
 # for ultra clients. Reader and non-reranker behavior remain pinned for
-# compatibility with public SDK 2.0.4.
+# compatibility with the SDK authority-migration development preview.
 HY_MEMORY_MODE = "ultra"
 # The SDK only recognises `legacy` and `hybrid` (see
 # hy_memory/pipelines/_retrieval/config.py: `ALL_READERS = (READER_LEGACY,
@@ -147,10 +147,7 @@ def apply_diagnostic_log_level(level: DiagnosticLogLevel) -> None:
     for root in _NOISY_LIBRARY_LOGGERS:
         logging.getLogger(root).setLevel(noisy_level)
     for name in tuple(logging.Logger.manager.loggerDict):
-        if any(
-            name == root or name.startswith(f"{root}.")
-            for root in _NOISY_LIBRARY_LOGGERS
-        ):
+        if any(name == root or name.startswith(f"{root}.") for root in _NOISY_LIBRARY_LOGGERS):
             logging.getLogger(name).setLevel(noisy_level)
 
     os.environ["MEMORY_LOG_LEVEL"] = logging.getLevelName(selected)

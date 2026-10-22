@@ -6,8 +6,6 @@ import type {
   MatterRun,
 } from "@one-memory/contracts";
 import {
-  type AskMemoryEvent,
-  type AskMemoryResponse,
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type ConversationBrowserPage,
@@ -23,10 +21,14 @@ import {
   type GraphWidthStatus,
   type HealthResponse,
   type HomeSummary,
+  type HostAskMemoryEvent,
+  type HostAskMemoryResponse,
+  type HostHomeSummary,
   type ImportIssue,
   type ImportJob,
   type LiveSyncHealth,
   type ManualExtractReceipt,
+  type MemoryAuthorityResponse,
   type MemoryDetail,
   type MemoryGraphResponse,
   type MemoryIndexSync,
@@ -45,6 +47,11 @@ import {
   type OnboardingState,
   type RecentConversationsPage,
   type SavedMemoryNoteEvidence,
+  type SdkMemoryPage,
+  type SdkMemoryRecord,
+  type SdkMemoryStatus,
+  type SdkRawContextItem,
+  type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
   type SourceResponse,
@@ -59,7 +66,6 @@ import {
   buildMemoryCorrectRequest,
   buildMemoryCreateRequest,
   buildMemoryNoteSaveRequest,
-  buildMemoryScopesRequest,
   buildModelProfileCreateRequest,
   buildModelProfileUpdateRequest,
   buildSourceImportRequest,
@@ -847,7 +853,12 @@ export async function deleteModelProfile(
   }
 }
 
-export async function getHomeSummary(): Promise<HomeSummary> {
+export async function getHomeSummary(): Promise<HostHomeSummary> {
+  const authority = await getMemoryAuthority();
+  if (authority.authority === "sdk") {
+    const response = await client.get<HostHomeSummary>("/api/v2/home-summary");
+    return response.data;
+  }
   return tryReader<HomeSummary>(
     "get",
     "/api/v1/home-summary",
@@ -877,6 +888,96 @@ export async function getMemoryLibrary(
   return response.data;
 }
 
+export async function getSdkMemoryLibrary(
+  {
+    statuses = ["active"],
+    offset = 0,
+    limit = 100,
+  }: {
+    statuses?: SdkMemoryStatus[];
+    offset?: number;
+    limit?: number;
+  } = {},
+  signal?: AbortSignal,
+): Promise<SdkMemoryPage> {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(limit),
+  });
+  for (const status of statuses) params.append("statuses", status);
+  const response = await client.get<SdkMemoryPage>("/api/v2/memory-library", {
+    params,
+    signal,
+  });
+  return response.data;
+}
+
+export async function getMemoryAuthority(): Promise<MemoryAuthorityResponse> {
+  const response = await client.get<MemoryAuthorityResponse>(
+    "/api/v2/memory-authority",
+  );
+  return response.data;
+}
+
+export async function getSdkMemory(memoryId: string): Promise<SdkMemoryRecord> {
+  const response = await client.get<SdkMemoryRecord>(
+    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
+  );
+  return response.data;
+}
+
+export async function updateSdkMemory(
+  memoryId: string,
+  content: string,
+): Promise<SdkMemoryRecord> {
+  const response = await client.put<SdkMemoryRecord>(
+    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
+    { content },
+  );
+  return response.data;
+}
+
+export async function deleteSdkMemory(memoryId: string): Promise<void> {
+  await client.delete(`/api/v2/memories/${encodeURIComponent(memoryId)}`);
+}
+
+export async function getSdkRaw({
+  source,
+  offset = 0,
+  limit = 100,
+}: {
+  source?: string;
+  offset?: number;
+  limit?: number;
+} = {}): Promise<SdkRawPage> {
+  const response = await client.get<SdkRawPage>("/api/v2/raw", {
+    params: { source, offset, limit },
+  });
+  return response.data;
+}
+
+export async function searchSdkRaw(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SdkRawContextItem[]> {
+  const response = await client.post(
+    "/api/v2/context/search",
+    {
+      query,
+      kinds: ["raw"],
+      limit: 20,
+      character_budget: 12_000,
+    },
+    { signal, timeout: 10_000 },
+  );
+  const items = response.data?.items;
+  return Array.isArray(items)
+    ? items.filter(
+        (item): item is SdkRawContextItem => item && item.kind === "raw",
+      )
+    : [];
+}
+
 export async function getMemories(query = ""): Promise<GovernedMemory[]> {
   return tryReader<GovernedMemory[]>(
     "get",
@@ -894,9 +995,10 @@ export async function getMemories(query = ""): Promise<GovernedMemory[]> {
 export async function askMemories(
   question: string,
   scope = "all-apps",
-): Promise<AskMemoryResponse> {
-  const response = await client.post<AskMemoryResponse>(
-    "/api/v1/memories/ask",
+  authority: "legacy" | "sdk",
+): Promise<HostAskMemoryResponse> {
+  const response = await client.post<HostAskMemoryResponse>(
+    `/api/${authority === "sdk" ? "v2" : "v1"}/memories/ask`,
     { question, scope },
     { timeout: 120_000 },
   );
@@ -908,7 +1010,9 @@ export async function* askMemoriesStream(
   scope = "all-apps",
   signal?: AbortSignal,
   traceId?: string,
-): AsyncGenerator<AskMemoryEvent> {
+  authority?: "legacy" | "sdk",
+): AsyncGenerator<HostAskMemoryEvent> {
+  if (authority === undefined) throw new Error("memory_authority_unavailable");
   const desktopBridge =
     typeof window === "undefined" ? undefined : window.oneMemory;
   // Same rule as the axios interceptor: a present bridge is the only authority
@@ -927,20 +1031,24 @@ export async function* askMemoriesStream(
         // would not.
         import.meta.env.VITE_CORE_API_TOKEN
       : undefined;
-  const response = await fetch(`${baseUrl}/api/v1/memories/ask/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      // This path uses raw `fetch`, so it does not go through the axios
-      // interceptor that stamps every other call. Without the header here Core
-      // still logs its own request, but under a different id from the
-      // renderer's `ui.action`/`ui.result`, so the four lines never group.
-      ...(traceId ? { "X-One-Memory-Trace-Id": traceId } : {}),
+  const version = authority === "sdk" ? "v2" : "v1";
+  const response = await fetch(
+    `${baseUrl}/api/${version}/memories/ask/stream`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        // This path uses raw `fetch`, so it does not go through the axios
+        // interceptor that stamps every other call. Without the header here Core
+        // still logs its own request, but under a different id from the
+        // renderer's `ui.action`/`ui.result`, so the four lines never group.
+        ...(traceId ? { "X-One-Memory-Trace-Id": traceId } : {}),
+      },
+      body: JSON.stringify({ question, scope }),
+      signal,
     },
-    body: JSON.stringify({ question, scope }),
-    signal,
-  });
+  );
   if (!response.ok || !response.body) {
     throw new Error(`ask_stream_failed_${response.status}`);
   }
@@ -957,7 +1065,7 @@ export async function* askMemoriesStream(
     for (const frame of frames) {
       const line = frame.trim();
       if (!line.startsWith("data:")) continue;
-      yield JSON.parse(line.slice(5).trim()) as AskMemoryEvent;
+      yield JSON.parse(line.slice(5).trim()) as HostAskMemoryEvent;
     }
   }
 }
@@ -1366,33 +1474,6 @@ export async function syncMemoryIndex(
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
   return response.data;
-}
-
-export async function setMemoryScopes(
-  memoryId: string,
-  revision: number,
-  scopes: string[],
-  requestId: string,
-  traceId?: string,
-): Promise<GovernedMemory> {
-  const request = buildMemoryScopesRequest(
-    memoryId,
-    revision,
-    scopes,
-    requestId,
-  );
-  const response = await client.post<GovernedMemory>(
-    request.path,
-    request.body,
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const receipt = parseMemoryReceipt(response.data, {
-    memoryId,
-    expectedRevision: revision,
-    expectedStatus: "confirmed",
-  });
-  if (receipt === null) throw new Error("memory_scopes_receipt_invalid");
-  return receipt;
 }
 
 export function apiErrorCode(reason: unknown): string | null {

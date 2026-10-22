@@ -10,7 +10,7 @@ vi.mock("axios", () => ({
   },
 }));
 
-import { getMemories, getMemoryLibrary } from "./api";
+import { getMemories, getMemoryLibrary, getSdkMemoryLibrary } from "./api";
 
 describe("paged memory library client", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -60,5 +60,21 @@ describe("paged memory library client", () => {
     get.mockRejectedValueOnce(error);
     await expect(getMemoryLibrary()).rejects.toBe(error);
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends SDK lifecycle filters as repeated status parameters", async () => {
+    const page = { memories: [], total: 0, offset: 0, limit: 25 };
+    get.mockResolvedValueOnce({ data: page });
+    expect(
+      await getSdkMemoryLibrary({
+        statuses: ["active", "superseded"],
+        offset: 0,
+        limit: 25,
+      }),
+    ).toBe(page);
+    expect(get.mock.calls[0][0]).toBe("/api/v2/memory-library");
+    const params = get.mock.calls[0][1].params as URLSearchParams;
+    expect(params.getAll("statuses")).toEqual(["active", "superseded"]);
+    expect(params.get("limit")).toBe("25");
   });
 });

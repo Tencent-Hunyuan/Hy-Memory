@@ -52,7 +52,7 @@ host-bridge、desktop 和 cli。单文件 4 MiB，保留 3 份轮转；额外清
 - `memory_task.finished`：最终 `result_count`、剩余 `pending_count` 和 `attempt`。
 
 其中 `memory_task.finished` 是产品侧判断沉淀是否持续推进的最终事件；不能只用
-`hy.ingest.completed` 代替，因为后者早于 Governance 写入。
+`hy.ingest.completed` 代替，因为后者早于 SDK 结果确认和写入队列终态。
 
 ## 验收
 

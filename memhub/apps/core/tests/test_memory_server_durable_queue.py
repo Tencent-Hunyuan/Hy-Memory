@@ -98,6 +98,30 @@ def test_acceptance_is_written_to_the_business_database(tmp_path, monkeypatch) -
     ]
 
 
+def test_pending_job_has_no_sdk_ids_and_completed_job_keeps_the_sdk_receipt(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    job = queue.submit(_request())
+
+    assert queue.sdk_receipt(job.job_id) is None
+    with pytest.raises(ValueError):
+        queue.settle(
+            job.job_id,
+            state=UNKNOWN,
+            sdk_raw_ids=("raw-1",),
+        )
+    queue.settle(
+        job.job_id,
+        state=COMPLETED,
+        sdk_raw_ids=("raw-1",),
+        sdk_memory_ids=("memory-1", "memory-1"),
+    )
+
+    receipt = queue.sdk_receipt(job.job_id)
+    assert receipt is not None
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1",)
+
+
 def test_an_isolated_legacy_queue_keeps_the_empty_snapshot_compatibility_shape(tmp_path) -> None:
     """Queues without an Evidence authority exist only for legacy/unit compatibility."""
     import json
@@ -216,6 +240,7 @@ def test_a_replay_is_idempotent_even_after_its_evidence_is_removed(tmp_path) -> 
     assert replay.job_id == first.job_id
     assert replay.enqueued is False
     assert len(_rows(path)) == 1
+
 
 def test_a_settled_job_replays_as_a_hit_not_a_conflict(tmp_path) -> None:
     """A historical reaped payload matches only its exact pre-snapshot intent."""
@@ -872,6 +897,57 @@ def test_a_durable_job_is_processed_through_the_authorized_path(tmp_path) -> Non
 
     assert supervisor.seen == [("e1", "e2")]
     assert _state(path, record.job_id) == "completed"
+
+
+def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+
+    class Supervisor:
+        sdk_authority = staticmethod(lambda: True)
+        calls = 0
+
+        @classmethod
+        async def process_sdk_job(cls, _records, **kwargs):
+            cls.calls += 1
+            await kwargs["before_hy_invocation"]()
+            return type(
+                "Result",
+                (),
+                {
+                    "raw_ids": ("raw-1",),
+                    "memories": (
+                        type("Memory", (), {"memory_id": "memory-1"})(),
+                        type("Memory", (), {"memory_id": "memory-2"})(),
+                    ),
+                },
+            )()
+
+    class Evidence(_EvidenceStore):
+        released: tuple[str, ...] = ()
+
+        def release_sdk_staging(self, evidence_ids):
+            self.released = evidence_ids
+            return len(evidence_ids)
+
+    evidence = Evidence({"e1"})
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=Supervisor(),
+            evidence=evidence,
+        )
+    )
+
+    receipt = queue.sdk_receipt(record.job_id)
+    assert receipt is not None
+    assert Supervisor.calls == 1
+    assert receipt.raw_ids == ("raw-1",)
+    assert receipt.memory_ids == ("memory-1", "memory-2")
+    assert evidence.released == ("e1",)
 
 
 def test_missing_evidence_is_refused_without_calling_the_model(tmp_path) -> None:
@@ -1625,8 +1701,7 @@ def test_no_profile_backlog_stays_parked_across_maintenance_cycles(tmp_path) -> 
         )
     with sqlite3.connect(path) as connection, connection:
         connection.execute(
-            "UPDATE memory_write_jobs SET attempts=1,"
-            "updated_at='2000-01-01T00:00:00+00:00'"
+            "UPDATE memory_write_jobs SET attempts=1,updated_at='2000-01-01T00:00:00+00:00'"
         )
 
     first = datetime.now(UTC)
@@ -1640,8 +1715,7 @@ def test_no_profile_backlog_stays_parked_across_maintenance_cycles(tmp_path) -> 
     )
     with sqlite3.connect(path) as connection:
         assert connection.execute(
-            "SELECT state,attempts,COUNT(*) FROM memory_write_jobs "
-            "GROUP BY state,attempts"
+            "SELECT state,attempts,COUNT(*) FROM memory_write_jobs GROUP BY state,attempts"
         ).fetchall() == [(WAITING_FOR_MODEL, 1, 100)]
 
 
@@ -2609,16 +2683,16 @@ def test_settle_with_an_owner_does_not_touch_an_ownerless_row(tmp_path, caplog) 
     assert not any("durable_write_settle_missed_row" in message for message in messages), messages
 
 
-def test_terminal_payloads_are_retained_and_replay_still_detects_conflicts(tmp_path) -> None:
-    """Terminal input is immutable audit data and idempotency remains strict."""
+def test_terminal_payloads_are_reaped_and_replay_still_detects_conflicts(tmp_path) -> None:
+    """Terminal raw input is removed while its intent digest preserves idempotency."""
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     record = queue.submit(_request(evidence=("e1",)))
     queue.settle(record.job_id, state="completed")
 
-    assert queue.clear_terminal_payloads() == 0
+    assert queue.clear_terminal_payloads() == 1
     stored = _rows(path)[0]["payload_json"]
-    assert "e1" in stored and "_one_memory_reaped_payload" not in stored
+    assert "e1" not in stored and "_one_memory_reaped_payload" in stored
     assert _rows(path)[0]["evidence_ids_json"] == '["e1"]'
 
     # Same intent still resolves to the existing row, not a second write.
@@ -2632,15 +2706,15 @@ def test_terminal_payloads_are_retained_and_replay_still_detects_conflicts(tmp_p
         queue.submit(_request(evidence=("e2",)))
 
 
-def test_terminal_payload_cleanup_is_a_compatibility_noop(tmp_path) -> None:
+def test_terminal_payload_cleanup_is_bounded(tmp_path) -> None:
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     for index in range(3):
         record = queue.submit(_request(evidence=("e1",), key=f"idem-{index}"))
         queue.settle(record.job_id, state="dead")
 
-    assert queue.clear_terminal_payloads(limit=2) == 0
-    assert queue.clear_terminal_payloads(limit=2) == 0
+    assert queue.clear_terminal_payloads(limit=2) == 2
+    assert queue.clear_terminal_payloads(limit=2) == 1
     assert queue.clear_terminal_payloads(limit=2) == 0
 
 
@@ -2659,8 +2733,8 @@ def test_unknown_and_pending_payloads_are_never_reaped(tmp_path) -> None:
     assert "e2" in payloads[unknown.request_id]
 
 
-def test_retained_terminal_payload_does_not_reappear_as_an_unsubmitted_orphan(tmp_path) -> None:
-    """A completed Evidence remains queued while its full input is retained.
+def test_reaped_terminal_payload_does_not_reappear_as_an_unsubmitted_orphan(tmp_path) -> None:
+    """A completed Evidence remains represented after its raw payload is removed.
 
     The reconcile primitive scans the durable queue by Evidence id. If it
     derived that set from `payload_json`, reaping a terminal row would erase
@@ -2694,7 +2768,7 @@ def test_retained_terminal_payload_does_not_reappear_as_an_unsubmitted_orphan(tm
     queue = DurableWriteQueue(path)
     record = queue.submit(_request(evidence=(evidence.evidence_id,), key="idem-reaped"))
     queue.settle(record.job_id, state="completed")
-    assert queue.clear_terminal_payloads() == 0
+    assert queue.clear_terminal_payloads() == 1
     assert queue.unsubmitted_evidence_ids() == ()
 
     orphan = store.put(
@@ -2712,17 +2786,17 @@ def test_retained_terminal_payload_does_not_reappear_as_an_unsubmitted_orphan(tm
     assert queue.unsubmitted_evidence_ids() == (orphan.evidence_id,)
 
 
-def test_payload_for_a_terminal_row_keeps_the_immutable_input(tmp_path) -> None:
+def test_payload_for_a_reaped_terminal_row_is_absent(tmp_path) -> None:
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     record = queue.submit(_request())
     queue.settle(record.job_id, state="completed")
     queue.clear_terminal_payloads()
 
-    assert queue.payload_for(record.job_id) == _request()
+    assert queue.payload_for(record.job_id) is None
 
 
-def test_drain_retains_terminal_payloads_when_idle(tmp_path) -> None:
+def test_drain_reaps_terminal_payloads_when_idle(tmp_path) -> None:
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     record = queue.submit(_request())
@@ -2747,11 +2821,11 @@ def test_drain_retains_terminal_payloads_when_idle(tmp_path) -> None:
     asyncio.run(scenario())
 
     assert executed == []
-    assert "_one_memory_reaped_payload" not in _rows(path)[0]["payload_json"]
+    assert "_one_memory_reaped_payload" in _rows(path)[0]["payload_json"]
 
 
-def test_the_drain_retains_terminal_payloads_while_never_idle(tmp_path) -> None:
-    """A sustained backlog must not mutate an earlier job's input snapshot."""
+def test_the_drain_reaps_terminal_payloads_while_never_idle(tmp_path) -> None:
+    """A sustained backlog must not retain an earlier job's raw input."""
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     finished = queue.submit(_request(key="finished"))
@@ -2779,8 +2853,8 @@ def test_the_drain_retains_terminal_payloads_while_never_idle(tmp_path) -> None:
 
     payload = _rows(path)
     by_key = {row["idempotency_key"]: row["payload_json"] for row in payload}
-    assert "_one_memory_reaped_payload" not in by_key["finished"]
-    assert '"e1"' in by_key["finished"]
+    assert "_one_memory_reaped_payload" in by_key["finished"]
+    assert '"e1"' not in by_key["finished"]
 
 
 def test_the_drain_readmits_model_waiters_even_while_never_idle(tmp_path) -> None:
@@ -3514,6 +3588,41 @@ def test_unknown_jobs_does_not_resolve_or_make_a_row_claimable(tmp_path) -> None
     assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=1) == ()
     assert queue.get("idem-1").state == UNKNOWN
     assert queue.resolve_unknown(found[0].job_id, found=False, detail="not in HY") == DEAD
+
+
+def test_unknown_jobs_can_exclude_sticky_authority_failures_before_limit(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    sticky = [
+        queue.submit(_request(key=f"sticky-{index}", evidence=(f"sticky-e{index}",)))
+        for index in range(129)
+    ]
+    ordinary = queue.submit(_request(key="ordinary", evidence=("ordinary-e",)))
+    anchor = datetime(2026, 1, 1, tzinfo=UTC)
+    with sqlite3.connect(path) as connection, connection:
+        for index, record in enumerate(sticky):
+            connection.execute(
+                "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+                "last_error=?,updated_at=? WHERE job_id=?",
+                (
+                    "hy_memory_write_verification_authority_invalid",
+                    (anchor + timedelta(seconds=index)).isoformat(),
+                    record.job_id,
+                ),
+            )
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown',attempts=1,hy_invoked=1,"
+            "last_error='model_content_outcome_unknown',updated_at=? WHERE job_id=?",
+            ((anchor + timedelta(minutes=3)).isoformat(), ordinary.job_id),
+        )
+
+    found = queue.unknown_jobs(
+        limit=128,
+        exclude_error_codes=("hy_memory_write_verification_authority_invalid",),
+    )
+
+    assert [job.job_id for job in found] == [ordinary.job_id]
+    assert all(queue.get(record.request_id).state == UNKNOWN for record in sticky)
 
 
 def test_unknown_jobs_tolerates_a_row_resolved_between_pages(tmp_path) -> None:
@@ -4896,15 +5005,16 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
     record = queue.submit(_request(key="after-call", source="opencode"))
     claimer = DurableWriteDrain(queue, execute=_never_execute, owner="after-call-owner")
     assert claimer.claim(limit=1) == (record.job_id,)
+    recorder = _Recorder(
+        error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
+        invoke_hy=True,
+    )
 
     asyncio.run(
         execute_job(
             record.job_id,
             queue=queue,
-            supervisor=_Recorder(
-                error=HyMemoryBridgeError("hy_memory_write_verification_authority_invalid"),
-                invoke_hy=True,
-            ),
+            supervisor=recorder,
             evidence=_EvidenceStore({"e1"}),
             owner="after-call-owner",
         )
@@ -4918,6 +5028,16 @@ def test_a_failure_after_the_call_still_parks_as_unknown(tmp_path) -> None:
 
     assert state == UNKNOWN
     assert invoked == 1
+    assert len(recorder.seen) == 1
+    assert (
+        queue.retry_first_unknown_after_reconcile(
+            older_than=datetime.now(UTC) + timedelta(minutes=1)
+        )
+        == 0
+    )
+    assert queue.retry_unknown_confirmed(record.job_id) == 0
+    assert DurableWriteDrain(queue, execute=_never_execute).claim(limit=1) == ()
+    assert len(recorder.seen) == 1
 
 
 def test_event_time_not_enqueue_order_drives_the_window(
@@ -4998,12 +5118,8 @@ def test_equal_event_time_uses_queue_sequence_inside_one_session(tmp_path) -> No
     path = tmp_path / "one-memory.sqlite3"
     queue = DurableWriteQueue(path)
     event_at = datetime(2026, 10, 18, 8, 0, tzinfo=UTC)
-    first = queue.submit(
-        _request(key="equal-first", source="cursor", event_at=event_at)
-    )
-    second = queue.submit(
-        _request(key="equal-second", source="cursor", event_at=event_at)
-    )
+    first = queue.submit(_request(key="equal-first", source="cursor", event_at=event_at))
+    second = queue.submit(_request(key="equal-second", source="cursor", event_at=event_at))
     drain = DurableWriteDrain(
         queue,
         execute=_never_execute,

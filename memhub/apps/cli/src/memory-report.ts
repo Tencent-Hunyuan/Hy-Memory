@@ -1,6 +1,5 @@
-import type { GovernedMemory } from "@one-memory/contracts";
+import type { SdkMemoryPage, SdkMemoryRecord } from "@one-memory/contracts";
 import { type CoreReader, RESERVED_MEMORY_SEGMENTS } from "./core-client.js";
-import { validateMemoryDetail, validateMemoryPage } from "./core-responses.js";
 import { PRODUCT } from "./version.js";
 
 /** Output budget: a long memory is shortened visibly, never dropped silently. */
@@ -47,10 +46,8 @@ export async function readMemoryPage(
     offset: query.offset,
     limit: query.limit,
   };
-  if (query.query !== undefined) parameters.query = query.query;
-  if (query.status !== undefined) parameters.status = query.status;
-  if (query.source !== undefined) parameters.source = query.source;
-  const outcome = await reader<unknown>("/api/v1/memory-library", parameters);
+  if (query.status !== undefined) parameters.statuses = query.status;
+  const outcome = await reader<unknown>("/api/v2/memory-library", parameters);
   if (outcome.state !== "ok") {
     return {
       schema_version: 1,
@@ -59,7 +56,7 @@ export async function readMemoryPage(
       memories: [],
     };
   }
-  const page = validateMemoryPage(outcome.data, query);
+  const page = sdkMemoryPage(outcome.data);
   if (page === null) {
     return {
       schema_version: 1,
@@ -68,7 +65,7 @@ export async function readMemoryPage(
       memories: [],
     };
   }
-  const items = page.items;
+  const items = page.memories;
   return {
     schema_version: 1,
     product: PRODUCT,
@@ -88,7 +85,7 @@ export async function readMemoryDetail(
   reader: CoreReader,
   memoryId: string,
 ): Promise<MemoryDetailDocument> {
-  const outcome = await reader<unknown>(`/api/v1/memories/${memoryId}`);
+  const outcome = await reader<unknown>(`/api/v2/memories/${memoryId}`);
   if (outcome.state !== "ok") {
     return {
       schema_version: 1,
@@ -98,8 +95,8 @@ export async function readMemoryDetail(
       history: [],
     };
   }
-  const detail = validateMemoryDetail(outcome.data, memoryId);
-  if (detail === null) {
+  const memory = sdkMemory(outcome.data);
+  if (memory === null || memory.memory_id !== memoryId) {
     return {
       schema_version: 1,
       product: PRODUCT,
@@ -111,33 +108,9 @@ export async function readMemoryDetail(
   return {
     schema_version: 1,
     product: PRODUCT,
-    memory: { state: "ok", ...describeMemory(detail.memory) },
-    evidence: (detail.evidence ?? []).map((item) => {
-      const budgeted = budget(item.verbatim ?? "");
-      return {
-        evidence_id: item.evidence_id,
-        available: item.available,
-        source_id: item.source_id,
-        written_by: item.written_by,
-        created_at: item.created_at,
-        excerpt: budgeted.text,
-        excerpt_truncated: budgeted.truncated,
-        excerpt_characters: budgeted.characters,
-      };
-    }),
-    history: (detail.history ?? []).map((item) => {
-      const content = budget(item.content);
-      return {
-        revision: item.revision,
-        action: item.action,
-        status: item.status,
-        scopes: item.scopes,
-        created_at: item.created_at,
-        content: content.text,
-        content_truncated: content.truncated,
-        content_characters: content.characters,
-      };
-    }),
+    memory: { state: "ok", ...describeMemory(memory) },
+    evidence: [],
+    history: [],
   };
 }
 
@@ -156,9 +129,7 @@ export function renderMemoryPageText(document: MemoryPageDocument): string {
   ];
   for (const memory of document.memories) {
     lines.push(
-      `- ${memory.memory_id}  ${memory.status}/${memory.kind}  rev ${memory.revision}  scopes=${
-        (memory.scopes as string[]).join(",") || "无"
-      }`,
+      `- ${memory.memory_id}  ${memory.status}/${memory.layer}  source=${memory.source ?? "未知"}`,
       `  ${memory.content}${memory.content_truncated ? ` …（共 ${memory.content_characters} 字）` : ""}`,
     );
   }
@@ -177,52 +148,89 @@ export function renderMemoryDetailText(document: MemoryDetailDocument): string {
   }
   const lines = [
     `记忆 ${memory.memory_id}`,
-    `状态：${memory.status}  类型：${memory.kind}  来源方式：${memory.origin}  版本：${memory.revision}`,
-    `授权范围：${(memory.scopes as string[]).join(",") || "无"}`,
-    `证据：${(memory.evidence_ids as string[]).join(",") || "无"}`,
-    `更新时间：${memory.updated_at}`,
+    `状态：${memory.status}  层：${memory.layer}  来源：${memory.source ?? "未知"}`,
+    `owner：${memory.owner ?? "未知"}  latest：${memory.is_latest}`,
+    `raw IDs：${(memory.source_raw_ids as string[]).join(",") || "无"}`,
     "",
     String(memory.content),
     memory.content_truncated ? `…（共 ${memory.content_characters} 字）` : "",
     "",
-    "原文摘录：",
+    "SDK memory 数据不在 MemHub 中保留 Evidence/版本副本。",
   ];
-  for (const item of document.evidence) {
-    lines.push(
-      `- ${item.evidence_id}  来源=${item.source_id ?? "未知"}  作者=${item.written_by ?? "未知"}  可读=${item.available}`,
-      `  ${item.excerpt}${item.excerpt_truncated ? ` …（共 ${item.excerpt_characters} 字）` : ""}`,
-    );
-  }
-  if (document.evidence.length === 0) lines.push("（无可读原文）");
-  lines.push("", "版本历史：");
-  for (const item of document.history) {
-    lines.push(
-      `- rev ${item.revision}  ${item.action}  ${item.status}  scopes=${(item.scopes as string[]).join(",")}`,
-      `  ${item.content}${item.content_truncated ? ` …（共 ${item.content_characters} 字）` : ""}`,
-    );
-  }
-  if (document.history.length === 0) lines.push("（无）");
   lines.push("");
   return lines.join("\n");
 }
 
-function describeMemory(memory: GovernedMemory): Record<string, unknown> {
+function describeMemory(memory: SdkMemoryRecord): Record<string, unknown> {
   const budgeted = budget(memory.content ?? "");
   return {
     memory_id: memory.memory_id,
     status: memory.status,
-    kind: memory.kind,
-    origin: memory.origin,
-    revision: memory.revision,
-    scopes: memory.scopes ?? [],
-    evidence_ids: memory.evidence_ids ?? [],
+    layer: memory.layer,
+    is_latest: memory.is_latest,
+    owner: memory.owner,
+    source: memory.source,
+    source_raw_ids: memory.source_raw_ids,
+    supersedes: memory.supersedes,
+    superseded_by: memory.superseded_by,
     tags: memory.tags ?? [],
-    created_at: memory.created_at,
-    updated_at: memory.updated_at,
+    memory_at: memory.memory_at,
+    gmt_created: memory.gmt_created,
     content: budgeted.text,
     content_truncated: budgeted.truncated,
     content_characters: budgeted.characters,
   };
+}
+
+function sdkMemoryPage(value: unknown): SdkMemoryPage | null {
+  if (!record(value) || !Array.isArray(value.memories)) return null;
+  const memories = value.memories.map(sdkMemory);
+  if (memories.some((item) => item === null)) return null;
+  if (!integer(value.total) || !integer(value.limit) || !integer(value.offset))
+    return null;
+  return {
+    memories: memories as SdkMemoryRecord[],
+    total: value.total,
+    limit: value.limit,
+    offset: value.offset,
+  };
+}
+
+function sdkMemory(value: unknown): SdkMemoryRecord | null {
+  if (
+    !record(value) ||
+    !text(value.memory_id) ||
+    typeof value.content !== "string" ||
+    !text(value.layer) ||
+    !text(value.status) ||
+    typeof value.is_latest !== "boolean" ||
+    !strings(value.supersedes) ||
+    !strings(value.superseded_by) ||
+    !strings(value.tags) ||
+    !strings(value.source_raw_ids) ||
+    !text(value.user_id) ||
+    !text(value.agent_id)
+  )
+    return null;
+  return value as unknown as SdkMemoryRecord;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function text(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function strings(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function integer(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 0;
 }
 
 function budget(value: string): {

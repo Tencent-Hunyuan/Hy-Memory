@@ -32,6 +32,7 @@ English | [中文](README.zh.md)
 
 ## Latest News
 
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Open-sourced** quantized **FP8** (**[Hy-Memory-30B-A3B-FP8](https://huggingface.co/tencent/Hy-Memory-30B-A3B-FP8)**) and **GGUF** (**[Hy-Memory-30B-A3B-GGUF](https://huggingface.co/tencent/Hy-Memory-30B-A3B-GGUF)**) versions of **Hy-Memory-30B-A3B** on Hugging Face!
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **Released [MemHub v1.0.4](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.4)** and **[memhub-cli 1.0.5](https://www.npmjs.com/package/memhub-cli/v/1.0.5)**, with a signed macOS desktop app and verified macOS/Linux Runtimes!
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Released** **Hy Memory 2.0 (`hy-memory==2.0.4`)** on [PyPI](https://pypi.org/project/hy-memory/2.0.4/) and open-sourced the **Hy-Memory** monorepo together with **[MemHub](memhub/README.md)**!
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Open-sourced** **[Hy-Memory-30B-A3B](https://huggingface.co/tencent/Hy-Memory-30B-A3B)** on Hugging Face along with its [technical report](https://arxiv.org/abs/2610.22196) on attributed reinforcement learning for long-term memory writing!
@@ -64,13 +65,13 @@ Welcome to the **Hy Memory Research Family**, covering cognitive chat memory, lo
 ### 1. Installation
 
 ```bash
-pip install hy-memory==2.0.3              # core (includes ChromaDB and Kuzu)
-pip install "hy-memory[qdrant]==2.0.3"    # + Qdrant
-pip install "hy-memory[faiss]==2.0.3"     # + FAISS
-pip install "hy-memory[graph]==2.0.3"     # + Neo4j
-pip install "hy-memory[mysql]==2.0.3"     # + MySQL cache
-pip install "hy-memory[rerank]==2.0.3"    # + local multilingual cross-encoder rerank
-pip install "hy-memory[all]==2.0.3"       # everything
+pip install hy-memory==2.0.4              # core (includes ChromaDB and Kuzu)
+pip install "hy-memory[qdrant]==2.0.4"    # + Qdrant
+pip install "hy-memory[faiss]==2.0.4"     # + FAISS
+pip install "hy-memory[graph]==2.0.4"     # + Neo4j
+pip install "hy-memory[mysql]==2.0.4"     # + MySQL cache
+pip install "hy-memory[rerank]==2.0.4"    # + local multilingual cross-encoder rerank
+pip install "hy-memory[all]==2.0.4"       # everything
 ```
 
 ### 2. Configuration
@@ -152,7 +153,7 @@ result = client.search(
 
 result["facts"]          # fact layer
 result["experiences"]    # experience layer
-result["chain_block"]    # coding only: version-evolution context
+result["chain_block"]    # coding only: version-evolution context (empty unless MEMORY_CODING_CHAIN_BLOCK_ENABLED)
 ```
 
 ### 5. Routing, Source Isolation & Advanced APIs

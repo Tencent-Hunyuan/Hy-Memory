@@ -4,7 +4,6 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 
-import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
@@ -223,11 +222,12 @@ def test_sync_runtime_failure_does_not_commit_the_requested_state(tmp_path, monk
                 raise RuntimeError("resume_failed")
 
             monkeypatch.setattr(app.state.live_sync_supervisor, "initialize_source", fail_resume)
-            with pytest.raises(RuntimeError, match="resume_failed"):
-                await client.post(
-                    "/api/v1/sources/claude-code/sync-permission",
-                    json={"enabled": True},
-                )
+            failed_resume = await client.post(
+                "/api/v1/sources/claude-code/sync-permission",
+                json={"enabled": True},
+            )
+            assert failed_resume.status_code == 409
+            assert failed_resume.json()["detail"] == "sync_prepare_failed"
             assert not app.state.config_store.sync_enabled("claude-code")
 
             monkeypatch.setattr(app.state.live_sync_supervisor, "initialize_source", resume)
@@ -242,11 +242,12 @@ def test_sync_runtime_failure_does_not_commit_the_requested_state(tmp_path, monk
                 raise RuntimeError("pause_failed")
 
             monkeypatch.setattr(app.state.live_sync_supervisor, "stop_source", fail_pause)
-            with pytest.raises(RuntimeError, match="pause_failed"):
-                await client.post(
-                    "/api/v1/sources/claude-code/sync-permission",
-                    json={"enabled": False},
-                )
+            failed_pause = await client.post(
+                "/api/v1/sources/claude-code/sync-permission",
+                json={"enabled": False},
+            )
+            assert failed_pause.status_code == 409
+            assert failed_pause.json()["detail"] == "sync_prepare_failed"
             assert app.state.config_store.sync_enabled("claude-code")
 
     asyncio.run(scenario())

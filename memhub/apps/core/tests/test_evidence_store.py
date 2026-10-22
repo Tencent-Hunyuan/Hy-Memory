@@ -15,6 +15,8 @@ from one_memory.imports.models import (
     WrittenBy,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
 from one_memory.memory_tasks import evidence_ref, matches_evidence_ref
 from one_memory.workspace_resolution import KnownWorkspace
 
@@ -60,6 +62,57 @@ def forget_repair(connection: sqlite3.Connection, name: str) -> None:
     a state no real database is ever in.
     """
     connection.execute("DELETE FROM evidence_repairs WHERE name = ?", (name,))
+
+
+def test_sdk_staging_release_removes_new_raw_but_keeps_legacy_governance(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    transient = store.put(evidence(message_id="transient")).record
+    legacy = store.put(evidence(message_id="legacy", verbatim="legacy")).record
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE governed_memory_evidence ("
+            "memory_id TEXT NOT NULL,evidence_id TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO governed_memory_evidence VALUES (?,?)",
+            ("memory-1", legacy.evidence_id),
+        )
+        connection.commit()
+
+    removed = store.release_sdk_staging((transient.evidence_id, legacy.evidence_id))
+
+    assert removed == 1
+    assert store.get(transient.evidence_id) is None
+    assert store.get(legacy.evidence_id) is not None
+
+
+def test_startup_resumes_sdk_staging_cleanup_after_completed_job(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(database)
+    record = store.put(evidence(message_id="queued")).record
+    queue = DurableWriteQueue(database, evidence=store)
+    request = WriteRequest(
+        internal_session_id="conversation-1",
+        source_id="cursor",
+        batch_identity=BatchIdentity(
+            internal_session_id="conversation-1",
+            first_round=1,
+            last_round=1,
+        ),
+        evidence_ids=[record.evidence_id],
+        input_records=(record,),
+        idempotency_key="request-1",
+    )
+    job = queue.submit(request)
+    queue.settle(
+        job.job_id,
+        state=COMPLETED,
+        sdk_raw_ids=("raw-1",),
+    )
+
+    assert store.release_completed_sdk_staging() == 1
+    assert store.get(record.evidence_id) is None
 
 
 def test_same_source_message_merges_origins_without_duplication(tmp_path) -> None:
@@ -129,9 +182,7 @@ def test_task_proof_ignores_legacy_written_by_metadata(tmp_path) -> None:
     )
     legacy_proof = {
         **proof,
-        "identity_hash": sha256(
-            json.dumps(legacy_identity, sort_keys=True).encode()
-        ).hexdigest(),
+        "identity_hash": sha256(json.dumps(legacy_identity, sort_keys=True).encode()).hexdigest(),
     }
 
     assert matches_evidence_ref(changed_author, proof) is True

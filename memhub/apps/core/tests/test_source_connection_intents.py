@@ -177,7 +177,9 @@ def test_connection_retry_reuses_completed_job_and_checks_root_snapshot(tmp_path
             job_id = initial.json()["jobs"][0]["job_id"]
             await app.state.import_supervisor.wait(job_id)
             grant = app.state.source_grant_store.receipt(user_id="local", source_id="claude-code")
-            assert grant is not None and grant.sync_enabled
+            assert grant is not None
+            assert app.state.config_store.sync_enabled("claude-code")
+            job_count = len(app.state.import_job_store.list_jobs())
             retry = await client.post("/api/v1/sources/connect", json=request)
             assert retry.status_code == 200
             assert retry.json()["jobs"][0]["job_id"] == job_id
@@ -186,11 +188,11 @@ def test_connection_retry_reuses_completed_job_and_checks_root_snapshot(tmp_path
                 app.state.source_grant_store.receipt(user_id="local", source_id="claude-code")
                 == grant
             )
-            assert len(app.state.import_job_store.list_jobs()) == 1
+            assert len(app.state.import_job_store.list_jobs()) == job_count
             request["source_roots"] = {"claude-code": "root:v2:wrong"}
             denied = await client.post("/api/v1/sources/connect", json=request)
             assert denied.status_code == 409
-            assert len(app.state.import_job_store.list_jobs()) == 1
+            assert len(app.state.import_job_store.list_jobs()) == job_count
 
     asyncio.run(scenario())
 

@@ -81,6 +81,21 @@ _CREATE_TABLES_SQL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS write_outcomes (
+        request_id VARCHAR(256) NOT NULL,
+        user_id    VARCHAR(255) NOT NULL,
+        agent_id   VARCHAR(255) NOT NULL DEFAULT '',
+        session_id VARCHAR(255) NOT NULL DEFAULT '',
+        operation  VARCHAR(32) NOT NULL,
+        status     VARCHAR(32) NOT NULL,
+        result_json LONGTEXT NOT NULL,
+        created_at VARCHAR(64) NOT NULL,
+        updated_at VARCHAR(64) NOT NULL,
+        PRIMARY KEY (request_id),
+        KEY idx_write_outcomes_owner (user_id, agent_id, session_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """,
+    """
     CREATE TABLE IF NOT EXISTS system_metrics (
         minute_ts   VARCHAR(32) NOT NULL,
         data        LONGTEXT NOT NULL,
@@ -459,29 +474,128 @@ class MysqlCache(CacheBase):
             logger.warning(f"get_pipeline_logs failed: {e}")
             return []
 
+    async def claim_write_outcome(
+        self,
+        request_id: str,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        operation: str,
+    ) -> Optional[Dict[str, Any]]:
+        now = datetime.now().isoformat()
+        inserted = await self._execute(
+            """
+            INSERT IGNORE INTO write_outcomes (
+                request_id, user_id, agent_id, session_id, operation,
+                status, result_json, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, 'running', '{}', %s, %s)
+            """,
+            (request_id, user_id, agent_id, session_id, operation, now, now),
+        )
+        if inserted == 1:
+            return None
+        return await self.get_write_outcome(request_id)
+
+    async def finish_write_outcome(
+        self,
+        request_id: str,
+        status: str,
+        result: Dict[str, Any],
+    ) -> bool:
+        updated = await self._execute(
+            """
+            UPDATE write_outcomes
+            SET status = %s, result_json = %s, updated_at = %s
+            WHERE request_id = %s
+            """,
+            (
+                status,
+                json.dumps(result, ensure_ascii=False, default=str),
+                datetime.now().isoformat(),
+                request_id,
+            ),
+        )
+        return updated == 1
+
+    async def get_write_outcome(self, request_id: str) -> Optional[Dict[str, Any]]:
+        row = await self._fetchone(
+            "SELECT * FROM write_outcomes WHERE request_id = %s",
+            (request_id,),
+        )
+        if row is None:
+            return None
+        try:
+            row["result"] = json.loads(row.pop("result_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            row["result"] = {}
+        return row
+
     # ================================================================
     # System Metrics（分钟粒度落盘）
     # ================================================================
 
     async def store_metrics_minute(self, minute_ts: str, data: dict) -> None:
+        import aiomysql
+
         try:
             now = datetime.now().isoformat()
-            # 尝试 UPSERT
-            existing = await self._fetchone(
-                "SELECT data FROM system_metrics WHERE minute_ts = %s", (minute_ts,)
-            )
-            if existing:
-                old_data = json.loads(existing["data"])
-                merged = self._merge_metric_buckets(old_data, data)
-                await self._execute(
-                    "UPDATE system_metrics SET data = %s, created_at = %s WHERE minute_ts = %s",
-                    (json.dumps(merged, default=str), now, minute_ts),
-                )
-            else:
-                await self._execute(
-                    "INSERT INTO system_metrics (minute_ts, data, created_at) VALUES (%s, %s, %s)",
-                    (minute_ts, json.dumps(data, default=str), now),
-                )
+            # Read-merge-write must be one transaction: two instances flushing
+            # the same minute used to overwrite each other's counters, and a
+            # concurrent insert could lose the whole batch to a duplicate key.
+            for attempt in range(2):
+                try:
+                    async with self._pool.acquire() as conn:
+                        await conn.begin()
+                        try:
+                            async with conn.cursor(aiomysql.DictCursor) as cur:
+                                await cur.execute(
+                                    "SELECT data FROM system_metrics "
+                                    "WHERE minute_ts = %s FOR UPDATE",
+                                    (minute_ts,),
+                                )
+                                row = await cur.fetchone()
+                                if row is not None:
+                                    old_raw = (
+                                        row["data"]
+                                        if isinstance(row, dict)
+                                        else row[0]
+                                    )
+                                    merged = self._merge_metric_buckets(
+                                        json.loads(old_raw), data,
+                                    )
+                                    await cur.execute(
+                                        "UPDATE system_metrics SET data = %s, "
+                                        "created_at = %s WHERE minute_ts = %s",
+                                        (
+                                            json.dumps(merged, default=str),
+                                            now,
+                                            minute_ts,
+                                        ),
+                                    )
+                                else:
+                                    await cur.execute(
+                                        "INSERT INTO system_metrics "
+                                        "(minute_ts, data, created_at) "
+                                        "VALUES (%s, %s, %s)",
+                                        (
+                                            minute_ts,
+                                            json.dumps(data, default=str),
+                                            now,
+                                        ),
+                                    )
+                            await conn.commit()
+                            return
+                        except Exception:
+                            await conn.rollback()
+                            raise
+                except (aiomysql.IntegrityError, aiomysql.OperationalError) as error:
+                    code = error.args[0] if error.args else None
+                    deadlock = code in (1205, 1213)
+                    if attempt or (isinstance(error, aiomysql.OperationalError) and not deadlock):
+                        raise
+                    # A competing writer inserted the row, or InnoDB chose us
+                    # as the deadlock victim. Retry so this batch merges.
+                    continue
         except Exception as e:
             logger.warning(f"store_metrics_minute failed: {e}")
 
