@@ -50,6 +50,11 @@
 阶段、Core 开始提供产品读写之前，完成 bundle、可续跑 backfill、reconciliation
 与最终 cutover。失败或缺少前置配置时 marker 保持未提交，不允许静默进入双写。
 
+Fresh install 直接创建最新管理面 schema，禁止创建 `evidence*`、`governed_*`
+及旧 retrieval/Matter/session-shadow 表。Legacy upgrade 在 bundle 与 SDK
+迁移校验完成后物理 DROP 这些旧表；备份 bundle 才是审计/回滚载体，不在 live DB
+保留一套“兼容权威”。
+
 ---
 
 ## 管理面仍属 MemHub（勿误拆）

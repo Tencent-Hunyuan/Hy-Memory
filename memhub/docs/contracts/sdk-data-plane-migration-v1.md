@@ -24,10 +24,19 @@ After the cutover marker is committed:
 
 - SDK memory/raw/vector/graph/coding stores are the only memory data authority;
 - MemHub stores management state and `memory_id` / raw references only;
-- legacy Evidence/Governance tables are read-only compatibility data;
+- legacy Evidence/Governance/retrieval/session-shadow tables are physically
+  dropped before the normal App window is revealed;
 - startup must not fall back to legacy authority because an SDK read failed.
 
 The marker, not table existence, selects the authority.
+
+### Fresh install
+
+A fresh home does not execute the historical application schema chain. It
+bootstraps the latest management-plane schema directly with SDK authority and
+never creates Evidence, Governance, legacy retrieval, legacy Matter body, or
+session-shadow tables. Historical schema migrations are an input format reader
+for old homes only.
 
 ## 2. Supported source state
 
@@ -232,23 +241,29 @@ After an SDK-only write:
 
 Changing only the Runtime `current` symlink is not data rollback.
 
-## 12. Legacy retention and cleanup
+## 12. Legacy cleanup
 
-For at least one compatibility release:
+Legacy tables are not a compatibility runtime. After every memory/raw/Matter
+reference resolves, the verified bundle has passed restore validation, and the
+SDK cutover marker is durable, the offline startup transaction drops:
 
-- keep legacy tables read-only;
-- keep the verified migration bundle;
-- expose diagnostics for migration ID, phase, counts and last stable error code;
-- do not silently delete old Evidence/Governance content.
+- every `evidence*` and `governed_*` table;
+- legacy retrieval/index tables;
+- legacy Matter body/dependency/note tables;
+- legacy deletion/index-sync/task-output and session-shadow tables;
+- migration-only aliases and ledgers after their canonical references have
+  been materialized into the surviving management tables.
 
-Cleanup is a separate explicit operation after retention expires. It requires a
-verified bundle and no unresolved alias/reference.
+The verified bundle is the audit and rollback artifact; keeping duplicate
+plaintext tables in the live database is not. A cleanup failure keeps startup
+blocked and never exposes a half-cleaned schema.
 
 ## 13. Acceptance matrix
 
 The release gate covers:
 
 - a clean install with no legacy rows;
+- a clean install whose schema contains no legacy table names;
 - Governance-only, SDK-only, mapped-ID and divergent fixtures;
 - Evidence/raw-only content;
 - pending correction and physical deletion;
@@ -257,6 +272,7 @@ The release gate covers:
 - full bundle restore and hash/count mismatch;
 - Matters/call-event alias preservation;
 - old Runtime against a post-cutover home;
+- successful migration followed by physical absence of every legacy table;
 - local and supported remote backend snapshot behavior.
 
 No narrow unit test may be used as evidence that the full migration is safe.
