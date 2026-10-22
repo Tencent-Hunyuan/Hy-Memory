@@ -713,6 +713,16 @@ def backfill_sdk_matter_references(
                 "ORDER BY matter_id,version"
             )
         )
+        note_rows = (
+            tuple(
+                database.execute(
+                    "SELECT matter_id,evidence_id,created_at FROM matter_notes "
+                    "ORDER BY matter_id,created_at"
+                )
+            )
+            if "matter_notes" in tables
+            else ()
+        )
     for row in matter_rows:
         matter_id = str(row["matter_id"])
         version = int(row["version"])
@@ -769,6 +779,50 @@ def backfill_sdk_matter_references(
             target_hash=hashlib.sha256(
                 json.dumps(references, sort_keys=True).encode()
             ).hexdigest(),
+        )
+    for note in note_rows:
+        evidence_id = str(note["evidence_id"])
+        item_key = f"matter-note:{note['matter_id']}:{evidence_id}"
+        source_hash = hashlib.sha256(item_key.encode()).hexdigest()
+        store.upsert_item(
+            migration_id=migration_id,
+            item_key=item_key,
+            source_kind="matter:note",
+            source_id=evidence_id,
+            source_hash=source_hash,
+            operation_key=hashlib.sha256(
+                f"{migration_id}:{item_key}".encode()
+            ).hexdigest(),
+        )
+        alias = raw_aliases.get(evidence_id)
+        if alias is None:
+            store.settle_item(
+                migration_id=migration_id,
+                item_key=item_key,
+                state="quarantine",
+                error_code="matter_note_raw_unresolved",
+            )
+            blocked += 1
+            continue
+        with main_database(database_path).write(autocommit=True) as database:
+            database.execute(
+                "INSERT INTO matter_sdk_notes "
+                "(matter_id,note_id,request_id,raw_id,created_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(request_id) DO NOTHING",
+                (
+                    str(note["matter_id"]),
+                    evidence_id,
+                    f"legacy-note:{note['matter_id']}:{evidence_id}",
+                    alias[0],
+                    str(note["created_at"]),
+                ),
+            )
+        store.settle_item(
+            migration_id=migration_id,
+            item_key=item_key,
+            state="verified",
+            target_memory_id=alias[0],
+            target_hash=source_hash,
         )
     return blocked
 

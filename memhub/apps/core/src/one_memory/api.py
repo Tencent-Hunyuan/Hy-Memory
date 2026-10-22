@@ -1586,6 +1586,30 @@ def create_app(
     )
     app.state.settings = runtime_settings
 
+    @app.middleware("http")
+    async def reject_legacy_memory_authority(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        legacy_paths = (
+            "/api/v1/memories",
+            "/api/v1/memory-library",
+            "/api/v1/conversations",
+            "/api/v1/conversation-browser",
+            "/api/v1/context",
+            "/api/v1/boundary",
+        )
+        if (
+            getattr(app.state, "memory_authority", MemoryAuthority.LEGACY)
+            is MemoryAuthority.SDK
+            and request.url.path.startswith(legacy_paths)
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "sdk_memory_authority_required"},
+            )
+        return await call_next(request)
+
     def ui_session_valid(cookie: str) -> bool:
         sessions = getattr(app.state, "ui_sessions", None)
         return sessions is not None and sessions.valid_session(cookie)

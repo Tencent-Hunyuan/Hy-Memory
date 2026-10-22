@@ -72,6 +72,8 @@ const {
   apiErrorCode,
   getMemories,
   getMemoryAuthority,
+  getSdkRaw,
+  searchSdkRaw,
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
@@ -98,6 +100,8 @@ const {
   apiErrorCode: vi.fn(),
   getMemories: vi.fn(),
   getMemoryAuthority: vi.fn(),
+  getSdkRaw: vi.fn(),
+  searchSdkRaw: vi.fn(),
   getMemory: vi.fn(),
   getMemoryGraph: vi.fn(),
   getMemoryProcessing: vi.fn(),
@@ -128,6 +132,8 @@ vi.mock("./api", () => ({
   apiErrorCode,
   getMemories,
   getMemoryAuthority,
+  getSdkRaw,
+  searchSdkRaw,
   getMemory,
   getMemoryGraph,
   getMemoryProcessing,
@@ -172,6 +178,13 @@ describe("MemorySpace", () => {
       authority: "legacy",
       migration_id: null,
     });
+    getSdkRaw.mockResolvedValue({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 100,
+    });
+    searchSdkRaw.mockResolvedValue([]);
     apiErrorCode.mockReturnValue(null);
     getMemories.mockResolvedValue([memory]);
     getMemory.mockResolvedValue(detail);
@@ -2039,6 +2052,8 @@ describe("MemorySpace", () => {
     );
     expect((await screen.findAllByText("SDK 回答")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/revision|evidence_ids/)).toBeNull();
+    expect(getMemories).not.toHaveBeenCalled();
+    expect(getMemoryGraph).not.toHaveBeenCalled();
   });
 
   it("hands a saved answer to HY as a note instead of writing the memory itself", async () => {

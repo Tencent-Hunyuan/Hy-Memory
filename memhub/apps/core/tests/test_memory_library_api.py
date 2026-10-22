@@ -20,6 +20,7 @@ from one_memory.hy_memory_bridge import (
 )
 from one_memory.memory_governance import MemoryGovernanceStore
 from one_memory.memory_library import MemoryLibraryPage, read_memory_library
+from one_memory.sdk_data_plane_migration import MemoryAuthority
 from one_memory.source_read_access import SourceReadAccess
 from tests.test_memory_library import NOW, grant, put
 from tests.test_memory_library import database as database  # noqa: F401
@@ -187,6 +188,10 @@ def test_memory_authority_is_legacy_until_cutover_marker_exists(app):
         "authority": "sdk",
         "migration_id": "migration-1",
     }
+    app.state.memory_authority = MemoryAuthority.SDK
+    legacy = request(app, url="/api/v1/memory-library")
+    assert legacy.status_code == 409
+    assert legacy.json()["detail"] == "sdk_memory_authority_required"
 
 
 @pytest.mark.parametrize(

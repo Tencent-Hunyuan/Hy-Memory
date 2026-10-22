@@ -71,6 +71,11 @@ def sdk_cutover_blockers(database_path: Path) -> dict[str, int]:
                 "evidence_pending_memory_dispatch",
                 "1=1",
             ),
+            (
+                "matter_runs",
+                "matter_runs",
+                "json_extract(body,'$.status')='running'",
+            ),
         )
         for name, table, where in checks:
             if table not in tables:
@@ -82,6 +87,18 @@ def sdk_cutover_blockers(database_path: Path) -> dict[str, int]:
             )
             if count:
                 blockers[name] = count
+        if {"matters", "matter_sdk_versions"} <= tables:
+            missing_matters = int(
+                database.execute(
+                    "SELECT COUNT(*) FROM matters current "
+                    "LEFT JOIN matter_sdk_versions projected "
+                    "ON projected.matter_id=current.matter_id "
+                    "AND projected.version=current.version "
+                    "WHERE projected.matter_id IS NULL"
+                ).fetchone()[0]
+            )
+            if missing_matters:
+                blockers["matter_references"] = missing_matters
     return blockers
 
 
@@ -93,11 +110,8 @@ def commit_reconciled_cutover(
     bundle_id: str,
     sdk_version: str,
     store_version: str = "1",
-    product_paths_ready: bool = False,
 ) -> CutoverMarker:
     """Verify backup/work quiescence and atomically commit SDK authority."""
-    if not product_paths_ready:
-        raise DataPlaneMigrationError("sdk_data_plane_product_paths_not_ready")
     inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id)
     blockers = sdk_cutover_blockers(database_path)
     if blockers:

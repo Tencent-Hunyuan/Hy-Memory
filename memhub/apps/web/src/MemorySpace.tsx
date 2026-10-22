@@ -53,6 +53,7 @@ import { MemoryMap } from "./MemoryMap";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
+import { SdkRawHistory } from "./SdkRawHistory";
 import { sourceNameOr } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { useMemoryLibrary } from "./use-memory-library";
@@ -200,7 +201,11 @@ export function MemorySpace({
   const [mapQuery, setMapQuery] = useState("");
   const [mapSource, setMapSource] = useState("");
   const mapLibrary = useMemoryLibrary({
-    enabled: simplified && (active || preload) && !management,
+    enabled:
+      memoryAuthority === "legacy" &&
+      simplified &&
+      (active || preload) &&
+      !management,
     stale: sourceSnapshotStale,
     sourceKey,
     query: mapQuery,
@@ -235,7 +240,7 @@ export function MemorySpace({
     knownMapTotal.current = mapLibrary.page.total;
   }
   const library = useMemoryLibrary({
-    enabled: management && active,
+    enabled: memoryAuthority === "legacy" && management && active,
     stale: sourceSnapshotStale,
     sourceKey,
     query: submittedQuery,
@@ -620,6 +625,7 @@ export function MemorySpace({
 
   const refresh = useCallback(
     async (search = "") => {
+      if (memoryAuthority !== "legacy") return;
       if (simplified && !viewActive.current) return;
       if (simplified) {
         library.invalidate();
@@ -643,6 +649,7 @@ export function MemorySpace({
       library.invalidate,
       library.refresh,
       mapLibrary.refresh,
+      memoryAuthority,
     ],
   );
 
@@ -703,6 +710,13 @@ export function MemorySpace({
      * updating from its own poll, so 483 memories looked exactly like none.
      */
     async function load() {
+      if (memoryAuthority === "unknown") return false;
+      if (memoryAuthority === "sdk") {
+        setMemories([]);
+        setGraph(null);
+        setReadError(null);
+        return true;
+      }
       const epoch = ++dataEpoch.current;
       const projectionEpoch = ++graphEpoch.current;
       // The library can arrive before the graph; render it immediately.
@@ -838,7 +852,7 @@ export function MemorySpace({
       deleteAnswer.current = null;
       if (retry !== undefined) window.clearTimeout(retry);
     };
-  }, [invalidateAnswers, shouldPoll, simplified]);
+  }, [invalidateAnswers, shouldPoll, simplified, memoryAuthority]);
 
   /* Land on the workbench, including on day one.
    *
@@ -1606,12 +1620,18 @@ export function MemorySpace({
           id="memory-mode-panel-history"
           hidden={displayedMode !== "history"}
         >
-          <ConversationSearch
-            onOpenMemory={(memoryId) => {
-              setMode("library");
-              void open(memoryId);
-            }}
-          />
+          {memoryAuthority === "sdk" ? (
+            <SdkRawHistory />
+          ) : memoryAuthority === "legacy" ? (
+            <ConversationSearch
+              onOpenMemory={(memoryId) => {
+                setMode("library");
+                void open(memoryId);
+              }}
+            />
+          ) : (
+            <p role="status">正在确认记忆数据来源…</p>
+          )}
         </div>
       )}
 

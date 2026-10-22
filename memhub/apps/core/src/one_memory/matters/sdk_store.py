@@ -245,8 +245,17 @@ class SdkMatterStore:
         for row in rows:
             request_id = str(row["request_id"])
             durable = self.write_queue.get(request_id) if self.write_queue else None
-            if durable is not None and durable.sdk_raw_ids:
-                raw = await self.bridge.get_sdk_raw(durable.sdk_raw_ids[0])
+            raw_id = (
+                durable.sdk_raw_ids[0]
+                if durable is not None and durable.sdk_raw_ids
+                else (
+                    str(row["raw_id"])
+                    if row["raw_id"] is not None
+                    else None
+                )
+            )
+            if raw_id is not None:
+                raw = await self.bridge.get_sdk_raw(raw_id)
                 if raw is None:
                     raise SdkMatterUnavailable("sdk_matter_note_raw_unavailable")
                 found.append(_sample_from_raw(raw, str(row["created_at"])))
@@ -303,7 +312,7 @@ class SdkMatterStore:
         with main_database(self.database_path).write(autocommit=True) as database:
             database.execute(
                 "INSERT INTO matter_sdk_notes "
-                "(matter_id,note_id,request_id,created_at) VALUES (?,?,?,?) "
+                "(matter_id,note_id,request_id,raw_id,created_at) VALUES (?,?,?,NULL,?) "
                 "ON CONFLICT(request_id) DO NOTHING",
                 (matter_id, note_id, request_id, created_at),
             )

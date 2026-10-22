@@ -49,6 +49,7 @@ import {
   type SdkMemoryPage,
   type SdkMemoryRecord,
   type SdkMemoryStatus,
+  type SdkRawContextItem,
   type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
@@ -947,6 +948,28 @@ export async function getSdkRaw({
     params: { source, offset, limit },
   });
   return response.data;
+}
+
+export async function searchSdkRaw(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SdkRawContextItem[]> {
+  const response = await client.post(
+    "/api/v2/context/search",
+    {
+      query,
+      kinds: ["raw"],
+      limit: 20,
+      character_budget: 12_000,
+    },
+    { signal, timeout: 10_000 },
+  );
+  const items = response.data?.items;
+  return Array.isArray(items)
+    ? items.filter(
+        (item): item is SdkRawContextItem => item && item.kind === "raw",
+      )
+    : [];
 }
 
 export async function getMemories(query = ""): Promise<GovernedMemory[]> {

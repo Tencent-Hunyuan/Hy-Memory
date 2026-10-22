@@ -3003,6 +3003,7 @@ CREATE TABLE IF NOT EXISTS matter_sdk_notes (
     matter_id TEXT NOT NULL,
     note_id TEXT NOT NULL,
     request_id TEXT NOT NULL UNIQUE,
+    raw_id TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (matter_id, note_id)
 )
@@ -3012,6 +3013,7 @@ CREATE TABLE IF NOT EXISTS matter_sdk_notes (
     matter_id VARCHAR(256) NOT NULL,
     note_id VARCHAR(256) NOT NULL,
     request_id VARCHAR(256) NOT NULL,
+    raw_id VARCHAR(256) NULL,
     created_at VARCHAR(64) NOT NULL,
     PRIMARY KEY (matter_id, note_id),
     UNIQUE KEY matter_sdk_note_request (request_id)

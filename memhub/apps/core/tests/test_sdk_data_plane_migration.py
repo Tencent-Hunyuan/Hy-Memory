@@ -44,6 +44,7 @@ from one_memory.sdk_migration_inventory import (
 from one_memory.sdk_migration_runner import (
     commit_reconciled_cutover,
     run_sdk_data_plane_backfill,
+    sdk_cutover_blockers,
 )
 
 
@@ -204,7 +205,6 @@ def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store)
             migration_id="m1",
             bundle_id="bundle-1",
             sdk_version="2.0.5.dev3",
-            product_paths_ready=True,
         )
 
     queue.settle(job.job_id, state=COMPLETED)
@@ -214,7 +214,6 @@ def test_startup_cutover_requires_verified_bundle_and_no_pending_sdk_call(store)
         migration_id="m1",
         bundle_id="bundle-1",
         sdk_version="2.0.5.dev3",
-        product_paths_ready=True,
     )
     assert marker.migration_id == "m1"
 
@@ -243,6 +242,15 @@ def test_alias_is_idempotent_but_cannot_be_retargeted(store):
             canonical_memory_id="other",
         )
     assert caught.value.code == "sdk_data_plane_alias_conflict"
+
+
+def test_cutover_blockers_require_current_matter_sdk_projection(store):
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "INSERT INTO matters(matter_id,version,needs_update) VALUES ('m1',1,0)"
+        )
+
+    assert sdk_cutover_blockers(store.database_path)["matter_references"] == 1
 
 
 def test_legacy_inventory_preserves_task_id_mapping_and_supersession(store):
@@ -652,6 +660,10 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         connection.execute(
             "INSERT INTO matters(matter_id,version,needs_update) VALUES ('matter-1',1,0)"
         )
+        connection.execute(
+            "INSERT INTO matter_notes(matter_id,evidence_id,created_at) "
+            "VALUES ('matter-1','e1','2026-10-21T00:00:00+00:00')"
+        )
     bridge = _Bridge()
     result = asyncio.run(
         run_sdk_data_plane_backfill(
@@ -669,7 +681,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
 
     assert result.state == "ready"
     assert result.phase == "reconciled"
-    assert result.counts == {"verified": 3}
+    assert result.counts == {"verified": 4}
     assert [item["memory_id"] for item in bridge.imported] == ["memory-1"]
     assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e1"]
     assert store.authority() is MemoryAuthority.LEGACY
@@ -688,6 +700,12 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     assert references["claims"][0]["raw_refs"][0]["raw_id"] == "evidence:e1"
     assert "statement" not in references["claims"][0]
     assert "quote" not in references["claims"][0]["raw_refs"][0]
+    with main_database(database).read(row_factory=sqlite3.Row) as connection:
+        migrated_note = connection.execute(
+            "SELECT raw_id FROM matter_sdk_notes "
+            "WHERE matter_id='matter-1' AND note_id='e1'"
+        ).fetchone()
+    assert migrated_note["raw_id"] == "evidence:e1"
 
     # Simulate a process dying after both SDK side effects but before startup
     # could finish. The next inventory observes them as matched rather than
@@ -764,9 +782,9 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         ),
     )
     notes = asyncio.run(sdk_matters.notes("matter-1"))
-    assert notes[0].raw_id == "raw-note-1"
-    assert notes[0].evidence_id is None
-    assert notes[0].text == "新备注"
+    sdk_note = next(note for note in notes if note.raw_id == "raw-note-1")
+    assert sdk_note.evidence_id is None
+    assert sdk_note.text == "新备注"
     evidence_store.release_sdk_staging((str(pending_note.evidence_id),))
 
     class Model:
@@ -836,7 +854,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         )
     )
     assert resumed.state == "ready"
-    assert resumed.counts == {"adopted": 1, "verified": 3}
+    assert resumed.counts == {"adopted": 1, "verified": 4}
     assert len(bridge.imported) == 1
     assert len(bridge.imported_raw) == 1
 

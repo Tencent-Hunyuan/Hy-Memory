@@ -150,6 +150,18 @@ def test_sdk_matter_references_are_owned_by_migration_57() -> None:
         assert "quote" not in ddl
 
 
+def test_sdk_matter_notes_are_owned_by_migration_58() -> None:
+    from one_memory.memory_server.migrations import MIGRATIONS, sdk_matter_notes_ddl
+
+    migration = next(item for item in MIGRATIONS if item.version == 58)
+    assert migration.tables == ("matter_sdk_notes",)
+    for dialect in ("sqlite", "mysql"):
+        ddl = sdk_matter_notes_ddl(dialect)
+        assert "CREATE TABLE IF NOT EXISTS matter_sdk_notes" in ddl
+        assert "raw_id" in ddl
+        assert "text" not in ddl
+
+
 def test_plan_upgrade_from_zero_is_everything() -> None:
     expected = [item.version for item in MIGRATIONS]
     assert [item.version for item in plan_upgrade(MIGRATIONS, 0)] == expected
@@ -2149,7 +2161,7 @@ def test_migration_49_resets_only_cursor_history_when_conversation_time_is_missi
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (49, 50, 51, 52, 53, 54, 55, 56, 57)
+    assert result.applied == (49, 50, 51, 52, 53, 54, 55, 56, 57, 58)
     with main_database(path).read() as connection:
         assert connection.execute("SELECT COUNT(*) FROM source_cursors").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM live_source_cursors").fetchone()[0] == 1
@@ -2182,7 +2194,7 @@ def test_upgrade_drops_obsolete_hy_node_permissions_without_touching_memories(
 
     result = asyncio.run(migrate(SqliteMigrationStore(path), MIGRATIONS))
 
-    assert result.applied == (51, 52, 53, 54, 55, 56, 57)
+    assert result.applied == (51, 52, 53, 54, 55, 56, 57, 58)
     with sqlite3.connect(path) as connection:
         tables = {
             row[0]

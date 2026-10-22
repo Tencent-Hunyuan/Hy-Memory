@@ -19,7 +19,11 @@ def library(tmp_path):
     with sqlite3.connect(path) as db:
         db.executescript(GRANT_SCHEMA)
         db.execute(
-            "INSERT INTO source_grants VALUES ('local','cursor','/source','default',?,NULL)",
+            "INSERT INTO source_grants "
+            "(user_id,source_id,root_path,requested_path,root_identity,"
+            "candidate_kind,granted_at,revoked_at,revision) "
+            "VALUES ('local','cursor','/source','/source','fixture',"
+            "'default',?,NULL,1)",
             ("2026-09-11T00:00:00Z",),
         )
     records = []
