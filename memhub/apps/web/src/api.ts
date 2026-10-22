@@ -23,6 +23,7 @@ import {
   type HomeSummary,
   type HostAskMemoryEvent,
   type HostAskMemoryResponse,
+  type HostHomeSummary,
   type ImportIssue,
   type ImportJob,
   type LiveSyncHealth,
@@ -852,7 +853,12 @@ export async function deleteModelProfile(
   }
 }
 
-export async function getHomeSummary(): Promise<HomeSummary> {
+export async function getHomeSummary(): Promise<HostHomeSummary> {
+  const authority = await getMemoryAuthority();
+  if (authority.authority === "sdk") {
+    const response = await client.get<HostHomeSummary>("/api/v2/home-summary");
+    return response.data;
+  }
   return tryReader<HomeSummary>(
     "get",
     "/api/v1/home-summary",

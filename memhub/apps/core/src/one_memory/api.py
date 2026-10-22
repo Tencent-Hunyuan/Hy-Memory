@@ -720,6 +720,13 @@ class AskMemoryResponse(BaseModel):
     mode: Literal["generated", "extractive", "empty"]
 
 
+class SdkHomeSummary(BaseModel):
+    schema_version: Literal[2] = 2
+    memory_count: int
+    latest: HySdkMemoryRecord | None
+    observed_at: datetime
+
+
 class MemoryGraphNode(BaseModel):
     node_id: str
     node_type: Literal["memory", "source", "schema", "topic"]
@@ -1603,6 +1610,7 @@ def create_app(
             "/api/v1/conversation-browser",
             "/api/v1/context",
             "/api/v1/boundary",
+            "/api/v1/home-summary",
         )
         if (
             getattr(app.state, "memory_authority", MemoryAuthority.LEGACY)
@@ -3058,6 +3066,30 @@ def create_app(
     @app.get("/api/v1/home-summary", response_model=HomeSummary, dependencies=protected)
     def home_summary() -> HomeSummary:
         return read_home_summary(app.state.evidence_store.database_path)
+
+    @app.get(
+        "/api/v2/home-summary",
+        response_model=SdkHomeSummary,
+        dependencies=protected,
+    )
+    async def sdk_home_summary() -> SdkHomeSummary:
+        if app.state.memory_authority is not MemoryAuthority.SDK:
+            raise HTTPException(409, "legacy_memory_authority_required")
+        try:
+            page = await _sdk_library_bridge(app).list_sdk_memories(
+                user_id="local",
+                statuses=("active",),
+                limit=1,
+                offset=0,
+                order="desc",
+            )
+        except HyMemoryBridgeError as error:
+            raise HTTPException(503, str(error)) from None
+        return SdkHomeSummary(
+            memory_count=page.total,
+            latest=page.memories[0] if page.memories else None,
+            observed_at=datetime.now(UTC),
+        )
 
     @app.get("/api/v1/memory-library", response_model=MemoryLibraryPage, dependencies=protected)
     def memory_library(

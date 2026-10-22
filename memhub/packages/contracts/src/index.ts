@@ -416,6 +416,15 @@ export interface HomeSummary {
   stale?: boolean;
 }
 
+export interface SdkHomeSummary {
+  schema_version: 2;
+  memory_count: number;
+  latest: SdkMemoryRecord | null;
+  observed_at: string;
+}
+
+export type HostHomeSummary = HomeSummary | SdkHomeSummary;
+
 export interface GovernedMemory {
   memory_id: string;
   user_id: string;
