@@ -325,6 +325,41 @@ class SdkDataPlaneMigrationStore:
                 raise DataPlaneMigrationError("sdk_data_plane_alias_conflict")
             connection.execute("COMMIT")
 
+    def record_raw_alias(
+        self,
+        *,
+        migration_id: str,
+        legacy_evidence_id: str,
+        canonical_raw_id: str,
+        item_index: int = 0,
+    ) -> None:
+        with main_database(self.database_path).write(
+            autocommit=True,
+            row_factory=sqlite3.Row,
+        ) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT canonical_raw_id FROM raw_id_aliases "
+                "WHERE legacy_evidence_id=? AND item_index=?",
+                (legacy_evidence_id, item_index),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "INSERT INTO raw_id_aliases "
+                    "(legacy_evidence_id,item_index,canonical_raw_id,migration_id,created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (
+                        legacy_evidence_id,
+                        item_index,
+                        canonical_raw_id,
+                        migration_id,
+                        self._now(),
+                    ),
+                )
+            elif existing["canonical_raw_id"] != canonical_raw_id:
+                raise DataPlaneMigrationError("sdk_data_plane_raw_alias_conflict")
+            connection.execute("COMMIT")
+
     def progress(self, migration_id: str) -> MigrationProgress:
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
             migration = connection.execute(

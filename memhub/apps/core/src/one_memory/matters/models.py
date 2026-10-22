@@ -8,7 +8,9 @@ class Contract(BaseModel):
 
 
 class Citation(Contract):
-    evidence_id: str = Field(min_length=1, max_length=512)
+    evidence_id: str | None = Field(default=None, min_length=1, max_length=512)
+    raw_id: str | None = Field(default=None, min_length=1, max_length=512)
+    item_index: int | None = Field(default=None, ge=0)
     quote: str = Field(min_length=1, max_length=1600)
     revision: int = 0
     source_id: str = ""
@@ -18,17 +20,18 @@ class Citation(Contract):
 
 class MemoryRef(Contract):
     memory_id: str
-    revision: int = Field(ge=1)
-    status: Literal["confirmed"]
+    revision: int | None = Field(default=None, ge=1)
+    status: Literal["confirmed", "active"] = "confirmed"
     content_hash: str
-    task_id: str
-    hy_memory_id: str
+    task_id: str | None = None
+    hy_memory_id: str | None = None
     engine: Literal["hy-memory"] = "hy-memory"
-    engine_version: str
-    profile_id: str
-    profile_revision: int = Field(ge=1)
-    model: str
+    engine_version: str | None = None
+    profile_id: str | None = None
+    profile_revision: int | None = Field(default=None, ge=1)
+    model: str | None = None
     origin: str = "extracted"
+    authority: Literal["legacy", "sdk"] = "legacy"
 
     @field_validator("status", mode="before")
     @classmethod
@@ -75,7 +78,12 @@ class Matter(MatterDraft):
     scope_confirmed: bool = False
     agent_access: bool = False
     availability: Literal[
-        "ready", "needs_update", "source_unavailable", "evidence_changed", "memory_changed"
+        "ready",
+        "needs_update",
+        "source_unavailable",
+        "evidence_changed",
+        "memory_changed",
+        "archived",
     ] = "ready"
     model: str
     updated_at: str

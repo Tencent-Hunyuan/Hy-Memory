@@ -65,6 +65,7 @@ class FakeHyMemoryClient:
         user_id: str,
         agent_id: str,
         session_id: str,
+        source: str,
         metadata: Mapping[str, object],
         memory_at: datetime | None,
         scene: str,
@@ -76,6 +77,7 @@ class FakeHyMemoryClient:
                 "user_id": user_id,
                 "agent_id": agent_id,
                 "session_id": session_id,
+                "source": source,
                 "metadata": metadata,
                 "memory_at": memory_at,
                 "scene": scene,
@@ -647,6 +649,7 @@ def test_bridge_returns_sdk_raw_and_memory_ids_from_one_add(tmp_path) -> None:
     assert tuple(memory.memory_id for memory in result.memories) == ("memory-1",)
     assert result.memories[0].content == "Extracted memory"
     assert client.calls[0]["agent_id"] == "one-memory"
+    assert client.calls[0]["source"] == "cursor"
     assert client.calls[0]["metadata"] == {
         "source_id": "cursor",
         "evidence_ids": ["evidence-1"],
@@ -765,6 +768,10 @@ def test_bridge_reads_sdk_memory_lifecycle_without_governance(tmp_path) -> None:
                     "agent_id": "one-memory",
                     "session_id": "session-1",
                     "tags": ["preference"],
+                    "owner": "user",
+                    "custom": {
+                        "source_raw_memory_ids": ["raw-1", "raw-2"],
+                    },
                 }
             ],
         }
@@ -791,6 +798,8 @@ def test_bridge_reads_sdk_memory_lifecycle_without_governance(tmp_path) -> None:
     assert page.total == 1
     assert page.memories[0].status == "superseded"
     assert page.memories[0].superseded_by == ("new-memory",)
+    assert page.memories[0].owner == "user"
+    assert page.memories[0].source_raw_ids == ("raw-1", "raw-2")
     assert client.calls[-1]["list_memories"]["statuses"] == ["superseded"]
 
 

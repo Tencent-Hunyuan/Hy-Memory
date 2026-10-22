@@ -307,6 +307,8 @@ class HySdkMemoryRecord(BaseModel):
     supersedes: tuple[str, ...] = ()
     superseded_by: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
+    owner: str | None = None
+    source_raw_ids: tuple[str, ...] = ()
     user_id: str
     agent_id: str
     session_id: str | None = None
@@ -574,6 +576,7 @@ class HyMemoryBridge:
                 user_id=request.user_id,
                 agent_id=request.agent_id,
                 session_id=request.session_id,
+                source=request.source_id,
                 metadata={
                     "source_id": request.source_id,
                     "evidence_ids": list(request.evidence_ids),
@@ -2270,6 +2273,12 @@ def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:
             supersedes=_string_tuple(raw.get("supersedes")),
             superseded_by=_string_tuple(raw.get("superseded_by")),
             tags=_string_tuple(raw.get("tags")),
+            owner=(
+                str(raw["owner"])
+                if raw.get("owner") in {"user", "agent"}
+                else None
+            ),
+            source_raw_ids=_sdk_source_raw_ids(raw),
             user_id=str(raw.get("user_id") or ""),
             agent_id=str(raw.get("agent_id") or ""),
             session_id=(
@@ -2283,6 +2292,25 @@ def _sdk_memory_record(raw: object) -> HySdkMemoryRecord:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise HyMemoryBridgeError("hy_memory_record_shape_unknown") from error
+
+
+def _sdk_source_raw_ids(raw: Mapping[str, object]) -> tuple[str, ...]:
+    custom = raw.get("custom")
+    values: list[object] = []
+    if isinstance(custom, Mapping):
+        listed = custom.get("source_raw_memory_ids")
+        if isinstance(listed, list):
+            values.extend(listed)
+    singular = raw.get("source_raw_memory_id")
+    if isinstance(singular, str):
+        values.append(singular)
+    return tuple(
+        dict.fromkeys(
+            value.strip()
+            for value in values
+            if isinstance(value, str) and value.strip()
+        )
+    )
 
 
 def _sdk_memory_page(raw: object, *, limit: int, offset: int) -> HySdkMemoryPage:

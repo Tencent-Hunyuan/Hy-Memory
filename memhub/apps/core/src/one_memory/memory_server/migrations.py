@@ -2949,6 +2949,53 @@ async def _056_sdk_write_receipts(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def sdk_matter_references_ddl(dialect: str = "mysql") -> str:
+    """Reference-only Matter projection for SDK authority."""
+    if dialect == "sqlite":
+        return """
+CREATE TABLE IF NOT EXISTS raw_id_aliases (
+    legacy_evidence_id TEXT NOT NULL,
+    item_index INTEGER NOT NULL DEFAULT 0,
+    canonical_raw_id TEXT NOT NULL,
+    migration_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (legacy_evidence_id, item_index)
+);
+CREATE INDEX IF NOT EXISTS raw_id_aliases_canonical
+ON raw_id_aliases(canonical_raw_id);
+CREATE TABLE IF NOT EXISTS matter_sdk_versions (
+    matter_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    references_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (matter_id, version)
+)
+"""
+    return """
+CREATE TABLE IF NOT EXISTS raw_id_aliases (
+    legacy_evidence_id VARCHAR(256) NOT NULL,
+    item_index INT NOT NULL DEFAULT 0,
+    canonical_raw_id VARCHAR(256) NOT NULL,
+    migration_id VARCHAR(128) NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (legacy_evidence_id, item_index),
+    KEY raw_id_aliases_canonical (canonical_raw_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS matter_sdk_versions (
+    matter_id VARCHAR(256) NOT NULL,
+    version INT NOT NULL,
+    references_json JSON NOT NULL,
+    created_at VARCHAR(64) NOT NULL,
+    PRIMARY KEY (matter_id, version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""
+
+
+async def _057_sdk_matter_references(cursor: Any) -> None:
+    for statement in _split_statements(sdk_matter_references_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3223,5 +3270,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         "sdk_write_receipts",
         _056_sdk_write_receipts,
         ("memory_task_sdk_receipts",),
+    ),
+    Migration(
+        57,
+        "sdk_matter_references",
+        _057_sdk_matter_references,
+        ("raw_id_aliases", "matter_sdk_versions"),
     ),
 )

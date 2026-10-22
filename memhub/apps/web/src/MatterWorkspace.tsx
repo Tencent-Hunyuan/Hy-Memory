@@ -407,6 +407,11 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
   }
   async function openEvidence(cite: Citation, focusMemory = true) {
     if (!matter) return;
+    const citationId = cite.evidence_id ?? cite.raw_id;
+    if (!citationId) {
+      setError("原始证据引用不可用。");
+      return;
+    }
     const request = ++evidenceRequest.current;
     setCitation(cite);
     setEvidenceRead(null);
@@ -416,17 +421,16 @@ export function MatterWorkspace({ onOpenSources }: { onOpenSources(): void }) {
     setMemoryLoading(false);
     setMemoryRead(null);
     const referenced = matter.claims.find((claim) =>
-      claim.citations.some((item) => item.evidence_id === cite.evidence_id),
+      claim.citations.some(
+        (item) => (item.evidence_id ?? item.raw_id) === citationId,
+      ),
     )?.memory_refs[0];
     const node = projection.graph.nodes.find(
       (item) => item.memory_id === referenced?.memory_id,
     );
     if (node && focusMemory) setSelectedNodeId(node.node_id);
     try {
-      const result = await getMatterEvidence(
-        matter.matter_id,
-        cite.evidence_id,
-      );
+      const result = await getMatterEvidence(matter.matter_id, citationId);
       if (
         request === evidenceRequest.current &&
         contentVersion === currentContentVersion.current

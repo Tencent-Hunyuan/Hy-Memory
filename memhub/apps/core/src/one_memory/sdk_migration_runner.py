@@ -18,6 +18,7 @@ from one_memory.sdk_data_plane_migration import (
 from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
 from one_memory.sdk_migration_inventory import (
     SdkMigrationBridge,
+    backfill_sdk_matter_references,
     execute_memory_migration_plan,
     execute_raw_migration_plan,
     read_legacy_memory_inventory,
@@ -183,6 +184,11 @@ async def run_sdk_data_plane_backfill(
         migration_id=migration_id,
         legacy=legacy_raw,
         decisions=raw_decisions,
+    )
+    backfill_sdk_matter_references(
+        database_path,
+        store,
+        migration_id=migration_id,
     )
     progress: MigrationProgress = store.progress(migration_id)
     if progress.counts.get("quarantine", 0):

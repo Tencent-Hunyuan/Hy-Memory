@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 
 import pytest
 
@@ -588,6 +589,50 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
             """,
             (content_hash("verbatim"),),
         )
+        connection.execute(
+            "INSERT INTO matter_versions(matter_id,version,body,dependencies,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (
+                "matter-1",
+                1,
+                json.dumps(
+                    {
+                        "title": "本地优先",
+                        "purpose": "保持本地处理",
+                        "boundary": "记忆系统",
+                        "anchors": ["本地"],
+                        "tags": [],
+                        "uncertainties": [],
+                        "source_engine": "hy-memory",
+                        "claims": [
+                            {
+                                "kind": "constraint",
+                                "scope": "记忆系统",
+                                "basis": "human_statement",
+                                "verification": "citation_checked",
+                                "state": "current",
+                                "change_note": "",
+                                "statement": "preference",
+                                "memory_refs": [
+                                    {
+                                        "memory_id": "memory-1",
+                                        "content_hash": content_hash("preference"),
+                                    }
+                                ],
+                                "citations": [
+                                    {
+                                        "evidence_id": "e1",
+                                        "quote": "verbatim",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                "[]",
+                "now",
+            ),
+        )
     bridge = _Bridge()
     result = asyncio.run(
         run_sdk_data_plane_backfill(
@@ -605,10 +650,25 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
 
     assert result.state == "ready"
     assert result.phase == "reconciled"
-    assert result.counts == {"verified": 2}
+    assert result.counts == {"verified": 3}
     assert [item["memory_id"] for item in bridge.imported] == ["memory-1"]
     assert [item["raw_id"] for item in bridge.imported_raw] == ["evidence:e1"]
     assert store.authority() is MemoryAuthority.LEGACY
+    with main_database(database).read(row_factory=sqlite3.Row) as connection:
+        matter = connection.execute(
+            "SELECT references_json FROM matter_sdk_versions "
+            "WHERE matter_id='matter-1' AND version=1"
+        ).fetchone()
+    references = json.loads(str(matter["references_json"]))
+    assert references["claims"][0]["memory_refs"] == [
+        {
+            "memory_id": "memory-1",
+            "content_hash": content_hash("preference"),
+        }
+    ]
+    assert references["claims"][0]["raw_refs"][0]["raw_id"] == "evidence:e1"
+    assert "statement" not in references["claims"][0]
+    assert "quote" not in references["claims"][0]["raw_refs"][0]
 
     # Simulate a process dying after both SDK side effects but before startup
     # could finish. The next inventory observes them as matched rather than
@@ -639,7 +699,7 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         )
     )
     assert resumed.state == "ready"
-    assert resumed.counts == {"verified": 2}
+    assert resumed.counts == {"verified": 3}
     assert len(bridge.imported) == 1
     assert len(bridge.imported_raw) == 1
 
