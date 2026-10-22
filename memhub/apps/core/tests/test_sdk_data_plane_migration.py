@@ -10,7 +10,8 @@ from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_memory_bridge import HySdkMemoryPage, HySdkMemoryRecord, HySdkRawRecord
 from one_memory.imports.storage import EvidenceStore
 from one_memory.ingest_journal import initialize as initialize_ingest_journal
-from one_memory.matters.models import MatterPatch
+from one_memory.matters.models import DiscoveryInput, MatterPatch
+from one_memory.matters.sdk_discovery import SdkMatterDiscovery
 from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
@@ -767,6 +768,60 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
     assert notes[0].evidence_id is None
     assert notes[0].text == "新备注"
     evidence_store.release_sdk_staging((str(pending_note.evidence_id),))
+
+    class Model:
+        async def complete(self, *_args, **_kwargs):
+            return {
+                "matters": [
+                    {
+                        "title": "SDK 新事项",
+                        "purpose": "组织 SDK 记忆",
+                        "boundary": "SDK",
+                        "anchors": ["memory-1"],
+                        "tags": ["SDK"],
+                        "uncertainties": [],
+                        "claims": [
+                            {
+                                "memory_ids": ["memory-1"],
+                                "kind": "constraint",
+                                "scope": "SDK",
+                                "state": "current",
+                                "basis": "human_statement",
+                                "citations": [
+                                    {
+                                        "raw_id": "evidence:e1",
+                                        "quote": "verbatim",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+
+    bridge.memories = (
+        bridge.memories[0].model_copy(
+            update={
+                "owner": "user",
+                "source_raw_ids": ("evidence:e1",),
+            }
+        ),
+    )
+
+    async def discover():
+        discovery = SdkMatterDiscovery(
+            sdk_matters,
+            Model(),  # type: ignore[arg-type]
+            bridge,  # type: ignore[arg-type]
+        )
+        status = discovery.start(DiscoveryInput())
+        await discovery._tasks[status.run_id]
+        return status, await sdk_matters.list()
+
+    discovery_status, discovered_matters = asyncio.run(discover())
+    assert discovery_status.status == "completed"
+    assert any(item.title == "SDK 新事项" for item in discovered_matters)
+
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,

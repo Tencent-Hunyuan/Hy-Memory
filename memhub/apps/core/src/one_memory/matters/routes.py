@@ -35,8 +35,6 @@ def matter_router(dependencies: Sequence[Depends]) -> APIRouter:
 
     @router.post("/discover", response_model=DiscoveryStatus, status_code=202)
     async def discover(options: DiscoveryInput, request: Request) -> DiscoveryStatus:
-        if getattr(_store(request), "authority", "legacy") == "sdk":
-            raise HTTPException(409, "sdk_matter_discovery_required")
         try:
             return _discovery(request).start(options)
         except ValueError as error:
@@ -133,8 +131,6 @@ def matter_router(dependencies: Sequence[Depends]) -> APIRouter:
 
     @router.post("/{matter_id}/refresh", response_model=DiscoveryStatus, status_code=202)
     async def refresh(matter_id: str, options: DiscoveryInput, request: Request) -> DiscoveryStatus:
-        if getattr(_store(request), "authority", "legacy") == "sdk":
-            raise HTTPException(409, "sdk_matter_discovery_required")
         try:
             return _discovery(request).start(options, matter_id=matter_id)
         except ValueError as error:

@@ -8,7 +8,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from one_memory.database_access import main_database
 from one_memory.hy_memory_bridge import HyMemoryBridge
@@ -76,6 +76,34 @@ class SdkMatterStore:
     async def patch(self, matter_id: str, patch: MatterPatch) -> Matter:
         await asyncio.to_thread(self._patch_references, matter_id, patch)
         return await self.get(matter_id)
+
+    async def save_references(
+        self,
+        references: dict[str, object],
+        *,
+        matter_id: str | None = None,
+    ) -> Matter:
+        identifier = matter_id or str(
+            uuid5(
+                NAMESPACE_URL,
+                "memhub:matter:sdk:"
+                + json.dumps(
+                    {
+                        "title": references.get("title"),
+                        "memory_ids": sorted(
+                            str(ref["memory_id"])
+                            for claim in references.get("claims", [])
+                            if isinstance(claim, dict)
+                            for ref in claim.get("memory_refs", [])
+                            if isinstance(ref, dict)
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+        await asyncio.to_thread(self._save_references, identifier, references)
+        return await self.get(identifier)
 
     async def context(self, matter_id: str) -> MatterContext:
         matter = await self.get(matter_id)
@@ -330,6 +358,38 @@ class SdkMatterStore:
             database.execute(
                 "UPDATE matters SET version=?,needs_update=0 WHERE matter_id=?",
                 (version, matter_id),
+            )
+
+    def _save_references(
+        self,
+        matter_id: str,
+        references: dict[str, object],
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        with main_database(self.database_path).write(
+            autocommit=True,
+            row_factory=sqlite3.Row,
+        ) as database:
+            current = database.execute(
+                "SELECT version FROM matters WHERE matter_id=?",
+                (matter_id,),
+            ).fetchone()
+            version = int(current["version"]) + 1 if current is not None else 1
+            database.execute(
+                "INSERT INTO matter_sdk_versions "
+                "(matter_id,version,references_json,created_at) VALUES (?,?,?,?)",
+                (
+                    matter_id,
+                    version,
+                    json.dumps(references, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            )
+            database.execute(
+                "INSERT INTO matters(matter_id,version,needs_update) VALUES (?,?,0) "
+                "ON CONFLICT(matter_id) DO UPDATE SET "
+                "version=excluded.version,needs_update=0",
+                (matter_id, version),
             )
 
     async def _hydrate(self, row: sqlite3.Row) -> Matter:

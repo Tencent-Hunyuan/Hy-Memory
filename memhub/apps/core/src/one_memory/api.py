@@ -152,6 +152,7 @@ from one_memory.loop_watchdog import LoopWatchdog
 from one_memory.matters.discovery import MatterDiscovery
 from one_memory.matters.model import MatterModel
 from one_memory.matters.routes import matter_router
+from one_memory.matters.sdk_discovery import SdkMatterDiscovery
 from one_memory.matters.sdk_store import SdkMatterStore
 from one_memory.matters.store import MatterStore
 from one_memory.memory_governance import (
@@ -1037,10 +1038,22 @@ def create_app(
                 if app.state.memory_authority is MemoryAuthority.SDK
                 else app.state.legacy_matter_store
             )
-            app.state.matter_discovery = MatterDiscovery(
-                app.state.legacy_matter_store,
-                MatterModel(app.state.model_profile_store, app.state.secret_store),
-                governance=app.state.memory_governance_store,
+            matter_model = MatterModel(
+                app.state.model_profile_store,
+                app.state.secret_store,
+            )
+            app.state.matter_discovery = (
+                SdkMatterDiscovery(
+                    app.state.matter_store,
+                    matter_model,
+                    _sdk_library_bridge(app),
+                )
+                if isinstance(app.state.matter_store, SdkMatterStore)
+                else MatterDiscovery(
+                    app.state.legacy_matter_store,
+                    matter_model,
+                    governance=app.state.memory_governance_store,
+                )
             )
             app.state.memory_task_store = MemoryTaskStore(database_path)
             # Derived, unversioned: created if absent, and the version ledger
