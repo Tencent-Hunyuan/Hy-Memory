@@ -16,7 +16,10 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import os
+import shutil
 import threading
+import uuid
 import numpy as np
 
 from ..models.memory import (
@@ -31,12 +34,130 @@ logger = logging.getLogger(__name__)
 # VDB 独立线程池
 from .vector_store_chroma import _vdb_executor
 
+# Indirection so tests can inject a crash between the two renames without
+# patching the process-wide os module.
+_atomic_replace = os.replace
+
 
 def _run_in_vdb_pool(func, *args, **kwargs):
     """在 VDB 独立线程池中执行同步函数"""
     import functools
     call = functools.partial(func, *args, **kwargs) if args or kwargs else func
     return run_in_executor_guarded(_vdb_executor, call)
+
+
+def _backup_path(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
+
+
+def _fsync_file(path: Path) -> None:
+    with open(path, "rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _pair_is_consistent(index: Any, saved: Any) -> bool:
+    """Whether the index and its payload describe the same save generation.
+
+    FAISS appends a vector for every upsert/update, so `ntotal` counts all
+    appends while `idx_to_id` only keeps live ones. The invariants that must
+    hold are: `next_idx` equals the number of appends, every live mapping
+    points at that mapping's `idx`, and every data row has exactly one live
+    mapping.
+    """
+    if not isinstance(saved, dict):
+        return False
+    data = saved.get("data")
+    raw_mapping = saved.get("idx_to_id")
+    next_idx = saved.get("next_idx")
+    if not isinstance(data, dict) or not isinstance(raw_mapping, dict):
+        return False
+    if not isinstance(next_idx, int) or next_idx < 0:
+        return False
+    try:
+        mapping = {int(key): str(value) for key, value in raw_mapping.items()}
+    except (TypeError, ValueError):
+        return False
+    if int(getattr(index, "ntotal", -1)) != next_idx:
+        return False
+    if len(mapping) != len(data):
+        return False
+    if len(set(mapping.values())) != len(mapping):
+        return False
+    if set(mapping.values()) != set(data):
+        return False
+    for idx, point_id in mapping.items():
+        entry = data.get(point_id)
+        if not isinstance(entry, dict) or entry.get("idx") != idx:
+            return False
+        if idx < 0 or idx >= next_idx:
+            return False
+    return True
+
+
+def _load_pair(faiss: Any, index_path: Path, payload_path: Path):
+    """Load and validate one index/payload pair; return None when unusable."""
+    try:
+        index = faiss.read_index(str(index_path))
+        with open(payload_path, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
+        return None
+    if not _pair_is_consistent(index, saved):
+        return None
+    return index, saved
+
+
+def _restore_pair(
+    source_index: Path,
+    source_payload: Path,
+    index_path: Path,
+    payload_path: Path,
+) -> None:
+    """Copy a known-good backup pair back into the live paths."""
+    token = f".restore-{os.getpid()}-{uuid.uuid4().hex}"
+    for source, destination in (
+        (source_payload, payload_path),
+        (source_index, index_path),
+    ):
+        staging = destination.with_name(destination.name + token)
+        try:
+            shutil.copy2(source, staging)
+            _fsync_file(staging)
+            _atomic_replace(staging, destination)
+        finally:
+            staging.unlink(missing_ok=True)
+    _fsync_directory(index_path.parent)
+
+
+def _back_up_current(path: Path) -> None:
+    """Keep the previous file as a fallback without copying its bytes.
+
+    A hard link is the cheapest snapshot in the same directory; filesystems
+    that refuse it fall back to a copy. The backup is removed first so a stale
+    generation can never be mistaken for the current one.
+    """
+    backup = _backup_path(path)
+    try:
+        backup.unlink(missing_ok=True)
+        try:
+            os.link(path, backup)
+        except OSError:
+            shutil.copy2(path, backup)
+    except OSError as error:
+        logger.warning(f"[faiss] could not back up {path.name}: {error}")
 
 
 class FaissVectorStore(VectorStoreBase):
@@ -57,6 +178,9 @@ class FaissVectorStore(VectorStoreBase):
         self._next_idx: int = 0
         self._lock = threading.Lock()
         self._dims = config.vector_store.embedding_dims
+        # True only between the payload rename and the index rename, when the
+        # two live files are known to describe different generations.
+        self._live_pair_mixed = False
 
     async def initialize(self) -> None:
         """初始化 FAISS 索引"""
@@ -75,11 +199,45 @@ class FaissVectorStore(VectorStoreBase):
             index_path = persist_dir / f"{self._collection_name}.faiss"
             payload_path = persist_dir / f"{self._collection_name}.json"
 
+            loaded = None
+            live_pair_mixed = False
             if index_path.exists() and payload_path.exists():
-                # 从磁盘加载
-                self._index = faiss.read_index(str(index_path))
-                with open(payload_path, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
+                loaded = _load_pair(faiss, index_path, payload_path)
+                if loaded is None:
+                    logger.warning(
+                        f"[faiss] index/payload pair is inconsistent: {index_path}"
+                    )
+            elif index_path.exists() or payload_path.exists():
+                logger.warning(
+                    f"[faiss] incomplete index/payload pair: {index_path}"
+                )
+
+            if loaded is None and (index_path.exists() or payload_path.exists()):
+                backup_index = _backup_path(index_path)
+                backup_payload = _backup_path(payload_path)
+                if backup_index.exists() and backup_payload.exists():
+                    loaded = _load_pair(faiss, backup_index, backup_payload)
+                    if loaded is not None:
+                        logger.warning(
+                            f"[faiss] recovered the previous save from "
+                            f"{backup_index.name}; restoring it"
+                        )
+                        try:
+                            _restore_pair(
+                                backup_index,
+                                backup_payload,
+                                index_path,
+                                payload_path,
+                            )
+                        except OSError as error:
+                            live_pair_mixed = True
+                            logger.warning(
+                                f"[faiss] could not restore the backup pair: {error}"
+                            )
+
+            if loaded is not None:
+                self._live_pair_mixed = live_pair_mixed
+                self._index, saved = loaded
                 self._data = saved.get("data", {})
                 self._idx_to_id = {int(k): v for k, v in saved.get("idx_to_id", {}).items()}
                 self._next_idx = saved.get("next_idx", 0)
@@ -87,10 +245,18 @@ class FaissVectorStore(VectorStoreBase):
                     f"FAISS index loaded from {index_path}, "
                     f"points={self._index.ntotal}"
                 )
-            else:
+            elif not index_path.exists() and not payload_path.exists():
                 # 创建新索引 (使用 IndexFlatIP，余弦相似度需先归一化)
+                self._live_pair_mixed = False
                 self._index = faiss.IndexFlatIP(self._dims)
                 logger.info(f"Created new FAISS index, dims={self._dims}")
+            else:
+                # 两个文件都在、但一个有效配对都读不出来：保留现场，拒绝
+                # 用一个空索引覆盖用户数据。
+                raise RuntimeError(
+                    f"FAISS index and payload cannot be loaded consistently and no "
+                    f"usable backup exists: {index_path}"
+                )
 
         await _run_in_vdb_pool(_init)
         logger.debug(f"VectorStore initialized (FAISS), collection={self._collection_name}")
@@ -100,7 +266,14 @@ class FaissVectorStore(VectorStoreBase):
     # ================================================================
 
     def _persist(self) -> None:
-        """持久化索引和 payload 到磁盘"""
+        """持久化索引和 payload 到磁盘。
+
+        两个文件先写到同目录的临时文件并 fsync，再用 `os.replace` 原子换入。
+        写入失败时旧文件完全不动；换入到一半崩溃时，`.bak` 里的上一代配对
+        仍然完整，`initialize()` 会校验并回退到它。FAISS 的原生写入直接覆盖
+        目标文件，磁盘写满或进程被杀会在旧数据上留下半个索引——这正是
+        issue #17 里“新增一条记录导致整库打不开”的原因。
+        """
         import faiss
 
         persist_dir = Path(self.config.vector_store.persist_directory)
@@ -108,15 +281,46 @@ class FaissVectorStore(VectorStoreBase):
 
         index_path = persist_dir / f"{self._collection_name}.faiss"
         payload_path = persist_dir / f"{self._collection_name}.json"
+        token = f".tmp-{os.getpid()}-{uuid.uuid4().hex}"
+        temp_index = index_path.with_name(index_path.name + token)
+        temp_payload = payload_path.with_name(payload_path.name + token)
 
-        faiss.write_index(self._index, str(index_path))
-        saved = {
-            "data": self._data,
-            "idx_to_id": {str(k): v for k, v in self._idx_to_id.items()},
-            "next_idx": self._next_idx,
-        }
-        with open(payload_path, "w", encoding="utf-8") as f:
-            json.dump(saved, f, ensure_ascii=False)
+        try:
+            faiss.write_index(self._index, str(temp_index))
+            _fsync_file(temp_index)
+
+            saved = {
+                "data": self._data,
+                "idx_to_id": {str(k): v for k, v in self._idx_to_id.items()},
+                "next_idx": self._next_idx,
+            }
+            with open(temp_payload, "w", encoding="utf-8") as f:
+                json.dump(saved, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Snapshot the previous generation before either live file moves.
+            # Both backups come from the same pre-save pair, so a fallback
+            # never mixes generations. If the last save died between the two
+            # renames, the live pair is already mixed: backing it up would
+            # overwrite the last complete pair with that mixture.
+            if not self._live_pair_mixed:
+                if index_path.exists():
+                    _back_up_current(index_path)
+                if payload_path.exists():
+                    _back_up_current(payload_path)
+
+            # Payload first: if the second rename never happens, the new
+            # payload against the old index fails validation and startup
+            # recovers the complete backup pair.
+            _atomic_replace(temp_payload, payload_path)
+            self._live_pair_mixed = True
+            _atomic_replace(temp_index, index_path)
+            self._live_pair_mixed = False
+            _fsync_directory(persist_dir)
+        finally:
+            temp_index.unlink(missing_ok=True)
+            temp_payload.unlink(missing_ok=True)
 
     @staticmethod
     def _normalize(vec: List[float]) -> np.ndarray:
