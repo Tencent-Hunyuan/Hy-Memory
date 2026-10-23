@@ -16,7 +16,6 @@ from one_memory.model_profiles import (
     ModelProfilePatch,
     ModelProfileStore,
     ProviderKind,
-    attach_disable_thinking,
 )
 from one_memory.secrets import SecretStore
 
@@ -26,6 +25,10 @@ if TYPE_CHECKING:
 _operation: ContextVar[tuple["ModelProbeOperations", str] | None] = ContextVar(
     "model_probe_operation", default=None
 )
+
+# Output budget for the generation probe. It has to cover the model's thinking
+# plus the four-field JSON, because the answer only starts after thinking ends.
+PROBE_MAX_TOKENS = 4096
 
 
 class ProbeCode(StrEnum):
@@ -42,6 +45,10 @@ class ProbeCode(StrEnum):
     MODEL_LIST_UNSUPPORTED = "model_list_unsupported"
     INVALID_RESPONSE = "invalid_response"
     STRUCTURED_OUTPUT_UNSUPPORTED = "structured_output_unsupported"
+    # The model answered, but spent the whole output budget before it reached
+    # the JSON. That is a budget fact, not a capability fact: treating it as
+    # "cannot do structured output" blamed the model for a 256-token probe.
+    STRUCTURED_OUTPUT_TRUNCATED = "structured_output_truncated"
     EMBEDDING_MODEL_REQUIRED = "embedding_model_required"
     EMBEDDING_UNAVAILABLE = "embedding_unavailable"
 
@@ -376,6 +383,19 @@ class ModelProber:
         if require_structured_json:
             try:
                 body = response.json()
+            except (ValueError, TypeError):
+                return _stage(stage, False, ProbeCode.INVALID_RESPONSE, started)
+            if _finish_reason(body) == "length":
+                # Stopped at the budget. Whether the model can emit this JSON
+                # is still unknown, so it must not be reported as a refusal
+                # and must not trigger the schema fallback below.
+                return _stage(
+                    stage,
+                    False,
+                    ProbeCode.STRUCTURED_OUTPUT_TRUNCATED,
+                    started,
+                )
+            try:
                 content = _response_content(body)
                 parsed = json.loads(content) if isinstance(content, str) else content
             except (ValueError, TypeError):
@@ -523,7 +543,11 @@ def _structured_request(
         )
     payload: dict[str, object] = {
         "model": profile.model,
-        "max_tokens": 256,
+        # A reasoning model spends output tokens before it writes any answer:
+        # one measured 470 thinking tokens to return a two-field JSON. The old
+        # 256 was small enough that the probe itself starved the model and then
+        # reported the empty body as an unsupported capability.
+        "max_tokens": PROBE_MAX_TOKENS,
         "messages": [
             {
                 "role": "user",
@@ -538,8 +562,11 @@ def _structured_request(
             "type": "json_schema",
             "json_schema": {"name": "memory_probe", "strict": True, "schema": schema},
         }
-    if profile.disable_thinking:
-        attach_disable_thinking(profile, payload)
+    # `disable_thinking` is a generation preference: it changes the request the
+    # product sends once configured. Probing with it on made a connectivity
+    # answer depend on an optional parameter, and models that refuse to stop
+    # thinking (GLM reports 1210) failed a probe that the model itself would
+    # have passed. The probe asks only whether the model answers.
     return (
         "POST",
         f"{base_url}/chat/completions",
@@ -700,6 +727,23 @@ def _response_content(body: object) -> object:
     if isinstance(content, list) and content and isinstance(content[0], dict):
         return content[0].get("text")
     return body
+
+
+def _finish_reason(body: object) -> str | None:
+    """Why the completion ended, as the gateway reported it.
+
+    `length` is the only value the probe acts on: an empty body that stopped
+    for length was never asked to completion, so it says nothing about whether
+    the model can produce JSON.
+    """
+    if not isinstance(body, dict):
+        return None
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        reason = choices[0].get("finish_reason")
+        return reason if isinstance(reason, str) else None
+    stop_reason = body.get("stop_reason")
+    return stop_reason if isinstance(stop_reason, str) else None
 
 
 def _models_include(body: object, expected: str) -> bool:

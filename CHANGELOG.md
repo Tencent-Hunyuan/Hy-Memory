@@ -4,6 +4,11 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Stopped the model probe from starving a thinking model: its output budget now
+  covers reasoning plus the answer, a length-truncated reply is reported as
+  truncation rather than as an unsupported structured output, and the probe no
+  longer carries the disable-thinking preference, which models that always
+  think reject. The settings dialog now names the stage that actually failed.
 - Kept a confirmed unknown-retry from taking the event loop: resolution and
   requeue now share one database handle per pass over the set instead of one
   per row, and the database work runs on a worker thread, so other endpoints
