@@ -20,7 +20,7 @@ import re
 import shutil
 import sqlite3
 import time as _time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1767,6 +1767,21 @@ class DurableWriteQueue:
         Returns the new state, or `None` when the row is missing or not
         `unknown` (an already-resolved row is left untouched).
         """
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            return self._resolve_unknown_in(connection, job_id, found=found, detail=detail)
+
+    def _resolve_unknown_in(
+        self,
+        connection: sqlite3.Connection,
+        job_id: str,
+        *,
+        found: bool,
+        detail: str,
+    ) -> str | None:
+        """The inquiry decision itself, so a caller's batch can share one transaction."""
         from one_memory.memory_server.contracts import WriteJobState as JobState
         from one_memory.memory_server.job_state import (
             IllegalTransition,
@@ -1777,31 +1792,27 @@ class DurableWriteQueue:
         event = JobEvent.RESOLVED if found else JobEvent.GIVE_UP
         target = next_state(JobState.UNKNOWN, event)
         now = datetime.now(UTC).isoformat()
-        with (
-            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
-            connection,
-        ):
-            row = connection.execute(
-                "SELECT state FROM memory_write_jobs WHERE job_id=?", (job_id,)
-            ).fetchone()
-            if row is None or str(row["state"]) != UNKNOWN:
-                return None
-            # Re-affirm the transition against the row we actually hold, so a
-            # race that changed it cannot be forced into an illegal state.
-            try:
-                next_state(JobState(str(row["state"])), event)
-            except IllegalTransition:
-                return None
-            connection.execute(
-                "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
-                "lease_expires_at=NULL, last_error=?, updated_at=? WHERE job_id=?",
-                (
-                    str(target),
-                    detail or (None if found else "model_content_outcome_not_found"),
-                    now,
-                    job_id,
-                ),
-            )
+        row = connection.execute(
+            "SELECT state FROM memory_write_jobs WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if row is None or str(row["state"]) != UNKNOWN:
+            return None
+        # Re-affirm the transition against the row we actually hold, so a
+        # race that changed it cannot be forced into an illegal state.
+        try:
+            next_state(JobState(str(row["state"])), event)
+        except IllegalTransition:
+            return None
+        connection.execute(
+            "UPDATE memory_write_jobs SET state=?, lease_owner=NULL, "
+            "lease_expires_at=NULL, last_error=?, updated_at=? WHERE job_id=?",
+            (
+                str(target),
+                detail or (None if found else "model_content_outcome_not_found"),
+                now,
+                job_id,
+            ),
+        )
         return str(target)
 
     def retry_unknown_confirmed(self, job_id: str) -> int:
@@ -1814,45 +1825,64 @@ class DurableWriteQueue:
         short transaction, so the unified queue remains the only execution
         entry and a half-reset attempt cannot become permanently stranded.
         """
-        now = datetime.now(UTC).isoformat()
+        return self.retry_unknown_confirmed_many((job_id,))
+
+    def retry_unknown_confirmed_many(self, job_ids: Iterable[str]) -> int:
+        """Requeue a confirmed set in **one** transaction.
+
+        Same rule as the single-row form, applied to a set: the state machine
+        is still consulted per row, but the set shares one connection and one
+        commit. A per-row connection is what turned a 2,048-row retry into
+        hours of synchronous database work on the caller's thread.
+        """
+        ids = tuple(job_ids)
+        if not ids:
+            return 0
+        requeued = 0
         with (
             main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
             connection,
         ):
-            row = connection.execute(
-                "SELECT state,last_error FROM memory_write_jobs WHERE job_id=?", (job_id,)
-            ).fetchone()
-            if (
-                row is None
-                or str(row["state"]) != UNKNOWN
-                or str(row["last_error"]) in NON_RETRYABLE_POST_WRITE_CODES
-            ):
-                return 0
-            connection.execute(
-                """
-                UPDATE memory_tasks
-                SET status='pending', runner_token=NULL, attempts=0,
-                    last_error_code='model_content_manual_retry_requested', updated_at=?
-                WHERE status='unknown' AND task_id IN (
-                    SELECT inputs.task_id
-                    FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
-                    JOIN memory_write_job_evidence AS linked
-                      ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
-                    WHERE linked.job_id=?
-                )
-                """,
-                (now, job_id),
+            for job_id in ids:
+                requeued += self._retry_unknown_confirmed_in(connection, job_id)
+        return requeued
+
+    def _retry_unknown_confirmed_in(self, connection: sqlite3.Connection, job_id: str) -> int:
+        now = datetime.now(UTC).isoformat()
+        row = connection.execute(
+            "SELECT state,last_error FROM memory_write_jobs WHERE job_id=?", (job_id,)
+        ).fetchone()
+        if (
+            row is None
+            or str(row["state"]) != UNKNOWN
+            or str(row["last_error"]) in NON_RETRYABLE_POST_WRITE_CODES
+        ):
+            return 0
+        connection.execute(
+            """
+            UPDATE memory_tasks
+            SET status='pending', runner_token=NULL, attempts=0,
+                last_error_code='model_content_manual_retry_requested', updated_at=?
+            WHERE status='unknown' AND task_id IN (
+                SELECT inputs.task_id
+                FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+                JOIN memory_write_job_evidence AS linked
+                  ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+                WHERE linked.job_id=?
             )
-            changed = connection.execute(
-                """
-                UPDATE memory_write_jobs
-                SET state='pending', attempts=0, lease_owner=NULL,
-                    lease_expires_at=NULL, hy_invoked=0,
-                    last_error='model_content_manual_retry_requested', updated_at=?
-                WHERE job_id=? AND state='unknown'
-                """,
-                (now, job_id),
-            ).rowcount
+            """,
+            (now, job_id),
+        )
+        changed = connection.execute(
+            """
+            UPDATE memory_write_jobs
+            SET state='pending', attempts=0, lease_owner=NULL,
+                lease_expires_at=NULL, hy_invoked=0,
+                last_error='model_content_manual_retry_requested', updated_at=?
+            WHERE job_id=? AND state='unknown'
+            """,
+            (now, job_id),
+        ).rowcount
         return changed
 
     def readmit_cancelled_permission_confirmed(self, job_id: str, request: WriteRequest) -> int:
@@ -2020,35 +2050,57 @@ class DurableWriteQueue:
                 )
         return len(job_ids)
 
-    def resolve_unknown_from_linked_output(self, job_id: str) -> bool:
-        """Close an unknown durable row when local governance output proves success."""
-        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
-            row = connection.execute(
-                """
-                SELECT 1
-                FROM memory_write_job_evidence AS linked
-                JOIN memory_task_inputs AS inputs
-                  ON EXISTS (
-                    SELECT 1 FROM json_each(inputs.refs_json) AS ref
-                    WHERE json_extract(ref.value, '$.evidence_id')=linked.evidence_id
-                  )
-                JOIN memory_tasks AS task ON task.task_id=inputs.task_id
-                JOIN memory_task_outputs AS output ON output.task_id=task.task_id
-                WHERE linked.job_id=? AND task.status='completed'
-                LIMIT 1
-                """,
-                (job_id,),
-            ).fetchone()
-        if row is None:
-            return False
-        return (
-            self.resolve_unknown(
-                job_id,
-                found=True,
-                detail="model_content_outcome_reconciled",
-            )
-            == COMPLETED
-        )
+    def resolve_unknown_outputs(self, job_ids: Iterable[str]) -> int:
+        """Close the unknown rows whose local governance output proves success.
+
+        One transaction for the whole set. The state machine still decides each
+        row's next state, so this is the same decision the single-row form made
+        — the only thing removed is the connection-and-commit per job that made
+        a few thousand rows block the Runtime for hours.
+        """
+        ids = tuple(job_ids)
+        if not ids:
+            return 0
+        resolved = 0
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            for job_id in ids:
+                if not self._linked_output_proves_success(connection, job_id):
+                    continue
+                if (
+                    self._resolve_unknown_in(
+                        connection,
+                        job_id,
+                        found=True,
+                        detail="model_content_outcome_reconciled",
+                    )
+                    == COMPLETED
+                ):
+                    resolved += 1
+        return resolved
+
+    @staticmethod
+    def _linked_output_proves_success(connection: sqlite3.Connection, job_id: str) -> bool:
+        """Whether a completed governance task already wrote this Evidence."""
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM memory_write_job_evidence AS linked
+            JOIN memory_task_inputs AS inputs
+              ON EXISTS (
+                SELECT 1 FROM json_each(inputs.refs_json) AS ref
+                WHERE json_extract(ref.value, '$.evidence_id')=linked.evidence_id
+              )
+            JOIN memory_tasks AS task ON task.task_id=inputs.task_id
+            JOIN memory_task_outputs AS output ON output.task_id=task.task_id
+            WHERE linked.job_id=? AND task.status='completed'
+            LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        return row is not None
 
     def unknown_jobs(
         self,
