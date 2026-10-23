@@ -59,6 +59,7 @@ export {
   diagnosticZipFilename,
   exportDiagnosticBundle,
   exportDiagnosticZip,
+  projectDiagnosticEventForSafeOutput,
   pruneDiagnosticLogs,
   readDiagnosticEvents,
   recordDiagnosticMarker,

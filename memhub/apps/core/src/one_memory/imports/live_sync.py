@@ -557,12 +557,10 @@ class PollingLiveSyncSupervisor:
         )
 
     def _note_internal_error(self, source_id: str, error: Exception) -> None:
-        # Type alone used to be all this said. It is not enough to act on:
-        # `OperationalError` covers a locked database, a missing table and a
-        # corrupt page alike, and without the message and the frames two dozen
-        # of these in a log could only be guessed at. The stack is the
-        # redacted, `one_memory`-relative one, so it names the call site
-        # without printing anyone's paths or query text.
+        # The ordinary local log keeps the exception message for debugging.
+        # The structured diagnostic event deliberately keeps only the stable
+        # error code, source id, type, and relative stack: exception messages
+        # can contain paths, query text, or credentials and are exportable data.
         logging.getLogger(__name__).warning(
             "live_sync_internal_error %s: %s", type(error).__name__, error
         )
@@ -572,10 +570,7 @@ class PollingLiveSyncSupervisor:
             event="live_sync.internal_error",
             outcome="failed",
             error_code="live_sync_internal_error",
-            # `reason` is the listed key that can carry the message; see
-            # `diagnostic_log._DETAIL_KEYS`. Truncated because a detail value
-            # longer than 256 characters is rejected.
-            details={"source_id": source_id, "reason": str(error)[:200]},
+            details={"source_id": source_id},
             **diagnostic_exception(error),
         )
         if isinstance(error, sqlite3.Error):

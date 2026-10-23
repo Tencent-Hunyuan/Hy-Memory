@@ -998,9 +998,7 @@ def create_app(
                 app.state.recall_target = GovernedRecallTarget(
                     app.state.memory_governance_store,
                     filter_memories=app.state.source_read_access.memories,
-                    semantic_search=lambda query: _sdk_memory_runtime(
-                        app
-                    ).semantic_recall(query),
+                    semantic_search=lambda query: _sdk_memory_runtime(app).semantic_recall(query),
                     # Read per request rather than cached: an import that lands
                     # while the app is open should make its workspace reachable
                     # without a restart. Affordable only because the read is served
@@ -1102,9 +1100,7 @@ def create_app(
                 authorize_generation=lambda profile, question, grounding: (
                     _authorize_answer_generation(app, profile, question, grounding)
                 ),
-                semantic_search=lambda query: _sdk_memory_runtime(app).semantic_recall(
-                    query
-                ),
+                semantic_search=lambda query: _sdk_memory_runtime(app).semantic_recall(query),
                 resolve_workspace=lambda workspace_path: resolve_workspace_scopes(
                     workspace_path,
                     evidence_store.known_workspaces(user_id="local"),
@@ -1128,21 +1124,21 @@ def create_app(
                 profiles=app.state.model_profile_store,
                 secrets=app.state.secret_store,
                 data_dir=runtime_settings.data_dir,
-                transport_factory=lambda profile: lambda: AuditedModelTransport(
-                    app.state.model_request_audit_store,
-                    profile_id=profile.profile_id,
-                    profile_revision=profile.revision,
-                    provider_kind=str(profile.provider_kind),
-                    model=profile.model,
-                    inner=(
-                        BudgetedModelTransport(model_request_budget)
-                        if model_request_budget is not None
-                        else None
-                    ),
+                transport_factory=lambda profile: (
+                    lambda: AuditedModelTransport(
+                        app.state.model_request_audit_store,
+                        profile_id=profile.profile_id,
+                        profile_revision=profile.revision,
+                        provider_kind=str(profile.provider_kind),
+                        model=profile.model,
+                        inner=(
+                            BudgetedModelTransport(model_request_budget)
+                            if model_request_budget is not None
+                            else None
+                        ),
+                    )
                 ),
-                sedimentation_enabled=lambda: _config_store(
-                    app
-                ).sedimentation_enabled(),
+                sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -1165,10 +1161,8 @@ def create_app(
                     exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
                 )
                 for job in unknown:
-                    receipt = (
-                        await app.state.sdk_write_coordinator.inquire_write_outcome(
-                            job.request_id
-                        )
+                    receipt = await app.state.sdk_write_coordinator.inquire_write_outcome(
+                        job.request_id
                     )
                     if receipt is None:
                         continue
@@ -1608,9 +1602,7 @@ def create_app(
         )
         if getattr(
             app.state, "memory_authority", MemoryAuthority.LEGACY
-        ) is MemoryAuthority.SDK and request.url.path.startswith(
-            legacy_paths
-        ):
+        ) is MemoryAuthority.SDK and request.url.path.startswith(legacy_paths):
             return JSONResponse(
                 status_code=409,
                 content={"detail": "sdk_memory_authority_required"},
@@ -1732,7 +1724,7 @@ def create_app(
                     trace_id=trace_id,
                     instance_id=runtime_settings.instance_id,
                     duration_ms=elapsed_ms(started),
-                    details={**diagnostic_details, "status": str(response.status_code)},
+                    details={**diagnostic_details, "status_code": response.status_code},
                 )
             return response
         except Exception as error:
@@ -3781,9 +3773,7 @@ def create_app(
             all_memories, projected, nodes, edges = await asyncio.to_thread(read_governed_part)
             try:
                 hy_graph = (
-                    None
-                    if revoked
-                    else await _sdk_memory_runtime(app).graph_snapshot(limit=limit)
+                    None if revoked else await _sdk_memory_runtime(app).graph_snapshot(limit=limit)
                 )
             except HySdkError:
                 hy_graph = None
@@ -3892,9 +3882,7 @@ def create_app(
         active_queue, in_flight_count = supervisor.active_depths()
         planned, current = supervisor.manual_batch_progress()
         sdk_counts = (
-            supervisor.status_counts()
-            if app.state.memory_authority is MemoryAuthority.SDK
-            else {}
+            supervisor.status_counts() if app.state.memory_authority is MemoryAuthority.SDK else {}
         )
         # `running` counts rows the store still marks running, which includes
         # work a worker has already given up on. Reporting that as "what is
@@ -3915,9 +3903,7 @@ def create_app(
             ),
             recent_completions=depths.recent_completions,
             running=sdk_counts.get("running", running_rows),
-            stranded_running=(
-                0 if sdk_counts else max(0, running_rows - in_flight_count)
-            ),
+            stranded_running=(0 if sdk_counts else max(0, running_rows - in_flight_count)),
             unexecuted_policy_failures=store.unexecuted_policy_failures(),
             waiting_for_model=sdk_counts.get(
                 "waiting_for_model",
@@ -5284,7 +5270,7 @@ def _report_visibility_failure(phase: str, error: BaseException) -> None:
         event="memory_visibility.background_failed",
         outcome="failed",
         error_type=type(error).__name__,
-        details={"phase": phase, "reason": str(error)[:200]},
+        details={"phase": phase},
     )
 
 

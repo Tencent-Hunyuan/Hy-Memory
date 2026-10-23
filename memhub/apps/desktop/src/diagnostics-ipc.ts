@@ -1,10 +1,13 @@
 import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 import {
+  type DiagnosticEventV1,
   type DiagnosticLogger,
+  diagnosticEvent,
   diagnosticZipFilename,
   exportDiagnosticZip,
   inspectBackgroundHealth,
+  projectDiagnosticEventForSafeOutput,
   recordDiagnosticMarker,
 } from "@one-memory/runtime-control";
 import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
@@ -370,42 +373,58 @@ function debugLogEntry(
   const timestamp = typeof value.timestamp === "string" ? value.timestamp : "";
   const timestampMs = Date.parse(timestamp);
   if (!Number.isFinite(timestampMs) || timestampMs < startedAt) return null;
-  const level = value.level;
-  const service = value.service;
-  const component = value.component;
-  const event = value.event;
-  const outcome = value.outcome;
-  if (
-    !["info", "warn", "error"].includes(String(level)) ||
-    !["runtime", "core", "host-bridge", "desktop", "cli"].includes(
-      String(service),
-    ) ||
-    typeof component !== "string" ||
-    typeof event !== "string" ||
-    typeof outcome !== "string"
-  ) {
+  let projected: DiagnosticEventV1;
+  try {
+    projected = projectDiagnosticEventForSafeOutput(
+      diagnosticEvent({
+        timestamp,
+        level: value.level as never,
+        service: value.service as never,
+        component: value.component as never,
+        event: value.event as never,
+        outcome: value.outcome as never,
+        session_id: value.session_id as never,
+        ...(typeof value.trace_id === "string"
+          ? { trace_id: value.trace_id }
+          : {}),
+        ...(typeof value.duration_ms === "number"
+          ? { duration_ms: value.duration_ms }
+          : {}),
+        ...(typeof value.error_code === "string"
+          ? { error_code: value.error_code }
+          : {}),
+        ...(typeof value.error_type === "string"
+          ? { error_type: value.error_type }
+          : {}),
+        ...(value.details && typeof value.details === "object"
+          ? { details: value.details as never }
+          : {}),
+      }),
+    );
+  } catch {
     return null;
   }
-  const details = safeDebugDetails(value.details);
   return {
     id: `${filename}:${lineNumber}:${timestamp}`,
-    timestamp,
-    level: level as DebugLogEntry["level"],
-    service: service as DebugLogEntry["service"],
-    component,
-    event,
-    outcome,
-    ...(typeof value.duration_ms === "number"
-      ? { duration_ms: value.duration_ms }
-      : {}),
-    ...(typeof value.error_code === "string"
-      ? { error_code: value.error_code }
-      : {}),
-    ...(typeof value.error_type === "string"
-      ? { error_type: value.error_type }
-      : {}),
-    ...(typeof value.trace_id === "string" ? { trace_id: value.trace_id } : {}),
-    ...(details === undefined ? {} : { details }),
+    timestamp: projected.timestamp,
+    level: projected.level,
+    service: projected.service,
+    component: projected.component,
+    event: projected.event,
+    outcome: projected.outcome,
+    ...(projected.duration_ms === undefined
+      ? {}
+      : { duration_ms: projected.duration_ms }),
+    ...(projected.error_code === undefined
+      ? {}
+      : { error_code: projected.error_code }),
+    ...(projected.error_type === undefined
+      ? {}
+      : { error_type: projected.error_type }),
+    ...(projected.trace_id === undefined
+      ? {}
+      : { trace_id: projected.trace_id }),
+    ...(projected.details === undefined ? {} : { details: projected.details }),
     source: "diagnostic",
   };
 }
@@ -521,25 +540,6 @@ function logLineTimestamp(
       return new Date(Math.max(startedAt, parsed)).toISOString();
   }
   return new Date(Math.max(startedAt, fallback)).toISOString();
-}
-
-function safeDebugDetails(
-  value: unknown,
-): Record<string, string | number | boolean | null> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return undefined;
-  const details: Record<string, string | number | boolean | null> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (
-      item === null ||
-      typeof item === "string" ||
-      typeof item === "number" ||
-      typeof item === "boolean"
-    ) {
-      details[key] = item;
-    }
-  }
-  return Object.keys(details).length ? details : undefined;
 }
 
 async function pipelineLogFiles(root: string): Promise<PipelineLogCursor[]> {

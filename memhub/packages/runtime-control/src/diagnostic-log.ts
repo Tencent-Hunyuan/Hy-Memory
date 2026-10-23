@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  constants,
   lstatSync,
   mkdirSync,
   renameSync,
@@ -11,10 +12,11 @@ import {
 import {
   appendFile,
   chmod,
+  link,
   lstat,
   mkdir,
+  open,
   readdir,
-  readFile,
   rename,
   rm,
   stat,
@@ -30,7 +32,7 @@ export const DIAGNOSTIC_MAX_FILE_BYTES = 4 * 1024 * 1024;
 export const DIAGNOSTIC_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 export const DIAGNOSTIC_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
-export type DiagnosticLevel = "info" | "warn" | "error";
+export type DiagnosticLevel = "debug" | "info" | "warn" | "error";
 export type DiagnosticService =
   | "runtime"
   | "core"
@@ -90,30 +92,49 @@ export interface DiagnosticSink {
 
 const NAME =
   /^diagnostic-(runtime|core|host-bridge|desktop|cli)\.jsonl(?:\.\d+)?$/;
+const CODE_FRAME =
+  /^(?:(?:apps|packages|scripts)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+:\d+:\d+|one_memory\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+:\d+:[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9_][A-Za-z0-9_.-]*\.py:\d+:[A-Za-z_][A-Za-z0-9_]*)$/;
+const THREAD_STACK = /^thread\|(.+)$/;
+const SHORT_CREDENTIAL_TOKEN =
+  /(^|[^A-Za-z0-9])([A-Za-z0-9]{24,47})(?:[_-])?(?=$|[^A-Za-z0-9])/g;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const EVENT_NAME = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+){0,15}$/;
-const DETAIL_KEYS = new Set([
+const DETAIL_KEY = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const DANGEROUS_DETAIL_KEYS = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
+]);
+const MAX_DETAIL_KEYS = 32;
+const EXPORT_SECRET_MARKER =
+  /(?:^|[._:-])(?:authorization|credential|password|prompt|query|secret|token)(?:$|[._:-])/i;
+const EXPORTED_STRING_DETAIL_KEYS = new Set([
   "action",
-  "attempt",
-  "count",
   "method",
   "mode",
   "phase",
   "platform",
   "reason",
-  "result_count",
   "source_id",
-  "spawned",
   "status",
   "version",
   "parent_session_id",
-  "invalid_lines",
-  "truncated",
-  "reader_port",
   "runtime_state",
   "core_state",
   "broker_state",
   "instance_id",
+  "operation_kind",
+  "file_kind",
+  "last_probe",
+  "signal",
+]);
+const EXPORTED_NUMBER_DETAIL_KEYS = new Set([
+  "attempt",
+  "count",
+  "status_code",
+  "result_count",
+  "invalid_lines",
+  "reader_port",
   "open_file_count",
   "memory_bytes",
   "thread_count",
@@ -138,18 +159,13 @@ const DETAIL_KEYS = new Set([
   "updated_count",
   "superseded_count",
   "deleted_count",
-  "operation_kind",
-  "file_kind",
-  // Bounded values the Core supervisor reports when a start fails. They are
-  // numbers or short enums, not free text, so they are safe to allow explicitly.
   "attempts",
   "delay_ms",
   "budget_ms",
-  "last_probe",
   "port",
   "exit_code",
-  "signal",
 ]);
+const EXPORTED_BOOLEAN_DETAIL_KEYS = new Set(["spawned", "truncated"]);
 const EVENT_KEYS = new Set([
   "schema_version",
   "timestamp",
@@ -283,37 +299,41 @@ export function writeDiagnosticEventSync(
   options: DiagnosticLoggerOptions,
   input: DiagnosticInput,
 ): void {
-  const event = diagnosticEvent({
-    ...buildIdentityFromEnvironment(),
-    ...input,
-    service: options.service,
-    session_id: canonicalUuid(options.sessionId) ?? randomUUID(),
-    timestamp:
-      input.timestamp ?? (options.now ?? (() => new Date()))().toISOString(),
-  });
-  const directory = diagnosticDirectory(options.dataDir);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const directoryInfo = lstatSync(directory);
-  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink())
-    fail("diagnostic_directory_unsafe");
-  chmodSync(directory, 0o700);
-  const target = path.join(directory, `diagnostic-${options.service}.jsonl`);
-  const line = `${JSON.stringify(event)}\n`;
-  let current: ReturnType<typeof statSync> | null = null;
   try {
-    current = statSync(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const event = diagnosticEvent({
+      ...buildIdentityFromEnvironment(),
+      ...input,
+      service: options.service,
+      session_id: canonicalUuid(options.sessionId) ?? randomUUID(),
+      timestamp:
+        input.timestamp ?? (options.now ?? (() => new Date()))().toISOString(),
+    });
+    const directory = diagnosticDirectory(options.dataDir);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const directoryInfo = lstatSync(directory);
+    if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink())
+      fail("diagnostic_directory_unsafe");
+    chmodSync(directory, 0o700);
+    const target = path.join(directory, `diagnostic-${options.service}.jsonl`);
+    const line = `${JSON.stringify(event)}\n`;
+    let current: ReturnType<typeof statSync> | null = null;
+    try {
+      current = statSync(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (
+      current &&
+      current.size + Buffer.byteLength(line) >
+        (options.maxFileBytes ?? DIAGNOSTIC_MAX_FILE_BYTES)
+    ) {
+      rotateSync(target);
+    }
+    appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
+    chmodSync(target, 0o600);
+  } catch {
+    // A synchronous fatal-path diagnostic must never replace the business error.
   }
-  if (
-    current &&
-    current.size + Buffer.byteLength(line) >
-      (options.maxFileBytes ?? DIAGNOSTIC_MAX_FILE_BYTES)
-  ) {
-    rotateSync(target);
-  }
-  appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
-  chmodSync(target, 0o600);
 }
 
 export function diagnosticEvent(
@@ -322,11 +342,17 @@ export function diagnosticEvent(
   for (const key of Object.keys(value)) {
     if (!EVENT_KEYS.has(key)) fail("diagnostic_field_invalid");
   }
+  if (typeof value.timestamp !== "string") fail("diagnostic_timestamp_invalid");
   const timestamp = new Date(value.timestamp);
   if (Number.isNaN(timestamp.getTime())) fail("diagnostic_timestamp_invalid");
-  if (!EVENT_NAME.test(value.component) || !EVENT_NAME.test(value.event))
+  if (
+    typeof value.component !== "string" ||
+    typeof value.event !== "string" ||
+    !EVENT_NAME.test(value.component) ||
+    !EVENT_NAME.test(value.event)
+  )
     fail("diagnostic_event_invalid");
-  if (!(["info", "warn", "error"] as const).includes(value.level))
+  if (!(["debug", "info", "warn", "error"] as const).includes(value.level))
     fail("diagnostic_level_invalid");
   if (
     !(["runtime", "core", "host-bridge", "desktop", "cli"] as const).includes(
@@ -334,8 +360,10 @@ export function diagnosticEvent(
     )
   )
     fail("diagnostic_service_invalid");
-  if (!IDENTIFIER.test(value.outcome)) fail("diagnostic_outcome_invalid");
-  if (!canonicalUuid(value.session_id)) fail("diagnostic_session_invalid");
+  if (typeof value.outcome !== "string" || !IDENTIFIER.test(value.outcome))
+    fail("diagnostic_outcome_invalid");
+  if (typeof value.session_id !== "string" || !canonicalUuid(value.session_id))
+    fail("diagnostic_session_invalid");
   for (const key of [
     "trace_id",
     "incident_id",
@@ -349,8 +377,24 @@ export function diagnosticEvent(
     "round",
   ] as const) {
     const item = value[key];
-    if (item !== undefined && !IDENTIFIER.test(item))
+    if (
+      item !== undefined &&
+      (typeof item !== "string" || !IDENTIFIER.test(item))
+    )
       fail("diagnostic_identifier_invalid");
+  }
+  for (const key of [
+    "state_before",
+    "state_after",
+    "error_code",
+    "error_type",
+  ] as const) {
+    const item = value[key];
+    if (
+      item !== undefined &&
+      (typeof item !== "string" || !IDENTIFIER.test(item))
+    )
+      fail("diagnostic_text_field_invalid");
   }
   if (
     value.duration_ms !== undefined &&
@@ -358,12 +402,15 @@ export function diagnosticEvent(
   )
     fail("diagnostic_duration_invalid");
   const details = sanitizeDetails(value.details);
+  const stack =
+    value.safe_stack === undefined ? undefined : safeStack(value.safe_stack);
+  const { details: _details, safe_stack: _safeStack, ...event } = value;
   return Object.freeze({
     schema_version: DIAGNOSTIC_SCHEMA_VERSION,
-    ...value,
+    ...event,
     timestamp: timestamp.toISOString(),
     ...(details ? { details } : {}),
-    ...(value.safe_stack ? { safe_stack: safeStack(value.safe_stack) } : {}),
+    ...(stack ? { safe_stack: stack } : {}),
   });
 }
 
@@ -388,7 +435,10 @@ export async function readDiagnosticEvents(
   let events: DiagnosticEventV1[] = [];
   let invalidLines = 0;
   for (const file of files) {
-    const content = await readFile(file, "utf8");
+    const content = await readRegularFileNoFollow(
+      file,
+      "diagnostic_file_unsafe",
+    );
     for (const line of content.split("\n")) {
       if (!line) continue;
       try {
@@ -441,16 +491,18 @@ export async function exportDiagnosticBundle(options: {
   status?: Record<string, string | number | boolean | null>;
 }): Promise<{ event_count: number; invalid_lines: number }> {
   const result = await readDiagnosticEvents(options.dataDir, { tail: 5_000 });
+  if (result.invalid_lines > 0) fail("diagnostic_export_invalid_lines");
+  const events = result.events.map(projectDiagnosticEventForSafeOutput);
   const payload = {
     schema_version: 1,
     exported_at: new Date().toISOString(),
-    product_version: cleanText(options.productVersion, 128),
+    product_version: exportProductVersion(options.productVersion),
     platform: process.platform,
     arch: process.arch,
-    status: sanitizeDetails(options.status),
-    event_count: result.events.length,
-    invalid_lines: result.invalid_lines,
-    events: result.events,
+    status: projectExportDetails(options.status),
+    event_count: events.length,
+    invalid_lines: 0,
+    events,
   };
   const directory = path.dirname(options.target);
   await mkdir(directory, { recursive: true });
@@ -465,8 +517,7 @@ export async function exportDiagnosticBundle(options: {
       flag: "wx",
     });
     await chmod(temporary, 0o600);
-    await rename(temporary, options.target);
-    await chmod(options.target, 0o600);
+    await publishTemporaryFile(temporary, options.target);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
@@ -477,72 +528,68 @@ export async function exportDiagnosticBundle(options: {
   };
 }
 
-const SUPPORT_LOG =
-  /^(?:diagnostic-(?:runtime|core|host-bridge|desktop|cli)\.jsonl|core\.log|service-error\.log|service\.log|recall-inject\.jsonl)(?:\.\d+)?$/;
-const CRASH_REPORT = /^MemHub.*\.(?:ips|crash)$/i;
-const PRIVATE_FIELD =
-  /(?:authorization|api[_-]?key|token|secret|credential|password)|^(?:prompt|query|content|messages?|memory|memory_text|raw_text)$/i;
-
 export interface DiagnosticMarker {
   timestamp: string;
   description: string;
 }
 
 const MARKER_FILE = "problem-markers.jsonl";
+const MARKER_DESCRIPTION = "user_marked_incident";
 
 export async function recordDiagnosticMarker(
   dataDir: string,
   marker: DiagnosticMarker,
   home = os.homedir(),
 ): Promise<void> {
-  const timestamp = new Date(marker.timestamp);
-  if (Number.isNaN(timestamp.getTime())) fail("diagnostic_timestamp_invalid");
+  const safe = validateDiagnosticMarker(marker, home);
   const directory = await ensureDiagnosticDirectory(dataDir);
-  const safe = {
-    timestamp: timestamp.toISOString(),
-    description: redactString(cleanText(marker.description, 500), home),
-  };
-  await appendFile(
-    path.join(directory, MARKER_FILE),
-    `${JSON.stringify(safe)}\n`,
-    {
-      encoding: "utf8",
-      mode: 0o600,
-    },
+  const target = path.join(directory, MARKER_FILE);
+  await refuseUnsafeExistingFile(target, "diagnostic_marker_file_unsafe");
+  const handle = await open(
+    target,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_APPEND |
+      (constants.O_NOFOLLOW ?? 0),
+    0o600,
   );
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) fail("diagnostic_marker_file_unsafe");
+    await handle.appendFile(`${JSON.stringify(safe)}\n`, "utf8");
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function readDiagnosticMarkers(
   dataDir: string,
   home: string,
 ): Promise<DiagnosticMarker[]> {
-  const raw = await readFile(
-    path.join(diagnosticDirectory(dataDir), MARKER_FILE),
-    "utf8",
-  ).catch(() => "");
-  return raw
-    .split("\n")
-    .flatMap((line) => {
-      if (!line) return [];
-      try {
-        const value = JSON.parse(line) as Record<string, unknown>;
-        if (
-          typeof value.timestamp !== "string" ||
-          Number.isNaN(new Date(value.timestamp).getTime()) ||
-          typeof value.description !== "string"
-        )
-          return [];
-        return [
-          {
-            timestamp: new Date(value.timestamp).toISOString(),
-            description: redactString(cleanText(value.description, 500), home),
-          },
-        ];
-      } catch {
-        return [];
-      }
-    })
-    .slice(-50);
+  const target = path.join(diagnosticDirectory(dataDir), MARKER_FILE);
+  let raw: string;
+  try {
+    raw = await readRegularFileNoFollow(
+      target,
+      "diagnostic_marker_file_unsafe",
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const markers: DiagnosticMarker[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      fail("diagnostic_marker_invalid");
+    }
+    markers.push(validateDiagnosticMarker(value, home));
+  }
+  return markers.slice(-50);
 }
 
 export function diagnosticZipFilename(build: string, now = new Date()): string {
@@ -566,97 +613,62 @@ export async function exportDiagnosticZip(options: {
 }): Promise<{ filename: string; file_count: number }> {
   const now = options.now ?? new Date();
   const home = options.home ?? os.homedir();
-  const archive: Record<string, Uint8Array> = {};
-  const logsDir = diagnosticDirectory(options.dataDir);
-  const cutoff = now.getTime() - 7 * 24 * 60 * 60 * 1000;
-  const logEntries = await readdir(logsDir, { withFileTypes: true }).catch(
-    () => [],
-  );
-  for (const entry of logEntries) {
-    if (
-      !entry.isFile() ||
-      entry.isSymbolicLink() ||
-      !SUPPORT_LOG.test(entry.name)
-    )
-      continue;
-    const source = path.join(logsDir, entry.name);
-    const info = await lstat(source);
-    if (!info.isFile() || info.isSymbolicLink() || info.mtimeMs < cutoff)
-      continue;
-    archive[`logs/${entry.name}`] = strToU8(
-      sanitizeDiagnosticText(await readFile(source, "utf8"), home),
-    );
-  }
-  const crashCutoff = now.getTime() - 24 * 60 * 60 * 1000;
-  if (options.crashReportsDir) {
-    const crashEntries = await readdir(options.crashReportsDir, {
-      withFileTypes: true,
-    }).catch(() => []);
-    for (const entry of crashEntries) {
-      if (
-        !entry.isFile() ||
-        entry.isSymbolicLink() ||
-        !CRASH_REPORT.test(entry.name)
-      )
-        continue;
-      const source = path.join(options.crashReportsDir, entry.name);
-      const info = await lstat(source);
-      if (!info.isFile() || info.isSymbolicLink() || info.mtimeMs < crashCutoff)
-        continue;
-      archive[`crashes/${entry.name}`] = strToU8(
-        sanitizeDiagnosticText(await readFile(source, "utf8"), home),
-      );
-    }
-  }
+  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const result = await readDiagnosticEvents(options.dataDir, {
+    since: cutoff,
+    tail: 5_000,
+  });
+  if (result.invalid_lines > 0) fail("diagnostic_export_invalid_lines");
+  const events = result.events.map(projectDiagnosticEventForSafeOutput);
+  const markers = options.markers
+    ? options.markers
+        .map((marker) => validateDiagnosticMarker(marker, home))
+        .slice(-50)
+    : await readDiagnosticMarkers(options.dataDir, home);
   const disk = await statfs(options.dataDir).catch(() => null);
-  const markers = (
-    options.markers ?? (await readDiagnosticMarkers(options.dataDir, home))
-  ).map((marker) => ({
-    timestamp: new Date(marker.timestamp).toISOString(),
-    description: cleanText(marker.description, 500),
-  }));
-  const summary = sanitizeBundleValue(
-    {
-      schema_version: 1,
-      exported_at: now.toISOString(),
-      build: cleanText(options.productVersion, 128),
-      commit: options.commit ? cleanText(options.commit, 64) : null,
-      core_sha256: options.coreSha256
-        ? cleanText(options.coreSha256, 128)
-        : null,
-      system: {
-        macos_version: process.platform === "darwin" ? os.release() : null,
-        platform: process.platform,
-        arch: process.arch,
-        chip: os.cpus()[0]?.model ?? "unknown",
-        memory_bytes: os.totalmem(),
-        free_disk_bytes: disk ? disk.bavail * disk.bsize : null,
-      },
-      problem_markers: markers,
-      ...(options.summary ?? {}),
+  const background = projectSummaryBackground(options.summary);
+  const summary = {
+    schema_version: 1,
+    exported_at: now.toISOString(),
+    build: exportProductVersion(options.productVersion),
+    commit: options.commit ? exportCommit(options.commit) : null,
+    core_sha256: options.coreSha256 ? exportSha256(options.coreSha256) : null,
+    system: {
+      macos_version: process.platform === "darwin" ? os.release() : null,
+      platform: process.platform,
+      arch: process.arch,
+      chip: os.cpus()[0]?.model ?? "unknown",
+      memory_bytes: os.totalmem(),
+      free_disk_bytes: disk ? disk.bavail * disk.bsize : null,
     },
-    home,
-  );
-  archive["summary.json"] = strToU8(`${JSON.stringify(summary, null, 2)}\n`);
-  archive["README.txt"] = strToU8(
-    [
-      "MemHub diagnostics",
-      "",
-      "包含：最近 7 天诊断日志、运行日志、最近 24 小时 MemHub 崩溃报告，以及不含正文的状态摘要。",
-      "不包含：对话原文、记忆内容、API Key、token 或宿主凭证。",
-      "本机主目录已替换为 ~。",
-      ...(markers.length
-        ? [
-            "",
-            "问题时间点：",
-            ...markers.map(
-              (marker) => `${marker.timestamp}  ${marker.description}`,
-            ),
-          ]
-        : []),
-      "",
-    ].join("\n"),
-  );
+    problem_markers: markers,
+    ...(background ? { background } : {}),
+  };
+  const eventLines = events.map((event) => JSON.stringify(event)).join("\n");
+  const archive: Record<string, Uint8Array> = {
+    "diagnostics/events.jsonl": strToU8(
+      eventLines.length > 0 ? `${eventLines}\n` : "",
+    ),
+    "summary.json": strToU8(`${JSON.stringify(summary, null, 2)}\n`),
+    "README.txt": strToU8(
+      [
+        "MemHub diagnostics",
+        "",
+        "包含：最近 7 天通过安全白名单重新投影的诊断事件，以及不含正文的状态摘要。",
+        "不包含：原始日志、崩溃报告、对话原文、记忆内容、API Key、token 或宿主凭证。",
+        ...(markers.length
+          ? [
+              "",
+              "问题时间点：",
+              ...markers.map(
+                (marker) => `${marker.timestamp}  ${marker.description}`,
+              ),
+            ]
+          : []),
+        "",
+      ].join("\n"),
+    ),
+  };
   const directory = path.dirname(options.target);
   await mkdir(directory, { recursive: true });
   const temporary = path.join(directory, `.memhub-logs-${randomUUID()}.tmp`);
@@ -665,8 +677,8 @@ export async function exportDiagnosticZip(options: {
       mode: 0o600,
       flag: "wx",
     });
-    await rename(temporary, options.target);
-    await chmod(options.target, 0o600);
+    await chmod(temporary, 0o600);
+    await publishTemporaryFile(temporary, options.target);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
@@ -677,61 +689,214 @@ export async function exportDiagnosticZip(options: {
   };
 }
 
-function sanitizeDiagnosticText(value: string, home: string): string {
-  return value
-    .split("\n")
-    .map((line) => {
-      if (!line) return "";
-      try {
-        return JSON.stringify(sanitizeBundleValue(JSON.parse(line), home));
-      } catch {
-        return redactString(line, home)
-          .replace(
-            /\b(?:authorization|api[_-]?key|token|secret|credential|password)\s*[:=]\s*\S+/gi,
-            (match) => match.replace(/[:=].*$/, "=[redacted]"),
-          )
-          .replace(
-            /\b(?:content|prompt|query|message|memory_text|raw_text)\s*[:=].*$/gi,
-            (match) => match.replace(/[:=].*$/, "=[redacted]"),
-          );
-      }
-    })
-    .join("\n");
+async function publishTemporaryFile(
+  temporary: string,
+  target: string,
+): Promise<void> {
+  // A hard link publishes the already-permissioned inode atomically and refuses
+  // to overwrite an existing target. That avoids both stale-file confusion and
+  // the rename-then-chmod window where a later failure leaves a false success.
+  await link(temporary, target);
+  await rm(temporary, { force: true }).catch(() => undefined);
 }
 
-function sanitizeBundleValue(value: unknown, home: string, key = ""): unknown {
-  if (PRIVATE_FIELD.test(key)) return "[redacted]";
-  if (typeof value === "string") return redactString(value, home);
-  if (Array.isArray(value))
-    return value.map((item) => sanitizeBundleValue(item, home));
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value).map(([childKey, child]) => [
-        childKey,
-        sanitizeBundleValue(child, home, childKey),
-      ]),
-    );
-  return value;
+export function projectDiagnosticEventForSafeOutput(
+  event: DiagnosticEventV1,
+): DiagnosticEventV1 {
+  const details = projectExportDetails(event.details);
+  const stack = projectSafeStack(event.safe_stack);
+  const optional: Partial<DiagnosticEventV1> = {};
+  for (const key of [
+    "trace_id",
+    "incident_id",
+    "instance_id",
+    "operation_id",
+    "request_id",
+    "job_id",
+    "task_id",
+    "build_id",
+    "package_id",
+    "round",
+    "state_before",
+    "state_after",
+    "error_code",
+    "error_type",
+  ] as const) {
+    const value = event[key];
+    if (value !== undefined && isExportIdentifier(value)) optional[key] = value;
+  }
+  return {
+    schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+    timestamp: event.timestamp,
+    level: event.level,
+    service: event.service,
+    component: isExportIdentifier(event.component)
+      ? event.component
+      : "diagnostic.redacted",
+    event: isExportIdentifier(event.event)
+      ? event.event
+      : "diagnostic.redacted",
+    outcome: isExportIdentifier(event.outcome) ? event.outcome : "redacted",
+    session_id: event.session_id,
+    ...optional,
+    ...(event.duration_ms === undefined ||
+    !Number.isSafeInteger(event.duration_ms)
+      ? {}
+      : { duration_ms: event.duration_ms }),
+    ...(stack === undefined ? {} : { safe_stack: stack }),
+    ...(details === undefined ? {} : { details }),
+  };
+}
+
+function projectExportDetails(
+  value: Record<string, unknown> | undefined,
+): Record<string, string | number | boolean | null> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const result: Record<string, string | number | boolean | null> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (
+      EXPORTED_STRING_DETAIL_KEYS.has(key) &&
+      typeof item === "string" &&
+      isExportIdentifier(item)
+    ) {
+      result[key] = item;
+    } else if (
+      EXPORTED_NUMBER_DETAIL_KEYS.has(key) &&
+      typeof item === "number" &&
+      isJsonSafeNumber(item)
+    ) {
+      result[key] = item;
+    } else if (
+      EXPORTED_BOOLEAN_DETAIL_KEYS.has(key) &&
+      typeof item === "boolean"
+    ) {
+      result[key] = item;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function validateDiagnosticMarker(
+  value: unknown,
+  _home: string,
+): DiagnosticMarker {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    fail("diagnostic_marker_invalid");
+  const marker = value as Record<string, unknown>;
+  const keys = Object.keys(marker);
+  if (
+    keys.length !== 2 ||
+    !keys.includes("timestamp") ||
+    !keys.includes("description") ||
+    typeof marker.timestamp !== "string" ||
+    typeof marker.description !== "string"
+  )
+    fail("diagnostic_marker_invalid");
+  const timestamp = new Date(marker.timestamp);
+  if (Number.isNaN(timestamp.getTime())) fail("diagnostic_marker_invalid");
+  return {
+    timestamp: timestamp.toISOString(),
+    description: redactString(MARKER_DESCRIPTION, _home),
+  };
+}
+
+function projectSummaryBackground(
+  summary: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary))
+    return undefined;
+  const candidate = summary.background;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+    return undefined;
+  const source = candidate as Record<string, unknown>;
+  const background: Record<string, string> = {};
+  for (const key of [
+    "status",
+    "runtime_state",
+    "core_state",
+    "broker_state",
+    "instance_id",
+  ]) {
+    const value = source[key];
+    if (typeof value === "string" && isExportIdentifier(value))
+      background[key] = value;
+  }
+  return Object.keys(background).length > 0 ? background : undefined;
 }
 
 function redactString(value: string, home: string): string {
-  const withoutHome = (home ? value.split(home).join("~") : value).replace(
-    /\/Users\/[^/\s"']+/g,
-    "~",
-  );
+  const withoutHome = (home ? value.split(home).join("~") : value)
+    .replace(/\/Users\/[^/\s"']+/g, "~")
+    .replace(/\b[A-Za-z]:\\Users\\[^\\\s"']+/g, "~");
   return withoutHome
     .replace(/\bBearer\s+[^\s"']+/gi, "Bearer [redacted]")
-    .replace(/\b(?:sk|omhg)_[A-Za-z0-9._-]+\b/g, "[redacted]")
-    .replace(/\bsk-[A-Za-z0-9._-]+\b/g, "[redacted]");
+    .replace(/\b(?:sk|omhg|ghp|github_pat)_[A-Za-z0-9._-]+\b/gi, "[redacted]")
+    .replace(/\bsk-[A-Za-z0-9._-]+\b/gi, "[redacted]")
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]+\b/gi, "[redacted]")
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[redacted]")
+    .replace(/\bAKID[A-Za-z0-9]{12,}\b/g, "[redacted]")
+    .replace(/\bAIza[A-Za-z0-9_-]{20,}\b/g, "[redacted]")
+    .replace(/\bGOCSPX-[A-Za-z0-9_-]+\b/g, "[redacted]")
+    .replace(SHORT_CREDENTIAL_TOKEN, (match, prefix: string, token: string) =>
+      isConservativeShortCredential(token) ? `${prefix}[redacted]` : match,
+    )
+    .replace(
+      /\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+      "[redacted]",
+    )
+    .replace(
+      /\b(?=[A-Za-z0-9._-]{48,}\b)(?=[A-Za-z0-9._-]*[A-Za-z])(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9._-]+\b/g,
+      "[redacted]",
+    )
+    .replace(
+      /\b(api[_-]?key|authorization|credential|password|secret|token)\s*[:=]\s*[^\s,;"']+/gi,
+      "$1=[redacted]",
+    );
+}
+
+async function refuseUnsafeExistingFile(
+  target: string,
+  code: string,
+): Promise<void> {
+  try {
+    const info = await lstat(target);
+    if (!info.isFile() || info.isSymbolicLink()) fail(code);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+async function readRegularFileNoFollow(
+  target: string,
+  code: string,
+): Promise<string> {
+  await refuseUnsafeExistingFile(target, code);
+  const handle = await open(
+    target,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) fail(code);
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function diagnosticLogFiles(dataDir: string): Promise<string[]> {
   const directory = diagnosticDirectory(dataDir);
-  const directoryInfo = await lstat(directory).catch(() => null);
-  if (directoryInfo?.isSymbolicLink()) return [];
-  const entries = await readdir(directory, { withFileTypes: true }).catch(
-    () => [],
-  );
+  let directoryInfo: Awaited<ReturnType<typeof lstat>>;
+  try {
+    directoryInfo = await lstat(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink())
+    fail("diagnostic_directory_unsafe");
+  const entries = await readdir(directory, { withFileTypes: true });
   const files: Array<{ path: string; mtime: number }> = [];
   for (const entry of entries) {
     if (!entry.isFile() || entry.isSymbolicLink() || !NAME.test(entry.name))
@@ -858,7 +1023,7 @@ function compareDiagnosticTimestamps(left: string, right: string): number {
     const milliseconds = Date.parse(value);
     if (!Number.isFinite(milliseconds)) fail("diagnostic_timestamp_invalid");
     const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/.exec(value)?.[1] ?? "";
-    const nanoseconds = BigInt((fraction + "000000000").slice(0, 9));
+    const nanoseconds = BigInt(`${fraction}000000000`.slice(0, 9));
     return (
       BigInt(Math.floor(milliseconds / 1000)) * 1_000_000_000n + nanoseconds
     );
@@ -868,15 +1033,80 @@ function compareDiagnosticTimestamps(left: string, right: string): number {
   return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 
+function containsCredentialMaterial(value: string): boolean {
+  return (
+    /(?:^|[^A-Za-z0-9])(?:sk-|sk_|omhg_|ghp_|github_pat_)[A-Za-z0-9._-]+/i.test(
+      value,
+    ) ||
+    /(?:^|[^A-Za-z0-9])xox[baprs]-[A-Za-z0-9-]+/i.test(value) ||
+    /(?:^|[^A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])/.test(value) ||
+    /(?:^|[^A-Za-z0-9])AKID[A-Za-z0-9]{12,}/i.test(value) ||
+    /(?:^|[^A-Za-z0-9])AIza[A-Za-z0-9_-]{20,}/.test(value) ||
+    /(?:^|[^A-Za-z0-9])GOCSPX-[A-Za-z0-9_-]+/.test(value) ||
+    hasConservativeShortCredential(value) ||
+    /\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/.test(
+      value,
+    ) ||
+    /\b(?=[A-Za-z0-9._-]{48,}\b)(?=[A-Za-z0-9._-]*[A-Za-z])(?=[A-Za-z0-9._-]*\d)[A-Za-z0-9._-]+\b/.test(
+      value,
+    )
+  );
+}
+
+function hasConservativeShortCredential(value: string): boolean {
+  for (const match of value.matchAll(SHORT_CREDENTIAL_TOKEN)) {
+    if (match[2] && isConservativeShortCredential(match[2])) return true;
+  }
+  return false;
+}
+
+function isConservativeShortCredential(value: string): boolean {
+  return (
+    /[A-Z]/.test(value) &&
+    /[a-z]/.test(value) &&
+    /\d/.test(value) &&
+    !/^[A-Fa-f0-9]+$/.test(value)
+  );
+}
+
+function looksLikeCredential(value: string): boolean {
+  return containsCredentialMaterial(value);
+}
+
+function isExportIdentifier(value: string): boolean {
+  return (
+    IDENTIFIER.test(value) &&
+    !EXPORT_SECRET_MARKER.test(value) &&
+    !looksLikeCredential(value)
+  );
+}
+
+function isJsonSafeNumber(value: number): boolean {
+  return (
+    Number.isFinite(value) &&
+    (!Number.isInteger(value) || Number.isSafeInteger(value))
+  );
+}
+
 function sanitizeDetails(
   value: Record<string, unknown> | undefined,
 ): Record<string, string | number | boolean | null> | undefined {
-  if (!value) return undefined;
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    fail("diagnostic_details_invalid");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null)
+    fail("diagnostic_detail_key_invalid");
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > MAX_DETAIL_KEYS) fail("diagnostic_detail_count_invalid");
+  if (keys.some((key) => typeof key !== "string"))
+    fail("diagnostic_detail_key_invalid");
   const result: Record<string, string | number | boolean | null> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (!DETAIL_KEYS.has(key)) fail("diagnostic_detail_key_invalid");
+    if (!DETAIL_KEY.test(key) || DANGEROUS_DETAIL_KEYS.has(key))
+      fail("diagnostic_detail_key_invalid");
     if (item === null || typeof item === "boolean") result[key] = item;
-    else if (typeof item === "number" && Number.isFinite(item))
+    else if (typeof item === "number" && isJsonSafeNumber(item))
       result[key] = item;
     else if (typeof item === "string") result[key] = cleanText(item, 256);
     else fail("diagnostic_detail_value_invalid");
@@ -884,15 +1114,55 @@ function sanitizeDetails(
   return Object.keys(result).length ? result : undefined;
 }
 
+function projectSafeStack(value: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result = value
+    .filter((line) => typeof line === "string" && isSafeStackLine(line))
+    .slice(0, 16);
+  return result.length > 0 ? result : undefined;
+}
+
 function safeStack(value: string[]): string[] {
   if (!Array.isArray(value) || value.length > 16)
     fail("diagnostic_stack_invalid");
   return value.map((line) => {
-    const cleaned = cleanText(line, 256);
-    if (path.isAbsolute(cleaned) || cleaned.includes("file://"))
+    if (typeof line !== "string" || !isSafeStackLine(line))
       fail("diagnostic_stack_invalid");
-    return cleaned;
+    return line;
   });
+}
+
+function isSafeStackLine(value: string): boolean {
+  if (
+    value.length < 1 ||
+    value.length > 256 ||
+    /[\0\r\n]/.test(value) ||
+    containsCredentialMaterial(value)
+  )
+    return false;
+  if (CODE_FRAME.test(value)) return true;
+  const aggregate = THREAD_STACK.exec(value)?.[1];
+  return (
+    aggregate?.split(" > ").every((frame) => CODE_FRAME.test(frame)) === true
+  );
+}
+
+function exportProductVersion(value: string): string {
+  const cleaned = cleanText(value, 128);
+  if (!isExportIdentifier(cleaned)) fail("diagnostic_product_version_invalid");
+  return cleaned;
+}
+
+function exportCommit(value: string): string {
+  const cleaned = cleanText(value, 64);
+  if (!/^[0-9a-f]{7,64}$/i.test(cleaned)) fail("diagnostic_commit_invalid");
+  return cleaned;
+}
+
+function exportSha256(value: string): string {
+  const cleaned = cleanText(value, 64);
+  if (!/^[0-9a-f]{64}$/i.test(cleaned)) fail("diagnostic_sha256_invalid");
+  return cleaned;
 }
 
 function cleanText(value: string, maximum: number): string {

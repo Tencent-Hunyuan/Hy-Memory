@@ -1,6 +1,7 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inflateRawSync } from "node:zlib";
 import { DiagnosticLogger } from "@one-memory/runtime-control";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -27,6 +28,27 @@ async function fixture() {
     error_code: "core_start_failed",
   });
   return dataDir;
+}
+
+function readZipEntry(archive: Buffer, expected: string): string {
+  let offset = 0;
+  while (archive.readUInt32LE(offset) === 0x04034b50) {
+    const method = archive.readUInt16LE(offset + 8);
+    const compressedSize = archive.readUInt32LE(offset + 18);
+    const nameLength = archive.readUInt16LE(offset + 26);
+    const extraLength = archive.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = archive.subarray(nameStart, nameStart + nameLength).toString();
+    const compressed = archive.subarray(dataStart, dataStart + compressedSize);
+    if (name === expected) {
+      if (method === 0) return compressed.toString();
+      if (method === 8) return inflateRawSync(compressed).toString();
+      throw new Error("unsupported zip compression");
+    }
+    offset = dataStart + compressedSize;
+  }
+  throw new Error(`missing ${expected}`);
 }
 
 it("prints matching diagnostic events as NDJSON without starting Runtime", async () => {
@@ -74,6 +96,25 @@ it("exports one support zip to the requested downloads directory", async () => {
   });
   expect(receipt.path).toMatch(/MemHub-日志-3800-\d{8}-\d{4}\.zip$/);
   expect(await readdir(downloads)).toEqual([path.basename(receipt.path)]);
+  const archive = await readFile(receipt.path);
+  expect(JSON.parse(readZipEntry(archive, "summary.json")).commit).toBeNull();
+});
+
+it("fails closed for an explicitly supplied invalid commit", async () => {
+  const dataDir = await fixture();
+  const downloads = await mkdtemp(path.join(os.tmpdir(), "om-cli-downloads-"));
+  roots.push(downloads);
+  vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+  await expect(
+    run(["logs", "export", "--json"], {
+      ONE_MEMORY_DATA_DIR: dataDir,
+      ONE_MEMORY_EXPORT_DIR: downloads,
+      ONE_MEMORY_BUILD_NUMBER: "3800",
+      ONE_MEMORY_COMMIT: "unknown",
+    }),
+  ).rejects.toThrow("diagnostic_commit_invalid");
+  expect(await readdir(downloads)).toEqual([]);
 });
 
 it("never emits a secret from a malformed manually written event", async () => {

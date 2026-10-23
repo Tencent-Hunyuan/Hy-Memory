@@ -3,8 +3,8 @@
 Every site that catches `Exception` broadly must call `report_exception`
 before (or instead of) continuing, so a failure never looks like success
 and a stack is always on disk. Content (conversation text, keys, SQL
-parameters) never reaches the log: only exception type, a truncated
-message, and file:line:function frames.
+parameters, and exception messages) never reaches the diagnostic log: only
+exception type, a repeat count, and file:line:function frames.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def report_exception(
         event=event,
         outcome="failed",
         **payload,
-        details={"reason": _safe_message(error), "count": _RECENT[key]},
+        details={"count": _RECENT[key]},
     )
     if full:
         _logger.error(

@@ -1048,15 +1048,21 @@ async function runCommand(
         entry: "cli",
       }));
       const target = path.join(downloads, diagnosticZipFilename(build));
+      const environmentCommit = environment.ONE_MEMORY_COMMIT?.trim();
+      const embeddedCommit =
+        typeof __ONE_MEMORY_COMMIT__ === "string"
+          ? __ONE_MEMORY_COMMIT__.trim()
+          : "";
+      const commit =
+        environmentCommit ||
+        (embeddedCommit && embeddedCommit !== "unknown"
+          ? embeddedCommit
+          : undefined);
       const receipt = await exportDiagnosticZip({
         dataDir: config.dataDir,
         target,
         productVersion: build,
-        commit:
-          environment.ONE_MEMORY_COMMIT?.trim() ||
-          (typeof __ONE_MEMORY_COMMIT__ === "string"
-            ? __ONE_MEMORY_COMMIT__
-            : "unknown"),
+        ...(commit === undefined ? {} : { commit }),
         coreSha256: await sha256File(config.coreCommand).catch(() => undefined),
         home: os.homedir(),
         crashReportsDir: path.join(

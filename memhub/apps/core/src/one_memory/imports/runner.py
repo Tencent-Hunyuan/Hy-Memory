@@ -867,10 +867,7 @@ class ImportRunner:
             outcome="failed",
             job_id=job_id,
             error_code="import_heartbeat_failed",
-            # `reason` is the listed key for this; see
-            # `diagnostic_log._DETAIL_KEYS`. Truncated: a detail value
-            # over 256 characters is rejected.
-            details={"reason": str(error)[:200]},
+            details={"phase": "heartbeat"},
             **diagnostic_exception(error),
         )
 

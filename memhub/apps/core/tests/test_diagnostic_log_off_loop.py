@@ -449,7 +449,7 @@ def test_invalid_input_is_still_rejected_on_the_caller_side(tmp_path):
             component="hy.bridge",
             event="hy.failed",
             outcome="failed",
-            details={"prompt": "private"},
+            details={"invalid key": "private"},
         )
     log.close()
 

@@ -20,8 +20,10 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import math
 import os
 import re
+import stat
 import sys
 import threading
 import time
@@ -72,80 +74,30 @@ class _Refused(OSError):
     """The path is not one we are willing to write to, and never will be."""
 
 
-DiagnosticLevel = Literal["info", "warn", "error"]
+DiagnosticLevel = Literal["debug", "info", "warn", "error"]
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _EVENT = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+){0,15}$")
-_DETAIL_KEYS = frozenset(
-    {
-        "action",
-        "attempt",
-        "count",
-        "method",
-        "mode",
-        "phase",
-        "platform",
-        "reason",
-        "result_count",
-        "source_id",
-        "spawned",
-        "status",
-        "version",
-        "parent_session_id",
-        "invalid_lines",
-        "truncated",
-        "open_file_count",
-        "memory_bytes",
-        "thread_count",
-        "database_error_count",
-        "route_path",
-        "sqlite_errorcode",
-        "sqlite_errorname",
-        "file_count",
-        "sqlite_file_count",
-        "byte_file_count",
-        "total_bytes",
-        "copied_bytes",
-        "bytes_per_second",
-        "stored_count",
-        "revised_count",
-        "skipped_count",
-        "error_count",
-        "pending_count",
-        "prepared_count",
-        "queue_depth",
-        "in_flight_count",
-        "call_count",
-        "created_count",
-        "updated_count",
-        "superseded_count",
-        "deleted_count",
-        "operation_kind",
-        "index_complete",
-        "lexical_hits",
-        "semantic_hits",
-        "generation",
-        "timed_out",
-        "failure_site",
-        "error_class",
-        "file_kind",
-        "file_size",
-        "file_mtime_ns",
-        "file_inode",
-        "cursor_new",
-        "cursor_old",
-        "cursor_read_to_end",
-        "cursor_rewind_branch",
-        "summed_ms",
-        "model_ms",
-        "accounted_ms",
-        "unaccounted_ms",
-        "conversation_hash",
-        # The sedimentation switch: a bounded boolean, the same shape as
-        # `spawned` and `index_complete`. Left out of this list it did not
-        # drop a log line, it turned the switch's own request into a 500.
-        "enabled",
-    }
+_DIAGNOSTIC_LOG_NAME = re.compile(
+    r"^diagnostic-(runtime|core|host-bridge|desktop|cli)\.jsonl(?:\.\d+)?$"
 )
+_DETAIL_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+_CODE_FRAME = re.compile(
+    r"^(?:(?:apps|packages|scripts)/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+:\d+:\d+"
+    r"|one_memory/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+:\d+:[A-Za-z_][A-Za-z0-9_]*"
+    r"|[A-Za-z0-9_][A-Za-z0-9_.-]*\.py:\d+:[A-Za-z_][A-Za-z0-9_]*)$"
+)
+_SHORT_CREDENTIAL_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z0-9]{24,47})(?:[_-])?(?![A-Za-z0-9])"
+)
+_REFUSED_DETAIL_KEYS = frozenset({"__proto__", "prototype", "constructor"})
+_MAX_DETAIL_KEYS = 32
+_MAX_SAFE_INTEGER = (1 << 53) - 1
+_EXPORT_SECRET_MARKER = re.compile(
+    r"(?:^|[._:-])(?:authorization|credential|password|prompt|query|secret|token)(?:$|[._:-])",
+    re.IGNORECASE,
+)
+_TRACE_STRING_DETAIL_KEYS = frozenset({"phase", "mode", "status", "reason", "failure_site"})
+_TRACE_NUMBER_DETAIL_KEYS = frozenset({"count"})
 _trace_id: ContextVar[str | None] = ContextVar("one_memory_trace_id", default=None)
 _active: DiagnosticLog | None = None
 _database_errors: Counter[tuple[str, str]] = Counter()
@@ -264,7 +216,12 @@ class DiagnosticLog:
         }
         value.update({key: _identifier(item) for key, item in identifiers.items() if item})
         if duration_ms is not None:
-            if not isinstance(duration_ms, int) or duration_ms < 0:
+            if (
+                not isinstance(duration_ms, int)
+                or isinstance(duration_ms, bool)
+                or duration_ms < 0
+                or duration_ms > _MAX_SAFE_INTEGER
+            ):
                 raise ValueError("diagnostic_duration_invalid")
             value["duration_ms"] = duration_ms
         for field_name, item in {
@@ -276,7 +233,9 @@ class DiagnosticLog:
             if item is not None:
                 value[field_name] = _identifier(item)
         if safe_stack:
-            value["safe_stack"] = [_safe_stack_line(line) for line in safe_stack[:256]]
+            if len(safe_stack) > 16:
+                raise ValueError("diagnostic_stack_invalid")
+            value["safe_stack"] = [_safe_stack_line(line) for line in safe_stack]
         if details:
             value["details"] = _details(details)
         self._submit(_serialize(value))
@@ -289,6 +248,8 @@ class DiagnosticLog:
         event: str,
         outcome: str,
     ) -> dict[str, object]:
+        if level not in ("debug", "info", "warn", "error"):
+            raise ValueError("diagnostic_level_invalid")
         return {
             "schema_version": 1,
             "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -651,24 +612,17 @@ def _drain_diagnostics_at_exit() -> None:
 
 
 def diagnostic_event(**values: object) -> None:
-    active = _active
-    if active is None:
-        return
-    if values.get("level") == "debug" and not logging.getLogger().isEnabledFor(logging.DEBUG):
-        return
     try:
+        active = _active
+        if active is None:
+            return
+        if values.get("level") == "debug" and not logging.getLogger().isEnabledFor(logging.DEBUG):
+            return
         active.write(**values)  # type: ignore[arg-type]
-    except OSError:
-        # Diagnostics must not become a new product outage when a disk is full
-        # or the log directory is temporarily unavailable.
-        return
-    except ValueError:
-        # Same promise, same reason, for a rejected payload instead of a failed
-        # write. An unlisted `details` key once turned every external recall
-        # into a 500 and then killed the process, and the sedimentation switch
-        # into a permanent failure. The payload itself is still wrong and is
-        # still caught in CI by tests/test_diagnostic_payload_keys.py; what
-        # must not happen is the caller paying for it.
+    except Exception:
+        # Diagnostics are best-effort: validation, serialization, logging, and
+        # filesystem failures must never become a product outage. BaseException
+        # deliberately remains visible so process-control signals still work.
         return
 
 
@@ -691,44 +645,93 @@ def read_trace_events(
     if (request_id is None) == (trace_id is None):
         raise ValueError("exactly_one_trace_identity_required")
     key, expected = ("request_id", request_id) if request_id is not None else ("trace_id", trace_id)
-    if expected is None or not _IDENTIFIER.fullmatch(expected):
+    if expected is None or not _export_identifier(expected):
         raise ValueError("invalid_trace_identity")
     selected: list[dict[str, object]] = []
-    allowed_details = {"phase", "mode", "status", "reason", "failure_site", "count"}
-    files = sorted(
-        (data_dir / "logs").glob("diagnostic-*.jsonl*"),
-        key=lambda path: path.stat().st_mtime,
-    )
-    for path in files:
-        if path.is_symlink() or not path.is_file():
+    directory = data_dir / "logs"
+    try:
+        directory_info = directory.lstat()
+    except FileNotFoundError:
+        return ()
+    if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(directory_info.st_mode):
+        raise ValueError("diagnostic_directory_unsafe")
+    files: list[tuple[Path, float]] = []
+    for path in directory.iterdir():
+        if not _DIAGNOSTIC_LOG_NAME.fullmatch(path.name):
             continue
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+            files.append((path, info.st_mtime))
+    for path, _mtime in sorted(files, key=lambda item: item[1]):
+        for line in _read_regular_file_no_follow(path).splitlines():
             try:
                 event = json.loads(line)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(event, dict) or event.get(key) != expected:
                 continue
-            details = event.get("details")
-            projected = {
-                name: event[name]
-                for name in (
-                    "timestamp",
-                    "component",
-                    "event",
-                    "outcome",
-                    "duration_ms",
-                    "error_code",
-                    "error_type",
-                )
-                if name in event
+            timestamp = event.get("timestamp")
+            if not isinstance(timestamp, str):
+                continue
+            try:
+                datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            component = event.get("component")
+            event_name = event.get("event")
+            outcome = event.get("outcome")
+            projected: dict[str, object] = {
+                "timestamp": timestamp,
+                "component": (
+                    component
+                    if isinstance(component, str) and _export_identifier(component)
+                    else "diagnostic.redacted"
+                ),
+                "event": (
+                    event_name
+                    if isinstance(event_name, str) and _export_identifier(event_name)
+                    else "diagnostic.redacted"
+                ),
+                "outcome": (
+                    outcome
+                    if isinstance(outcome, str) and _export_identifier(outcome)
+                    else "redacted"
+                ),
             }
+            duration_ms = event.get("duration_ms")
+            if (
+                isinstance(duration_ms, int)
+                and not isinstance(duration_ms, bool)
+                and 0 <= duration_ms <= _MAX_SAFE_INTEGER
+            ):
+                projected["duration_ms"] = duration_ms
+            for name in ("error_code", "error_type"):
+                value = event.get(name)
+                if isinstance(value, str) and _export_identifier(value):
+                    projected[name] = value
+            details = event.get("details")
             if isinstance(details, dict):
-                projected["details"] = {
-                    name: value for name, value in details.items() if name in allowed_details
-                }
+                safe_details = _trace_details(details)
+                if safe_details:
+                    projected["details"] = safe_details
             selected.append(projected)
     return tuple(selected[-max(1, min(limit, 500)) :])
+
+
+def _read_regular_file_no_follow(path: Path) -> str:
+    descriptor = os.open(path, os.O_RDONLY | _O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("diagnostic_file_unsafe")
+        with os.fdopen(descriptor, encoding="utf-8", errors="replace") as handle:
+            descriptor = -1
+            return handle.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def current_trace_id() -> str | None:
@@ -837,8 +840,77 @@ def diagnostic_exception(error: BaseException) -> dict[str, object]:
     }
 
 
+def _contains_credential_material(value: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:^|[^A-Za-z0-9])(?:sk-|sk_|omhg_|ghp_|github_pat_)[A-Za-z0-9._-]+",
+            value,
+            re.IGNORECASE,
+        )
+        or re.search(r"(?:^|[^A-Za-z0-9])xox[baprs]-[A-Za-z0-9-]+", value, re.IGNORECASE)
+        or re.search(r"(?:^|[^A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])", value)
+        or re.search(r"(?:^|[^A-Za-z0-9])AKID[A-Za-z0-9]{12,}", value, re.IGNORECASE)
+        or re.search(r"(?:^|[^A-Za-z0-9])AIza[A-Za-z0-9_-]{20,}", value)
+        or re.search(r"(?:^|[^A-Za-z0-9])GOCSPX-[A-Za-z0-9_-]+", value)
+        or any(
+            _is_conservative_short_credential(match.group(1))
+            for match in _SHORT_CREDENTIAL_TOKEN.finditer(value)
+        )
+        or re.search(
+            r"\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+            value,
+        )
+        or any(
+            len(candidate) >= 48
+            and any(character.isalpha() for character in candidate)
+            and any(character.isdigit() for character in candidate)
+            for candidate in re.findall(r"\b[A-Za-z0-9._-]{48,}\b", value)
+        )
+    )
+
+
+def _is_conservative_short_credential(value: str) -> bool:
+    return bool(
+        re.search(r"[A-Z]", value)
+        and re.search(r"[a-z]", value)
+        and re.search(r"\d", value)
+        and not re.fullmatch(r"[A-Fa-f0-9]+", value)
+    )
+
+
+def _export_identifier(value: str) -> bool:
+    return bool(
+        _IDENTIFIER.fullmatch(value)
+        and not _EXPORT_SECRET_MARKER.search(value)
+        and not _contains_credential_material(value)
+    )
+
+
+def _trace_details(values: Mapping[object, object]) -> dict[str, str | int | float]:
+    result: dict[str, str | int | float] = {}
+    for key, value in values.items():
+        if (
+            key in _TRACE_STRING_DETAIL_KEYS
+            and isinstance(value, str)
+            and _export_identifier(value)
+        ):
+            result[str(key)] = value
+        elif key in _TRACE_NUMBER_DETAIL_KEYS and isinstance(value, (int, float)):
+            if isinstance(value, bool):
+                continue
+            safe_integer = isinstance(value, int) and abs(value) <= _MAX_SAFE_INTEGER
+            safe_float = (
+                isinstance(value, float)
+                and math.isfinite(value)
+                and (not value.is_integer() or abs(value) <= _MAX_SAFE_INTEGER)
+            )
+            if safe_integer or safe_float:
+                result[str(key)] = value
+    return result
+
+
 def _serialize(value: Mapping[str, object]) -> str:
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":")) + "\n"
+    return json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":")) + "\n"
 
 
 def _uuid(value: str | None) -> str | None:
@@ -864,24 +936,47 @@ def _event_name(value: str) -> str:
 
 
 def _safe_stack_line(value: str) -> str:
-    if not value or len(value) > 256 or "\n" in value or "\r" in value:
+    if (
+        not value
+        or len(value) > 256
+        or any(character in value for character in "\0\r\n")
+        or _contains_credential_material(value)
+    ):
         raise ValueError("diagnostic_stack_invalid")
-    if Path(value.split(":", 1)[0]).is_absolute() or "file://" in value:
-        raise ValueError("diagnostic_stack_invalid")
-    return value
+    if _CODE_FRAME.fullmatch(value):
+        return value
+    if value.startswith("thread|"):
+        frames = value.removeprefix("thread|").split(" > ")
+        if frames and all(_CODE_FRAME.fullmatch(frame) for frame in frames):
+            return value
+    raise ValueError("diagnostic_stack_invalid")
 
 
 def _details(
     values: Mapping[str, str | int | float | bool | None],
 ) -> dict[str, str | int | float | bool | None]:
+    if len(values) > _MAX_DETAIL_KEYS:
+        raise ValueError("diagnostic_detail_count_invalid")
     result: dict[str, str | int | float | bool | None] = {}
     for key, value in values.items():
-        if key not in _DETAIL_KEYS:
+        if (
+            not isinstance(key, str)
+            or not _DETAIL_KEY.fullmatch(key)
+            or key in _REFUSED_DETAIL_KEYS
+        ):
             raise ValueError("diagnostic_detail_key_invalid")
         if isinstance(value, str):
-            if not value or len(value) > 256 or "\n" in value or "\r" in value:
+            if not value or len(value) > 256 or any(character in value for character in "\0\r\n"):
                 raise ValueError("diagnostic_detail_value_invalid")
-        elif value is not None and not isinstance(value, (int, float, bool)):
+        elif isinstance(value, float):
+            if not math.isfinite(value) or (value.is_integer() and abs(value) > _MAX_SAFE_INTEGER):
+                raise ValueError("diagnostic_detail_value_invalid")
+        elif isinstance(value, bool) or value is None:
+            pass
+        elif isinstance(value, int):
+            if abs(value) > _MAX_SAFE_INTEGER:
+                raise ValueError("diagnostic_detail_value_invalid")
+        else:
             raise ValueError("diagnostic_detail_value_invalid")
         result[key] = value
     return result

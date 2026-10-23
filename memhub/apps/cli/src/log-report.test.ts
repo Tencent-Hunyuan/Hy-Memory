@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DiagnosticLogger } from "@one-memory/runtime-control";
@@ -41,11 +41,15 @@ it("redacts unsafe details and absolute stack frames from the read surface", () 
     session_id: "11111111-1111-4111-8111-111111111111",
     details: {
       count: 1,
+      reason: "/Users/me/private-query.txt",
+      status: "sk-live-secret-token",
+      source_id: "credential.private",
       prompt: "secret-token-123",
       authorization: "Bearer secret-token-123",
     } as unknown as Record<string, string | number | boolean | null>,
     safe_stack: [
       "packages/runtime-control/src/example.ts:42:7",
+      "packages/runtime/sk-live-secret-token.ts:1:1",
       "/Users/me/private.py:1",
       "C:\\Users\\me\\private.py:1",
     ],
@@ -56,6 +60,8 @@ it("redacts unsafe details and absolute stack frames from the read surface", () 
     "packages/runtime-control/src/example.ts:42:7",
   ]);
   expect(JSON.stringify(redacted)).not.toContain("secret-token-123");
+  expect(JSON.stringify(redacted)).not.toContain("sk-live-secret-token");
+  expect(JSON.stringify(redacted)).not.toContain("credential.private");
   expect(JSON.stringify(redacted)).not.toContain("/Users/me");
   expect(JSON.stringify(redacted)).not.toContain("C:\\\\Users");
 });
@@ -131,4 +137,28 @@ it("follows a newly appended event without stopping Runtime", async () => {
     },
   });
   expect(seen).toEqual(["service.ready", "core.failed"]);
+});
+
+it("fails follow mode when the diagnostic directory is unsafe", async () => {
+  const dataDir = await mkdtemp(
+    path.join(os.tmpdir(), "om-cli-follow-unsafe-"),
+  );
+  const external = await mkdtemp(
+    path.join(os.tmpdir(), "om-cli-follow-external-"),
+  );
+  roots.push(dataDir, external);
+  await symlink(external, path.join(dataDir, "logs"));
+  const query = parseLogQuery(["--follow"]);
+  expect(query).not.toBeNull();
+  if (!query) throw new Error("query_missing");
+  await expect(
+    followLogs({
+      dataDir,
+      query,
+      signal: new AbortController().signal,
+      maxEvents: 1,
+      emit: () => undefined,
+      wait: async () => undefined,
+    }),
+  ).rejects.toThrow("log_directory_unreadable");
 });
