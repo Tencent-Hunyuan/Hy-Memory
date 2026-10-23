@@ -222,3 +222,72 @@ class TestSingleLineAndJsonFormat:
         monkeypatch.delenv("MEMORY_LOG_FORMAT", raising=False)
         fmt = log_setup._make_formatter()
         assert isinstance(fmt, log_setup.SingleLineFormatter)
+
+
+class TestLogRetention:
+    """保留窗口必须能真正收敛，而不是只在配置里写着 3 天。"""
+
+    def test_default_retention_is_three_days(self, monkeypatch):
+        monkeypatch.delenv("MEMORY_LOG_RETENTION_DAYS", raising=False)
+        assert log_setup.resolve_retention_days() == 3
+
+    def test_env_overrides_default(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_RETENTION_DAYS", "7")
+        assert log_setup.resolve_retention_days() == 7
+
+    def test_explicit_argument_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_RETENTION_DAYS", "7")
+        assert log_setup.resolve_retention_days(2) == 2
+
+    def test_invalid_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_RETENTION_DAYS", "not-a-number")
+        assert log_setup.resolve_retention_days() == 3
+
+    def test_purge_removes_expired_including_gzipped_files(self, tmp_path):
+        import datetime as _dt
+        from pathlib import Path
+
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        expired = ["hy_memory.log.2026-10-01", "hy_memory.log.2026-10-19.gz"]
+        fresh = ["hy_memory.log.2026-10-21", "hy_memory.log.2026-10-22.gz"]
+        for name in expired + fresh:
+            (log_dir / name).write_text("x")
+        (log_dir / "hy_memory.log").write_text("active")
+        (log_dir / "unrelated.log").write_text("keep")
+
+        removed = log_setup.purge_expired_logs(
+            str(log_dir), 3, today=_dt.date(2026, 10, 23)
+        )
+
+        assert sorted(Path(p).name for p in removed) == sorted(expired)
+        assert {p.name for p in log_dir.iterdir()} == {
+            "hy_memory.log",
+            "unrelated.log",
+            *fresh,
+        }
+
+    def test_rotation_delete_list_includes_gzipped_files(self, tmp_path):
+        from pathlib import Path
+
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        base = log_dir / "hy_memory.log"
+        base.write_text("active")
+        for day in ("01", "02", "03", "04"):
+            (log_dir / f"hy_memory.log.2026-10-{day}").write_text("x")
+        (log_dir / "hy_memory.log.2026-09-30.gz").write_text("x")
+
+        handler = log_setup.GzipAwareTimedRotatingFileHandler(
+            filename=str(base), when="midnight", backupCount=2
+        )
+        try:
+            to_delete = {Path(p).name for p in handler.getFilesToDelete()}
+        finally:
+            handler.close()
+
+        assert to_delete == {
+            "hy_memory.log.2026-09-30.gz",
+            "hy_memory.log.2026-10-01",
+            "hy_memory.log.2026-10-02",
+        }

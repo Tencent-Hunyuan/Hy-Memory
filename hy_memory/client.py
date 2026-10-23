@@ -495,8 +495,11 @@ class HyMemoryClient:
 
         # 进程级初始化日志强制不带业务 request_id（哨兵 "-"），避免污染 App
         # 请求上下文里按 request_id 的过滤。
+        #
+        # 用 debug 而非 info：全组件冷启动本就该是进程级一次性事件，
+        # 一旦有人在高频路径上重建 client，info 会把这条噪音放大几十万倍。
         with request_id_scope():
-            logger.info(
+            logger.debug(
                 f"Initializing HyMemoryClient: mode={self._mode} "
                 f"enable_graph={self.enable_graph}"
             )
@@ -523,7 +526,7 @@ class HyMemoryClient:
             # 同步初始化所有组件
             self._loop_thread.run(self._initialize())
 
-            logger.info("HyMemoryClient ready")
+            logger.debug("HyMemoryClient ready")
 
     async def _initialize(self):
         """初始化所有核心组件"""
@@ -542,7 +545,7 @@ class HyMemoryClient:
         loop.set_default_executor(
             concurrent.futures.ThreadPoolExecutor(max_workers=_max_workers)
         )
-        logger.info(f"[init] Default ThreadPoolExecutor max_workers={_max_workers}")
+        logger.debug(f"[init] Default ThreadPoolExecutor max_workers={_max_workers}")
 
         # 1. EmbedService（注入发生在 ComponentFactory / pipeline 预热之前）
         self._embed_service = (
@@ -557,7 +560,7 @@ class HyMemoryClient:
         # 2. VectorStore（根据配置选择后端）
         self._vector_store = create_vector_store(self._config)
         await self._vector_store.initialize()
-        logger.info(
+        logger.debug(
             f"[init] VectorStore ready: provider={self._config.vector_store.provider} "
             f"collection={self._vector_store._collection_name}"
         )
@@ -574,7 +577,7 @@ class HyMemoryClient:
                     f"GraphStore ({self._config.graph_store.provider}) init failed. "
                     f"Use mode='pro' instead of mode='ultra' to disable Graph, or check logs for details."
                 )
-            logger.info(
+            logger.debug(
                 f"[init] GraphStore ready: provider={self._config.graph_store.provider}"
             )
 
@@ -594,10 +597,10 @@ class HyMemoryClient:
         if self._owns_runtime:
             self._cache = create_cache(self._config)
             await self._cache.initialize()
-            logger.info(f"[init] Cache ready (backend={self._config.cache.backend})")
+            logger.debug(f"[init] Cache ready (backend={self._config.cache.backend})")
         else:
             self._cache = self._runtime.cache
-            logger.info("[init] Cache reused from SharedRuntime")
+            logger.debug("[init] Cache reused from SharedRuntime")
 
         self._registry._shared_cache = self._cache
 
@@ -610,14 +613,14 @@ class HyMemoryClient:
         # 6. 预热组件（确保首次 add/search 不需要等待初始化）
         await self._registry.get_writer()
         await self._registry.get_reader()
-        logger.info(f"[init] Writer & Reader ready (mode={self._mode})")
+        logger.debug(f"[init] Writer & Reader ready (mode={self._mode})")
 
         await self._initialize_local_reranker()
 
         if self._mode == "ultra":
             try:
                 await self._registry.get_system2_writer()
-                logger.info("[init] System2Writer ready (ultra mode)")
+                logger.debug("[init] System2Writer ready (ultra mode)")
             except Exception as e:
                 logger.warning(f"[init] System2Writer warmup failed: {e}")
 
@@ -626,7 +629,7 @@ class HyMemoryClient:
         if self._config.history.enable:
             self._history_store = HistoryStore(self._config)
             await self._history_store.initialize()
-            logger.info("[init] HistoryStore ready")
+            logger.debug("[init] HistoryStore ready")
 
         # 8. MetricsCollector
         # - solo 模式：bind cache 到 metrics 单例 + 启 background flush
@@ -636,9 +639,9 @@ class HyMemoryClient:
             _metrics = MetricsCollector.get()
             _metrics.bind_cache(self._cache)
             await _metrics.start_background_tasks()
-            logger.info("[init] MetricsCollector ready")
+            logger.debug("[init] MetricsCollector ready")
         else:
-            logger.info("[init] MetricsCollector already bound by SharedRuntime")
+            logger.debug("[init] MetricsCollector already bound by SharedRuntime")
 
         # 9. Coding memory 链路占位（lazy 初始化）
         #    仅在 add(messages_with_tool) 首次命中 is_coding=True 时才真正初始化。
@@ -691,7 +694,7 @@ class HyMemoryClient:
                 "Local rerank is enabled but initialization failed: "
                 f"model={reranker.model_name!r}, error={exc}"
             ) from exc
-        logger.info(
+        logger.debug(
             "[init] Local reranker ready: model=%s device=%s "
             "load_ms=%s warmup_ms=%s",
             reranker.model_name,

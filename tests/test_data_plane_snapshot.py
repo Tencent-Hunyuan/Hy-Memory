@@ -39,6 +39,37 @@ def test_snapshot_copies_and_verifies_local_sdk_tree(tmp_path):
     assert result.total_bytes == len(b"vector") + len(b"cache")
 
 
+def test_snapshot_skips_top_level_runtime_logs(tmp_path):
+    """Runtime logs sit beside the data plane but are not data.
+
+    Copying them doubled a 15.8 GB migration snapshot, most of it rotated log
+    files, and made migrations fail with ENOSPC on an otherwise healthy volume.
+    Only the top-level directory is pruned: a business directory that happens to
+    be called "logs" deeper in the tree must still be copied.
+    """
+    source = tmp_path / "source"
+    (source / "logs").mkdir(parents=True)
+    (source / "logs" / "hy_memory.log").write_bytes(b"x" * 4096)
+    (source / "logs" / "hy_memory.log.2026-10-19").write_bytes(b"y" * 4096)
+    (source / "vector" / "logs").mkdir(parents=True)
+    (source / "vector" / "logs" / "keep.bin").write_bytes(b"keep")
+    (source / "cache.sqlite3").write_bytes(b"cache")
+    target = tmp_path / "snapshot"
+
+    result = snapshot_local_data_plane(
+        source_root=source,
+        target_root=target,
+        writers_stopped=True,
+    )
+
+    assert {item["path"] for item in result.files} == {
+        "cache.sqlite3",
+        "vector/logs/keep.bin",
+    }
+    assert not (target / "logs").exists()
+    assert result.total_bytes == len(b"keep") + len(b"cache")
+
+
 def test_snapshot_refuses_active_writers(tmp_path):
     source = tmp_path / "source"
     source.mkdir()

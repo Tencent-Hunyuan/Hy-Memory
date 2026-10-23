@@ -15,6 +15,15 @@ class DataPlaneSnapshotRejected(RuntimeError):
         self.code = code
 
 
+# Runtime logs live beside the data plane but are not data: they are written by
+# a rotating handler, carry no recovery value, and can grow to gigabytes. The
+# migration snapshot is a recovery artifact, so copying them both doubles the
+# disk cost and makes every migration run fail on a nearly-full volume.
+# Only top-level entries are excluded so a business directory that happens to be
+# named "logs" deeper in the tree is still copied.
+SNAPSHOT_EXCLUDED_TOP_LEVEL: frozenset[str] = frozenset({"logs"})
+
+
 @dataclass(frozen=True)
 class DataPlaneSnapshot:
     source_root: Path
@@ -64,6 +73,14 @@ def snapshot_local_data_plane(
         for root, directories, files in os.walk(source, followlinks=False):
             root_path = Path(root)
             relative = root_path.relative_to(source)
+            if relative == Path("."):
+                # Prune before descending: an excluded directory is never walked,
+                # so its files are neither checked nor copied.
+                directories[:] = [
+                    name
+                    for name in directories
+                    if name not in SNAPSHOT_EXCLUDED_TOP_LEVEL
+                ]
             target_directory = target / relative
             target_directory.mkdir(parents=True, exist_ok=True)
             for name in directories:

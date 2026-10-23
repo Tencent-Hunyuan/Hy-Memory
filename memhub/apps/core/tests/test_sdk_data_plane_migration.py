@@ -1028,28 +1028,16 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
 
     assert result.state == "ready"
     assert result.phase == "reconciled"
-    assert result.counts == {"verified": 2}
+    assert result.counts == {"verified": 1}
     assert [item["memory_id"] for item in client.imported] == ["memory-1"]
-    assert len(client.imported_raw) == 1
-    assert client.imported_raw[0]["content"] == "[user]: verbatim\n[assistant]: reply"
-    migrated_raw_id = client.imported_raw[0]["raw_id"]
+    # raw 全丢：迁移只搬记忆，不再把 legacy 的对话重建成新数据面的 raw
+    assert client.imported_raw == []
     assert store.authority() is MemoryAuthority.LEGACY
-    # Simulate a process dying after both SDK side effects but before startup
-    # could finish. The next inventory observes them as matched rather than
+    # Simulate a process dying after the SDK side effect but before startup
+    # could finish. The next inventory observes it as matched rather than
     # import_exact; that reclassification must resume the settled ledger
     # instead of conflicting with its original operation key.
     client.memories = (_record("memory-1", content="preference"),)
-    client.raw = (
-        HySdkRawRecord(
-            raw_id=migrated_raw_id,
-            content="[user]: verbatim\n[assistant]: reply",
-            user_id="local",
-            agent_id="all-apps",
-            session_id="session",
-            source="cursor",
-            custom={"input_kind": "legacy_turn"},
-        ),
-    )
     resumed = asyncio.run(
         run_sdk_data_plane_backfill(
             database_path=database,
@@ -1064,9 +1052,9 @@ def test_offline_backfill_reaches_ready_without_committing_cutover(store):
         )
     )
     assert resumed.state == "ready"
-    assert resumed.counts == {"verified": 2}
+    assert resumed.counts == {"verified": 1}
     assert len(client.imported) == 1
-    assert len(client.imported_raw) == 1
+    assert client.imported_raw == []
 
 
 def test_offline_backfill_blocks_cutover_when_an_item_is_quarantined(store):

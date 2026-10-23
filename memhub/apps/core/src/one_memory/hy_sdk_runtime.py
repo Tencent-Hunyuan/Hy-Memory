@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import threading
 from collections.abc import Callable, Coroutine
@@ -39,6 +40,8 @@ _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
 _LOCAL_ONNX_PLACEHOLDER_URL = "http://127.0.0.1/local-onnx"
 DEFAULT_RELEVANCE_FLOOR = 0.35
+
+logger = logging.getLogger("one_memory.hy_sdk_runtime")
 
 
 @dataclass
@@ -120,6 +123,15 @@ class ClientLease:
             if self._closed:
                 return
             self._closed = True
+            if _lease_trace_enabled():
+                # 一个进程只应持有极少数 client lease。若这里被高频调用，
+                # 说明某条请求路径在请求结束时释放了共享句柄，下一次调用
+                # 只能整份重建 client（连带 3 套组件与线程池）。
+                logger.warning(
+                    "sdk client lease released: data_dir=%s",
+                    self.data_dir,
+                    stack_info=True,
+                )
             try:
                 self.client.close()
             finally:
@@ -130,6 +142,15 @@ class ClientLease:
 
     def __exit__(self, *_exc: object) -> None:
         self.close()
+
+
+def _lease_trace_enabled() -> bool:
+    return os.getenv("ONE_MEMORY_TRACE_CLIENT_LEASE", "").strip() not in {
+        "",
+        "0",
+        "false",
+        "False",
+    }
 
 
 class SdkClientHandle:

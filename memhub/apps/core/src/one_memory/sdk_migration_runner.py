@@ -9,7 +9,6 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from one_memory.database_access import main_database
@@ -28,11 +27,11 @@ from one_memory.sdk_data_plane_migration import (
 )
 from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
 from one_memory.sdk_migration_inventory import (
+    LegacyRawInventory,
     SdkMigrationClient,
     execute_memory_migration_plan,
     execute_raw_migration_plan,
     read_legacy_memory_inventory,
-    read_legacy_raw_inventory,
     read_sdk_memory_inventory,
     read_sdk_raw_inventory,
     record_memory_migration_plan,
@@ -414,20 +413,13 @@ async def run_sdk_data_plane_backfill(
         legacy=legacy_memories,
         sdk=sdk_memories,
     )
-    with main_database(database_path).read(row_factory=sqlite3.Row) as database:
-        started = database.execute(
-            "SELECT created_at FROM sdk_data_plane_migrations WHERE migration_id=?",
-            (migration_id,),
-        ).fetchone()
-    if started is None:
-        raise DataPlaneMigrationError("sdk_data_plane_migration_start_missing")
-    started_at = datetime.fromisoformat(str(started["created_at"]))
-    if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=UTC)
-    legacy_raw = read_legacy_raw_inventory(
-        database_path,
-        cutoff=started_at.astimezone(UTC) - timedelta(days=3),
-    )
+    # raw 全丢：迁移只搬记忆，不再搬原始对话。
+    #
+    # 仍然走同一套 plan/execute 路径，classify_raw_inventory 的判定规则不动：
+    # 新数据面里已有的 raw 因为拿不到 legacy 对应项，会按原有规则被判为窗口外
+    # 并删除。这里只做一件事——不再从 legacy 读取、不再把三天窗口内的对话
+    # 重建成一份新的 raw，省掉几十万行的读写与重建成本。
+    legacy_raw: tuple[LegacyRawInventory, ...] = ()
     sdk_raw = await read_sdk_raw_inventory(client)
     raw_decisions = record_raw_migration_plan(
         store,
