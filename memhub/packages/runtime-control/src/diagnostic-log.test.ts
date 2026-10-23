@@ -202,6 +202,37 @@ describe("diagnostic log", () => {
     ).toThrow("diagnostic_stack_invalid");
   });
 
+  it("drops malformed logger events without interrupting later writes", async () => {
+    const dataDir = await root();
+    const logger = new DiagnosticLogger({
+      dataDir,
+      service: "desktop",
+      sessionId: "11111111-1111-4111-8111-111111111111",
+    });
+
+    await expect(
+      logger.log({
+        level: "info",
+        component: "desktop.sdk_migration",
+        event: "sdk_migration.startup",
+        outcome: "succeeded",
+        details: { state: "cutover" },
+      }),
+    ).resolves.toBeUndefined();
+    await logger.log({
+      level: "info",
+      component: "desktop.sdk_migration",
+      event: "sdk_migration.startup",
+      outcome: "succeeded",
+      details: { runtime_state: "cutover" },
+    });
+
+    const result = await readDiagnosticEvents(dataDir);
+    expect(result.invalid_lines).toBe(0);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].details).toEqual({ runtime_state: "cutover" });
+  });
+
   it("keeps code locations but strips exception messages and absolute prefixes", () => {
     const secret = "secret-token-918273";
     const error = new Error(secret);

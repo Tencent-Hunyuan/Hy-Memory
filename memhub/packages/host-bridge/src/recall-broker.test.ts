@@ -192,16 +192,12 @@ describe("RecallBroker", () => {
       level: "error",
       component: "host.broker",
       outcome: "failed",
-      details: expect.objectContaining({
-        action: "host",
-        code: "connection_control_unavailable",
-        error_type: "Error",
-      }),
+      error_code: "connection_control_unavailable",
+      error_type: "Error",
+      details: { action: "host" },
     });
-    expect(typeof exception?.details).toBe("object");
-    const details = exception?.details as Record<string, unknown>;
-    expect(typeof details.stack_origin).toBe("string");
-    expect(details.stack_origin).toContain("recall-broker");
+    expect(exception?.details).not.toHaveProperty("message");
+    expect(exception?.details).not.toHaveProperty("stack_origin");
   });
   it.each(["recall", "ask"])(
     "answers %s without waiting for a slow diagnostic write",

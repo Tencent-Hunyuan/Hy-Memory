@@ -128,6 +128,7 @@ const DETAIL_KEYS = new Set([
   "revised_count",
   "skipped_count",
   "error_count",
+  "restart_streak",
   "pending_count",
   "prepared_count",
   "queue_depth",
@@ -207,18 +208,26 @@ export class DiagnosticLogger {
   }
 
   log(input: DiagnosticInput): Promise<void> {
-    const event = diagnosticEvent({
-      // A package build stamps its identity into the environment at the shared
-      // spawn point; copy it onto every event so one chain can be attributed to
-      // one package. A source run leaves them unset and writes nothing.
-      ...buildIdentityFromEnvironment(),
-      ...input,
-      service: this.options.service,
-      session_id: this.sessionId,
-      timestamp:
-        input.timestamp ??
-        (this.options.now ?? (() => new Date()))().toISOString(),
-    });
+    let event: DiagnosticEventV1;
+    try {
+      event = diagnosticEvent({
+        // A package build stamps its identity into the environment at the shared
+        // spawn point; copy it onto every event so one chain can be attributed to
+        // one package. A source run leaves them unset and writes nothing.
+        ...buildIdentityFromEnvironment(),
+        ...input,
+        service: this.options.service,
+        session_id: this.sessionId,
+        timestamp:
+          input.timestamp ??
+          (this.options.now ?? (() => new Date()))().toISOString(),
+      });
+    } catch {
+      // Diagnostics are observational. A malformed event must be dropped rather
+      // than turn a logging mistake into a product outage. The pure validator
+      // stays strict so tests and export paths can still reject unsafe records.
+      return this.tail;
+    }
     this.tail = this.tail.then(() => this.write(event)).catch(() => undefined);
     return this.tail;
   }

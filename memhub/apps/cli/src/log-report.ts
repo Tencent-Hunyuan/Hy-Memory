@@ -59,6 +59,7 @@ const SAFE_DETAIL_KEYS = new Set([
   "revised_count",
   "skipped_count",
   "error_count",
+  "restart_streak",
   "pending_count",
   "prepared_count",
   "queue_depth",

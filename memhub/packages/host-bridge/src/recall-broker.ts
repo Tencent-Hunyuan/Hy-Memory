@@ -702,20 +702,10 @@ export class RecallBroker {
           event: "connection_control.exception",
           outcome: "failed",
           instance_id: this.options.instanceId,
-          details: {
-            action: action ?? "invalid",
-            code,
-            error_type:
-              error instanceof Error ? error.constructor.name : typeof error,
-            message:
-              error instanceof Error
-                ? error.message.slice(0, 256)
-                : String(error).slice(0, 256),
-            stack_origin:
-              error instanceof Error && error.stack
-                ? (error.stack.split("\n").at(1)?.trim() ?? "").slice(0, 256)
-                : null,
-          },
+          error_code: code,
+          error_type:
+            error instanceof Error ? error.constructor.name : typeof error,
+          details: { action: action ?? "invalid" },
         });
       }
       const fingerprint = `error:${code}`;

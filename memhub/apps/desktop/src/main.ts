@@ -1098,7 +1098,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
             ? "blocked"
             : "skipped",
       ...(migration.code === undefined ? {} : { error_code: migration.code }),
-      details: { state: migration.state },
+      details: { runtime_state: migration.state },
     });
     requireCompletedStartupSdkMigration(migration);
   };
