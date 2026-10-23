@@ -11,8 +11,9 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
     "filelock>=3.32.4",
-    # Public SDK version validated against MemHub's permission and recall contracts.
-    "hy-memory==2.0.5",
+    # SDK 版本与仓库源码保持一致。2.0.6 尚未发布到 PyPI，构建期间由下面的
+    # [tool.uv.sources] 指向仓库根的本地源码；发布后删掉该 sources 段即可。
+    "hy-memory==2.0.6",
     # Retrieval's derived vector index directly consumes these locked versions.
     "chromadb==1.5.9",
     "numpy==2.5.2",
@@ -39,6 +40,12 @@ dependencies = [
 [project.scripts]
 one-memory = "one_memory.cli:main"
 one-memory-core = "one_memory.cli:main"
+
+# 打包必须用仓库里的 SDK 源码，否则 core 会去 PyPI 取已发布的 hy-memory 包，
+# 仓库 hy_memory/ 下的改动（快照排除 logs、日志保留窗口）不会进包。
+# 2.0.6 正式发布后删除本段，只保留依赖声明里的版本号。
+[tool.uv.sources]
+hy-memory = { path = "../../../" }
 
 [dependency-groups]
 dev = [
