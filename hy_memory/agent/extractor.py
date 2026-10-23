@@ -934,6 +934,34 @@ def _system_prompt_without_intention(system_prompt: str, *, lang: str) -> str:
     return system_prompt
 
 
+def _message_list(content: str) -> Optional[List[Any]]:
+    """Parse a JSON message blob into a list of messages, or None.
+
+    The chat scene hands the extractor a JSON list of the new messages
+    (`writer.py`: `_extract_content = _json_msgs.dumps(_msgs_dump)`).
+    `detect_language()` reads the FIRST 10 alphanumeric characters of the
+    string it is given, and for that blob they are the envelope keys —
+    "roleuserc" — so it answers "en".  The Chinese extractor prompt
+    (prompts_zh.EXTRACT_PROMPT_ZH + Chinese few-shot) was therefore
+    unreachable, and a compliant model answered with ENGLISH facts, which then
+    failed Chinese recall against a Chinese embedding model.
+
+    Returning the parsed messages lets the caller route on the message TEXT via
+    `is_chinese(messages=...)`, which already ignores role names and metadata.
+
+    Returns None for anything that is not a JSON list (e.g. plain text), so the
+    caller can fall back to detecting on the raw string.
+    """
+    text = (content or "").strip()
+    if not text.startswith("["):
+        return None
+    try:
+        items = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    return items if isinstance(items, list) else None
+
+
 class Extractor:
     """
     提取智能体 (V2)
@@ -1021,7 +1049,18 @@ class Extractor:
             _enable_intention = bool(
                 getattr(self._llm_config, "enable_intention", True)
             )
-            if is_chinese(content):
+            # Route on the message TEXT, not the JSON envelope. In the chat
+            # scene `content` is a JSON list of the new messages, and
+            # detect_language() reads its first 10 alphanumeric characters
+            # ("roleuserc") -> "en" -> the Chinese prompt was never used and
+            # the model returned English facts for Chinese input. The parsed
+            # messages let is_chinese(messages=...) route on the text itself.
+            _messages = _message_list(content)
+            if _messages is not None:
+                _is_zh = is_chinese(messages=_messages)
+            else:
+                _is_zh = is_chinese(content=content)
+            if _is_zh:
                 from .prompts_zh import (
                     EXTRACT_PROMPT_ZH,
                     EXTRACT_PROMPT_ZH_NO_INTENTION,
