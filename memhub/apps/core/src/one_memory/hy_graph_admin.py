@@ -71,10 +71,24 @@ def graph_store_enabled() -> bool:
     return raw != "none"
 
 
+def _expected_graph_width(config: Any) -> object:
+    """Width the graph store must agree with.
+
+    Prefer the vector store's width: it is the concrete value storage is sized
+    with. The SDK's ``embedder.embedding_dims`` is deliberately left unset so the
+    embedding request omits the ``dimensions`` parameter, so it is only a
+    fallback for the synthetic profile config below.
+    """
+    width = getattr(getattr(config, "vector_store", None), "embedding_dims", None)
+    if width:
+        return width
+    return getattr(getattr(config, "embedder", None), "embedding_dims", None)
+
+
 def inspect_graph_width_mismatch(config: Any) -> GraphWidthMismatch | None:
     """Return a mismatch without renaming or deleting anything."""
     db_path = Path(config.graph_store.db_path)
-    expected = getattr(getattr(config, "embedder", None), "embedding_dims", None)
+    expected = _expected_graph_width(config)
     return _inspect_graph_width(db_path, expected)
 
 
@@ -166,7 +180,7 @@ def retire_mismatched_graph_store(config: Any) -> Path | None:
     db_path = Path(config.graph_store.db_path)
     if not db_path.exists():
         return None
-    expected = getattr(getattr(config, "embedder", None), "embedding_dims", None)
+    expected = _expected_graph_width(config)
     if not expected:
         return None
     stored = _graph_embedding_width(db_path)

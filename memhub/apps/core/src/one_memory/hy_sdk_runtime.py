@@ -262,7 +262,13 @@ def build_sdk_config(
                 ),
                 "api_key": embedding_key,
                 "base_url": embedding_endpoint,
-                "embedding_dims": dimensions,
+                # The SDK sends the OpenAI-compatible `dimensions` request
+                # parameter whenever this is truthy. Not every embedding model
+                # accepts it (e.g. BAAI/bge-m3 replies HTTP 400), and MemHub
+                # never truncates: probe already recorded the model's native
+                # width. Keep the request dimension unset so no `dimensions`
+                # parameter is sent; the vector store keeps the real width.
+                "embedding_dims": None,
             },
             "vector_store": {
                 "provider": "chroma",

@@ -85,7 +85,9 @@ def test_local_embedding_config_needs_no_embedding_key(tmp_path: Path) -> None:
 
     assert config.embedder.api_key is None
     assert config.embedder.base_url is None
-    assert config.embedder.embedding_dims == BUILTIN_EMBEDDING_DIMENSIONS
+    # The request-side dimension stays unset so the SDK never sends `dimensions`;
+    # the store keeps the concrete width.
+    assert config.embedder.embedding_dims is None
     assert config.vector_store.embedding_dims == BUILTIN_EMBEDDING_DIMENSIONS
 
 
