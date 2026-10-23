@@ -27,6 +27,7 @@ HY Memory Client - 面向用户的同步客户端（无状态）
 """
 
 import asyncio
+from concurrent.futures import Future
 import json
 import logging
 import os
@@ -63,6 +64,14 @@ from .pipelines import (
 # Productivity memory 模块（含 tool 时三分类为 working/coding 才启用）
 from .coding.preproc import has_any_tool_message, strip_tool_messages
 from .coding.judge import classify_messages_scene
+
+from .utils.init_rollback import (
+    close_component,
+    finish_cleanup,
+    initialize_component,
+    rollback_metrics,
+    stop_failed_loops,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -279,10 +288,24 @@ class _LoopThread:
         self._lag_max_ms = 0.0
         self._lag_samples = 0
         self._lag_over_100ms = 0
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        if not self._ready.wait(timeout=5):
-            raise RuntimeError("background event loop failed to start")
+        self._close_on_exit = False
+        self._run_finished = Future()
+        self._thread = threading.Thread(target=self._run_with_failure_cleanup, daemon=True)
+        try:
+            self._thread.start()
+            if not self._ready.wait(timeout=5):
+                raise RuntimeError("background event loop failed to start")
+        except BaseException:
+            stop_failed_loops(self)
+            raise
+
+    def _run_with_failure_cleanup(self):
+        try:
+            self._run()
+        finally:
+            # Failure cleanup subscribes to completion without another thread.
+            # Future callbacks also cover registration after _run has returned.
+            self._run_finished.set_result(None)
 
     def _run(self):
         asyncio.set_event_loop(self._loop)
@@ -507,21 +530,29 @@ class HyMemoryClient:
             self._runtime = runtime
             self._owns_runtime = runtime is None
 
-            # 创建/复用持久 event loop
-            if self._owns_runtime:
-                self._loop_thread = _LoopThread()
-                # solo 模式：search 也开一个独立 loop，隔离效果与 shared 模式一致。
-                self._search_loop_thread = _LoopThread()
-            else:
-                self._loop_thread = runtime.loop_thread
-                # shared 模式：用 runtime 的 search 专用 loop（与 write loop 隔离）。
-                # 兼容旧 runtime（无 search_loop_thread）时回落到 write loop。
-                self._search_loop_thread = (
-                    getattr(runtime, "search_loop_thread", None) or runtime.loop_thread
-                )
-
-            # 同步初始化所有组件
-            self._loop_thread.run(self._initialize())
+            self._loop_thread = None
+            self._search_loop_thread = None
+            self._initializing_metrics = None
+            self._vector_store = None
+            self._graph_store = None
+            self._registry = None
+            self._cache = None
+            self._history_store = None
+            try:
+                # Only Solo owns these loops. A borrowed runtime survives failure.
+                if self._owns_runtime:
+                    self._loop_thread = _LoopThread()
+                    self._search_loop_thread = _LoopThread()
+                else:
+                    self._loop_thread = runtime.loop_thread
+                    self._search_loop_thread = (
+                        getattr(runtime, "search_loop_thread", None) or runtime.loop_thread
+                    )
+                self._loop_thread.run(self._initialize())
+            except BaseException:
+                if self._owns_runtime:
+                    stop_failed_loops(self._search_loop_thread, self._loop_thread)
+                raise
 
             logger.info("HyMemoryClient ready")
 
@@ -530,7 +561,26 @@ class HyMemoryClient:
         # 进程级初始化日志不应继承外层（如 App 请求上下文）的业务 request_id，
         # 否则按 request_id 过滤会混入一次性 init 噪音。强制设为哨兵 "-"。
         with request_id_scope():
-            await self._initialize_impl()
+            try:
+                await self._initialize_impl()
+            except BaseException:
+                await finish_cleanup(self._rollback_initialization())
+                raise
+            self._initializing_metrics = None
+
+    async def _rollback_initialization(self):
+        """Release partial startup resources on their owning loop, at most once."""
+        state, self._initializing_metrics = self._initializing_metrics, None
+        await rollback_metrics(state, self._cache)
+        # Registry owns pipelines, but vector ownership remains here on failure.
+        # Keep cache/vector/graph alive until their dependent pipelines close.
+        if self._registry is not None:
+            self._registry._shared_vector_store = None
+        for attr in ("_history_store", "_registry", "_graph_store", "_vector_store", "_cache"):
+            component = getattr(self, attr)
+            setattr(self, attr, None)
+            if component is not None and (attr != "_cache" or self._owns_runtime):
+                await close_component(attr, component.close)
 
     async def _initialize_impl(self):
         """初始化所有核心组件（实际实现）"""
@@ -556,7 +606,7 @@ class HyMemoryClient:
 
         # 2. VectorStore（根据配置选择后端）
         self._vector_store = create_vector_store(self._config)
-        await self._vector_store.initialize()
+        await initialize_component(self._vector_store)
         logger.info(
             f"[init] VectorStore ready: provider={self._config.vector_store.provider} "
             f"collection={self._vector_store._collection_name}"
@@ -567,7 +617,7 @@ class HyMemoryClient:
         if self.enable_graph:
             from .data.graph_store import create_graph_store
             self._graph_store = create_graph_store(self._config)
-            await self._graph_store.initialize()
+            await initialize_component(self._graph_store)
             # 检查图数据库是否真正可用（Kuzu 会静默降级为 no-op）
             if hasattr(self._graph_store, '_available') and not self._graph_store._available:
                 raise RuntimeError(
@@ -593,7 +643,7 @@ class HyMemoryClient:
         # - shared 模式：复用 runtime 的 cache（已 init + 已装 observability hook）
         if self._owns_runtime:
             self._cache = create_cache(self._config)
-            await self._cache.initialize()
+            await initialize_component(self._cache)
             logger.info(f"[init] Cache ready (backend={self._config.cache.backend})")
         else:
             self._cache = self._runtime.cache
@@ -625,7 +675,7 @@ class HyMemoryClient:
         self._history_store = None
         if self._config.history.enable:
             self._history_store = HistoryStore(self._config)
-            await self._history_store.initialize()
+            await initialize_component(self._history_store)
             logger.info("[init] HistoryStore ready")
 
         # 8. MetricsCollector
@@ -634,6 +684,9 @@ class HyMemoryClient:
         if self._owns_runtime:
             from .metrics import MetricsCollector
             _metrics = MetricsCollector.get()
+            self._initializing_metrics = (
+                _metrics, _metrics._cache, _metrics._background_started,
+            )
             _metrics.bind_cache(self._cache)
             await _metrics.start_background_tasks()
             logger.info("[init] MetricsCollector ready")

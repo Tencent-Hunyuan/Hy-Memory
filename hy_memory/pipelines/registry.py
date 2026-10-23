@@ -23,6 +23,8 @@ from ..embedding import EmbeddingService
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
 
+from ..utils.init_rollback import close_component
+
 logger = logging.getLogger(__name__)
 
 
@@ -113,7 +115,11 @@ class ComponentFactory:
             # None 时 writer 里的图投影整段跳过。
             graph_store=self._shared_graph_store,
         )
-        await writer.initialize()
+        try:
+            await writer.initialize()
+        except BaseException:
+            await close_component("partial writer", writer.close)
+            raise
         self._writer = writer
         logger.debug("MemoryWriter initialized")
         return writer
@@ -156,7 +162,11 @@ class ComponentFactory:
         try:
             from .reader import MemoryReader
             reader = MemoryReader(**reader_kwargs)
-            await reader.initialize()
+            try:
+                await reader.initialize()
+            except BaseException:
+                await close_component("partial reader", reader.close)
+                raise
         finally:
             if old_env:
                 os.environ["HY_MEMORY_READER"] = old_env
@@ -189,7 +199,11 @@ class ComponentFactory:
         if self._shared_graph_store is not None:
             s2_kwargs["graph_store"] = self._shared_graph_store
         s2 = System2Writer(**s2_kwargs)
-        await s2.initialize()
+        try:
+            await s2.initialize()
+        except BaseException:
+            await close_component("partial s2", s2.close)
+            raise
         self._system2_writer = s2
         logger.debug("System2Writer initialized")
         return s2
