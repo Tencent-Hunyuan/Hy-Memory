@@ -336,8 +336,12 @@ class ChromaVectorStore(VectorStoreBase):
         """按 ID 获取"""
         point_id = self._node_id_to_point_id(node_id)
         try:
+            # Keep the accepted read's collection alive across the executor hop.
+            # close() clears self._collection while a queued worker may still run.
+            collection = self._collection
+
             def _get():
-                return self._collection.get(
+                return collection.get(
                     ids=[point_id],
                     include=["metadatas", "embeddings", "documents"],
                 )
