@@ -44,7 +44,7 @@ def save(store, registration, path, revision=0):
     )
 
 
-@pytest.mark.parametrize("source", ["workbuddy", "cursor", "claude-code", "codex"])
+@pytest.mark.parametrize("source", ["workbuddy", "cursor", "claude-code", "codex", "hermes"])
 def test_preview_is_metadata_only_and_cancel_changes_nothing(setup, source):
     store, catalog, selected, database, grants, jobs, evidence = setup
     with (
@@ -62,6 +62,27 @@ def test_preview_is_metadata_only_and_cancel_changes_nothing(setup, source):
         assert db.execute("SELECT count(*) FROM source_candidates").fetchone()[0] == 0
     assert grants.receipt(user_id="local", source_id=source) is None
     assert jobs.list_jobs() == [] and evidence.count() == 0
+
+
+def test_hermes_profile_directory_can_be_selected(setup):
+    """Hermes is multi-profile, so its source root has to be pickable.
+
+    The default candidate is `~/.hermes`, which also contains every
+    `profiles/<name>/state.db`. Without a picker there is no way to import one
+    profile without the others, so `hermes` joins the picker allowlist and a
+    profile directory behaves like any other selected root.
+    """
+    store, catalog, selected, *_ = setup
+    profile = selected / ".hermes" / "profiles" / "luo-bo"
+    profile.mkdir(parents=True)
+    (profile / "state.db").write_bytes(b"")
+    assert store.allowed("hermes")
+    saved = save(store, catalog["hermes"], profile)
+    assert saved.path == str(profile)
+    assert saved.candidate_revision == 1
+    assert store.resolve(catalog["hermes"]).candidate == SourceRootCandidate(
+        profile, RootCandidateKind.USER_SELECTED, 1
+    )
 
 
 def test_select_persists_only_candidate_and_restarts_with_revision(setup):
