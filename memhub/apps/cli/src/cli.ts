@@ -3395,10 +3395,14 @@ async function runCommand(
       probeIdentity,
       requireServiceReceipt: true,
     });
+    // A missing runtime.json is not proof that no Runtime owns the directory.
+    // Check the service lease separately, exactly like `backup restore` does.
+    const runtimeLock = await inspectRuntimeServiceLock(dataDir);
     const plan = await planDataDeletion({
       dataDir,
       home: environment.HOME ?? os.homedir(),
       runtimeRunning: status.state === "running",
+      runtimeLock,
     });
     if (!parsed.confirmed) {
       process.stdout.write(
