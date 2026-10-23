@@ -6,7 +6,12 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from one_memory.model_probe import ModelProber, ProbeCode, _structured_request
+from one_memory.model_probe import (
+    PROBE_MAX_TOKENS,
+    ModelProber,
+    ProbeCode,
+    _structured_request,
+)
 from one_memory.model_profiles import (
     ModelProfileInput,
     ModelProfileStore,
@@ -695,7 +700,7 @@ def test_bounded_openai_probe_payload_preserves_profile_and_recipient(
 
     expected = {
         "model": "unchanged-model",
-        "max_tokens": 256,
+        "max_tokens": PROBE_MAX_TOKENS,
         "messages": [
             {"role": "user", "content": 'Return memory_probe=true as JSON: {"memory_probe": true}'}
         ],
@@ -714,11 +719,10 @@ def test_bounded_openai_probe_payload_preserves_profile_and_recipient(
                 },
             },
         }
-    if disable_thinking:
-        if base_url == "https://api.deepseek.com/v1":
-            expected["thinking"] = {"type": "disabled"}
-        else:
-            expected["reasoning_effort"] = "none"
+    # A generation preference must not shape the probe: with it on, a model
+    # that refuses to stop thinking failed a probe it would otherwise pass.
+    assert "reasoning_effort" not in expected
+    assert "thinking" not in expected
     assert (method, url, headers) == (
         "POST",
         f"{base_url}/chat/completions",
@@ -781,10 +785,8 @@ def test_bounded_probe_transport_keeps_existing_fallback_and_request_count(
         assert request.url == "https://models.example.com/v1/chat/completions"
         assert request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert body["model"] == "unchanged-model"
-        assert body.get("max_tokens") == 256
-        assert ("reasoning_effort" in body) is disable_thinking
-        if disable_thinking:
-            assert body["reasoning_effort"] == "none"
+        assert body["max_tokens"] == PROBE_MAX_TOKENS
+        assert "reasoning_effort" not in body
         assert "thinking" not in body
     assert requests[-1].url == "http://127.0.0.1:11434/api/embed"
     assert "Authorization" not in requests[-1].headers
@@ -840,3 +842,62 @@ def test_other_provider_probe_payloads_are_unchanged(tmp_path, provider, force_p
             "max_tokens": 64,
             "messages": [{"role": "user", "content": "Return memory_probe=true as JSON"}],
         }
+
+
+def test_probe_reports_a_truncated_reply_as_a_budget_fact(tmp_path) -> None:
+    """A thinking model that ran out of budget is not a model that cannot answer.
+
+    Regression: the probe asked for 256 tokens, a reasoning model spent 251 of
+    them thinking, and the empty body was reported as
+    `structured_output_unsupported`. That code also fired the schema fallback,
+    which re-asked with the same starved budget, so a working model was recorded
+    as unavailable and the dialog blamed the model name.
+    """
+    store = ModelProfileStore(tmp_path / "one-memory.sqlite3")
+    secrets = InMemorySecretStore()
+    profile = store.create(
+        ModelProfileInput(
+            name="Thinking model",
+            provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="https://models.example.com/v1",
+            model="glm-5.3-flash",
+            api_key=SecretStr(API_KEY),
+            embedding_provider_kind=ProviderKind.OLLAMA,
+            embedding_base_url="http://127.0.0.1:11434",
+            embedding_model="unchanged-embedding",
+            embedding_dimensions=2,
+        ),
+        secrets,
+    )
+    generation: list[dict] = []
+
+    def handler(request):
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "glm-5.3-flash"}]})
+        if request.url.path == "/api/embed":
+            return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]})
+        generation.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "length", "message": {"content": ""}}],
+                "usage": {
+                    "completion_tokens": PROBE_MAX_TOKENS,
+                    "completion_tokens_details": {"reasoning_tokens": PROBE_MAX_TOKENS - 5},
+                },
+            },
+        )
+
+    result = asyncio.run(
+        ModelProber(store=store, secrets=secrets, transport=httpx.MockTransport(handler)).probe(
+            profile.profile_id
+        )
+    )
+
+    structured = next(stage for stage in result.stages if stage.stage == "structured_output")
+    assert structured.code is ProbeCode.STRUCTURED_OUTPUT_TRUNCATED
+    # The schema parameter was never the problem, so it is neither dropped nor
+    # re-asked: exactly one generation request, with the schema still on.
+    assert len(generation) == 1
+    assert "response_format" in generation[0]
+    assert generation[0]["max_tokens"] == PROBE_MAX_TOKENS

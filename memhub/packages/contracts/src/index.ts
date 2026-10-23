@@ -357,6 +357,7 @@ export type ProbeCode =
   | "model_list_unsupported"
   | "invalid_response"
   | "structured_output_unsupported"
+  | "structured_output_truncated"
   | "embedding_model_required"
   | "embedding_unavailable";
 
