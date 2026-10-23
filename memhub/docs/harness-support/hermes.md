@@ -98,7 +98,8 @@ Hermes 来源的默认扫描根是 `~/.hermes`，会递归覆盖所有 profile�
 - 在「选择目录」里指定该 profile 目录（如 `~/.hermes/profiles/luo-bo`），
   授权时按 `user_selected` 根落盘；
 - 或用 `HERMES_HOME` 指向 profile 目录，此时来源按
-  `environment_override` 处理，接入时需要 `--confirm-overrides`。
+  `environment_override` 处理，接入时需要 `--confirm-overrides`；宿主接入
+  （Provider / MCP / Skill 的安装位置）也跟随 `HERMES_HOME`，不会写回默认 profile。
 
 两种方式互斥：一旦设置了 `HERMES_HOME`，picker 不再允许改选（与其它
 环境覆盖来源一致）。
