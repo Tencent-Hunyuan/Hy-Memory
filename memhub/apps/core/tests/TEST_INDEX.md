@@ -90,6 +90,7 @@
 | `test_diagnostic_trace_api.py` | `integration` | 覆盖 trace lookup is disabled until detailed logging is enabled、trace lookup returns only safe structured steps、log level route applies current process level 等 4 个场景。 |
 | `test_disable_thinking.py` | `contract` | 运行期生成请求须按档案可选关闭思考；默认不向厂商下发未知字段。 |
 | `test_dual_engine_helper.py` | `contract` | Tests for the dual-engine harness itself. |
+| `test_embedding_request_dimensions.py` | `contract` | An embedding profile must not send the OpenAI `dimensions` request parameter. |
 | `test_event_loop_blocking.py` | `contract` | Proof, as a test, that blocking work on the loop freezes it — and the fix works. |
 | `test_evidence_store.py` | `contract` | 覆盖 same source message merges origins without duplication、identical text from different sources is not deduplicated、rescanning an unchanged file does not write the message again 等 26 个场景。 |
 | `test_export_probe.py` | `contract` | What a probe may say about a stranger's chat history, and what it may not. |
@@ -328,4 +329,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 323 个测试文件。
+共 324 个测试文件。
