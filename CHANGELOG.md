@@ -4,6 +4,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Kept a confirmed unknown-retry from taking the event loop: resolution and
+  requeue now share one database handle per pass over the set instead of one
+  per row, and the database work runs on a worker thread, so other endpoints
+  and shutdown keep answering while a backlog drains.
 - Fixed legacy-to-SDK startup migration to adopt native Coding Experience and
   Working Fact IDs instead of importing them as Chat layers. Raw migration now
   rebuilds bounded user/assistant turns from the latest three days, excludes

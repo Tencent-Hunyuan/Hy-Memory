@@ -2394,6 +2394,83 @@ def test_user_confirmed_unknown_retry_requeues_job_and_linked_tasks(tmp_path) ->
     assert queue.retry_unknown_confirmed(record.job_id) == 0
 
 
+def test_confirmed_retry_batch_resolves_and_requeues_with_one_handle(
+    tmp_path, monkeypatch
+) -> None:
+    """A confirmed retry set pays one database handle, not one per row.
+
+    Regression: the endpoint resolved and requeued every unknown row through
+    its own connection and commit. A few thousand unknowns therefore held the
+    event loop — and with it every other endpoint and the shutdown signal —
+    for hours, while the same work in one transaction finishes in seconds.
+    """
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    proven = queue.submit(_request(evidence=("e1",), key="idem-proven"))
+    missing = queue.submit(_request(evidence=("e2",), key="idem-missing"))
+    untouched = queue.submit(_request(evidence=("e3",), key="idem-pending"))
+
+    with sqlite3.connect(path) as connection, connection:
+        connection.execute(
+            "UPDATE memory_write_jobs SET state='unknown', attempts=2, hy_invoked=1, "
+            "last_error='hy_memory_timeout' WHERE job_id IN (?,?)",
+            (proven.job_id, missing.job_id),
+        )
+        connection.executescript(
+            """
+            CREATE TABLE memory_tasks (
+                task_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                runner_token TEXT,
+                attempts INTEGER NOT NULL,
+                last_error_code TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE memory_task_inputs (
+                task_id TEXT PRIMARY KEY,
+                refs_json TEXT NOT NULL
+            );
+            CREATE TABLE memory_task_outputs (
+                task_id TEXT NOT NULL,
+                memory_id TEXT NOT NULL,
+                body TEXT NOT NULL
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO memory_tasks VALUES (?,?,?,?,?,?)",
+            ("task-1", "completed", None, 1, None, "old"),
+        )
+        connection.execute(
+            "INSERT INTO memory_task_inputs VALUES (?,?)",
+            ("task-1", '[{"evidence_id":"e1"}]'),
+        )
+        connection.execute(
+            "INSERT INTO memory_task_outputs VALUES (?,?,?)",
+            ("task-1", "m-1", "{}"),
+        )
+
+    import one_memory.memory_server.durable_queue as durable_queue_module
+
+    handles: list[int] = []
+    real_main_database = durable_queue_module.main_database
+
+    def counting_main_database(*args, **kwargs):
+        handles.append(1)
+        return real_main_database(*args, **kwargs)
+
+    monkeypatch.setattr(durable_queue_module, "main_database", counting_main_database)
+    job_ids = (proven.job_id, missing.job_id, untouched.job_id)
+
+    assert queue.resolve_unknown_outputs(job_ids) == 1
+    assert queue.retry_unknown_confirmed_many(job_ids) == 1
+    assert handles == [1, 1], "one handle per pass over the set, not one per row"
+
+    assert queue.get(proven.request_id).state == COMPLETED
+    assert queue.get(missing.request_id).state == PENDING
+    assert queue.get(untouched.request_id).state == PENDING
+
+
 def test_restart_redrains_a_job_claimed_by_a_worker_that_died(tmp_path) -> None:
     """End-to-end restart recovery: a claimed-but-not-run job runs once.
 
