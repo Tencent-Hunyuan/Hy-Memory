@@ -1,15 +1,17 @@
-import type {
-  GovernedMemory,
-  HomeSummary,
-  ImportIssue,
-  ImportJob,
-  LiveSyncHealth,
-  MemoryDetail,
-  MemoryEvidenceExcerpt,
-  MemoryLibraryPage,
-  MemoryProcessingSummary,
-  ModelProfile,
-  SourceResponse,
+import {
+  CANDIDATE_KINDS,
+  type CandidateKind,
+  type GovernedMemory,
+  type HomeSummary,
+  type ImportIssue,
+  type ImportJob,
+  type LiveSyncHealth,
+  type MemoryDetail,
+  type MemoryEvidenceExcerpt,
+  type MemoryLibraryPage,
+  type MemoryProcessingSummary,
+  type ModelProfile,
+  type SourceResponse,
 } from "@one-memory/contracts";
 /** The only memory states a response may carry, and the only ones a filter may ask for. */
 export const MEMORY_STATUSES = ["confirmed", "deleted", "superseded"] as const;
@@ -74,11 +76,6 @@ const SYNC_COMPLETENESS = [
   "additions_only",
   "one_time_snapshot",
 ] as const;
-const CANDIDATE_KINDS = [
-  "default",
-  "environment_override",
-  "user_selected",
-] as const;
 const LOCATION_STATES = [
   "found",
   "not_found",
@@ -100,7 +97,7 @@ export interface ValidatedMemoryTask {
 export interface SourceConnectionCandidate {
   source_id: string;
   display_name: string;
-  candidate_kind: (typeof CANDIDATE_KINDS)[number];
+  candidate_kind: CandidateKind;
   candidate_root_id: string;
   candidate_revision?: number;
   requires_override_confirmation: boolean;

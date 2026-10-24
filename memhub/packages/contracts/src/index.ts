@@ -147,6 +147,19 @@ export type SourceAuthorizationState =
   | "source_root_unavailable"
   | "candidate_changed";
 
+/** The kinds of root a source can be granted for — Core's `RootCandidateKind`.
+ *
+ * A value, not only a type, because the web layer has to check what Core sent
+ * at runtime. Issue #139: the transport guard listed the kinds by hand, Core
+ * added `user_selected`, and one such row rejected the entire source list.
+ */
+export const CANDIDATE_KINDS = [
+  "default",
+  "environment_override",
+  "user_selected",
+] as const;
+export type CandidateKind = (typeof CANDIDATE_KINDS)[number];
+
 export interface SourceResponse {
   source_id: string;
   display_name: string;
@@ -157,7 +170,7 @@ export interface SourceResponse {
   detected: boolean | null;
   root_label: string | null;
   candidate_path: string;
-  candidate_kind: "default" | "environment_override" | "user_selected";
+  candidate_kind: CandidateKind;
   candidate_revision?: number;
   candidate_change_allowed?: boolean;
   candidate_change_reason?: string | null;
@@ -190,7 +203,7 @@ export interface SourceGrantReceipt {
   source_id: string;
   root_id: string;
   root_label: string;
-  candidate_kind: "default" | "environment_override" | "user_selected";
+  candidate_kind: CandidateKind;
   granted_at: string;
   revoked_at: string | null;
   revision: number;

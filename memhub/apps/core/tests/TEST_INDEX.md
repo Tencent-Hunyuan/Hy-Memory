@@ -287,6 +287,7 @@
 | `test_source_authorization_state.py` | `unit` | Why a source cannot be read, named separately from whether it can. |
 | `test_source_candidate_api.py` | `integration` | Candidate location changes must not implicitly grant or import anything. |
 | `test_source_candidate_connections.py` | `contract` | 覆盖 empty candidate revisions preserve default fingerprint、persisted candidate requires exact revision、connection resolves candidate in transaction and prior replay never regrants 等 7 个场景。 |
+| `test_source_candidate_kind_parity.py` | `contract` | 来源根目录类型在三处必须同时存在：python 枚举、TS 契约、前端运行时校验。 |
 | `test_source_candidates.py` | `contract` | 覆盖 preview is metadata only and cancel changes nothing、select persists only candidate and restarts with revision、compare and swap and aba cannot reuse old preview 等 9 个场景。 |
 | `test_source_connection_intents.py` | `integration` | No user data: connection retries must retain the original intent and job. |
 | `test_source_discovery.py` | `contract` | 覆盖 discovery is sorted bounded and suffix scoped、discovery does not follow directory or file symlinks 场景。 |
@@ -328,4 +329,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 323 个测试文件。
+共 324 个测试文件。

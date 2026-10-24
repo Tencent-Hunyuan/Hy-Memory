@@ -6,6 +6,8 @@ import type {
   MatterRun,
 } from "@one-memory/contracts";
 import {
+  CANDIDATE_KINDS,
+  type CandidateKind,
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type ConversationBrowserPage,
@@ -1544,8 +1546,12 @@ export function isSourceResponse(value: unknown): value is SourceResponse {
     typeof candidate.candidate_path === "string" &&
     measuredCount(candidate.imported_messages) &&
     measuredCount(candidate.imported_conversations) &&
-    (candidate.candidate_kind === "default" ||
-      candidate.candidate_kind === "environment_override") &&
+    // Taken from the contract rather than spelled out here: this list used to
+    // be written by hand, Core gained `user_selected`, and one row of that kind
+    // failed the guard for the whole list. Nothing renders, every endpoint
+    // answers 200, and the prefetch that carried the rejection cannot report
+    // it (issue #139).
+    CANDIDATE_KINDS.includes(candidate.candidate_kind as CandidateKind) &&
     // Guarded rather than defaulted: an unrecognised value must not quietly
     // read as "additions_only" and tell the user we track less than we do,
     // nor as "full_dynamic" and promise more.
