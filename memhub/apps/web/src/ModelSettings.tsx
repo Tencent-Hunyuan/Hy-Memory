@@ -109,6 +109,9 @@ const FIELD_PROBE_TEXT: Partial<Record<ProbeCode, string>> = {
     "服务商拒绝了这个 API Key（401）。请确认密钥属于当前填写的服务地址。",
   model_not_found: "服务商没有这个模型名，请对照服务商的模型列表核对。",
   unreachable: "连不上接口地址，请检查网络和服务地址是否正确。",
+  structured_output_truncated:
+    "模型能连上，但这次回答在输出预算内没有写完（思考占满了额度）。可以重试一次；如果每次都这样，说明这个模型的思考过长。",
+  structured_output_unsupported: "模型能连上，但没能按要求的格式返回结果。",
 };
 
 function probeFieldErrors(
@@ -129,8 +132,15 @@ function probeFieldErrors(
   if (!result.capabilities.model_available) {
     if (stages.get("model")?.code === "unauthorized") {
       errors["api-key"] = FIELD_PROBE_TEXT.unauthorized;
-    } else {
+    } else if (stages.get("model")?.code !== "ok") {
       errors.model = text("model") ?? FIELD_PROBE_TEXT.model_not_found;
+    } else {
+      // The listing answered and the model was found: the model name is not
+      // what failed. Blaming it sent people to compare model lists while the
+      // real answer was "the probe truncated the reply".
+      errors.model =
+        text("structured_output") ??
+        FIELD_PROBE_TEXT.structured_output_unsupported;
     }
   }
   if (!result.capabilities.embedding_available) {
@@ -1724,6 +1734,7 @@ export function probeLabel(code: ProbeCode): string {
     model_list_unsupported: "该网关不提供模型列表，已改由生成调用验证",
     invalid_response: "服务返回不符合协议",
     structured_output_unsupported: "结构化输出未通过",
+    structured_output_truncated: "输出被预算截断；模型思考占满了额度",
     embedding_model_required: "需要填写 Embedding 模型",
     embedding_unavailable: "Embedding 模型不可用",
   };

@@ -4043,19 +4043,29 @@ def create_app(
     async def retry_unknown_memory_tasks(
         request: RetryUnknownMemoryTasksRequest,
     ) -> RetryUnknownMemoryTasksReceipt:
-        """Retry unknown writes only behind the user's explicit confirmation."""
+        """Retry unknown writes only behind the user's explicit confirmation.
+
+        The database work runs on a worker thread: it is a bounded set of rows,
+        not a handful, and doing it on the loop is what made every other
+        endpoint (and the shutdown signal) wait behind it.
+        """
         del request
         reconciled = await _sdk_memory_runtime(app).reconcile_unknown_outputs()
         from one_memory.memory_server.durable_queue import DurableWriteQueue
 
         queue = DurableWriteQueue(app.state.memory_write_queue_path)
-        unknown = queue.unknown_jobs(limit=2048)
-        if app.state.memory_authority is MemoryAuthority.LEGACY:
-            for job in unknown:
-                queue.resolve_unknown_from_linked_output(job.job_id)
-        requeued = sum(queue.retry_unknown_confirmed(job.job_id) for job in unknown)
-        if app.state.memory_authority is MemoryAuthority.LEGACY:
-            requeued += app.state.memory_task_store.retry_unknown_confirmed()
+        legacy_authority = app.state.memory_authority is MemoryAuthority.LEGACY
+
+        def retry_unknown() -> int:
+            job_ids = tuple(job.job_id for job in queue.unknown_jobs(limit=2048))
+            if legacy_authority:
+                queue.resolve_unknown_outputs(job_ids)
+            requeued = queue.retry_unknown_confirmed_many(job_ids)
+            if legacy_authority:
+                requeued += app.state.memory_task_store.retry_unknown_confirmed()
+            return requeued
+
+        requeued = await asyncio.to_thread(retry_unknown)
         return RetryUnknownMemoryTasksReceipt(reconciled=reconciled, requeued=requeued)
 
     @app.get(
