@@ -128,6 +128,19 @@ it.each([
     await expect(getCallHistory()).rejects.toThrow("call_history_unavailable");
   },
 );
+it("accepts every host the backend records, including ZCode", async () => {
+  // The recorder already files zcode call events; the page contract refused
+  // to name one, which turned a single ZCode recall into a whole-page
+  // failure instead of a listing.
+  fake.list.mockResolvedValue({
+    ...page,
+    items: [{ ...event, host_id: "zcode" }],
+  });
+  await expect(getCallHistory()).resolves.toMatchObject({
+    items: [{ host_id: "zcode" }],
+  });
+  expect(callHostName("zcode")).toBe("ZCode");
+});
 it("does not call transport with invalid filters or clear IDs", async () => {
   await expect(getCallHistory({ hostId: "../host" })).rejects.toThrow();
   await expect(clearCallEvents(["not-an-id"])).rejects.toThrow();
