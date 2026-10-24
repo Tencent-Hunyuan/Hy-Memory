@@ -50,18 +50,29 @@ class SdkDataPlaneMigrationStore:
         return datetime.now(UTC).isoformat()
 
     def authority(self) -> MemoryAuthority:
+        return self.authority_state()[0]
+
+    def authority_state(self) -> tuple[MemoryAuthority, str | None]:
+        """The surviving singleton: authority and the migration that set it.
+
+        This is the only source of authority. The detailed cutover receipt is
+        dropped after cleanup and never exists on a fresh home.
+        """
         try:
             with main_database(self.database_path).read() as connection:
                 row = connection.execute(
-                    "SELECT authority FROM memory_authority_state WHERE singleton=1"
+                    "SELECT authority,migration_id FROM memory_authority_state WHERE singleton=1"
                 ).fetchone()
         except sqlite3.OperationalError as error:
             if "no such table" not in str(error).lower():
                 raise
         else:
             if row is not None:
-                return MemoryAuthority(str(row[0]))
-        return MemoryAuthority.SDK if self.cutover() is not None else MemoryAuthority.LEGACY
+                return MemoryAuthority(str(row[0])), (str(row[1]) if row[1] else None)
+        marker = self.cutover()
+        if marker is not None:
+            return MemoryAuthority.SDK, marker.migration_id
+        return MemoryAuthority.LEGACY, None
 
     def cutover(self) -> CutoverMarker | None:
         try:

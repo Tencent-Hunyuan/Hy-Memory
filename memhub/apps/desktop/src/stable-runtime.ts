@@ -130,6 +130,10 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   // a first launch can be given. They stay codes here and become sentences in
   // STABLE_RUNTIME_USER_MESSAGES: a person reading the dialog never sees them.
   "sdk_migration_preflight_failed",
+  "sdk_migration_memory_unreadable",
+  "sdk_migration_model_profile_required",
+  "sdk_migration_model_secret_unavailable",
+  "sdk_migration_secure_storage_unavailable",
   "sdk_migration_disk_space_insufficient",
   "sdk_migration_cutover_failed",
   "sdk_migration_bundle_copy_failed",
@@ -201,6 +205,14 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "已安装的运行环境比这个安装包更新，无法用旧安装包启动。请安装最新版本的 MemHub；你的记忆数据不会受到影响。",
   install_current_unmanaged:
     "运行环境的安装目录被改动过，无法安全接管。请重新安装 MemHub，你的记忆数据不会受到影响。",
+  sdk_migration_memory_unreadable:
+    "升级前核对发现，新版本还读不到你的全部记忆，所以没有切换数据源，旧数据保持原样可用。请把这个提示反馈给我们；原有记忆数据不会丢失。",
+  sdk_migration_model_profile_required:
+    "升级记忆数据格式需要先有可用的模型配置，用来核对新版本能否读回你的记忆。请在旧版本中完成模型配置后重启；你的记忆数据不会受到影响。",
+  sdk_migration_model_secret_unavailable:
+    "模型密钥读不到（可能被系统钥匙串拒绝），无法核对新版本能否读回你的记忆。请允许 MemHub 访问钥匙串后重新启动；你的记忆数据不会受到影响。",
+  sdk_migration_secure_storage_unavailable:
+    "系统钥匙串暂时不可用，无法核对新版本能否读回你的记忆。请解锁钥匙串后重新启动；你的记忆数据不会受到影响。",
   sdk_migration_disk_space_insufficient:
     "磁盘空间不足，升级记忆数据格式时中断了。请至少腾出与记忆数据同等大小的可用空间（可在「关于本机 → 储存空间」查看），然后重新启动 MemHub；升级会自动继续，原有记忆数据不会丢失。",
   sdk_migration_bundle_copy_failed:

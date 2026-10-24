@@ -135,7 +135,7 @@ This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 - Context wire：cutover marker 提交前只使用 legacy Context v1；提交后 Host Bridge 只使用 SDK-native Context v2。两种 schema 原样校验、原样返回，不把 SDK item 补造成 v1 的 `revision`、`evidence_ids`、`paths` 或 `adoption`，已选择的 v2 路径失败时也不回退 legacy 权威。
 - Ask wire：marker 前保留 Governance Ask v1；marker 后 Web / Host Bridge 只调用 SDK Ask v2。v2 的引用只含 SDK 原生 `memory_id/content/layer/status/source/gmt_created`，生成过程中重复 `get` 校验同一 SDK 快照，不补造 revision、Evidence 或 scopes，SDK 失败不回退 v1。
 - Matter：未形成已发布产品合同，不迁移占位数据；所有 `matter*` 表在升级清理时物理删除，fresh install 不创建，Runtime 不注册 Matter API。
-- 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。所有已发布版本都先经 SDK 写入，Governance/Evidence 只是镜像，所以迁移**不复制、不比对任何 memory 或 raw**：只创建并校验完整 bundle、让写入队列脱离旧表、提交 marker、删除旧表。由一个 Core 命令 `sdk-migrate` 完成；Desktop 启动与 CLI `memhub install`/`upgrade`（macOS、Linux）在启动新 Runtime 前调用它，普通用户不需要另跑命令。App 不得在 migration `deferred` 状态继续启动 Runtime。
+- 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。所有已发布版本都先经 SDK 写入，Governance/Evidence 只是镜像，所以迁移**不复制任何 memory 或 raw**：创建并校验完整 bundle、让写入队列脱离旧表、把旧版命名的 SDK 向量集合接回当前名字、用 Runtime 同样配置的公开 SDK client 按 ID 回读核对，通过后才提交 marker、删除旧表。由一个 Core 命令 `sdk-migrate` 完成；Desktop 启动与 CLI `memhub install`/`upgrade`（macOS、Linux）在启动新 Runtime 前调用它，普通用户不需要另跑命令。App 不得在 migration `deferred` 状态继续启动 Runtime。
 - 迁移期间宿主 capture hook 由 Desktop 活跃 PID marker 静默挡住，不再追加
   Evidence；cutover 后先从宿主 History checkpoint 补齐遗漏 turn，再恢复 live sync。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。

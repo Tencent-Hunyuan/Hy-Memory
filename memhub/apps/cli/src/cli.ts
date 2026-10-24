@@ -4131,6 +4131,15 @@ function notReadyAfterMigration(command: "install" | "upgrade") {
   };
 }
 
+const SDK_MIGRATION_FAILURES: Record<string, string> = {
+  sdk_migration_disk_space_insufficient:
+    "磁盘空间不足，记忆数据迁移没有完成，已回滚到上一版本。请腾出与记忆数据同等大小的空间后重试；原有记忆数据不会丢失。",
+  sdk_migration_memory_unreadable:
+    "核对发现新版本还读不到你的全部记忆，没有切换数据源，已回滚到上一版本。请把这个错误码反馈给我们；原有记忆数据不会丢失。",
+  sdk_migration_model_profile_required:
+    "迁移需要先有可用的模型配置，用来核对新版本能否读回记忆。已回滚到上一版本；请先用 memhub models setup 完成配置后再升级。",
+};
+
 function sdkMigrationFailure(command: "install" | "upgrade", code: string) {
   return {
     schema_version: 1,
@@ -4139,9 +4148,8 @@ function sdkMigrationFailure(command: "install" | "upgrade", code: string) {
     status: "error",
     code,
     message:
-      code === "sdk_migration_disk_space_insufficient"
-        ? "磁盘空间不足，记忆数据迁移没有完成，已回滚到上一版本。请腾出与记忆数据同等大小的空间后重试；原有记忆数据不会丢失。"
-        : "记忆数据迁移没有完成，已回滚到上一版本。请重试；如果仍然失败，请把这个错误码反馈给我们。原有记忆数据不会丢失。",
+      SDK_MIGRATION_FAILURES[code] ??
+      "记忆数据迁移没有完成，已回滚到上一版本。请重试；如果仍然失败，请把这个错误码反馈给我们。原有记忆数据不会丢失。",
   };
 }
 
@@ -4861,10 +4869,10 @@ async function runMaintenanceRestore(options: {
   const instanceId = randomUUID();
   const child = spawn(options.coreCommand, ["serve", "--maintenance"], {
     env: {
-      // Do not pass the caller's Runtime tuning variables (for example
-      // retrieval-index flags) into a maintenance process: a restore must
-      // start the product's minimal maintenance configuration, not inherit
-      // an unrelated experiment from the shell.
+      // Do not pass the caller's Runtime tuning variables into a
+      // maintenance process: a restore must start the product's minimal
+      // maintenance configuration, not inherit an unrelated experiment from
+      // the shell.
       PATH: process.env.PATH,
       HOME: process.env.HOME,
       LANG: process.env.LANG,

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, cast
 
 from one_memory.background_work import interactive_read_pool
 from one_memory.context_expand import ExpansionAuthority, ExpansionRefSigner
@@ -36,23 +36,8 @@ from one_memory.retrieval.models import (
     RawEvidence,
     RetrievalPath,
     RetrievalResponse,
-    TimeRange,
 )
 from one_memory.retrieval.query_plan import plan_local_query
-from one_memory.retrieval.raw_candidates import RawCandidateBatch
-from one_memory.retrieval.raw_evidence import materialize_raw_candidates
-
-
-class RawIndexLookup(Protocol):
-    def lookup_raw(
-        self,
-        query: str,
-        *,
-        source_ids: frozenset[str],
-        deadline: float,
-        time_range: TimeRange | None = None,
-    ) -> tuple[RawCandidateBatch, bool]: ...
-
 
 ExpandRefs = tuple[ExpansionRefSigner, ExpansionAuthority]
 
@@ -104,11 +89,6 @@ class LaneResult:
     starved: bool = False
     #: Bounded candidate probing left authorized rows unranked.
     coverage_limited: bool = False
-
-
-def _semantic_only_raw(item: RawEvidence) -> bool:
-    """Semantic overlap alone is a candidate, not a confirmed recall item."""
-    return set(item.matched_by) == {"semantic"}
 
 
 @dataclass(frozen=True)
@@ -189,12 +169,6 @@ def _managed(
         selected.append(item)
         used += size
     return selected, truncated
-
-
-def _group_missing_requirements(item: RawEvidence | GovernedEvidence) -> list[str]:
-    if isinstance(item, RawEvidence) and _semantic_only_raw(item):
-        return ["relevance_confirmation"]
-    return []
 
 
 def _path(
@@ -296,8 +270,7 @@ def read_lexical_raw_lane(
         ("lexical", "object") if plan.object_keys else ("lexical",),
         truncated,
         # Starvation means: this lane matched, then dropped the item whole. An
-        # ordinary no-match must stay empty, and an unconfigured semantic lane
-        # is not starvation.
+        # ordinary no-match must stay empty.
         starved and not items,
         probe_saturated,
     )
@@ -564,97 +537,6 @@ def warm_raw_read_path(
         return False
 
 
-def read_semantic_raw_lane(
-    index: RawIndexLookup | None,
-    database_path: Path,
-    query: CoordinatorQuery,
-    *,
-    source_ids: frozenset[str],
-    deadline: float,
-) -> LaneResult:
-    if not source_ids:
-        return LaneResult((), "unavailable", "permission_required", (), False)
-    # No derived index is the no-model baseline, not a failure: the lexical lane
-    # must still answer. Semantic is genuinely unsearched in that state, so it
-    # must not claim a channel or a coverage result it never produced.
-    if index is None:
-        return LaneResult((), "not_searched", None, (), False)
-    try:
-        batch, unpublished = index.lookup_raw(
-            query.query,
-            source_ids=source_ids,
-            deadline=deadline,
-            time_range=plan_local_query(query.query).time_range,
-        )
-    except Exception:
-        return LaneResult((), "unavailable", "index_unavailable", ("semantic",), False)
-    if not isinstance(batch, RawCandidateBatch):
-        return LaneResult((), "unavailable", "index_unavailable", ("semantic",), False)
-    if batch.reason == "not_authorized":
-        return LaneResult((), "unavailable", "permission_required", ("semantic",), False)
-    if batch.reason == "deadline":
-        return LaneResult((), "unavailable", "timeout_budget", ("semantic",), True)
-    if batch.reason in {"vector_unavailable", "index_unavailable"}:
-        return LaneResult((), "unavailable", batch.reason, ("semantic",), False)
-    store, generation = _index_state(index, database_path)
-    from one_memory.retrieval.index_store import RetrievalIndexStore
-
-    store = cast("RetrievalIndexStore | None", store)
-    if store is None or generation is None:
-        return LaneResult((), "unavailable", "index_unavailable", ("semantic",), False)
-    try:
-        materialized = materialize_raw_candidates(
-            store,
-            batch,
-            generation_id=generation,
-            source_ids=source_ids,
-            deadline=deadline,
-            character_budget=query.character_budget,
-        )
-    except Exception:
-        return LaneResult((), "unavailable", "index_unavailable", ("semantic",), False)
-    if materialized.reason == "deadline":
-        return LaneResult((), "unavailable", "timeout_budget", ("semantic",), True)
-    if materialized.reason in {"index_unavailable", "not_authorized"}:
-        return LaneResult((), "unavailable", materialized.reason, ("semantic",), False)
-    complete = materialized.complete and not unpublished
-    if materialized.reason == "evidence_changed":
-        status: Literal["ok", "empty", "unavailable", "not_searched"] = "unavailable"
-        reason = "evidence_changed"
-    elif not materialized.items and not complete:
-        status, reason = "unavailable", "index_incomplete"
-    elif materialized.reason == "character_budget":
-        status, reason = "ok", None
-    else:
-        status, reason = ("ok" if materialized.items else "empty"), None
-    return LaneResult(
-        tuple(materialized.items),
-        status,
-        reason,
-        ("semantic",),
-        materialized.reason == "character_budget",
-    )
-
-
-def _index_state(index: RawIndexLookup, database_path: Path) -> tuple[object | None, str | None]:
-    store = getattr(index, "_store", None)
-    generation = None
-    snapshot = getattr(index, "snapshot", None)
-    if snapshot is not None:
-        try:
-            generation = snapshot().generation_id
-        except Exception:
-            generation = None
-    if store is None:
-        try:
-            from one_memory.retrieval.index_store import RetrievalIndexStore
-
-            store = RetrievalIndexStore(database_path)
-        except Exception:
-            store = None
-    return store, generation
-
-
 def read_memory_lane(
     database_path: Path,
     query: CoordinatorQuery,
@@ -857,7 +739,6 @@ def coordinate_context_v2(
     query: CoordinatorQuery,
     *,
     database_path: Path,
-    index: RawIndexLookup | None = None,
     deadline: float,
     expand_refs: ExpandRefs | None = None,
 ) -> RetrievalResponse:
@@ -871,62 +752,29 @@ def coordinate_context_v2(
         lexical = read_lexical_raw_lane(
             database_path, query, source_ids=authority.raw_sources, deadline=deadline
         )
-        semantic = read_semantic_raw_lane(
-            index, database_path, query, source_ids=authority.raw_sources, deadline=deadline
-        )
         timings = StageTimings(raw_ms=(time.monotonic() - raw_started) * 1000)
         combined: dict[tuple[str, str], RawEvidence] = {}
-        for item in (*lexical.items, *semantic.items):
-            if not isinstance(item, RawEvidence):
-                continue
-            identity = _identity(item)
-            previous = combined.get(identity)
-            if previous is None or _semantic_only_raw(previous):
-                combined[identity] = item
-        # Semantic similarity is a candidate signal, not a verified recall
-        # result. Keep semantic-only candidates visible in coverage, but do not
-        # release their bodies for host injection unless the item is
-        # independently confirmed by the lexical/object lane. A global distance
-        # threshold is deliberately not used: the measured positive and
-        # negative distributions overlap.
-        semantic_only = {_identity(item) for item in combined.values() if _semantic_only_raw(item)}
-        confirmed = {_identity(item) for item in lexical.items if isinstance(item, RawEvidence)}
-        deferred_raw = semantic_only - confirmed
-        if deferred_raw:
-            combined = {
-                identity: item
-                for identity, item in combined.items()
-                if identity not in deferred_raw
-            }
-        channels = tuple(dict.fromkeys((*lexical.channels, *semantic.channels)))
+        for item in lexical.items:
+            if isinstance(item, RawEvidence):
+                combined.setdefault(_identity(item), item)
         if lexical.status == "unavailable":
             status: Literal["ok", "empty", "unavailable", "not_searched", "degraded"] = (
                 "unavailable"
             )
             reason = lexical.reason
-        elif semantic.status == "unavailable":
-            status = "unavailable"
-            reason = semantic.reason
-        elif combined:
-            status, reason = "ok", semantic.reason if semantic.status != "ok" else None
-        elif deferred_raw:
-            status, reason = "degraded", "relevance_confirmation"
-        elif lexical.status == "empty":
-            status, reason = ("empty" if semantic.status != "not_searched" else "ok"), None
+        elif combined or lexical.status == "empty":
+            status, reason = "ok", None
         else:
             status, reason = "empty", None
-        truncated = lexical.truncated or semantic.truncated
         raw = LaneResult(
             tuple(combined.values()),
             status,
             reason,
-            channels,
-            truncated,
+            lexical.channels,
+            lexical.truncated,
             lexical.starved,
             lexical.coverage_limited,
         )
-        if deferred_raw:
-            object.__setattr__(raw, "coverage_limited", True)
     elif "raw" in query.kinds and not authority.raw_allowed:
         raw = LaneResult((), "unavailable", "permission_required", (), False)
     if "memory" in query.kinds:
@@ -995,9 +843,7 @@ def coordinate_context_v2(
             return _path("unavailable", raw.reason, raw.channels, "not_searched", False, 0)
         if dropped and not final_raw:
             return _path("unavailable", "permission_required", raw.channels, "unavailable", True, 0)
-        # Lexical-only is complete when the lexical lane actually answered. An
-        # unconfigured semantic lane is a capability absence, not proof that
-        # less than the authorized range was searched.
+        # The raw lane is complete when the lexical lane actually answered.
         complete = (
             raw.status in {"ok", "empty"}
             and not dropped
@@ -1022,9 +868,7 @@ def coordinate_context_v2(
                 "count_budget"
                 if truncated
                 else "coverage_budget"
-                if raw.coverage_limited and not deferred_raw
-                else "relevance_confirmation"
-                if deferred_raw
+                if raw.coverage_limited
                 else "character_budget"
             )
         return _path(
@@ -1112,7 +956,7 @@ def coordinate_context_v2(
                 "group_id": f"group-{index}",
                 "answer_target": query.intent,
                 "decision_status": "missing_confirmation",
-                "missing_requirements": _group_missing_requirements(item),
+                "missing_requirements": [],
                 "object_refs": _object_refs(item, plan.object_keys),
                 "items": [group_item.model_dump(mode="json") for group_item in (item,)],
             }
@@ -1185,7 +1029,6 @@ async def search_context_v2(
     query: CoordinatorQuery,
     *,
     database_path: Path,
-    index: RawIndexLookup | None = None,
     deadline: float,
     expand_refs: ExpandRefs | None = None,
 ) -> RetrievalResponse:
@@ -1198,7 +1041,6 @@ async def search_context_v2(
             authority,
             query,
             database_path=database_path,
-            index=index,
             deadline=deadline,
             expand_refs=expand_refs,
         ),

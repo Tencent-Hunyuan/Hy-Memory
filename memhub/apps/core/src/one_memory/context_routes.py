@@ -38,7 +38,7 @@ from one_memory.context_models import (
     SdkMemoryContextItem,
     SdkRawContextItem,
 )
-from one_memory.context_raw import revalidate_raw_context
+from one_memory.context_raw import read_raw_context, revalidate_raw_context
 from one_memory.context_search import search_context
 from one_memory.diagnostic_log import diagnostic_event, diagnostic_exception
 from one_memory.external_memory_access import external_access
@@ -50,7 +50,6 @@ from one_memory.hy_sdk_types import (
     parse_sdk_search,
 )
 from one_memory.imports.storage import EvidenceStore
-from one_memory.retrieval.raw_lane import read_raw_indexed_context
 from one_memory.semantic_deadline import hy_wait_budget, search_within
 
 CALL_EVENT_RESPONSE_BUDGET_MS = 250
@@ -99,12 +98,11 @@ def context_router(dependencies: Sequence[Depends]) -> APIRouter:
             read = asyncio.create_task(
                 in_read_pool(
                     raw_read_pool(),
-                    read_raw_indexed_context,
+                    read_raw_context,
                     database,
                     value,
                     source_ids=authority.raw_sources,
                     deadline=lane_end,
-                    index=getattr(request.app.state, "retrieval_runtime", None),
                 )
             )
             done, _ = await asyncio.wait({read}, timeout=max(0, lane_end - time.monotonic()))

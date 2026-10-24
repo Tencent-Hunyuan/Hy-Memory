@@ -85,7 +85,6 @@ async def application(tmp_path: Path):
         live_sync_enabled=False,
         live_sync_watch_enabled=False,
         automatic_memory_processing=False,
-        retrieval_index_enabled=False,
     )
     app = create_app(settings, source_catalog={}, secret_store=secrets)
     async with (

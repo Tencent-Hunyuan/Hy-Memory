@@ -237,15 +237,9 @@ def build_sdk_config(
 
     root = data_dir.resolve() / "hy-memory" / "governed-v2"
     root.mkdir(parents=True, exist_ok=True)
-    collection_identity = "\0".join(
-        (
-            embedding_provider.value,
-            embedding_endpoint or "local",
-            embedding_model,
-            str(dimensions or "auto"),
-        )
+    collection = _collection_base(
+        embedding_provider, embedding_endpoint, embedding_model, dimensions
     )
-    collection = "memhub_" + hashlib.sha256(collection_identity.encode()).hexdigest()[:16]
 
     return MemoryConfig.from_dict(
         {
@@ -346,6 +340,49 @@ def _generation_access(
     if not api_key:
         raise HySdkRuntimeError("hy_sdk_model_api_key_missing")
     return endpoint, api_key
+
+
+def _collection_base(
+    provider: ProviderKind,
+    endpoint: str | None,
+    model: str,
+    dimensions: int | None,
+) -> str:
+    identity = "\0".join((provider.value, endpoint or "local", model, str(dimensions or "auto")))
+    return "memhub_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
+
+
+def vector_collection_bases(profile: ModelProfileSnapshot) -> tuple[str, tuple[str, ...]]:
+    """The SDK vector collection base for this embedding space, and the older ones.
+
+    The SDK derives every vector collection (chat, Coding keys, Working facts,
+    each variant) by suffixing this base. Builds before #145 named the same
+    embedding space `one_memory_<12 hex>`, with or without a declared width;
+    the offline migration renames those so their vectors stay readable.
+    """
+    provider = profile.embedding_provider_kind or profile.provider_kind
+    local = provider is ProviderKind.LOCAL_ONNX
+    model = profile.embedding_model or (BUILTIN_EMBEDDING_MODEL if local else None)
+    if not model:
+        raise HySdkRuntimeError("hy_sdk_embedding_model_required")
+    endpoint: str | None
+    dimensions: int | None
+    if local:
+        endpoint, dimensions = None, profile.embedding_dimensions or BUILTIN_EMBEDDING_DIMENSIONS
+        legacy_endpoint = "local-onnx"
+    else:
+        endpoint = _openai_endpoint(provider, profile.embedding_base_url or profile.base_url)
+        dimensions = profile.embedding_dimensions
+        legacy_endpoint = endpoint
+    legacy_model = profile.embedding_model or "bge-small-zh-v1.5"
+    legacy = tuple(
+        "one_memory_"
+        + hashlib.sha256(
+            ":".join((provider.value, legacy_endpoint, legacy_model, *declared)).encode()
+        ).hexdigest()[:12]
+        for declared in ((), ("auto",), (str(profile.embedding_dimensions or "auto"),))
+    )
+    return _collection_base(provider, endpoint, model, dimensions), tuple(dict.fromkeys(legacy))
 
 
 def _openai_endpoint(provider: ProviderKind, endpoint: str | None) -> str:

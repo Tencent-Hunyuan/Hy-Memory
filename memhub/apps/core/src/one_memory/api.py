@@ -841,8 +841,6 @@ def create_app(
     secret_store: SecretStore | None = None,
 ) -> FastAPI:
     runtime_settings = settings or load_settings()
-    if runtime_settings.retrieval_index_enabled and not manage_runtime:
-        raise ValueError("retrieval_runtime_ownership_required")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -1456,22 +1454,7 @@ def create_app(
             app.state.resource_diagnostics = watched_task(
                 asyncio.get_running_loop(), _emit_resource_snapshots
             )
-            app.state.retrieval_runtime = None
             try:
-                if runtime_settings.retrieval_index_enabled:
-                    from one_memory.retrieval.index_provisioning import provision_retrieval_index
-                    from one_memory.retrieval.runtime import ExistingRetrievalRuntime
-
-                    # The runtime only resumes an index someone initialized. Turning
-                    # the feature on is that someone; otherwise enabling it would
-                    # leave every search on the lexical lane with nothing to say why.
-                    await asyncio.to_thread(provision_retrieval_index, runtime_settings.data_dir)
-                    app.state.retrieval_runtime = ExistingRetrievalRuntime(
-                        runtime_settings.data_dir,
-                        minimum_free_bytes=runtime_settings.retrieval_minimum_free_bytes,
-                        service_levels=app.state.service_levels,
-                    )
-                    await app.state.retrieval_runtime.start()
                 # Startup writes are done. Only now let the derived-content
                 # rebuild take the single write checkout: it is a long
                 # background job, and on a large library it would otherwise
@@ -1498,15 +1481,6 @@ def create_app(
                     outcome="started",
                     instance_id=runtime_settings.instance_id,
                 )
-                retrieval_stop_error: BaseException | None = None
-                if app.state.retrieval_runtime is not None:
-                    try:
-                        await app.state.retrieval_runtime.stop()
-                    except (Exception, asyncio.CancelledError) as error:
-                        # Preserve failure while cleaning other owned services.
-                        # Experimental: an exceptional live-thread failure still
-                        # needs an outer ownership fence before production enablement.
-                        retrieval_stop_error = error
                 app.state.main_database_report.cancel()
                 app.state.loop_heartbeat.cancel()
                 with suppress(asyncio.CancelledError):
@@ -1564,8 +1538,6 @@ def create_app(
                 # Waited for off the loop: this is the task whose whole point
                 # is that the loop never waits on a disk.
                 await asyncio.to_thread(flush_diagnostics)
-                if retrieval_stop_error is not None:
-                    raise retrieval_stop_error
 
     app = FastAPI(
         title="MemHub Core",
@@ -3130,11 +3102,8 @@ def create_app(
         store = getattr(app.state, "sdk_data_plane_migrations", None)
         if store is None:
             store = SdkDataPlaneMigrationStore(_evidence_store(app).database_path)
-        marker = store.cutover()
-        return MemoryAuthorityResponse(
-            authority="sdk" if marker is not None else "legacy",
-            migration_id=marker.migration_id if marker is not None else None,
-        )
+        authority, migration_id = store.authority_state()
+        return MemoryAuthorityResponse(authority=authority.value, migration_id=migration_id)
 
     @app.get(
         "/api/v2/memory-library",
@@ -4484,9 +4453,8 @@ class _LazyASGIApp:
     `create_app()` must not run at import time. The managed `serve()` entry
     imports `create_app` from this module before it can construct its own app
     with `manage_runtime=True`; an eager module-level app was therefore built
-    first with the default `manage_runtime=False`. With retrieval index enabled
-    that default app hit `retrieval_runtime_ownership_required` and killed the
-    process before the managed app could bind a port.
+    first with the default `manage_runtime=False`, doing startup work for an
+    app that never serves.
     """
 
     def __init__(self) -> None:

@@ -285,6 +285,12 @@ describe("startup install errors", () => {
     expect(noSpace).toContain("重新启动");
     expect(noSpace).toContain("不会丢失");
     expect(noSpace).not.toContain("sdk_migration_disk_space_insufficient");
+
+    const unreadable = stableRuntimeUserMessage(
+      new Error("sdk_migration_memory_unreadable"),
+    );
+    expect(unreadable).toContain("没有切换数据源");
+    expect(unreadable).toContain("不会丢失");
   });
 });
 
