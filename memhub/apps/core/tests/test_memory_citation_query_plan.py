@@ -21,14 +21,13 @@ def _predicates():
     home = re.search(r'readable = """(.*?)"""', _source(home_summary), re.S).group(1)
     library = _source(memory_library)
     library_clauses = re.findall(r'clauses\.append\("""(NOT EXISTS.*?)"""\)', library, re.S)
-    access = re.search(
-        r"_MEMORY_READABLE = \"\"\"(.*?)\"\"\"", _source(source_read_access), re.S
-    ).group(1)
     return {
         "home": (home, ("local",)),
         "library": ("m.user_id = ? AND " + " AND ".join(library_clauses), ("local",)),
         "context": (context_memory._READABLE, ()),
-        "source_read_access": (access, ()),
+        # Built rather than lifted out of the module's source: the policy is a
+        # function now, so what has to be planned is what it returns.
+        "source_read_access": (source_read_access._MEMORY_READABLE, ()),
     }
 
 

@@ -38,6 +38,12 @@ Hy Memory and MemHub are versioned and released independently.
   parked pre-invocation work, and drop only the obsolete
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
+- A memory whose cited evidence row has been released no longer reads as a
+  revoked source. The read policy is now spelled once instead of in four
+  copies, so the memory library, the detail endpoint, call-event references
+  and context assembly agree that missing provenance is a fact about the
+  citation, not about the grant. Real revocations still hide memories; they
+  are recorded on the grant and never on the evidence row.
 
 ## Hy Memory 2.0.5 — 2026-10-22
 

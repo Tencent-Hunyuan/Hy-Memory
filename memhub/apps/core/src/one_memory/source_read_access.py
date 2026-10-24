@@ -14,22 +14,42 @@ from one_memory.memory_governance import GovernedMemory
 from one_memory.memory_visibility import mode as visibility_mode
 from one_memory.memory_visibility import readable_ids
 
-# A memory is readable while every active citation is: still current, owned by
-# the reader, and not on a revoked source. `+link.active` keeps SQLite on the
-# (memory_id, evidence_id) primary key. Left on its own, SQLite picks the
-# (active, evidence_id, memory_id) index and walks every active link in the
-# library once per memory, which on a 1,226-memory library took 5.4 s for 500
-# memories and hit the 5 s interrupt, so the memory library and the memory map
-# both answered 503 (D78 missed this path).
-_MEMORY_READABLE = """
-    is_memory_evidence_current(?,?,?) AND NOT EXISTS (
+
+def memory_source_readable(memory_id: str, user_id: str) -> str:
+    """SQL: no active citation of this memory sits behind a revoked source.
+
+    Takes expressions rather than values because the callers differ: the
+    checks here bind a parameter, `context_memory` reads an already-open row.
+
+    Absence is not revocation, and used to be read as one. A citation whose
+    `evidence` row is gone proves nothing about the grant — the row was
+    released as import staging, not by the user — so it neither hides the
+    memory nor excuses it. `_revoked_evidence` below has always answered it
+    that way; only this predicate disagreed, and it answered 403
+    `memory_source_revoked` for 85 of 2,382 memories on two sources nobody
+    revoked (issue #157). Revocation itself is unaffected: it marks the grant
+    and never deletes evidence, so a revoked source still has a row here to
+    match against.
+
+    `+link.active` keeps SQLite on the (memory_id, evidence_id) primary key.
+    Left on its own, SQLite picks the (active, evidence_id, memory_id) index
+    and walks every active link in the library once per memory, which on a
+    1,226-memory library took 5.4 s for 500 memories and hit the 5 s
+    interrupt, so the memory library and the memory map both answered 503
+    (D78 missed this path).
+    """
+    return f"""
+    NOT EXISTS (
         SELECT 1 FROM governed_memory_evidence link
         LEFT JOIN evidence e ON e.evidence_id=link.evidence_id
         LEFT JOIN source_grants g ON g.user_id=e.user_id AND g.source_id=e.source_id
-        WHERE link.memory_id=? AND +link.active=1
-          AND (e.evidence_id IS NULL OR e.user_id!=? OR g.revoked_at IS NOT NULL)
+        WHERE link.memory_id={memory_id} AND +link.active=1
+          AND (e.user_id!={user_id} OR g.revoked_at IS NOT NULL)
     )
 """
+
+
+_MEMORY_READABLE = "is_memory_evidence_current(?,?,?) AND " + memory_source_readable("?", "?")
 
 
 class SourceReadAccess:
