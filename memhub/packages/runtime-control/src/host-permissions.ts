@@ -33,6 +33,7 @@ import {
   previewRecallInstall,
   previewRecallUninstall,
   type RecallHostLayout,
+  type RecallInstallPlan,
   type RecallInstallPreview,
   type RecallRuntime,
   type RecallUninstallPlan,
@@ -113,6 +114,17 @@ export class HostPermissions {
     private readonly runtime: RecallRuntime,
     private readonly syncHookAssetsDirectory?: string,
   ) {}
+
+  /** One plan per host, the last one previewed, for install to approve by
+   * fingerprint. See `approvedPlan`.
+   *
+   * Lives for the length of one settings-dialog session: a preview and its
+   * confirm happen in the same process, and a restart re-previews rather
+   * than approving an old fingerprint. Note the constraint this exists
+   * under — previewing a plugin host twice is not byte-stable (each plan
+   * mints its own record timestamps), so callers approve the one preview
+   * they showed, never re-preview in between. */
+  private readonly previewedPlans = new Map<string, RecallInstallPlan>();
 
   static async open(
     dataDir: string,
@@ -270,12 +282,32 @@ export class HostPermissions {
       assertSupported(layout);
       await this.checkStorage();
       await this.requireNoSyncHook(layout);
-      const preview = await previewRecallInstall(
-        await planRecallInstall(layout, this.runtimeFor(layout)),
-      );
+      const plan = await planRecallInstall(layout, this.runtimeFor(layout));
+      const preview = await previewRecallInstall(plan);
+      this.previewedPlans.set(layout.hostId, plan);
       await this.checkInstallTrees(layout, preview);
       return preview;
     });
+  }
+
+  /** The plan this approval names. The preview's own plan is reused when the
+   * fingerprint matches it: a plugin record carries the timestamp its plan
+   * minted, so on a machine with no prior record a fresh plan could never
+   * reproduce a preview's fingerprint, and every first install would refuse
+   * as stale. Any other approval falls through to a fresh plan, and the
+   * caller's fingerprint check still decides; apply's own drift guards hold
+   * the disk still in place either way. */
+  private async approvedPlan(
+    layout: RecallHostLayout,
+    approved: string,
+  ): Promise<{ plan: RecallInstallPlan; preview: RecallInstallPreview }> {
+    const previewed = this.previewedPlans.get(layout.hostId);
+    if (previewed !== undefined) {
+      const preview = await previewRecallInstall(previewed);
+      if (preview.fingerprint === approved) return { plan: previewed, preview };
+    }
+    const plan = await planRecallInstall(layout, this.runtimeFor(layout));
+    return { plan, preview: await previewRecallInstall(plan) };
   }
 
   async install(layout: RecallHostLayout, approved: unknown) {
@@ -285,8 +317,7 @@ export class HostPermissions {
       await this.checkStorage();
       await this.requireNoSyncHook(layout);
       await this.reclaimOrphanSyncHook(layout);
-      const plan = await planRecallInstall(layout, this.runtimeFor(layout));
-      const preview = await previewRecallInstall(plan);
+      const { plan, preview } = await this.approvedPlan(layout, approved);
       if (preview.fingerprint !== approved)
         throw new Error("host_install_preview_stale");
       await this.checkInstallTrees(layout, preview);
@@ -1021,11 +1052,15 @@ export class HostPermissions {
       }
     }
     if (!layout.plugin) return;
+    // WorkBuddy has a marketplace copy beside its cache copy; a ZCode plugin
+    // is the cache copy alone. Both roots are ours, and both are checked.
+    const plugin = layout.plugin;
+    const roots =
+      "marketplaceRoot" in plugin
+        ? [plugin.marketplaceRoot, plugin.cacheRoot]
+        : [plugin.cacheRoot];
     const planned = new Set(preview.files.map((file) => file.path));
-    for (const root of [
-      layout.plugin.marketplaceRoot,
-      layout.plugin.cacheRoot,
-    ]) {
+    for (const root of roots) {
       for (const file of await treeFiles(root)) {
         // WorkBuddy writes `.in_use/<pid>` beside the cached manifest for every
         // live process. Those files are the host's, not the user's, and they

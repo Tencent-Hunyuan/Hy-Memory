@@ -210,7 +210,11 @@ describe("all writing layouts refuse a symlinked ancestor", () => {
         deepseekHarnessLayout({ dshHome: dir, profile: "headless" }),
     },
     { name: "workbuddy plugins", link: "plugins", layout: workbuddyLayout },
-    { name: "zcode skills", link: "skills", layout: zcodeLayout },
+    {
+      name: "zcode plugins",
+      link: path.join("cli", "plugins"),
+      layout: zcodeLayout,
+    },
   ];
 
   for (const testCase of cases) {

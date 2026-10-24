@@ -130,24 +130,8 @@ export async function planCaptureFiles(
       },
     ];
   }
-  if (filePath !== null && sourceId === "zcode") {
-    const capture = captureCommandFor(layout, runtime);
-    const recallCli = runtime.recallCliPath;
-    const injection =
-      recallCli === undefined
-        ? null
-        : zcodeInjectionCommand(runtime, recallCli);
-    const before = await readFile(filePath);
-    return [
-      {
-        path: filePath,
-        before,
-        after: mergeZcodeHooks(before, capture, injection),
-        command: capture,
-        kind: "merge",
-      },
-    ];
-  }
+  // ZCode's hooks ship inside its plugin tree, planned with the rest of it
+  // (recall-installer's plannedPluginFiles); it has no config-file hooks.
   return [];
 }
 
@@ -159,7 +143,10 @@ export function captureFilePath(layout: RecallHostLayout): string | null {
     return path.join(root, "extensions", "one-memory-capture.js");
   if (layout.hostId === "opencode")
     return path.join(root, "plugin", "one-memory-capture.js");
-  if (layout.hostId === "zcode") return layout.configPath;
+  // ZCode ships its hooks inside the plugin tree, planned with the rest of
+  // it (recall-installer's plannedPluginFiles).
+  if (layout.hostId === "zcode" && layout.plugin)
+    return path.join(layout.plugin.installRoot, "hooks", "hooks.json");
   return null;
 }
 
@@ -197,7 +184,9 @@ export async function inspectCapture(
     return { ours: false, findings: [{ path: filePath, where: UNREADABLE }] };
   }
   if (raw === null) return { ours: false, findings: [] };
-  if (!(layout.hostId in COMMAND_HOSTS) && layout.hostId !== "zcode") {
+  // Hosts whose capture file we own outright: the file existing at all is
+  // ours, including ZCode, whose hooks live inside its plugin tree.
+  if (!(layout.hostId in COMMAND_HOSTS)) {
     return { ours: true, findings: [] };
   }
   let document: unknown;
@@ -211,17 +200,7 @@ export async function inspectCapture(
   }
   let ours = false;
   const findings: RemovalFinding[] = [];
-  for (const { where, command } of hookCommands(document, layout.hostId)) {
-    if (layout.hostId === "zcode") {
-      // Both of ZCode's hook commands are ours by spelling — the capture
-      // entry and the `--inject zcode` entry — and `expected` names only the
-      // capture one, so the inject spelling cannot be told from a stale
-      // variant without the runtime that wrote it.
-      if (sameShellCommand(command, expected) || namesZcodeHook(command)) {
-        ours = true;
-      }
-      continue;
-    }
+  for (const { where, command } of hookCommands(document)) {
     if (sameShellCommand(command, expected)) ours = true;
     else if (namesCapture(command, layout.hostId))
       findings.push({ path: filePath, where });
@@ -252,15 +231,9 @@ export function namesCapture(command: string, hostId: string): boolean {
 
 function hookCommands(
   document: unknown,
-  hostId?: string,
 ): Array<{ where: string; command: string }> {
   if (!document || typeof document !== "object") return [];
-  const hooks = (document as { hooks?: unknown }).hooks;
-  if (!hooks || typeof hooks !== "object") return [];
-  // ZCode nests its event lists under `hooks.events`; every other group-shaped
-  // host hangs them directly off `hooks`.
-  const container =
-    hostId === "zcode" ? (hooks as { events?: unknown }).events : hooks;
+  const container = (document as { hooks?: unknown }).hooks;
   if (!container || typeof container !== "object" || Array.isArray(container)) {
     return [];
   }
@@ -551,16 +524,16 @@ export default async function oneMemoryCapture() {
 
 /** The recall injection entry ZCode's UserPromptSubmit and SessionStart run.
  *
- * Same shape as the WorkBuddy plugin's hook (codebuddy-plugin.ts), built here
- * because a config-file host names the command in the user's own config
- * rather than in a plugin file we own. The entry recalls with the prompt's
+ * Same shape as the WorkBuddy plugin's hook (codebuddy-plugin.ts); built
+ * here because the ZCode plugin tree writes it into a hooks file of its own
+ * rather than the user's config. The entry recalls with the prompt's
  * words and answers `additionalContext`; it also hands the prompt to
  * `<core> capture zcode` without waiting, which is why ZCode gets no separate
  * UserPromptSubmit capture hook — one hook per event speaks, and this is that
  * one. Absent when the runtime ships no recall command; a Stop capture hook
  * is still installed, so capture degrades alone.
  */
-function zcodeInjectionCommand(
+export function zcodeInjectionCommand(
   runtime: RecallRuntime,
   recallCliPath: string,
 ): string {
@@ -584,161 +557,4 @@ function zcodeInjectionCommand(
   // would read an error reply back into the turn as text.
   const script = `if [ "\${ONE_MEMORY_DEBUG_DELIVERY:-}" = "1" ]; then ${invocation}; else ${invocation} 2>/dev/null; fi; exit 0`;
   return `sh -c ${quoteCaptureCommand(script)}`;
-}
-
-/** Post-strip residue check for ZCode's shared config file.
- *
- * Runs where the strip itself is composed with the server removal by the
- * caller, so this reports only what a person has to look at: a file that
- * cannot be parsed, or a command that still names us after everything
- * recorded was stripped. */
-export function zcodeCaptureReview(
-  current: string,
-  filePath: string,
-): RemovalFinding[] {
-  let document: unknown;
-  try {
-    document = JSON.parse(stripZcodeManagedHooks(current));
-  } catch {
-    return [{ path: filePath, where: UNPARSEABLE_HOOKS }];
-  }
-  return hookCommands(document, "zcode")
-    .filter(({ command }) => namesZcodeHook(command))
-    .map(({ where }) => ({ path: filePath, where }));
-}
-
-/** True for either hook command this installer writes for ZCode. */
-export function namesZcodeHook(command: string): boolean {
-  return command.includes("--inject zcode") || namesCapture(command, "zcode");
-}
-
-/** Merge this install's hooks into ZCode's `hooks.events`.
- *
- * ZCode nests config-file hooks one level deeper than the other group-shaped
- * hosts (`hooks.events.<Event>`, not `hooks.<Event>`) and gates all of them on
- * `hooks.enabled` — both from the client's own configuration guide. Setting
- * that flag true when the user had it false is a side effect worth naming:
- * their own config-file hooks start running too. The alternative — installing
- * hooks the host never executes — silently captures nothing, which is worse.
- *
- * Old installs of ours are replaced rather than stacked, as for Claude Code:
- * a different historical binary path is not byte-equal and would otherwise
- * accumulate one group per install.
- */
-function mergeZcodeHooks(
-  raw: string | null,
-  capture: string,
-  injection: string | null,
-): string {
-  let document: Record<string, unknown> = {};
-  if (raw !== null && raw.trim() !== "") {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(
-        "zcode hook configuration is not a JSON object; no files were changed",
-      );
-    }
-    document = parsed as Record<string, unknown>;
-  }
-  const hooks =
-    document.hooks &&
-    typeof document.hooks === "object" &&
-    !Array.isArray(document.hooks)
-      ? (document.hooks as Record<string, unknown>)
-      : {};
-  const events =
-    hooks.events &&
-    typeof hooks.events === "object" &&
-    !Array.isArray(hooks.events)
-      ? (hooks.events as Record<string, unknown>)
-      : {};
-  const planned = injection
-    ? [
-        { event: "SessionStart", command: injection, timeoutMs: 8000 },
-        { event: "UserPromptSubmit", command: injection, timeoutMs: 8000 },
-        { event: "Stop", command: capture, timeoutMs: 5000 },
-      ]
-    : [{ event: "Stop", command: capture, timeoutMs: 5000 }];
-  for (const { event, command, timeoutMs } of planned) {
-    const entries = Array.isArray(events[event]) ? [...events[event]] : [];
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (!entry || typeof entry !== "object") continue;
-      const group = entry as { hooks?: unknown };
-      if (!Array.isArray(group.hooks)) continue;
-      const kept = group.hooks.filter((hook) => {
-        if (!hook || typeof hook !== "object") return true;
-        const value = (hook as { command?: unknown }).command;
-        return !(typeof value === "string" && namesZcodeHook(value));
-      });
-      if (kept.length === 0) entries.splice(index, 1);
-      else if (kept.length !== group.hooks.length)
-        entries[index] = {
-          ...(entry as Record<string, unknown>),
-          hooks: kept,
-        };
-    }
-    if (
-      !entries.some(
-        (entry) =>
-          entry &&
-          typeof entry === "object" &&
-          Array.isArray((entry as { hooks?: unknown }).hooks) &&
-          (entry as { hooks: Array<{ command?: unknown }> }).hooks.some(
-            (hook) => isCommand(hook.command, command),
-          ),
-      )
-    ) {
-      entries.push({ hooks: [{ type: "command", command, timeoutMs }] });
-    }
-    events[event] = entries;
-  }
-  hooks.events = events;
-  hooks.enabled = true;
-  document.hooks = hooks;
-  return `${JSON.stringify(document, null, 2)}\n`;
-}
-
-/** Config text with every hook this installer wrote for ZCode gone.
- *
- * Empty event lists are pruned and an emptied `events` container is removed,
- * like the flat hosts' strip. `hooks.enabled` stays: it is one flag for every
- * hook the user has, not ours alone, and we may have been the reason it was
- * on.
- */
-export function stripZcodeManagedHooks(raw: string): string {
-  const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return raw;
-  }
-  const document = parsed as Record<string, unknown>;
-  const hooks = document.hooks;
-  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return raw;
-  const events = (hooks as Record<string, unknown>).events;
-  if (!events || typeof events !== "object" || Array.isArray(events)) {
-    return raw;
-  }
-  const container = events as Record<string, unknown>;
-  for (const [event, entries] of Object.entries(container)) {
-    if (!Array.isArray(entries)) continue;
-    const kept = entries.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") return [entry];
-      const group = entry as { hooks?: unknown };
-      if (!Array.isArray(group.hooks)) return [entry];
-      const hooks = group.hooks.filter((hook) => {
-        if (!hook || typeof hook !== "object") return true;
-        const value = (hook as { command?: unknown }).command;
-        return !(typeof value === "string" && namesZcodeHook(value));
-      });
-      if (hooks.length === 0) return [];
-      if (hooks.length === group.hooks.length) return [entry];
-      return [{ ...(entry as Record<string, unknown>), hooks }];
-    });
-    if (kept.length === 0) delete container[event];
-    else container[event] = kept;
-  }
-  if (Object.keys(container).length === 0) {
-    delete (hooks as Record<string, unknown>).events;
-  }
-  return `${JSON.stringify(document, null, 2)}\n`;
 }

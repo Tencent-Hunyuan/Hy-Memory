@@ -86,8 +86,8 @@ export async function recallHosts(
     },
     {
       hostId: "workbuddy",
-      // The only host that installs as a plugin rather than as an entry in a
-      // config file. Its directory is still what says it is set up here: the
+      // Installs as a plugin rather than as a config entry (ZCode now does
+      // too). Its directory is still what says it is set up here: the
       // `plugins` tree underneath is partly ours, so keying presence off that
       // would report the host as present because we installed into it.
       label: "WorkBuddy",
