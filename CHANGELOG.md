@@ -38,6 +38,11 @@ Hy Memory and MemHub are versioned and released independently.
   parked pre-invocation work, and drop only the obsolete
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
+- Fixed the applications list going permanently blank when a source's root was
+  chosen by the person rather than detected. The web transport guard listed
+  the root kinds by hand and rejected the whole list over the `user_selected`
+  kind Core already grants; the kinds now come from the shared contract, so the
+  two cannot drift again, and a parity test pins Core's enumeration to it.
 
 ## Hy Memory 2.0.5 — 2026-10-22
 

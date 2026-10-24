@@ -227,6 +227,27 @@ describe("source list transport validation", () => {
     await expect(getSources()).resolves.toEqual([source]);
   });
 
+  // Every kind Core can grant, not just the ones this guard happened to know.
+  // A source whose root the person picked themselves is `user_selected`; the
+  // hand-written list here skipped it, so one such row rejected the whole
+  // list and every app disappeared while all endpoints answered 200.
+  it.each(["default", "environment_override", "user_selected"])(
+    "accepts the %s candidate kind",
+    async (candidate_kind) => {
+      fake.get.mockResolvedValue({ data: [{ ...source, candidate_kind }] });
+      await expect(getSources()).resolves.toEqual([
+        { ...source, candidate_kind },
+      ]);
+    },
+  );
+
+  it("rejects a candidate kind Core cannot grant", async () => {
+    fake.get.mockResolvedValue({
+      data: [{ ...source, candidate_kind: "invented" }],
+    });
+    await expect(getSources()).rejects.toThrow("invalid source list");
+  });
+
   it.each([
     ["negative messages", { imported_messages: -1 }],
     ["NaN messages", { imported_messages: Number.NaN }],
