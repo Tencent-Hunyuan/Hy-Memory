@@ -293,18 +293,13 @@ def build_source_catalog(
                 kind=RootCandidateKind.DEFAULT,
             ),
             create_adapter=create_zcode_adapter,
-            # Recall and the installer ship for ZCode in this build and were
-            # verified against the live host: install, capture in both
-            # directions, and prompt-time injection. Live sync is delivered
-            # by those capture hooks rather than by the scanner: the rollout
-            # stream's record shape is unmapped, so a scan reads its files
-            # and skips every record by name, and the sync flag's other job —
-            # gating the hooks' capture writes — is why the switch has to be
-            # available at all.
+            # Same shape as the other scanner-backed hosts: history and
+            # incremental import read the rollout transcripts, live sync is
+            # the capture hooks writing each turn as it happens (the sync
+            # flag also gates those writes, which is why it exists), and the
+            # recall installer ships in this build.
             capabilities=with_recall_install_target(
-                polling_live_sync_capabilities(
-                    verification=VerificationLevel.FIXTURE_ONLY
-                )
+                polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
             ),
         ),
     )
