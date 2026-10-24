@@ -53,6 +53,7 @@ CAPTURE_SOURCES = frozenset(
         "deepseek-harness",
         "opencode",
         "openclaw",
+        "zcode",
     }
 )
 _UNKNOWN_USER = frozenset({"hermes", "opencode", "openclaw"})

@@ -327,5 +327,6 @@
 | `test_workbuddy_parsing.py` | `contract` | 覆盖 automation preserves query without claiming fresh human authorship、automation context attributes do not depend on order or quote style、quoted full automation envelope is not scheduled provenance 等 17 个场景。 |
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
+| `test_zcode_source.py` | `contract` | The ZCode source: rollout parsing, detection, and the capability card. |
 
-共 323 个测试文件。
+共 324 个测试文件。

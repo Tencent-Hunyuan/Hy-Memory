@@ -95,6 +95,16 @@ def _good_record(source: str, index: int) -> dict:
                 "content": [{"type": "text", "text": text}],
             },
         }
+    if source == "zcode":
+        return {
+            "requestId": f"{source}-{index}",
+            "sessionId": f"{source}-session",
+            "querySource": "main_turn",
+            "startedAt": "2026-09-28T10:00:00+08:00",
+            "completedAt": "2026-09-28T10:00:01+08:00",
+            "request": {"messages": [{"role": "user", "content": text}]},
+            "response": {"finishReason": "tool-calls", "text": "", "toolCalls": []},
+        }
     return {
         "type": "user",
         "sessionId": f"{source}-session",
@@ -110,6 +120,8 @@ def _jsonl_path(root: Path, source: str, name: str) -> Path:
         return root / "chats" / f"{'0' * 32}.jsonl"
     if source == "deepseek-harness":
         return root / name / "session.jsonl"
+    if source == "zcode":
+        return root / "cli" / "rollout" / f"model-io-{name}.jsonl"
     return root / "project" / f"rollout-{name}.jsonl"
 
 

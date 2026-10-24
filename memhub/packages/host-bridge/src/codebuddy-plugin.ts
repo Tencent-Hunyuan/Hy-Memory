@@ -444,7 +444,9 @@ export function pluginTree(
  * excused, so an edited SKILL.md still stops an install.
  */
 export function isPluginCacheBookkeeping(
-  target: CodebuddyPluginTarget,
+  /** Structural: only the cache root is consulted, and every plugin dialect
+   * has one. */
+  target: { cacheRoot: string },
   filePath: string,
 ): boolean {
   const prefix = target.cacheRoot.endsWith("/")

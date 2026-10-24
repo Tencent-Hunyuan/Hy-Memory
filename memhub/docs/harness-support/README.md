@@ -36,6 +36,7 @@ Preview 不会弹出给用户；开关点击本身被视为确认。关闭时通
 | [WorkBuddy](workbuddy.md) | 开放 | `.codebuddy-plugin` 内 MCP + Skill | Plugin Hooks | WorkBuddy Adapter 扫描 + Plugin Hook |
 | [OpenCode](opencode.md) | 开放 | MCP，无 Skill | JS Capture Plugin | OpenCode DB 扫描 + Plugin 实时入口 |
 | [Qwen Code](qwen-code.md) | 开放 | MCP + Skill | 无自动 Hook | `$QWEN_HOME/projects` 扫描 |
+| [ZCode](zcode.md) | 开放 | Plugin 内联 MCP + Skill | Plugin Hooks（注入入口移交 + Stop 钩子） | `cli/rollout` 转录扫描 + Plugin Hook 实时入口 |
 | [Pi](pi.md) | 开放 | CLI Skill，不使用 MCP | JS Capture Extension | Pi session 扫描 + Extension 实时入口 |
 | [OpenClaw](openclaw.md) | 正式产品冻结 | 当前没有；仅有未开放的底层 MCP 写入器 | 没有 Hook、Plugin 或 Prefetch | Adapter 也被冻结，开关不可用 |
 | [DeepSeek Harness](deepseek-harness.md) | 详情页排除，来源管理页按 Profile 接入 | Profile 级 MCP Patch | 无自动 Hook | `$DSH_HOME/sessions` 扫描 |

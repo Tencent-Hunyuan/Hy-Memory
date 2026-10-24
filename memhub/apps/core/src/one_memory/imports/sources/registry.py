@@ -53,6 +53,10 @@ from one_memory.imports.sources.workbuddy import (
     WORKBUDDY_DESCRIPTOR,
     create_workbuddy_adapter,
 )
+from one_memory.imports.sources.zcode import (
+    ZCODE_DESCRIPTOR,
+    create_zcode_adapter,
+)
 
 
 class RootCandidateKind(StrEnum):
@@ -275,6 +279,25 @@ def build_source_catalog(
                 default_home=".openclaw",
             ),
             create_adapter=create_openclaw_adapter,
+            capabilities=with_recall_install_target(
+                polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
+            ),
+        ),
+        SourceRegistration(
+            descriptor=ZCODE_DESCRIPTOR,
+            # ZCode's home directory is the whole install — config, skills,
+            # and the rollout transcripts all live under ~/.zcode — so its
+            # existence is what "installed here" means.
+            candidate=SourceRootCandidate(
+                path=home / ".zcode",
+                kind=RootCandidateKind.DEFAULT,
+            ),
+            create_adapter=create_zcode_adapter,
+            # Same shape as the other scanner-backed hosts: history and
+            # incremental import read the rollout transcripts, live sync is
+            # the capture hooks writing each turn as it happens (the sync
+            # flag also gates those writes, which is why it exists), and the
+            # recall installer ships in this build.
             capabilities=with_recall_install_target(
                 polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
             ),

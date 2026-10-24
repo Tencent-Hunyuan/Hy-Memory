@@ -54,6 +54,7 @@ describe("recall hosts", () => {
       "openclaw",
       "hermes",
       "pi",
+      "zcode",
     ]);
     const [
       cursor,
@@ -65,6 +66,7 @@ describe("recall hosts", () => {
       openclaw,
       hermes,
       pi,
+      zcode,
     ] = hosts;
     expect(cursor.layout.configPath).toBe("/Users/example/.cursor/mcp.json");
     // Codex stores servers in TOML, but it does load Skills.
@@ -82,9 +84,12 @@ describe("recall hosts", () => {
     expect(workbuddy.layout.plugin?.installRoot).toBe(
       "/Users/example/.workbuddy/plugins/cache/one-memory/one-memory-recall/1.0.0",
     );
-    expect(workbuddy.layout.plugin?.settingsPath).toBe(
-      "/Users/example/.workbuddy/settings.json",
-    );
+    expect(
+      workbuddy.layout.plugin !== undefined &&
+        "settingsPath" in workbuddy.layout.plugin
+        ? workbuddy.layout.plugin.settingsPath
+        : null,
+    ).toBe("/Users/example/.workbuddy/settings.json");
     // The three added on 2026-09-05, each dialect read off the installed host
     // rather than its docs. OpenCode puts servers under `mcp` and has no Skill
     // mechanism at all; OpenClaw nests them one deeper under `mcp.servers`;
@@ -122,6 +127,16 @@ describe("recall hosts", () => {
     expect(pi.layout.channel).toBe("cli");
     expect(pi.layout.skillPath).toBe(
       "/Users/example/.pi/agent/skills/memhub-recall/SKILL.md",
+    );
+    // ZCode installs as a plugin, like WorkBuddy but one directory deeper and
+    // under the host's own plugins cache: no config file is edited for the
+    // server or the skill, and the one key added to the user's config is the
+    // plugin's own enable flag.
+    expect(zcode.layout.configPath).toBeNull();
+    expect(zcode.layout.format).toBe("zcode-plugin");
+    expect(zcode.layout.skillPath).toBeNull();
+    expect(zcode.layout.plugin?.installRoot).toBe(
+      "/Users/example/.zcode/cli/plugins/cache/one-memory/one-memory-recall/1.0.0",
     );
     // Every other host speaks MCP, and mislabelling one would put wording in
     // its skill for a channel it does not have.
