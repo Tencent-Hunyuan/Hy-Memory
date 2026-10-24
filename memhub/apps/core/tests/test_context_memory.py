@@ -131,7 +131,10 @@ def test_scope_user_status_and_active_source_isolation(database):
         revoke(db, "workbuddy")
         revoke(db, "cursor", user="other")
     assert ids(read(database, scopes=frozenset({"workspace:one"}))) == ["workspace"]
-    assert ids(read(database, scopes=frozenset({"all-apps"}))) == [
+    # `dangling` cites an evidence row that is gone. That is released
+    # provenance, not a revocation, so the memory reads like any other.
+    assert sorted(ids(read(database, scopes=frozenset({"all-apps"})))) == [
+        "dangling",
         "global",
         "inactive",
         "no-evidence",
@@ -375,7 +378,7 @@ def test_lock_wait_is_bounded_by_shared_deadline(database):
         writer.rollback()
 
 
-@pytest.mark.parametrize("change", ["revoke", "revision", "scope", "delete", "bad-link", "user"])
+@pytest.mark.parametrize("change", ["revoke", "revision", "scope", "delete", "user"])
 def test_final_revalidation_drops_changed_items_without_new_text(database, change):
     with closing(sqlite3.connect(database)) as db, db:
         put(db, "change", links=("e2",))
@@ -385,8 +388,6 @@ def test_final_revalidation_drops_changed_items_without_new_text(database, chang
     with closing(sqlite3.connect(database)) as db, db:
         if change == "revoke":
             revoke(db, "workbuddy")
-        elif change == "bad-link":
-            db.execute("DELETE FROM evidence WHERE evidence_id='e2'")
         else:
             assignment = {
                 "revision": "revision=8,content='new text never return'",
@@ -400,6 +401,25 @@ def test_final_revalidation_drops_changed_items_without_new_text(database, chang
     )
     assert [item.memory_id for item in validated] == ["keep"]
     assert validated[0] is original[1]
+
+
+def test_released_provenance_is_not_a_change_to_the_memory(database):
+    """Revalidation is about the memory, and its evidence row is not it.
+
+    A citation can be released as import staging; that says nothing about the
+    text, the scopes or the grant, so the item keeps its place in the batch.
+    """
+    with closing(sqlite3.connect(database)) as db, db:
+        put(db, "released", links=("e2",))
+    original = read(database, scopes=frozenset({"all-apps"})).items
+    assert [item.memory_id for item in original] == ["released"]
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("DELETE FROM evidence WHERE evidence_id='e2'")
+    validated = revalidate_memory_context(
+        database, original, scopes=frozenset({"all-apps"}), deadline=time.monotonic() + 2
+    )
+    assert [item.memory_id for item in validated] == ["released"]
+    assert validated[0] is original[0]
 
 
 def test_final_revalidation_failure_propagates_for_aggregator_not_false_empty(database):
