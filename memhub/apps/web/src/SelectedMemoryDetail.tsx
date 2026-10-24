@@ -249,9 +249,14 @@ export function SelectedMemoryDetail({
         </p>
         <h3>{heading}</h3>
         {body && <p className="selected-memory-body">{body}</p>}
-        <p className="selected-memory-source">
-          {t("selectedMemory.sourceLine", { source, time: timestamp })}
-        </p>
+        {/* The source line names the conversation a memory was read from.
+            Without a cited excerpt there is no such conversation to name, and
+            the row would say "unknown" about a memory that is right here. */}
+        {detail.evidence.length ? (
+          <p className="selected-memory-source">
+            {t("selectedMemory.sourceLine", { source, time: timestamp })}
+          </p>
+        ) : null}
         <p className="selected-memory-times">
           {t("selectedMemory.timestamps", {
             conversation: clockStamp(
@@ -276,27 +281,32 @@ export function SelectedMemoryDetail({
             {t("selectedMemory.edit")}
           </R6Button>
         )}
-        <section className="selected-memory-evidence">
-          <h4>{t("selectedMemory.evidence")}</h4>
-          <small>
-            {t("selectedMemory.evidenceLine", { author, time: timestamp })}
-          </small>
-          <blockquote>
-            {evidence?.available
-              ? evidence.verbatim
-              : t("selectedMemory.evidenceUnavailable")}
-          </blockquote>
-          {!hideActions && (
-            <R6Button
-              onClick={(event) => {
-                trigger.current = event.currentTarget;
-                setPage("original");
-              }}
-            >
-              {t("selectedMemory.viewOriginal")}
-            </R6Button>
-          )}
-        </section>
+        {/* An SDK memory carries no cited excerpt, so the section would only
+            say "not available". The design shows the memory itself; keep it
+            that way rather than opening a block about evidence nobody kept. */}
+        {detail.evidence.length ? (
+          <section className="selected-memory-evidence">
+            <h4>{t("selectedMemory.evidence")}</h4>
+            <small>
+              {t("selectedMemory.evidenceLine", { author, time: timestamp })}
+            </small>
+            <blockquote>
+              {evidence?.available
+                ? evidence.verbatim
+                : t("selectedMemory.evidenceUnavailable")}
+            </blockquote>
+            {!hideActions && (
+              <R6Button
+                onClick={(event) => {
+                  trigger.current = event.currentTarget;
+                  setPage("original");
+                }}
+              >
+                {t("selectedMemory.viewOriginal")}
+              </R6Button>
+            )}
+          </section>
+        ) : null}
         {!hideActions && (
           <R6Button variant="quiet" onClick={() => setShowHistory((v) => !v)}>
             {t("selectedMemory.history")}

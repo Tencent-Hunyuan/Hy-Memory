@@ -1,6 +1,9 @@
 import type {
   GovernedMemory,
+  MemoryDetail,
   MemoryKind,
+  MemoryLibraryPage,
+  SdkMemoryPage,
   SdkMemoryRecord,
 } from "@one-memory/contracts";
 
@@ -20,9 +23,11 @@ function stamp(seconds: number | null | undefined): string {
 
 /** An SDK memory in the shape the memory map draws.
  *
- * The map groups and labels by id, content, kind, status and tags only. It
- * never writes through this shape: opening a memory goes to the SDK library,
- * so the governed-only fields are inert placeholders here.
+ * The map groups and labels by id, content, kind, status and tags only, so the
+ * governed-only fields are inert placeholders here. Opening, editing and
+ * deleting still go through the SDK (v2) endpoints — `sdkDetail()` below wraps
+ * the same projection for the map's inspector, which is why the inspector can
+ * stay where the design put it instead of sending the reader to another view.
  */
 export function sdkMapMemory(record: SdkMemoryRecord): GovernedMemory {
   const created = stamp(record.gmt_created ?? record.memory_at);
@@ -47,5 +52,54 @@ export function sdkMapMemory(record: SdkMemoryRecord): GovernedMemory {
     created_at: created,
     updated_at: created,
     deleted_at: null,
+  };
+}
+
+/** One SDK memory as the map's inspector reads it.
+ *
+ * The inspector was built for a governed detail (memory + cited evidence +
+ * versions). The SDK keeps none of the latter two per memory — a rewrite
+ * replaces the row — so they are empty rather than faked, and the panel shows
+ * the memory itself where the design put it.
+ */
+export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
+  return {
+    memory: sdkMapMemory(record),
+    evidence: [],
+    history: [],
+    index_sync: null,
+  };
+}
+
+/** One SDK page as the map's left list reads it.
+ *
+ * The list asks a library page for its rows, its total and — per row — when
+ * the cited conversation happened. The SDK page carries the row itself, so the
+ * time is taken from the memory: `memory_at` is the moment the conversation
+ * happened, `gmt_created` only the moment it was imported. Naming which one it
+ * is keeps "对话于" from silently becoming "沉淀于".
+ */
+export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
+  const sourceTime: Record<
+    string,
+    { at: string; basis: "conversation" | "import" }
+  > = {};
+  const sourceIds: Record<string, string[]> = {};
+  for (const record of page.memories) {
+    if (record.source) sourceIds[record.memory_id] = [record.source];
+    const at = record.memory_at ?? record.gmt_created;
+    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    sourceTime[record.memory_id] = {
+      at: new Date(at * 1_000).toISOString(),
+      basis: record.memory_at ? "conversation" : "import",
+    };
+  }
+  return {
+    items: page.memories.map(sdkMapMemory),
+    total: page.total,
+    offset: page.offset,
+    limit: page.limit,
+    source_ids_by_memory: sourceIds,
+    source_time_by_memory: sourceTime,
   };
 }

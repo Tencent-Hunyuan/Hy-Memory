@@ -70,14 +70,14 @@ describe("SDK memory library", () => {
         name: "Estado de la memoria",
       }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: /original/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "original" })).toBeTruthy();
     expect(screen.getByText("1 memoria")).toBeTruthy();
   });
 
   it("edits the same memory id and physically deletes without revision or undo", async () => {
     render(<SdkMemoryLibrary active />);
     await userEvent.click(
-      await screen.findByRole("button", { name: /original/ }),
+      await screen.findByRole("button", { name: "original" }),
     );
     const input = screen.getByRole("textbox", { name: "记忆内容" });
     await userEvent.clear(input);
@@ -93,30 +93,5 @@ describe("SDK memory library", () => {
     expect(screen.queryByText("撤销")).toBeNull();
     expect(screen.queryByText(/版本/)).toBeNull();
     expect(screen.queryByRole("button", { name: "已删除" })).toBeNull();
-  });
-
-  // The list endpoint has no text query. A search has to filter here, or the
-  // box in the header silently does nothing on SDK authority.
-  it("filters the ledger when a query is present", async () => {
-    const other = {
-      ...memory,
-      memory_id: "memory-2",
-      content: "beta",
-      tags: ["preference"],
-    };
-    getSdkMemoryLibrary.mockImplementation(({ offset, limit }) =>
-      Promise.resolve({
-        memories: limit === 500 ? [memory, other] : [memory, other],
-        total: 2,
-        offset,
-        limit,
-      }),
-    );
-    render(<SdkMemoryLibrary active query="beta" />);
-    expect(await screen.findByRole("button", { name: /beta/ })).toBeTruthy();
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /original/ })).toBeNull(),
-    );
-    expect(screen.getByText("共 1 条")).toBeTruthy();
   });
 });

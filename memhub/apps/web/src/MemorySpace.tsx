@@ -5,6 +5,7 @@ import type {
   ImportJob,
   MemoryDetail,
   MemoryGraphResponse,
+  MemoryLibraryPage,
   MemoryProcessingSummary,
   SdkAskMemory,
   SourceResponse,
@@ -32,6 +33,7 @@ import {
   apiErrorCode,
   askMemoriesStream,
   correctMemory,
+  deleteSdkMemory,
   digestMemoryGraph,
   getMemories,
   getMemory,
@@ -39,6 +41,7 @@ import {
   getMemoryGraph,
   getMemoryProcessing,
   getModelProfiles,
+  getSdkMemory,
   getSdkMemoryGraph,
   getSdkMemoryLibrary,
   manualExtract,
@@ -47,6 +50,7 @@ import {
   saveMemoryNote,
   setExtractionWindow,
   syncMemoryIndex,
+  updateSdkMemory,
 } from "./api";
 import { ConversationSearch } from "./ConversationSearch";
 import { clockStamp } from "./clock-stamp";
@@ -58,7 +62,7 @@ import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
-import { sdkMapMemory } from "./sdk-memory-map";
+import { sdkDetail, sdkLibraryPage, sdkMapMemory } from "./sdk-memory-map";
 import { sourceNameOr } from "./source-label";
 import { traceUiAction } from "./ui-trace";
 import { useMemoryLibrary } from "./use-memory-library";
@@ -296,9 +300,9 @@ export function MemorySpace({
     text: string;
     memories: AskMemory[];
   } | null>(null);
-  const [sdkFocusedMemoryId, setSdkFocusedMemoryId] = useState<string | null>(
-    null,
-  );
+  // The SDK library is no longer where a memory opens from the map; the id is
+  // kept so the panel still has a focus target for its own tests.
+  const [sdkFocusedMemoryId] = useState<string | null>(null);
   // The map on SDK authority. Legacy reads (library page, governed graph)
   // are refused there, so it draws SDK memories and the v2 graph instead.
   const [sdkMap, setSdkMap] = useState<{
@@ -306,6 +310,20 @@ export function MemorySpace({
     graph: MemoryGraphResponse;
   } | null>(null);
   const [sdkMapFailed, setSdkMapFailed] = useState(false);
+  // A write on SDK authority has no governed refresh to ride on; bumping this
+  // re-reads the SDK page and graph after an edit or a delete.
+  const [sdkMapRevision, setSdkMapRevision] = useState(0);
+  const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
+  // The map's left list pages through the SDK library the same way it pages
+  // through the governed one: the list is always one page, and the count above
+  // it is the library's total, not the page's length.
+  const [sdkLibrary, setSdkLibrary] = useState<{
+    page: MemoryLibraryPage | null;
+    loading: boolean;
+    failed: boolean;
+  }>({ page: null, loading: false, failed: false });
+  const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
+  const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
   const sdkMapVisible =
     memoryAuthority === "sdk" &&
     simplified &&
@@ -313,6 +331,9 @@ export function MemorySpace({
     displayedMode === "map";
   useEffect(() => {
     if (!sdkMapVisible) return;
+    // A write bumps the revision; reading it here re-runs the read at once
+    // instead of waiting for the 30s poll.
+    void sdkMapRevision;
     let cancelled = false;
     let controller: AbortController | null = null;
     const read = async () => {
@@ -341,7 +362,46 @@ export function MemorySpace({
       clearInterval(timer);
       controller?.abort();
     };
-  }, [sdkMapVisible]);
+  }, [sdkMapVisible, sdkMapRevision]);
+  useEffect(() => {
+    if (memoryAuthority !== "sdk" || !simplified || !active) return;
+    if (displayedMode !== "map") return;
+    void sdkMapRevision;
+    let cancelled = false;
+    const controller = new AbortController();
+    setSdkLibrary((current) => ({ ...current, loading: true }));
+    void getSdkMemoryLibrary(
+      { statuses: ["active"], offset: sdkLibraryOffset, limit: 50 },
+      controller.signal,
+    )
+      .then((page) => {
+        if (cancelled) return;
+        setSdkLibrary({
+          page: sdkLibraryPage(page),
+          loading: false,
+          failed: false,
+        });
+      })
+      .catch(() => {
+        if (cancelled || controller.signal.aborted) return;
+        setSdkLibrary((current) => ({
+          ...current,
+          loading: false,
+          failed: true,
+        }));
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    memoryAuthority,
+    simplified,
+    active,
+    displayedMode,
+    sdkLibraryOffset,
+    sdkMapRevision,
+  ]);
   const [draft, setDraft] = useState("");
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const bulkInFlight = useRef(false);
@@ -1025,8 +1085,9 @@ export function MemorySpace({
       open(memory.memory_id);
       return;
     }
-    setSdkFocusedMemoryId(memory.memory_id);
-    setMode("library");
+    // An SDK answer cites SDK memories; they open in the inspector like any
+    // other rather than switching the reader to a second list.
+    void open(memory.memory_id);
   }
 
   async function saveAnswer(draft: { content: string }) {
@@ -1075,7 +1136,13 @@ export function MemorySpace({
     setDetailFreshness(null);
     setDetailLoad({ memoryId, status: "loading" });
     try {
-      const result = await getMemory(memoryId);
+      // Governed detail is refused on SDK authority, so the inspector reads the
+      // same memory through v2 and renders it in place. Staying here keeps the
+      // map's list, graph and detail where the design put them.
+      const result =
+        memoryAuthority === "sdk"
+          ? sdkDetail(await getSdkMemory(memoryId))
+          : await getMemory(memoryId);
       if (epoch !== detailEpoch.current || result.memory.memory_id !== memoryId)
         return;
       setDetail(result);
@@ -1123,6 +1190,28 @@ export function MemorySpace({
       return;
     setBusy(true);
     setError(null);
+    if (memoryAuthority === "sdk") {
+      // An SDK memory is removed outright: there is no revision to undo.
+      if (actionName !== "delete") {
+        setBusy(false);
+        return;
+      }
+      const trace = traceUiAction("memory", "confirm");
+      try {
+        await deleteSdkMemory(detail.memory.memory_id);
+        trace.done("succeeded");
+        closeDetail();
+        bumpSdkMap();
+      } catch (reason) {
+        trace.done(writeTraceStatus(reason), {
+          reason: "memory_action_failed",
+        });
+        setError(message(reason, t));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const intent = `${detail.memory.memory_id}:${actionName}:${detail.memory.revision}`;
     const requestId = requestIdFor(requestIds.current, intent);
     const trace = traceUiAction("memory", "confirm");
@@ -1329,6 +1418,28 @@ export function MemorySpace({
       return;
     setBusy(true);
     setError(null);
+    if (memoryAuthority === "sdk") {
+      // A rewrite replaces the SDK row instead of adding a revision, so there
+      // is no revision to send and nothing to reconcile afterwards.
+      const trace = traceUiAction("memory", "submit");
+      try {
+        const saved = await updateSdkMemory(detail.memory.memory_id, draft);
+        trace.done("succeeded");
+        setDetail(sdkDetail(saved));
+        setDraft(saved.content);
+        bumpSdkMap();
+      } catch (reason) {
+        trace.done(writeTraceStatus(reason), {
+          reason: isDefiniteRefusal(reason)
+            ? "memory_correct_failed"
+            : "memory_correct_result_unknown",
+        });
+        setError(message(reason, t));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const intent = `${detail.memory.memory_id}:correct:${detail.memory.revision}`;
     const requestId = requestIdFor(requestIds.current, intent);
     const trace = traceUiAction("memory", "submit");
@@ -1510,7 +1621,8 @@ export function MemorySpace({
                       {
                         filter: "",
                         shown: new Intl.NumberFormat(locale).format(
-                          sdkMap.memories.length,
+                          sdkLibrary.page?.items.length ??
+                            sdkMap.memories.length,
                         ),
                       },
                     )
@@ -1887,23 +1999,39 @@ export function MemorySpace({
         focusDialogue={focusDialogue}
         onFocusDialogueConsumed={onFocusDialogueConsumed}
         libraryView={
-          simplified && memoryAuthority !== "sdk"
+          simplified && memoryAuthority === "sdk"
             ? {
-                query: mapQuery,
-                source: mapSource,
-                page: mapLibrary.page,
-                loading: mapLibrary.loading,
-                failed: mapLibrary.failed,
-                stale: sourceSnapshotStale,
-                onQuery: setMapQuery,
-                onSource: setMapSource,
-                resetPage: () => mapLibrary.go(0),
-                onPage: mapLibrary.go,
-                onRetry: () => {
-                  void mapLibrary.refresh().catch(() => {});
-                },
+                query: sdkLibraryQuery,
+                source: "",
+                page: sdkLibrary.page,
+                loading: sdkLibrary.loading,
+                failed: sdkLibrary.failed,
+                stale: false,
+                onQuery: setSdkLibraryQuery,
+                // SDK memories carry one source each and the list is paged by
+                // the endpoint; a source filter would have to page separately.
+                onSource: () => {},
+                resetPage: () => setSdkLibraryOffset(0),
+                onPage: (offset) => setSdkLibraryOffset(offset),
+                onRetry: bumpSdkMap,
               }
-            : undefined
+            : simplified
+              ? {
+                  query: mapQuery,
+                  source: mapSource,
+                  page: mapLibrary.page,
+                  loading: mapLibrary.loading,
+                  failed: mapLibrary.failed,
+                  stale: sourceSnapshotStale,
+                  onQuery: setMapQuery,
+                  onSource: setMapSource,
+                  resetPage: () => mapLibrary.go(0),
+                  onPage: mapLibrary.go,
+                  onRetry: () => {
+                    void mapLibrary.refresh().catch(() => {});
+                  },
+                }
+              : undefined
         }
         onMutationComplete={(id) => {
           void refresh(query)
@@ -1951,14 +2079,6 @@ export function MemorySpace({
         streaming={streaming}
         onDraft={setDraft}
         onOpenMemory={(memoryId) => {
-          if (memoryAuthority === "sdk") {
-            // Governed detail is refused on SDK authority; the SDK library
-            // opens, edits and deletes the same memory through v2.
-            setSdkFocusedMemoryId(memoryId);
-            if (simplified) setManagementOpen(true);
-            else setMode("library");
-            return;
-          }
           const recalled = answerMemories.current.find(
             (memory) => memory.memory_id === memoryId,
           );
@@ -2056,7 +2176,6 @@ export function MemorySpace({
           <SdkMemoryLibrary
             active={active}
             focusedMemoryId={sdkFocusedMemoryId}
-            query={displayedMode === "library" ? query : ""}
           />
         ) : (
           <>

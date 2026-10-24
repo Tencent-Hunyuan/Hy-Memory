@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
   legacyGraph: vi.fn(),
   sdkLibrary: vi.fn(),
   sdkGraph: vi.fn(),
+  sdkMemory: vi.fn(),
 }));
 vi.mock("./api", () => ({
   getMemoryAuthority: api.authority,
@@ -29,6 +30,9 @@ vi.mock("./api", () => ({
   getMemoryGraph: api.legacyGraph,
   getSdkMemoryLibrary: api.sdkLibrary,
   getSdkMemoryGraph: api.sdkGraph,
+  getSdkMemory: api.sdkMemory,
+  updateSdkMemory: vi.fn(),
+  deleteSdkMemory: vi.fn(),
   getMemoryProcessing: async () => null,
   getModelProfiles: async () => [],
   apiErrorCode: () => null,
@@ -140,8 +144,9 @@ it("draws the map from SDK memories on SDK authority, without legacy reads", asy
   expect(api.legacyGraph).not.toHaveBeenCalled();
 });
 
-it("opens a memory from the SDK map in the SDK library", async () => {
+it("opens an SDK memory in place instead of switching away from the map", async () => {
   sdkAuthority();
+  api.sdkMemory.mockResolvedValue(record("a"));
 
   render(<MemorySpace simplified active />);
   await waitFor(() =>
@@ -149,10 +154,10 @@ it("opens a memory from the SDK map in the SDK library", async () => {
   );
   fireEvent.click(screen.getByText("open a"));
 
-  const library = await screen.findByTestId("sdk-library");
-  expect(library.textContent).toBe("a");
-  expect(library.closest("[hidden]")).toBeNull();
-  expect(screen.getByTestId("map").hidden).toBe(true);
+  await waitFor(() => expect(api.sdkMemory).toHaveBeenCalledWith("a"));
+  // The inspector stays on the map; the reader is never moved to a second list.
+  expect(screen.getByTestId("map").hidden).toBe(false);
+  expect(screen.getByTestId("sdk-library").textContent).toBe("");
 });
 
 it("keeps asking for the authority until Core answers", async () => {
