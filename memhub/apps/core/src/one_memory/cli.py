@@ -335,6 +335,8 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
         "bundle": "正在备份记忆数据……",
         "prepare": "正在整理待处理的写入任务……",
         "cutover": "正在切换数据源……",
+        "vectors": "正在接回旧版本的向量数据……",
+        "verify": "正在用新版本核对记忆能否读回……",
         "cleanup": "正在删除旧表……",
     }
 
@@ -356,13 +358,17 @@ def sdk_migrate(options: Sequence[str], stream: TextIO) -> int:
             progress=progress,
         )
     except Exception as error:
+        from one_memory.sdk_migration_verify import MemoryReadbackFailed
+
         code = migration_failure_code(error)
-        document = {"schema_version": 1, "state": "failed", "code": code}
-        _write_restore(stream, as_json, document, f"迁移未完成：{code}")
+        failed: dict[str, object] = {"schema_version": 1, "state": "failed", "code": code}
+        if isinstance(error, MemoryReadbackFailed):
+            failed["readback"] = error.report.as_document()
+        _write_restore(stream, as_json, failed, f"迁移未完成：{code}")
         return 1
     messages = {
         "not_required": "不需要迁移。",
-        "complete": "迁移已完成，旧表已清理。",
+        "complete": "迁移已完成；遗留的旧表或向量已处理。",
         "cutover": "迁移完成：记忆数据已以 SDK 为准。",
     }
     _write_restore(stream, as_json, result.as_document(), messages[result.state])
@@ -390,15 +396,22 @@ def sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
             SdkDataPlaneMigrationStore,
         )
         from one_memory.sdk_migration_runner import abandoned_staging_present
+        from one_memory.sdk_migration_verify import read_active_profile
+        from one_memory.sdk_vector_reattach import legacy_vector_collections
         from one_memory.target_schema import legacy_tables_present
 
         authority = SdkDataPlaneMigrationStore(database_path).authority()
         if authority is MemoryAuthority.SDK:
+            profile = read_active_profile(database_path)
             leftovers = bool(
                 legacy_tables_present(database_path)
                 or abandoned_staging_present(
                     data_dir=settings.data_dir,
                     namespace=HY_MEMORY_NAMESPACE,
+                )
+                or (
+                    profile is not None
+                    and legacy_vector_collections(settings.data_dir, profile)
                 )
             )
             state = "required" if leftovers else "not_required"

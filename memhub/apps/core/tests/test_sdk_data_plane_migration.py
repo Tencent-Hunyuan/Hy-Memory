@@ -8,11 +8,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 
 from one_memory import cli
+from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.hy_sdk_types import HySdkRawPage
+from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.migration_runner import SqliteMigrationStore, migrate
@@ -35,6 +39,7 @@ from one_memory.sdk_migration_runner import (
     resume_legacy_cleanup,
     run_startup_migration,
 )
+from one_memory.secrets import InMemorySecretStore
 from one_memory.target_schema import legacy_tables_present
 
 
@@ -281,6 +286,235 @@ def test_finished_jobs_without_input_do_not_stop_the_migration(store):
     job("pending-without-input")
     with pytest.raises(DataPlaneMigrationError, match="write_job_input_missing"):
         prepare_legacy_write_queue_for_cutover(store.database_path)
+
+
+def _chroma(home: Path):
+    import chromadb
+    from chromadb.config import Settings as ChromaSettings
+
+    return chromadb.PersistentClient(
+        path=str(home / "hy-memory" / "governed-v2" / "vector"),
+        settings=ChromaSettings(anonymized_telemetry=False),
+    )
+
+
+def _fill(client, name: str, ids: list[str], *, text: str = "old") -> None:
+    collection = client.get_or_create_collection(name, metadata={"hnsw:space": "cosine"})
+    collection.upsert(
+        ids=ids,
+        embeddings=[[float(index + 1)] * 4 for index, _ in enumerate(ids)],
+        documents=[f"{text} {identifier}" for identifier in ids],
+        metadatas=[{"layer": "l2_fact"} for _ in ids],
+    )
+
+
+def test_legacy_vectors_are_renamed_and_newer_writes_are_kept(tmp_path) -> None:
+    """Build 20: 3317 memories in `one_memory_*`, the Runtime reading an empty `memhub_*`."""
+    from one_memory.hy_sdk_runtime import builtin_retrieval_snapshot, vector_collection_bases
+    from one_memory.sdk_vector_reattach import (
+        legacy_vector_collections,
+        reattach_legacy_vectors,
+    )
+
+    profile = builtin_retrieval_snapshot()
+    current, legacy = vector_collection_bases(profile)
+    client = _chroma(tmp_path)
+    _fill(client, f"{legacy[0]}_4", ["a", "b", "both"])
+    _fill(client, f"{legacy[0]}_coding_keys_cv_4", ["k1"])
+    _fill(client, f"{current}_4", ["new", "both"], text="newer")
+    del client
+
+    assert len(legacy_vector_collections(tmp_path, profile)) == 2
+    done = reattach_legacy_vectors(tmp_path, profile)
+
+    assert {(item.current, item.final_count) for item in done} == {
+        (f"{current}_4", 4),
+        (f"{current}_coding_keys_cv_4", 1),
+    }
+    assert legacy_vector_collections(tmp_path, profile) == ()
+    client = _chroma(tmp_path)
+    assert sorted(collection.name for collection in client.list_collections()) == [
+        f"{current}_4",
+        f"{current}_coding_keys_cv_4",
+    ]
+    chat = client.get_collection(f"{current}_4").get(ids=["both"], include=["documents"])
+    assert chat["documents"] == ["newer both"]
+    assert reattach_legacy_vectors(tmp_path, profile) == ()
+
+
+def _confirmed(store, *memory_ids: str, kind: str = "chat") -> None:
+    with main_database(store.database_path).write() as database, database:
+        for memory_id in memory_ids:
+            database.execute(
+                "INSERT INTO governed_memories (memory_id,user_id,kind,status,content,"
+                "scopes_json,revision,created_at,updated_at) "
+                "VALUES (?,'local',?,'confirmed','x','[]',1,'now','now')",
+                (memory_id, kind),
+            )
+
+
+class _ReadingClient:
+    """Public-API shaped SDK client that holds only `readable` ids."""
+
+    def __init__(self, readable: set[str]) -> None:
+        self.readable = readable
+
+    def list_memories(self, *, user_id, statuses, limit, offset, order):
+        del user_id, statuses, order
+        ids = sorted(self.readable)
+        rows = [{"memory_id": memory_id} for memory_id in ids[offset : offset + limit]]
+        return {"vdb": {"memories": rows, "total": len(ids)}}
+
+    def get(self, memory_id):
+        return {"memory_id": memory_id} if memory_id in self.readable else None
+
+
+def _reading(readable: set[str]):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def open_client(_profile):
+        yield _ReadingClient(readable)
+
+    return open_client
+
+
+@pytest.fixture
+def active_profile(monkeypatch):
+    from one_memory.hy_sdk_runtime import builtin_retrieval_snapshot
+
+    profile = builtin_retrieval_snapshot()
+    monkeypatch.setattr("one_memory.sdk_migration_runner.read_active_profile", lambda _db: profile)
+    monkeypatch.setattr("one_memory.sdk_migration_verify.read_active_profile", lambda _db: profile)
+    return profile
+
+
+def test_cutover_waits_until_the_new_runtime_reads_every_chat_memory(store, active_profile):
+    """Build 20 reported success on 37 of 3317. Now the legacy tables stay."""
+    from one_memory.sdk_migration_verify import MemoryReadbackFailed
+
+    _confirmed(store, "m1", "m2", "m3")
+    home = store.database_path.parent
+
+    with pytest.raises(MemoryReadbackFailed) as caught:
+        run_startup_migration(
+            data_dir=home,
+            runtime_build="21",
+            sdk_version="2.0.5",
+            namespace="governed-v2",
+            open_client=_reading({"m1"}),
+        )
+
+    assert caught.value.code == "sdk_migration_memory_unreadable"
+    assert caught.value.report.as_document() == {
+        "chat_expected": 3,
+        "chat_readable": 1,
+        "productivity_expected": 0,
+        "productivity_readable": 0,
+        "passed": False,
+    }
+    assert store.authority() is MemoryAuthority.LEGACY
+    assert "governed_memories" in legacy_tables_present(store.database_path)
+
+    result = run_startup_migration(
+        data_dir=home,
+        runtime_build="21",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        open_client=_reading({"m1", "m2", "m3"}),
+    )
+
+    assert result.state == "cutover"
+    assert result.readback is not None and result.readback.passed
+    assert store.authority() is MemoryAuthority.SDK
+
+
+def test_retired_coding_experiences_do_not_block_but_an_empty_store_does(store, active_profile):
+    _confirmed(store, "chat-1")
+    _confirmed(store, "exp-kept", "exp-retired", kind="coding")
+    home = store.database_path.parent
+    from one_memory.sdk_migration_verify import MemoryReadbackFailed
+
+    with pytest.raises(MemoryReadbackFailed):
+        run_startup_migration(
+            data_dir=home,
+            runtime_build="21",
+            sdk_version="2.0.5",
+            namespace="governed-v2",
+            open_client=_reading({"chat-1"}),
+        )
+    result = run_startup_migration(
+        data_dir=home,
+        runtime_build="21",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        open_client=_reading({"chat-1", "exp-kept"}),
+    )
+    assert result.readback is not None
+    assert (result.readback.productivity_expected, result.readback.productivity_readable) == (2, 1)
+
+
+def test_memories_without_a_model_profile_keep_legacy_authority(store, monkeypatch):
+    monkeypatch.setattr("one_memory.sdk_migration_runner.read_active_profile", lambda _db: None)
+    _confirmed(store, "m1")
+
+    with pytest.raises(DataPlaneMigrationError, match="sdk_migration_model_profile_required"):
+        run_startup_migration(
+            data_dir=store.database_path.parent,
+            runtime_build="21",
+            sdk_version="2.0.5",
+            namespace="governed-v2",
+        )
+    assert store.authority() is MemoryAuthority.LEGACY
+
+
+def test_a_build_20_home_gets_its_vectors_back_and_is_checked_against_its_backup(
+    store, active_profile, monkeypatch
+):
+    from one_memory.hy_sdk_runtime import vector_collection_bases
+
+    home = store.database_path.parent
+    current, legacy_bases = vector_collection_bases(active_profile)
+    client = _chroma(home)
+    _fill(client, f"{legacy_bases[0]}_512", ["m1", "m2"])
+    _fill(client, f"{current}_512", ["after-upgrade"], text="newer")
+    del client
+    _confirmed(store, "m1", "m2")
+    first = run_startup_migration(
+        data_dir=home,
+        runtime_build="20",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        open_client=_reading({"m1", "m2"}),
+    )
+    assert first.state == "cutover"
+    # Reproduce build 20: cut over while the legacy collection stayed stranded.
+    client = _chroma(home)
+    client.get_collection(f"{current}_512").modify(name=f"{legacy_bases[0]}_512")
+    _fill(client, f"{current}_512", ["after-upgrade"], text="newer")
+    del client
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=home))
+    status = io.StringIO()
+    assert cli.run(["sdk-migration-status", "--json"], output=status) == 0
+    assert json.loads(status.getvalue())["state"] == "required"
+
+    repaired = run_startup_migration(
+        data_dir=home,
+        runtime_build="21",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        open_client=_reading({"m1", "m2", "after-upgrade"}),
+    )
+
+    assert repaired.state == "complete"
+    assert [(item.current, item.final_count) for item in repaired.reattached] == [
+        (f"{current}_512", 3)
+    ]
+    assert repaired.readback is not None and repaired.readback.passed
+    assert repaired.readback.chat_expected == 2
+    status = io.StringIO()
+    assert cli.run(["sdk-migration-status", "--json"], output=status) == 0
+    assert json.loads(status.getvalue())["state"] == "not_required"
 
 
 def test_pending_dispatch_becomes_one_write_job_per_conversation(store):
@@ -560,3 +794,75 @@ def test_sdk_raw_retention_keeps_only_the_latest_three_days():
     )
     assert asyncio.run(runtime.prune_expired_raw(now=now)) == 1
     assert [row["memory_id"] for row in client.rows] == ["recent"]
+
+
+# The UI asks which memory data plane is authoritative and must get the
+# answer the API gates use.
+
+
+def _app_settings(tmp_path) -> Settings:
+    return Settings(
+        _env_file=None,
+        data_dir=tmp_path / "data",
+        source_home=tmp_path,
+        api_token=SecretStr("authority-test"),
+        imports_enabled=False,
+        automatic_memory_processing=False,
+        live_sync_enabled=False,
+    )
+
+
+async def _authority(tmp_path) -> tuple[dict[str, object], str]:
+    app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": "Bearer authority-test"},
+        ) as client,
+    ):
+        response = await client.get("/api/v2/memory-authority")
+        assert response.status_code == 200
+        return response.json(), app.state.memory_authority.value
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_sdk
+def test_a_fresh_home_reports_sdk_authority(tmp_path) -> None:
+    document, gate = asyncio.run(_authority(tmp_path))
+
+    assert document == {"authority": "sdk", "migration_id": None}
+    assert gate == "sdk"
+
+
+@pytest.mark.integration
+def test_a_migrated_home_still_reports_sdk_after_its_receipt_is_dropped(
+    tmp_path, monkeypatch
+) -> None:
+    """Build 20: the cleanup dropped the cutover receipt, the UI fell back to legacy."""
+    data_dir = tmp_path / "data"
+    EvidenceStore(data_dir / "one-memory.sqlite3")
+    monkeypatch.setattr(cli, "load_settings", lambda: _app_settings(tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+    output = io.StringIO()
+    assert cli.run(["sdk-migrate", "--runtime-build", "21", "--yes", "--json"], output=output) == 0
+    migration_id = json.loads(output.getvalue().splitlines()[-1])["migration_id"]
+    assert legacy_tables_present(data_dir / "one-memory.sqlite3") == ()
+
+    document, gate = asyncio.run(_authority(tmp_path))
+
+    assert document == {"authority": "sdk", "migration_id": migration_id}
+    assert gate == "sdk"
+
+
+@pytest.mark.integration
+def test_a_legacy_home_reports_legacy_authority(tmp_path) -> None:
+    document, gate = asyncio.run(_authority(tmp_path))
+
+    assert document == {"authority": "legacy", "migration_id": None}
+    assert gate == "legacy"

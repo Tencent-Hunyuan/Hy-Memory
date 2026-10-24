@@ -23,10 +23,6 @@ class Settings(BaseSettings):
     live_sync_enabled: bool = True
     automatic_memory_processing: bool = True
     imports_enabled: bool = True
-    # Experimental and unreleased: ownership/error shutdown still requires acceptance.
-    # Resume only explicitly initialized generations; never migrate at startup.
-    retrieval_index_enabled: bool = False
-    retrieval_minimum_free_bytes: int = Field(default=256 * 1024 * 1024, ge=0)
     # Bounded metadata only: query, original text and answers are never stored.
     call_event_retention_days: int | None = Field(default=30, ge=1, le=365)
     call_event_max_events: int | None = Field(default=10_000, ge=1, le=100_000)

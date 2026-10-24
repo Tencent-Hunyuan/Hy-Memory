@@ -2217,34 +2217,6 @@ CREATE TABLE IF NOT EXISTS retrieval_chunks (
 """
 
 
-def retrieval_documents_v2_ddl(dialect: str = "mysql") -> str:
-    """The v2 documents table under its temporary `_v2` name.
-
-    `index_store.migrate_v2` creates this, copies rows from the v1 table, drops
-    the v1 table and renames. The rename is the only reason a `_v2` name exists
-    at all, and it is derived from the single definition so the copy-across
-    cannot drift from what fresh databases get.
-    """
-    documents = next(
-        statement
-        for statement in _split_statements(retrieval_index_ddl(dialect))
-        if "CREATE TABLE IF NOT EXISTS retrieval_documents (" in statement
-    )
-    return documents.replace(
-        "CREATE TABLE IF NOT EXISTS retrieval_documents (",
-        "CREATE TABLE retrieval_documents_v2 (",
-    )
-
-
-def retrieval_build_maps_ddl(dialect: str = "mysql") -> str:
-    """The build-maps table added by v2."""
-    return next(
-        statement
-        for statement in _split_statements(retrieval_index_ddl(dialect))
-        if "retrieval_build_maps" in statement
-    )
-
-
 async def _033_retrieval_index(cursor: Any) -> None:
     for statement in _split_statements(retrieval_index_ddl(_dialect(cursor))):
         await cursor.execute(statement)

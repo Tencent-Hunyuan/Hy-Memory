@@ -15,9 +15,10 @@ import os
 import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from one_memory.database_access import main_database
 from one_memory.imports.models import EvidenceRecord
@@ -35,6 +36,7 @@ from one_memory.memory_server.durable_queue import (
     DurableWriteQueue,
 )
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
+from one_memory.model_profiles import ModelProfileSnapshot
 from one_memory.sdk_data_plane_migration import (
     CutoverMarker,
     DataPlaneMigrationError,
@@ -42,6 +44,20 @@ from one_memory.sdk_data_plane_migration import (
     SdkDataPlaneMigrationStore,
 )
 from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
+from one_memory.sdk_migration_verify import (
+    MemoryReadbackFailed,
+    ReadbackReport,
+    legacy_memory_ids_from,
+    legacy_memory_ids_from_bundle,
+    read_active_profile,
+    runtime_sdk_client,
+    verify_readback,
+)
+from one_memory.sdk_vector_reattach import (
+    ReattachedCollection,
+    legacy_vector_collections,
+    reattach_legacy_vectors,
+)
 from one_memory.target_schema import drop_legacy_tables, legacy_tables_present
 
 PREPARED_PHASE = "prepared"
@@ -341,6 +357,8 @@ class StartupMigrationResult:
     bundle_id: str | None = None
     preparation: CutoverPreparation | None = None
     dropped_tables: tuple[str, ...] = ()
+    reattached: tuple[ReattachedCollection, ...] = ()
+    readback: ReadbackReport | None = None
 
     def as_document(self) -> dict[str, object]:
         document: dict[str, object] = {"schema_version": 1, "state": self.state}
@@ -349,6 +367,18 @@ class StartupMigrationResult:
             document["bundle_id"] = self.bundle_id
         if self.preparation is not None:
             document.update(self.preparation.as_document())
+        if self.reattached:
+            document["reattached_vectors"] = [
+                {
+                    "collection": item.current,
+                    "legacy_count": item.legacy_count,
+                    "merged_count": item.merged_count,
+                    "final_count": item.final_count,
+                }
+                for item in self.reattached
+            ]
+        if self.readback is not None:
+            document["readback"] = self.readback.as_document()
         if self.dropped_tables:
             document["dropped_tables"] = list(self.dropped_tables)
         return document
@@ -415,6 +445,15 @@ def _ensure_bundle(*, data_dir: Path, bundle_id: str, runtime_build: str) -> dic
     return inspect_sdk_migration_bundle(data_dir=data_dir, bundle_id=bundle_id)
 
 
+def _vacuum(database_path: Path) -> None:
+    """Return the dropped tables' pages to the disk; a full disk only skips it."""
+    try:
+        with main_database(database_path).write(autocommit=True) as database:
+            database.execute("VACUUM")
+    except sqlite3.OperationalError:
+        return
+
+
 def run_startup_migration(
     *,
     data_dir: Path,
@@ -422,24 +461,59 @@ def run_startup_migration(
     sdk_version: str,
     namespace: str,
     progress: Callable[[str], None] = lambda _step: None,
+    open_client: Callable[[ModelProfileSnapshot], AbstractContextManager[Any]] | None = None,
 ) -> StartupMigrationResult:
     """Bring one stopped home to SDK authority. Safe to repeat after any failure.
 
     The caller must stop Runtime and keep its service from restarting.
+    `open_client` yields a public SDK client configured as the Runtime will be;
+    tests replace it.
     """
     database_path = data_dir / "one-memory.sqlite3"
     if not database_path.is_file():
         return StartupMigrationResult(state="not_required")
+
+    def client_for(profile: ModelProfileSnapshot) -> AbstractContextManager[Any]:
+        if open_client is not None:
+            return open_client(profile)
+        return runtime_sdk_client(database_path, data_dir, profile)
+
     store = SdkDataPlaneMigrationStore(database_path)
-    if store.authority() is MemoryAuthority.SDK:
-        if not legacy_tables_present(database_path) and not abandoned_staging_present(
+    authority, authority_migration = store.authority_state()
+    profile = read_active_profile(database_path)
+    if authority is MemoryAuthority.SDK:
+        vectors_waiting = profile is not None and bool(legacy_vector_collections(data_dir, profile))
+        leftovers = bool(legacy_tables_present(database_path)) or abandoned_staging_present(
             data_dir=data_dir, namespace=namespace
-        ):
+        )
+        if not vectors_waiting and not leftovers:
             return StartupMigrationResult(state="not_required")
-        progress("cleanup")
+        reattached: tuple[ReattachedCollection, ...] = ()
+        readback: ReadbackReport | None = None
+        if vectors_waiting:
+            assert profile is not None
+            progress("vectors")
+            reattached = reattach_legacy_vectors(data_dir, profile)
+            legacy = legacy_memory_ids_from_bundle(data_dir, authority_migration)
+            if legacy is not None and not legacy.empty:
+                # Authority already moved, so nothing is left to protect by
+                # refusing; record what the repaired home reads back.
+                progress("verify")
+                with client_for(profile) as client:
+                    readback = verify_readback(client, legacy)
+        dropped: tuple[str, ...] = ()
+        if leftovers:
+            progress("cleanup")
+            dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+            if dropped:
+                _vacuum(database_path)
         return StartupMigrationResult(
             state="complete",
-            dropped_tables=resume_legacy_cleanup(data_dir=data_dir, database_path=database_path),
+            migration_id=authority_migration,
+            bundle_id=f"{authority_migration}-pre-cutover" if authority_migration else None,
+            dropped_tables=dropped,
+            reattached=reattached,
+            readback=readback,
         )
 
     from one_memory.database_access import close_main_databases
@@ -447,6 +521,11 @@ def run_startup_migration(
     from one_memory.memory_server.migrations import MIGRATIONS
 
     migration_id, bundle_id = _resumable_identity(database_path)
+    legacy = legacy_memory_ids_from(database_path)
+    if profile is None and not legacy.empty:
+        # Without the embedding profile the Runtime's collections cannot be
+        # named, so neither reattached nor read back. Legacy stays intact.
+        raise DataPlaneMigrationError("sdk_migration_model_profile_required")
     with capture_fence(data_dir):
         progress("bundle")
         manifest = _ensure_bundle(
@@ -472,6 +551,19 @@ def run_startup_migration(
             backup_bundle_id=bundle_id,
         )
         preparation = prepare_legacy_work_for_cutover(database_path)
+        reattached = ()
+        readback = None
+        if profile is not None:
+            progress("vectors")
+            reattached = reattach_legacy_vectors(data_dir, profile)
+        if not legacy.empty:
+            assert profile is not None
+            progress("verify")
+            with client_for(profile) as client:
+                readback = verify_readback(client, legacy)
+            if not readback.passed:
+                store.set_phase(migration_id, phase="readback_failed", state="blocked")
+                raise MemoryReadbackFailed(readback)
         store.set_phase(migration_id, phase=PREPARED_PHASE, state="ready")
         progress("cutover")
         commit_sdk_cutover(
@@ -483,10 +575,14 @@ def run_startup_migration(
         )
         progress("cleanup")
         dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
+        if dropped:
+            _vacuum(database_path)
     return StartupMigrationResult(
         state="cutover",
         migration_id=migration_id,
         bundle_id=bundle_id,
         preparation=preparation,
         dropped_tables=dropped,
+        reattached=reattached,
+        readback=readback,
     )

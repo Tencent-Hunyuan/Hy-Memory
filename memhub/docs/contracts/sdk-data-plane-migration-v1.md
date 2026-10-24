@@ -1,6 +1,6 @@
 # SDK Data Plane Migration v1
 
-Updated: 2026-10-24.
+Updated: 2026-10-24 (vector reattach, readback).
 
 This contract moves released MemHub installations from the historical
 Evidence/Governance authority to the Hy Memory SDK data plane defined by
@@ -28,6 +28,14 @@ and no raw turn, and does not compare the mirror with the SDK:
   no user intent the SDK lacks;
 - SDK L1 raw is retained for three days by the Runtime's own
   `prune_expired_raw`, not by the migration.
+
+"Already complete" holds only if the new Runtime opens the same stores. Builds
+before #145 named a profile's vector collections `one_memory_<12 hex>…`; #145
+renamed them `memhub_<16 hex>…` without carrying the old ones over, so later
+Runtimes read an empty collection (build 20 cut over showing 37 of 3317
+memories). The migration therefore reattaches those collections (§3, step 3)
+and proves the new Runtime reads the memories back before it cuts over
+(step 4).
 
 ## 2. Authority before and after cutover
 
@@ -68,9 +76,32 @@ then:
    restore; an existing verified bundle of the same run is reused;
 2. **prepare**: applies the management schema migrations, discards SDK staging
    left by builds through 19 (§5) and makes legacy queue work self-contained
-   (§4); it needs no model profile and no SDK client;
-3. **cutover**: re-verifies the bundle, repeats §4, commits SDK authority;
-4. **cleanup**: drops the legacy tables (including the `evidence_search` index).
+   (§4);
+3. **vectors**: for the active embedding profile, renames every
+   `one_memory_<old hash>…` collection to the current `memhub_<hash>…` name
+   through Chroma's public client. A current collection that already holds
+   writes is merged in first (newer record wins on a shared id); counts are
+   checked after each step;
+4. **verify**: opens the public SDK client exactly as the Runtime will and reads
+   the legacy confirmed memory ids back (`list_memories`, then `get`). Every
+   chat memory must read back. Coding/Working may be fewer, because the SDK's
+   Coding reconciler deletes experiences it retires, but not zero when the
+   legacy mirror has some. Otherwise the run stops with
+   `sdk_migration_memory_unreadable` and the counts, before anything
+   irreversible; legacy authority and tables stay intact;
+5. **cutover**: re-verifies the bundle, repeats §4, commits SDK authority;
+6. **cleanup**: drops the legacy tables (including the `evidence_search`
+   index) and runs `VACUUM` (skipped if the disk is too full).
+
+A home with legacy memories but no active model profile is not migrated
+(`sdk_migration_model_profile_required`): its collections can be neither named
+nor read back.
+
+A home already on SDK authority still reports `required` while legacy-named
+vector collections exist for its profile (build 20 homes). `sdk-migrate` then
+reattaches them and reads back against the memory ids in the pre-cutover
+bundle; that report is recorded but does not block, as nothing irreversible is
+left. Runtime code never renames or reads Chroma directly.
 
 With `--json` each step prints `{"state":"running","step":…}` and the last line
 is the result: `cutover`, `complete` (only cleanup was left), `not_required`, or
@@ -148,6 +179,12 @@ The release gate covers:
 - CLI upgrade migrating before restart, rolling back on a failed migration,
   and keeping the new version when a migrated home is slow to come up;
 - host capture fenced for the whole command;
+- legacy-named vector collections reattached (with merge) before verifying,
+  and on a home that already cut over;
+- readback refusing a cutover the new Runtime cannot read, and tolerating
+  retired Coding experiences;
+- `/api/v2/memory-authority` agreeing with the API gates on fresh, migrated
+  and legacy homes;
 - pending job freezing, legacy task and pending dispatch conversion;
 - invoked/unknown legacy tasks and pending deletions not blocking cutover;
 - interrupted directory swap recovery before and after authority;
