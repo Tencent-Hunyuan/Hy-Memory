@@ -1,6 +1,6 @@
 # MemHub Architecture
 
-Updated: 2026-10-21.
+Updated: 2026-10-24.
 
 Hy Memory 是 SDK / 引擎；MemHub 是产品与发布名。`one-memory` 仍可能出现在
 兼容路径、模块名和服务标识中。
@@ -129,16 +129,13 @@ directly for low-latency Cypher projection and store-width administration.
 This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
-- Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。旧用户启动迁移在 Runtime writers 停止期间直接操作 SDK 存储，不向公开 `HyMemoryClient` 增加迁移专用方法，也不拆分正常写路径。
-- Raw retention：SDK L1 raw 只保留最近三天；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。高层 Chat/Coding/Working memory 不受该窗口影响。
+- Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。
+- Raw retention：SDK L1 raw 只保留最近三天，由 Runtime 的 `prune_expired_raw` 执行；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。高层 Chat/Coding/Working memory 不受该窗口影响。
 - Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。
 - Context wire：cutover marker 提交前只使用 legacy Context v1；提交后 Host Bridge 只使用 SDK-native Context v2。两种 schema 原样校验、原样返回，不把 SDK item 补造成 v1 的 `revision`、`evidence_ids`、`paths` 或 `adoption`，已选择的 v2 路径失败时也不回退 legacy 权威。
 - Ask wire：marker 前保留 Governance Ask v1；marker 后 Web / Host Bridge 只调用 SDK Ask v2。v2 的引用只含 SDK 原生 `memory_id/content/layer/status/source/gmt_created`，生成过程中重复 `get` 校验同一 SDK 快照，不补造 revision、Evidence 或 scopes，SDK 失败不回退 v1。
 - Matter：未形成已发布产品合同，不迁移占位数据；所有 `matter*` 表在升级清理时物理删除，fresh install 不创建，Runtime 不注册 Matter API。
-- 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。启动流程创建/校验完整 bundle、续跑 ledger、完成 SDK backfill 与 reconciliation，满足全部门禁后才提交 marker 并进入主界面。普通用户不需要另跑 CLI，也不按旧 App 内 SDK 版本分叉迁移。
-- SDK backfill 只写同文件系统的私有 staging 副本；验证后先原子切换 SDK
-  root，再提交 authority marker。切换或 marker 提交失败必须恢复原 live root；
-  App 不得在 migration `deferred` 状态继续启动 Runtime。
+- 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。所有已发布版本都先经 SDK 写入，Governance/Evidence 只是镜像，所以迁移**不复制、不比对任何 memory 或 raw**：只创建并校验完整 bundle、让写入队列脱离旧表、提交 marker、删除旧表。由一个 Core 命令 `sdk-migrate` 完成；Desktop 启动与 CLI `memhub install`/`upgrade`（macOS、Linux）在启动新 Runtime 前调用它，普通用户不需要另跑命令。App 不得在 migration `deferred` 状态继续启动 Runtime。
 - 迁移期间宿主 capture hook 由 Desktop 活跃 PID marker 静默挡住，不再追加
   Evidence；cutover 后先从宿主 History checkpoint 补齐遗漏 turn，再恢复 live sync。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
@@ -306,9 +303,9 @@ Test entry points: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## Upgrade Compatibility
 
-Released installations require the offline, resumable compatibility protocol in
+Released installations require the offline compatibility protocol in
 [`contracts/sdk-data-plane-migration-v1.md`](contracts/sdk-data-plane-migration-v1.md).
 The App runs it during the startup loading phase before Core exposes product
-reads or writes. A cutover requires a complete bundle, resumable backfill,
-reconciliation, and verified cleanup; a SQLite-only backup or replaying legacy
-rows through extraction is not sufficient.
+reads or writes. A cutover requires a verified full bundle and a write queue
+that no longer depends on legacy tables; it copies no memory, because the SDK
+stores already hold every memory and raw turn.

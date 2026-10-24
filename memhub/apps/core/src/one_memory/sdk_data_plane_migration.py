@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,10 +39,6 @@ class MigrationProgress:
     migration_id: str
     state: str
     phase: str
-    counts: dict[str, int]
-
-
-TERMINAL_ITEM_STATES = frozenset({"verified", "adopted", "deleted", "skipped"})
 
 
 class SdkDataPlaneMigrationStore:
@@ -136,37 +131,14 @@ class SdkDataPlaneMigrationStore:
                     """,
                     values,
                 )
-            else:
-                identity = (
-                    source_runtime_build,
-                    target_sdk_version,
-                    source_schema_version,
-                    namespace_fingerprint,
-                    backend_fingerprint,
+            elif backup_bundle_id and existing["backup_bundle_id"] is None:
+                connection.execute(
+                    "UPDATE sdk_data_plane_migrations "
+                    "SET backup_bundle_id=?,updated_at=? WHERE migration_id=?",
+                    (backup_bundle_id, now, migration_id),
                 )
-                existing_identity = tuple(
-                    existing[key]
-                    for key in (
-                        "source_runtime_build",
-                        "target_sdk_version",
-                        "source_schema_version",
-                        "namespace_fingerprint",
-                        "backend_fingerprint",
-                    )
-                )
-                if existing_identity != identity:
-                    raise DataPlaneMigrationError("sdk_data_plane_migration_identity_conflict")
-                if backup_bundle_id and existing["backup_bundle_id"] not in {
-                    None,
-                    backup_bundle_id,
-                }:
-                    raise DataPlaneMigrationError("sdk_data_plane_migration_bundle_conflict")
-                if backup_bundle_id and existing["backup_bundle_id"] is None:
-                    connection.execute(
-                        "UPDATE sdk_data_plane_migrations "
-                        "SET backup_bundle_id=?,updated_at=? WHERE migration_id=?",
-                        (backup_bundle_id, now, migration_id),
-                    )
+            elif backup_bundle_id and existing["backup_bundle_id"] != backup_bundle_id:
+                raise DataPlaneMigrationError("sdk_data_plane_migration_bundle_conflict")
             connection.execute("COMMIT")
         return self.progress(migration_id)
 
@@ -182,211 +154,18 @@ class SdkDataPlaneMigrationStore:
                 raise DataPlaneMigrationError("sdk_data_plane_migration_not_mutable")
             connection.execute("COMMIT")
 
-    def upsert_item(
-        self,
-        *,
-        migration_id: str,
-        item_key: str,
-        source_kind: str,
-        source_id: str,
-        source_hash: str,
-        operation_key: str,
-        source_revision: str | None = None,
-        state: str = "pending",
-    ) -> None:
-        now = self._now()
-        with main_database(self.database_path).write(
-            autocommit=True, row_factory=sqlite3.Row
-        ) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT * FROM sdk_data_plane_migration_items WHERE migration_id=? AND item_key=?",
-                (migration_id, item_key),
-            ).fetchone()
-            if row is None:
-                try:
-                    connection.execute(
-                        """
-                        INSERT INTO sdk_data_plane_migration_items (
-                            migration_id,item_key,source_kind,source_id,
-                            source_revision,source_hash,operation_key,state,updated_at
-                        ) VALUES (?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            migration_id,
-                            item_key,
-                            source_kind,
-                            source_id,
-                            source_revision,
-                            source_hash,
-                            operation_key,
-                            state,
-                            now,
-                        ),
-                    )
-                except sqlite3.IntegrityError as error:
-                    raise DataPlaneMigrationError(
-                        "sdk_data_plane_migration_operation_conflict"
-                    ) from error
-            else:
-                if str(row["state"]) in TERMINAL_ITEM_STATES and (
-                    source_id,
-                    source_revision,
-                    source_hash,
-                ) == (
-                    row["source_id"],
-                    row["source_revision"],
-                    row["source_hash"],
-                ):
-                    # A crash after an SDK side effect can make the next
-                    # inventory classify the same source as verified/adopted
-                    # instead of import/delete. Keep the settled operation as
-                    # the durable audit identity.
-                    connection.execute("COMMIT")
-                    return
-                identity = (
-                    source_kind,
-                    source_id,
-                    source_revision,
-                    source_hash,
-                    operation_key,
-                )
-                if identity != tuple(
-                    row[key]
-                    for key in (
-                        "source_kind",
-                        "source_id",
-                        "source_revision",
-                        "source_hash",
-                        "operation_key",
-                    )
-                ):
-                    raise DataPlaneMigrationError("sdk_data_plane_migration_item_conflict")
-            connection.execute("COMMIT")
-
-    def settle_item(
-        self,
-        *,
-        migration_id: str,
-        item_key: str,
-        state: str,
-        target_memory_id: str | None = None,
-        target_hash: str | None = None,
-        error_code: str | None = None,
-    ) -> None:
-        with main_database(self.database_path).write(autocommit=True) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            cursor = connection.execute(
-                """
-                UPDATE sdk_data_plane_migration_items
-                SET state=?,target_memory_id=?,target_hash=?,error_code=?,
-                    attempts=attempts+1,updated_at=?
-                WHERE migration_id=? AND item_key=?
-                """,
-                (
-                    state,
-                    target_memory_id,
-                    target_hash,
-                    error_code,
-                    self._now(),
-                    migration_id,
-                    item_key,
-                ),
-            )
-            if cursor.rowcount != 1:
-                raise DataPlaneMigrationError("sdk_data_plane_migration_item_not_found")
-            connection.execute("COMMIT")
-
-    def record_alias(
-        self,
-        *,
-        migration_id: str,
-        legacy_memory_id: str,
-        canonical_memory_id: str,
-    ) -> None:
-        with main_database(self.database_path).write(
-            autocommit=True, row_factory=sqlite3.Row
-        ) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                "SELECT canonical_memory_id,migration_id FROM memory_id_aliases "
-                "WHERE legacy_memory_id=?",
-                (legacy_memory_id,),
-            ).fetchone()
-            if existing is None:
-                connection.execute(
-                    """
-                    INSERT INTO memory_id_aliases (
-                        legacy_memory_id,canonical_memory_id,migration_id,created_at
-                    ) VALUES (?,?,?,?)
-                    """,
-                    (
-                        legacy_memory_id,
-                        canonical_memory_id,
-                        migration_id,
-                        self._now(),
-                    ),
-                )
-            elif existing["canonical_memory_id"] != canonical_memory_id:
-                raise DataPlaneMigrationError("sdk_data_plane_alias_conflict")
-            connection.execute("COMMIT")
-
-    def record_raw_alias(
-        self,
-        *,
-        migration_id: str,
-        legacy_evidence_id: str,
-        canonical_raw_id: str,
-        item_index: int = 0,
-    ) -> None:
-        with main_database(self.database_path).write(
-            autocommit=True,
-            row_factory=sqlite3.Row,
-        ) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                "SELECT canonical_raw_id FROM raw_id_aliases "
-                "WHERE legacy_evidence_id=? AND item_index=?",
-                (legacy_evidence_id, item_index),
-            ).fetchone()
-            if existing is None:
-                connection.execute(
-                    "INSERT INTO raw_id_aliases "
-                    "(legacy_evidence_id,item_index,canonical_raw_id,migration_id,created_at) "
-                    "VALUES (?,?,?,?,?)",
-                    (
-                        legacy_evidence_id,
-                        item_index,
-                        canonical_raw_id,
-                        migration_id,
-                        self._now(),
-                    ),
-                )
-            elif existing["canonical_raw_id"] != canonical_raw_id:
-                raise DataPlaneMigrationError("sdk_data_plane_raw_alias_conflict")
-            connection.execute("COMMIT")
-
     def progress(self, migration_id: str) -> MigrationProgress:
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
             migration = connection.execute(
                 "SELECT state,phase FROM sdk_data_plane_migrations WHERE migration_id=?",
                 (migration_id,),
             ).fetchone()
-            if migration is None:
-                raise DataPlaneMigrationError("sdk_data_plane_migration_not_found")
-            counts = {
-                str(row["state"]): int(row["count"])
-                for row in connection.execute(
-                    "SELECT state,COUNT(*) AS count "
-                    "FROM sdk_data_plane_migration_items WHERE migration_id=? GROUP BY state",
-                    (migration_id,),
-                )
-            }
+        if migration is None:
+            raise DataPlaneMigrationError("sdk_data_plane_migration_not_found")
         return MigrationProgress(
             migration_id=migration_id,
             state=str(migration["state"]),
             phase=str(migration["phase"]),
-            counts=counts,
         )
 
     def commit_cutover(
@@ -409,23 +188,8 @@ class SdkDataPlaneMigrationStore:
             ).fetchone()
             if migration is None:
                 raise DataPlaneMigrationError("sdk_data_plane_migration_not_found")
-            if migration["phase"] != "reconciled" or migration["state"] != "ready":
+            if migration["phase"] != "prepared" or migration["state"] != "ready":
                 raise DataPlaneMigrationError("sdk_data_plane_migration_not_ready")
-            unresolved = connection.execute(
-                "SELECT state,COUNT(*) AS count FROM sdk_data_plane_migration_items "
-                "WHERE migration_id=? GROUP BY state",
-                (migration_id,),
-            ).fetchall()
-            blocked = {
-                str(row["state"]): int(row["count"])
-                for row in unresolved
-                if str(row["state"]) not in TERMINAL_ITEM_STATES
-            }
-            if blocked:
-                raise DataPlaneMigrationError(
-                    "sdk_data_plane_migration_items_unresolved:"
-                    + json.dumps(blocked, sort_keys=True, separators=(",", ":"))
-                )
             if migration["backup_bundle_id"] != backup_bundle_id:
                 raise DataPlaneMigrationError("sdk_data_plane_migration_bundle_conflict")
             existing = connection.execute(

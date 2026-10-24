@@ -100,7 +100,7 @@ Downloader 使用标准 `HTTPS_PROXY`/`https_proxy` 与 `NO_PROXY`/`no_proxy` �
 - `npm uninstall -g memhub-cli`：只删除 npm CLI；不停止或删除受管 Runtime，不删除 Memory。
   完整 fake Release 验收会在 Runtime 运行中执行真实 npm uninstall，并再次验证
   systemd、`current`、受管 `memhub`、doctor 和 SQLite 均仍可用。
-- `memhub upgrade`：下载并校验新 Runtime，健康检查失败时恢复旧版本。
+- `memhub upgrade`：下载并校验新 Runtime；旧版本写过的数据会先迁移到 SDK 数据面（先做完整备份，终端显示进度），再启动新 Runtime。迁移失败时恢复旧版本；迁移完成后旧版本无法打开数据，健康检查失败时保留新版本并提示 `memhub restart` / `memhub doctor`。
 - `memhub uninstall`：停止并移除受管服务、Runtime versions/current 和受管 CLI 链接；
   默认保留数据。
 - `memhub delete-data`：唯一删除 Memory 的命令；Runtime 必须已停止，并要求 `--yes` 与

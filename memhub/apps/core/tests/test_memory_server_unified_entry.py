@@ -6,6 +6,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -249,16 +250,17 @@ def test_old_branch_job_executes_its_frozen_revision_after_harness_rewind(tmp_pa
     captured = []
 
     class Supervisor:
-        async def process_records(
+        async def process_sdk_job(
             self,
             records,
             *,
+            request_id,
             before_hy_invocation,
-            source_admitted,
         ):
-            assert source_admitted is True
+            assert request_id == old_job.request_id
             captured.extend(records)
             await before_hy_invocation()
+            return SimpleNamespace(raw_ids=(), memory_ids=())
 
     asyncio.run(
         execute_job(

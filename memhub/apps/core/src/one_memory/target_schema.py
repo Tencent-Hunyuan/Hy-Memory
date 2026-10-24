@@ -54,6 +54,8 @@ LEGACY_TABLES_IN_DROP_ORDER = (
     "evidence_origins",
     "evidence_versions",
     "evidence_repairs",
+    # FTS5 index over Evidence text; dropping it removes its shadow tables.
+    "evidence_search",
     "evidence",
     "memory_id_aliases",
     "raw_id_aliases",

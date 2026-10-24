@@ -39,7 +39,9 @@ import {
   rollbackCliLink,
   rollbackLocalInstall,
   runRuntimeCli,
+  runSdkMigration,
   runtimeInstallLayout,
+  type SdkMigrationResult,
   stopRuntimeProcess,
 } from "@one-memory/runtime-control";
 import axios from "axios";
@@ -354,6 +356,9 @@ export interface RunControls {
   /** Wait for a restarted Runtime to become healthy after `upgrade`.
    * Injectable so the upgrade tests do not spend real seconds polling. */
   waitForRuntimeReady?: (dataDir: string) => Promise<boolean>;
+  /** Run the SDK data migration before install/upgrade starts the new
+   * Runtime. Injectable so the tests do not spawn a real Core. */
+  migrateSdkData?: typeof migrateSdkDataBeforeStart;
   restartManagedRuntime?: typeof restartManagedService;
   stopRuntime?: typeof stopRuntimeProcess;
   ensureRuntime?: typeof ensureRuntimeProcess;
@@ -3149,6 +3154,7 @@ async function runCommand(
       null;
     let installReceiptWritten = false;
     let serviceApplied = false;
+    let migrated = false;
     let previousOwner:
       | Awaited<ReturnType<typeof claimCliServiceOwnership>>
       | undefined;
@@ -3159,6 +3165,22 @@ async function runCommand(
       }
       shellPathReceipt = await applyShellPath(shellPath);
       previousOwner = await claimCliServiceOwnership(layout.dataDir);
+      // `install` over an existing home (reinstall, App-to-CLI takeover) must
+      // migrate it too, before the new Runtime starts serving it.
+      const migration = await (
+        controls.migrateSdkData ?? migrateSdkDataBeforeStart
+      )({
+        coreCommand: layout.coreCommand,
+        dataDir: layout.dataDir,
+        runtimeBuild: String(plan.build_number ?? plan.version),
+        asJson: true,
+      });
+      if (migration.state === "deferred") {
+        throw new SdkMigrationDeferred(
+          migration.code ?? "sdk_migration_incomplete",
+        );
+      }
+      migrated = migration.state === "cutover";
       await applyPreparedServiceInstall(preparedService);
       serviceApplied = true;
       // The receipt exists so a later command can find the data dir without
@@ -3210,6 +3232,13 @@ async function runCommand(
           );
         }
       };
+      if (migrated) {
+        // An older Runtime refuses a migrated home: keep this install.
+        process.stderr.write(
+          `${JSON.stringify(notReadyAfterMigration("install"), null, 2)}\n`,
+        );
+        return EXIT_FAILED;
+      }
       if (serviceApplied) {
         await rollbackPreparedServiceInstall(
           preparedService,
@@ -3219,7 +3248,13 @@ async function runCommand(
         await rollbackFilesAndOwner();
       }
       process.stderr.write(
-        `${JSON.stringify(serviceErrorDocument("install", error), null, 2)}\n`,
+        `${JSON.stringify(
+          error instanceof SdkMigrationDeferred
+            ? sdkMigrationFailure("install", error.code)
+            : serviceErrorDocument("install", error),
+          null,
+          2,
+        )}\n`,
       );
       return EXIT_FAILED;
     }
@@ -3581,6 +3616,7 @@ async function runCommand(
     let previousOwner:
       | Awaited<ReturnType<typeof claimCliServiceOwnership>>
       | undefined;
+    let migrated = false;
     const rollbackUpgrade = async (
       dataDir: string | undefined,
     ): Promise<void> => {
@@ -3612,6 +3648,24 @@ async function runCommand(
         memhubReceipts.push(await installManagedCliLink(link));
       }
       previousOwner = await claimCliServiceOwnership(layout.dataDir);
+      const migration = await (
+        controls.migrateSdkData ?? migrateSdkDataBeforeStart
+      )({
+        coreCommand: layout.coreCommand,
+        dataDir: parsed.dataDir ?? layout.dataDir,
+        runtimeBuild: String(plan.build_number ?? plan.version),
+        asJson,
+      });
+      if (migration.state === "deferred") {
+        await rollbackUpgrade(parsed.dataDir);
+        process.stderr.write(
+          `${JSON.stringify(sdkMigrationFailure("upgrade", migration.code ?? "sdk_migration_incomplete"), null, 2)}\n`,
+        );
+        return EXIT_FAILED;
+      }
+      // An older Runtime refuses a migrated home, so from here a failure
+      // keeps the new version instead of rolling back to one that cannot start.
+      migrated = migration.state === "cutover";
       await restartUserService(layout, serviceOptions);
       // A restart that returns without error only means launchd/systemd
       // accepted the command. O-22: the first `upgrade` implementation
@@ -3623,6 +3677,12 @@ async function runCommand(
       const ready = await (controls.waitForRuntimeReady ?? waitForRuntimeReady)(
         dataDir,
       );
+      if (!ready && migrated) {
+        process.stderr.write(
+          `${JSON.stringify(notReadyAfterMigration("upgrade"), null, 2)}\n`,
+        );
+        return EXIT_FAILED;
+      }
       if (!ready) {
         await rollbackUpgrade(parsed.dataDir);
         process.stderr.write(
@@ -3650,9 +3710,9 @@ async function runCommand(
         });
       }
     } catch (error) {
-      await rollbackUpgrade(parsed.dataDir);
+      if (!migrated) await rollbackUpgrade(parsed.dataDir);
       process.stderr.write(
-        `${JSON.stringify(serviceErrorDocument("upgrade", error), null, 2)}\n`,
+        `${JSON.stringify(migrated ? notReadyAfterMigration("upgrade") : serviceErrorDocument("upgrade", error), null, 2)}\n`,
       );
       return EXIT_FAILED;
     }
@@ -4018,6 +4078,71 @@ export function runtimeIsReady(
     status.host !== undefined &&
     status.port !== undefined
   );
+}
+
+const SDK_MIGRATION_STEPS: Record<string, string> = {
+  bundle: "正在备份记忆数据，数据较多时需要几分钟……",
+  prepare: "正在整理待处理的写入任务……",
+  cutover: "正在切换记忆数据源……",
+  cleanup: "正在清理旧数据表……",
+};
+
+/**
+ * Migrate a home written by an older release before the new Runtime serves it.
+ *
+ * Runs the new Runtime's own Core with the Runtime stopped. Progress goes to
+ * stderr so stdout stays one result document.
+ */
+async function migrateSdkDataBeforeStart(options: {
+  coreCommand: string;
+  dataDir: string;
+  runtimeBuild: string;
+  asJson: boolean;
+}): Promise<SdkMigrationResult> {
+  return runSdkMigration({
+    dataDir: options.dataDir,
+    core: { command: options.coreCommand },
+    runtimeBuild: options.runtimeBuild,
+    onProgress: (step) => {
+      process.stderr.write(
+        options.asJson
+          ? `${JSON.stringify({ schema_version: 1, product: PRODUCT, event: "sdk_migration.progress", step })}\n`
+          : `${SDK_MIGRATION_STEPS[step] ?? step}\n`,
+      );
+    },
+  });
+}
+
+class SdkMigrationDeferred extends Error {
+  constructor(readonly code: string) {
+    super(code);
+  }
+}
+
+function notReadyAfterMigration(command: "install" | "upgrade") {
+  return {
+    schema_version: 1,
+    product: PRODUCT,
+    command,
+    status: "error",
+    code: "runtime_not_ready_after_sdk_migration",
+    message:
+      "记忆数据已迁移到新版本，但新版本 Runtime 没有在限定时间内就绪。旧版本无法打开已迁移的数据，所以没有回滚。请运行 memhub restart，或 memhub doctor 查看原因。",
+  };
+}
+
+function sdkMigrationFailure(command: "install" | "upgrade", code: string) {
+  return {
+    schema_version: 1,
+    product: PRODUCT,
+    command,
+    status: "error",
+    code,
+    message:
+      code === "sdk_migration_disk_space_insufficient"
+        ? "磁盘空间不足，记忆数据迁移没有完成，已回滚到上一版本。请腾出与记忆数据同等大小的空间后重试；原有记忆数据不会丢失。"
+        : "记忆数据迁移没有完成，已回滚到上一版本。请重试；如果仍然失败，请把这个错误码反馈给我们。原有记忆数据不会丢失。",
+  };
 }
 
 async function waitForRuntimeReady(

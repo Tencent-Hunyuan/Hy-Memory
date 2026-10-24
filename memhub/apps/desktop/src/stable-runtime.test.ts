@@ -285,18 +285,6 @@ describe("startup install errors", () => {
     expect(noSpace).toContain("重新启动");
     expect(noSpace).toContain("不会丢失");
     expect(noSpace).not.toContain("sdk_migration_disk_space_insufficient");
-
-    const noModel = stableRuntimeUserMessage(
-      new Error("model_profile_not_active"),
-    );
-    expect(noModel).toContain("模型");
-    expect(noModel).not.toContain("model_profile_not_active");
-
-    const coding = stableRuntimeUserMessage(
-      new Error("sdk_migration_working_fact_conflict"),
-    );
-    expect(coding).toContain("Coding");
-    expect(coding).toContain("不会丢失");
   });
 });
 

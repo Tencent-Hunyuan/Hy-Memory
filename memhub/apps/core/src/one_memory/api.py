@@ -1430,6 +1430,14 @@ def create_app(
             app.state.memory_backfill = None
             app.state.memory_visibility_task = None
             app.state.deletion_sync = None
+            if app.state.memory_authority is MemoryAuthority.LEGACY:
+                _start_backfill(app)
+                _start_visibility_recompute(app)
+                app.state.deletion_sync = watched_task(
+                    asyncio.get_running_loop(),
+                    lambda: _keep_legacy_deletions_in_sync(app),
+                    name="one-memory-deletion-sync",
+                )
             # Both times the loop was blocked here it was found from outside,
             # by hand, days later. This says so at the time, and says what was
             # holding it.
@@ -4226,7 +4234,7 @@ def create_app(
             if action == "delete":
                 deletion = _memory_store(app).deletion(memory_id, user_id="local")
                 if deletion is None or deletion.status is not DeletionStatus.COMPLETED:
-                    await _sdk_memory_runtime(app).finish_deletion(memory_id)
+                    await _finish_deletion(app, memory_id)
             return memory
         except KeyError:
             raise HTTPException(status_code=404, detail="memory_not_found") from None
@@ -4922,6 +4930,54 @@ def _secret_store_detail(error: SecretStoreUnavailableError) -> str:
     user whose Keychain needs one click was told the store was broken.
     """
     return str(getattr(error, "code", None) or SecretStoreErrorCode.STORE_UNAVAILABLE)
+
+
+async def _finish_deletion(app: FastAPI, memory_id: str) -> None:
+    """Delete from the SDK and, on legacy authority, settle the deletion row.
+
+    Without the settle the legacy row stays `pending` for good, and the person
+    is shown a deletion that never finishes.
+    """
+    if app.state.memory_authority is MemoryAuthority.SDK:
+        await _sdk_memory_runtime(app).finish_deletion(memory_id)
+        return
+    await _work_legacy_deletions(app, memory_id=memory_id)
+
+
+async def _work_legacy_deletions(app: FastAPI, *, memory_id: str | None = None) -> None:
+    store = _memory_store(app)
+    runtime = _sdk_memory_runtime(app)
+    claims = await asyncio.to_thread(store.claim_deletions, user_id="local", memory_id=memory_id)
+    for claim in claims:
+        try:
+            await runtime.finish_deletion(claim.memory_id)
+        except HySdkError as error:
+            code: str | None = error.code
+        except Exception as error:  # noqa: BLE001 - recorded so it waits its turn
+            logger.warning("memory_deletion_unexpected_failure: %s", type(error).__name__)
+            code = "hy_memory_delete_unexpected"
+        else:
+            code = None
+        await asyncio.to_thread(store.settle_deletion, claim, user_id="local", error_code=code)
+
+
+_LEGACY_DELETION_SYNC_IDLE_SECONDS = 60.0
+
+
+async def _keep_legacy_deletions_in_sync(app: FastAPI) -> None:
+    """Retry legacy deletions the SDK did not take; nothing else asks again."""
+    store = _memory_store(app)
+    while True:
+        wait = _LEGACY_DELETION_SYNC_IDLE_SECONDS
+        try:
+            await _work_legacy_deletions(app)
+            due = await asyncio.to_thread(store.next_deletion_due, user_id="local")
+        except Exception as error:  # noqa: BLE001 - reported, then retried
+            report_exception("memory.deletion_sync", "memory_deletion_sync.failed", error)
+        else:
+            if due is not None:
+                wait = min(wait, max(0.0, (due - store.clock()).total_seconds()))
+        await asyncio.sleep(wait)
 
 
 def _memory_store(app: FastAPI) -> MemoryGovernanceStore:
