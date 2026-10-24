@@ -12,9 +12,8 @@ L1_RAW 对外读路径不可见：闸门焊在向量库唯一查询入口。
 hybrid_search_native / list_by_user 四个查询方法的共同必经处，
 上层无法绕开，新增接口自动受保护。
 
-按 ID 直取走主键查询、不经过 filter，故在 `client.async_get` 处默认挡住。
-Python SDK 调用方可显式传 `include_raw=True` 读取；HTTP 接口不传该参数，
-继续保持原有隐藏行为。
+按 ID 直取是精确读取：raw ID 返回 L1_RAW，fact ID 返回对应事实。权限由
+调用 SDK 前的产品边界检查，不由 SDK 根据 layer 猜测。
 
 内部管线需读原始对话时显式 allow_raw_layer=True 放行：
 - `writer._get_recent_dialogue_history`：提取前拼多轮对话历史喂 LLM
@@ -125,8 +124,8 @@ class TestListNoLongerFiltersInProcess:
             "list 又出现进程内过滤 raw 的写法，应交由 vdb 侧 filter 完成"
 
 
-class TestGetByIdRawOptIn:
-    """按 ID 直取默认隐藏 raw，只有 SDK 显式选择时才返回。"""
+class TestGetByIdReturnsExactLayer:
+    """按 ID 直取返回命中的真实层级。"""
 
     @staticmethod
     def _client(node):
@@ -153,35 +152,29 @@ class TestGetByIdRawOptIn:
             user_id="u1",
             agent_id="a1",
             session_id="s1",
+            source="cursor",
             content="原始对话",
             layer=MemoryLayer.L1_RAW,
             status=MemoryStatus.ACTIVE,
             custom={"meta": [{"source": "test"}]},
         )
 
-    def test_default_still_hides_raw(self):
+    def test_raw_id_returns_lite_memory(self):
         from hy_memory.client import HyMemoryClient
 
         client = self._client(self._raw_node())
         raw_get = HyMemoryClient.async_get.__wrapped__
-        assert run(raw_get(client, "raw-1")) is None
-
-    def test_explicit_include_raw_returns_lite_memory(self):
-        from hy_memory.client import HyMemoryClient
-
-        client = self._client(self._raw_node())
-        raw_get = HyMemoryClient.async_get.__wrapped__
-        result = run(raw_get(client, "raw-1", include_raw=True))
+        result = run(raw_get(client, "raw-1"))
 
         assert result["memory_id"] == "raw-1"
         assert result["content"] == "原始对话"
         assert result["layer"] == MemoryLayer.L1_RAW.value
+        assert result["source"] == "cursor"
+        assert result["retrieval_source"] == "vdb"
         assert result["meta"] == [{"source": "test"}]
 
-    def test_public_get_exposes_keyword_only_opt_in(self):
+    def test_public_get_has_no_raw_visibility_switch(self):
         import inspect
         from hy_memory.client import HyMemoryClient
 
-        param = inspect.signature(HyMemoryClient.get).parameters["include_raw"]
-        assert param.default is False
-        assert param.kind is inspect.Parameter.KEYWORD_ONLY
+        assert "include_raw" not in inspect.signature(HyMemoryClient.get).parameters

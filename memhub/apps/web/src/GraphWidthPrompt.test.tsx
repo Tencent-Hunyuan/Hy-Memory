@@ -13,6 +13,20 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
+import {
+  LANGUAGE_STORAGE_KEY,
+  LanguageProvider,
+  useGuiLanguage,
+} from "./gui-language";
+
+function LanguageSwitch() {
+  const { setPreference } = useGuiLanguage();
+  return (
+    <button type="button" onClick={() => void setPreference("zh-CN")}>
+      Cambiar idioma
+    </button>
+  );
+}
 
 const { getGraphWidth, decideGraphWidth } = vi.hoisted(() => ({
   getGraphWidth: vi.fn(),
@@ -45,6 +59,44 @@ describe("GraphWidthPrompt", () => {
       exported_path: null,
       mismatch: null,
     });
+  });
+
+  it("translates the mismatch and live switch without requesting or confirming twice", async () => {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+    const user = userEvent.setup();
+    render(
+      <LanguageProvider>
+        <LanguageSwitch />
+        <GraphWidthPrompt />
+      </LanguageProvider>,
+    );
+    await screen.findByRole("dialog", {
+      name: "La biblioteca y el modelo integrado no coinciden",
+    });
+    const keep = screen.getByRole("radio", {
+      name: /Conservar la biblioteca actual/,
+    }) as HTMLInputElement;
+    expect(keep.checked).toBe(true);
+    await user.click(
+      screen.getByRole("radio", { name: /Usar el modelo integrado/ }),
+    );
+    expect(decideGraphWidth).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cambiar idioma" }));
+    await screen.findByRole("dialog", { name: "现有记忆库和内置模型对不上" });
+    expect(
+      (screen.getByRole("radio", { name: /改用内置模型/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(getGraphWidth).toHaveBeenCalledOnce();
+    expect(decideGraphWidth).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "就这么办" }));
+    await waitFor(() =>
+      expect(decideGraphWidth).toHaveBeenCalledExactlyOnceWith(
+        "rebuild_with_new",
+        expect.any(String),
+      ),
+    );
+    window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
   });
 
   it("moves focus into the modal and keeps Tab inside it", async () => {

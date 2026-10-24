@@ -680,7 +680,7 @@ export class CoreSupervisor {
           outcome: "failed",
           instance_id: this.activeInstanceId,
           error_code: "core_restart_circuit_open",
-          details: { streak: this.restartStreak },
+          details: { restart_streak: this.restartStreak },
         });
         return;
       }
@@ -765,7 +765,7 @@ export class CoreSupervisor {
             outcome: "failed",
             instance_id: this.activeInstanceId,
             error_code: "core_restart_exhausted",
-            details: { attempts: budget, streak: this.restartStreak },
+            details: { attempts: budget, restart_streak: this.restartStreak },
           });
           await this.options.diagnostics?.log({
             level: "error",
@@ -774,7 +774,7 @@ export class CoreSupervisor {
             outcome: "failed",
             instance_id: this.activeInstanceId,
             error_code: "core_restart_circuit_open",
-            details: { streak: this.restartStreak },
+            details: { restart_streak: this.restartStreak },
           });
         }
       } finally {

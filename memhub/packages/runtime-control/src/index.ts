@@ -59,6 +59,7 @@ export {
   diagnosticZipFilename,
   exportDiagnosticBundle,
   exportDiagnosticZip,
+  projectDiagnosticEventForSafeOutput,
   pruneDiagnosticLogs,
   readDiagnosticEvents,
   recordDiagnosticMarker,
@@ -152,6 +153,10 @@ export {
   type WaitForRuntimeOptions,
   waitForRuntimeProcess,
 } from "./runtime-launcher.js";
+export {
+  type RuntimeMaintenanceDependencies,
+  withRuntimeMaintenanceFence,
+} from "./runtime-maintenance.js";
 export {
   type ManagedRuntime,
   RuntimeService,

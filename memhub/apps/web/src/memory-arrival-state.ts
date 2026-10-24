@@ -3,6 +3,7 @@ import type {
   MemoryProcessingSummary,
   SourceResponse,
 } from "@one-memory/contracts";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import { modelBlock, splitBlockedStages } from "./memory-processing-labels";
 
 export type MemoryArrivalPhase =
@@ -110,23 +111,39 @@ function onlyRetries(blocks: readonly MemoryProcessingBlock[]): boolean {
   return blocks.length > 0 && splitBlockedStages(blocks).named.length === 0;
 }
 
-export function memoryArrivalTitle(arrival: MemoryArrival): string {
+export function memoryArrivalTitle(
+  arrival: MemoryArrival,
+  locale: GuiLocale = "zh-CN",
+): string {
   switch (arrival.phase) {
     case "checking":
     case "unavailable":
-      return arrival.refreshing ? "已保存内容保留，正在核对进度" : "进度待更新";
+      return translate(
+        locale,
+        arrival.refreshing
+          ? "arrival.title.refreshing"
+          : "arrival.title.checking",
+      );
     case "importing":
-      return "正在导入对话";
+      return translate(locale, "arrival.title.importing");
     case "processing":
-      return "正在沉淀记忆";
+      return translate(locale, "arrival.title.processing");
     case "model-required":
-      return modelBlock(arrival.blockedStages ?? [])
-        ? "待继续"
-        : "尚未设置整理模型";
+      return translate(
+        locale,
+        modelBlock(arrival.blockedStages ?? [])
+          ? "arrival.title.continue"
+          : "arrival.title.model",
+      );
     case "failed":
     case "stopped":
-      return "待继续";
+      return translate(locale, "arrival.title.continue");
     default:
-      return arrival.importedMessages > 0 ? "待继续" : "还没有保存的对话";
+      return translate(
+        locale,
+        arrival.importedMessages > 0
+          ? "arrival.title.continue"
+          : "arrival.title.empty",
+      );
   }
 }

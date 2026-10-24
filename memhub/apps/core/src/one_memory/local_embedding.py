@@ -121,7 +121,7 @@ class LocalEmbedder:
                 raise MissingEmbeddingAssetsError(f"{_FETCH_HINT} Looked in {directory}.")
 
             # Imported by name for the same reason kuzu and hy_memory are in
-            # hy_memory_bridge: onnxruntime ships no py.typed, and a dynamic
+            # onnxruntime ships no py.typed, and a dynamic
             # import keeps the strict checker on everything around it.
             ort = import_module("onnxruntime")
             from tokenizers import Tokenizer

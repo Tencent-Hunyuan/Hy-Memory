@@ -11,7 +11,31 @@ import {
 } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
+
+it("localizes informational details and dates while preserving evidence and memory", async () => {
+  delete window.oneMemory;
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <SelectedMemoryDetail
+        detail={detail}
+        sources={[]}
+        onChanged={vi.fn()}
+        hideActions
+      />
+    </LanguageProvider>,
+  );
+  expect(await screen.findByText("Guardada · Versión 2")).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { name: "Evidencia original" }),
+  ).toBeTruthy();
+  expect(screen.getByText("这次先确认范围。")).toBeTruthy();
+  expect(correct).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+  localStorage.clear();
+});
 
 const { correct, read, remove, errorCode } = vi.hoisted(() => ({
   correct: vi.fn(),

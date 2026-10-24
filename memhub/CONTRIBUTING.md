@@ -1,6 +1,6 @@
 # Contributing
 
-感谢你参与 One Memory。
+感谢你参与 MemHub。
 
 ## 开发环境
 
@@ -27,3 +27,10 @@ pnpm check
 
 涉及外部源码时，必须记录项目、固定版本或 commit、许可证、采用文件和修改说明。不得提交
 密钥、内部地址、真实对话、个人路径、模型权重或签名证书。
+
+## 界面翻译
+
+新增或修改界面语言时遵循
+[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)：使用稳定语义 key，保持所有
+locale 的 key 与占位符一致，不翻译用户内容、路径、标识符或外部错误正文。语言
+catalog 与无关产品行为应拆成不同 PR。

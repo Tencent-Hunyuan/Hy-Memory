@@ -16,6 +16,7 @@ import {
   isDisabledServiceInstallError,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeFailureDetail,
   stableRuntimeUserMessage,
   startStableRuntimeRepair,
 } from "./stable-runtime";
@@ -273,5 +274,47 @@ describe("startup install errors", () => {
     expect(stableRuntimeUserMessage("not an error")).toContain(
       "MemHub 启动失败",
     );
+  });
+
+  it("says why a data upgrade failed, and what the person can do", () => {
+    const noSpace = stableRuntimeUserMessage(
+      new Error("sdk_migration_disk_space_insufficient"),
+    );
+    // The only failure here the person fixes themselves: name the action.
+    expect(noSpace).toContain("磁盘空间不足");
+    expect(noSpace).toContain("重新启动");
+    expect(noSpace).toContain("不会丢失");
+    expect(noSpace).not.toContain("sdk_migration_disk_space_insufficient");
+
+    const noModel = stableRuntimeUserMessage(
+      new Error("model_profile_not_active"),
+    );
+    expect(noModel).toContain("模型");
+    expect(noModel).not.toContain("model_profile_not_active");
+
+    const coding = stableRuntimeUserMessage(
+      new Error("sdk_migration_working_fact_conflict"),
+    );
+    expect(coding).toContain("Coding");
+    expect(coding).toContain("不会丢失");
+  });
+});
+
+describe("startup dialog body", () => {
+  it("keeps a code we have no copy for, so support can see which failure fired", () => {
+    expect(stableRuntimeFailureDetail(new Error("page_load_failed"))).toBe(
+      "page_load_failed",
+    );
+    expect(
+      stableRuntimeFailureDetail(new Error("runtime_broker_unavailable")),
+    ).toBe("runtime_broker_unavailable");
+  });
+
+  it("shows the sentence we wrote for a migration failure", () => {
+    const detail = stableRuntimeFailureDetail(
+      new Error("sdk_migration_disk_space_insufficient"),
+    );
+    expect(detail).toContain("磁盘空间不足");
+    expect(detail).not.toContain("sdk_migration_disk_space_insufficient");
   });
 });

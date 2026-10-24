@@ -149,7 +149,7 @@ describe.each(materials)("S1.3 INT-04/05: $name", ({ render }) => {
 
 describe("generated Skill and fallback material", () => {
   it("versions both Skill channels and preserves their distinct invocation paths", () => {
-    expect(SKILL_VERSION).toBe(15);
+    expect(SKILL_VERSION).toBe(17);
     for (const channel of ["mcp", "cli"] as const) {
       const skill = renderSkillContent(channel, runtime);
       expect(skill).toContain(`skill-version=${SKILL_VERSION}`);

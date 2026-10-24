@@ -3,6 +3,7 @@
 更新日期：2026-10-14
 
 “一键插入应用”控制的是 **MemHub → Harness** 的 Recall 接入；“同步开关”控制的是 **Harness → MemHub** 的会话读取与处理。两者不是同一个功能。
+同步后的原始对话和记忆由 Hy Memory SDK 数据面持久化。
 
 打开一键插入通常会执行：
 
@@ -28,7 +29,7 @@ Preview 不会弹出给用户；开关点击本身被视为确认。关闭时通
 
 | Harness | 一键插入产品状态 | Harness 如何查询 MemHub | Harness 如何把新会话送入 MemHub | 同步开关的数据来源 |
 |---|---|---|---|---|
-| [Hermes](hermes.md) | 开放 | MCP + Skill | 无自动 Hook；Core 扫描 | `.hermes` SQLite/文件扫描 |
+| [Hermes](hermes.md) | 开放 | 原生 MemoryProvider Prefetch + MCP + Skill | Provider 只读；Core 扫描写入 | `.hermes` SQLite/文件扫描 |
 | [Cursor](cursor.md) | 开放 | MCP + Skill | Capture Hooks | Cursor Adapter 扫描 + Hook 实时入口 |
 | [Claude Code](claude-code.md) | 开放 | MCP + Skill | Capture Hooks | `.claude/projects` 扫描 + Hook 实时入口 |
 | [Codex](codex.md) | 开放 | MCP + Skill | Capture Hooks | `.codex/sessions` 扫描 + Hook 实时入口 |
@@ -53,7 +54,7 @@ Core 会：
 5. 调度 pending Job，并恢复 paused、interrupted、failed Job；
 6. 把该来源加入轮询/文件 Watcher；
 7. 补扫历史尚未处理的 Session，并继续处理未来的新 Session；
-8. 如果启用了自动记忆处理，恢复对应的 Memory Task。
+8. 如果启用了自动记忆处理，恢复对应的 `memory_write_jobs`。
 
 ### 关闭同步开关
 
@@ -64,7 +65,7 @@ Core 会：
 3. 停止 claim Job 表中尚未开始的 Job；这些 Job 保持原状态，等待下次打开；
 4. 不再通过 Adapter 扫描新 Session；
 5. 已经 running 的少量 Job允许执行完，不强杀；
-6. Harness Hook/Plugin 后续即使继续调用 Capture，Core 也会因为同步关闭而拒绝入库；
+6. Harness Hook/Plugin 后续即使继续调用 Capture，Core 也会因为同步关闭而拒绝进入 SDK 写入路径；
 7. 已经生成的 Memory 不删除，仍可被 Search 和 Recall 使用。
 
 关闭同步开关不会卸载 MCP、Skill、Hook 或 Plugin，也不会撤销 Harness 查询记忆的 Credential。那些属于“一键插入应用”开关。

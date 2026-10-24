@@ -249,7 +249,14 @@ def test_old_branch_job_executes_its_frozen_revision_after_harness_rewind(tmp_pa
     captured = []
 
     class Supervisor:
-        async def process_records(self, records, *, before_hy_invocation):
+        async def process_records(
+            self,
+            records,
+            *,
+            before_hy_invocation,
+            source_admitted,
+        ):
+            assert source_admitted is True
             captured.extend(records)
             await before_hy_invocation()
 

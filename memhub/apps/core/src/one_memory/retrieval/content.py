@@ -2,10 +2,10 @@
 
 from collections.abc import Sequence
 
+from one_memory.conversation_processing import _is_hy_input_turn
 from one_memory.imports.models import EvidenceContentKind, EvidenceRecord
 from one_memory.imports.sources.parsing import is_host_generated_user_turn, strip_host_wrappers
 from one_memory.input_sanitization import sanitize_model_input
-from one_memory.memory_processing import _is_hy_input_turn
 from one_memory.retrieval.chunking import TextChunk
 from one_memory.retrieval.mapped_content import PreparedMappedContent, prepare_mapped_content
 

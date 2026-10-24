@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated
 from uuid import UUID, uuid5
@@ -343,3 +343,33 @@ class EvidenceRecord(BaseModel):
     @property
     def origins(self) -> frozenset[EvidenceOrigin]:
         return frozenset(self.origin_meta)
+
+
+def materialize_write_input(
+    value: EvidenceInput,
+    *,
+    observed_at: datetime | None = None,
+) -> EvidenceRecord:
+    """Freeze source input directly into a write-job payload, without Evidence SQL."""
+    now = observed_at or datetime.now(UTC)
+    return EvidenceRecord(
+        evidence_id=value.evidence_id,
+        user_id=value.user_id,
+        source_id=value.source_id,
+        workspace=value.workspace,
+        project=value.project,
+        conversation_id=value.conversation_id,
+        message_id=value.message_id,
+        correlation_id=value.correlation_id,
+        source_ordinal=value.source_ordinal,
+        content_kind=value.content_kind,
+        role=value.role,
+        written_by=value.written_by,
+        created_at=value.created_at,
+        verbatim=value.verbatim,
+        origin_meta=value.origin_meta,
+        content_hash=value.content_hash,
+        revision=1,
+        imported_at=now,
+        updated_at=now,
+    )

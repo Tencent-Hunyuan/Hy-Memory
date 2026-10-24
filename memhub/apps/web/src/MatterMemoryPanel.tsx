@@ -1,4 +1,8 @@
-import type { GovernedMemory, MemoryDetail } from "@one-memory/contracts";
+import type {
+  GovernedMemory,
+  MemoryDetail,
+  SdkMemoryRecord,
+} from "@one-memory/contracts";
 
 export function MatterMemoryPanel({
   memories,
@@ -7,7 +11,7 @@ export function MatterMemoryPanel({
   loading,
   onSelect,
 }: {
-  memories: GovernedMemory[];
+  memories: (GovernedMemory | SdkMemoryRecord)[];
   selectedMemoryId: string | null;
   detail: MemoryDetail | null;
   loading: boolean;
@@ -30,8 +34,9 @@ export function MatterMemoryPanel({
           >
             <span>{memory.content}</span>
             <small>
-              基础记忆 · {memory.evidence_ids.length} 条原话 · r
-              {memory.revision}
+              {"revision" in memory
+                ? `基础记忆 · ${memory.evidence_ids.length} 条原话 · r${memory.revision}`
+                : `SDK 记忆 · ${memory.layer} · ${memory.status}`}
             </small>
           </button>
         ))}

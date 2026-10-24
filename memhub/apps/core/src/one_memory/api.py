@@ -11,7 +11,6 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
-    Collection,
     Iterable,
     MutableMapping,
 )
@@ -43,7 +42,6 @@ from pydantic import (
     Field,
     StrictBool,
     StrictInt,
-    field_validator,
     model_validator,
 )
 
@@ -51,7 +49,11 @@ from one_memory import __version__, memory_visibility
 from one_memory.auth import local_api_guard, renderer_origins
 from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
 from one_memory.config import Settings, load_settings
-from one_memory.context_routes import context_router
+from one_memory.context_routes import context_router, sdk_context_router
+from one_memory.conversation_processing import (
+    _conversation_chunks,
+    memory_task_timeout_seconds,
+)
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
     close_main_databases,
@@ -80,20 +82,29 @@ from one_memory.external_memory_access import external_access, require_external_
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
 from one_memory.home_summary import HomeSummary, read_home_summary
-from one_memory.hy_lifecycle import HyLifecycle
-from one_memory.hy_memory_bridge import (
-    GraphWidthDecision,
-    GraphWidthMismatch,
-    HyMemoryBridge,
-    HyMemoryBridgeError,
-    builtin_retrieval_snapshot,
-)
+from one_memory.hy_graph_admin import GraphWidthDecision, GraphWidthMismatch
 from one_memory.hy_runtime_config import (
+    HY_MEMORY_READER,
     DiagnosticLogLevel,
     detailed_logging_enabled,
     diagnostic_log_level,
     set_detailed_logging,
     set_diagnostic_log_level,
+)
+from one_memory.hy_sdk_runtime import (
+    SdkClientHandle,
+    builtin_retrieval_snapshot,
+    close_all_shared_runtimes,
+    sdk_relevance_floor,
+)
+from one_memory.hy_sdk_types import (
+    HySdkError,
+    HySdkMemoryPage,
+    HySdkMemoryRecord,
+    HySdkRawPage,
+    HySdkRawRecord,
+    HySdkUserProfile,
+    parse_sdk_search,
 )
 from one_memory.imports.access import (
     AuthorizedSourceRoot,
@@ -147,10 +158,6 @@ from one_memory.imports.supervisor import ImportSupervisor
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.library_upgrade import LibraryUpgradeError, prepare_library
 from one_memory.loop_watchdog import LoopWatchdog
-from one_memory.matters.discovery import MatterDiscovery
-from one_memory.matters.model import MatterModel
-from one_memory.matters.routes import matter_router
-from one_memory.matters.store import MatterStore
 from one_memory.memory_governance import (
     DeletionStatus,
     GovernedMemory,
@@ -171,11 +178,10 @@ from one_memory.memory_library import (
     read_conversation_memories,
     read_memory_library,
 )
-from one_memory.memory_notes import MemoryNoteStore, memory_note_router
-from one_memory.memory_processing import (
-    MemoryProcessingSupervisor,
-    _conversation_chunks,
-    memory_task_timeout_seconds,
+from one_memory.memory_notes import (
+    LegacyMemoryNoteReader,
+    MemoryNoteStore,
+    memory_note_router,
 )
 from one_memory.memory_qa import MemoryAnswerer, MemoryAnswerError
 from one_memory.memory_queue import (
@@ -205,11 +211,35 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ModelProfileUnavailableError,
 )
-from one_memory.model_request_audit import AuditedModelTransport, ModelRequestAuditStore
+from one_memory.model_request_audit import (
+    AuditedModelTransport,
+    ModelRequestAuditStore,
+)
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
 from one_memory.onboarding import OnboardingState, OnboardingStore
-from one_memory.recall import GovernedRecallTarget, RecallReceipt, RecallRequest
+from one_memory.recall import (
+    GovernedRecallTarget,
+    RecallReceipt,
+    RecallRequest,
+    SdkRecallTarget,
+)
+from one_memory.retired_authority import (
+    RetiredEvidenceStore,
+    RetiredGovernanceStore,
+    RetiredMemoryTaskStore,
+)
 from one_memory.runtime import CoreRuntime
+from one_memory.sdk_data_plane_migration import (
+    MemoryAuthority,
+    SdkDataPlaneMigrationStore,
+)
+from one_memory.sdk_memory_qa import (
+    SdkAskMemory,
+    SdkMemoryAnswer,
+    SdkMemoryAnswerer,
+)
+from one_memory.sdk_memory_runtime import SdkMemoryRuntime
+from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.secrets import (
     KeyringSecretStore,
     SecretStore,
@@ -227,6 +257,7 @@ from one_memory.service_levels import (
 from one_memory.source_import_receipts import SourceImportReceipt, build_source_import_receipt
 from one_memory.source_read_access import SourceReadAccess
 from one_memory.source_totals import SourceTotals
+from one_memory.target_schema import bootstrap_fresh_management_schema
 from one_memory.workspace_resolution import resolve_workspace_scopes
 
 logger = logging.getLogger(__name__)
@@ -400,21 +431,6 @@ class CorrectMemoryRequest(MemoryMutationRequest):
     scopes: tuple[str, ...] | None = Field(default=None, max_length=128)
 
 
-class MemoryScopesRequest(MemoryMutationRequest):
-    model_config = ConfigDict(extra="forbid")
-    scopes: tuple[str, ...] = Field(min_length=1, max_length=128)
-
-    @field_validator("scopes")
-    @classmethod
-    def validate_scopes(cls, scopes: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not scope.strip() or len(scope) > 512 or scope.strip() == "*" for scope in scopes):
-            raise ValueError("invalid_memory_scope")
-        cleaned = tuple(dict.fromkeys(scope.strip() for scope in scopes))
-        if "private" in cleaned and len(cleaned) != 1:
-            raise ValueError("private_scope_must_be_exclusive")
-        return cleaned
-
-
 class EvidenceExcerpt(BaseModel):
     evidence_id: str
     available: bool
@@ -531,6 +547,36 @@ class MemoryDetail(BaseModel):
     # and a state the user never caused is a state the interface would have to
     # explain away.
     index_sync: MemoryIndexSync | None = None
+
+
+class SdkMemoryUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=200_000)
+
+
+class SdkUserProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    profile: dict[str, object] | None
+    elapsed_ms: float = Field(ge=0)
+
+
+class SdkRawPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[HySdkRawRecord, ...] = ()
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=500)
+
+
+class MemoryAuthorityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authority: Literal["legacy", "sdk"]
+    migration_id: str | None = None
 
 
 class MemoryProcessingBlock(BaseModel):
@@ -695,6 +741,13 @@ class AskMemoryResponse(BaseModel):
     mode: Literal["generated", "extractive", "empty"]
 
 
+class SdkHomeSummary(BaseModel):
+    schema_version: Literal[2] = 2
+    memory_count: int
+    latest: HySdkMemoryRecord | None
+    observed_at: datetime
+
+
 class MemoryGraphNode(BaseModel):
     node_id: str
     node_type: Literal["memory", "source", "schema", "topic"]
@@ -807,6 +860,8 @@ def create_app(
         runtime = CoreRuntime(runtime_settings) if manage_runtime else nullcontext()
         with runtime:
             database_path = runtime_settings.data_dir / "one-memory.sqlite3"
+            app.state.sdk_client_handle = None
+            bootstrap_fresh_management_schema(database_path)
             # Before any store: each one below changes the library as it opens.
             try:
                 # Anti-downgrade: a database a newer build wrote must not be
@@ -818,25 +873,40 @@ def create_app(
             except LibraryUpgradeError as error:
                 logging.getLogger("one_memory.library_upgrade").error("%s", error)
                 raise
-            app.state.memory_governance_store = MemoryGovernanceStore(
-                database_path, prepared=prepared
-            )
-            # Hold the rebuild until every startup write below has finished; the
-            # gate is released just before the app starts serving.
-            app.state.memory_governance_store.start_content_candidate_backfill(
-                hold_until_startup_release=True
-            )
+            # SDK authority may need its bridge before the rest of startup
+            # selects recall targets. Model/secret management is control-plane
+            # state, so initialize it before authority selection.
+            app.state.secret_store = secret_store or KeyringSecretStore()
+            app.state.model_profile_store = ModelProfileStore(database_path)
+            app.state.sdk_data_plane_migrations = SdkDataPlaneMigrationStore(database_path)
+            app.state.memory_authority = app.state.sdk_data_plane_migrations.authority()
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                app.state.memory_governance_store = RetiredGovernanceStore(database_path)
+                app.state.evidence_store = RetiredEvidenceStore(database_path)
+            else:
+                app.state.memory_governance_store = MemoryGovernanceStore(
+                    database_path, prepared=prepared
+                )
+                # Hold the rebuild until every startup write below has finished.
+                app.state.memory_governance_store.start_content_candidate_backfill(
+                    hold_until_startup_release=True
+                )
+                app.state.evidence_store = EvidenceStore(database_path)
             from one_memory.ui_session import UISessionStore
 
             app.state.ui_sessions = UISessionStore(instance_id=runtime_settings.instance_id)
             # Taken before anything else holds the store, so nothing HY drives
             # can take it: the person's writes come through the API alone.
             app.state.person_writes = app.state.memory_governance_store.claim_person_writes("api")
-            app.state.evidence_store = EvidenceStore(database_path)
             app.state.memory_write_queue_path = database_path
-            app.state.memory_write_evidence_store = app.state.evidence_store
+            app.state.memory_write_evidence_store = (
+                app.state.evidence_store
+                if app.state.memory_authority is MemoryAuthority.LEGACY
+                else None
+            )
             from one_memory.memory_server.data_safety import MIN_FREE_BYTES
             from one_memory.memory_server.durable_queue import (
+                COMPLETED,
                 DurableWriteDrain,
                 DurableWriteQueue,
                 execute_job,
@@ -846,7 +916,8 @@ def create_app(
             memory_write_queue = DurableWriteQueue(
                 database_path,
                 min_free_bytes=MIN_FREE_BYTES,
-                evidence=app.state.evidence_store,
+                evidence=app.state.memory_write_evidence_store,
+                sdk_authority=app.state.memory_authority is MemoryAuthority.SDK,
             )
             app.state.memory_write_queue = memory_write_queue
             # Builds through 1.0.2 parked pre-invocation jobs behind the
@@ -871,22 +942,28 @@ def create_app(
             # and the app cannot be unresponsive for them. Until it lands the
             # ordering query is slow but correct.
             app.state.evidence_store.ensure_imported_index_in_background()
-            from one_memory.session_registry import SessionRegistry
+            if app.state.memory_authority is MemoryAuthority.LEGACY:
+                from one_memory.session_registry import SessionRegistry
 
-            app.state.session_registry = SessionRegistry(database_path)
-            app.state.session_registry.initialize()
-            from one_memory.change_outbox import ChangeOutbox
+                app.state.session_registry = SessionRegistry(database_path)
+                app.state.session_registry.initialize()
+                from one_memory.change_outbox import ChangeOutbox
 
-            app.state.change_outbox = ChangeOutbox(database_path)
-            app.state.change_outbox.initialize()
-            from one_memory.session_inbox import SessionInbox
+                app.state.change_outbox = ChangeOutbox(database_path)
+                app.state.change_outbox.initialize()
+                from one_memory.session_inbox import SessionInbox
 
-            app.state.session_inbox = SessionInbox(database_path)
-            app.state.session_inbox.initialize()
-            from one_memory.session_lease import SessionLease
+                app.state.session_inbox = SessionInbox(database_path)
+                app.state.session_inbox.initialize()
+                from one_memory.session_lease import SessionLease
 
-            app.state.session_lease = SessionLease(database_path)
-            app.state.session_lease.initialize()
+                app.state.session_lease = SessionLease(database_path)
+                app.state.session_lease.initialize()
+            else:
+                app.state.session_registry = None
+                app.state.change_outbox = None
+                app.state.session_inbox = None
+                app.state.session_lease = None
             app.state.call_event_store = None
             app.state.call_event_recording_error = False
             if (
@@ -903,22 +980,34 @@ def create_app(
                 app.state.call_event_store.initialize()
             app.state.source_totals = SourceTotals(app.state.evidence_store)
             app.state.source_read_access = SourceReadAccess(database_path)
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                await asyncio.to_thread(app.state.evidence_store.release_completed_sdk_staging)
             evidence_store = app.state.evidence_store
-            app.state.recall_target = GovernedRecallTarget(
-                app.state.memory_governance_store,
-                filter_memories=app.state.source_read_access.memories,
-                semantic_search=lambda query: _memory_processing_supervisor(app).semantic_recall(
-                    query
-                ),
-                # Read per request rather than cached: an import that lands
-                # while the app is open should make its workspace reachable
-                # without a restart. Affordable only because the read is served
-                # by a covering index; see `EvidenceStore.known_workspaces`.
-                resolve_workspace=lambda workspace_path: resolve_workspace_scopes(
-                    workspace_path,
-                    evidence_store.known_workspaces(user_id="local"),
-                ),
-            )
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                sdk_handle = _sdk_client_handle(app)
+                app.state.recall_target = SdkRecallTarget(
+                    semantic_search=lambda query: _search_sdk_memories(
+                        sdk_handle,
+                        query,
+                        user_id="local",
+                        agent_id="*",
+                    ),
+                    get_memory=lambda memory_id: _get_sdk_memory(sdk_handle, memory_id),
+                )
+            else:
+                app.state.recall_target = GovernedRecallTarget(
+                    app.state.memory_governance_store,
+                    filter_memories=app.state.source_read_access.memories,
+                    semantic_search=lambda query: _sdk_memory_runtime(app).semantic_recall(query),
+                    # Read per request rather than cached: an import that lands
+                    # while the app is open should make its workspace reachable
+                    # without a restart. Affordable only because the read is served
+                    # by a covering index; see `EvidenceStore.known_workspaces`.
+                    resolve_workspace=lambda workspace_path: resolve_workspace_scopes(
+                        workspace_path,
+                        evidence_store.known_workspaces(user_id="local"),
+                    ),
+                )
             app.state.import_job_store = ImportJobStore(database_path)
             app.state.onboarding_store = OnboardingStore(database_path)
             app.state.history_import_gate_released = False
@@ -947,8 +1036,6 @@ def create_app(
             app.state.sedimentation_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
-            app.state.secret_store = secret_store or KeyringSecretStore()
-            app.state.model_profile_store = ModelProfileStore(database_path)
 
             async def cleanup_stale_model_secrets() -> None:
                 try:
@@ -978,28 +1065,21 @@ def create_app(
                 lambda: cleanup_stale_model_secrets(),
                 name="one-memory-model-secret-cleanup",
             )
-            app.state.matter_store = MatterStore(
-                database_path,
-                lifecycle_source=_matter_lifecycle_source(
-                    app,
-                    runtime_settings.data_dir,
-                ),
+            app.state.memory_task_store = (
+                RetiredMemoryTaskStore(database_path)
+                if app.state.memory_authority is MemoryAuthority.SDK
+                else MemoryTaskStore(database_path)
             )
-            app.state.matter_store.recover_runs()
-            app.state.matter_discovery = MatterDiscovery(
-                app.state.matter_store,
-                MatterModel(app.state.model_profile_store, app.state.secret_store),
-                governance=app.state.memory_governance_store,
-            )
-            app.state.memory_task_store = MemoryTaskStore(database_path)
             # Derived, unversioned: created if absent, and the version ledger
             # is left alone so an older package can still open this library.
-            try:
-                await asyncio.to_thread(memory_visibility.startup, database_path)
-            except sqlite3.Error as error:
-                # Not fatal: without the tables every read checks exactly, as
-                # it does today.
-                app.state.memory_visibility_error = str(error)
+            if app.state.memory_authority is MemoryAuthority.LEGACY:
+                try:
+                    await asyncio.to_thread(
+                        memory_visibility.startup,
+                        database_path,
+                    )
+                except sqlite3.Error as error:
+                    app.state.memory_visibility_error = str(error)
             model_request_budget = (
                 ModelRequestBudget(
                     database_path,
@@ -1020,9 +1100,7 @@ def create_app(
                 authorize_generation=lambda profile, question, grounding: (
                     _authorize_answer_generation(app, profile, question, grounding)
                 ),
-                semantic_search=lambda query: _memory_processing_supervisor(app).semantic_recall(
-                    query
-                ),
+                semantic_search=lambda query: _sdk_memory_runtime(app).semantic_recall(query),
                 resolve_workspace=lambda workspace_path: resolve_workspace_scopes(
                     workspace_path,
                     evidence_store.known_workspaces(user_id="local"),
@@ -1042,19 +1120,12 @@ def create_app(
                 store=app.state.model_profile_store,
                 secrets=app.state.secret_store,
             )
-            app.state.memory_processing_supervisor = MemoryProcessingSupervisor(
-                tasks=app.state.memory_task_store,
+            app.state.sdk_write_coordinator = SdkWriteCoordinator(
                 profiles=app.state.model_profile_store,
                 secrets=app.state.secret_store,
-                evidence=app.state.evidence_store,
-                governance=app.state.memory_governance_store,
                 data_dir=runtime_settings.data_dir,
-                extraction_settings=app.state.extraction_settings_store,
-                bridge_factory=lambda profile, api_key, data_dir: HyMemoryBridge(
-                    profile=profile,
-                    api_key=api_key,
-                    data_dir=data_dir,
-                    http_transport_factory=lambda: AuditedModelTransport(
+                transport_factory=lambda profile: (
+                    lambda: AuditedModelTransport(
                         app.state.model_request_audit_store,
                         profile_id=profile.profile_id,
                         profile_revision=profile.revision,
@@ -1065,20 +1136,19 @@ def create_app(
                             if model_request_budget is not None
                             else None
                         ),
-                    ),
+                    )
                 ),
-                # `None` means "whatever the active profile allows". Pinned to
-                # 1 in `a59f4b5` as temporary load-shedding for an acceptance
-                # package, and left pinned after it: a hardcoded 1 is rule 9's
-                # exact anti-pattern (a small number baked into code that
-                # cannot be tuned per machine). Measured before removing — at
-                # profile concurrency 4, recall latency is unchanged while
-                # precipitation goes 4x.
-                max_concurrent_tasks=runtime_settings.precipitation_max_concurrent_tasks,
-                source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
-                service_levels=app.state.service_levels,
                 sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
             )
+            app.state.sdk_memory_runtime = SdkMemoryRuntime(
+                coordinator=app.state.sdk_write_coordinator,
+                read_handle=_sdk_client_handle(app),
+                write_queue=memory_write_queue,
+                extraction_settings=app.state.extraction_settings_store,
+                data_dir=runtime_settings.data_dir,
+            )
+            if app.state.memory_authority is MemoryAuthority.SDK:
+                app.state.sdk_memory_runtime.start_raw_retention()
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
             # root only consumes it: no local formula, and the 250ms claim
@@ -1087,29 +1157,24 @@ def create_app(
             drain_budget = production_drain_budget()
 
             async def reconcile_unknown_writes() -> None:
-                await app.state.memory_processing_supervisor.reconcile_unknown_outputs(
-                    exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
-                )
                 unknown = await asyncio.to_thread(
                     memory_write_queue.unknown_jobs,
                     limit=128,
                     exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
                 )
                 for job in unknown:
-                    await asyncio.to_thread(
-                        memory_write_queue.resolve_unknown_from_linked_output,
-                        job.job_id,
+                    receipt = await app.state.sdk_write_coordinator.inquire_write_outcome(
+                        job.request_id
                     )
-                await asyncio.to_thread(
-                    memory_write_queue.retry_first_unknown_after_reconcile,
-                    older_than=datetime.now(UTC) - timedelta(seconds=10),
-                    limit=32,
-                )
-                await asyncio.to_thread(
-                    app.state.memory_task_store.retry_first_unknown_after_reconcile,
-                    older_than=datetime.now(UTC) - timedelta(seconds=10),
-                    limit=128,
-                )
+                    if receipt is None:
+                        continue
+                    await asyncio.to_thread(
+                        memory_write_queue.settle,
+                        job.job_id,
+                        state=COMPLETED,
+                        sdk_raw_ids=receipt.raw_ids,
+                        sdk_memory_ids=receipt.memory_ids,
+                    )
 
             async def admit_hy_invocation(
                 source_id: str,
@@ -1131,7 +1196,7 @@ def create_app(
                 execute=lambda job_id: execute_job(
                     job_id,
                     queue=memory_write_queue,
-                    supervisor=app.state.memory_processing_supervisor,
+                    supervisor=app.state.sdk_write_coordinator,
                     evidence=app.state.evidence_store,
                     source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                     admit_hy_invocation=admit_hy_invocation,
@@ -1139,7 +1204,7 @@ def create_app(
                 execute_owned=lambda job_id, owner: execute_job(
                     job_id,
                     queue=memory_write_queue,
-                    supervisor=app.state.memory_processing_supervisor,
+                    supervisor=app.state.sdk_write_coordinator,
                     evidence=app.state.evidence_store,
                     owner=owner,
                     source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
@@ -1187,7 +1252,9 @@ def create_app(
 
             app.state.memory_write_intake = UnifiedWriteIntake(
                 memory_write_queue,
-                source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
+                source_writes_permitted=lambda source_id: (
+                    source_id == "one-memory-manual" or _source_writes_on(app, source_id)
+                ),
             )
             app.state.start_memory_backfill = lambda: _start_backfill(app)
 
@@ -1209,13 +1276,19 @@ def create_app(
                         priority=priority,
                     )
 
-            app.state.matter_discovery.processor = app.state.memory_processing_supervisor
-            app.state.matter_discovery.write_intake = app.state.memory_write_intake
-            app.state.matter_discovery.write_queue = memory_write_queue
             app.state.memory_note_store = MemoryNoteStore(
                 app.state.evidence_store,
-                app.state.memory_processing_supervisor,
+                (
+                    LegacyMemoryNoteReader(
+                        app.state.memory_task_store,
+                        app.state.memory_governance_store,
+                    )
+                    if app.state.memory_authority is MemoryAuthority.LEGACY
+                    else None
+                ),
                 app.state.memory_write_intake,
+                sdk_authority=app.state.memory_authority is MemoryAuthority.SDK,
+                write_queue=memory_write_queue,
             )
             app.state.file_import_store = FileImportStore(
                 runtime_settings.data_dir / "import-files"
@@ -1234,19 +1307,23 @@ def create_app(
                 on_stable_evidence=(
                     enqueue_stable_evidence
                     if runtime_settings.automatic_memory_processing
+                    and app.state.memory_authority is MemoryAuthority.LEGACY
                     else None
                 ),
                 service_levels=app.state.service_levels,
+                sdk_queue=memory_write_queue,
+                sdk_authority=lambda: app.state.memory_authority is MemoryAuthority.SDK,
             )
-            if runtime_settings.imports_enabled:
-                app.state.matter_discovery.importer = app.state.import_supervisor
             app.state.import_job_store.replace_never_published_snapshot_failures()
             # A file's Evidence and its pending-dispatch row commit atomically,
             # but the callback that turns them into a task runs after the
             # transaction. A crash in that window leaves durable Evidence with
             # no in-memory timer left to notice it; drain those rows once on
             # startup through the same permission/debounce path as live work.
-            if runtime_settings.automatic_memory_processing:
+            if (
+                runtime_settings.automatic_memory_processing
+                and app.state.memory_authority is MemoryAuthority.LEGACY
+            ):
                 # Two-phase, like the live runner: enumerate the file
                 # identities, read each without consuming its pending marker,
                 # await the durable submit, and only then consume. A crash or
@@ -1350,13 +1427,9 @@ def create_app(
             # starts its threads wherever the first work arrives from, and
             # from a busy loop that wait was 2.5 seconds.
             warm_bulk_pool()
-            _start_backfill(app)
-            _start_visibility_recompute(app)
-            app.state.deletion_sync = watched_task(
-                asyncio.get_running_loop(),
-                lambda: _memory_processing_supervisor(app).keep_deletions_in_sync(),
-                name="one-memory-deletion-sync",
-            )
+            app.state.memory_backfill = None
+            app.state.memory_visibility_task = None
+            app.state.deletion_sync = None
             # Both times the loop was blocked here it was found from outside,
             # by hand, days later. This says so at the time, and says what was
             # holding it.
@@ -1426,7 +1499,6 @@ def create_app(
                         # Experimental: an exceptional live-thread failure still
                         # needs an outer ownership fence before production enablement.
                         retrieval_stop_error = error
-                await app.state.matter_discovery.shutdown()
                 app.state.main_database_report.cancel()
                 app.state.loop_heartbeat.cancel()
                 with suppress(asyncio.CancelledError):
@@ -1437,18 +1509,23 @@ def create_app(
                     await app.state.resource_diagnostics
                 with suppress(asyncio.CancelledError):
                     await app.state.model_secret_cleanup
-                app.state.memory_backfill.cancel()
-                app.state.deletion_sync.cancel()
+                if app.state.memory_backfill is not None:
+                    app.state.memory_backfill.cancel()
+                if app.state.deletion_sync is not None:
+                    app.state.deletion_sync.cancel()
                 # Awaited, not just cancelled: they hold database connections,
                 # and shutdown releases the data directory's lock.
-                with suppress(asyncio.CancelledError):
-                    await app.state.memory_backfill
-                with suppress(asyncio.CancelledError):
-                    await app.state.deletion_sync
-                await asyncio.to_thread(
-                    app.state.memory_governance_store.wait_content_candidate_backfill,
-                    5.0,
-                )
+                if app.state.memory_backfill is not None:
+                    with suppress(asyncio.CancelledError):
+                        await app.state.memory_backfill
+                if app.state.deletion_sync is not None:
+                    with suppress(asyncio.CancelledError):
+                        await app.state.deletion_sync
+                if app.state.memory_authority is MemoryAuthority.LEGACY:
+                    await asyncio.to_thread(
+                        app.state.memory_governance_store.wait_content_candidate_backfill,
+                        5.0,
+                    )
                 if app.state.live_sync_watch is not None:
                     await app.state.live_sync_watch.shutdown()
                 await app.state.live_sync_supervisor.shutdown()
@@ -1456,13 +1533,12 @@ def create_app(
                 app.state.memory_write_drain.stop()
                 with suppress(asyncio.CancelledError):
                     await app.state.memory_write_drain_task
-                await app.state.memory_processing_supervisor.shutdown()
-                # HY clients share two process-owned loop threads. Close them
-                # after every bridge is down, while HY's SQLite executor is
-                # still available; interpreter atexit is too late for that.
-                from one_memory.hy_memory_bridge import close_shared_hy_runtimes
-
-                await asyncio.to_thread(close_shared_hy_runtimes)
+                await app.state.sdk_memory_runtime.shutdown()
+                await app.state.sdk_write_coordinator.close()
+                if app.state.sdk_client_handle is not None:
+                    await app.state.sdk_client_handle.close()
+                    app.state.sdk_client_handle = None
+                close_all_shared_runtimes()
                 # Last: what has just been shut down was using it.
                 shutdown_bulk_pool()
                 log_main_database_stats("shutdown")
@@ -1512,6 +1588,29 @@ def create_app(
     )
     app.state.settings = runtime_settings
 
+    @app.middleware("http")
+    async def reject_legacy_memory_authority(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        legacy_paths = (
+            "/api/v1/memories",
+            "/api/v1/memory-library",
+            "/api/v1/conversations",
+            "/api/v1/conversation-browser",
+            "/api/v1/context",
+            "/api/v1/boundary",
+            "/api/v1/home-summary",
+        )
+        if getattr(
+            app.state, "memory_authority", MemoryAuthority.LEGACY
+        ) is MemoryAuthority.SDK and request.url.path.startswith(legacy_paths):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "sdk_memory_authority_required"},
+            )
+        return await call_next(request)
+
     def ui_session_valid(cookie: str) -> bool:
         sessions = getattr(app.state, "ui_sessions", None)
         return sessions is not None and sessions.valid_session(cookie)
@@ -1520,10 +1619,10 @@ def create_app(
         Depends(local_api_guard(runtime_settings, valid_ui_session=ui_session_valid)),
         Depends(require_external_endpoint),
     ]
-    app.include_router(matter_router(protected))
     app.include_router(memory_note_router(protected))
     app.include_router(file_import_router(protected))
     app.include_router(context_router(protected))
+    app.include_router(sdk_context_router(protected))
 
     def require_workbuddy_boundary(request: Request) -> None:
         access = external_access(request.headers)
@@ -1534,6 +1633,8 @@ def create_app(
     @app.post("/api/v1/boundary/peek", dependencies=protected)
     async def boundary_peek(value: dict[str, Any], request: Request) -> dict[str, object]:
         require_workbuddy_boundary(request)
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(409, "sdk_boundary_retired")
         from one_memory.workbuddy_boundary import peek_output
 
         return await asyncio.to_thread(peek_output, value, _evidence_store(app).database_path)
@@ -1541,6 +1642,8 @@ def create_app(
     @app.post("/api/v1/boundary/ack", dependencies=protected)
     async def boundary_ack(value: BoundaryAckRequest, request: Request) -> dict[str, bool]:
         require_workbuddy_boundary(request)
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(409, "sdk_boundary_retired")
         from one_memory.session_inbox import CursorRejected
         from one_memory.workbuddy_boundary import confirm
 
@@ -1563,10 +1666,12 @@ def create_app(
     # write path is reachable through one door rather than per-caller routes.
     from one_memory.memory_server.registry import WriteRegistry
     from one_memory.memory_server.routes import router as memory_write_router
+    from one_memory.memory_server.routes import sdk_router as sdk_memory_write_router
 
     if getattr(app.state, "memory_write_registry", None) is None:
         app.state.memory_write_registry = WriteRegistry()
     app.include_router(memory_write_router(protected))
+    app.include_router(sdk_memory_write_router(protected))
     from one_memory.call_event_routes import call_event_router
 
     app.include_router(call_event_router(protected))
@@ -1621,7 +1726,7 @@ def create_app(
                     trace_id=trace_id,
                     instance_id=runtime_settings.instance_id,
                     duration_ms=elapsed_ms(started),
-                    details={**diagnostic_details, "status": str(response.status_code)},
+                    details={**diagnostic_details, "status_code": response.status_code},
                 )
             return response
         except Exception as error:
@@ -1692,7 +1797,7 @@ def create_app(
     ) -> dict[str, object]:
         """Semantic search IDs for the Reader process. Reader-only."""
         try:
-            hits = await _memory_processing_supervisor(app).semantic_search(query, limit=limit)
+            hits = await _sdk_memory_runtime(app).semantic_search(query, limit=limit)
         except Exception:
             return {"ids": []}
         return {"ids": [memory_id for memory_id, _score in hits]}
@@ -1722,7 +1827,7 @@ def create_app(
     ) -> dict[str, object]:
         """HY graph overlay for the Reader process. Reader-only."""
         try:
-            snapshot = await _memory_processing_supervisor(app).graph_snapshot(limit=limit)
+            snapshot = await _sdk_memory_runtime(app).graph_snapshot(limit=limit)
         except Exception:
             return {"consulted": False, "nodes": [], "edges": []}
         return snapshot.model_dump(mode="json")
@@ -1733,7 +1838,7 @@ def create_app(
         error = cast(str | None, getattr(app.state, "memory_backfill_error", None))
         status = _backfill_state(backfill, error)
         governance = getattr(app.state, "memory_governance_store", None)
-        supervisor = getattr(app.state, "memory_processing_supervisor", None)
+        supervisor = getattr(app.state, "sdk_memory_runtime", None)
         if supervisor is not None:
             accepted = supervisor.accepted_backfill_status()
             if accepted is not None:
@@ -2531,6 +2636,10 @@ def create_app(
                 import_binding = (str(upload.upload_id), upload.checksum)
             except (KeyError, ValueError, OSError):
                 raise HTTPException(409, "import_upload_scope_mismatch") from None
+        existing_intent = await asyncio.to_thread(
+            app.state.source_connection_store.get,
+            request.request_id,
+        )
         try:
             connect = partial(
                 app.state.source_connection_store.connect,
@@ -2551,6 +2660,8 @@ def create_app(
             result = await asyncio.to_thread(connect)
         except ConnectionIntentError as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
+        if existing_intent is not None:
+            return ConnectSourcesResponse(**result.model_dump())
         configured: list[str] = []
         for job in result.jobs:
             registration = _require_registration(app, job.source_id)
@@ -2807,9 +2918,7 @@ def create_app(
         # A missing profile is an event-driven wait, not a provider outage.
         # Release those durable rows only now that activation has changed the
         # condition; the ordinary drain poll will claim them without a restart.
-        await asyncio.to_thread(
-            app.state.memory_write_queue.readmit_model_profile_waiters
-        )
+        await asyncio.to_thread(app.state.memory_write_queue.readmit_model_profile_waiters)
         # Not awaited: the catch-up reads every conversation ever imported, and
         # the answer to "which profile is active" does not depend on it.
         _start_backfill(app)
@@ -2951,6 +3060,33 @@ def create_app(
     def home_summary() -> HomeSummary:
         return read_home_summary(app.state.evidence_store.database_path)
 
+    @app.get(
+        "/api/v2/home-summary",
+        response_model=SdkHomeSummary,
+        dependencies=protected,
+    )
+    async def sdk_home_summary() -> SdkHomeSummary:
+        if app.state.memory_authority is not MemoryAuthority.SDK:
+            raise HTTPException(409, "legacy_memory_authority_required")
+        try:
+            client = await _sdk_client_handle(app).client()
+            raw = await asyncio.to_thread(
+                client.list_memories,
+                user_id="local",
+                statuses=["active"],
+                limit=1,
+                offset=0,
+                order="desc",
+            )
+            page = HySdkMemoryPage.from_sdk(raw, limit=1, offset=0)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_list_failed") from None
+        return SdkHomeSummary(
+            memory_count=page.total,
+            latest=page.memories[0] if page.memories else None,
+            observed_at=datetime.now(UTC),
+        )
+
     @app.get("/api/v1/memory-library", response_model=MemoryLibraryPage, dependencies=protected)
     def memory_library(
         query: str | None = Query(default=None, max_length=512),
@@ -2976,6 +3112,139 @@ def create_app(
         except Exception:
             # Stored-data/IO failures are not empty results or invalid client input.
             raise HTTPException(status_code=503, detail="memory_library_unavailable") from None
+
+    @app.get(
+        "/api/v2/memory-authority",
+        response_model=MemoryAuthorityResponse,
+        dependencies=protected,
+    )
+    def memory_authority() -> MemoryAuthorityResponse:
+        store = getattr(app.state, "sdk_data_plane_migrations", None)
+        if store is None:
+            store = SdkDataPlaneMigrationStore(_evidence_store(app).database_path)
+        marker = store.cutover()
+        return MemoryAuthorityResponse(
+            authority="sdk" if marker is not None else "legacy",
+            migration_id=marker.migration_id if marker is not None else None,
+        )
+
+    @app.get(
+        "/api/v2/memory-library",
+        response_model=HySdkMemoryPage,
+        dependencies=protected,
+    )
+    async def sdk_memory_library(
+        statuses: list[str] = Query(default=["active"]),  # noqa: B008
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> HySdkMemoryPage:
+        try:
+            client = await _sdk_client_handle(app).client()
+            raw = await asyncio.to_thread(
+                client.list_memories,
+                user_id="local",
+                statuses=list(statuses),
+                offset=offset,
+                limit=limit,
+            )
+            return HySdkMemoryPage.from_sdk(raw, limit=limit, offset=offset)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_list_failed") from None
+
+    @app.get(
+        "/api/v2/user-profile",
+        response_model=SdkUserProfileResponse,
+        dependencies=protected,
+    )
+    async def sdk_user_profile() -> SdkUserProfileResponse:
+        try:
+            client = await _sdk_client_handle(app).client()
+            value = await asyncio.to_thread(client.get_user_profile, user_id="local")
+            profile = HySdkUserProfile.from_sdk(value)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_profile_read_failed") from None
+        return SdkUserProfileResponse.model_validate(profile.model_dump())
+
+    @app.get(
+        "/api/v2/memories/{memory_id}",
+        response_model=HySdkMemoryRecord,
+        dependencies=protected,
+    )
+    async def get_sdk_memory(memory_id: str) -> HySdkMemoryRecord:
+        try:
+            memory = await _get_sdk_memory(_sdk_client_handle(app), memory_id)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_get_failed") from None
+        if memory is None:
+            raise HTTPException(status_code=404, detail="memory_not_found")
+        return memory
+
+    @app.put(
+        "/api/v2/memories/{memory_id}",
+        response_model=HySdkMemoryRecord,
+        dependencies=protected,
+    )
+    async def update_sdk_memory(
+        memory_id: str,
+        request: SdkMemoryUpdateRequest,
+    ) -> HySdkMemoryRecord:
+        try:
+            client = await app.state.sdk_write_coordinator.client()
+            result = await asyncio.to_thread(client.update, memory_id, request.content)
+            if not isinstance(result, dict) or result.get("success") is not True:
+                raise HySdkError("hy_memory_update_rejected")
+            raw = await asyncio.to_thread(client.get, memory_id)
+            memory = None if raw is None else HySdkMemoryRecord.from_sdk(raw)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_update_failed") from None
+        if memory is None:
+            raise HTTPException(status_code=404, detail="memory_not_found")
+        return memory
+
+    @app.delete(
+        "/api/v2/memories/{memory_id}",
+        status_code=204,
+        dependencies=protected,
+    )
+    async def delete_sdk_memory(memory_id: str) -> Response:
+        try:
+            client = await app.state.sdk_write_coordinator.client()
+            result = await asyncio.to_thread(client.delete, memory_id)
+            if not isinstance(result, dict):
+                raise HySdkError("hy_memory_delete_rejected")
+            error_code = result.get("error_code")
+            if error_code or result.get("partial") is True:
+                raise HySdkError(str(error_code or "hy_memory_delete_incomplete"))
+            if result.get("success") is not True and result.get("deleted_count") != 0:
+                raise HySdkError("hy_memory_delete_rejected")
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_delete_failed") from None
+        return Response(status_code=204)
+
+    @app.get(
+        "/api/v2/raw",
+        response_model=SdkRawPage,
+        dependencies=protected,
+    )
+    async def sdk_raw_library(
+        source: str | None = Query(default=None, min_length=1),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> SdkRawPage:
+        try:
+            client = await _sdk_client_handle(app).client()
+            value = await asyncio.to_thread(
+                client.list_memories,
+                user_id="local",
+                layers=["l1_raw"],
+                include_sources=[source] if source else None,
+                offset=offset,
+                limit=limit,
+            )
+            page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_raw_list_failed") from None
+        return SdkRawPage(items=page.raw, total=page.total, offset=offset, limit=limit)
 
     @app.get(
         "/api/v1/memories",
@@ -3240,6 +3509,8 @@ def create_app(
     async def ask_memories(
         request: AskMemoryRequest, http_request: Request, response: Response
     ) -> AskMemoryResponse:
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="sdk_memory_authority_required")
         started = time.monotonic()
         access = external_access(http_request.headers)
         await _require_external_recall_scope(
@@ -3283,6 +3554,8 @@ def create_app(
     async def ask_memories_stream(
         request: AskMemoryRequest, http_request: Request
     ) -> StreamingResponse:
+        if app.state.memory_authority is MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="sdk_memory_authority_required")
         await _require_external_recall_scope(
             app, http_request, request.scope, request.workspace_path, "om_ask"
         )
@@ -3326,6 +3599,61 @@ def create_app(
                     )
             except MemoryAnswerError as error:
                 yield _sse({"type": "error", "code": str(error)})
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post(
+        "/api/v2/memories/ask",
+        response_model=SdkMemoryAnswer,
+        dependencies=protected,
+    )
+    async def ask_sdk_memories(
+        request: AskMemoryRequest,
+        http_request: Request,
+    ) -> SdkMemoryAnswer:
+        if app.state.memory_authority is not MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="legacy_memory_authority_required")
+        await _require_external_recall_scope(
+            app,
+            http_request,
+            request.scope,
+            request.workspace_path,
+            "om_ask",
+        )
+        try:
+            return await _sdk_request_answerer(app).answer(request.question)
+        except MemoryAnswerError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+
+    @app.post(
+        "/api/v2/memories/ask/stream",
+        dependencies=protected,
+    )
+    async def ask_sdk_memories_stream(
+        request: AskMemoryRequest,
+        http_request: Request,
+    ) -> StreamingResponse:
+        if app.state.memory_authority is not MemoryAuthority.SDK:
+            raise HTTPException(status_code=409, detail="legacy_memory_authority_required")
+        await _require_external_recall_scope(
+            app,
+            http_request,
+            request.scope,
+            request.workspace_path,
+            "om_ask",
+        )
+        answerer = _sdk_request_answerer(app)
+
+        async def events() -> AsyncIterator[str]:
+            try:
+                async for event in answerer.answer_stream(request.question):
+                    yield _sse(_serialize_ask_event(event))
+            except MemoryAnswerError:
+                yield _sse({"type": "error", "code": "memory_answer_failed"})
 
         return StreamingResponse(
             events(),
@@ -3377,7 +3705,7 @@ def create_app(
         )
         target = _recall_target(app)
         access = external_access(http_request.headers)
-        if access is not None:
+        if access is not None and isinstance(target, GovernedRecallTarget):
             target = copy(target)
             original_filter = target.filter_memories
             target.filter_memories = lambda memories: tuple(
@@ -3447,11 +3775,9 @@ def create_app(
             all_memories, projected, nodes, edges = await asyncio.to_thread(read_governed_part)
             try:
                 hy_graph = (
-                    None
-                    if revoked
-                    else await _memory_processing_supervisor(app).graph_snapshot(limit=limit)
+                    None if revoked else await _sdk_memory_runtime(app).graph_snapshot(limit=limit)
                 )
-            except HyMemoryBridgeError:
+            except HySdkError:
                 hy_graph = None
 
             revoked_now = await asyncio.to_thread(_read_access(app).has_revoked_sources)
@@ -3528,8 +3854,8 @@ def create_app(
         if await asyncio.to_thread(_read_access(app).has_revoked_sources):
             raise HTTPException(status_code=403, detail="memory_source_revoked")
         try:
-            return await _memory_processing_supervisor(app).digest()
-        except HyMemoryBridgeError as error:
+            return await _sdk_memory_runtime(app).digest()
+        except HySdkError as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
 
     @app.get(
@@ -3553,17 +3879,24 @@ def create_app(
         # Two numbers, not one: 675 as a single total reads as "stuck", when
         # what is true is that the three from this morning are nearly done
         # and the rest is catch-up (R-02).
-        supervisor = app.state.memory_processing_supervisor
+        supervisor = app.state.sdk_memory_runtime
         depths = supervisor.queue_depths()
         active_queue, in_flight_count = supervisor.active_depths()
         planned, current = supervisor.manual_batch_progress()
+        sdk_counts = (
+            supervisor.status_counts() if app.state.memory_authority is MemoryAuthority.SDK else {}
+        )
         # `running` counts rows the store still marks running, which includes
         # work a worker has already given up on. Reporting that as "what is
         # running" is how a stalled queue looks busy, so the strand is given
         # its own number.
         running_rows = counts.get(MemoryTaskStatus.RUNNING, 0)
         return MemoryProcessingSummary(
-            pending=counts.get(MemoryTaskStatus.PENDING, 0),
+            pending=(
+                sdk_counts.get("pending", 0)
+                if sdk_counts
+                else counts.get(MemoryTaskStatus.PENDING, 0)
+            ),
             fresh_pending=depths.fresh,
             backlog_pending=depths.backlog,
             outside_window_pending=counts.get(
@@ -3571,20 +3904,26 @@ def create_app(
                 0,
             ),
             recent_completions=depths.recent_completions,
-            running=running_rows,
-            stranded_running=max(0, running_rows - in_flight_count),
+            running=sdk_counts.get("running", running_rows),
+            stranded_running=(0 if sdk_counts else max(0, running_rows - in_flight_count)),
             unexecuted_policy_failures=store.unexecuted_policy_failures(),
-            waiting_for_model=counts.get(MemoryTaskStatus.WAITING_FOR_MODEL, 0),
-            completed=counts.get(MemoryTaskStatus.COMPLETED, 0),
-            failed=counts.get(MemoryTaskStatus.FAILED, 0),
-            unknown=counts.get(MemoryTaskStatus.UNKNOWN, 0),
+            waiting_for_model=sdk_counts.get(
+                "waiting_for_model",
+                counts.get(MemoryTaskStatus.WAITING_FOR_MODEL, 0),
+            ),
+            completed=sdk_counts.get(
+                "completed",
+                counts.get(MemoryTaskStatus.COMPLETED, 0),
+            ),
+            failed=sdk_counts.get("failed", counts.get(MemoryTaskStatus.FAILED, 0)),
+            unknown=sdk_counts.get("unknown", counts.get(MemoryTaskStatus.UNKNOWN, 0)),
             unknown_reasons=store.unknown_error_counts(),
             blocked_stages=tuple(
                 MemoryProcessingBlock(kind=kind, reason=reason, count=count)
                 for kind, reason, count in store.blocked_stages()[:6]
             ),
             seconds_per_completion=store.seconds_per_completion(),
-            extraction_window_preset=supervisor.extraction_window_settings().window_preset,
+            extraction_window_preset=app.state.extraction_settings_store.get().window_preset,
             manual_extract_batches_planned=planned,
             manual_extract_batches_current=current,
             active_queue=active_queue,
@@ -3602,15 +3941,17 @@ def create_app(
     ) -> RetryUnknownMemoryTasksReceipt:
         """Retry unknown writes only behind the user's explicit confirmation."""
         del request
-        reconciled = await _memory_processing_supervisor(app).reconcile_unknown_outputs()
+        reconciled = await _sdk_memory_runtime(app).reconcile_unknown_outputs()
         from one_memory.memory_server.durable_queue import DurableWriteQueue
 
         queue = DurableWriteQueue(app.state.memory_write_queue_path)
         unknown = queue.unknown_jobs(limit=2048)
-        for job in unknown:
-            queue.resolve_unknown_from_linked_output(job.job_id)
+        if app.state.memory_authority is MemoryAuthority.LEGACY:
+            for job in unknown:
+                queue.resolve_unknown_from_linked_output(job.job_id)
         requeued = sum(queue.retry_unknown_confirmed(job.job_id) for job in unknown)
-        requeued += app.state.memory_task_store.retry_unknown_confirmed()
+        if app.state.memory_authority is MemoryAuthority.LEGACY:
+            requeued += app.state.memory_task_store.retry_unknown_confirmed()
         return RetryUnknownMemoryTasksReceipt(reconciled=reconciled, requeued=requeued)
 
     @app.get(
@@ -3621,8 +3962,8 @@ def create_app(
     async def get_graph_width() -> GraphWidthStatus:
         """Report the mismatch. Never writes: this is polled by the app."""
         try:
-            mismatch = await _memory_processing_supervisor(app).graph_width_mismatch()
-        except HyMemoryBridgeError as error:
+            mismatch = await _sdk_memory_runtime(app).graph_width_mismatch()
+        except HySdkError as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
         if mismatch is None:
             return GraphWidthStatus()
@@ -3645,10 +3986,10 @@ def create_app(
         decision is rejected by validation rather than assumed, because the
         assumption that cost a live graph once was made in code, not by a user.
         """
-        supervisor = _memory_processing_supervisor(app)
+        supervisor = _sdk_memory_runtime(app)
         try:
             outcome = await supervisor.decide_graph_width(request.decision)
-        except HyMemoryBridgeError as error:
+        except HySdkError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except OSError as error:
             # A failed export left nothing behind, but the user must be told
@@ -3666,7 +4007,7 @@ def create_app(
         dependencies=protected,
     )
     def get_extraction_settings() -> ExtractionSettings:
-        return _memory_processing_supervisor(app).extraction_window_settings()
+        return app.state.extraction_settings_store.get()
 
     @app.put(
         "/api/v1/extraction-settings",
@@ -3674,7 +4015,7 @@ def create_app(
         dependencies=protected,
     )
     def put_extraction_settings(request: ExtractionWindowUpdate) -> ExtractionSettings:
-        return _memory_processing_supervisor(app).set_extraction_window(request.window_preset)
+        return app.state.extraction_settings_store.set_window_preset(request.window_preset)
 
     @app.get(
         "/api/v1/sedimentation",
@@ -3724,7 +4065,7 @@ def create_app(
         dependencies=protected,
     )
     def manual_extract(request: ManualExtractRequest) -> ManualExtractReceipt:
-        supervisor = _memory_processing_supervisor(app)
+        supervisor = _sdk_memory_runtime(app)
         task_ids: tuple[str, ...] | None = None
         if request.evidence_ids:
             resolved: list[str] = []
@@ -3842,11 +4183,11 @@ def create_app(
         """
         store = _memory_store(app)
         try:
-            await _memory_processing_supervisor(app).update_hy_memory(
+            await _sdk_memory_runtime(app).update_hy_memory(
                 memory.memory_id,
                 memory.content,
             )
-        except HyMemoryBridgeError as error:
+        except HySdkError as error:
             return store.fail_index_sync(
                 memory.memory_id,
                 user_id="local",
@@ -3885,7 +4226,7 @@ def create_app(
             if action == "delete":
                 deletion = _memory_store(app).deletion(memory_id, user_id="local")
                 if deletion is None or deletion.status is not DeletionStatus.COMPLETED:
-                    await _memory_processing_supervisor(app).finish_deletion(memory_id)
+                    await _sdk_memory_runtime(app).finish_deletion(memory_id)
             return memory
         except KeyError:
             raise HTTPException(status_code=404, detail="memory_not_found") from None
@@ -3928,27 +4269,6 @@ def create_app(
                 status_code=409,
                 detail="memory_request_conflict",
             ) from None
-
-    @app.post(
-        "/api/v1/memories/{memory_id}/scopes",
-        response_model=GovernedMemory,
-        dependencies=protected,
-    )
-    def set_memory_scopes(memory_id: str, request: MemoryScopesRequest) -> GovernedMemory:
-        try:
-            return _person_writes(app).set_scopes(
-                memory_id,
-                user_id="local",
-                request_id=request.request_id,
-                expected_revision=request.expected_revision,
-                scopes=request.scopes,
-            )
-        except KeyError:
-            raise HTTPException(status_code=404, detail="memory_not_found") from None
-        except MemoryMutationConflictError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from None
-        except MemoryMutationRequestConflictError:
-            raise HTTPException(status_code=409, detail="memory_request_conflict") from None
 
     @app.post(
         "/api/v1/memories/{memory_id}/index-sync",
@@ -4067,6 +4387,53 @@ async def _request_answerer(
         known = await asyncio.to_thread(_evidence_store(app).known_workspaces, user_id="local")
         answerer.resolve_workspace = lambda path: resolve_workspace_scopes(path, known)
     return answerer
+
+
+def _sdk_request_answerer(app: FastAPI) -> SdkMemoryAnswerer:
+    return SdkMemoryAnswerer(
+        client_handle=_sdk_client_handle(app),
+        profiles=_model_profile_store(app),
+        secrets=_secret_store(app),
+        authorize_generation=lambda profile, question, grounding: _authorize_sdk_answer_generation(
+            app,
+            profile,
+            question,
+            grounding,
+        ),
+    )
+
+
+async def _authorize_sdk_answer_generation(
+    app: FastAPI,
+    profile: ModelProfile,
+    question: str,
+    grounding: tuple[SdkAskMemory, ...],
+) -> Callable[[], Awaitable[None]]:
+    if not question.strip() or not grounding:
+        raise MemoryAnswerError("memory_answer_generation_not_authorized")
+
+    async def recheck() -> None:
+        identity = await asyncio.to_thread(_model_profile_store(app).active_identity)
+        if identity != (profile.profile_id, profile.revision):
+            raise MemoryAnswerError("memory_answer_generation_not_authorized")
+        handle = _sdk_client_handle(app)
+        for memory in grounding:
+            current = await _get_sdk_memory(handle, memory.memory_id)
+            if current is None:
+                raise MemoryAnswerError("memory_answer_generation_not_authorized")
+            projected = SdkAskMemory(
+                memory_id=current.memory_id,
+                content=current.content,
+                layer=current.layer,
+                status=current.status,
+                source=current.source,
+                gmt_created=current.gmt_created,
+            )
+            if projected != memory:
+                raise MemoryAnswerError("memory_answer_generation_not_authorized")
+
+    await recheck()
+    return recheck
 
 
 async def _authorize_answer_generation(
@@ -4387,8 +4754,8 @@ async def _refresh_live_watch(app: FastAPI) -> None:
             watch.start(prime=True)
 
 
-def _recall_target(app: FastAPI) -> GovernedRecallTarget:
-    return cast(GovernedRecallTarget, app.state.recall_target)
+def _recall_target(app: FastAPI) -> GovernedRecallTarget | SdkRecallTarget:
+    return cast(GovernedRecallTarget | SdkRecallTarget, app.state.recall_target)
 
 
 def _detection(app: FastAPI) -> dict[str, SourceInstallState]:
@@ -4798,6 +5165,9 @@ def _start_backfill(app: FastAPI) -> None:
     A running one is cancelled first: whoever asks for another has changed the
     model profile whose tasks the old walk was recording.
     """
+    if app.state.memory_authority is MemoryAuthority.SDK:
+        app.state.memory_backfill = None
+        return
     running = cast("asyncio.Task[None] | None", getattr(app.state, "memory_backfill", None))
     if running is not None and not running.done():
         running.cancel()
@@ -4829,7 +5199,7 @@ def _resume_sedimentation(app: FastAPI) -> None:
         return
     app.state.sedimentation_resume = watched_task(
         asyncio.get_running_loop(),
-        lambda: _memory_processing_supervisor(app).resume_allowed(),
+        lambda: _sdk_memory_runtime(app).resume_allowed(),
         component="memory.sedimentation",
         name="one-memory-sedimentation-resume",
     )
@@ -4849,7 +5219,7 @@ def _start_visibility_recompute(app: FastAPI) -> None:
     the triggers are still installed, so turning it on later finds a library
     already marked.
     """
-    if memory_visibility.mode() == "exact":
+    if app.state.memory_authority is MemoryAuthority.SDK or memory_visibility.mode() == "exact":
         app.state.memory_visibility_task = None
         return
     running = cast("asyncio.Task[None] | None", getattr(app.state, "memory_visibility_task", None))
@@ -4902,7 +5272,7 @@ def _report_visibility_failure(phase: str, error: BaseException) -> None:
         event="memory_visibility.background_failed",
         outcome="failed",
         error_type=type(error).__name__,
-        details={"phase": phase, "reason": str(error)[:200]},
+        details={"phase": phase},
     )
 
 
@@ -4997,9 +5367,8 @@ async def _run_backfill(app: FastAPI) -> None:
 
 
 def _evidence_excerpt(app: FastAPI, record: EvidenceRecord) -> EvidenceExcerpt:
-    supervisor = _memory_processing_supervisor(app)
     task = _memory_task_store(app).task_for_evidence(record.evidence_id)
-    window = extraction_window_for(supervisor.extraction_window_settings().window_preset)
+    window = extraction_window_for(app.state.extraction_settings_store.get().window_preset)
     return EvidenceExcerpt(
         evidence_id=record.evidence_id,
         available=True,
@@ -5019,51 +5388,62 @@ def _evidence_excerpt(app: FastAPI, record: EvidenceRecord) -> EvidenceExcerpt:
     )
 
 
-def _memory_processing_supervisor(app: FastAPI) -> MemoryProcessingSupervisor:
+def _sdk_memory_runtime(app: FastAPI) -> SdkMemoryRuntime:
     return cast(
-        MemoryProcessingSupervisor,
-        app.state.memory_processing_supervisor,
+        SdkMemoryRuntime,
+        app.state.sdk_memory_runtime,
     )
 
 
-class _MatterLifecycleSource:
-    """Read-only HY lifecycle view for `MatterStore`.
-
-    A derived Matter dossier must be invalidated when HY has set one of its
-    cited memories aside, even if the ledger mirror has not caught up. This
-    source builds a `HyMemoryBridge` over the same `data_dir` the memory
-    processing supervisor uses -- never a second store or writer -- and only
-    opens its client on the first lifecycle read. `MatterStore` maps a `None`
-    or unreadable result to a fail-closed `memory_changed`, so a not-yet-opened
-    HY store can never turn a stale dossier into a ready one.
-
-    The bridge is built **once** and cached: constructing one per read would
-    create a fresh client/config lifecycle each time and could observe a
-    different not-open state than the runtime's own bridge.
-    """
-
-    def __init__(self, data_dir: Path) -> None:
-        self._data_dir = data_dir
-        self._bridge: HyMemoryBridge | None = None
-
-    def _lifecycle_bridge(self) -> HyMemoryBridge:
-        bridge = self._bridge
-        if bridge is None:
-            bridge = HyMemoryBridge(
-                profile=builtin_retrieval_snapshot(),
-                api_key=None,
-                data_dir=self._data_dir,
-            )
-            self._bridge = bridge
-        return bridge
-
-    def lifecycle_now(self, user_id: str, ids: Collection[str]) -> HyLifecycle | None:
-        bridge = self._lifecycle_bridge()
-        return bridge.lifecycle_now(user_id, ids)
+def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
+    handle = cast(SdkClientHandle | None, app.state.sdk_client_handle)
+    if handle is None:
+        handle = SdkClientHandle(
+            profile=builtin_retrieval_snapshot(),
+            api_key=None,
+            data_dir=cast(Settings, app.state.settings).data_dir,
+        )
+        app.state.sdk_client_handle = handle
+    return handle
 
 
-def _matter_lifecycle_source(app: FastAPI, data_dir: Path) -> _MatterLifecycleSource:
-    return _MatterLifecycleSource(data_dir)
+async def _get_sdk_memory(
+    handle: SdkClientHandle,
+    memory_id: str,
+) -> HySdkMemoryRecord | None:
+    client = await handle.client()
+    raw = await asyncio.to_thread(client.get, memory_id)
+    return None if raw is None else HySdkMemoryRecord.from_sdk(raw)
+
+
+async def _search_sdk_memories(
+    handle: SdkClientHandle,
+    query: str,
+    *,
+    user_id: str,
+    agent_id: str,
+    limit: int = 12,
+) -> tuple[object, ...]:
+    client = await handle.client()
+    raw = await asyncio.to_thread(
+        client.search,
+        query,
+        user_ids=[user_id],
+        agent_ids=[] if agent_id == "*" else [agent_id],
+        limit=limit,
+        min_score=sdk_relevance_floor(),
+        schema_min_score=sdk_relevance_floor(),
+        schema_limit=limit,
+        intention_limit=limit,
+        scene="normal",
+        reader=HY_MEMORY_READER,
+    )
+    return parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+
+
+def _sdk_http_error(error: Exception, fallback: str) -> HTTPException:
+    detail = error.code if isinstance(error, HySdkError) else fallback
+    return HTTPException(status_code=503, detail=detail)
 
 
 def _evidence_store(app: FastAPI) -> EvidenceStore:

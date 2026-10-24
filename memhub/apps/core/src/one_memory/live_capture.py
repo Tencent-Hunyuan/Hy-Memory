@@ -1,6 +1,7 @@
 """Write visible hook text into Evidence. Tool output stays out."""
 
 import json
+import os
 import time
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -75,6 +76,7 @@ _FILE_FALLBACK = {
 }
 _FALLBACK_EVENTS = frozenset({"Stop", "stop", "SubagentStop", "StopFailure"})
 _TEXT_BLOCKS = frozenset({"text"})
+SDK_MIGRATION_CAPTURE_FENCE = ".sdk-migration-capture-fence.json"
 
 
 def database_path() -> Path:
@@ -89,15 +91,40 @@ def capture_stdio(source_id: str, stdin: TextIO, output: TextIO) -> int:
     del output
     if source_id not in CAPTURE_SOURCES:
         return 2
+    database = database_path()
+    if sdk_migration_capture_fenced(database.parent):
+        return 0
     try:
         payload = json.loads(stdin.read() or "")
     except json.JSONDecodeError:
         return 0
     try:
-        capture_hook(source_id, payload, database_path())
+        capture_hook(source_id, payload, database)
     except Exception:
         return 0
     return 0
+
+
+def sdk_migration_capture_fenced(data_dir: Path) -> bool:
+    """Ignore stale fences; only a live Desktop migration pauses hook writes."""
+    marker = data_dir / SDK_MIGRATION_CAPTURE_FENCE
+    try:
+        document = json.loads(marker.read_text(encoding="utf-8"))
+        pid = int(document["pid"])
+        if pid < 1:
+            raise ValueError("invalid migration fence pid")
+        os.kill(pid, 0)
+        return True
+    except FileNotFoundError:
+        return False
+    except ProcessLookupError:
+        marker.unlink(missing_ok=True)
+        return False
+    except PermissionError:
+        return True
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+        marker.unlink(missing_ok=True)
+        return False
 
 
 def capture_hook(source_id: str, payload: object, database: Path) -> bool:
@@ -225,7 +252,7 @@ def record_capture_rejection(
 def _submit_live_memory(store: EvidenceStore, record: EvidenceRecord, *, changed: bool) -> None:
     if not changed or not _sync_open(store.database_path, record.source_id):
         return
-    from one_memory.memory_processing import _conversation_chunks
+    from one_memory.conversation_processing import _conversation_chunks
     from one_memory.memory_server.durable_queue import DurableWriteQueue
     from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 

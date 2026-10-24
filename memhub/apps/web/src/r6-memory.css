@@ -204,6 +204,19 @@
 .r6-memory .memory-processing-details {
   margin: 0 0 16px;
 }
+.r6-memory .memory-library-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  height: auto;
+  overflow: visible;
+}
+.r6-memory .memory-library-pagination span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .r6-memory .memory-library-layout {
   min-height: 0;
   overflow: auto;

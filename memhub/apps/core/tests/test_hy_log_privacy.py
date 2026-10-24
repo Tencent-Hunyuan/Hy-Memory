@@ -2,7 +2,7 @@
 
 import logging
 
-from one_memory.hy_memory_bridge import configure_hy_memory_environment
+from one_memory.hy_runtime_config import configure_hy_runtime_environment
 
 
 def test_the_extractors_parse_failures_pass_through_unchanged(tmp_path):
@@ -19,7 +19,7 @@ def test_the_extractors_parse_failures_pass_through_unchanged(tmp_path):
     original_handlers = list(logger.handlers)
     logger.handlers = [capture]
     logger.setLevel(logging.WARNING)
-    configure_hy_memory_environment(tmp_path)
+    configure_hy_runtime_environment(tmp_path)
     try:
         secret = "x" * 5000
         logger.warning(
@@ -52,7 +52,7 @@ def test_other_warnings_pass_through_unchanged(tmp_path):
     original_handlers = list(logger.handlers)
     logger.handlers = [capture]
     logger.setLevel(logging.WARNING)
-    configure_hy_memory_environment(tmp_path)
+    configure_hy_runtime_environment(tmp_path)
     try:
         logger.warning("[coding-extract] judge failed, fallback to chat: %s", "reason")
     finally:

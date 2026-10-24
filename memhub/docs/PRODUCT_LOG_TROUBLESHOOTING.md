@@ -6,10 +6,13 @@
 2. 记忆沉淀有没有持续运行、产出了多少条；
 3. 如果停住，停在导入、模型调用还是最终写入。
 
-默认 `info` 下的结构化诊断日志不包含会话正文、模型输入输出或 API Key。`debug`
-会额外启用 HY pipeline trace，其中可能包含完整 prompt/response 和获授权的对话正文。
-排查时优先通过 App 的“导出日志”提供文件，不要直接发送整个 `~/.one-memory` 数据目录；
-debug 期间产生的 pipeline 日志在分享前必须由开发人员确认并脱敏。
+默认 `info` 下的官方结构化事件不应写入会话正文、模型输入输出或 API Key；但本地原始日志允许
+新增受限标量标签，仍应按私人数据处理，不能直接对外发送。`debug` 会额外启用 HY pipeline
+trace，其中可能包含完整 prompt/response 和获授权的对话正文。
+
+排查时只通过 App 的“导出日志”提供文件：导出过程会按安全白名单重新生成诊断事件，不会打包
+原始日志。不要直接发送 `diagnostic-*.jsonl`、整个 `~/.one-memory` 数据目录或 debug pipeline
+日志；后者如确需分享，必须由开发人员另行确认并脱敏。
 
 ## 1. Log level 设什么
 
@@ -39,7 +42,8 @@ debug 可能把完整模型 prompt/response 写入本机调试日志，不得长
 ## 2. 日志在哪里
 
 App 内推荐直接使用“运行诊断 → 导出日志”。开发人员远程指导时，优先使用
-`memhub logs`，它会再次过滤不安全字段。需要现场查看原始结构化日志时，Core 日志默认位于：
+`memhub logs`，它会再次过滤不安全字段。原始结构化日志只用于本机现场查看，不得作为附件发送。
+Core 日志默认位于：
 
 ```text
 ~/.one-memory/logs/diagnostic-core.jsonl
@@ -249,7 +253,7 @@ jq --arg id "$TASK_ID" 'select(.task_id == $id)' "$LOG"
 - 有 `core.ready`，没有 `import.finished`：来源未授权、未开启同步，或来源读取失败。
 - `import.finished` 正常，没有 `memory_scheduler.tasks_queued`：导入内容尚未形成完整会话，或未进入处理窗口。
 - 有 `memory_task.started`，没有 `hy.ingest_completed`：重点查模型配置、余额、网络、超时和 `hy.ingest_failed`。
-- 有 `hy.ingest_completed`，但 `memory_task.finished` 失败：重点查最终治理写入和对应 `error_code`。
+- 有 `hy.ingest_completed`，但 `memory_task.finished` 失败：重点查 SDK 结果确认、写入队列终态和对应 `error_code`。
 - `pending_count` 长时间完全不下降：查看是否反复出现同一个错误码，或任务都在
   `waiting_for_model`。
 - 导入数量持续增加、沉淀任务完全没有出现：这是异常，不应解释为“对话没有记忆价值”。

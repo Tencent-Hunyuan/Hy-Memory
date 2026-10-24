@@ -18,7 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from one_memory.database import take_the_write_lock_first
 from one_memory.database_access import main_database
 from one_memory.imports.models import EvidenceRecord, WrittenBy
-from one_memory.memory_server.migrations import memory_tasks_ddl
+from one_memory.memory_server.migrations import (
+    memory_task_sdk_receipts_ddl,
+    memory_tasks_ddl,
+)
 from one_memory.model_profiles import ModelProfile, ModelProfileSnapshot
 
 
@@ -233,8 +236,7 @@ def matches_evidence_ref(record: EvidenceRecord, ref: TaskEvidenceRef) -> bool:
     if "segment_hash" in ref:
         base = evidence_ref(record)
         if any(
-            base.get(key) != ref.get(key)
-            for key in ("evidence_id", "revision", "content_hash")
+            base.get(key) != ref.get(key) for key in ("evidence_id", "revision", "content_hash")
         ):
             return False
         if not _identity_hash_matches(record, ref.get("identity_hash")):
@@ -314,6 +316,16 @@ class MemoryTaskOutput(BaseModel):
     support_refs: tuple[TaskEvidenceRef, ...] = ()
 
 
+class SdkTaskReceipt(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    task_id: str
+    request_id: str
+    raw_ids: tuple[str, ...] = ()
+    memory_ids: tuple[str, ...] = ()
+    created_at: datetime
+
+
 #: Schema owned by `memory_server.migrations` (migration 14). No local copy.
 #:
 #: The `CHECK` on `memory_task_extractions` is preserved there too: content and
@@ -351,6 +363,7 @@ class MemoryTaskStore:
         self.database_path = database_path
         with self._connect(writing=True) as connection:
             connection.executescript(MEMORY_TASK_SCHEMA)
+            connection.executescript(memory_task_sdk_receipts_ddl("sqlite"))
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(memory_tasks)")}
             if "duration_seconds" not in columns:
                 connection.execute("ALTER TABLE memory_tasks ADD COLUMN duration_seconds REAL")
@@ -464,7 +477,7 @@ class MemoryTaskStore:
     #: Statuses whose input snapshot nothing reads back afterwards.
     #:
     #: Deliberately narrow. A `completed` task's inputs are read after the fact:
-    #: `memory_processing` compares them against the evidence actually sent to
+    #: SDK write processing compares them against the evidence actually sent to
     #: HY to prove coverage, and `matters/discovery` reads them to report how
     #: many records HY really saw. Clearing those would silently turn a
     #: verification into a pass and a report into a lie, which is far worse
@@ -616,6 +629,70 @@ class MemoryTaskStore:
                 (task_id,),
             ).fetchall()
         return tuple(MemoryTaskOutput.model_validate_json(r[0]) for r in rows)
+
+    def save_sdk_receipt(
+        self,
+        *,
+        task_id: str,
+        request_id: str,
+        raw_ids: Sequence[str],
+        memory_ids: Sequence[str],
+    ) -> SdkTaskReceipt:
+        receipt = SdkTaskReceipt(
+            task_id=task_id,
+            request_id=request_id,
+            raw_ids=tuple(dict.fromkeys(raw_ids)),
+            memory_ids=tuple(dict.fromkeys(memory_ids)),
+            created_at=datetime.now(UTC),
+        )
+        body = (
+            json.dumps(receipt.raw_ids),
+            json.dumps(receipt.memory_ids),
+            receipt.created_at.isoformat(),
+        )
+        with self._connect(writing=True) as db:
+            db.execute(
+                "INSERT INTO memory_task_sdk_receipts "
+                "(task_id,request_id,raw_ids_json,memory_ids_json,created_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(task_id) DO NOTHING",
+                (task_id, request_id, *body),
+            )
+            row = db.execute(
+                "SELECT * FROM memory_task_sdk_receipts WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            raise MemoryTaskRequestConflictError("SDK task receipt disappeared")
+        saved = SdkTaskReceipt(
+            task_id=str(row["task_id"]),
+            request_id=str(row["request_id"]),
+            raw_ids=tuple(json.loads(str(row["raw_ids_json"]))),
+            memory_ids=tuple(json.loads(str(row["memory_ids_json"]))),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
+        if (
+            saved.request_id != receipt.request_id
+            or saved.raw_ids != receipt.raw_ids
+            or saved.memory_ids != receipt.memory_ids
+        ):
+            raise MemoryTaskRequestConflictError("SDK task receipt differs")
+        return saved
+
+    def sdk_receipt(self, task_id: str) -> SdkTaskReceipt | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM memory_task_sdk_receipts WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return SdkTaskReceipt(
+            task_id=str(row["task_id"]),
+            request_id=str(row["request_id"]),
+            raw_ids=tuple(json.loads(str(row["raw_ids_json"]))),
+            memory_ids=tuple(json.loads(str(row["memory_ids_json"]))),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+        )
 
     def create(
         self,
@@ -1065,9 +1142,7 @@ class MemoryTaskStore:
                 ),
             )
             if changed.rowcount != 1:
-                raise MemoryTaskOwnershipError(
-                    "Memory task runner no longer owns this task"
-                )
+                raise MemoryTaskOwnershipError("Memory task runner no longer owns this task")
         return self.require(task_id)
 
     def park_for_permission(self, task_id: str, *, error_code: str) -> bool:

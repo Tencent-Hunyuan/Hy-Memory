@@ -1,7 +1,7 @@
 /** Shared by MCP descriptions and installed Skills; guidance never rewrites receipts. */
 export const RECALL_PRESENTATION_GUIDANCE = `
 Give one brief, visible result receipt per logical lookup, not per internal step. Follow the host's language and disclosure requirements; use these exact Chinese sentences in Chinese, and equivalent wording in other languages. Select the actual state before choosing wording: denial or unavailability takes precedence over ordinary empty; partial coverage takes precedence over full success.
-Search original conversations and governed memories together. A returned original conversation is usable even when the memory path is empty, because a new conversation may not have been settled into a memory yet. Use those excerpts and cite them.
+Search original conversations and memories together. A returned original conversation is usable even when no memory item is returned, because a new conversation may not have been settled into a memory yet. Use only source, time, raw IDs, memory IDs and evidence metadata actually returned by the active schema; never invent legacy evidence or revision fields.
 For an ordinary empty lookup, or when a historical question has no returned conversation and no returned memory, say exactly "已完成MemHub的记忆查询。" Then continue with the host application's own context. Do not say that MemHub found nothing, and do not invent memories or claim that all history was searched.
 Only when relevant conversations or memories were actually returned without a known coverage limitation, say "成功使用 MemHub 回忆到相关记忆。" Then use relevant evidence and cite only sources actually used. This announces retrieval, not proof that the answer adopted the memories or that every retrieved statement is verified.
 For offline, unavailable or failed calls, say "MemHub 暂时不可用，我将先依据当前对话继续。" Do not present a historical answer as verified or dump technical diagnostics unless requested or needed for recovery.
@@ -13,7 +13,7 @@ Never describe an error, denial, partial or unknown result as a completed succes
 
 export const RECALL_PRESENTATION_GUIDANCE_ZH = `
 每次逻辑查询给一句简短可见的结果提示，不逐个内部步骤重复播报。先按真实状态选文案：拒绝/不可用优先于普通空结果，部分结果优先于完整成功；遵守宿主语言与披露要求。
-一次查询同时检索原文会话和已沉淀记忆。原文有结果时就使用，即使记忆一路为空；新会话可能还没有沉淀成记忆。
+一次查询同时检索原文会话和记忆。原文有结果时就使用，即使没有返回记忆条目；新会话可能还没有沉淀成记忆。只使用当前格式实际返回的来源、时间、raw ID、memory ID 和证据字段，不补造旧格式的 evidence 或 revision。
 普通空结果，或原文和记忆都没有返回：“已完成MemHub的记忆查询。”然后继续使用宿主应用自己的上下文。不要说 MemHub 没找到，不编造记忆，不宣称查遍全部历史。
 确有相关原文或记忆返回且没有已知覆盖限制：“成功使用 MemHub 回忆到相关记忆。”随后使用相关内容并引用实际采用的来源；这是检索回执，不代表回答已经采用或每条记忆已被核实。
 暂时不可用或调用失败：“MemHub 暂时不可用，我将先依据当前对话继续。”不能把历史答案当作已核实；除非用户要求或恢复所需，不倾倒技术诊断。

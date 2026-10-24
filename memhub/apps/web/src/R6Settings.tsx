@@ -11,7 +11,9 @@ import {
 import { getModelProfiles, setSedimentation } from "./api";
 import { ConnectionFallback } from "./ConnectionFallback";
 import { exportDiagnosticsFile } from "./diagnostics-export";
+import { LanguageSelector } from "./LanguageSelector";
 import { ModelSettings, type ModelSettingsActions } from "./ModelSettings";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
 import {
   refreshLoginPreference,
@@ -55,6 +57,7 @@ export function R6Settings({
   showDiagnostics?: boolean;
 }) {
   const id = useId();
+  const { t, text, locale } = useOnboardingTranslation();
   const groups = showDiagnostics
     ? [...primaryGroups, "help" as const]
     : primaryGroups;
@@ -99,7 +102,7 @@ export function R6Settings({
     setExportingLogs(true);
     setExportMessage("");
     try {
-      const result = await exportDiagnosticsFile();
+      const result = await exportDiagnosticsFile(locale);
       setExportMessage(result.message);
     } finally {
       setExportingLogs(false);
@@ -263,10 +266,11 @@ export function R6Settings({
   }
 
   return (
-    <section className="r6-settings" aria-label="设置">
-      <h1>设置</h1>
+    <section className="r6-settings" aria-label={t("settings")}>
+      <h1>{t("settings")}</h1>
+      <LanguageSelector />
       <div className="r6-settings-layout">
-        <nav aria-label="设置分组">
+        <nav aria-label={text("设置分组")}>
           {groups.map((key) => (
             <button
               type="button"
@@ -277,7 +281,7 @@ export function R6Settings({
               onKeyDown={moveGroupFocus}
               onClick={() => setGroup(key)}
             >
-              {labels[key]}
+              {text(labels[key])}
             </button>
           ))}
         </nav>
@@ -288,20 +292,23 @@ export function R6Settings({
             hidden={group !== "model"}
             className="r6-settings-model"
           >
-            <h2>记忆模型</h2>
+            <h2>{text("记忆模型")}</h2>
             <div className="r6-model-overview">
-              <p className="r6-model-caption">当前模型</p>
+              <p className="r6-model-caption">{text("当前模型")}</p>
               <h3 className="r6-current-model">
                 {currentModel?.name ??
-                  (profiles === null
-                    ? "正在读取模型…"
-                    : modelError
-                      ? "模型状态暂不可读"
-                      : "尚未配置模型")}
+                  text(
+                    profiles === null
+                      ? "正在读取模型…"
+                      : modelError
+                        ? "模型状态暂不可读"
+                        : "尚未配置模型",
+                  )}
               </h3>
               {currentModel && (
                 <p className="r6-model-state">
-                  {currentModel.model} · {safeEndpoint(currentModel.base_url)}
+                  {currentModel.model} ·{" "}
+                  {text(safeEndpoint(currentModel.base_url))}
                 </p>
               )}
               <div className="r6-model-actions">
@@ -310,12 +317,12 @@ export function R6Settings({
                   disabled={profiles === null}
                   onClick={openConfiguration}
                 >
-                  {currentModel ? "修改模型" : "配置模型"}
+                  {text(currentModel ? "修改模型" : "配置模型")}
                 </R6Button>
                 <R6Button
                   variant="quiet"
-                  aria-label="刷新模型状态"
-                  title="刷新模型状态"
+                  aria-label={text("刷新模型状态")}
+                  title={text("刷新模型状态")}
                   onClick={() => setModelVersion((value) => value + 1)}
                 >
                   <RefreshCw size={16} aria-hidden="true" />
@@ -323,29 +330,32 @@ export function R6Settings({
               </div>
               {modelError && (
                 <p role="alert" className="r6-settings-error">
-                  {profiles === null
-                    ? "模型状态未能读取，请重试。"
-                    : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。"}
+                  {text(
+                    profiles === null
+                      ? "模型状态未能读取，请重试。"
+                      : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
+                  )}
                 </p>
               )}
               {configurationRefusal && (
                 <p role="alert" className="r6-settings-error">
-                  上次模型测试或创建还待核对，配置暂时不能改动。请先在下方模型配置区核对结果；
-                  现有配置和原文不会被改动。
+                  {text(
+                    "上次模型测试或创建还待核对，配置暂时不能改动。请先在下方模型配置区核对结果； 现有配置和原文不会被改动。",
+                  )}
                 </p>
               )}
               {currentModel && (
                 <div className="r6-setting-row">
                   <div>
-                    <h3>用模型沉淀记忆</h3>
+                    <h3>{text("用模型沉淀记忆")}</h3>
                     <p>
-                      开启后，导入和同步到本机的会话会交给当前模型整理成记忆，会产生模型调用。
-                      停止后不再调用模型、不再整理记忆，但会话仍会照常导入和保存；已排队的内容会留着，重新开启后继续。
-                      模型配置始终保留，重新开启不需要重新填写。
+                      {text(
+                        "开启后，导入和同步到本机的会话会交给当前模型整理成记忆，会产生模型调用。 停止后不再调用模型、不再整理记忆，但会话仍会照常导入和保存；已排队的内容会留着，重新开启后继续。 模型配置始终保留，重新开启不需要重新填写。",
+                      )}
                     </p>
                   </div>
                   <R6Switch
-                    label="用模型沉淀记忆"
+                    label={text("用模型沉淀记忆")}
                     checked={sedimentation === true}
                     disabled={
                       sedimentation === null ||
@@ -360,19 +370,21 @@ export function R6Settings({
               )}
               {sedimentationError && (
                 <p role="alert" className="r6-settings-error">
-                  {sedimentationError}
+                  {text(sedimentationError)}
                 </p>
               )}
               {sedimentationUnavailable && (
                 <p role="alert" className="r6-settings-error">
-                  当前安装还不能读取这个开关，请确认后台服务已启动后重试。
+                  {text(
+                    "当前安装还不能读取这个开关，请确认后台服务已启动后重试。",
+                  )}
                 </p>
               )}
             </div>
             <section
               className="r6-model-owner"
               hidden={!configurationOpen}
-              aria-label="模型配置表单"
+              aria-label={text("模型配置表单")}
             >
               <ModelSettings
                 compactSingle
@@ -388,7 +400,7 @@ export function R6Settings({
             hidden={group !== "connections"}
             className="r6-settings-connections"
           >
-            <h2>连接其他应用</h2>
+            <h2>{text("连接其他应用")}</h2>
             <ConnectionFallback />
           </section>
           {showDiagnostics && (
@@ -398,14 +410,14 @@ export function R6Settings({
               hidden={group !== "help"}
               className="r6-settings-help"
             >
-              <h2>帮助与诊断</h2>
+              <h2>{text("帮助与诊断")}</h2>
               <div className="r6-setting-row">
                 <div>
-                  <h3>登录后启动后台服务</h3>
-                  <p>无需打开界面，持续同步、整理和提供记忆。</p>
+                  <h3>{text("登录后启动后台服务")}</h3>
+                  <p>{text("无需打开界面，持续同步、整理和提供记忆。")}</p>
                 </div>
                 <R6Switch
-                  label="登录后启动后台服务"
+                  label={text("登录后启动后台服务")}
                   checked={login?.enabled === true}
                   disabled={
                     !dataReady ||
@@ -418,15 +430,17 @@ export function R6Settings({
               </div>
               {(dataError || readError) && (
                 <p role="alert" className="r6-settings-error">
-                  {dataError || readError}
+                  {text(dataError || readError)}
                 </p>
               )}
               <div className="r6-setting-row">
                 <div>
-                  <h3>导出日志</h3>
+                  <h3>{text("导出日志")}</h3>
                   <p>
-                    {exportMessage ||
-                      "把本机运行日志打包成一个文件，发给开发排查。"}
+                    {text(
+                      exportMessage ||
+                        "把本机运行日志打包成一个文件，发给开发排查。",
+                    )}
                   </p>
                 </div>
                 <R6Button
@@ -435,15 +449,15 @@ export function R6Settings({
                   onClick={() => void handleExportLogs()}
                 >
                   <Download size={16} aria-hidden="true" />
-                  导出日志
+                  {text("导出日志")}
                 </R6Button>
               </div>
               <div className="r6-setting-row r6-settings-about">
                 <div>
-                  <h3>关于</h3>
+                  <h3>{text("关于")}</h3>
                   <dl>
                     <div>
-                      <dt>版本</dt>
+                      <dt>{text("版本")}</dt>
                       <dd>{buildInfo.version}</dd>
                     </div>
                     <div>
@@ -497,23 +511,25 @@ export function R6Settings({
               }
             }}
           >
-            <h2 id={`${id}-quit-title`}>确定退出 One Memory 界面吗？</h2>
-            <p>后台服务会继续同步、整理和提供记忆。</p>
+            <h2 id={`${id}-quit-title`}>
+              {text("确定退出 One Memory 界面吗？")}
+            </h2>
+            <p>{text("后台服务会继续同步、整理和提供记忆。")}</p>
             {quitError && (
               <p role="alert" className="r6-settings-error">
-                {quitError}
+                {text(quitError)}
               </p>
             )}
             <footer>
               <R6Button disabled={quitting} onClick={() => setQuitOpen(false)}>
-                取消
+                {text("取消")}
               </R6Button>
               <R6Button
                 variant="primary"
                 pending={quitting}
                 onClick={() => void quitApplication()}
               >
-                退出界面
+                {text("退出界面")}
               </R6Button>
             </footer>
           </section>

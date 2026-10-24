@@ -11,6 +11,7 @@ import {
   subscribeDisplayPreference,
 } from "./display-preferences";
 import { graphEase } from "./graph-motion";
+import { useMemoryLanguage } from "./memory-language";
 
 /** 力导向迭代总步数。原实现在挂载时一次算完，现改为分帧推进。 */
 const LAYOUT_ITERATIONS = 90;
@@ -35,6 +36,7 @@ export function MemoryGraph3D({
   selectedNodeId: string | null;
   onSelectNode(node: MemoryGraphNode): void;
 }) {
+  const { text } = useMemoryLanguage();
   const host = useRef<HTMLDivElement>(null);
   const labelHost = useRef<HTMLDivElement>(null);
   const selectRef = useRef(onSelectNode);
@@ -626,7 +628,7 @@ export function MemoryGraph3D({
       <div className="graph-labels" ref={labelHost} aria-hidden="true" />
       {!available ? (
         <div className="memory-graph-fallback">
-          <p>这台设备打不开 3D 视图，已显示关联列表。</p>
+          <p>{text("这台设备打不开 3D 视图，已显示关联列表。")}</p>
           {graph.nodes.map((node) => (
             <button
               type="button"
@@ -644,13 +646,13 @@ export function MemoryGraph3D({
         <div
           className="memory-graph-controls"
           role="toolbar"
-          aria-label="图谱工具"
+          aria-label={text("图谱工具")}
         >
           <button
             type="button"
             className="secondary"
-            title="放大"
-            aria-label="放大图谱"
+            title={text("放大")}
+            aria-label={text("放大图谱")}
             onClick={() => actionsRef.current?.zoom(0.8)}
           >
             <Plus size={16} />
@@ -658,8 +660,8 @@ export function MemoryGraph3D({
           <button
             type="button"
             className="secondary"
-            title="缩小"
-            aria-label="缩小图谱"
+            title={text("缩小")}
+            aria-label={text("缩小图谱")}
             onClick={() => actionsRef.current?.zoom(1.25)}
           >
             <Minus size={16} />
@@ -667,8 +669,8 @@ export function MemoryGraph3D({
           <button
             type="button"
             className="secondary"
-            title="重置视角"
-            aria-label="重置图谱视角"
+            title={text("重置视角")}
+            aria-label={text("重置图谱视角")}
             onClick={() => actionsRef.current?.reset()}
           >
             <Focus size={16} />

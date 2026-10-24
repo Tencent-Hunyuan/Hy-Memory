@@ -9,9 +9,8 @@ Evidence→queue crash window stayed open.
 This adapter is deliberately small.  It turns one committed Evidence record
 into the one-record complete-turn request, submits it once under an evidence
 derived idempotency key, and returns the durable record.  The existing
-``DurableWriteDrain`` remains the only consumer; it calls
-``process_records``, which preserves the complete-turn/debounce/settle rules
-in ``MemoryProcessingSupervisor``.
+``DurableWriteDrain`` remains the only consumer; it calls the SDK write
+coordinator once and persists only the public receipt ids.
 """
 
 from __future__ import annotations

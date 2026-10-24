@@ -22,10 +22,12 @@ import {
   CALL_HISTORY_ENTRY_VISIBLE,
 } from "./ApplicationsHome";
 import { getOnboarding } from "./api";
+import { useApplicationsLanguage } from "./applications-language";
 import { CallHistory } from "./CallHistory";
 import { DebugLogPanel } from "./DebugLogPanel";
 import { DesktopFrame } from "./DesktopFrame";
 import { FirstUseGuide } from "./FirstUseGuide";
+import { useGuiLanguage } from "./gui-language";
 import { HealthPanel } from "./HealthPanel";
 import { ImportProgressStrip } from "./ImportProgressStrip";
 import { MatterWorkspace } from "./MatterWorkspace";
@@ -64,6 +66,8 @@ export function App() {
 }
 
 function AppContent() {
+  const { t } = useGuiLanguage();
+  const { a } = useApplicationsLanguage();
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [startupRead, setStartupRead] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -216,19 +220,19 @@ function AppContent() {
         {startupRead === "error" ? (
           <div className="boot-status">
             <p className="error-banner" role="alert">
-              暂时无法读取启动状态，请重试。
+              {t("startupReadError")}
             </p>
             <R6Button
               onClick={() => {
                 if (!startupFlight.current) readStartup();
               }}
             >
-              重新读取
+              {t("startupRetry")}
             </R6Button>
           </div>
         ) : (
           <p className="boot-status" aria-live="polite">
-            正在打开 MemHub…
+            {t("startupOpening")}
           </p>
         )}
       </main>
@@ -264,9 +268,9 @@ function AppContent() {
           the text it used to contain. */}
       <header className="r6-titlebar" />
       <a className="skip-link" href="#main-content">
-        跳到主要内容
+        {a("skip")}
       </a>
-      <nav className="app-rail" aria-label="主要导航">
+      <nav className="app-rail" aria-label={a("navigation")}>
         <div className="brand-mark" title="MemHub">
           <Layers3 size={21} strokeWidth={1.6} aria-hidden="true" />
           <span>MemHub</span>
@@ -285,7 +289,7 @@ function AppContent() {
               key={destination}
               active={displayedView === destination}
               tourId={destination === "sources" ? "nav-sources" : undefined}
-              label={destination === "memory" ? "记忆" : "应用"}
+              label={a(destination === "memory" ? "navMemories" : "apps")}
               icon={
                 destination === "memory" ? (
                   <Network size={19} />
@@ -308,16 +312,13 @@ function AppContent() {
           <RailButton
             active={displayedView === "settings" || displayedView === "health"}
             tourId="nav-settings"
-            label="设置"
+            label={t("settings")}
             icon={<Settings size={18} />}
             onClick={() => navigate("settings")}
           />
-          <p
-            className="rail-core"
-            title="记忆保存在本机；使用云模型整理或交给已授权的助手时，相关内容会发送给对应服务。"
-          >
+          <p className="rail-core" title={a("localHint")}>
             <span aria-hidden="true" />
-            本地存储
+            {a("local")}
           </p>
         </div>
       </nav>
@@ -439,7 +440,7 @@ function AppContent() {
               onClick={() => navigate("settings")}
             >
               <ArrowLeft size={16} />
-              设置
+              {t("settings")}
             </button>
             <HealthPanel imports={imports} />
           </>
@@ -511,6 +512,7 @@ function RailButton({
       className={`rail-button${active ? " active" : ""}`}
       aria-current={active ? "page" : undefined}
       data-tour-id={tourId}
+      title={label}
       onClick={onClick}
     >
       <span className="rail-icon" aria-hidden="true">

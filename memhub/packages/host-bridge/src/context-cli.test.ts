@@ -64,6 +64,37 @@ const env = {
 };
 
 describe("om_context CLI receipts", () => {
+  it("renders SDK-native context without legacy path or adoption fields", async () => {
+    contextThroughBroker.mockResolvedValue({
+      schema_version: 2,
+      request_id: "sdk-request",
+      state: "grounded",
+      items: [
+        {
+          kind: "memory",
+          memory_id: "memory-1",
+          content: "native memory",
+          layer: "l2_fact",
+          status: "active",
+          source: "codex",
+          updated_at: "2026-10-21T00:00:00Z",
+          score: 0.9,
+          truncated: false,
+        },
+      ],
+      used_characters: 13,
+      truncated: false,
+      total_ms: 1,
+    });
+
+    const result = await runContextCli(["native"], env);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("MemHub context v2: grounded");
+    expect(result.stdout).toContain("native memory");
+    expect(result.stdout).not.toMatch(/adoption|paths|revision|evidence_ids/);
+  });
+
   it("announces a complete hit without treating it as adoption", async () => {
     contextThroughBroker.mockResolvedValue({
       ...empty,

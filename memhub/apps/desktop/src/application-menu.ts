@@ -1,36 +1,49 @@
+import { translate } from "@one-memory/i18n";
 import type { Menu, MenuItemConstructorOptions } from "electron";
+import type { NativeLanguageSource } from "./native-language";
 
 export function installApplicationMenu(options: {
   productName: string;
+  language?: NativeLanguageSource;
   buildMenu(template: MenuItemConstructorOptions[]): Menu;
   setMenu(menu: Menu): void;
   exportLogs(): Promise<void>;
   reportError(message: string): void;
-}): void {
+}): () => void {
   const runExport = async () => {
     try {
       await options.exportLogs();
     } catch {
-      options.reportError("日志未能导出，请稍后重试。");
+      options.reportError(
+        translate(
+          options.language?.read().locale ?? "zh-CN",
+          "nativeExportError",
+        ),
+      );
     }
   };
-  options.setMenu(
-    options.buildMenu([
-      {
-        label: options.productName,
-        submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
-      },
-      { role: "editMenu" },
-      { role: "windowMenu" },
-      {
-        label: "帮助",
-        submenu: [
-          {
-            label: "导出日志（发给开发排查）",
-            click: runExport,
-          },
-        ],
-      },
-    ]),
-  );
+  const refresh = () => {
+    const locale = options.language?.read().locale ?? "zh-CN";
+    options.setMenu(
+      options.buildMenu([
+        {
+          label: options.productName,
+          submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
+        },
+        { role: "editMenu" },
+        { role: "windowMenu" },
+        {
+          label: translate(locale, "nativeHelp"),
+          submenu: [
+            {
+              label: translate(locale, "nativeExportLogs"),
+              click: runExport,
+            },
+          ],
+        },
+      ]),
+    );
+  };
+  refresh();
+  return options.language?.subscribe(refresh) ?? (() => {});
 }

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import sqlite3
 from contextlib import closing
 from io import StringIO
@@ -20,6 +21,7 @@ from one_memory.memory_server.durable_queue import (
     DurableWriteQueue,
     execute_job,
 )
+from one_memory.sdk_write_processor import SdkWriteReceipt
 
 
 def _grant(tmp_path, source_id: str, *, sync: bool) -> EvidenceStore:
@@ -233,14 +235,14 @@ def test_hook_job_completes_after_file_identity_adoption(tmp_path) -> None:
         ).fetchone()
 
     class IdentityCheckingSupervisor:
-        async def process_records(
+        async def process_sdk_job(
             self,
             records,
             *,
+            request_id,
             before_hy_invocation,
-            source_admitted,
         ):
-            assert source_admitted is True
+            assert request_id
             with closing(sqlite3.connect(database)) as connection:
                 connection.execute("BEGIN")
                 for record in records:
@@ -249,7 +251,7 @@ def test_hook_job_completes_after_file_identity_adoption(tmp_path) -> None:
                     assert ingest_journal.matches_current(connection, current)
                 connection.rollback()
             await before_hy_invocation()
-            return ()
+            return SdkWriteReceipt()
 
     drain = DurableWriteDrain(queue, execute=lambda _job: None)
     assert drain.claim(limit=1) == (job_id,)
@@ -558,6 +560,30 @@ def test_capture_failure_stays_silent(tmp_path, monkeypatch) -> None:
     )
     assert cli.run(["capture", "workbuddy"], output=output) == 0
     assert output.getvalue() == ""
+
+
+def test_capture_is_a_silent_noop_during_sdk_migration(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    marker = tmp_path / ".sdk-migration-capture-fence.json"
+    marker.write_text(json.dumps({"schema_version": 1, "pid": os.getpid()}))
+    monkeypatch.setattr("one_memory.live_capture.database_path", lambda: database)
+    monkeypatch.setattr(
+        "sys.stdin",
+        StringIO(
+            json.dumps(
+                {
+                    "hook_event_name": "beforeSubmitPrompt",
+                    "conversation_id": "session",
+                    "prompt": "not persisted during migration",
+                }
+            )
+        ),
+    )
+    output = StringIO()
+
+    assert cli.run(["capture", "cursor"], output=output) == 0
+    assert output.getvalue() == ""
+    assert not database.exists()
 
 
 def test_codex_harness_preamble_is_not_a_user_message(tmp_path) -> None:

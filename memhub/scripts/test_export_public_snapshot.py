@@ -27,6 +27,7 @@ def test_public_export_has_only_reviewed_root_files(tmp_path: Path) -> None:
         assert not (target / forbidden).exists()
     for required in (
         "docs/INSTALLATION.md",
+        "docs/LOCALIZATION.md",
         "docs/harness-support/README.md",
         "docs/harness-support/hermes.md",
         "scripts/build-release-assets.mjs",

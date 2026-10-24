@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 
 from pydantic import JsonValue
 
+from one_memory.derived_echo import strip_injected_memory
 from one_memory.imports.access import (
     AuthorizedSourceFile,
     AuthorizedSourceRoot,
@@ -213,6 +214,7 @@ def parse_hermes_rollout_record(
         message.get("content"),
         allowed_block_types=frozenset({"text", "input_text", "output_text"}),
     )
+    text = strip_injected_memory(text)
     if not text:
         return ParsedSkip(
             reason_code=ScanIssueCode.NO_TEXT,
@@ -386,7 +388,8 @@ def _read_state_db(
             # The assistant's call sits on its own row as `tool_calls`; the
             # `tool` rows after it hold only what came back.
             calls = _tool_calls_text(row["tool_calls"]) if role == "assistant" else None
-            has_text = bool(str(row["content"] or "").strip())
+            content = strip_injected_memory(str(row["content"] or ""))
+            has_text = bool(content.strip())
             if role not in {"user", "assistant"} or (not has_text and calls is None):
                 yield ScanSkip(
                     cursor=cursor,
@@ -401,7 +404,7 @@ def _read_state_db(
                 role=str(role) if has_text else "tool",
                 written_by=_written_by(role, row["session_source"]) if has_text else WrittenBy.TOOL,
                 created_at=parse_timestamp(row["timestamp"]),
-                verbatim=str(row["content"]) if has_text else str(calls),
+                verbatim=content if has_text else str(calls),
                 workspace=workspace,
                 project=safe_project_label(workspace),
                 record_type="state_db_message" if has_text else "state_db_message.tool",

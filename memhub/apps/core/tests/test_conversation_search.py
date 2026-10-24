@@ -1,10 +1,8 @@
 """Searching imported conversations before any generation model is configured.
 
 This search is literal, not semantic, and that is a correction rather than a
-shortcut. The vector store `semantic_search` reads is written only by
-extraction (`memory_processing.py` EXTRACT tasks), and extraction is precisely
-what a user without a generation model does not have: their store is empty, so
-a semantic path would return nothing no matter how it was wired.
+shortcut. Literal conversation search must remain available before a model is
+configured and independently of SDK semantic-memory extraction.
 """
 
 import sqlite3

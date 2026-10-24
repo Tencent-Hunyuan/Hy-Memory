@@ -59,6 +59,9 @@ it("loads the production preload in a sandbox with Electron as its only module",
     const bridge = exposed as unknown as Record<string, unknown>;
     expect(bridge.getApiBaseUrl).toBeTypeOf("function");
     expect(bridge.getApiToken).toBeTypeOf("function");
+    expect(bridge.getLanguagePreference).toBeTypeOf("function");
+    expect(bridge.setLanguagePreference).toBeTypeOf("function");
+    expect(bridge.onLanguagePreferenceChanged).toBeTypeOf("function");
   } finally {
     rmSync(output, { recursive: true, force: true });
   }

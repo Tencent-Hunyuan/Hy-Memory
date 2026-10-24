@@ -991,7 +991,7 @@ wheels = [
 
 [[package]]
 name = "hy-memory"
-version = "2.0.4"
+version = "2.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "chromadb" },
@@ -1008,9 +1008,9 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "tiktoken" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/d0/44af626b3991a49f787074ebf7474ab68d7adf93a048555ffcdd3092d215/hy_memory-2.0.4.tar.gz", hash = "sha256:ae68837a55afdd50143003608e586350da36c5bd90f4dafcf460c34377179a11", size = 824206, upload-time = "2026-10-17T13:47:29.219Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/94/56/7a279122bb56b067c390b748b8a83b6a90bb2a8f237c1d3989b6317681cd/hy_memory-2.0.5.tar.gz", hash = "sha256:bfb1e9e9815377477702327fa318331d555b8256a67b5bad8d70d6a682bd9a4f", size = 839060, upload-time = "2026-10-22T12:59:30.502Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/68/1c6512a7c3c41cad2731df40416a5331cbc95763feb4983fb59a91869cc7/hy_memory-2.0.4-py3-none-any.whl", hash = "sha256:1d6fd4120185cc6cbcf04f9d81d5bf47e33c467f52787e5d175a412d4e687cd1", size = 888026, upload-time = "2026-10-17T13:47:27.062Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/97/090ca18b6a13d0216d2df607cb67732ff7a8eba2d0359b9ad95283b2cbdc/hy_memory-2.0.5-py3-none-any.whl", hash = "sha256:c24649d188eaa03d3b4e4e4ec20e818da884170b5f775f3cf23ecfa6b60523d6", size = 902923, upload-time = "2026-10-22T12:59:28.018Z" },
 ]
 
 [[package]]
@@ -1801,7 +1801,7 @@ wheels = [
 
 [[package]]
 name = "one-memory"
-version = "1.0.4"
+version = "1.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiomysql" },
@@ -1837,7 +1837,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "filelock", specifier = ">=3.32.4" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "hy-memory", specifier = "==2.0.4" },
+    { name = "hy-memory", specifier = "==2.0.5" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "numpy", specifier = "==2.5.2" },
     { name = "onnxruntime", specifier = "==1.23.2" },

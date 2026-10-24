@@ -1,26 +1,24 @@
-"""A0-01: L0-L4 dependency-direction gate.
+"""Executable dependency and memory-authority gates.
 
-The target architecture (docs/ARCHITECTURE.md, D52) fixes one direction:
+The public target architecture is defined by ``docs/ARCHITECTURE.md``:
 
-    L4 app (CLI/Electron) -> L3 control plane -> L2 write entries
-        -> L1 Memory Server -> L0 HY Memory SDK
+* Hy Memory SDK owns memory/raw/vector/graph/coding data;
+* MemHub owns the management plane and may retain ``memory_id`` references;
+* product code reaches the SDK only through narrow runtime/migration modules;
+* MemHub calls public ``HyMemoryClient`` methods only.
 
-Two things must never happen: an entry point reaching past the Memory Server
-straight to the HY SDK, and a Harness Adapter owning MemHub's own business
-database. This gate is the executable form of that, so the rule survives
-refactors instead of living only in a document.
+The sole exception is the read-only Kuzu projection/admin surface used by the
+existing graph UI and Graph Width workflow.
 
-The gate is deliberately NOT a blanket ban on `sqlite3`. D53 says MemHub's own
-authoritative business database must be MySQL, but explicitly keeps an
-Adapter's right to read the host product's own SQLite files. A blanket ban
-would outlaw a documented product decision, so the rule is split by layer
-instead: Adapters may read host files, but only through the read-only access
-module, and may never touch MemHub's store.
+The gate is deliberately not a blanket ban on ``sqlite3``. Adapters may read a
+host product's SQLite through the guarded read-only module; they may not own
+MemHub state or call the SDK directly.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -59,13 +57,63 @@ HOST_READONLY_MODULE = "one_memory.imports.sqlite_access"
 SRC_ROOT = PACKAGE_ROOT.parents[0]
 PACKAGE_LABEL = PACKAGE_ROOT.name
 
-HY_BRIDGE = f"{PACKAGE_LABEL}/hy_memory_bridge.py"
+SDK_MODULES = frozenset(
+    {
+        f"{PACKAGE_LABEL}/hy_sdk_runtime.py",
+        f"{PACKAGE_LABEL}/hy_sdk_migration.py",
+    }
+)
+SDK_CLIENT_CONSTRUCTOR = f"{PACKAGE_LABEL}/hy_sdk_runtime.py"
 
-#: The one module allowed to *invoke* the SDK.
-SDK_CALLER = HY_BRIDGE
+# Frozen migration debt: modules that still write the legacy memory/raw
+# authority.  The target count is zero.  A new module cannot join this set.
+LEGACY_AUTHORITY_WRITERS = frozenset(
+    {
+        f"{PACKAGE_LABEL}/imports/jobs.py",
+        f"{PACKAGE_LABEL}/imports/storage.py",
+        f"{PACKAGE_LABEL}/ingest_journal.py",
+        f"{PACKAGE_LABEL}/memory_governance.py",
+        f"{PACKAGE_LABEL}/memory_server/migrations.py",
+    }
+)
 
-#: Type-only importers of HY datatypes; they hold no client and write nothing.
-HY_TYPE_ONLY: frozenset[str] = frozenset()
+LEGACY_AUTHORITY_WRITE = re.compile(
+    r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+"
+    r"(?:governed_[a-z_]+|evidence(?:_[a-z_]+)?)\b",
+    re.IGNORECASE,
+)
+
+SDK_PRIVATE_ATTRIBUTES = frozenset(
+    {
+        "_coding_store",
+        "_coding_stores",
+        "_collection",
+        "_embed_service",
+        "_graph_store",
+        "_loop_thread",
+        "_readers",
+        "_reader",
+        "_reconciler",
+        "_registry",
+        "_run",
+        "_shared_embed_service",
+        "_spawn_search_dedup",
+        "_system2_writer",
+        "_vector_store",
+        "_writer",
+    }
+)
+SDK_PRIVATE_ACCESS_EXCEPTIONS = {
+    f"{PACKAGE_LABEL}/hy_graph_projection.py": frozenset(
+        {"_graph_store", "_loop_thread", "_run"}
+    ),
+    # Startup migration runs while Runtime writers are stopped. It is the one
+    # non-runtime path allowed to manipulate SDK storage directly so that
+    # migration-only mechanics never become public HyMemoryClient methods.
+    f"{PACKAGE_LABEL}/hy_sdk_migration.py": frozenset(
+        {"_embed_service", "_graph_store", "_loop_thread", "_vector_store"}
+    ),
+}
 
 
 def _relative(path: Path) -> str:
@@ -140,49 +188,26 @@ def test_adapters_use_only_the_readonly_host_sqlite_module() -> None:
     )
 
 
-def test_hy_sdk_is_confined_to_the_l1_adapter() -> None:
-    """A0-01: HY SDK stays behind HyMemoryPort; entries must not import it.
-
-    This is the executable form of "Function/MCP/scan/Hook must not call the
-    HY SDK directly". `hy_memory_bridge` is the current L1 adapter and the
-    permission stores quote HY types, so they are the allowed set; anything
-    else reaching for the SDK is a new bypass and must fail here.
-
-    Only `hy_memory_bridge` *calls* the SDK. The two permission stores merely
-    import HY datatypes (`CodingMemory`, `WorkingFact`, memory models) to type
-    what they persist; they hold no client and issue no writes. They are
-    listed here so the gate stays green on today's truth while still failing
-    on any new module that reaches for the SDK.
-    """
-    allowed = frozenset({HY_BRIDGE}) | HY_TYPE_ONLY
+def test_hy_sdk_is_confined_to_public_sdk_modules() -> None:
+    """Only the runtime and offline migration adapters may import the SDK."""
     offenders: list[str] = []
     for path in _all_module_files():
         relative = _relative(path)
-        if relative in allowed:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = _module_names(tree)
+        if not any(_root(name) in HY_SDK_ROOTS for name in names):
             continue
-        names = _module_names(ast.parse(path.read_text(encoding="utf-8")))
-        if any(_root(name) in HY_SDK_ROOTS for name in names):
+        if relative not in SDK_MODULES:
             offenders.append(relative)
-    assert not offenders, f"HY SDK must stay in the L1 adapter: {offenders}"
+    assert not offenders, f"HY SDK imports must stay in {sorted(SDK_MODULES)}: {offenders}"
 
 
-def test_only_the_l1_adapter_constructs_a_hy_client() -> None:
-    """A0-01: type-only imports are tolerated; constructing a client is not.
-
-    A permission store quoting `CodingMemory` cannot write a memory. A module
-    that instantiates `HyMemoryClient` can. So the stricter check is on client
-    construction, and it must pass today rather than merely documenting an
-    aspiration.
-
-    The check is on the AST, not on the substring: a docstring or comment that
-    *mentions* `HyMemoryClient` builds nothing. Matching text would flag prose
-    and, worse, would keep passing while a real caller is added inside a
-    function the text search happened to like.
-    """
+def test_only_runtime_constructs_a_hy_client() -> None:
+    """Migration borrows a lease; only runtime constructs clients."""
     offenders: list[str] = []
     for path in _all_module_files():
         relative = _relative(path)
-        if relative == SDK_CALLER:
+        if relative == SDK_CLIENT_CONSTRUCTOR:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -202,7 +227,102 @@ def test_only_the_l1_adapter_constructs_a_hy_client() -> None:
                 if any(alias.name == "HyMemoryClient" for alias in node.names):
                     offenders.append(relative)
                     break
-    assert not offenders, f"only the L1 adapter may build a HY client: {offenders}"
+    assert not offenders, f"only {SDK_CLIENT_CONSTRUCTOR} may build a HY client: {offenders}"
+
+
+def test_no_new_module_writes_legacy_memory_authority() -> None:
+    """Freeze Evidence/Governance writers while the SDK cutover removes them."""
+    offenders: list[str] = []
+    for path in _all_module_files():
+        source = path.read_text(encoding="utf-8")
+        if not LEGACY_AUTHORITY_WRITE.search(source):
+            continue
+        relative = _relative(path)
+        if relative not in LEGACY_AUTHORITY_WRITERS:
+            offenders.append(relative)
+    assert not offenders, (
+        "new Evidence/Governance writers are forbidden; use public SDK client "
+        f"methods instead: {offenders}"
+    )
+
+
+def test_no_sdk_private_implementation_access() -> None:
+    """Runtime uses public APIs; only Graph and stopped-writer migration are privileged."""
+    offenders: list[str] = []
+    for path in _all_module_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        relative = _relative(path)
+        used = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and node.attr in SDK_PRIVATE_ATTRIBUTES
+            and (
+                relative.startswith(f"{PACKAGE_LABEL}/hy_")
+                or (
+                    isinstance(node.value, ast.Name)
+                    and node.value.id in {"client", "native", "concrete"}
+                )
+            )
+        }
+        if used:
+            unexpected = used - SDK_PRIVATE_ACCESS_EXCEPTIONS.get(
+                relative, frozenset()
+            )
+            if unexpected:
+                offenders.append(f"{relative}: {sorted(unexpected)}")
+    assert not offenders, (
+        "SDK private implementation access is forbidden outside the isolated "
+        f"Graph and offline-migration boundaries: {offenders}"
+    )
+
+
+def test_sdk_modules_import_only_the_public_package_root() -> None:
+    """Runtime imports only public SDK symbols; offline migration is privileged."""
+    offenders: list[str] = []
+    for path in _all_module_files():
+        relative = _relative(path)
+        if relative == f"{PACKAGE_LABEL}/hy_sdk_migration.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import) and any(
+                alias.name.startswith("hy_memory.") for alias in node.names
+            ):
+                offenders.append(relative)
+                break
+            if isinstance(node, ast.ImportFrom) and (
+                node.module or ""
+            ).startswith("hy_memory."):
+                offenders.append(relative)
+                break
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "import_module"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.startswith("hy_memory.")
+            ):
+                offenders.append(relative)
+                break
+    assert not offenders, f"import SDK symbols from `hy_memory` only: {offenders}"
+
+
+def test_memhub_never_patches_sdk_prompts() -> None:
+    offenders: list[str] = []
+    forbidden = (
+        "extract_system_prompt_en",
+        "extract_system_prompt_zh",
+        "hy_memory.agent.prompts",
+    )
+    for path in _all_module_files():
+        source = path.read_text(encoding="utf-8")
+        hits = [token for token in forbidden if token in source]
+        if hits:
+            offenders.append(f"{_relative(path)}: {hits}")
+    assert not offenders, f"SDK prompt patching is forbidden: {offenders}"
 
 
 @pytest.mark.parametrize("driver", sorted(MEMHUB_DRIVERS))

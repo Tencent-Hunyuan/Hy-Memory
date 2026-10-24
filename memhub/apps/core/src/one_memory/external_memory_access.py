@@ -10,11 +10,8 @@ from uuid import UUID
 from fastapi import HTTPException, Request
 
 from one_memory.database_access import main_database
-from one_memory.matters.models import Matter, MatterContext
-from one_memory.matters.store import MatterStore
-from one_memory.memory_governance import MemoryGovernanceStore
 
-TOOLS = frozenset({"om_recall", "om_ask", "om_conversations", "om_matters", "om_diagnostic_trace"})
+TOOLS = frozenset({"om_recall", "om_ask", "om_conversations", "om_diagnostic_trace"})
 _ENVELOPE_HEADERS = frozenset(
     {
         "x-one-memory-read-context",
@@ -27,8 +24,9 @@ _ENVELOPE_HEADERS = frozenset(
 _BROKER_ROUTES = {
     ("POST", "/api/v1/recall"): "om_recall",
     ("POST", "/api/v1/memories/ask"): "om_ask",
+    ("POST", "/api/v2/memories/ask"): "om_ask",
+    ("POST", "/api/v2/memories/ask/stream"): "om_ask",
     ("GET", "/api/v1/conversations/search"): "om_conversations",
-    ("POST", "/api/v1/matters/context/search"): "om_matters",
     ("POST", "/api/v1/diagnostics/trace"): "om_diagnostic_trace",
     ("POST", "/api/v1/boundary/peek"): "om_recall",
     ("POST", "/api/v1/boundary/ack"): "om_recall",
@@ -67,50 +65,6 @@ class ExternalMemoryAccess:
                 )
             }
         return sources - revoked
-
-    def allows_matter(self, matter: Matter, governance: MemoryGovernanceStore) -> bool:
-        if (
-            not matter.agent_access
-            or matter.availability != "ready"
-            or matter.source_engine != "hy-memory"
-        ):
-            return False
-        support_ids: set[str] = set()
-        for claim in matter.claims:
-            if not claim.memory_refs:
-                return False
-            for reference in claim.memory_refs:
-                memory = governance.get(reference.memory_id, user_id="local")
-                if (
-                    memory is None
-                    or memory.revision != reference.revision
-                    or memory.status != reference.status
-                    or self.scopes.isdisjoint(memory.scopes)
-                ):
-                    return False
-                support_ids.update(memory.evidence_ids)
-        # Titles, boundaries and uncertainties can depend on uncited anchors.
-        # Referenced memories can also have support not quoted by this matter.
-        with main_database(governance.database_path).read() as db:
-            row = db.execute(
-                "SELECT dependencies FROM matter_versions WHERE matter_id=? AND version=?",
-                (matter.matter_id, matter.version),
-            ).fetchone()
-            if row is None:
-                return False
-            dependencies = json.loads(row[0])
-            if not dependencies:
-                return False
-            for evidence_id in set(dependencies) | support_ids:
-                source = db.execute(
-                    "SELECT e.source_id FROM evidence e JOIN source_grants g "
-                    "USING(user_id,source_id) WHERE e.user_id='local' AND e.evidence_id=? "
-                    "AND g.revoked_at IS NULL",
-                    (evidence_id,),
-                ).fetchone()
-                if source is None or f"source:{source[0]}" not in self.scopes:
-                    return False
-        return bool(matter.claims)
 
 
 def external_access(headers: Mapping[str, str]) -> ExternalMemoryAccess | None:
@@ -174,7 +128,10 @@ def require_external_endpoint(request: Request) -> None:
     access = external_access(request.headers)
     if access is None:
         return
-    if (request.method, request.url.path) == ("POST", "/api/v1/context/search"):
+    if request.method == "POST" and request.url.path in {
+        "/api/v1/context/search",
+        "/api/v2/context/search",
+    }:
         # The route resolves each requested lane against its original grant.
         # Passing this envelope gate does not authorize either lane by itself.
         if access.tools.isdisjoint({"om_recall", "om_conversations"}):
@@ -189,46 +146,7 @@ def require_external_endpoint(request: Request) -> None:
         raise HTTPException(403, "external_endpoint_denied")
     if tool not in access.tools:
         raise HTTPException(403, "external_recall_scope_denied")
-    if tool in {"om_conversations", "om_matters"}:
+    if tool == "om_conversations":
         access.require(tool, frozenset({"all-apps"}))
         if not any(scope.startswith("source:") for scope in access.scopes):
             raise HTTPException(403, "external_source_permission_required")
-
-
-def search_external_matter_contexts(
-    access: ExternalMemoryAccess,
-    query: str,
-    *,
-    matters: MatterStore,
-    governance: MemoryGovernanceStore,
-) -> list[MatterContext]:
-    """Apply installation bounds before rendering quotes or consuming the result limit."""
-    access.require("om_matters", frozenset({"all-apps"}))
-    access.readable_source_ids(governance.database_path)
-    terms = query.casefold().split()
-    found: list[MatterContext] = []
-    for matter in matters.list():
-        if not access.allows_matter(matter, governance):
-            continue
-        searchable = f"{matter.title} {matter.purpose} {' '.join(matter.tags)}".casefold()
-        if not all(term in searchable for term in terms):
-            continue
-        context = matters.context(matter.matter_id, character_budget=20_000)
-        current = matters.get(matter.matter_id)
-        if (
-            context.availability != "ready"
-            or current.version != matter.version
-            or context.version != matter.version
-            or not access.allows_matter(current, governance)
-        ):
-            continue
-        found.append(context)
-        if len(found) == 3:
-            break
-    # Rendering a later item may race a revocation affecting an earlier one.
-    released = []
-    for context in found:
-        current = matters.get(context.matter_id)
-        if current.version == context.version and access.allows_matter(current, governance):
-            released.append(context)
-    return released

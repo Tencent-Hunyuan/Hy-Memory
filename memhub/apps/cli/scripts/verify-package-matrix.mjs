@@ -29,10 +29,9 @@ const REQUIRED_COMMAND_SURFACE = [
   "sources",
   "sync",
   "memories",
+  "profile",
   "calls",
-  "import-file",
   "notes",
-  "extraction",
   "graph",
   "models",
   "host",
@@ -55,7 +54,6 @@ const REQUIRED_COMMAND_SURFACE = [
   "scan",
   "progress",
   "jobs",
-  "processing",
   "path",
   "adapter",
   "write",
@@ -82,16 +80,15 @@ const REQUIRED_MARKERS = [
  */
 const REQUIRED_SUBCOMMANDS = [
   { command: "calls", marker: "memhub calls clear" },
-  { command: "import-file", marker: "memhub import-file upload" },
-  { command: "import-file", marker: "memhub import-file commit" },
-  { command: "import-file", marker: "memhub import-file discard" },
   { command: "notes", marker: "memhub notes add" },
   { command: "notes", marker: "memhub notes process" },
-  { command: "extraction", marker: "memhub extraction set" },
+  { command: "memories", marker: "memhub memories update" },
+  { command: "memories", marker: "memhub memories delete" },
+  { command: "write", marker: "memhub write submit" },
+  { command: "write", marker: "memhub write status" },
   { command: "graph", marker: "memhub graph width" },
   { command: "models", marker: "memhub models edit" },
   { command: "models", marker: "memhub models activate" },
-  { command: "processing", marker: "memhub processing extract" },
   { command: "jobs", marker: "memhub jobs start" },
   { command: "jobs", marker: "memhub jobs <pause|resume|cancel>" },
 ];
@@ -123,24 +120,6 @@ const STOPPED_DESTRUCTIVE_PROBES = [
     args: ["calls", "clear", "--all", "--confirm"],
   },
   {
-    name: "import_file_commit_apply",
-    args: [
-      "import-file",
-      "commit",
-      "22222222-2222-4222-8222-222222222222",
-      "--confirm",
-    ],
-  },
-  {
-    name: "import_file_discard_apply",
-    args: [
-      "import-file",
-      "discard",
-      "22222222-2222-4222-8222-222222222222",
-      "--confirm",
-    ],
-  },
-  {
     name: "notes_process_apply",
     args: [
       "notes",
@@ -150,16 +129,8 @@ const STOPPED_DESTRUCTIVE_PROBES = [
     ],
   },
   {
-    name: "extraction_set_apply",
-    args: ["extraction", "set", "--window", "6m", "--confirm"],
-  },
-  {
     name: "graph_width_apply",
     args: ["graph", "width", "--decision", "keep_existing", "--confirm"],
-  },
-  {
-    name: "processing_extract_apply",
-    args: ["processing", "extract", "--confirm"],
   },
   {
     name: "models_activate_apply",

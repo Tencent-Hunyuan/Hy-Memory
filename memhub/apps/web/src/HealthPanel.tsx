@@ -1,6 +1,6 @@
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import { Download, Flag, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import {
   getDetailedLogging,
   getMemoryProcessing,
@@ -13,16 +13,16 @@ import {
 import { clockStamp } from "./clock-stamp";
 import { exportDiagnosticsFile } from "./diagnostics-export";
 import type { RecallHostStatus } from "./global";
+import { useGuiLanguage } from "./gui-language";
 import { refreshRecallHosts } from "./host-state";
+import { memoryText } from "./memory-language";
 import {
   blockReasonLabel,
-  retryingBlockLabel,
   splitBlockedStages,
   taskKindLabel,
 } from "./memory-processing-labels";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button, R6Switch } from "./R6Controls";
-import { LINK_WORDING } from "./recall-host-wording";
 import type { useImportSources } from "./use-import-sources";
 
 type ImportState = ReturnType<typeof useImportSources>;
@@ -98,10 +98,11 @@ async function readHosts() {
 }
 
 function ReadTime({ label, value }: { label: string; value: string }) {
+  const { locale } = useGuiLanguage();
   return (
     <p className="health-stamp">
       {label}
-      <time dateTime={value}>{clockStamp(value)}</time>
+      <time dateTime={value}>{clockStamp(value, locale)}</time>
     </p>
   );
 }
@@ -111,23 +112,26 @@ function ReadReceipt({
   confirmedAt,
   failedAt,
 }: Pick<Reading<unknown>, "pending" | "confirmedAt" | "failedAt">) {
+  const { t } = useGuiLanguage();
   return (
     <>
       {failedAt ? (
         <p role="status">
-          暂时无法读取
-          {confirmedAt ? " · 数据已过期，以下为上次读取结果。" : "。"}
+          {t("healthReadFailed")}
+          {confirmedAt ? t("healthStale") : "。"}
         </p>
       ) : null}
       {pending ? (
         <p role="status">
-          {confirmedAt ? "正在重新读取，以下为上次读取结果…" : "正在读取状态…"}
+          {confirmedAt ? t("healthRereading") : t("healthReading")}
         </p>
       ) : null}
       {confirmedAt ? (
-        <ReadTime label="上次成功读取" value={confirmedAt} />
+        <ReadTime label={t("healthReadSuccessTime")} value={confirmedAt} />
       ) : null}
-      {failedAt ? <ReadTime label="读取失败时间" value={failedAt} /> : null}
+      {failedAt ? (
+        <ReadTime label={t("healthReadFailedTime")} value={failedAt} />
+      ) : null}
     </>
   );
 }
@@ -143,6 +147,8 @@ function ReadReceipt({
  * the table the originating screen already uses.
  */
 export function HealthPanel({ imports }: { imports: ImportState }) {
+  const { t, tn, tnPlain, locale } = useGuiLanguage();
+  const n = (value: number) => value.toLocaleString(locale);
   const [detailedLogging, setDetailedLoggingState] = useState(false);
   const [detailedLoggingPending, setDetailedLoggingPending] = useState(false);
   const backgroundRead = useDiagnosticRead(readBackgroundHealth);
@@ -199,13 +205,13 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
 
   async function markIncident() {
     if (!window.oneMemory?.markDiagnosticIncident) {
-      setDiagnosticMessage("请在桌面 App 中记录问题时间点。");
+      setDiagnosticMessage(t("healthIncidentDesktop"));
       return;
     }
     setDiagnosticAction("incident");
     setDiagnosticMessage("");
     try {
-      const description = window.prompt("简单描述刚才遇到的问题（可不填）", "");
+      const description = window.prompt(t("healthIncidentPrompt"), "");
       if (description === null) {
         setDiagnosticAction(null);
         return;
@@ -213,9 +219,11 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
       const receipt =
         await window.oneMemory.markDiagnosticIncident(description);
       await window.oneMemory.copyText?.(receipt.incident_id);
-      setDiagnosticMessage(`问题编号已复制：${receipt.incident_id}`);
+      setDiagnosticMessage(
+        t("healthIncidentCopied", { id: receipt.incident_id }),
+      );
     } catch {
-      setDiagnosticMessage("问题时间点未能记录，请重试。");
+      setDiagnosticMessage(t("healthIncidentError"));
     } finally {
       setDiagnosticAction(null);
     }
@@ -223,13 +231,13 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
 
   async function exportDiagnostics() {
     if (!window.oneMemory?.exportDiagnostics) {
-      setDiagnosticMessage("请在桌面 App 中导出诊断信息。");
+      setDiagnosticMessage(t("diagnosticExportDesktop"));
       return;
     }
     setDiagnosticAction("export");
     setDiagnosticMessage("");
     try {
-      const result = await exportDiagnosticsFile();
+      const result = await exportDiagnosticsFile(locale);
       setDiagnosticMessage(result.message);
     } finally {
       setDiagnosticAction(null);
@@ -244,20 +252,23 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
   const sourceReceipt = (
     <>
       {imports.loading ? (
-        <p role="status">正在读取本地服务与来源状态…</p>
+        <p role="status">{t("healthReadingSources")}</p>
       ) : sourceUnavailable ? (
         <p role="status">
-          暂时无法读取
+          {t("healthReadFailed")}
           {sourceConfirmedAt || imports.health || imports.sources.length
-            ? " · 数据已过期，以下为上次读取结果。"
+            ? t("healthStale")
             : "。"}
         </p>
       ) : null}
       {sourceConfirmedAt ? (
-        <ReadTime label="上次成功读取" value={sourceConfirmedAt} />
+        <ReadTime
+          label={t("healthReadSuccessTime")}
+          value={sourceConfirmedAt}
+        />
       ) : null}
       {sourceUnavailable && sourceFailedAt ? (
-        <ReadTime label="读取失败时间" value={sourceFailedAt} />
+        <ReadTime label={t("healthReadFailedTime")} value={sourceFailedAt} />
       ) : null}
     </>
   );
@@ -274,7 +285,7 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
     <section className="view health-view" aria-labelledby="health-title">
       <header className="view-header">
         <div>
-          <h1 id="health-title">运行诊断</h1>
+          <h1 id="health-title">{t("healthTitle")}</h1>
         </div>
       </header>
 
@@ -285,26 +296,34 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           onClick={() => void exportDiagnostics()}
         >
           <Download size={16} aria-hidden="true" />
-          导出日志（发给开发排查）
+          {t("nativeExportLogs")}
         </R6Button>
       </div>
 
-      <section className="health-block" aria-label="本地服务">
-        <h2>本地服务</h2>
+      <section className="health-block" aria-label={t("healthLocal")}>
+        <h2>{t("healthLocal")}</h2>
         {sourceReceipt}
         {imports.health ? (
           <p>
-            {`${sourceUnavailable || imports.loading ? "上次读取" : "运行中"} · 版本 ${imports.health.version} · 实例 ${imports.health.instance_id}`}
+            {t("healthCoreVersion", {
+              state: t(
+                sourceUnavailable || imports.loading
+                  ? "healthPrevious"
+                  : "healthRunning",
+              ),
+              version: imports.health.version,
+              instance: imports.health.instance_id,
+            })}
           </p>
         ) : !sourceUnavailable && !imports.loading ? (
-          <p>还没连上本地 Core。</p>
+          <p>{t("healthCoreDisconnected")}</p>
         ) : null}
       </section>
 
-      <section className="health-block" aria-label="后台服务">
-        <h2>后台服务</h2>
+      <section className="health-block" aria-label={t("healthBackground")}>
+        <h2>{t("healthBackground")}</h2>
         {backgroundRead.value === "no-bridge" ? (
-          <p>当前环境无法检查后台服务，请在支持此功能的桌面 App 中查看。</p>
+          <p>{t("healthBackgroundUnavailable")}</p>
         ) : (
           <>
             <ReadReceipt {...backgroundRead} />
@@ -312,13 +331,18 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
               <>
                 <p>
                   {backgroundRead.pending || backgroundRead.failedAt
-                    ? "上次读取："
+                    ? t("healthPreviousPrefix")
                     : ""}
-                  {backgroundVerdict(backgroundRead.value.state)}
+                  {backgroundVerdict(backgroundRead.value.state, locale)}
                 </p>
                 <p>
-                  Core：{runtimeStateLabel(backgroundRead.value.core)} ·
-                  宿主桥接：{runtimeStateLabel(backgroundRead.value.broker)}
+                  {t("healthRuntime", {
+                    core: runtimeStateLabel(backgroundRead.value.core, locale),
+                    broker: runtimeStateLabel(
+                      backgroundRead.value.broker,
+                      locale,
+                    ),
+                  })}
                 </p>
               </>
             ) : null}
@@ -326,8 +350,8 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
         )}
       </section>
 
-      <section className="health-block" aria-label="各来源累计条数">
-        <h2>各来源累计条数</h2>
+      <section className="health-block" aria-label={t("healthSources")}>
+        <h2>{t("healthSources")}</h2>
         {sourceReceipt}
         {imports.sources.length ? (
           <dl>
@@ -335,41 +359,70 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
               <div key={source.source_id}>
                 <dt>{source.display_name}</dt>
                 <dd>
-                  {`${source.imported_conversations} 个会话 · ${source.imported_messages} 条消息`}
+                  {t("healthSourceCount", {
+                    conversations: n(source.imported_conversations),
+                    messages: n(source.imported_messages),
+                  })}
                 </dd>
               </div>
             ))}
           </dl>
         ) : !sourceUnavailable && !imports.loading ? (
-          <p>还没有已连接的来源。</p>
+          <p>{t("healthNoSources")}</p>
         ) : null}
       </section>
 
-      <section className="health-block" aria-label="记忆提炼">
-        <h2>记忆提炼</h2>
+      <section className="health-block" aria-label={t("healthProcessing")}>
+        <h2>{t("healthProcessing")}</h2>
         <ReadReceipt {...processingRead} />
         {processing ? (
           <>
             <p>
-              {`${processing.running} 处理中 · ${processing.pending} 排队 · ${processing.completed} 已完成 · ${processing.failed} 失败`}
+              {t("healthTaskCounts", {
+                running: n(processing.running),
+                pending: n(processing.pending),
+                completed: n(processing.completed),
+                failed: n(processing.failed),
+              })}
             </p>
             {processing.metrics ? (
-              <dl aria-label="导入与整理详情">
+              <dl aria-label={t("healthImportDetails")}>
                 <div>
-                  <dt>原文与完整对话轮次</dt>
-                  <dd>{`${processing.metrics.raw_evidence} 条原文 · ${processing.metrics.complete_turns} 个完整 turn`}</dd>
+                  <dt>{t("healthRawTurns")}</dt>
+                  <dd>
+                    {t("healthRawCounts", {
+                      raw: n(processing.metrics.raw_evidence),
+                      turns: n(processing.metrics.complete_turns),
+                    })}
+                  </dd>
                 </div>
                 <div>
-                  <dt>HY 整理</dt>
-                  <dd>{`${processing.metrics.hy_calls} 次调用 · ${processing.metrics.completed} 完成 · ${processing.metrics.unknown} 结果不确定 · ${processing.metrics.failed} 失败 · ${processing.metrics.cancelled} 取消`}</dd>
+                  <dt>{t("healthHy")}</dt>
+                  <dd>
+                    {t("healthHyCounts", {
+                      calls: n(processing.metrics.hy_calls),
+                      completed: n(processing.metrics.completed),
+                      unknown: n(processing.metrics.unknown),
+                      failed: n(processing.metrics.failed),
+                      cancelled: n(processing.metrics.cancelled),
+                    })}
+                  </dd>
                 </div>
                 <div>
-                  <dt>产出</dt>
-                  <dd>{`${processing.metrics.governed_memories} 条记忆`}</dd>
+                  <dt>{t("healthOutput")}</dt>
+                  <dd>
+                    {tn("healthMemories", processing.metrics.governed_memories)}
+                  </dd>
                 </div>
                 <div>
-                  <dt>WorkBuddy 查记忆</dt>
-                  <dd>{`${processing.metrics.workbuddy.injected} 次注入 · ${processing.metrics.workbuddy.timed_out} 次超时 · ${processing.metrics.workbuddy.unavailable} 次不可用`}</dd>
+                  <dt>{t("healthWorkbuddy")}</dt>
+                  <dd>
+                    {t("healthWorkbuddyCounts", {
+                      injected: n(processing.metrics.workbuddy.injected),
+                      timedOut: n(processing.metrics.workbuddy.timed_out),
+                      unavailable: n(processing.metrics.workbuddy.unavailable),
+                    })}
+                  </dd>
                 </div>
               </dl>
             ) : null}
@@ -378,26 +431,35 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
                 {splitBlockedStages(processing.blocked_stages).named.map(
                   (block) => (
                     <li key={`${block.kind}:${block.reason}`}>
-                      {`${taskKindLabel(block.kind)}卡在 ${blockReasonLabel(block.reason)}（${block.count} 条）`}
+                      {t("healthBlocked", {
+                        kind: memoryText(locale, taskKindLabel(block.kind)),
+                        reason: memoryText(
+                          locale,
+                          blockReasonLabel(block.reason),
+                        ),
+                        count: n(block.count),
+                      })}
                     </li>
                   ),
                 )}
-                {retrying ? <li>{retryingBlockLabel(retrying)}</li> : null}
+                {retrying ? (
+                  <li>{tnPlain("healthRetrying", retrying)}</li>
+                ) : null}
               </ul>
             ) : !processingRead.failedAt && !processingRead.pending ? (
-              <p>暂无需要处理的问题。</p>
+              <p>{t("healthNoIssues")}</p>
             ) : null}
           </>
         ) : null}
       </section>
 
-      <section className="health-block" aria-label="AI 接通情况">
-        <h2>AI 接通情况</h2>
+      <section className="health-block" aria-label={t("healthHosts")}>
+        <h2>{t("healthHosts")}</h2>
         {/* Host state lives in the desktop shell. In a browser it is not
             false, it is unavailable, and reporting it as 未接通 would send
             the user to repair links that may well be fine. */}
         {hosts === "no-bridge" || !window.oneMemory ? (
-          <p>在浏览器里读不到；请在桌面 App 里查看。</p>
+          <p>{t("healthHostsUnavailable")}</p>
         ) : (
           <>
             <ReadReceipt {...hostsRead} />
@@ -408,34 +470,34 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
                     <dt>{host.label}</dt>
                     <dd>
                       {hostsRead.failedAt || hostsRead.pending
-                        ? "上次读取："
+                        ? t("healthPreviousPrefix")
                         : ""}
-                      {hostVerdict(host)}
+                      {hostVerdict(host, locale)}
                     </dd>
                   </div>
                 ))}
               </dl>
             ) : hosts && !hostsRead.failedAt && !hostsRead.pending ? (
-              <p>本机没有检测到可接入的 AI 工具。</p>
+              <p>{t("healthNoHosts")}</p>
             ) : null}
           </>
         )}
       </section>
-      <section className="health-block" aria-label="详细日志">
+      <section className="health-block" aria-label={t("healthDetailed")}>
         <div className="health-setting-row">
           <div>
-            <h2>详细日志（排查用）</h2>
-            <p>默认关闭。仅在开发人员请你协助排查时开启。</p>
+            <h2>{t("healthDetailedTitle")}</h2>
+            <p>{t("healthDetailedHint")}</p>
           </div>
           <R6Switch
-            label="详细日志（排查用）"
+            label={t("healthDetailedTitle")}
             checked={detailedLogging}
             pending={detailedLoggingPending}
             onCheckedChange={(enabled) => {
               setDetailedLoggingPending(true);
               void setDetailedLogging(enabled)
                 .then(setDetailedLoggingState)
-                .catch(() => setDiagnosticMessage("详细日志设置失败，请重试。"))
+                .catch(() => setDiagnosticMessage(t("healthDetailedError")))
                 .finally(() => setDetailedLoggingPending(false));
             }}
           />
@@ -448,7 +510,7 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           onClick={() => void refresh()}
         >
           <RefreshCw size={16} aria-hidden="true" />
-          重新读取状态
+          {t("healthRefresh")}
         </R6Button>
         <R6Button
           variant="quiet"
@@ -456,7 +518,7 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           onClick={() => void markIncident()}
         >
           <Flag size={16} aria-hidden="true" />
-          记录问题时间点
+          {t("healthIncident")}
         </R6Button>
       </div>
       {diagnosticMessage ? (
@@ -470,31 +532,52 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
 
 /** A host with no self-check on record has not been shown to work, and the
  * install flow's own wording for that is 未接通. */
-function hostVerdict(host: RecallHostStatus): string {
-  if (!host.installed) return LINK_WORDING.unreachable;
-  const state = host.selfCheck?.state;
-  return (state ? LINK_WORDING[state] : undefined) ?? LINK_WORDING.unreachable;
+function hostVerdict(host: RecallHostStatus, locale: GuiLocale): string {
+  return translate(
+    locale,
+    !host.installed
+      ? "healthUnreachable"
+      : host.selfCheck?.state === "wired"
+        ? "healthWired"
+        : host.selfCheck?.state === "reachable_but_blind"
+          ? "healthBlind"
+          : "healthUnreachable",
+  );
 }
 
-function backgroundVerdict(state: BackgroundSnapshot["state"]): string {
-  return {
-    healthy: "后台服务可用",
-    stopped: "后台服务已停止",
-    degraded: "后台服务部分不可用",
-    untrusted: "后台服务身份未通过核验",
-    unknown: "后台状态尚未确认",
-  }[state];
+function backgroundVerdict(
+  state: BackgroundSnapshot["state"],
+  locale: GuiLocale,
+): string {
+  return translate(
+    locale,
+    (
+      {
+        healthy: "healthBackgroundHealthy",
+        stopped: "healthBackgroundStopped",
+        degraded: "healthBackgroundDegraded",
+        untrusted: "healthBackgroundUntrusted",
+        unknown: "healthBackgroundUnknown",
+      } as const
+    )[state],
+  );
 }
 
 function runtimeStateLabel(
   state: BackgroundSnapshot["core"] | BackgroundSnapshot["broker"],
+  locale: GuiLocale,
 ): string {
-  return {
-    running: "运行中",
-    stopped: "已停止",
-    unhealthy: "无法连接",
-    untrusted: "身份未通过核验",
-    unknown: "尚未确认",
-    not_checked: "未检查",
-  }[state];
+  return translate(
+    locale,
+    (
+      {
+        running: "healthRunning",
+        stopped: "healthStopped",
+        unhealthy: "healthUnhealthy",
+        untrusted: "healthUntrusted",
+        unknown: "healthUnknown",
+        not_checked: "healthNotChecked",
+      } as const
+    )[state],
+  );
 }

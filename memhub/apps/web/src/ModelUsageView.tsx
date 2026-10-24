@@ -1,16 +1,18 @@
+import type { MessageKey } from "@one-memory/i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getModelUsage,
   type ModelUsageMinute,
   type ModelUsageReport,
 } from "./api";
+import { useGuiLanguage } from "./gui-language";
 
-const RANGES = [
-  { minutes: 15, label: "最近 15 分钟" },
-  { minutes: 60, label: "最近 1 小时" },
-  { minutes: 360, label: "最近 6 小时" },
-  { minutes: 1_440, label: "最近 24 小时" },
-  { minutes: 10_080, label: "最近 7 天" },
+const RANGES: { minutes: number; label: MessageKey }[] = [
+  { minutes: 15, label: "usageRange15m" },
+  { minutes: 60, label: "usageRange1h" },
+  { minutes: 360, label: "usageRange6h" },
+  { minutes: 1_440, label: "usageRange24h" },
+  { minutes: 10_080, label: "usageRange7d" },
 ];
 
 const STAGE_LABELS: Record<string, string> = {
@@ -41,6 +43,7 @@ interface ModelUsageViewProps {
 }
 
 export function ModelUsageView({ live, refreshToken }: ModelUsageViewProps) {
+  const { t, tnPlain } = useGuiLanguage();
   const [rangeMinutes, setRangeMinutes] = useState(60);
   const [report, setReport] = useState<ModelUsageReport | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -76,33 +79,33 @@ export function ModelUsageView({ live, refreshToken }: ModelUsageViewProps) {
     <div className="model-usage-view">
       <div className="model-usage-toolbar">
         <label>
-          <span>时间范围</span>
+          <span>{t("usageRange")}</span>
           <select
-            aria-label="模型用量时间范围"
+            aria-label={t("usageRangeLabel")}
             value={rangeMinutes}
             onChange={(event) => setRangeMinutes(Number(event.target.value))}
           >
             {RANGES.map((range) => (
               <option key={range.minutes} value={range.minutes}>
-                {range.label}
+                {t(range.label)}
               </option>
             ))}
           </select>
         </label>
         <span className={`model-usage-state state-${state}`}>
           {state === "loading"
-            ? "正在读取…"
+            ? t("usageLoading")
             : state === "error"
-              ? "读取失败"
+              ? t("usageReadError")
               : live
-                ? "每 5 秒刷新"
-                : "已暂停"}
+                ? t("usageLive")
+                : t("debugPaused")}
         </span>
       </div>
 
       <div className="model-usage-metrics">
         <Metric
-          label="总 Tokens"
+          label={t("usageTotalTokens")}
           value={formatTokens(report?.summary.total_tokens)}
         />
         <Metric
@@ -114,26 +117,26 @@ export function ModelUsageView({ live, refreshToken }: ModelUsageViewProps) {
           value={formatTokens(report?.summary.avg_completion_tokens)}
         />
         <Metric
-          label="请求数"
+          label={t("usageRequests")}
           value={String(report?.summary.request_count ?? 0)}
         />
       </div>
 
       <section
         className="model-usage-chart-card"
-        aria-label="各 Prompt 每分钟 Token 曲线"
+        aria-label={t("usageChartRegion")}
       >
         <div className="model-usage-section-title">
-          <strong>各 Prompt 花费曲线</strong>
-          <span>每分钟 · Total Tokens</span>
+          <strong>{t("usageChartTitle")}</strong>
+          <span>{t("usageChartSubtitle")}</span>
         </div>
         <UsageChart rows={report?.by_minute ?? []} />
       </section>
 
       <section className="model-usage-stage-card">
         <div className="model-usage-section-title">
-          <strong>Prompt 明细</strong>
-          <span>当前时间范围</span>
+          <strong>{t("usageBreakdown")}</strong>
+          <span>{t("usageCurrentRange")}</span>
         </div>
         <div className="model-usage-stage-list">
           {stages.length ? (
@@ -141,14 +144,14 @@ export function ModelUsageView({ live, refreshToken }: ModelUsageViewProps) {
               <div className="model-usage-stage-row" key={stage.name}>
                 <i style={{ background: stageColor(stage.name) }} />
                 <strong>{stageLabel(stage.name)}</strong>
-                <span>{stage.requests} 次</span>
+                <span>{tnPlain("usageRequestCount", stage.requests)}</span>
                 <span>Prompt {formatTokens(stage.prompt)}</span>
                 <span>Completion {formatTokens(stage.completion)}</span>
                 <b>{formatTokens(stage.total)}</b>
               </div>
             ))
           ) : (
-            <p className="debug-log-empty">这个时间范围内没有沉淀模型调用</p>
+            <p className="debug-log-empty">{t("usageEmpty")}</p>
           )}
         </div>
       </section>
@@ -166,6 +169,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function UsageChart({ rows }: { rows: ModelUsageMinute[] }) {
+  const { t } = useGuiLanguage();
   const minutes = [...new Set(rows.map((row) => row.minute))].sort();
   const stages = [...new Set(rows.map((row) => row.prompt_stage))].sort();
   const width = 640;
@@ -189,7 +193,7 @@ function UsageChart({ rows }: { rows: ModelUsageMinute[] }) {
     pad.top + plotHeight - (value / max) * plotHeight;
 
   if (!rows.length)
-    return <div className="model-usage-chart-empty">暂无曲线数据</div>;
+    return <div className="model-usage-chart-empty">{t("usageNoChart")}</div>;
 
   return (
     <>
@@ -197,7 +201,7 @@ function UsageChart({ rows }: { rows: ModelUsageMinute[] }) {
         className="model-usage-chart"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="按分钟显示各 Prompt 的 Token 花费"
+        aria-label={t("usageChartAria")}
       >
         {[0, 0.5, 1].map((ratio) => (
           <g key={ratio}>

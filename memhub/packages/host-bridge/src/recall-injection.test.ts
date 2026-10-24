@@ -145,6 +145,7 @@ async function fixture(
     partial?: boolean;
     partialTimedOut?: boolean;
     allTimedOut?: boolean;
+    sdk?: boolean;
     boundary?: {
       hookSpecificOutput: { hookEventName: string; additionalContext: string };
       one_memory_ack: string;
@@ -167,6 +168,19 @@ async function fixture(
   const calls: CoreCall[] = [];
   const core = createServer((request, response: ServerResponse) => {
     void (async () => {
+      if (
+        request.method === "GET" &&
+        request.url === "/api/v2/memory-authority"
+      ) {
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({
+            authority: options.sdk ? "sdk" : "legacy",
+            migration_id: options.sdk ? "migration-1" : null,
+          }),
+        );
+        return;
+      }
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -177,7 +191,50 @@ async function fixture(
         );
       if (response.destroyed) return;
       response.setHeader("Content-Type", "application/json");
-      if (request.url === "/api/v1/context/search") {
+      if (
+        request.url ===
+        (options.sdk ? "/api/v2/context/search" : "/api/v1/context/search")
+      ) {
+        if (options.sdk) {
+          const items = [
+            ...(options.hits ?? []).map((memory) => ({
+              kind: "memory",
+              memory_id: memory.memory_id,
+              content: memory.content,
+              layer: "l2_fact",
+              status: "active",
+              source: "workbuddy",
+              updated_at: memory.updated_at,
+              score: memory.score,
+              truncated: false,
+            })),
+            ...(options.raw ?? []).map((message) => ({
+              kind: "raw",
+              raw_id: message.evidence_id,
+              content: message.text,
+              source: "workbuddy",
+              session_id: `session-${message.evidence_id}`,
+              memory_at: message.created_at,
+              score: 0.8,
+              truncated: false,
+            })),
+          ];
+          response.end(
+            JSON.stringify({
+              schema_version: 2,
+              request_id: "sdk-request",
+              state: items.length ? "grounded" : "empty",
+              items,
+              used_characters: items.reduce(
+                (total, item) => total + [...item.content].length,
+                0,
+              ),
+              truncated: false,
+              total_ms: 1,
+            }),
+          );
+          return;
+        }
         const result = contextResponse(options.raw ?? [], options.hits ?? []);
         if (options.partial) {
           result.state = "partial";
@@ -347,6 +404,33 @@ describe("WorkBuddy recall injection hook", () => {
     });
     expect(result.requestId).toBe("req-fixture");
     expect(result.hostSessionId).toBe("sess-1");
+  });
+
+  it("renders SDK-native context without fabricating legacy evidence or revision", async () => {
+    const { env, calls } = await fixture({
+      sdk: true,
+      hits: [hit(0, "SDK 记忆内容")],
+      raw: [
+        {
+          evidence_id: "raw-1",
+          text: "SDK 原始对话",
+          created_at: "2026-10-21T00:00:00Z",
+        },
+      ],
+    });
+
+    const result = await runRecallInjection(
+      "workbuddy",
+      prompt("继续之前的 SDK 任务"),
+      env,
+    );
+
+    expect(result.outcome).toBe("injected");
+    expect(context(result.stdout)).toContain("SDK 记忆内容");
+    expect(context(result.stdout)).toContain("SDK 原始对话");
+    expect(context(result.stdout)).not.toMatch(/revision|evidence/);
+    expect(calls.map((call) => call.url)).toEqual(["/api/v2/context/search"]);
+    expect(result.requestId).toBeNull();
   });
 
   it("keeps each memory within 640 characters and the block within 4000", async () => {

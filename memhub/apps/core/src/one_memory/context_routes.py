@@ -4,7 +4,9 @@ import asyncio
 import sqlite3
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import cast
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.params import Depends
@@ -31,11 +33,22 @@ from one_memory.context_models import (
     ContextSemanticStatus,
     MemoryContextItem,
     RawContextItem,
+    SdkContextItem,
+    SdkContextSearchResponse,
+    SdkMemoryContextItem,
+    SdkRawContextItem,
 )
 from one_memory.context_raw import revalidate_raw_context
 from one_memory.context_search import search_context
 from one_memory.diagnostic_log import diagnostic_event, diagnostic_exception
 from one_memory.external_memory_access import external_access
+from one_memory.hy_runtime_config import HY_MEMORY_READER
+from one_memory.hy_sdk_runtime import sdk_relevance_floor
+from one_memory.hy_sdk_types import (
+    HySdkMemoryRecord,
+    parse_sdk_raw_search,
+    parse_sdk_search,
+)
 from one_memory.imports.storage import EvidenceStore
 from one_memory.retrieval.raw_lane import read_raw_indexed_context
 from one_memory.semantic_deadline import hy_wait_budget, search_within
@@ -418,5 +431,179 @@ def context_router(dependencies: Sequence[Depends]) -> APIRouter:
                 response.headers["X-One-Memory-Call-Recorded"] = "false"
                 request.app.state.call_event_recording_error = True
         return final
+
+    return router
+
+
+def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
+    """SDK-native context: no Evidence/Governance ids or fabricated revisions."""
+    router = APIRouter(prefix="/api/v2/context", dependencies=dependencies)
+
+    @router.post("/search", response_model=SdkContextSearchResponse)
+    async def search(
+        value: ContextSearchRequest,
+        request: Request,
+        response: Response,
+    ) -> SdkContextSearchResponse:
+        response.headers["Cache-Control"] = "no-store"
+        started = time.monotonic()
+        access = external_access(request.headers)
+        database = cast(EvidenceStore, request.app.state.evidence_store).database_path
+        try:
+            authority = await asyncio.to_thread(
+                resolve_context_authority,
+                value,
+                access,
+                database,
+                deadline=started + value.timeout_ms / 1000,
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, "context_authority_unavailable") from None
+
+        client_handle = getattr(request.app.state, "sdk_client_handle", None)
+        if client_handle is None:
+            raise HTTPException(503, "sdk_context_unavailable")
+        try:
+            client = await client_handle.client()
+        except Exception:
+            raise HTTPException(503, "sdk_context_unavailable") from None
+
+        async def raw_lane() -> tuple[SdkRawContextItem, ...]:
+            if "raw" not in value.kinds or not authority.raw_allowed:
+                return ()
+            raw = await asyncio.to_thread(
+                client.search,
+                value.query,
+                user_ids=["local"],
+                agent_ids=[],
+                include_sources=list(authority.raw_sources or ()),
+                limit=value.limit,
+                min_score=0.0,
+                schema_min_score=0.0,
+                schema_limit=0,
+                intention_limit=0,
+                scene="chat",
+                reader=HY_MEMORY_READER,
+                layers=["l1_raw"],
+            )
+            hits = parse_sdk_raw_search(raw)
+            return tuple(
+                SdkRawContextItem(
+                    raw_id=hit.raw_id,
+                    content=hit.content,
+                    source=hit.source,
+                    session_id=hit.session_id,
+                    memory_at=(
+                        datetime.fromtimestamp(hit.memory_at, tz=UTC)
+                        if hit.memory_at is not None
+                        else None
+                    ),
+                    score=hit.score,
+                )
+                for hit in hits
+            )
+
+        async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
+            if "memory" not in value.kinds or not authority.memory_allowed:
+                return ()
+            raw = await asyncio.to_thread(
+                client.search,
+                value.query,
+                user_ids=["local"],
+                agent_ids=[],
+                limit=value.limit,
+                min_score=sdk_relevance_floor(),
+                schema_min_score=sdk_relevance_floor(),
+                schema_limit=value.limit,
+                intention_limit=value.limit,
+                scene="normal",
+                reader=HY_MEMORY_READER,
+            )
+            hits = parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+            items: list[SdkMemoryContextItem] = []
+            for hit in hits:
+                record = await asyncio.to_thread(client.get, hit.memory_id)
+                memory = None if record is None else HySdkMemoryRecord.from_sdk(record)
+                if memory is None or memory.status != "active":
+                    continue
+                items.append(
+                    SdkMemoryContextItem(
+                        memory_id=memory.memory_id,
+                        content=(
+                            hit.formatted_content
+                            if hit.sdk_formatted
+                            and hit.formatting_complete
+                            and hit.formatted_content
+                            else memory.content
+                        ),
+                        layer=memory.layer,
+                        status=memory.status,
+                        source=memory.source,
+                        updated_at=(
+                            datetime.fromtimestamp(memory.gmt_created, tz=UTC)
+                            if memory.gmt_created is not None
+                            else None
+                        ),
+                        score=hit.score,
+                    )
+                )
+            return tuple(items)
+
+        lanes = (raw_lane(), memory_lane())
+        try:
+            raw_items, memory_items = await asyncio.wait_for(
+                asyncio.gather(*lanes, return_exceptions=True),
+                timeout=value.timeout_ms / 1000,
+            )
+        except TimeoutError:
+            return SdkContextSearchResponse(
+                request_id=str(uuid4()),
+                state="unavailable",
+                items=(),
+                used_characters=0,
+                truncated=True,
+                total_ms=(time.monotonic() - started) * 1000,
+            )
+        partial = isinstance(raw_items, Exception) or isinstance(memory_items, Exception)
+        raw_candidates = (
+            () if isinstance(raw_items, Exception) else cast(tuple[SdkContextItem, ...], raw_items)
+        )
+        memory_candidates = (
+            ()
+            if isinstance(memory_items, Exception)
+            else cast(tuple[SdkContextItem, ...], memory_items)
+        )
+        candidates: list[SdkContextItem] = [
+            *raw_candidates,
+            *memory_candidates,
+        ]
+        candidates.sort(key=lambda item: item.score, reverse=True)
+        selected: list[SdkContextItem] = []
+        used = 0
+        truncated = False
+        for item in candidates:
+            if len(selected) >= value.limit:
+                truncated = True
+                break
+            content = item.content
+            remaining = value.character_budget - used
+            if remaining <= 0:
+                truncated = True
+                break
+            if len(content) > remaining:
+                item = item.model_copy(update={"content": content[:remaining], "truncated": True})
+                truncated = True
+            selected.append(item)
+            used += len(item.content)
+        return SdkContextSearchResponse(
+            request_id=str(uuid4()),
+            state=("partial" if partial else "grounded" if selected else "empty"),
+            items=tuple(selected),
+            used_characters=used,
+            truncated=truncated,
+            total_ms=(time.monotonic() - started) * 1000,
+        )
 
     return router

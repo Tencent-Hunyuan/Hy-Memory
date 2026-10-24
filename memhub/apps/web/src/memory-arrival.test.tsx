@@ -2,7 +2,33 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { MemoryArrivalPanel } from "./memory-arrival";
+
+it("traduce el progreso conservando mensajes y conversaciones como medidas distintas", () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <MemoryArrivalPanel
+        arrival={{
+          importing: true,
+          importedMessages: 1,
+          importedConversations: 1,
+          phase: "importing",
+        }}
+        onConfigureModel={() => {}}
+        onConnect={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("status").textContent).toBe(
+    "Importando conversaciones",
+  );
+  expect(screen.getByText("Se guardó 1 mensaje")).toBeTruthy();
+  expect(screen.getByText("1 conversación")).toBeTruthy();
+  localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+});
+
 import type { MemoryArrivalPhase } from "./memory-arrival-state";
 
 afterEach(() => {

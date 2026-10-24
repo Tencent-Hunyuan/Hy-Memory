@@ -1,6 +1,6 @@
 .app-shell.r6-shell {
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr);
   grid-template-rows: 58px minmax(0, 1fr) 48px;
   height: 100dvh;
   min-height: 0;
@@ -26,6 +26,9 @@
   user-select: none;
 }
 .r6-shell > .app-rail {
+  /* Keep the R6 sidebar vertical when legacy mobile navigation becomes a grid. */
+  display: flex;
+  flex-direction: column;
   grid-column: 1;
   grid-row: 2;
   padding: 34px 9px 18px;
@@ -43,7 +46,10 @@
 }
 .r6-shell button.rail-button {
   border-radius: 8px;
-  width: 60px;
+  width: 100%;
+  min-width: 60px;
+  padding-inline: 9px;
+  white-space: nowrap;
   min-height: 70px;
   height: 70px;
 }
@@ -108,7 +114,7 @@
 }
 @media (max-width: 600px) {
   .app-shell.r6-shell {
-    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-columns: max-content minmax(0, 1fr);
   }
   .r6-shell > .app-rail {
     padding: 12px 4px;

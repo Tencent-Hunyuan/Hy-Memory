@@ -24,14 +24,67 @@
 .onboarding-r6 [hidden] {
   display: none;
 }
+/* Onboarding owns its drag strip; the global overlay would intercept the select. */
+.desktop-frame:has(.onboarding-r6) > .window-drag-region {
+  display: none;
+}
 .onboarding-r6-titlebar {
   position: relative;
-  flex: 0 0 58px;
+  flex: 0 0 auto;
+  min-height: 58px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 8px 24px 8px 88px;
   border-bottom: 1px solid #ffffffa8;
   background: #ffffff30;
   backdrop-filter: blur(40px);
   user-select: none;
   -webkit-app-region: drag;
+}
+.onboarding-r6-titlebar .r6-language-selector--compact {
+  min-width: 0;
+  max-width: 100%;
+  -webkit-app-region: no-drag;
+}
+.onboarding-r6-titlebar .r6-language-selector-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 10px;
+  font-size: 12px;
+}
+.onboarding-r6-titlebar select {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #9badbd;
+  border-radius: 8px;
+  color: inherit;
+  background: #f7fafc;
+  font: inherit;
+}
+.onboarding-r6-titlebar select:focus-visible {
+  outline: 2px solid #356d99;
+  outline-offset: 2px;
+}
+.onboarding-r6-titlebar [role="alert"] {
+  margin: 6px 0 0;
+  max-width: 320px;
+  color: #9f3333;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .onboarding-r6-titlebar {
+    padding-right: 12px;
+  }
+  .onboarding-r6-titlebar .r6-language-selector-row {
+    flex-direction: column;
+    align-items: flex-end;
+  }
 }
 .onboarding-r6
   :is(
@@ -52,6 +105,7 @@
   padding: 32px 24px 2px;
 }
 .onboarding-r6-shell {
+  min-height: 0;
   width: 1120px;
   max-width: 100%;
   height: 820px;
@@ -69,8 +123,13 @@
     inset 0 -1px 0 #adc0d22e;
 }
 .onboarding-r6-head {
-  min-height: 0;
-  flex: 0 0 123.7px;
+  min-height: 123.7px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px 32px;
   position: relative;
   border-bottom: 1px solid #ffffffc4;
   background: linear-gradient(115deg, #ffffff57, #ffffff0a);
@@ -78,8 +137,11 @@
   border-radius: 25px 25px 0 0;
 }
 .onboarding-r6-head > div {
+  flex: 1 1 360px;
+  min-width: 0;
   width: 450px;
-  max-width: calc(100% - 320px);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .onboarding-r6-head p {
   margin: 0 0 10px;
@@ -94,12 +156,10 @@
   line-height: 43px;
 }
 .onboarding-r6-head .r6-stepper {
-  position: absolute;
-  top: 42px;
-  right: 36px;
+  margin-top: 14px;
 }
 .onboarding-r6-head .r6-stepper li {
-  height: 36px;
+  min-height: 36px;
   padding: 0 0 12px;
   align-items: flex-start;
   line-height: 18px;
@@ -107,11 +167,15 @@
 .onboarding-r6-body {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   padding: 26px 36px;
 }
 .onboarding-r6-foot {
-  min-height: 0;
-  flex: 0 0 82.1px;
+  min-height: 82.1px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   padding: 20px 36px 18px;
   border-top: 1px solid #ffffffc4;
   background: #ffffff38;
@@ -202,13 +266,9 @@
   position: absolute;
   inset: 142px 0 auto;
 }
-.onboarding-r6-list-area::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  height: 40px;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent, #f7fafc 92%);
+.onboarding-r6-list-status .onboarding-r6-quiet:disabled {
+  color: #4e6478;
+  opacity: 1;
 }
 .onboarding-r6-list {
   padding: 0;
@@ -464,8 +524,16 @@
   color: #4e6478;
 }
 .onboarding-r6-submit {
-  width: 138px;
+  width: auto;
+  min-width: 138px;
   margin-left: auto;
+}
+.onboarding-r6-foot .r6-button {
+  max-width: 100%;
+  height: auto;
+  padding-block: 10px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .onboarding-r6 .r6-button[data-variant="primary"]:not(:disabled) {
   background: #4f6373;
@@ -605,12 +673,12 @@
     flex-basis: auto;
   }
   .onboarding-r6-head > div {
+    flex-basis: 100%;
     max-width: 100%;
     width: auto;
   }
   .onboarding-r6-head .r6-stepper {
-    position: static;
-    margin-top: 22px;
+    margin-top: 0;
   }
   .onboarding-r6-body {
     padding: 24px 20px;

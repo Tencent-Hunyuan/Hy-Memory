@@ -273,8 +273,8 @@ catalog 也可以在没有基础 L0 时形成只读的合成画像。
 
 ```python
 memory = client.get("memory_id")
-# lite 模式写入的是 L1_RAW；按 ID 读取时必须显式选择返回原文。
-raw_memory = client.get("memory_id", include_raw=True)
+# raw ID 返回 L1_RAW，fact ID 返回对应事实层。
+raw_memory = client.get("raw_id")
 result = client.update("memory_id", "更新后的内容")
 result = client.delete("memory_id")
 result = client.delete_all(user_id="user_001")
@@ -284,7 +284,7 @@ page = client.list_memories(
     limit=100,
     offset=0,
     order="desc",
-    layers=None,
+    layers=["l1_raw"],  # 显式列出 raw；不传仍沿用默认语义层列表
     with_evolution=False,
 )
 
@@ -294,9 +294,10 @@ result = client.clone_user("user_001", "user_002", agent_id=None)
 对应异步方法为 `async_get()`、`async_update()`、`async_delete()`、
 `async_delete_all()`、`async_list_memories()`、`async_clone_user()`。
 
-`get()` / `async_get()` 默认继续隐藏 `L1_RAW`，因此不会改变现有调用方的原文访问
-边界。只有显式传入 `include_raw=True` 才返回该层；这也是 lite 模式按 ID 读取
-写入内容及其 `meta` 的方式。MemHub 的 HTTP 读取接口不开放此参数。
+`get()` / `async_get()` 是统一的 ID 精确读取：返回结果的 `layer`、`kind` 和
+`variant` 表明实际类型。授权由调用 SDK 前的产品边界完成，不由 SDK 根据 layer
+猜测。`list_memories()` 默认仍不包含 `L1_RAW`；显式传
+`layers=["l1_raw"]` 时按同一列表合同返回 raw。
 
 普通 `list_memories()` 返回 `vdb` 桶，并在 Graph 有结果时附带 `graph`；传入
 `workspace_id` 时返回生产力记忆的 `scene="productivity"` 和 `experiences`。

@@ -846,9 +846,7 @@ def _read_store_messages(
                         reason_code=ScanIssueCode.UNKNOWN_RECORD,
                     )
                     continue
-                host_timestamp = (
-                    _cursor_host_timestamp(content) if role == "user" else None
-                )
+                host_timestamp = _cursor_host_timestamp(content) if role == "user" else None
                 fallback_timestamp = datetime.fromtimestamp(
                     source_file.modified_ns / 1_000_000_000,
                     tz=UTC,

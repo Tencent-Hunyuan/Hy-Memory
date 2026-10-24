@@ -74,14 +74,12 @@ const COMMANDS = [
   "sync",
   "progress",
   "jobs",
-  "processing",
   "models",
   "memories",
+  "profile",
   // C6 App BLOCK (25f4ecf): UI write operations that had no CLI equivalent.
   "calls",
-  "import-file",
   "notes",
-  "extraction",
   "graph",
   "host",
   "recall",
@@ -562,7 +560,7 @@ describe("documented commands", () => {
     // `sync <pause|resume>` is documented as one alternation, so it is
     // checked as an entry rather than as two literal subcommands.
     sync: ["status", "<pause|resume>"],
-    memories: ["list", "show", "plan", "apply"],
+    memories: ["list", "show", "update", "delete"],
     host: ["list", "status", "install", "uninstall", "sync"],
   };
 

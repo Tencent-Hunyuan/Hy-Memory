@@ -7,10 +7,11 @@ import {
 import type { AddressInfo } from "node:net";
 import type {
   AskMemoryRequest,
-  AskMemoryResponse,
   ContextSearchRequest,
-  ContextSearchResponse,
   ConversationSearchResponse,
+  HostAskMemoryResponse,
+  HostContextSearchResponse,
+  MemoryAuthorityResponse,
   RecallReceipt,
   RecallRequest,
 } from "@one-memory/contracts";
@@ -701,20 +702,10 @@ export class RecallBroker {
           event: "connection_control.exception",
           outcome: "failed",
           instance_id: this.options.instanceId,
-          details: {
-            action: action ?? "invalid",
-            code,
-            error_type:
-              error instanceof Error ? error.constructor.name : typeof error,
-            message:
-              error instanceof Error
-                ? error.message.slice(0, 256)
-                : String(error).slice(0, 256),
-            stack_origin:
-              error instanceof Error && error.stack
-                ? (error.stack.split("\n").at(1)?.trim() ?? "").slice(0, 256)
-                : null,
-          },
+          error_code: code,
+          error_type:
+            error instanceof Error ? error.constructor.name : typeof error,
+          details: { action: action ?? "invalid" },
         });
       }
       const fingerprint = `error:${code}`;
@@ -818,35 +809,62 @@ export class RecallBroker {
         return;
       }
       const authorized = await this.authorizeHost(request, body, "all-apps");
-      const result = {
-        data: await this.readViaReader<unknown>(
-          "/api/v1/context/search",
-          body,
-          authorized.headers,
-          (body.timeout_ms ?? 2000) + 1000,
-          async () => {
-            const r = await axios.post(
-              `${this.options.coreBaseUrl}/api/v1/context/search`,
-              body,
-              {
-                headers: authorized.headers,
-                proxy: false,
-                maxRedirects: 0,
-                timeout: (body.timeout_ms ?? 2000) + 1000,
-                maxContentLength: 2 * 1024 * 1024,
-                signal: abort.signal,
-              },
-            );
-            await authorized.verifyBeforeRelease();
-            return r.data;
+      const authorityResponse = await axios.get<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.options.coreApiToken}`,
+            "x-one-memory-trace-id": requestTraceId(request),
           },
-          abort.signal,
-        ),
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 1_500,
+          signal: abort.signal,
+        },
+      );
+      if (!isMemoryAuthorityResponse(authorityResponse.data))
+        throw new Error("invalid_memory_authority");
+      const authority = authorityResponse.data;
+      const contextPath =
+        authority.authority === "sdk"
+          ? "/api/v2/context/search"
+          : "/api/v1/context/search";
+      const readContext = async () => {
+        const result = await axios.post(
+          `${this.options.coreBaseUrl}${contextPath}`,
+          body,
+          {
+            headers: authorized.headers,
+            proxy: false,
+            maxRedirects: 0,
+            timeout: (body.timeout_ms ?? 2000) + 1000,
+            maxContentLength: 2 * 1024 * 1024,
+            signal: abort.signal,
+          },
+        );
+        await authorized.verifyBeforeRelease();
+        return result.data;
+      };
+      const result = {
+        data:
+          authority.authority === "legacy"
+            ? await this.readViaReader<unknown>(
+                contextPath,
+                body,
+                authorized.headers,
+                (body.timeout_ms ?? 2000) + 1000,
+                readContext,
+                abort.signal,
+              )
+            : await readContext(),
       };
       const invalidField = contextResponseInvalidField(result.data);
       const identity = authorized.identity;
       const responseFailure =
         invalidField ??
+        (!matchesContextAuthority(result.data, authority)
+          ? "schema_version"
+          : null) ??
         (!isContextResponseForRequest(result.data, body)
           ? "request_or_budget"
           : !identity
@@ -867,9 +885,10 @@ export class RecallBroker {
         throw new Error("invalid_context_response");
       }
       if (!identity) throw new Error("invalid_context_response");
-      const contextResult = result.data as ContextSearchResponse;
+      const contextResult = result.data as HostContextSearchResponse;
       await authorized.verifyBeforeRelease();
       if (
+        contextResult.schema_version === 1 &&
         identity.hostId === "workbuddy" &&
         CALL_EVENT_ID.test(contextResult.request_id)
       ) {
@@ -1200,10 +1219,25 @@ export class RecallBroker {
         "om_ask",
         body.scope ?? "all-apps",
       );
+      const authorityResponse = await axios.get<unknown>(
+        `${this.options.coreBaseUrl}/api/v2/memory-authority`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.options.coreApiToken}`,
+            "x-one-memory-trace-id": requestTraceId(request),
+          },
+          proxy: false,
+          maxRedirects: 0,
+          timeout: 1_500,
+        },
+      );
+      if (!isMemoryAuthorityResponse(authorityResponse.data))
+        throw new Error("invalid_memory_authority");
+      const authority = authorityResponse.data;
       // Ask may call a generation model; keep the broker timeout aligned with
       // the web client's 120s budget rather than the short recall budget.
-      const coreResponse = await axios.post<AskMemoryResponse>(
-        `${this.options.coreBaseUrl}/api/v1/memories/ask`,
+      const coreResponse = await axios.post<HostAskMemoryResponse>(
+        `${this.options.coreBaseUrl}/api/${authority.authority === "sdk" ? "v2" : "v1"}/memories/ask`,
         body,
         {
           headers: authorized.headers,
@@ -1212,6 +1246,8 @@ export class RecallBroker {
           timeout: 120_000,
         },
       );
+      if (!isHostAskResponse(coreResponse.data, authority.authority))
+        throw new Error("invalid_ask_response");
       await authorized.verifyBeforeRelease();
       sendJson(response, 200, coreResponse.data);
     } catch (error) {
@@ -1578,6 +1614,79 @@ function sendJson(
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.end(`${JSON.stringify(value)}\n`);
+}
+
+function isMemoryAuthorityResponse(
+  value: unknown,
+): value is MemoryAuthorityResponse {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2 ||
+    !Object.hasOwn(record, "authority") ||
+    !Object.hasOwn(record, "migration_id")
+  )
+    return false;
+  return record.authority === "legacy"
+    ? record.migration_id === null
+    : record.authority === "sdk" &&
+        typeof record.migration_id === "string" &&
+        record.migration_id.length > 0 &&
+        record.migration_id.length <= 512;
+}
+
+function matchesContextAuthority(
+  value: unknown,
+  authority: MemoryAuthorityResponse,
+): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  return (
+    (value as { schema_version?: unknown }).schema_version ===
+    (authority.authority === "sdk" ? 2 : 1)
+  );
+}
+
+function isHostAskResponse(
+  value: unknown,
+  authority: "legacy" | "sdk",
+): value is HostAskMemoryResponse {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const response = value as Record<string, unknown>;
+  if (
+    typeof response.answer !== "string" ||
+    !["generated", "extractive", "empty"].includes(String(response.mode)) ||
+    !Array.isArray(response.memories)
+  )
+    return false;
+  if (authority === "legacy") return response.schema_version === undefined;
+  if (response.schema_version !== 2) return false;
+  return response.memories.every((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item))
+      return false;
+    const memory = item as Record<string, unknown>;
+    return (
+      Object.keys(memory).every((key) =>
+        [
+          "memory_id",
+          "content",
+          "layer",
+          "status",
+          "source",
+          "gmt_created",
+        ].includes(key),
+      ) &&
+      ["memory_id", "content", "layer", "status"].every(
+        (key) => typeof memory[key] === "string",
+      ) &&
+      (memory.source === null || typeof memory.source === "string") &&
+      (memory.gmt_created === null ||
+        (typeof memory.gmt_created === "number" &&
+          Number.isSafeInteger(memory.gmt_created)))
+    );
+  });
 }
 
 function isLoopback(address: string | undefined): boolean {

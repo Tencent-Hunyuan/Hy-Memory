@@ -84,15 +84,8 @@ def test_reader_internal_endpoints_require_local_token() -> None:
         assert asyncio.run(internal_request(path, token=None)) == 401
         assert asyncio.run(internal_request(path, token="test-token")) == 200
 
+    assert asyncio.run(internal_request("/internal/call-event", token=None, method="POST")) == 401
     assert (
-        asyncio.run(
-            internal_request("/internal/call-event", token=None, method="POST")
-        )
-        == 401
-    )
-    assert (
-        asyncio.run(
-            internal_request("/internal/call-event", token="test-token", method="POST")
-        )
+        asyncio.run(internal_request("/internal/call-event", token="test-token", method="POST"))
         == 200
     )

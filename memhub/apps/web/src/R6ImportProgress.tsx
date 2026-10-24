@@ -1,21 +1,37 @@
 import type { ImportJob, SourceResponse } from "@one-memory/contracts";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { AppMark } from "./app-mark";
+import { useOnboardingTranslation } from "./onboarding-language";
 import "./r6-import-progress.css";
 
-function progressText(job: ImportJob): string | null {
-  if (job.stored > 0) return `已保存 ${job.stored.toLocaleString()} 条消息`;
+type Translate = ReturnType<typeof useOnboardingTranslation>["t"];
+
+function progressText(
+  job: ImportJob,
+  t: Translate,
+  locale: string,
+): string | null {
+  if (job.stored > 0)
+    return t("onboardingSavedMessages", {
+      count: job.stored.toLocaleString(locale),
+    });
   if (job.discovered <= 0) return null;
-  const scanned = `已扫描 ${job.discovered.toLocaleString()} 条`;
+  const count = job.discovered.toLocaleString(locale);
   if (job.status === "completed")
-    return job.history_after
-      ? `${scanned}，本次没有符合时间范围的对话`
-      : `${scanned}，本次没有可保存的对话`;
+    return t(
+      job.history_after
+        ? "onboardingScannedOutsideRange"
+        : "onboardingScannedNothingToSave",
+      { count },
+    );
   if (job.status === "pending" || job.status === "running")
-    return job.history_after
-      ? `${scanned}，正在筛选最近 3 天`
-      : `${scanned}，正在筛选`;
-  return `${scanned}，尚未保存`;
+    return t(
+      job.history_after
+        ? "onboardingScannedFilteringRecent"
+        : "onboardingScannedFiltering",
+      { count },
+    );
+  return t("onboardingScannedNotSaved", { count });
 }
 
 export function R6ImportProgress({
@@ -29,6 +45,7 @@ export function R6ImportProgress({
   jobs: ImportJob[];
   stale?: boolean;
 }) {
+  const { text, t, locale } = useOnboardingTranslation();
   const scroller = useRef<HTMLElement>(null);
   const userScrollLeft = useRef(0);
   const userScrollIntent = useRef(false);
@@ -56,7 +73,7 @@ export function R6ImportProgress({
   return (
     <section
       className="r6-import-progress"
-      aria-label="本次应用导入进度"
+      aria-label={text("本次应用导入进度")}
       data-count={ids.length <= 2 ? String(ids.length) : "many"}
       ref={scroller}
       onPointerDown={markUserScrollIntent}
@@ -103,12 +120,14 @@ export function R6ImportProgress({
           cancelled: "已取消",
           completed: "导入完成",
         };
-        const progress = job ? progressText(job) : null;
+        const progress = job ? progressText(job, t, locale) : null;
         return (
           <article
             className="r6-import-progress-card"
             key={id}
-            aria-label={`${source?.display_name ?? id} 导入进度`}
+            aria-label={t("onboardingAppProgress", {
+              name: source?.display_name ?? id,
+            })}
             data-running={running ? "true" : "false"}
           >
             <div className="r6-import-progress-orbit" aria-hidden="true">
@@ -121,18 +140,22 @@ export function R6ImportProgress({
             {progress ? (
               <p>{progress}</p>
             ) : noImportedHistory ? (
-              <p>没有可保存的历史对话</p>
+              <p>{text("没有可保存的历史对话")}</p>
             ) : null}
             <small role="status">
-              {stale
-                ? "状态待核对"
-                : source?.authorized !== true
-                  ? "读取授权不可用"
-                  : job
-                    ? names[job.status]
-                    : "正在导入"}
+              {text(
+                stale
+                  ? "状态待核对"
+                  : source?.authorized !== true
+                    ? "读取授权不可用"
+                    : job
+                      ? names[job.status]
+                      : "正在导入",
+              )}
               {job && job.errors > 0
-                ? ` · ${job.errors.toLocaleString()} 条读取异常`
+                ? t("onboardingReadErrors", {
+                    count: job.errors.toLocaleString(locale),
+                  })
                 : ""}
             </small>
           </article>

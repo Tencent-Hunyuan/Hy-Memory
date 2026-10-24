@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 HY_MEMORY_DISTRIBUTION = "hy-memory"
-HY_MEMORY_VERSION = "2.0.4"
+HY_MEMORY_VERSION = "2.0.5"
 HY_MEMORY_NAMESPACE = "governed-v2"
 DiagnosticLogLevel = Literal["error", "warning", "info", "debug"]
 
@@ -33,48 +33,7 @@ _COLLECTION_LOGGERS = (
 )
 _NOISY_LIBRARY_LOGGERS = ("httpx", "httpcore", "watchfiles", "jieba")
 
-# One Memory deliberately stays on ultra because its existing, user-visible
-# profile/graph flow calls digest(), which the pinned public SDK exposes only
-# for ultra clients. Reader and non-reranker behavior remain pinned for
-# compatibility with public SDK 2.0.4.
-HY_MEMORY_MODE = "ultra"
-# The SDK only recognises `legacy` and `hybrid` (see
-# hy_memory/pipelines/_retrieval/config.py: `ALL_READERS = (READER_LEGACY,
-# READER_HYBRID)`). The old spelling `hybrid_v2` was silently rejected and
-# fell back to legacy, so the hybrid-v2 recall strategy never ran at all.
 HY_MEMORY_READER = "hybrid"
-
-HY_MEMORY_BEHAVIOR_ENV: dict[str, str] = {
-    "MEMORY_MODE": HY_MEMORY_MODE,
-    "MEMORY_ENABLE_GRAPH": "true",
-    "MEMORY_GRAPH_RERANK_ENABLED": "false",
-    "MEMORY_GRAPH_TEMPORAL_SPINE": "true",
-    "MEMORY_TOPIC_SUMMARY_ENABLED": "false",
-    "MEMORY_EPISODE_SUMMARY_ENABLED": "false",
-    "MEMORY_EPISODE_RECALL_ENABLED": "true",
-    "MEMORY_DYNAMIC_EPISODE_ENABLED": "true",
-    "MEMORY_SESSION_EPISODE_ENABLED": "false",
-    "MEMORY_SESSION_EPISODE_CONTEXT_ENABLED": "false",
-    "MEMORY_EPISODE_CAPSULE_CONTEXT_ENABLED": "true",
-    "MEMORY_EPISODE_CAPSULE_QUERY_MIN": "0.65",
-    "MEMORY_EPISODE_CAPSULE_ASSIGNMENT_MIN": "0.60",
-    "MEMORY_EPISODE_CAPSULE_FIRST_RANK_MAX": "3",
-    "MEMORY_EPISODE_CAPSULE_MEMBER_LIMIT": "3",
-    "MEMORY_ENABLE_INTENTION": "false",
-    "MEMORY_ENABLE_QUERY_REWRITE": "false",
-    "MEMORY_FEW_SHOT_ENABLED": "true",
-    "MEMORY_HYBRID_V2_QUERY_EXPAND": "1",
-    "MEMORY_HYBRID_V2_GEO_INTENT_PRIOR": "0.6",
-    "MEMORY_HYBRID_V2_DIVERSITY": "1",
-    "MEMORY_HYBRID_V2_TEMPORAL_ADMIT_PRIOR": "0.55",
-    "MEMORY_HYBRID_V2_TEMPORAL_BOOST": "0.18",
-    "MEMORY_CROSS_DOMAIN_CON_THRESHOLD": "0.5",
-    "MEMORY_READER_ENABLE_SUMMARY": "false",
-    "MEMORY_SUMMARY_ENABLED_IN_SYS2": "false",
-    "MEMORY_LOCAL_RERANK_ENABLED": "false",
-    "RECONCILE_ENABLED": "true",
-    "HY_MEMORY_READER": HY_MEMORY_READER,
-}
 
 
 def detailed_logging_enabled(data_dir: Path) -> bool:
@@ -147,10 +106,7 @@ def apply_diagnostic_log_level(level: DiagnosticLogLevel) -> None:
     for root in _NOISY_LIBRARY_LOGGERS:
         logging.getLogger(root).setLevel(noisy_level)
     for name in tuple(logging.Logger.manager.loggerDict):
-        if any(
-            name == root or name.startswith(f"{root}.")
-            for root in _NOISY_LIBRARY_LOGGERS
-        ):
+        if any(name == root or name.startswith(f"{root}.") for root in _NOISY_LIBRARY_LOGGERS):
             logging.getLogger(name).setLevel(noisy_level)
 
     os.environ["MEMORY_LOG_LEVEL"] = logging.getLevelName(selected)
@@ -171,7 +127,6 @@ def configure_hy_runtime_environment(data_dir: Path) -> None:
     log_dir = memory_root / "logs"
     memory_root.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.update(HY_MEMORY_BEHAVIOR_ENV)
     os.environ["MEMORY_DATA_DIR"] = str(memory_root)
     os.environ["MEMORY_LOG_DIR"] = str(log_dir)
     level = diagnostic_log_level(data_dir)
@@ -181,9 +136,3 @@ def configure_hy_runtime_environment(data_dir: Path) -> None:
     os.environ["MEMORY_MEMORY_OPERATIONS_ENABLED"] = "false"
     os.environ["ANONYMIZED_TELEMETRY"] = "False"
     os.environ.pop("CHROMA_OTEL_COLLECTION_ENDPOINT", None)
-
-
-def configure_hy_behavior_environment() -> None:
-    """Set import-time HY behavior flags without touching paths or secrets."""
-
-    os.environ.update(HY_MEMORY_BEHAVIOR_ENV)

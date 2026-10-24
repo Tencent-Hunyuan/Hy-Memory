@@ -1,5 +1,7 @@
 export interface Citation {
-  evidence_id: string;
+  evidence_id?: string | null;
+  raw_id?: string | null;
+  item_index?: number | null;
   quote: string;
   revision: number;
   source_id: string;
@@ -45,7 +47,8 @@ export interface Matter {
     | "needs_update"
     | "source_unavailable"
     | "evidence_changed"
-    | "memory_changed";
+    | "memory_changed"
+    | "archived";
   model: string;
   updated_at: string;
   source_count: number;
@@ -70,14 +73,16 @@ export interface MatterContext {
 }
 
 export interface MatterEvidence {
-  evidence_id: string;
+  evidence_id?: string | null;
+  raw_id?: string | null;
+  item_index?: number | null;
   source_id: string;
   conversation_id: string;
   role: string;
   written_by: string;
   created_at: string | null;
   observed_at: string;
-  revision: number;
+  revision?: number | null;
   content_hash: string;
   project: string | null;
   workspace: string | null;
@@ -125,14 +130,15 @@ export interface MatterRun {
 export interface MemoryRef {
   origin: string;
   memory_id: string;
-  revision: number;
-  status: "confirmed";
+  revision?: number | null;
+  status: "confirmed" | "active";
   content_hash: string;
-  task_id: string;
-  hy_memory_id: string;
+  task_id?: string | null;
+  hy_memory_id?: string | null;
   engine: "hy-memory";
-  engine_version: string;
-  profile_id: string;
-  profile_revision: number;
-  model: string;
+  engine_version?: string | null;
+  profile_id?: string | null;
+  profile_revision?: number | null;
+  model?: string | null;
+  authority?: "legacy" | "sdk";
 }

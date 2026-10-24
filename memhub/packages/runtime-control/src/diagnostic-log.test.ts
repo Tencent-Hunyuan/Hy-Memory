@@ -1,4 +1,5 @@
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -21,8 +22,10 @@ import {
   diagnosticLogFiles,
   exportDiagnosticBundle,
   exportDiagnosticZip,
+  projectDiagnosticEventForSafeOutput,
   pruneDiagnosticLogs,
   readDiagnosticEvents,
+  recordDiagnosticMarker,
   writeDiagnosticEventSync,
 } from "./diagnostic-log.js";
 
@@ -66,6 +69,30 @@ describe("diagnostic log", () => {
     });
   });
 
+  it("keeps the synchronous writer fail-open for invalid input", async () => {
+    const dataDir = await root();
+    expect(() =>
+      writeDiagnosticEventSync(
+        {
+          dataDir,
+          service: "desktop",
+          sessionId: "55555555-5555-4555-8555-555555555555",
+        },
+        {
+          level: "error",
+          component: "desktop.lifecycle",
+          event: "desktop.early_start_failed",
+          outcome: "failed",
+          details: { nested: ["private"] } as never,
+        },
+      ),
+    ).not.toThrow();
+    expect(await readDiagnosticEvents(dataDir)).toEqual({
+      events: [],
+      invalid_lines: 0,
+    });
+  });
+
   it("writes structured, private events and reads them by correlation identity", async () => {
     const dataDir = await root();
     const session = "11111111-1111-4111-8111-111111111111";
@@ -89,6 +116,8 @@ describe("diagnostic log", () => {
         open_file_count: 7,
         memory_bytes: 4096,
         thread_count: 4,
+        "cache.hit-rate": 0.75,
+        custom_label: "warm",
       },
     });
     const result = await readDiagnosticEvents(dataDir, { traceId: trace });
@@ -101,6 +130,8 @@ describe("diagnostic log", () => {
       event: "runtime.ready",
       details: expect.objectContaining({
         open_file_count: 7,
+        "cache.hit-rate": 0.75,
+        custom_label: "warm",
       }),
     });
     const file = (await diagnosticLogFiles(dataDir))[0];
@@ -184,7 +215,7 @@ describe("diagnostic log", () => {
     }
   });
 
-  it("rejects arbitrary detail fields and absolute stack paths", () => {
+  it("strictly rejects complex detail values, dangerous keys and absolute stacks", () => {
     const base = {
       timestamp: new Date().toISOString(),
       level: "error" as const,
@@ -195,11 +226,142 @@ describe("diagnostic log", () => {
       session_id: "11111111-1111-4111-8111-111111111111",
     };
     expect(() =>
-      diagnosticEvent({ ...base, details: { prompt: "private" } }),
+      diagnosticEvent({
+        ...base,
+        details: { nested: { secret: "private" } } as never,
+      }),
+    ).toThrow("diagnostic_detail_value_invalid");
+    expect(() =>
+      diagnosticEvent({ ...base, details: { constructor: "private" } }),
     ).toThrow("diagnostic_detail_key_invalid");
+    expect(() =>
+      diagnosticEvent({ ...base, details: { "9invalid": "private" } }),
+    ).toThrow("diagnostic_detail_key_invalid");
+    expect(() =>
+      diagnosticEvent({
+        ...base,
+        details: Object.fromEntries(
+          Array.from({ length: 33 }, (_, index) => [`key_${index}`, index]),
+        ),
+      }),
+    ).toThrow("diagnostic_detail_count_invalid");
+    expect(() =>
+      diagnosticEvent({ ...base, details: { message: "line1\nline2" } }),
+    ).toThrow("diagnostic_text_invalid");
+    expect(() =>
+      diagnosticEvent({ ...base, details: { metric: Number.NaN } }),
+    ).toThrow("diagnostic_detail_value_invalid");
+    expect(() =>
+      diagnosticEvent({
+        ...base,
+        details: { count: Number.MAX_SAFE_INTEGER + 1 },
+      }),
+    ).toThrow("diagnostic_detail_value_invalid");
+    expect(() =>
+      diagnosticEvent({ ...base, details: { list: ["private"] } as never }),
+    ).toThrow("diagnostic_detail_value_invalid");
     expect(() =>
       diagnosticEvent({ ...base, safe_stack: ["/Users/me/private.py:1"] }),
     ).toThrow("diagnostic_stack_invalid");
+    expect(() =>
+      diagnosticEvent({
+        ...base,
+        safe_stack: ["packages/runtime/sk-live-secret-token.ts:1:1"],
+      }),
+    ).toThrow("diagnostic_stack_invalid");
+    for (const line of [
+      "arbitrary stack text",
+      "thread=worker|threading.py:12:wait",
+      "FILE:///Users/me/private.py:1:call",
+      "one_memory/worker.py:9:call /Users/private",
+      "one_memory/GOCSPX-privateCredential.py:9:call",
+      "packages/ASIA1234567890ABCDEF/file.ts:1:1",
+      "packages/Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8/file.ts:1:1",
+    ]) {
+      expect(() => diagnosticEvent({ ...base, safe_stack: [line] })).toThrow(
+        "diagnostic_stack_invalid",
+      );
+    }
+    expect(() =>
+      diagnosticEvent({
+        ...base,
+        safe_stack: Array.from(
+          { length: 17 },
+          (_, index) => `one_memory/worker.py:${index + 1}:call`,
+        ),
+      }),
+    ).toThrow("diagnostic_stack_invalid");
+
+    const accepted = diagnosticEvent({
+      ...base,
+      safe_stack: [
+        "apps/desktop/src/main.ts:80:1",
+        "one_memory/diagnostic_log.py:895:_safe_stack_line",
+        "threading.py:1045:_bootstrap_inner",
+        "thread|threading.py:1045:_bootstrap_inner > one_memory/worker.py:9:call",
+      ],
+    });
+    expect(accepted.safe_stack).toHaveLength(4);
+
+    const projected = projectDiagnosticEventForSafeOutput({
+      ...accepted,
+      safe_stack: [
+        "free text",
+        "thread=worker|one_memory/worker.py:9:call",
+        "packages/runtime-control/src/diagnostic-log.ts:42:7",
+        "thread|threading.py:1045:_bootstrap_inner > one_memory/worker.py:9:call",
+      ],
+    });
+    expect(projected.safe_stack).toEqual([
+      "packages/runtime-control/src/diagnostic-log.ts:42:7",
+      "thread|threading.py:1045:_bootstrap_inner > one_memory/worker.py:9:call",
+    ]);
+    const conservative = projectDiagnosticEventForSafeOutput(
+      diagnosticEvent({
+        ...base,
+        details: {
+          source_id: "cursor",
+          reason: "abcdef1234567890abcdef1234567890abcdef12",
+          status: "11111111-1111-4111-8111-111111111111",
+        },
+      }),
+    );
+    expect(conservative.details).toEqual({
+      source_id: "cursor",
+      reason: "abcdef1234567890abcdef1234567890abcdef12",
+      status: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
+  it("drops malformed logger events without interrupting later writes", async () => {
+    const dataDir = await root();
+    const logger = new DiagnosticLogger({
+      dataDir,
+      service: "desktop",
+      sessionId: "11111111-1111-4111-8111-111111111111",
+    });
+
+    await expect(
+      logger.log({
+        level: "info",
+        component: "desktop.sdk_migration",
+        event: "sdk_migration.startup",
+        outcome: "succeeded",
+        details: { nested: { secret: "private" } } as never,
+      }),
+    ).resolves.toBeUndefined();
+    await logger.log({
+      level: "info",
+      component: "desktop.sdk_migration",
+      event: "sdk_migration.startup",
+      outcome: "succeeded",
+      details: { arbitrary_state: "cutover" },
+    });
+
+    const result = await readDiagnosticEvents(dataDir);
+    expect(result.invalid_lines).toBe(0);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].details).toEqual({ arbitrary_state: "cutover" });
   });
 
   it("keeps code locations but strips exception messages and absolute prefixes", () => {
@@ -215,29 +377,162 @@ describe("diagnostic log", () => {
     expect(JSON.stringify(safe)).not.toContain("/Users/me");
   });
 
-  it("marks incidents and exports only validated events", async () => {
+  it("exports events through an independent detail whitelist", async () => {
     const dataDir = await root();
     const logger = new DiagnosticLogger({ dataDir, service: "desktop" });
     const incident = await logger.markIncident({
       component: "desktop.diagnostics",
       status: "degraded",
     });
-    await writeFile(
-      path.join(dataDir, "logs", "diagnostic-core.jsonl"),
-      "not-json\n",
-      { mode: 0o600 },
-    );
+    await logger.log({
+      level: "info",
+      component: "desktop.diagnostics",
+      event: "diagnostics.checked",
+      outcome: "succeeded",
+      details: {
+        count: 1,
+        reason: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signaturevalue",
+        status: "ASIA1234567890ABCDEF",
+        source_id: "GOCSPX-clientSecret_A1",
+        mode: "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8",
+        action: "AIzaSyExampleCredential1234567890",
+        platform: "x_ASIA1234567890ABCDEF",
+        phase: "x_GOCSPX-clientSecret_A1",
+        local_only_secret: "must-not-export",
+      },
+    });
+    await logger.log({
+      level: "error",
+      component: "credential.private",
+      event: "token.failed",
+      outcome: "ghp_private_token",
+      trace_id: "ghp_private_token",
+      instance_id: "ASIA1234567890ABCDEF",
+      request_id: "GOCSPX-clientSecret_A1",
+      task_id: "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8",
+      error_code: "secret.token",
+    });
     const target = path.join(await root(), "bundle.json");
     const result = await exportDiagnosticBundle({
       dataDir,
       target,
       productVersion: "1.2.3",
-      status: { status: "degraded" },
+      status: { status: "degraded", local_only_secret: "must-not-export" },
     });
-    expect(result).toEqual({ event_count: 1, invalid_lines: 1 });
+    expect(result).toEqual({ event_count: 3, invalid_lines: 0 });
     const payload = JSON.parse(await readFile(target, "utf8"));
     expect(payload.events[0].incident_id).toBe(incident.incident_id);
-    expect(JSON.stringify(payload)).not.toContain(dataDir);
+    expect(payload.events[1].details).toEqual({ count: 1 });
+    expect(payload.events[2]).toMatchObject({
+      component: "diagnostic.redacted",
+      event: "diagnostic.redacted",
+      outcome: "redacted",
+    });
+    expect(payload.events[2].trace_id).toBeUndefined();
+    expect(payload.events[2].instance_id).toBeUndefined();
+    expect(payload.events[2].request_id).toBeUndefined();
+    expect(payload.events[2].task_id).toBeUndefined();
+    expect(payload.events[2].error_code).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain("local_only_secret");
+    expect(JSON.stringify(payload)).not.toContain("must-not-export");
+    expect(JSON.stringify(payload)).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+    expect(JSON.stringify(payload)).not.toContain("ASIA1234567890ABCDEF");
+    expect(JSON.stringify(payload)).not.toContain("GOCSPX-clientSecret_A1");
+    expect(JSON.stringify(payload)).not.toContain("x_ASIA1234567890ABCDEF");
+    expect(JSON.stringify(payload)).not.toContain("x_GOCSPX-clientSecret_A1");
+    expect(JSON.stringify(payload)).not.toContain("Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8");
+    expect(JSON.stringify(payload)).not.toContain(
+      "AIzaSyExampleCredential1234567890",
+    );
+    expect(JSON.stringify(payload)).not.toContain("ghp_private_token");
+  });
+
+  it("fails closed when exported build identity has a credential shape", async () => {
+    const dataDir = await root();
+    const outputDir = await root();
+    await expect(
+      exportDiagnosticBundle({
+        dataDir,
+        target: path.join(outputDir, "bundle.json"),
+        productVersion: "xoxb-123456-abcdef",
+      }),
+    ).rejects.toThrow("diagnostic_product_version_invalid");
+    await expect(
+      exportDiagnosticZip({
+        dataDir,
+        target: path.join(outputDir, "commit.zip"),
+        productVersion: "1.2.3",
+        commit: "ghp_private_token",
+      }),
+    ).rejects.toThrow("diagnostic_commit_invalid");
+    await expect(
+      exportDiagnosticZip({
+        dataDir,
+        target: path.join(outputDir, "sha.zip"),
+        productVersion: "1.2.3",
+        coreSha256: "AKIDExampleSecretId1234567890",
+      }),
+    ).rejects.toThrow("diagnostic_sha256_invalid");
+    expect(await readdir(outputDir)).toEqual([]);
+  });
+
+  it("fails closed without publishing a JSON bundle when any line is invalid", async () => {
+    const dataDir = await root();
+    await mkdir(path.join(dataDir, "logs"), { recursive: true });
+    await writeFile(
+      path.join(dataDir, "logs", "diagnostic-core.jsonl"),
+      "not-json\n",
+      { mode: 0o600 },
+    );
+    const outputDir = await root();
+    const target = path.join(outputDir, "bundle.json");
+    await expect(
+      exportDiagnosticBundle({
+        dataDir,
+        target,
+        productVersion: "1.2.3",
+      }),
+    ).rejects.toThrow("diagnostic_export_invalid_lines");
+    expect(await readdir(outputDir)).toEqual([]);
+  });
+
+  it("fails closed when the diagnostic directory cannot be read", async () => {
+    if (process.platform === "win32") return;
+    const dataDir = await root();
+    const logs = path.join(dataDir, "logs");
+    await mkdir(logs, { recursive: true, mode: 0o700 });
+    await writeFile(path.join(logs, "diagnostic-core.jsonl"), "{}\n");
+    const outputDir = await root();
+    const target = path.join(outputDir, "bundle.json");
+    await chmod(logs, 0o000);
+    try {
+      await expect(
+        exportDiagnosticBundle({
+          dataDir,
+          target,
+          productVersion: "1.2.3",
+        }),
+      ).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      await chmod(logs, 0o700);
+    }
+    expect(await readdir(outputDir)).toEqual([]);
+  });
+
+  it("never overwrites an existing export target or leaves temporary files", async () => {
+    const dataDir = await root();
+    const outputDir = await root();
+    const target = path.join(outputDir, "bundle.json");
+    await writeFile(target, "existing-artifact", { mode: 0o600 });
+    await expect(
+      exportDiagnosticBundle({
+        dataDir,
+        target,
+        productVersion: "1.2.3",
+      }),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await readFile(target, "utf8")).toBe("existing-artifact");
+    expect(await readdir(outputDir)).toEqual(["bundle.json"]);
   });
 
   it("preserves microsecond ordering across service log files", async () => {
@@ -280,7 +575,7 @@ describe("diagnostic log", () => {
     expect(result.events[1].timestamp).toBe("2026-10-14T00:00:00.123999Z");
   });
 
-  it("exports a private seven-day zip with summary, logs, crashes and markers", async () => {
+  it("exports only reprojected events, a strict summary and README", async () => {
     const dataDir = await root();
     const outputDir = await root();
     const crashDir = await root();
@@ -326,39 +621,178 @@ describe("diagnostic log", () => {
       markers: [
         {
           timestamp: "2026-10-05T01:30:00.000Z",
-          description: "蓝莓没出来",
+          description:
+            "蓝莓没出来 /Users/private/query.txt ASIA1234567890ABCDEF GOCSPX-clientSecret_A1 Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8 token=ghp_private_token xoxb-123456-abcdef AKIDExampleSecretId1234567890 AIzaSyExampleCredential1234567890 eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signaturevalue",
         },
       ],
       summary: {
         sources: [{ source_id: "workbuddy", imported_messages: 12 }],
-        memory_tasks: { unknown: 1, last_error_codes: { model_failed: 1 } },
+        summary_secret: conversation,
+        background: {
+          status: "exported",
+          runtime_state: "ready",
+          core_state: "healthy",
+          broker_state: "ready",
+          instance_id: "instance-1",
+          secret: conversation,
+        },
       },
     });
 
-    expect(result.filename).toBe("MemHub.zip");
+    expect(result).toEqual({ filename: "MemHub.zip", file_count: 3 });
     const files = unzipSync(await readFile(target));
-    expect(Object.keys(files)).toEqual(
-      expect.arrayContaining([
-        "README.txt",
-        "summary.json",
-        "logs/diagnostic-core.jsonl",
-        "logs/core.log",
-        "crashes/MemHub-2026-10-05.ips",
-      ]),
-    );
-    const summary = files["summary.json"];
+    expect(Object.keys(files).sort()).toEqual([
+      "README.txt",
+      "diagnostics/events.jsonl",
+      "summary.json",
+    ]);
+    const eventFile = files["diagnostics/events.jsonl"];
+    const summaryFile = files["summary.json"];
     const readme = files["README.txt"];
-    if (!summary || !readme) throw new Error("missing support bundle metadata");
-    expect(strFromU8(summary)).toContain("model_failed");
-    expect(strFromU8(readme)).toContain("蓝莓没出来");
+    if (!eventFile || !summaryFile || !readme)
+      throw new Error("missing support bundle metadata");
+    const exportedEvent = JSON.parse(strFromU8(eventFile).trim());
+    expect(exportedEvent.details).toEqual({ count: 1 });
+    const summary = JSON.parse(strFromU8(summaryFile));
+    expect(summary.background).toEqual({
+      status: "exported",
+      runtime_state: "ready",
+      core_state: "healthy",
+      broker_state: "ready",
+      instance_id: "instance-1",
+    });
+    expect(summary.sources).toBeUndefined();
+    expect(summary.summary_secret).toBeUndefined();
+    expect(summary.problem_markers).toEqual([
+      {
+        timestamp: "2026-10-05T01:30:00.000Z",
+        description: "user_marked_incident",
+      },
+    ]);
+    expect(strFromU8(readme)).toContain("user_marked_incident");
+    expect(strFromU8(readme)).not.toContain("蓝莓没出来");
     const all = Object.values(files)
       .map((value) => strFromU8(value))
       .join("\n");
     expect(all).not.toContain(secret);
+    expect(all).not.toContain("ghp_private_token");
+    expect(all).not.toContain("xoxb-123456-abcdef");
+    expect(all).not.toContain("AKIDExampleSecretId1234567890");
+    expect(all).not.toContain("ASIA1234567890ABCDEF");
+    expect(all).not.toContain("GOCSPX-clientSecret_A1");
+    expect(all).not.toContain("Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8");
+    expect(all).not.toContain("AIzaSyExampleCredential1234567890");
+    expect(all).not.toContain("eyJhbGciOiJIUzI1NiJ9");
     expect(all).not.toContain(conversation);
     expect(all).not.toContain(home);
     expect(all).not.toContain("/Users/");
-    expect(all).toContain("~/MemHub");
+  });
+
+  it("fails closed without publishing a ZIP when a diagnostic line is invalid", async () => {
+    const dataDir = await root();
+    await mkdir(path.join(dataDir, "logs"), { recursive: true });
+    await writeFile(
+      path.join(dataDir, "logs", "diagnostic-core.jsonl"),
+      "not-json\n",
+    );
+    const outputDir = await root();
+    const target = path.join(outputDir, "MemHub.zip");
+    await expect(
+      exportDiagnosticZip({
+        dataDir,
+        target,
+        productVersion: "3800",
+      }),
+    ).rejects.toThrow("diagnostic_export_invalid_lines");
+    expect(await readdir(outputDir)).toEqual([]);
+  });
+
+  it("stores and exports only the fixed marker description", async () => {
+    const dataDir = await root();
+    const markerFile = path.join(dataDir, "logs", "problem-markers.jsonl");
+    await recordDiagnosticMarker(
+      dataDir,
+      {
+        timestamp: "2026-10-05T01:00:00.000Z",
+        description:
+          "蓝莓 /Users/private/query.txt ASIA1234567890ABCDEF GOCSPX-clientSecret_A1 Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8",
+      },
+      "/Users/private",
+    );
+    expect(await readFile(markerFile, "utf8")).toBe(
+      `${JSON.stringify({ timestamp: "2026-10-05T01:00:00.000Z", description: "user_marked_incident" })}\n`,
+    );
+    await writeFile(
+      markerFile,
+      `${await readFile(markerFile, "utf8")}${JSON.stringify({ timestamp: "2026-10-05T01:30:00.000Z", description: "legacy arbitrary text" })}\n`,
+      { mode: 0o600 },
+    );
+
+    const target = path.join(await root(), "markers.zip");
+    await exportDiagnosticZip({
+      dataDir,
+      target,
+      productVersion: "3800",
+      now: new Date("2026-10-05T02:00:00.000Z"),
+    });
+    const files = unzipSync(await readFile(target));
+    const summaryFile = files["summary.json"];
+    if (!summaryFile) throw new Error("missing summary.json");
+    const payload = JSON.stringify(JSON.parse(strFromU8(summaryFile)));
+    expect(payload.match(/user_marked_incident/g)).toHaveLength(2);
+    expect(payload).not.toContain("legacy arbitrary text");
+    expect(payload).not.toContain("蓝莓");
+    expect(payload).not.toContain("/Users/");
+  });
+
+  it("never follows a problem marker symlink for reads or writes", async () => {
+    const dataDir = await root();
+    const logs = path.join(dataDir, "logs");
+    await mkdir(logs, { recursive: true });
+    const outside = path.join(await root(), "outside-marker");
+    await writeFile(outside, "private");
+    await symlink(outside, path.join(logs, "problem-markers.jsonl"));
+
+    await expect(
+      recordDiagnosticMarker(dataDir, {
+        timestamp: "2026-10-05T01:00:00.000Z",
+        description: "anything",
+      }),
+    ).rejects.toThrow("diagnostic_marker_file_unsafe");
+    await expect(
+      exportDiagnosticZip({
+        dataDir,
+        target: path.join(await root(), "markers.zip"),
+        productVersion: "3800",
+      }),
+    ).rejects.toThrow("diagnostic_marker_file_unsafe");
+    expect(await readFile(outside, "utf8")).toBe("private");
+  });
+
+  it("rejects invalid explicit and persisted markers without publishing a ZIP", async () => {
+    const dataDir = await root();
+    const logs = path.join(dataDir, "logs");
+    await mkdir(logs, { recursive: true });
+    const outputDir = await root();
+    const explicitTarget = path.join(outputDir, "explicit.zip");
+    await expect(
+      exportDiagnosticZip({
+        dataDir,
+        target: explicitTarget,
+        productVersion: "3800",
+        markers: [{ timestamp: "invalid", description: "marker" }],
+      }),
+    ).rejects.toThrow("diagnostic_marker_invalid");
+    await writeFile(path.join(logs, "problem-markers.jsonl"), "not-json\n");
+    const persistedTarget = path.join(outputDir, "persisted.zip");
+    await expect(
+      exportDiagnosticZip({
+        dataDir,
+        target: persistedTarget,
+        productVersion: "3800",
+      }),
+    ).rejects.toThrow("diagnostic_marker_invalid");
+    expect(await readdir(outputDir)).toEqual([]);
   });
 
   it("an incident retrieves its surrounding session rather than only its marker", async () => {

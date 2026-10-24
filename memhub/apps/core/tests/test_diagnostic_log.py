@@ -18,11 +18,13 @@ from one_memory.diagnostic_log import (
     diagnostic_exception,
     diagnostics_enabled,
     diagnostics_requested,
+    read_trace_events,
     record_database_error,
     reset_diagnostics,
     reset_trace_id,
     resource_snapshot,
 )
+from one_memory.exception_reporting import report_exception
 
 
 def test_debug_events_are_collected_only_at_debug_level(tmp_path, monkeypatch) -> None:
@@ -105,7 +107,31 @@ def test_structured_log_is_private_correlated_and_owner_only(tmp_path):
         assert log.path.stat().st_mode & 0o777 == 0o600
 
 
-def test_arbitrary_detail_and_absolute_stack_are_rejected(tmp_path):
+def test_arbitrary_valid_detail_keys_and_scalars_are_recorded(tmp_path):
+    log = DiagnosticLog(tmp_path)
+    details = {
+        "Custom.metric-v1": "ready",
+        "noneValue": None,
+        "boolValue": False,
+        "intValue": 7,
+        "floatValue": 1.5,
+    }
+    log.write(
+        level="info",
+        component="core.lifecycle",
+        event="core.started",
+        outcome="succeeded",
+        details=details,
+    )
+    assert log.flush()
+    assert json.loads(log.path.read_text())["details"] == details
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["__proto__", "prototype", "constructor", "_private", "9startsWithDigit", "a" * 65],
+)
+def test_dangerous_or_malformed_detail_keys_are_rejected(tmp_path, key):
     log = DiagnosticLog(tmp_path)
     with pytest.raises(ValueError, match="diagnostic_detail_key_invalid"):
         log.write(
@@ -113,8 +139,76 @@ def test_arbitrary_detail_and_absolute_stack_are_rejected(tmp_path):
             component="hy.bridge",
             event="hy.failed",
             outcome="failed",
-            details={"prompt": "private"},
+            details={key: "value"},
         )
+
+
+@pytest.mark.parametrize("value", [{}, [], object()])
+def test_complex_detail_values_are_rejected(tmp_path, value):
+    log = DiagnosticLog(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic_detail_value_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            details={"payload": value},
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_detail_values_are_rejected(tmp_path, value):
+    log = DiagnosticLog(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic_detail_value_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            details={"metric": value},
+        )
+
+
+@pytest.mark.parametrize("value", [2**53, -(2**53), float(2**53), -float(2**53)])
+def test_numeric_detail_values_outside_json_safe_range_are_rejected(tmp_path, value):
+    log = DiagnosticLog(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic_detail_value_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            details={"count": value},
+        )
+
+
+@pytest.mark.parametrize("value", ["", "nul\0byte", "carriage\rreturn", "line\nfeed", "x" * 257])
+def test_invalid_detail_strings_are_rejected(tmp_path, value):
+    log = DiagnosticLog(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic_detail_value_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            details={"message": value},
+        )
+
+
+def test_more_than_32_detail_keys_are_rejected(tmp_path):
+    log = DiagnosticLog(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic_detail_count_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            details={f"key{index}": index for index in range(33)},
+        )
+
+
+def test_absolute_or_credential_bearing_stack_is_rejected(tmp_path):
+    log = DiagnosticLog(tmp_path)
     with pytest.raises(ValueError, match="diagnostic_stack_invalid"):
         log.write(
             level="error",
@@ -123,16 +217,90 @@ def test_arbitrary_detail_and_absolute_stack_are_rejected(tmp_path):
             outcome="failed",
             safe_stack=("/Users/me/private.py:1",),
         )
+    with pytest.raises(ValueError, match="diagnostic_stack_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            safe_stack=("one_memory/sk-live-secret-token.py:1:call",),
+        )
 
 
-def test_a_rejected_payload_does_not_break_the_caller(tmp_path, monkeypatch) -> None:
-    """Rejection protects the log; it must not become the caller's outage.
+def test_safe_stack_uses_strict_shared_grammar_and_sixteen_line_limit(tmp_path):
+    log = DiagnosticLog(tmp_path)
+    for line in (
+        "arbitrary stack text",
+        "thread=worker|threading.py:12:wait",
+        "FILE:///Users/me/private.py:1:call",
+        "one_memory/worker.py:9:call /Users/private",
+        "one_memory/GOCSPX-privateCredential.py:9:call",
+        "packages/ASIA1234567890ABCDEF/file.ts:1:1",
+        "packages/Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8/file.ts:1:1",
+    ):
+        with pytest.raises(ValueError, match="diagnostic_stack_invalid"):
+            log.write(
+                level="error",
+                component="hy.bridge",
+                event="hy.failed",
+                outcome="failed",
+                safe_stack=(line,),
+            )
 
-    Two of our own nodes shipped with unlisted `details` keys. Both sat on a
-    request path, so the rejection surfaced as a 500 to the person using the
-    app — including the sedimentation switch, whose every request failed
-    because logging the toggle raised before the endpoint could answer.
-    """
+    accepted = (
+        "apps/desktop/src/main.ts:80:1",
+        "one_memory/diagnostic_log.py:895:_safe_stack_line",
+        "threading.py:1045:_bootstrap_inner",
+        "thread|threading.py:1045:_bootstrap_inner > one_memory/worker.py:9:call",
+    )
+    log.write(
+        level="error",
+        component="hy.bridge",
+        event="hy.failed",
+        outcome="failed",
+        safe_stack=accepted,
+    )
+    with pytest.raises(ValueError, match="diagnostic_stack_invalid"):
+        log.write(
+            level="error",
+            component="hy.bridge",
+            event="hy.failed",
+            outcome="failed",
+            safe_stack=tuple(f"one_memory/worker.py:{index + 1}:call" for index in range(17)),
+        )
+    assert log.flush()
+    assert json.loads(log.path.read_text())["safe_stack"] == list(accepted)
+
+
+def test_invalid_level_is_strict_but_diagnostic_event_remains_fail_open(
+    tmp_path, monkeypatch
+) -> None:
+    log = DiagnosticLog(tmp_path)
+    with pytest.raises(ValueError, match="diagnostic_level_invalid"):
+        log.write(
+            level="fatal",  # type: ignore[arg-type]
+            component="core.lifecycle",
+            event="core.failed",
+            outcome="failed",
+        )
+
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    receipt = configure_diagnostics(tmp_path / "fail-open")
+    try:
+        diagnostic_event(
+            level="fatal",
+            component="core.lifecycle",
+            event="core.failed",
+            outcome="failed",
+        )
+    finally:
+        reset_diagnostics()
+    assert not receipt.path.exists()
+
+
+def test_a_rejected_payload_does_not_break_the_caller_or_later_events(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
     receipt = configure_diagnostics(tmp_path)
     try:
@@ -141,20 +309,122 @@ def test_a_rejected_payload_does_not_break_the_caller(tmp_path, monkeypatch) -> 
             component="memory.sedimentation",
             event="memory_sedimentation.toggled",
             outcome="succeeded",
-            details={"prompt": "private"},
+            details={"payload": ["not", "scalar"]},
+        )
+        diagnostic_event(
+            level="info",
+            component="memory.sedimentation",
+            event="memory_sedimentation.toggled",
+            outcome="succeeded",
+            details={"custom.metric": 1},
         )
     finally:
         reset_diagnostics()
-    # Rejected, so nothing is written — but the call returned.
-    assert not receipt.path.exists() or receipt.path.read_text() == ""
+    events = [json.loads(line) for line in receipt.path.read_text().splitlines()]
+    assert [event["details"] for event in events] == [{"custom.metric": 1}]
+
+
+def test_trace_projection_does_not_expose_arbitrary_local_detail_keys(tmp_path):
+    log = DiagnosticLog(tmp_path)
+    log.write(
+        level="info",
+        component="core.api",
+        event="memory.request.completed",
+        outcome="succeeded",
+        request_id="request-1",
+        details={
+            "phase": "recall",
+            "reason": "/Users/private/query.txt",
+            "status": "sk-live-secret-token",
+            "custom.private": "local-only",
+        },
+    )
+    assert log.flush()
+    events = read_trace_events(tmp_path, request_id="request-1")
+    assert events[0]["details"] == {"phase": "recall"}
+
+
+def test_trace_projection_rejects_symlinked_directory_and_redacts_top_level_secrets(
+    tmp_path,
+) -> None:
+    request_id = "request-1"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    event = {
+        "timestamp": "2026-10-23T01:00:00Z",
+        "request_id": request_id,
+        "component": "secret.token",
+        "event": "credential.failed",
+        "outcome": "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8",
+        "error_code": "GOCSPX-clientSecret_A1",
+        "error_type": "ASIA1234567890ABCDEF",
+        "details": {
+            "phase": "recall",
+            "reason": "x_ASIA1234567890ABCDEF",
+            "mode": "x_GOCSPX-clientSecret_A1",
+            "status": "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8",
+            "failure_site": "AIzaSyExampleCredential1234567890",
+            "count": 1,
+        },
+    }
+    (logs / "diagnostic-core.jsonl").write_text(json.dumps(event) + "\n")
+    projected = read_trace_events(tmp_path, request_id=request_id)
+    assert projected == (
+        {
+            "timestamp": "2026-10-23T01:00:00Z",
+            "component": "diagnostic.redacted",
+            "event": "diagnostic.redacted",
+            "outcome": "redacted",
+            "details": {"phase": "recall", "count": 1},
+        },
+    )
+
+    external = tmp_path / "external"
+    external.mkdir()
+    (logs / "diagnostic-core.jsonl").unlink()
+    logs.rmdir()
+    logs.symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match="diagnostic_directory_unsafe"):
+        read_trace_events(tmp_path, request_id=request_id)
+
+
+def test_credential_detection_is_conservative_and_matches_export_rules() -> None:
+    for value in (
+        "ASIA1234567890ABCDEF",
+        "GOCSPX-clientSecret_A1",
+        "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8",
+        "Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8_",
+    ):
+        assert diagnostic_log._contains_credential_material(value)
+    for value in (
+        "11111111-1111-4111-8111-111111111111",
+        "abcdef1234567890abcdef1234567890abcdef12",
+        "cursor",
+    ):
+        assert not diagnostic_log._contains_credential_material(value)
+
+
+def test_trace_reader_never_follows_a_diagnostic_file_symlink(tmp_path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-10-23T01:00:00Z",
+                "request_id": "request-1",
+                "component": "core.api",
+                "event": "memory.request.completed",
+                "outcome": "succeeded",
+            }
+        )
+        + "\n"
+    )
+    (logs / "diagnostic-core.jsonl").symlink_to(outside)
+    assert read_trace_events(tmp_path, request_id="request-1") == ()
 
 
 def test_the_sedimentation_toggle_payload_is_recorded(tmp_path, monkeypatch) -> None:
-    """`enabled` is a bounded boolean and has to be a legal detail key.
-
-    Omitting it from the allow-list is what made the switch's own endpoint
-    answer 500 while still saving the new value.
-    """
     monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
     receipt = configure_diagnostics(tmp_path)
     try:
@@ -181,7 +451,7 @@ def test_exception_diagnostic_keeps_code_location_not_message():
             component="hy.bridge",
             event="hy.failed",
             outcome="failed",
-            details={"prompt": secret},
+            details={"prompt": f"{secret}\n"},
         )
     except ValueError as error:
         safe = diagnostic_exception(error)
@@ -189,6 +459,28 @@ def test_exception_diagnostic_keeps_code_location_not_message():
     assert "one_memory/diagnostic_log.py" in json.dumps(safe)
     assert secret not in json.dumps(safe)
     assert str(__file__) not in json.dumps(safe)
+
+
+def test_report_exception_never_writes_the_exception_message_to_diagnostics(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ONE_MEMORY_DIAGNOSTICS", "1")
+    receipt = configure_diagnostics(tmp_path)
+    secret = "sk-live-private-provider-response"
+    try:
+        report_exception(
+            "core.test",
+            "core.test.failed",
+            RuntimeError(f"provider failed with {secret} at /Users/private/query.txt"),
+        )
+    finally:
+        reset_diagnostics()
+    payload = receipt.path.read_text()
+    assert secret not in payload
+    assert "/Users/private" not in payload
+    event = json.loads(payload)
+    assert event["details"] == {"count": 1}
+    assert event["error_type"] == "RuntimeError"
 
 
 def test_old_logs_are_removed_but_symlinks_are_never_followed(tmp_path):

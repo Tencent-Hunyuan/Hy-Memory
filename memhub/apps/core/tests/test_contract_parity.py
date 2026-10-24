@@ -50,21 +50,3 @@ def test_governed_memory_carries_the_same_fields_on_both_sides() -> None:
     }
 
     assert typescript == set(GovernedMemory.model_fields)
-
-
-def test_an_agent_owned_memory_is_usable_and_never_passes_as_the_person(tmp_path) -> None:
-    """助手输出里的事实直接可用，但始终标成助手说的。
-
-    召回读到它时，origin 让别的 AI 应用知道这是模型的陈述、不是本人的判决。
-    已有的同内容记忆，也不会被模型输出改掉来源标记。
-    """
-    from tests.test_memory_processing import (
-        test_agent_output_keeps_the_origin_of_a_same_content_memory,
-        test_agent_owned_memories_land_usable_but_marked_as_the_assistant,
-    )
-
-    created, existing = tmp_path / "created", tmp_path / "existing"
-    created.mkdir()
-    existing.mkdir()
-    test_agent_owned_memories_land_usable_but_marked_as_the_assistant(created)
-    test_agent_output_keeps_the_origin_of_a_same_content_memory(existing, MemoryOrigin.AGENT)

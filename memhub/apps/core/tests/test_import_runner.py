@@ -39,6 +39,12 @@ from one_memory.imports.runner import (
     live_sync_arrival,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.memory_server.durable_queue import DurableWriteQueue
+from one_memory.retired_authority import RetiredEvidenceStore
+from one_memory.target_schema import (
+    bootstrap_fresh_management_schema,
+    legacy_tables_present,
+)
 
 
 def evidence(message_id: str) -> EvidenceInput:
@@ -111,6 +117,50 @@ def test_job_transitions_are_explicit(tmp_path) -> None:
 
     with pytest.raises(InvalidJobTransitionError):
         job_store.transition(job.job_id, ImportStatus.COMPLETED)
+
+
+def test_sdk_authority_import_freezes_input_in_job_without_evidence_tables(
+    tmp_path,
+) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    bootstrap_fresh_management_schema(database)
+    evidence_store = RetiredEvidenceStore(database)
+    job_store = ImportJobStore(database)
+    queue = DurableWriteQueue(database, sdk_authority=True)
+    job = job_store.create(user_id="local", source_id="fixture")
+    assistant = evidence("2").model_copy(
+        update={
+            "role": "assistant",
+            "written_by": WrittenBy.AGENT,
+        }
+    )
+    eof = cursor("line:2").model_copy(update={"read_to_end": True})
+    adapter = FixtureAdapter(
+        [
+            ScannedEvidence(evidence=evidence("1"), cursor=cursor("line:1")),
+            ScannedEvidence(evidence=assistant, cursor=cursor("line:2")),
+            ScanCursorTouch(cursor=eof),
+        ]
+    )
+    runner = ImportRunner(
+        evidence_store=evidence_store,  # type: ignore[arg-type]
+        job_store=job_store,
+        sdk_queue=queue,
+        sdk_authority=lambda: True,
+    )
+
+    completed = asyncio.run(runner.run(adapter=adapter, job_id=job.job_id))
+
+    assert completed.status is ImportStatus.COMPLETED
+    assert legacy_tables_present(database) == ()
+    with sqlite3.connect(database) as connection:
+        state, payload = connection.execute(
+            "SELECT state,payload_json FROM memory_write_jobs WHERE state='pending'"
+        ).fetchone()
+    assert state == "pending"
+    assert '"input_records"' in payload
+    assert "message 1" in payload
+    assert "message 2" in payload
 
 
 def test_runner_keeps_per_record_errors_and_continues(tmp_path) -> None:

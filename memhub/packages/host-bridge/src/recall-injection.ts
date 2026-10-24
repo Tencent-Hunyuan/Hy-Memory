@@ -28,7 +28,10 @@ import path from "node:path";
 
 import type {
   ContextSearchResponse,
+  HostContextSearchResponse,
   MemoryContextItem,
+  SdkContextSearchResponse,
+  SdkMemoryContextItem,
 } from "@one-memory/contracts";
 
 import {
@@ -304,13 +307,16 @@ export async function runRecallInjection(
         },
         client,
       );
-      requestId = context.request_id;
+      requestId = context.schema_version === 1 ? context.request_id : null;
       const memories = validMemories(context);
       counts.recalled = memories.length;
       const rendered = render(context, memories);
-      const requestedPaths = [context.paths.raw, context.paths.memory].filter(
-        (path) => path.status !== "not_requested",
-      );
+      const requestedPaths =
+        context.schema_version === 1
+          ? [context.paths.raw, context.paths.memory].filter(
+              (path) => path.status !== "not_requested",
+            )
+          : [];
       const unavailable = context.state === "unavailable";
       const timedOut = requestedPaths.some(
         (path) => path.reason === "timeout_budget",
@@ -940,10 +946,12 @@ function textContent(content: unknown): string | null {
   return texts.length > 0 ? texts.join("\n") : null;
 }
 
-function validMemories(response: ContextSearchResponse): MemoryContextItem[] {
+function validMemories(
+  response: HostContextSearchResponse,
+): (MemoryContextItem | SdkMemoryContextItem)[] {
   return response.items
     .filter(
-      (item): item is MemoryContextItem =>
+      (item): item is MemoryContextItem | SdkMemoryContextItem =>
         item.kind === "memory" && item.content.trim() !== "",
     )
     .slice(0, MAX_INJECTED_MEMORIES);
@@ -986,6 +994,19 @@ function isSpeakableMessage(message: {
 }
 
 function render(
+  response: HostContextSearchResponse,
+  memories: (MemoryContextItem | SdkMemoryContextItem)[],
+): { block: string | null; hits: number; evidence: number } {
+  if (response.schema_version === 2) return renderSdk(response);
+  return renderLegacy(
+    response,
+    memories.filter(
+      (memory): memory is MemoryContextItem => "revision" in memory,
+    ),
+  );
+}
+
+function renderLegacy(
   response: ContextSearchResponse,
   memories: MemoryContextItem[],
 ): { block: string | null; hits: number; evidence: number } {
@@ -1048,6 +1069,47 @@ function render(
     block: items.length > 0 ? [opening, ...items, close].join("\n") : null,
     hits: items.length,
     evidence,
+  };
+}
+
+function renderSdk(response: SdkContextSearchResponse): {
+  block: string | null;
+  hits: number;
+  evidence: number;
+} {
+  const coverage =
+    response.state === "partial" || response.truncated
+      ? "覆盖不完整：result=partial。不得把未查完当作无命中。"
+      : null;
+  const opening = `<${TAG}>\n${HEADER}${coverage ? `\n${coverage}` : ""}`;
+  const close = `</${TAG}>`;
+  const items: string[] = [];
+  let used = length(opening) + 1 + length(close);
+  for (const item of response.items) {
+    if (items.length >= MAX_INJECTED_MEMORIES) break;
+    const label = `[${items.length + 1}] `;
+    const source =
+      item.kind === "raw"
+        ? `${inline(item.source)}${item.memory_at ? ` · ${item.memory_at.slice(0, 10)}` : ""}`
+        : item.source
+          ? inline(item.source)
+          : null;
+    const prefix =
+      item.kind === "raw"
+        ? `原始对话（${source}）：`
+        : `记忆${source ? `（${source}）` : ""}：`;
+    const rendered = `${label}${clip(
+      `${prefix}${inline(item.content)}`,
+      ITEM_CHARACTERS - length(label),
+    )}`;
+    if (used + 1 + length(rendered) > BLOCK_CHARACTERS) break;
+    items.push(rendered);
+    used += 1 + length(rendered);
+  }
+  return {
+    block: items.length > 0 ? [opening, ...items, close].join("\n") : null,
+    hits: items.length,
+    evidence: 0,
   };
 }
 

@@ -55,6 +55,8 @@ class WriteRecord:
     created_at: str
     updated_at: str
     detail: str = ""
+    raw_ids: tuple[str, ...] = ()
+    memory_ids: tuple[str, ...] = ()
 
 
 def _now() -> str:

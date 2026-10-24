@@ -18,6 +18,23 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
+
+it("traduce los controles del mapa en español sin cambiar etiquetas importadas", () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  const { container } = render(
+    <LanguageProvider>
+      <Host simplified />
+    </LanguageProvider>,
+  );
+  expect(screen.getByLabelText("Filtrar memorias del mapa")).toBeTruthy();
+  expect(container.textContent).not.toContain("全部记忆");
+  expect(container.textContent).not.toContain("当前已加载");
+  expect(container.textContent).not.toContain("来源视角");
+  expect(container.textContent).not.toContain("段原文");
+  localStorage.removeItem(LANGUAGE_STORAGE_KEY);
+});
+
 import { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -313,7 +330,6 @@ function Host({
           : null
       }
       draft={detail?.memory.content ?? ""}
-      scopes="all-apps"
       busy={false}
       answer={null}
       streaming={null}
@@ -341,7 +357,6 @@ function Host({
       onCloseDetail={() => setDetail(null)}
       onAsk={() => {}}
       onDraft={() => {}}
-      onScopes={() => {}}
       onSave={() => {}}
       onAction={() => {}}
       onSyncIndex={() => {}}

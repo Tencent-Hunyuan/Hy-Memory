@@ -1,6 +1,6 @@
 {
   "name": "@one-memory/desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "main": "dist/main.js",
   "scripts": {
@@ -84,6 +84,7 @@
   "dependencies": {
     "@one-memory/contracts": "workspace:*",
     "@one-memory/host-bridge": "workspace:*",
+    "@one-memory/i18n": "workspace:*",
     "@one-memory/runtime-control": "workspace:*",
     "axios": "^1.20.0"
   }

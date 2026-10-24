@@ -93,7 +93,7 @@ def test_seed_ids_read_metadata_only_without_hydrating(tmp_path, monkeypatch):
     assert all(table == "evidence" and column != "verbatim" for table, column in reads)
 
 
-def test_seed_eligibility_keeps_person_and_memory_content_only(tmp_path):
+def test_seed_eligibility_keeps_user_roles_and_memory_content_only(tmp_path):
     store = EvidenceStore(tmp_path / "evidence.sqlite3")
     put(store, "a-human", "assistant-before", role="assistant", author=WrittenBy.AGENT)
     person = put(store, "a-human", "person")
@@ -105,13 +105,21 @@ def test_seed_eligibility_keeps_person_and_memory_content_only(tmp_path):
         kind=EvidenceContentKind.MEMORY_CONTENT,
     )
     put(store, "assistant-only", role="assistant", author=WrittenBy.AGENT)
-    put(store, "agent-authored-user", author=WrittenBy.AGENT)
-    put(store, "unknown-user", author=WrittenBy.UNKNOWN)
+    agent_user = put(store, "agent-authored-user", author=WrittenBy.AGENT)
+    unknown_user = put(store, "unknown-user", author=WrittenBy.UNKNOWN)
     put(store, "tool-only", role="tool", author=WrittenBy.TOOL)
     put(store, "other-user", user="other")
 
-    assert store.list_conversation_seed_ids() == [person.evidence_id, report.evidence_id]
-    assert store.list_conversation_seed_ids(limit=2) == [person.evidence_id, report.evidence_id]
+    assert store.list_conversation_seed_ids() == [
+        person.evidence_id,
+        agent_user.evidence_id,
+        report.evidence_id,
+        unknown_user.evidence_id,
+    ]
+    assert store.list_conversation_seed_ids(limit=2) == [
+        person.evidence_id,
+        agent_user.evidence_id,
+    ]
 
 
 def test_latest_activity_includes_nonseed_turns_and_import_time_fallback(tmp_path):

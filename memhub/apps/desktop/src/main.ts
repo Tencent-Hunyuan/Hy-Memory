@@ -9,6 +9,7 @@ import {
   renderCustomHarnessSkill,
   verifyRecallInstall,
 } from "@one-memory/host-bridge/installer";
+import { type GuiLocale, translate } from "@one-memory/i18n";
 import {
   claimRuntimeServiceForApp,
   claimRuntimeServiceForCli,
@@ -92,6 +93,11 @@ import {
   resolvePackagedCommit,
 } from "./isolated-runtime";
 import {
+  LanguagePreferences,
+  preferredSystemLanguage,
+} from "./language-preferences";
+import { installLanguagePreferencesIpc } from "./language-preferences-ipc";
+import {
   disableLegacyLoginItem,
   wasOpenedByLegacyLoginItem,
 } from "./login-item";
@@ -107,9 +113,14 @@ import {
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
   stableRuntimeErrorCode,
+  stableRuntimeFailureDetail,
   startStableRuntimeRepair,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
+import {
+  requireCompletedStartupSdkMigration,
+  runStartupSdkMigration,
+} from "./startup-sdk-migration";
 import { resolveTrialProfile } from "./trial-profile";
 import { createWindowOptions } from "./window-options";
 
@@ -124,6 +135,9 @@ let runtimeSupervisor: RuntimeSupervisor | null = null;
 let runtimeDataDir: string | null = null;
 let preserveManagedRuntimeOnQuit = false;
 let disposeTray: (() => void) | null = null;
+let disposeApplicationMenu: (() => void) | null = null;
+let languagePreferences: LanguagePreferences | null = null;
+let disposeLanguagePreferences: (() => void) | null = null;
 const displayWindows = new Set<BrowserWindow>();
 let disposeDisplayPreferences: (() => void) | null = null;
 let disposeSourceDirectoryPicker: (() => void) | null = null;
@@ -145,6 +159,7 @@ installEarlyStartupErrorHandler({
     process.env.ONE_MEMORY_DATA_DIR?.trim() ||
     path.join(app.getPath("home"), ".one-memory"),
   stderr: process.stderr,
+  readLocale: () => languagePreferences?.read().locale ?? "zh-CN",
   showError: (title, message) => dialog.showErrorBox(title, message),
   exit: (code) => app.exit(code),
 });
@@ -273,7 +288,16 @@ let appProtocolInstalled = false;
 function installPackagedWebProtocol(): void {
   if (!app.isPackaged || appProtocolInstalled) return;
   installAppProtocol(path.join(process.resourcesPath, "web"), {
-    startupScreen: startupScreenHtml,
+    // Preferences are open by now: beforeNativeUi runs before this window.
+    startupScreen: () => {
+      let locale: GuiLocale = "zh-CN";
+      try {
+        locale = languagePreferences?.read().locale ?? "zh-CN";
+      } catch {
+        // An unreadable preference keeps the Chinese placeholder.
+      }
+      return startupScreenHtml(locale);
+    },
   });
   appProtocolInstalled = true;
 }
@@ -525,6 +549,11 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         "apps/core/.venv/bin",
         process.platform === "win32" ? "one-memory.exe" : "one-memory",
       ),
+    hermesProviderSource: path.join(
+      path.dirname(stable?.mcpEntryPath ?? path.join(hostBridgeDir, "mcp.cjs")),
+      "hermes-provider",
+      "hy_memory",
+    ),
     dataDir,
   };
   const standaloneRuntime =
@@ -1044,7 +1073,58 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
   );
   installPackagedWebProtocol();
 
+  const migrateAtStartup = async (core: {
+    command: string;
+    args: string[];
+    cwd?: string;
+  }) => {
+    const migration = await runStartupSdkMigration({
+      dataDir,
+      core,
+      runtimeBuild:
+        packagedBuildNumber === undefined
+          ? typeof app.getVersion === "function"
+            ? app.getVersion()
+            : "0.0.0"
+          : String(packagedBuildNumber),
+    });
+    await diagnostics.log({
+      level: migration.state === "deferred" ? "warn" : "info",
+      component: "desktop.sdk_migration",
+      event: "sdk_migration.startup",
+      outcome:
+        migration.state === "cutover"
+          ? "succeeded"
+          : migration.state === "deferred"
+            ? "blocked"
+            : "skipped",
+      ...(migration.code === undefined ? {} : { error_code: migration.code }),
+      details: { runtime_state: migration.state },
+    });
+    requireCompletedStartupSdkMigration(migration);
+  };
+
   try {
+    if (languagePreferences) {
+      disposeLanguagePreferences = installLanguagePreferencesIpc({
+        ipc: ipcMain,
+        preferences: languagePreferences,
+        requireTrustedWindow,
+        broadcast: (snapshot) => {
+          for (const window of displayWindows) {
+            try {
+              assertTrustedWindow(window);
+              window.webContents.mainFrame.send(
+                "one-memory:language-preference-changed",
+                snapshot,
+              );
+            } catch {
+              // Navigation/destruction races must never leak to another document.
+            }
+          }
+        },
+      });
+    }
     disposeDisplayPreferences = installDisplayPreferences();
     disposeSourceDirectoryPicker = installSourceDirectoryPicker();
     if (appManagedRuntime) {
@@ -1101,6 +1181,16 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           home: app.getPath("home"),
           installRoot,
           platform: "darwin",
+        });
+      }
+      if (
+        !desktopBackgroundLaunch &&
+        !desktopTestIsolation &&
+        process.env.NODE_ENV !== "test"
+      ) {
+        await migrateAtStartup({
+          command: stable?.captureCommand ?? layout.coreCommand,
+          args: [],
         });
       }
       const alreadyRunning = runtimeChanged
@@ -1162,6 +1252,20 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       }
       preserveManagedRuntimeOnQuit = !transientRuntime;
     } else if (standaloneRuntime) {
+      if (
+        !desktopBackgroundLaunch &&
+        !desktopTestIsolation &&
+        process.env.NODE_ENV !== "test"
+      ) {
+        await migrateAtStartup(
+          resolveCoreLaunch({
+            packaged: app.isPackaged,
+            appPath: app.getAppPath(),
+            resourcesPath: process.resourcesPath,
+            platform: process.platform,
+          }),
+        );
+      }
       await ensureRuntimeProcess({
         dataDir,
         launch: runtimeLaunch(),
@@ -1237,10 +1341,20 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       });
       void dialog.showMessageBox({
         type: "warning",
-        message: "请先将 MemHub 拖到“应用程序”文件夹",
-        detail:
-          "从“应用程序”重新打开后，MemHub 才会接入其他应用并安装命令行工具。",
-        buttons: ["知道了"],
+        message: translate(
+          languagePreferences?.read().locale ?? "zh-CN",
+          "nativeMoveTitle",
+        ),
+        detail: translate(
+          languagePreferences?.read().locale ?? "zh-CN",
+          "nativeMoveDetail",
+        ),
+        buttons: [
+          translate(
+            languagePreferences?.read().locale ?? "zh-CN",
+            "nativeAcknowledge",
+          ),
+        ],
       });
     } else if (
       trialProfile === null &&
@@ -1397,22 +1511,31 @@ async function sha256File(target: string): Promise<string> {
 }
 
 const desktopVersion = desktopVersionOutput(process.argv, packagedVersion);
+const desktopBackgroundLaunch =
+  legacyLoginLaunch || process.argv.includes("--background");
 if (desktopVersion !== null) {
   process.stdout.write(desktopVersion, () => app.exit(0));
 } else
   startDesktopLifecycle({
     app,
     platform: process.platform,
-    background: legacyLoginLaunch || process.argv.includes("--background"),
+    background: desktopBackgroundLaunch,
     prepare: prepareProtocol,
+    beforeNativeUi: async () => {
+      languagePreferences = await LanguagePreferences.open(
+        app.getPath("userData"),
+        preferredSystemLanguage(app),
+      );
+    },
     initialize,
     createWindow,
     showStartupWindow: createStartupWindow,
     revealStartupWindow,
     getWindows: () => [...displayWindows],
     installTray: (open) => {
-      installApplicationMenu({
+      disposeApplicationMenu = installApplicationMenu({
         productName: app.getName(),
+        language: languagePreferences ?? undefined,
         buildMenu: (template) => Menu.buildFromTemplate(template),
         setMenu: (menu) => Menu.setApplicationMenu(menu),
         exportLogs: async () => {
@@ -1424,6 +1547,7 @@ if (desktopVersion !== null) {
       });
       disposeTray = installBackgroundTray({
         app,
+        language: languagePreferences ?? undefined,
         platform: process.platform,
         resourcesPath: process.resourcesPath,
         appPath: app.getAppPath(),
@@ -1468,6 +1592,9 @@ if (desktopVersion !== null) {
         ...(coreSupervisor ? { instance_id: coreSupervisor.instanceId } : {}),
       });
       // An admitted native effect must settle and journal before Runtime detach.
+      disposeLanguagePreferences?.();
+      disposeLanguagePreferences = null;
+      await languagePreferences?.drain();
       await connectionSetup?.drain();
       // BUG-12: stopping the supervisor only releases this process's handles. In
       // a packaged build the Runtime is its own process and was left running
@@ -1516,6 +1643,10 @@ if (desktopVersion !== null) {
       });
     },
     dispose: () => {
+      disposeLanguagePreferences?.();
+      disposeLanguagePreferences = null;
+      disposeApplicationMenu?.();
+      disposeApplicationMenu = null;
       connectionSetup?.dispose();
       disposeDiagnostics?.();
       disposeDiagnostics = null;
@@ -1537,8 +1668,11 @@ if (desktopVersion !== null) {
         error instanceof Error ? error.name : "UnknownError",
       );
       dialog.showErrorBox(
-        "MemHub 无法启动",
-        error instanceof Error ? error.message : "desktop_unavailable",
+        translate(
+          languagePreferences?.read().locale ?? "zh-CN",
+          "nativeErrorTitle",
+        ),
+        stableRuntimeFailureDetail(error),
       );
     },
   });

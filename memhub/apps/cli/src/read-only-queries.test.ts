@@ -197,6 +197,9 @@ const READ_ONLY_PATHS = [
   "/api/v1/home-summary",
   "/api/v1/memory-library",
   "/api/v1/memories/",
+  "/api/v2/memory-library",
+  "/api/v2/memories/",
+  "/api/v2/user-profile",
 ];
 
 const BACKGROUND_HEALTHY = {
@@ -562,6 +565,43 @@ describe("CLI-20 status summary", () => {
   });
 });
 
+describe("SDK user profile", () => {
+  it("prints the assembled long-term profile from the v2 endpoint", async () => {
+    transport.get.mockImplementation(async (url: string) =>
+      url === "/api/v2/user-profile"
+        ? {
+            status: 200,
+            data: {
+              request_id: "profile-request",
+              profile: {
+                memory_id: "l0-head",
+                content: "name is Alice",
+                layer: "L0_BASIC_INFO",
+                basic_info: { name: "Alice" },
+              },
+              elapsed_ms: 1.2,
+            },
+          }
+        : { status: 404, data: {} },
+    );
+    const streams = captureStreams();
+    try {
+      expect(await run(["profile", "--json"], {})).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    expect(transport.get).toHaveBeenCalledWith(
+      "/api/v2/user-profile",
+      undefined,
+    );
+    expect(JSON.parse(streams.stdout())).toMatchObject({
+      schema_version: 2,
+      state: "ok",
+      profile: { memory_id: "l0-head", content: "name is Alice" },
+    });
+  });
+});
+
 describe("CLI-21 memory reads", () => {
   it("keeps memory reads open long enough for a busy Core and explains failure", async () => {
     const axios = (await import("axios")).default as unknown as {
@@ -610,14 +650,14 @@ describe("CLI-21 memory reads", () => {
 
   it("lists a page and states truthfully that more remains", async () => {
     transport.get.mockImplementation(async (url: string) => {
-      if (url !== "/api/v1/memory-library") return { status: 404, data: {} };
+      if (url !== "/api/v2/memory-library") return { status: 404, data: {} };
       return {
         status: 200,
         data: {
           total: 12,
           offset: 0,
           limit: 2,
-          items: [memory("m1", "第一条记忆"), memory("m2", "x".repeat(400))],
+          memories: [memory("m1", "第一条记忆"), memory("m2", "x".repeat(400))],
         },
       };
     });
@@ -640,10 +680,8 @@ describe("CLI-21 memory reads", () => {
     });
     expect(report.memories[0]).toMatchObject({
       memory_id: "m1",
-      status: "confirmed",
-      revision: 3,
-      scopes: ["all-apps"],
-      evidence_ids: ["e1"],
+      status: "active",
+      layer: "L2_FACT",
       content_truncated: false,
     });
     expect(report.memories[1]).toMatchObject({
@@ -658,12 +696,8 @@ describe("CLI-21 memory reads", () => {
       [
         "memories",
         "list",
-        "--query",
-        "部署",
         "--status",
-        "confirmed",
-        "--source",
-        "codex",
+        "active",
         "--offset",
         "10",
         "--limit",
@@ -672,30 +706,23 @@ describe("CLI-21 memory reads", () => {
       ],
       {},
     ).catch(() => undefined);
-    expect(transport.get).toHaveBeenCalledWith("/api/v1/memory-library", {
+    expect(transport.get).toHaveBeenCalledWith("/api/v2/memory-library", {
       params: {
-        query: "部署",
-        status: "confirmed",
-        source: "codex",
+        statuses: "active",
         offset: 10,
         limit: 5,
       },
     });
   });
 
-  it("reads a sensitive query from a file so it stays out of shell history", async () => {
+  it("rejects retired memory query flags before calling Core", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "om-cli-query-"));
     const file = path.join(directory, "query.txt");
     await writeFile(file, "机密查询\n", { mode: 0o600 });
-    await run(["memories", "list", "--query-file", file, "--json"], {}).catch(
-      () => undefined,
-    );
-    expect(transport.get).toHaveBeenCalledWith(
-      "/api/v1/memory-library",
-      expect.objectContaining({
-        params: expect.objectContaining({ query: "机密查询" }),
-      }),
-    );
+    expect(
+      await run(["memories", "list", "--query-file", file, "--json"], {}),
+    ).toBe(2);
+    expect(transport.get).not.toHaveBeenCalled();
   });
 
   it("rejects contradictory or unreadable query input before calling Core", async () => {
@@ -705,7 +732,7 @@ describe("CLI-21 memory reads", () => {
       ["memories", "list", "--limit", "0"],
       ["memories", "list", "--limit", "501"],
       ["memories", "list", "--offset", "-1"],
-      ["memories", "list", "--status", "unknown-status"],
+      ["memories", "list", "--status", ""],
       ["memories", "show"],
       ["memories"],
     ]) {
@@ -723,7 +750,7 @@ describe("CLI-21 memory reads", () => {
   it("distinguishes an empty page from a denied or missing one", async () => {
     transport.get.mockResolvedValue({
       status: 200,
-      data: { total: 0, offset: 0, limit: 100, items: [] },
+      data: { total: 0, offset: 0, limit: 100, memories: [] },
     });
     const empty = captureStreams();
     try {
@@ -763,33 +790,10 @@ describe("CLI-21 memory reads", () => {
     });
   });
 
-  it("shows one memory with its source, version and evidence", async () => {
+  it("shows one SDK memory without fabricated Evidence or versions", async () => {
     transport.get.mockResolvedValue({
       status: 200,
-      data: {
-        memory: memory("m1", "记忆正文"),
-        evidence: [
-          {
-            evidence_id: "e1",
-            available: true,
-            source_id: "codex",
-            written_by: "user",
-            created_at: "T",
-            verbatim: "y".repeat(500),
-          },
-        ],
-        history: [
-          {
-            memory_id: "m1",
-            revision: 3,
-            action: "correct",
-            status: "confirmed",
-            content: "记忆正文",
-            scopes: ["all-apps"],
-            created_at: "T",
-          },
-        ],
-      },
+      data: memory("m1", "记忆正文"),
     });
     const streams = captureStreams();
     try {
@@ -799,28 +803,17 @@ describe("CLI-21 memory reads", () => {
     }
     const report = JSON.parse(streams.stdout());
     expect(transport.get).toHaveBeenCalledWith(
-      "/api/v1/memories/m1",
+      "/api/v2/memories/m1",
       undefined,
     );
     expect(report.memory).toMatchObject({
       state: "ok",
       memory_id: "m1",
-      revision: 3,
-      scopes: ["all-apps"],
+      layer: "L2_FACT",
+      status: "active",
     });
-    expect(report.evidence[0]).toMatchObject({
-      evidence_id: "e1",
-      source_id: "codex",
-      excerpt_truncated: true,
-      excerpt_characters: 500,
-    });
-    expect(report.history[0]).toMatchObject({
-      revision: 3,
-      action: "correct",
-      status: "confirmed",
-      scopes: ["all-apps"],
-      content: "记忆正文",
-    });
+    expect(report.evidence).toEqual([]);
+    expect(report.history).toEqual([]);
   });
 
   // Core registers /api/v1/memories/graph before /{memory_id}, and that static
@@ -840,6 +833,8 @@ describe("CLI-21 memory reads", () => {
     expect(isReadOnlyPath("/api/v1/memories/graph")).toBe(false);
     expect(isReadOnlyPath("/api/v1/memories/ask")).toBe(false);
     expect(isReadOnlyPath("/api/v1/memories/m1")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/memory-library")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/memories/m1")).toBe(true);
     expect(isReadOnlyPath("/api/v1/model-content-permission")).toBe(false);
     expect(
       isReadOnlyPath(
@@ -1137,17 +1132,20 @@ function memory(id: string, content: string) {
   return {
     memory_id: id,
     user_id: "local",
-    kind: "chat",
-    status: "confirmed",
+    agent_id: "one-memory",
+    layer: "L2_FACT",
+    status: "active",
+    is_latest: true,
+    supersedes: [],
+    superseded_by: [],
     content,
-    scopes: ["all-apps"],
-    evidence_ids: ["e1"],
-    origin: "extracted",
     tags: [],
-    revision: 3,
-    created_at: "T",
-    updated_at: "T",
-    deleted_at: null,
+    owner: "user",
+    source_raw_ids: ["raw-1"],
+    session_id: "s1",
+    source: "codex",
+    memory_at: null,
+    gmt_created: null,
   };
 }
 

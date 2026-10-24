@@ -13,6 +13,31 @@ const sync = (
 });
 
 describe("indexSyncPresentation", () => {
+  it("localiza tipos y ventanas visibles sin traducir valores desconocidos", async () => {
+    const { memoryText } = await import("./memory-language");
+    expect(memoryText("es", "近 3 个月")).toBe("Últimos 3 meses");
+    expect(memoryText("es", "已确认")).toBe("Confirmada");
+    expect(memoryText("es", "记忆库")).toBe("Biblioteca de memorias");
+    expect(memoryText("es", "问记忆")).toBe("Preguntar a las memorias");
+    expect(memoryText("es", "历史对话")).toBe("Historial de conversaciones");
+    expect(memoryText("es", "项目记忆")).toBe("Memoria del proyecto");
+    expect(memoryText("es", "contenido opaco")).toBe("contenido opaco");
+  });
+  it("traduce sincronización sin cambiar la acción ni la fecha opaca", () => {
+    expect(
+      indexSyncPresentation(
+        sync({ attempts: 2, last_error_code: "model_profile_not_active" }),
+        "fecha sintética",
+        "es",
+      ),
+    ).toEqual({
+      action: "configure",
+      attemptedLine:
+        "2 intentos de sincronización · Estado actualizado: fecha sintética",
+      explanation:
+        "La sincronización necesita un modelo local disponible o autorización para embeddings locales.",
+    });
+  });
   it("offers retry after an unknown transient failure", () => {
     expect(
       indexSyncPresentation(

@@ -14,6 +14,7 @@ stuck in it.
 """
 
 import logging
+import re
 import sys
 import threading
 import time
@@ -23,6 +24,7 @@ from types import FrameType
 logger = logging.getLogger("one_memory.loop_watchdog")
 
 DEFAULT_STALL_SECONDS = 2.0
+_SAFE_FALLBACK_FILE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.py$")
 
 
 class LoopWatchdog:
@@ -120,22 +122,28 @@ def _safe_stack_for_main_thread() -> tuple[str, ...]:
 
 
 def _safe_stacks_for_all_threads() -> tuple[str, ...]:
-    """Return one content-free, bounded stack summary for every live thread."""
-    names = {thread.ident: thread.name for thread in threading.enumerate()}
+    """Return bounded stack summaries without recording thread names."""
     lines: list[str] = []
-    for ident, frame in sorted(sys._current_frames().items()):
+    for _ident, frame in sorted(sys._current_frames().items()):
         stack: list[str] = []
-        # Most specific frame first so the 256-character privacy bound keeps
-        # the likely culprit rather than only the thread bootstrap frames.
+        # Most specific frame first; append only complete frames so truncation
+        # can never turn a valid location into free text.
         for entry in reversed(traceback.extract_stack(frame)[-8:]):
             parts = entry.filename.replace("\\", "/").split("/")
             try:
                 root = parts.index("one_memory")
                 relative = "/".join(parts[root:])
             except ValueError:
-                relative = parts[-1]
+                fallback = parts[-1]
+                relative = fallback if _SAFE_FALLBACK_FILE.fullmatch(fallback) else "unknown.py"
             name = entry.name if entry.name.isidentifier() else "call"
-            stack.append(f"{relative}:{entry.lineno}:{name}")
-        thread_name = names.get(ident, "unknown").replace("\n", " ").replace("\r", " ")
-        lines.append(f"thread={thread_name[:48]}|{' > '.join(stack)}"[:256])
+            candidate = f"{relative}:{entry.lineno}:{name}"
+            separator = "" if not stack else " > "
+            if len("thread|") + len(" > ".join(stack)) + len(separator) + len(candidate) > 256:
+                break
+            stack.append(candidate)
+        if stack:
+            lines.append(f"thread|{' > '.join(stack)}")
+        if len(lines) == 16:
+            break
     return tuple(lines)

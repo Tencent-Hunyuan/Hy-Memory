@@ -19,6 +19,7 @@ import logging
 from .base import WritePipeline, ReadPipeline
 from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
+from ..embedding import EmbeddingService
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
 
@@ -50,7 +51,12 @@ class ComponentFactory:
         s2 = await factory.get_system2_writer()    # System2Writer (ultra mode)
     """
 
-    def __init__(self, config: Optional[MemoryConfig] = None):
+    def __init__(
+        self,
+        config: Optional[MemoryConfig] = None,
+        *,
+        embedding_service: Optional[EmbeddingService] = None,
+    ):
         self.config = config or MemoryConfig.from_env()
 
         # 实例缓存（单例）
@@ -62,7 +68,7 @@ class ComponentFactory:
         self._readers: Dict[str, ReadPipeline] = {}
 
         # 共享资源
-        self._shared_embed_service: Optional[EmbedService] = None
+        self._shared_embed_service: Optional[EmbeddingService] = embedding_service
         self._shared_vector_store: Optional[VectorStoreBase] = None
         self._shared_vector_store_initialized: bool = False
         self._shared_graph_store = None
@@ -72,7 +78,7 @@ class ComponentFactory:
     # 共享资源
     # ================================================================
 
-    def _get_shared_embed_service(self) -> EmbedService:
+    def _get_shared_embed_service(self) -> EmbeddingService:
         if self._shared_embed_service is None:
             self._shared_embed_service = EmbedService(self.config)
         return self._shared_embed_service

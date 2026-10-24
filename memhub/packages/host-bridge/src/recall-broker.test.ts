@@ -192,24 +192,28 @@ describe("RecallBroker", () => {
       level: "error",
       component: "host.broker",
       outcome: "failed",
-      details: expect.objectContaining({
-        action: "host",
-        code: "connection_control_unavailable",
-        error_type: "Error",
-      }),
+      error_code: "connection_control_unavailable",
+      error_type: "Error",
+      details: { action: "host" },
     });
-    expect(typeof exception?.details).toBe("object");
-    const details = exception?.details as Record<string, unknown>;
-    expect(typeof details.stack_origin).toBe("string");
-    expect(details.stack_origin).toContain("recall-broker");
+    expect(exception?.details).not.toHaveProperty("message");
+    expect(exception?.details).not.toHaveProperty("stack_origin");
   });
   it.each(["recall", "ask"])(
     "answers %s without waiting for a slow diagnostic write",
     async (endpoint) => {
       const events: string[] = [];
-      const core = createServer((_request, response) => {
+      const core = createServer((request, response) => {
         response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({ state: "empty" }));
+        response.end(
+          JSON.stringify(
+            request.url === "/api/v2/memory-authority"
+              ? { authority: "legacy", migration_id: null }
+              : request.url === "/api/v1/memories/ask"
+                ? { answer: "empty", memories: [], mode: "empty" }
+                : { state: "empty" },
+          ),
+        );
       });
       const corePort = await listen(core, 0);
       closers.push(() => close(core));
@@ -252,9 +256,17 @@ describe("RecallBroker", () => {
       closers.push(async () => {
         process.off("unhandledRejection", onRejection);
       });
-      const core = createServer((_request, response) => {
+      const core = createServer((request, response) => {
         response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({ state: "empty" }));
+        response.end(
+          JSON.stringify(
+            request.url === "/api/v2/memory-authority"
+              ? { authority: "legacy", migration_id: null }
+              : request.url === "/api/v1/memories/ask"
+                ? { answer: "empty", memories: [], mode: "empty" }
+                : { state: "empty" },
+          ),
+        );
       });
       const corePort = await listen(core, 0);
       closers.push(() => close(core));
@@ -292,7 +304,14 @@ describe("RecallBroker", () => {
     "preserves %s scope denial instead of claiming Core is offline",
     async (endpoint) => {
       const diagnostics: Array<Record<string, unknown>> = [];
-      const core = createServer((_request, response) => {
+      const core = createServer((request, response) => {
+        if (request.url === "/api/v2/memory-authority") {
+          response.setHeader("Content-Type", "application/json");
+          response.end(
+            JSON.stringify({ authority: "legacy", migration_id: null }),
+          );
+          return;
+        }
         response.statusCode = 403;
         response.setHeader("Content-Type", "application/json");
         response.end(

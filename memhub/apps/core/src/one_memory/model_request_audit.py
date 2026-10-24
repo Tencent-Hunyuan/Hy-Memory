@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib import import_module
 from pathlib import Path
 from typing import TypedDict
 from uuid import uuid4
@@ -46,14 +45,7 @@ def audit_precipitation_request(request_id: str) -> Iterator[None]:
 
 
 def _current_prompt_stage() -> str:
-    try:
-        resolver = getattr(  # noqa: B009 - optional SDK version boundary
-            import_module("hy_memory.utils.model_call_context"),
-            "current_model_call_stage",
-        )
-    except (ImportError, AttributeError):
-        return "other"
-    return str(resolver())
+    return "other"
 
 
 class ModelRequestAuditStore:
@@ -243,10 +235,7 @@ class ModelRequestAuditStore:
                 )
                 for key, value in zip(summary_keys, summary, strict=True)
             },
-            "requests": [
-                dict(zip(keys, tuple(row), strict=True))
-                for row in rows
-            ],
+            "requests": [dict(zip(keys, tuple(row), strict=True)) for row in rows],
             "by_minute": [
                 {
                     "minute": str(row[0]),
@@ -305,9 +294,7 @@ def _response_usage(content: bytes) -> _ResponseUsage:
         else usage.get("prompt_cache_hit_tokens")
     )
     reasoning = (
-        completion_details.get("reasoning_tokens")
-        if isinstance(completion_details, dict)
-        else None
+        completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None
     )
     return {
         "provider_request_id": body.get("id") if isinstance(body.get("id"), str) else None,

@@ -3,12 +3,50 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectionFallback } from "./ConnectionFallback";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 
 afterEach(() => {
   cleanup();
   delete window.oneMemory;
+  localStorage.clear();
 });
 describe("ConnectionFallback", () => {
+  it("localizes pairing controls while preserving generated Skill bytes", async () => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+    const skill = "pair --token '{no-traducir}'";
+    window.oneMemory = {
+      createCustomHarnessSkill: vi.fn().mockResolvedValue({
+        displayName: "Harness 原名",
+        expiresAt: "2026-10-19T12:10:00.000Z",
+        skill,
+      }),
+      copyText: vi.fn().mockResolvedValue(undefined),
+      getLanguagePreference: vi
+        .fn()
+        .mockResolvedValue({ preference: "es", locale: "es", revision: 1 }),
+      onLanguagePreferenceChanged: vi.fn().mockReturnValue(() => {}),
+    } as unknown as Window["oneMemory"];
+    render(
+      <LanguageProvider>
+        <ConnectionFallback />
+      </LanguageProvider>,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByText("Conectar otras herramientas"));
+    await user.type(
+      screen.getByLabelText("Nombre del Harness"),
+      "Harness 原名",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Generar Skill de emparejamiento",
+      }),
+    );
+    expect(
+      await screen.findByLabelText("Skill de emparejamiento"),
+    ).toHaveProperty("value", skill);
+  });
+
   it("names an unknown Harness before generating and copying its pairing Skill", async () => {
     const user = userEvent.setup();
     const createCustomHarnessSkill = vi.fn().mockResolvedValue({

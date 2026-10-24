@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DiagnosticEventV1 } from "@one-memory/runtime-control";
 import {
   diagnosticLogFiles,
+  projectDiagnosticEventForSafeOutput,
   readDiagnosticEvents,
 } from "@one-memory/runtime-control";
 
@@ -24,54 +25,6 @@ export interface LogQuery {
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const NAME = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+){0,15}$/;
-const SAFE_DETAIL_KEYS = new Set([
-  "action",
-  "attempt",
-  "count",
-  "method",
-  "mode",
-  "phase",
-  "platform",
-  "reason",
-  "result_count",
-  "source_id",
-  "spawned",
-  "status",
-  "version",
-  "parent_session_id",
-  "invalid_lines",
-  "truncated",
-  "runtime_state",
-  "core_state",
-  "broker_state",
-  "instance_id",
-  "open_file_count",
-  "memory_bytes",
-  "thread_count",
-  "database_error_count",
-  "file_count",
-  "sqlite_file_count",
-  "byte_file_count",
-  "total_bytes",
-  "copied_bytes",
-  "bytes_per_second",
-  "stored_count",
-  "revised_count",
-  "skipped_count",
-  "error_count",
-  "pending_count",
-  "prepared_count",
-  "queue_depth",
-  "in_flight_count",
-  "call_count",
-  "created_count",
-  "updated_count",
-  "superseded_count",
-  "deleted_count",
-  "operation_kind",
-  "file_kind",
-]);
-
 export function parseLogQuery(arguments_: readonly string[]): LogQuery | null {
   if (arguments_.filter((item) => item === "--json").length > 1) return null;
   const values: Partial<LogQuery> = { errorsOnly: false, follow: false };
@@ -237,63 +190,13 @@ export function renderLogText(
   return `${lines.join("\n")}\n`;
 }
 
-/** Defence in depth for the CLI read surface. `DiagnosticLogger` already
- * allow-lists keys, but a future writer, a manually edited log, or a malformed
- * line must not turn `memhub logs` into an exfiltration path. */
+/** Defence in depth for the CLI read surface. Local writers accept arbitrary
+ * bounded scalar keys, so every outward read surface must reuse the same
+ * field-and-value projection as the support-bundle exporter. */
 export function redactDiagnosticEvent(
   event: DiagnosticEventV1,
 ): DiagnosticEventV1 {
-  const redacted: DiagnosticEventV1 = {
-    schema_version: 1,
-    timestamp: event.timestamp,
-    level: event.level,
-    service: event.service,
-    component: event.component,
-    event: event.event,
-    outcome: event.outcome,
-    session_id: event.session_id,
-    ...(event.trace_id === undefined ? {} : { trace_id: event.trace_id }),
-    ...(event.incident_id === undefined
-      ? {}
-      : { incident_id: event.incident_id }),
-    ...(event.instance_id === undefined
-      ? {}
-      : { instance_id: event.instance_id }),
-    ...(event.operation_id === undefined
-      ? {}
-      : { operation_id: event.operation_id }),
-    ...(event.request_id === undefined ? {} : { request_id: event.request_id }),
-    ...(event.job_id === undefined ? {} : { job_id: event.job_id }),
-    ...(event.task_id === undefined ? {} : { task_id: event.task_id }),
-    ...(event.duration_ms === undefined
-      ? {}
-      : { duration_ms: event.duration_ms }),
-    ...(event.state_before === undefined
-      ? {}
-      : { state_before: event.state_before }),
-    ...(event.state_after === undefined
-      ? {}
-      : { state_after: event.state_after }),
-    ...(event.error_code === undefined ? {} : { error_code: event.error_code }),
-    ...(event.error_type === undefined ? {} : { error_type: event.error_type }),
-    ...(event.safe_stack === undefined
-      ? {}
-      : {
-          safe_stack: event.safe_stack.filter(
-            (frame) =>
-              !frame.startsWith("/") &&
-              !/^[A-Za-z]:\\/.test(frame) &&
-              !frame.includes(".."),
-          ),
-        }),
-  };
-  const details = Object.fromEntries(
-    Object.entries(event.details ?? {}).filter(([key]) =>
-      SAFE_DETAIL_KEYS.has(key),
-    ),
-  );
-  if (Object.keys(details).length > 0) redacted.details = details;
-  return redacted;
+  return projectDiagnosticEventForSafeOutput(event);
 }
 
 export async function followLogs(options: {
@@ -315,6 +218,7 @@ export async function followLogs(options: {
       ...options.query,
       tail: 5_000,
     });
+    if (report.failure) throw new Error(report.failure);
     for (const event of report.events) {
       const identity = JSON.stringify(event);
       if (seen.has(identity)) continue;

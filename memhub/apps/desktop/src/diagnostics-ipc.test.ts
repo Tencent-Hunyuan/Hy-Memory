@@ -94,12 +94,14 @@ it("returns only diagnostic events written during this desktop launch", async ()
   await mkdir(logs, { recursive: true });
   const target = path.join(logs, "diagnostic-core.jsonl");
   const old = {
+    schema_version: 1,
     timestamp: "2026-10-14T09:00:00.000Z",
     level: "info",
     service: "core",
     component: "core.startup",
     event: "core.old",
     outcome: "succeeded",
+    session_id: "11111111-1111-4111-8111-111111111111",
   };
   await writeFile(target, `${JSON.stringify(old)}\n`);
   const cursor = await captureDebugLogCursor(dataDir);
@@ -109,6 +111,11 @@ it("returns only diagnostic events written during this desktop launch", async ()
     timestamp: "2026-10-14T10:01:00.000Z",
     event: "core.current",
     level: "warn",
+    details: {
+      count: 1,
+      "custom.private": "/Users/private/query.txt",
+      credential_hint: "ghp_private_token",
+    },
   };
   await appendFile(target, `${JSON.stringify(current)}\nnot-json\n`);
 
@@ -118,8 +125,11 @@ it("returns only diagnostic events written during this desktop launch", async ()
   expect(snapshot.entries[0]).toMatchObject({
     event: "core.current",
     level: "warn",
+    details: { count: 1 },
     source: "diagnostic",
   });
+  expect(JSON.stringify(snapshot)).not.toContain("/Users/private");
+  expect(JSON.stringify(snapshot)).not.toContain("ghp_private_token");
 });
 
 it("tracks diagnostic JSONL across rotation without rereading the old prefix", async () => {
@@ -130,12 +140,14 @@ it("tracks diagnostic JSONL across rotation without rereading the old prefix", a
   const target = path.join(logs, "diagnostic-core.jsonl");
   const event = (name: string, timestamp: string) =>
     JSON.stringify({
+      schema_version: 1,
       timestamp,
       level: "info",
       service: "core",
       component: "core.test",
       event: name,
       outcome: "succeeded",
+      session_id: "22222222-2222-4222-8222-222222222222",
     });
   await writeFile(target, `${event("before", "2026-10-14T09:00:00.000Z")}\n`);
   const cursor = await captureDebugLogCursor(dataDir);

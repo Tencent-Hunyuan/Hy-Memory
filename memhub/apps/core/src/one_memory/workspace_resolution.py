@@ -37,7 +37,6 @@ import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
 
 from one_memory.imports.access import opaque_workspace_id
 
@@ -116,14 +115,16 @@ def resolve_workspace_scopes(
 
 
 def _normalize(workspace_path: str) -> str | None:
-    try:
-        # Not resolved against the filesystem: the recorded identity is of the
-        # path as the host saw it, and following symlinks now would produce a
-        # different string than the one that was stored.
-        normalized = str(Path(workspace_path).expanduser())
-    except (RuntimeError, ValueError):
+    # This value is an opaque identity that is hashed below, never a filesystem
+    # operation. Accept only an already-absolute POSIX path; do not expand `~`,
+    # resolve symlinks, stat, open, or join caller-controlled path components.
+    if (
+        not workspace_path.startswith("/")
+        or len(workspace_path) > 4_096
+        or any(ord(character) < 32 for character in workspace_path)
+    ):
         return None
-    return normalized if Path(normalized).is_absolute() else None
+    return workspace_path
 
 
 def _cursor_project_scopes(

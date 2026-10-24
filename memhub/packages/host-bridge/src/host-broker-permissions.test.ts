@@ -95,6 +95,12 @@ function corePayload(url: string | undefined): unknown {
   };
 }
 
+function markedPayload(url: string | undefined, marker: string): unknown {
+  return url === paths.ask
+    ? { answer: marker, memories: [], mode: "empty" }
+    : { content: marker };
+}
+
 async function fixture(
   options: {
     legacy?: boolean;
@@ -119,6 +125,16 @@ async function fixture(
   const calls: CoreCall[] = [];
   const core = createServer((request, response) => {
     void (async () => {
+      if (
+        request.method === "GET" &&
+        request.url === "/api/v2/memory-authority"
+      ) {
+        response.setHeader("Content-Type", "application/json");
+        response.end(
+          JSON.stringify({ authority: "legacy", migration_id: null }),
+        );
+        return;
+      }
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const raw = Buffer.concat(chunks).toString("utf8");
@@ -433,12 +449,14 @@ describe.skipIf(process.platform === "win32")(
         const entered = deferred();
         const release = deferred();
         const context = await fixture({
-          onCore: async (_call, response) => {
+          onCore: async (call, response) => {
             entered.resolve();
             await release.promise;
             response.setHeader("Content-Type", "application/json");
             response.end(
-              JSON.stringify({ content: "must-not-release-old-content" }),
+              JSON.stringify(
+                markedPayload(call.url, "must-not-release-old-content"),
+              ),
             );
           },
         });
@@ -471,10 +489,10 @@ describe.skipIf(process.platform === "win32")(
         const entered = deferred();
         const release = deferred();
         const context = await fixture({
-          onCore: async (_call, response) => {
+          onCore: async (call, response) => {
             entered.resolve();
             await release.promise;
-            response.end(JSON.stringify({ marker: "old-result" }));
+            response.end(JSON.stringify(markedPayload(call.url, "old-result")));
           },
         });
         const pending = context.post("ask", context.issued.secret);

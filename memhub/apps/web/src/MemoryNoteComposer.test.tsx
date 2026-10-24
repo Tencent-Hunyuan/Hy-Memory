@@ -3,7 +3,39 @@ import type { MemoryNoteReceipt } from "@one-memory/contracts";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { MemoryNoteComposer } from "./MemoryNoteComposer";
+
+it("opens a Spanish composer without saving, processing or enabling anything", async () => {
+  delete window.oneMemory;
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  render(
+    <LanguageProvider>
+      <MemoryNoteComposer
+        onSaved={vi.fn()}
+        onOpenMemory={vi.fn()}
+        onConfigureModel={vi.fn()}
+      />
+    </LanguageProvider>,
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Añadir memoria" }),
+  );
+  expect(screen.getByRole("dialog", { name: "Añadir memoria" })).toBeTruthy();
+  expect(
+    screen.getByRole("textbox", { name: "¿Qué quieres recordar?" }),
+  ).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: "Guardar texto" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  await userEvent.click(
+    screen.getByRole("button", { name: "Cerrar nueva memoria" }),
+  );
+  expect(api.saveMemoryNote).not.toHaveBeenCalled();
+  expect(api.processMemoryNote).not.toHaveBeenCalled();
+  localStorage.clear();
+});
 
 const api = vi.hoisted(() => ({
   getMemoryNotes: vi.fn(),

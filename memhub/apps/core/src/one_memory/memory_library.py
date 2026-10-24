@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.database_access import main_database
-from one_memory.hy_lifecycle import HyLifecycle
+from one_memory.legacy_lifecycle_types import HyLifecycle
 from one_memory.memory_evidence_freshness import register_memory_freshness
 from one_memory.memory_governance import (
     GovernedMemory,

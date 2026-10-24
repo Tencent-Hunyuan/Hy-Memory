@@ -111,23 +111,6 @@ export function buildMemoryCorrectRequest(
   };
 }
 
-/** `POST /api/v1/memories/{id}/scopes`. */
-export function buildMemoryScopesRequest(
-  memoryId: string,
-  revision: number,
-  scopes: string[],
-  requestId: string,
-): MemoryWriteRequest {
-  return {
-    path: `/api/v1/memories/${requireMemoryId(memoryId)}/scopes`,
-    body: {
-      request_id: requireRequestId(requestId),
-      expected_revision: requireRevision(revision),
-      scopes: requireScopes(scopes),
-    },
-  };
-}
-
 /** `POST /api/v1/memories/{id}/actions/{undo|delete}`. */
 export function buildMemoryActionRequest(
   memoryId: string,

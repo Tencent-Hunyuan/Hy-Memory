@@ -102,6 +102,8 @@ def test_stall_captures_a_safe_stack_for_every_thread() -> None:
 
     assert watchdog.stall_stacks
     captured = watchdog.stall_stacks[0]
-    assert any(line.startswith("thread=MainThread|") for line in captured)
-    assert any(line.startswith("thread=source-reader-test|") for line in captured)
+    assert captured
+    assert len(captured) <= 16
+    assert all(line.startswith("thread|") for line in captured)
+    assert all("source-reader-test" not in line and "MainThread" not in line for line in captured)
     assert all("/Users/" not in line and "\n" not in line for line in captured)

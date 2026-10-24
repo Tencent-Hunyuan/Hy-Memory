@@ -2,14 +2,14 @@
 
 MemHub itself is licensed under Apache-2.0 (see `LICENSE`).
 It bundles the runtime dependencies listed below.
-Generated from the installed dependency tree on 2026-10-17T13:52:48Z
+Generated from the installed dependency tree on 2026-10-22T13:18:16Z
 by `python3 scripts/generate_sbom.py`. Do not edit by hand.
 
 Per-package license texts are not reproduced here yet; the license
 column is filled in as part of release review, and the SBOM records
 `NOASSERTION` until then rather than guessing.
 
-## hy-memory 2.0.4
+## hy-memory 2.0.5
 
 License: Apache-2.0
 
@@ -112,12 +112,13 @@ Adaptation boundary:
 
 No Memmy brand, icon, font or mascot assets are distributed.
 
-## JavaScript (npm) — 10 packages
+## JavaScript (npm) — 11 packages
 
 - @tanstack/react-query 5.103.2
 - axios 1.20.0
 - fflate 0.8.3
 - https-proxy-agent 7.0.0
+- i18next 25.10.10
 - lucide-react 1.43.0
 - proxy-from-env 2.1.0
 - react 19.2.8

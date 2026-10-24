@@ -1,9 +1,14 @@
 import { Component, type ReactNode } from "react";
+import { useApplicationsLanguage } from "./applications-language";
 
-type Props = { label: string; children: ReactNode };
+type Props = { label: string; children: ReactNode; fallback?: ReactNode };
 type State = { crashed: boolean };
 
 const RESET_MS = 15_000;
+function CardFallback({ label }: { label: string }) {
+  const { a } = useApplicationsLanguage();
+  return <p>{a("cardUnavailable", { label })}</p>;
+}
 
 /**
  * 2026-10-12: 首页任何一张卡片渲染出错时，只塌这一张卡，不塌整页。
@@ -36,9 +41,7 @@ export class HomeCardBoundary extends Component<Props, State> {
     if (this.state.crashed) {
       return (
         <section className="r6-home-auto-failure" role="status">
-          <p>
-            {this.props.label}暂时显示不了，其他功能不受影响，稍后会自动恢复。
-          </p>
+          {this.props.fallback ?? <CardFallback label={this.props.label} />}
         </section>
       );
     }

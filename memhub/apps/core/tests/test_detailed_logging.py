@@ -35,7 +35,7 @@ def test_live_log_level_applies_to_full_hy_and_provider_call_chain(
     set_diagnostic_log_level(tmp_path, "debug")
 
     assert diagnostic_log_level(tmp_path) == "debug"
-    assert logging.getLogger("one_memory.memory_processing").isEnabledFor(logging.DEBUG)
+    assert logging.getLogger("one_memory.sdk_write_processor").isEnabledFor(logging.DEBUG)
     assert logging.getLogger("hy_memory.runtime").isEnabledFor(logging.DEBUG)
     assert logging.getLogger("hy_memory.client").isEnabledFor(logging.DEBUG)
     assert logging.getLogger("hy_memory.agent.llm_provider").isEnabledFor(logging.DEBUG)

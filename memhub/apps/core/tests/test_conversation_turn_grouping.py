@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from one_memory.conversation_processing import _conversation_chunks
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
-from one_memory.memory_processing import _conversation_chunks
 
 
 def _records(tmp_path, *speakers: tuple[str, str, str]) -> list:

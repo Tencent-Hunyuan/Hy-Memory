@@ -74,7 +74,15 @@ import {
   serverBlockIndices,
   type TomlDocument,
 } from "./toml-mcp.js";
-import { putYamlServer, readYamlServer, removeYamlServer } from "./yaml-mcp.js";
+import {
+  putYamlMemoryProvider,
+  putYamlServer,
+  readYamlMemoryProvider,
+  readYamlServer,
+  removeYamlServer,
+  restoreYamlMemoryProvider,
+  type YamlMemoryProvider,
+} from "./yaml-mcp.js";
 
 export {
   PROBE_QUERY,
@@ -147,7 +155,7 @@ export const OWNER_VALUE = "one-memory";
  * embedded in the marker so a disk skill can say which template produced it
  * without a second file to keep in step.
  */
-export const SKILL_VERSION = 15;
+export const SKILL_VERSION = 17;
 
 /** Marker written after the complete YAML frontmatter of every managed skill.
  *
@@ -250,6 +258,8 @@ export interface RecallHostLayout {
   /** Null for hosts with no skill mechanism; guidance then comes from the
    * MCP tool description instead of a file we would only pretend is loaded. */
   skillPath: string | null;
+  /** Native Hermes MemoryProvider tree managed alongside MCP and Skill. */
+  nativeProviderRoot?: string;
   /** Where installs made before the MemHub rename put the skill: removed on
    * upgrade, and found by uninstall on a host that was never upgraded. */
   legacySkillPath?: string;
@@ -297,6 +307,8 @@ export interface RecallRuntime {
   captureCommand?: string;
   /** Database directory of the running app. Hooks do not inherit its environment. */
   dataDir?: string;
+  /** Packaged `hy_memory` provider source. Required only by Hermes installs. */
+  hermesProviderSource?: string;
 }
 
 interface ManagedServer {
@@ -379,6 +391,8 @@ export interface RecallInstallPlan {
     configExisted: boolean;
     server: ManagedServer | null;
     skill: string | null;
+    memoryProvider: YamlMemoryProvider | null;
+    nativeProviderFiles: Array<{ path: string; previous: string | null }>;
     /** Verbatim text of a foreign same-named server being taken over. */
     displaced: Displaced | null;
     /** What each shared registry key held before MemHub first touched it. */
@@ -387,6 +401,7 @@ export interface RecallInstallPlan {
   next: {
     server: ManagedServer | null;
     skill: string | null;
+    memoryProvider: string | null;
   };
   actions: Array<
     | "create-mcp"
@@ -397,6 +412,7 @@ export interface RecallInstallPlan {
     | "create-plugin"
     | "update-plugin"
     | "takeover-plugin"
+    | "install-native-provider"
     | "remove-superseded"
   >;
 }
@@ -446,10 +462,17 @@ interface InstallJournal {
   config_existed: boolean;
   previous_server: ManagedServer | null;
   previous_skill: string | null;
+  previous_memory_provider?: YamlMemoryProvider;
   displaced: Displaced | null;
   /** Null for a host with no MCP config, where no server was installed. */
   installed_server_hash: string | null;
   installed_skill_hash: string | null;
+  installed_memory_provider?: string;
+  native_provider_files?: Array<{
+    path: string;
+    hash: string;
+    previous: string | null;
+  }>;
   /** Both present only for a plugin-format host.
    *
    * The registry values are the only copy of whatever our keys held before, and
@@ -719,6 +742,7 @@ export function hermesLayout(hermesDir: string): RecallHostLayout {
     format: "yaml",
     channel: "mcp",
     ...looseSkill(root),
+    nativeProviderRoot: path.join(root, "plugins", "hy_memory"),
     journalPath: path.join(root, ".one-memory", "recall-install.json"),
     containmentRoot: root,
   };
@@ -823,6 +847,12 @@ export async function planRecallInstall(
   const mcpRaw = paths.mcp === null ? null : await readOptional(paths.mcp);
   const skillRaw =
     paths.skill === null ? null : await readOptional(paths.skill);
+  const nativeProviderEnabled =
+    layout.nativeProviderRoot !== undefined &&
+    normalized.hermesProviderSource !== undefined;
+  const observedMemoryProvider = nativeProviderEnabled
+    ? readYamlMemoryProvider(mcpRaw ?? "")
+    : null;
   const existing =
     paths.mcp === null
       ? { managed: null, foreign: null }
@@ -892,6 +922,7 @@ export async function planRecallInstall(
       actions.push("remove-superseded");
     }
   }
+  if (nativeProviderEnabled) actions.push("install-native-provider");
   const observedRegistries: RegistryPrevious[] = registries.map((entry) => ({
     path: entry.registry.path,
     existed: entry.raw !== null,
@@ -920,6 +951,11 @@ export async function planRecallInstall(
             (paths.mcp !== null && mcpRaw !== null),
           server: priorJournal?.previous_server ?? null,
           skill: priorJournal?.previous_skill ?? null,
+          memoryProvider:
+            priorJournal?.previous_memory_provider ?? observedMemoryProvider,
+          nativeProviderFiles: (priorJournal?.native_provider_files ?? []).map(
+            (file) => ({ path: file.path, previous: file.previous }),
+          ),
           displaced: priorJournal?.displaced ?? null,
           registries: priorJournal?.plugin_registries ?? observedRegistries,
         }
@@ -927,6 +963,8 @@ export async function planRecallInstall(
           configExisted: paths.mcp !== null && mcpRaw !== null,
           server: existing.managed,
           skill: skillRaw,
+          memoryProvider: observedMemoryProvider,
+          nativeProviderFiles: [],
           displaced,
           registries: observedRegistries,
         },
@@ -941,6 +979,7 @@ export async function planRecallInstall(
         paths.skill === null && layout.plugin === undefined
           ? null
           : skillContent(layout.channel, normalized),
+      memoryProvider: nativeProviderEnabled ? "hy_memory" : null,
     },
     actions,
   };
@@ -1200,6 +1239,9 @@ export async function applyRecallInstall(
       config_existed: plan.previous.configExisted,
       previous_server: plan.previous.server,
       previous_skill: plan.previous.skill,
+      ...(plan.previous.memoryProvider === null
+        ? {}
+        : { previous_memory_provider: plan.previous.memoryProvider }),
       displaced: plan.previous.displaced,
       installed_server_hash:
         plan.next.server === null
@@ -1207,6 +1249,27 @@ export async function applyRecallInstall(
           : hash(JSON.stringify(plan.next.server)),
       installed_skill_hash:
         plan.next.skill === null ? null : hash(plan.next.skill),
+      ...(plan.next.memoryProvider === null
+        ? {}
+        : { installed_memory_provider: plan.next.memoryProvider }),
+      ...(plan.layout.nativeProviderRoot === undefined
+        ? {}
+        : {
+            native_provider_files: files.trees
+              .filter((tree) => tree.root === plan.layout.nativeProviderRoot)
+              .flatMap((tree) =>
+                tree.files.map((file) => {
+                  const prior = plan.previous.nativeProviderFiles.find(
+                    (entry) => entry.path === file.path,
+                  );
+                  return {
+                    path: file.path,
+                    hash: hash(file.after),
+                    previous: prior?.previous ?? file.before,
+                  };
+                }),
+              ),
+          }),
       ...(plan.layout.plugin === undefined
         ? {}
         : {
@@ -1393,19 +1456,23 @@ async function plannedFiles(plan: RecallInstallPlan): Promise<PlannedFiles> {
   let mcp: PlannedFile | null = null;
   if (plan.paths.mcp !== null && plan.next.server !== null) {
     const beforeMcp = await readOptional(plan.paths.mcp);
+    let after = writeInstalledServer(beforeMcp, plan.layout, plan.next.server);
+    if (plan.next.memoryProvider !== null) {
+      after = putYamlMemoryProvider(after, plan.next.memoryProvider);
+    }
     mcp = {
       path: plan.paths.mcp,
       owner: "host",
       existed: beforeMcp !== null,
       before: beforeMcp,
-      after: writeInstalledServer(beforeMcp, plan.layout, plan.next.server),
+      after,
     };
   }
-  const { registries, trees } = await plannedPluginFiles(plan);
-  const captures = await plannedCaptures(
-    plan,
-    mcp === null ? null : { path: mcp.path, content: mcp.after },
-  );
+  const { registries, trees: pluginTrees } = await plannedPluginFiles(plan);
+  const nativeTree = await plannedNativeProviderTree(plan);
+  const trees =
+    nativeTree === null ? pluginTrees : [...pluginTrees, nativeTree];
+  const captures = await plannedCaptures(plan);
   if (plan.paths.skill === null || plan.next.skill === null) {
     return { mcp, skill: null, registries, trees, captures };
   }
@@ -1555,6 +1622,74 @@ async function plannedPluginFiles(
     })),
   );
   return { registries, trees };
+}
+
+const HERMES_PROVIDER_FILES = [
+  "__init__.py",
+  "plugin.yaml",
+  "provider.py",
+] as const;
+
+async function plannedNativeProviderTree(
+  plan: RecallInstallPlan,
+): Promise<PlannedTree | null> {
+  const root = plan.layout.nativeProviderRoot;
+  const source = plan.runtime.hermesProviderSource;
+  if (root === undefined || source === undefined) return null;
+  if (plan.runtime.credentialFile === undefined) {
+    throw new Error("Hermes native provider requires a host credential file");
+  }
+  const desired = new Map<string, string>();
+  for (const relative of HERMES_PROVIDER_FILES) {
+    desired.set(relative, await readFile(path.join(source, relative), "utf8"));
+  }
+  desired.set(
+    "connection.json",
+    `${JSON.stringify(
+      {
+        schema_version: 1,
+        transport: "memhub-broker",
+        discovery_path: plan.runtime.discoveryPath,
+        credential_file: plan.runtime.credentialFile,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const existing = await readTreeFiles(root);
+  const relatives = new Set([...desired.keys(), ...existing.keys()]);
+  const files = [...relatives].sort().map((relative) => {
+    const before = existing.get(relative) ?? null;
+    return {
+      path: path.join(root, relative),
+      owner: "one-memory" as const,
+      existed: before !== null,
+      before,
+      after: desired.get(relative) ?? (before as string),
+    };
+  });
+  return { root, existed: await exists(root), files };
+}
+
+async function readTreeFiles(root: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  if (!(await exists(root))) return files;
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      if (entry.isSymbolicLink())
+        throw new Error("Hermes provider tree contains a symbolic link");
+      if (entry.isDirectory()) {
+        await visit(target);
+        continue;
+      }
+      if (!entry.isFile())
+        throw new Error("Hermes provider tree contains an unsupported entry");
+      files.set(path.relative(root, target), await readFile(target, "utf8"));
+    }
+  };
+  await visit(root);
+  return files;
 }
 
 /** The lines an edit changes, with a little of the text around them.
@@ -1879,6 +2014,15 @@ export async function verifyRecallInstall(
         `MemHub ${layout.hostLabel} installation verification failed`,
       );
     }
+    if (
+      journal.installed_memory_provider !== undefined &&
+      readYamlMemoryProvider(raw ?? "").value !==
+        journal.installed_memory_provider
+    ) {
+      throw new Error(
+        `MemHub ${layout.hostLabel} native provider is not active`,
+      );
+    }
   }
   let skill: string | null = null;
   if (layout.skillPath !== null) {
@@ -1915,6 +2059,14 @@ export async function verifyRecallInstall(
     ) {
       throw new Error(
         `MemHub ${layout.hostLabel} installation verification failed`,
+      );
+    }
+  }
+  for (const file of journal.native_provider_files ?? []) {
+    const content = await readOptional(file.path);
+    if (content === null || hash(content) !== file.hash) {
+      throw new Error(
+        `MemHub ${layout.hostLabel} native provider verification failed`,
       );
     }
   }
@@ -2002,6 +2154,9 @@ export async function planRecallUninstall(
       (currentServer === null ||
         hash(JSON.stringify(currentServer)) !==
           journal.installed_server_hash)) ||
+    (journal.installed_memory_provider !== undefined &&
+      readYamlMemoryProvider(mcpRaw ?? "").value !==
+        journal.installed_memory_provider) ||
     (layout.skillPath !== null &&
       (currentSkill === null ||
         hash(currentSkill) !== journal.installed_skill_hash))
@@ -2014,16 +2169,25 @@ export async function planRecallUninstall(
 
   const files: PlannedRemoval[] = [];
   if (layout.configPath !== null) {
+    const withoutServer = journal.config_existed
+      ? removeInstalledServer(mcpRaw, layout, {
+          previous: journal.previous_server,
+          displaced: journal.displaced,
+        })
+      : null;
     files.push({
       path: layout.configPath,
       owner: "host",
       before: mcpRaw,
-      after: journal.config_existed
-        ? removeInstalledServer(mcpRaw, layout, {
-            previous: journal.previous_server,
-            displaced: journal.displaced,
-          })
-        : null,
+      after:
+        withoutServer === null
+          ? null
+          : journal.previous_memory_provider === undefined
+            ? withoutServer
+            : restoreYamlMemoryProvider(
+                withoutServer,
+                journal.previous_memory_provider,
+              ),
     });
   }
   if (layout.skillPath !== null) {
@@ -2035,6 +2199,30 @@ export async function planRecallUninstall(
     });
   }
   const removedRoots: string[] = [];
+  if (layout.nativeProviderRoot !== undefined) {
+    const nativeFiles = journal.native_provider_files ?? [];
+    for (const file of nativeFiles) {
+      const content = await readOptional(file.path);
+      if (content === null || hash(content) !== file.hash) {
+        throw new DomainError(
+          "host_uninstall_unknown_owned_file",
+          "host_uninstall_modified_files: Hermes provider files changed after installation; rollback refused",
+        );
+      }
+      files.push({
+        path: file.path,
+        owner: "one-memory",
+        before: content,
+        after: file.previous,
+      });
+    }
+    if (
+      nativeFiles.length > 0 &&
+      nativeFiles.every((file) => file.previous === null)
+    ) {
+      removedRoots.push(layout.nativeProviderRoot);
+    }
+  }
   if (layout.plugin !== undefined) {
     // Every tree file is checked, not just the manifest, because the whole
     // directory is about to be deleted. Anything the user put in there — and
@@ -2422,6 +2610,7 @@ export async function inspectRemnants(
       candidate.journalPath,
       candidate.skillPath,
       candidate.legacySkillPath,
+      candidate.nativeProviderRoot,
       candidate.plugin?.marketplaceRoot,
       candidate.plugin?.cacheRoot,
     ]) {
@@ -2787,8 +2976,8 @@ ${SKILL_MARKER}
 
 When the answer would depend on the user's preferences, past decisions, or
 project conventions, call \`MemHub_context\` when the host exposes it. Leave kinds
-at the default so original conversations and governed memories are searched
-together. Use returned original conversations even when the memory path is empty.
+at the default so original conversations and memories are searched together.
+Use returned original conversations even when no memory item is returned.
 On hosts that do not expose it, you must call \`MemHub_recall\` before answering
 questions about governed memories, and call \`MemHub_conversations\` in that same
 turn. Do not guess those from earlier turns in this chat alone.
@@ -2797,12 +2986,13 @@ Loading this Skill is not a memory lookup. Give one action notice per logical lo
 not once per instruction file or tool discovery. Keep another memory provider separately
 attributed; its results do not prove MemHub success.
 For \`MemHub_context\`, use \`query\`; \`raw_source_ids\` filters raw only. Do not pass identity,
-workspace or scope fields. Inspect both \`paths\` and the \`kind\` of each returned item.
-Raw-only results are original conversations, not generated memories. Mixed results retain
-both kinds and their citations. Partial with zero items means coverage was limited, not
-that memories were retrieved. \`adoption\` remains unknown until actually observed.
+workspace or scope fields. Inspect \`schema_version\` and each returned item. Schema v1
+includes path/evidence metadata; schema v2 is SDK-native and does not. Raw-only results
+are original conversations, not generated memories. Use only source, time and identifiers
+actually returned; never invent revision, evidence, author, path or adoption fields.
+Partial with zero items means coverage was limited, not that memories were retrieved.
 If the context call is denied, unavailable or requires an upgrade, report that state;
-do not retry or broaden permissions. When both paths return zero items, say exactly
+do not retry or broaden permissions. When no items are returned, say exactly
 "已完成MemHub的记忆查询。" and continue with this host's own context. Do not say that
 MemHub found nothing. A context result already used for this logical lookup does not
 require a second memory lookup just for an announcement.
@@ -3041,8 +3231,9 @@ Keep another memory provider separately attributed. Context mode works without a
 model, but requires this installation's existing read permissions and credential file.
 Use \`--kind raw\` or \`--kind memory\` only to narrow, and repeat \`--raw-source <id>\`
 to filter raw sources only. Context mode does not accept \`--workspace-path\` or \`--scope\`.
-Inspect both paths and item kinds: original conversations are not generated memories,
-partial zero-item results are not successful retrieval, and adoption is unknown.
+Inspect schema version and item kinds: schema v1 has path/evidence metadata while schema
+v2 does not. Original conversations are not generated memories; partial zero-item results
+are not successful retrieval. Never invent revision, evidence, path or adoption fields.
 Context exit 4 reports unavailable/denied, exit 5 requires a runtime upgrade; do not
 retry with the legacy command or broaden access. The legacy command above is retained
 for explicitly memory-only queries and the installation self-check, not error fallback.
@@ -3174,6 +3365,12 @@ function normalizeRuntime(
     ...(runtime.dataDir === undefined || runtime.dataDir === ""
       ? {}
       : { dataDir: path.resolve(runtime.dataDir) }),
+    ...(runtime.hermesProviderSource === undefined ||
+    runtime.hermesProviderSource === ""
+      ? {}
+      : {
+          hermesProviderSource: path.resolve(runtime.hermesProviderSource),
+        }),
   };
 }
 
@@ -3740,6 +3937,11 @@ async function layoutManagedTargets(
     targets.push({ role: "skill", path: layout.skillPath });
   if (layout.legacySkillPath !== undefined)
     targets.push({ role: "legacy-skill", path: layout.legacySkillPath });
+  if (layout.nativeProviderRoot !== undefined)
+    targets.push({
+      role: "native-provider",
+      path: layout.nativeProviderRoot,
+    });
   if (layout.plugin !== undefined) {
     const plugin = layout.plugin;
     targets.push(

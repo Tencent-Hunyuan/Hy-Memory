@@ -5,6 +5,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
+from one_memory.conversation_processing import _is_hy_input_turn
 from one_memory.embedding_assets import BUILTIN_EMBEDDING_MAX_TOKENS
 from one_memory.imports.models import (
     MAX_VERBATIM_CHARACTERS,
@@ -17,7 +18,6 @@ from one_memory.imports.sources.parsing import (
 )
 from one_memory.input_sanitization import sanitize_model_input_with_spans
 from one_memory.local_embedding import TokenizedText
-from one_memory.memory_processing import _is_hy_input_turn
 from one_memory.retrieval.chunking import ChunkingError, OffsetTokenizer, TextChunk, chunk_evidence
 
 MAP_VERSION = "raw-content-map-v1"

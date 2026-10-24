@@ -50,6 +50,7 @@ class CodingWriter:
         embed_service: EmbedService,
         fact_reconciler: Optional[WorkingFactReconciler] = None,
         cache: Any = None,
+        variant: str = "working",
     ):
         self.store = store
         self.extractor = extractor
@@ -58,6 +59,11 @@ class CodingWriter:
         self.embed_service = embed_service
         self.fact_reconciler = fact_reconciler or WorkingFactReconciler(
             store, embed_service, llm_provider
+        )
+        self.variant = (
+            "coding"
+            if str(variant or "").strip().lower() == "coding"
+            else "working"
         )
         # cache 仅用于把 request_id 串给各阶段（各阶段自己打点）；writer 不集中打点。
         self.cache = cache
@@ -217,6 +223,7 @@ class CodingWriter:
         return {
             "success": True,
             "scene": "productivity",
+            "variant": self.variant,
             "request_id": request_id,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
             "ops": [op.to_dict() for op in ops],
@@ -278,11 +285,11 @@ class CodingWriter:
                         f"[coding-write] crosslink fact {f.fact_id} failed: {e}"
                     )
 
-    @staticmethod
-    def _empty_response(request_id: str, t0: float) -> Dict[str, Any]:
+    def _empty_response(self, request_id: str, t0: float) -> Dict[str, Any]:
         return {
             "success": True,
             "scene": "productivity",
+            "variant": self.variant,
             "request_id": request_id,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
             "ops": [],

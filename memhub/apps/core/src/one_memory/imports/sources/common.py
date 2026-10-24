@@ -80,6 +80,7 @@ def _clamp_verbatim(text: str) -> str:
     keep = max(0, MAX_VERBATIM_CHARACTERS - len(marker))
     return text[:keep] + marker
 
+
 #: At most one read heartbeat per second. Faster would be more writes than the
 #: counts are worth; slower leaves the job's visible state stale.
 _READ_PROGRESS_INTERVAL_SECONDS = 1.0
@@ -1093,8 +1094,7 @@ def to_evidence(
         created_at=parsed.created_at,
         verbatim=_clamp_verbatim(parsed.verbatim),
         raw_verbatim=(
-            None if parsed.raw_verbatim is None
-            else _clamp_verbatim(parsed.raw_verbatim)
+            None if parsed.raw_verbatim is None else _clamp_verbatim(parsed.raw_verbatim)
         ),
         origin_meta={
             EvidenceOrigin.FILE: OriginMetadata(

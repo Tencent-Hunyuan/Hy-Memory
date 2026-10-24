@@ -1,4 +1,4 @@
-import type { ContextSearchResponse } from "@one-memory/contracts";
+import type { HostContextSearchResponse } from "@one-memory/contracts";
 import type { BrokerClientErrorCode } from "./broker-client.js";
 
 /** v9 visible receipts. Structured path dumps stay after this line. */
@@ -15,10 +15,15 @@ export const CONTEXT_RECEIPTS = {
 
 const NO_BYPASS = "Do not retry through other tools or expand permissions.";
 
-export function contextResultReceipt(result: ContextSearchResponse): string {
+export function contextResultReceipt(
+  result: HostContextSearchResponse,
+): string {
   if (result.state === "unavailable") return CONTEXT_RECEIPTS.unavailable;
   if (result.state === "partial") {
-    if (result.paths.memory.reason === "timeout_budget") {
+    if (
+      result.schema_version === 1 &&
+      result.paths.memory.reason === "timeout_budget"
+    ) {
       return CONTEXT_RECEIPTS.semanticTimeout;
     }
     return result.items.length === 0

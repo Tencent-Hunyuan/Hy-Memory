@@ -18,13 +18,13 @@ If you run into a problem, please open an Issue with the version, platform,repro
 
 ## 发行与平台合同
 
-公共 Python SDK 为 `hy-memory==2.0.4`。MemHub 源码版本为 `1.0.4`
-（build 13），GitHub 仓库为
+源码当前固定使用公开 PyPI 正式版 `hy-memory==2.0.5`。MemHub 源码版本为 `1.0.5`
+（build 14），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-`v1.0.4` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
+`v1.0.5` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
 Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命周期验收；macOS
 制品由发行流水线完成 Developer ID 签名、公证和验收后手动上传。Windows 不支持。
 只有同时出现在 GitHub Release 与 `release-manifest.json` 中、且通过公开校验的制品才属于
@@ -37,23 +37,27 @@ Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命�
 ## 核心原则
 
 - 一次安装、一个 Runtime、一份数据、多种客户端。
-- Python Core 是唯一记忆数据面和唯一业务数据库写入者。
+- Hy Memory SDK 是 memory/raw/vector/graph/coding 数据面的唯一权威；Python Core
+  管理授权、模型、异步队列和 Runtime 状态。
 - 来源读取、模型处理和宿主读取是相互独立的授权边界。
-- 正式记忆链路保持 `Evidence -> Hy Memory -> Governance -> Matters/Wiki`。
+- 正式写链路为 `memory_write_jobs -> SDK add() -> raw/memory ID receipt`。
 - 产品不包含屏幕、Accessibility / AXTree、OCR、键鼠、剪贴板或后台录音采集。
 
 ## 仓库结构
 
-- `apps/core`：Python / FastAPI Kernel，负责 Evidence、Hy Memory、治理、检索与 API。
+- `apps/core`：Python / FastAPI Kernel，负责授权、模型、队列、SDK Runtime 边界与 API。
 - `apps/cli`：安装、控制和诊断共享 Runtime 的 `one-memory` CLI。
 - `apps/web`：React / TypeScript 管理界面。
 - `apps/desktop`：Electron 桌面壳与图形安装入口。
 - `packages/contracts`：公共 API 类型。
+- `packages/i18n`：Web 与 Electron 共用的界面语言合同和 catalog。
 - `packages/host-bridge`：AI App 的 Skill、Hook、插件和 MCP 接入。
 - `packages/runtime-control`：Core、Host Gateway 和 Runtime 生命周期控制。
 
 架构详情见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 和
 [`docs/contracts/runtime-unification.md`](docs/contracts/runtime-unification.md)。
+界面语言架构与社区翻译规则见
+[`docs/LOCALIZATION.md`](docs/LOCALIZATION.md)。
 产品、测试和一线支持排查导入与记忆沉淀时，使用
 [`docs/PRODUCT_LOG_TROUBLESHOOTING.md`](docs/PRODUCT_LOG_TROUBLESHOOTING.md)。
 
@@ -113,7 +117,7 @@ MemHub 的 SQLite 数据默认位于 `~/.one-memory`，不在 npm 包或 Runtime
 
 ## Hy Memory
 
-当前开发依赖固定为公开 PyPI 包 `hy-memory==2.0.4`。SDK 配置、权限边界及 search
+SDK 依赖固定为公开 PyPI 正式版 `hy-memory==2.0.5`。SDK 配置、权限边界及 search
 返回格式见 [`MEMORY.md`](MEMORY.md)。HY search 返回的 `content` 已包含 SDK 统一生成的
 逻辑时间和演化上下文；调用方不应再次转换时间戳或重复拼接 `When`。
 
