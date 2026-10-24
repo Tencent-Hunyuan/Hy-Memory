@@ -2056,6 +2056,7 @@ export function MemorySpace({
           <SdkMemoryLibrary
             active={active}
             focusedMemoryId={sdkFocusedMemoryId}
+            query={displayedMode === "library" ? query : ""}
           />
         ) : (
           <>
