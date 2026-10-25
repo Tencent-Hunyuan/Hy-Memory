@@ -92,11 +92,13 @@ def test_each_fault_outcome_is_realised_by_the_durable_queue(tmp_path) -> None:
             self.error = error
             self.seen: list[str] = []
 
-        async def process_records(self, records, **_kwargs):
+        async def process_sdk_job(self, records, **_kwargs):
+            # Refusals are classified before `before_hy_invocation`, as the
+            # SDK write processor does, so these never cross into HY.
             self.seen.append("called")
             if self.error is not None:
                 raise self.error
-            return ()
+            return type("Result", (), {"raw_ids": (), "memory_ids": ()})()
 
     # hy_succeeded_then_crash: marked invoked, then the lease lapses -> unknown.
     path = tmp_path / "fault.sqlite3"

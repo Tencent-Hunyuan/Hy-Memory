@@ -15,10 +15,12 @@ import {
   installServiceWithDisabledFallback,
   isDisabledServiceInstallError,
   isInstalledApplicationsApp,
+  requireCurrentRuntimeAtLeast,
   stableRuntimeErrorCode,
   stableRuntimeFailureDetail,
   stableRuntimeUserMessage,
   startStableRuntimeRepair,
+  startupFailureCause,
 } from "./stable-runtime";
 
 it("only treats a packaged macOS executable under Applications as installed", () => {
@@ -286,17 +288,11 @@ describe("startup install errors", () => {
     expect(noSpace).toContain("不会丢失");
     expect(noSpace).not.toContain("sdk_migration_disk_space_insufficient");
 
-    const noModel = stableRuntimeUserMessage(
-      new Error("model_profile_not_active"),
+    const unreadable = stableRuntimeUserMessage(
+      new Error("sdk_migration_memory_unreadable"),
     );
-    expect(noModel).toContain("模型");
-    expect(noModel).not.toContain("model_profile_not_active");
-
-    const coding = stableRuntimeUserMessage(
-      new Error("sdk_migration_working_fact_conflict"),
-    );
-    expect(coding).toContain("Coding");
-    expect(coding).toContain("不会丢失");
+    expect(unreadable).toContain("没有切换数据源");
+    expect(unreadable).toContain("不会丢失");
   });
 });
 
@@ -316,5 +312,45 @@ describe("startup dialog body", () => {
     );
     expect(detail).toContain("磁盘空间不足");
     expect(detail).not.toContain("sdk_migration_disk_space_insufficient");
+  });
+});
+
+describe("packaged runtime build after an App upgrade", () => {
+  it("refuses to run on a Runtime older than the App, or none", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "memhub-current-"));
+    await expect(requireCurrentRuntimeAtLeast(root, 21)).rejects.toThrow(
+      "packaged_runtime_not_current",
+    );
+    await mkdir(path.join(root, "current"));
+    const manifest = path.join(root, "current", "manifest.json");
+    await writeFile(manifest, JSON.stringify({ build_number: 19 }));
+    await expect(requireCurrentRuntimeAtLeast(root, 21)).rejects.toThrow(
+      "packaged_runtime_not_current",
+    );
+    await writeFile(manifest, JSON.stringify({ build_number: 21 }));
+    await expect(
+      requireCurrentRuntimeAtLeast(root, 21),
+    ).resolves.toBeUndefined();
+    await writeFile(manifest, JSON.stringify({ build_number: 22 }));
+    await expect(
+      requireCurrentRuntimeAtLeast(root, 21),
+    ).resolves.toBeUndefined();
+    await expect(
+      requireCurrentRuntimeAtLeast(root, undefined),
+    ).resolves.toBeUndefined();
+    expect(
+      stableRuntimeUserMessage(new Error("packaged_runtime_not_current")),
+    ).toContain("重新安装");
+  });
+
+  it("keeps the cause of a startup failure, without the home path", () => {
+    const cause = startupFailureCause(
+      new Error("ENOENT: no such file /Users/someone/Library/x\nmore"),
+      "/Users/someone",
+    );
+    expect(cause).toBe("Error: ENOENT: no such file ~/Library/x more");
+    expect(startupFailureCause(new Error("x".repeat(500)), "/h").length).toBe(
+      300,
+    );
   });
 });

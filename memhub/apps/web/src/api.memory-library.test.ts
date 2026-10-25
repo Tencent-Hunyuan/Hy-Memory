@@ -68,6 +68,8 @@ describe("paged memory library client", () => {
     expect(
       await getSdkMemoryLibrary({
         statuses: ["active", "superseded"],
+        source: "cursor",
+        query: "release",
         offset: 0,
         limit: 25,
       }),
@@ -76,5 +78,7 @@ describe("paged memory library client", () => {
     const params = get.mock.calls[0][1].params as URLSearchParams;
     expect(params.getAll("statuses")).toEqual(["active", "superseded"]);
     expect(params.get("limit")).toBe("25");
+    expect(params.get("source")).toBe("cursor");
+    expect(params.get("query")).toBe("release");
   });
 });

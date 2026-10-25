@@ -22,6 +22,13 @@ class RetiredEvidenceStore:
         del limit
         return 0
 
+    def release_sdk_staging(self, evidence_ids: tuple[str, ...]) -> int:
+        # The write drain releases staged Evidence after every SDK write. On
+        # SDK authority nothing is staged; without this, `__getattr__` raised
+        # past `getattr(..., None)` and every completed write logged an error.
+        del evidence_ids
+        return 0
+
     def get(self, _identifier: str) -> None:
         return None
 

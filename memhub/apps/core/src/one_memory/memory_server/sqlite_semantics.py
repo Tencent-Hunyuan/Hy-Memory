@@ -64,7 +64,6 @@ EXEMPT_PATHS = frozenset(
         "memory_server/sqlite_semantics.py",
         "memory_tasks.py",
         "sdk_data_plane_migration.py",
-        "sdk_migration_inventory.py",
         "target_schema.py",
         # D93 A: the visibility cache is SQLite-only by construction. It is a
         # derived table with triggers on the six tables the read check reads —

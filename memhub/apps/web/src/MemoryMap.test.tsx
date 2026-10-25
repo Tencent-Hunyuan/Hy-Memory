@@ -177,7 +177,7 @@ it("OBS-22: the graph inspector has no editing entry and never says changes cann
   await act(async () => {});
   // The detail pane is open and the page is being re-read, which used to be
   // the exact condition that printed the warning.
-  expect(screen.getByText("共同原文")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
   expect(screen.queryByText(/暂不能保存更改/)).toBeNull();
 });
 
@@ -224,11 +224,11 @@ it("OBS-15: switching memory shows a read in progress instead of the previous me
   // screen while it is open.
   render(<Host simplified deferMemoryId="m1" />);
   const list = screen.getByRole("list", { name: "地图记忆列表" });
-  expect(screen.getByText("共同原文")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
   await user.click(within(list).getByRole("button", { name: /第二条/ }));
   // The first memory's evidence must not still be presented as if it
   // belonged to the selection that is now the second one.
-  expect(screen.queryByText("共同原文")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
   expect(screen.getByRole("status").textContent).toContain("正在读取这条记忆");
 });
 
@@ -253,10 +253,10 @@ it("opens the newest listed memory in the detail pane and keeps it closed after 
   const list = screen.getByRole("list", { name: "地图记忆列表" });
   const first = within(list).getByRole("button", { name: /第一条/ });
   expect(first.getAttribute("aria-pressed")).toBe("true");
-  expect(screen.getByText("共同原文")).toBeTruthy();
-  expect(screen.getByText(/原对话/)).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  expect(screen.queryByText(/原对话/)).toBeNull();
   await user.click(screen.getByRole("button", { name: "关闭记忆详情" }));
-  expect(screen.queryByText("共同原文")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
 });
 
 it("OBS-14: lists what the conversation settled instead of asking to settle first", async () => {

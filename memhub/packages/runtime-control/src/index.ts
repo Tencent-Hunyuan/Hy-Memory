@@ -175,6 +175,13 @@ export {
   type RuntimeSupervisorOptions,
 } from "./runtime-supervisor.js";
 export {
+  type CoreCommand,
+  runSdkMigration,
+  type SdkMigrationCommandResult,
+  type SdkMigrationOptions,
+  type SdkMigrationResult,
+} from "./sdk-migration.js";
+export {
   installUserService,
   parseDisabledOverride,
   restartUserService,

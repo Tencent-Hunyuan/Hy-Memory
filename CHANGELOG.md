@@ -4,6 +4,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Reused the existing three-column memory map for SDK-authority list/detail
+  views and removed the retired "original evidence" surface. SDK-native status,
+  source, conversation time and creation time now render without fabricated
+  revisions; source and text filters are applied by the paged Core endpoint.
 - Fixed legacy-to-SDK startup migration to adopt native Coding Experience and
   Working Fact IDs instead of importing them as Chat layers. Raw migration now
   rebuilds bounded user/assistant turns from the latest three days, excludes

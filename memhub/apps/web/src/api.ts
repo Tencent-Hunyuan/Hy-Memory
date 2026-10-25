@@ -891,10 +891,14 @@ export async function getMemoryLibrary(
 export async function getSdkMemoryLibrary(
   {
     statuses = ["active"],
+    source,
+    query,
     offset = 0,
     limit = 100,
   }: {
     statuses?: SdkMemoryStatus[];
+    source?: string;
+    query?: string;
     offset?: number;
     limit?: number;
   } = {},
@@ -905,6 +909,8 @@ export async function getSdkMemoryLibrary(
     limit: String(limit),
   });
   for (const status of statuses) params.append("statuses", status);
+  if (source) params.set("source", source);
+  if (query?.trim()) params.set("query", query.trim());
   const response = await client.get<SdkMemoryPage>("/api/v2/memory-library", {
     params,
     signal,
@@ -1161,6 +1167,17 @@ export async function getMemory(memoryId: string): Promise<MemoryDetail> {
  * read in the app and the least urgent, so it never runs twice at once.
  */
 let pendingMemoryGraph: Promise<MemoryGraphResponse> | null = null;
+
+/** The memory map on SDK authority: SDK memories plus the graph overlay. */
+export async function getSdkMemoryGraph(
+  signal?: AbortSignal,
+): Promise<MemoryGraphResponse> {
+  const response = await client.get<MemoryGraphResponse>(
+    "/api/v2/memories/graph",
+    { params: { limit: 300 }, signal },
+  );
+  return response.data;
+}
 
 export async function getMemoryGraphWith(
   transport: { get: typeof client.get } = client,

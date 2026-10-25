@@ -57,6 +57,11 @@ const runtimeMocks = vi.hoisted(() => ({
   })),
   uninstallUserService: vi.fn(async (..._args: unknown[]) => "removed"),
   restartUserService: vi.fn(async () => undefined),
+  runSdkMigration: vi.fn(
+    async (): Promise<{ state: string; code?: string }> => ({
+      state: "not_required",
+    }),
+  ),
   rollbackLocalInstall: vi.fn(async () => undefined),
   planCliLink: vi.fn(async ({ home, installRoot }) => ({
     schema_version: 1,
@@ -126,6 +131,7 @@ vi.mock("@one-memory/runtime-control", async (importOriginal) => {
     installUserService: runtimeMocks.installUserService,
     uninstallUserService: runtimeMocks.uninstallUserService,
     restartUserService: runtimeMocks.restartUserService,
+    runSdkMigration: runtimeMocks.runSdkMigration,
     rollbackLocalInstall: runtimeMocks.rollbackLocalInstall,
     planCliLink: runtimeMocks.planCliLink,
     installCliLink: runtimeMocks.installCliLink,
@@ -887,6 +893,108 @@ describe("public One Memory CLI", () => {
       // Rolled back to the previous version and restarted it.
       expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
       expect(runtimeMocks.restartUserService).toHaveBeenCalledTimes(2);
+    });
+
+    const upgradeArguments = [
+      "upgrade",
+      "--source",
+      "/tmp/dist",
+      "--home",
+      "/tmp/home",
+      "--install-root",
+      "/tmp/install",
+      "--data-dir",
+      "/tmp/custom data",
+      "--yes",
+    ];
+    const presentCliLink = {
+      schema_version: 1 as const,
+      platform: "linux" as const,
+      home: "/tmp/home",
+      install_root: "/tmp/install",
+      bin_directory: "/tmp/bin",
+      status: "present" as const,
+      blocked_reason: null,
+      link_path: "/tmp/bin/one-memory",
+      target_path: "/tmp/install/current/bin/one-memory",
+    };
+
+    it("migrates the home with the new Core before restarting the Runtime", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      const order: string[] = [];
+      runtimeMocks.runSdkMigration.mockImplementationOnce(async () => {
+        order.push("migrate");
+        return { state: "cutover" };
+      });
+      runtimeMocks.restartUserService.mockImplementationOnce(async () => {
+        order.push("restart");
+      });
+      const output = captureStdout();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        output.restore();
+      }
+      expect(code!).toBe(0);
+      expect(order).toEqual(["migrate", "restart"]);
+      expect(runtimeMocks.runSdkMigration).toHaveBeenCalledWith(
+        expect.objectContaining({ dataDir: "/tmp/custom data" }),
+      );
+    });
+
+    it("rolls back to the previous version when the migration does not finish", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      runtimeMocks.runSdkMigration.mockResolvedValueOnce({
+        state: "deferred",
+        code: "sdk_migration_disk_space_insufficient",
+      });
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        command: "upgrade",
+        code: "sdk_migration_disk_space_insufficient",
+      });
+      expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+    });
+
+    it("keeps the new version when a migrated home is slow to come up", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      runtimeMocks.runSdkMigration.mockResolvedValueOnce({ state: "cutover" });
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => false },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        command: "upgrade",
+        code: "runtime_not_ready_after_sdk_migration",
+      });
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
     });
 
     it("reports success once the upgraded Runtime is healthy", async () => {

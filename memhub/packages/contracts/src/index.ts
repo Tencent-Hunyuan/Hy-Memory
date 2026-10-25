@@ -518,6 +518,11 @@ export interface MemoryDetail {
   memory: GovernedMemory;
   evidence: MemoryEvidenceExcerpt[];
   history: MemoryVersion[];
+  /** SDK-native display metadata. Legacy governed details leave these absent. */
+  sdk_status?: SdkMemoryStatus;
+  source_id?: string | null;
+  sdk_memory_at?: string | null;
+  sdk_created_at?: string | null;
   // Null for a memory nobody has rewritten: there is no index to be behind,
   // and the interface should not explain a state the user never caused.
   index_sync: MemoryIndexSync | null;

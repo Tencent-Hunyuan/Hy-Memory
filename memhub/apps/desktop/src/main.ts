@@ -112,9 +112,11 @@ import {
   installBundledCliIfNeeded,
   installServiceWithDisabledFallback,
   isInstalledApplicationsApp,
+  requireCurrentRuntimeAtLeast,
   stableRuntimeErrorCode,
   stableRuntimeFailureDetail,
   startStableRuntimeRepair,
+  startupFailureCause,
 } from "./stable-runtime";
 import { STARTUP_SCREEN_URL, startupScreenHtml } from "./startup-screen";
 import {
@@ -1093,7 +1095,7 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       component: "desktop.sdk_migration",
       event: "sdk_migration.startup",
       outcome:
-        migration.state === "cutover"
+        migration.state === "cutover" || migration.state === "complete"
           ? "succeeded"
           : migration.state === "deferred"
             ? "blocked"
@@ -1158,30 +1160,52 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       const previousOwner = owner;
       let runtimeChanged = false;
       let transientRuntime = false;
-      if (owner?.owner !== "cli") {
-        const installed = await installPackagedRuntime({
-          resourcesPath: process.resourcesPath,
-          executablePath: process.execPath,
-          installRoot,
-          platform: "darwin",
-          arch: process.arch,
-          ...(packagedBuildNumber === undefined
-            ? {}
-            : { buildNumber: packagedBuildNumber }),
-          ...(packagedCommit === undefined
-            ? {}
-            : { gitCommit: packagedCommit }),
-          // Only the packaged Desktop path opts into a valid same-build,
-          // different-commit takeover. CLI installs remain strict.
-          replaceSameBuild: true,
-          serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
-        });
-        runtimeChanged = !installed.reused_current;
-        await installBundledCliIfNeeded({
-          home: app.getPath("home"),
-          installRoot,
-          platform: "darwin",
-        });
+      // Install whoever owns the service. Owner decides who starts and stops
+      // it, not which build runs: skipping the install for a CLI owner (also
+      // the App's own guess when its receipt is missing) left an upgraded App
+      // on the previous Runtime and, with `current` gone, on none at all.
+      {
+        let installed: Awaited<
+          ReturnType<typeof installPackagedRuntime>
+        > | null = null;
+        try {
+          installed = await installPackagedRuntime({
+            resourcesPath: process.resourcesPath,
+            executablePath: process.execPath,
+            installRoot,
+            platform: "darwin",
+            arch: process.arch,
+            ...(packagedBuildNumber === undefined
+              ? {}
+              : { buildNumber: packagedBuildNumber }),
+            ...(packagedCommit === undefined
+              ? {}
+              : { gitCommit: packagedCommit }),
+            // Only the packaged Desktop path opts into a valid same-build,
+            // different-commit takeover. CLI installs remain strict.
+            replaceSameBuild: true,
+            serviceEnableMarker: runtimeServiceEnableMarkerPath(dataDir),
+          });
+        } catch (error) {
+          // `memhub upgrade` may already have installed a newer build.
+          if (
+            !(
+              owner?.owner === "cli" &&
+              error instanceof Error &&
+              error.message === "distribution_downgrade_refused"
+            )
+          )
+            throw error;
+        }
+        if (installed !== null) {
+          runtimeChanged = !installed.reused_current;
+          await installBundledCliIfNeeded({
+            home: app.getPath("home"),
+            installRoot,
+            platform: "darwin",
+          });
+        }
+        await requireCurrentRuntimeAtLeast(installRoot, packagedBuildNumber);
       }
       if (
         !desktopBackgroundLaunch &&
@@ -1485,6 +1509,9 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       outcome: "failed",
       error_code: stableRuntimeErrorCode(error),
       ...diagnosticError(error),
+      // The code alone is often `desktop_start_failed`; the cause is what
+      // support needs. Home is shortened and the text bounded.
+      details: { cause: startupFailureCause(error, app.getPath("home")) },
     });
     throw error;
   }

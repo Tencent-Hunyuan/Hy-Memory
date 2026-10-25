@@ -278,3 +278,71 @@ def test_sdk_user_profile_http_returns_native_assembled_profile(tmp_path):
             }
 
     asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
+def test_sdk_memory_library_forwards_source_and_filters_query(tmp_path):
+    async def scenario():
+        app = application(tmp_path)
+        calls = []
+
+        class Client:
+            def list_memories(self, **kwargs):
+                calls.append(kwargs)
+                rows = [
+                    {
+                        "memory_id": "release",
+                        "content": "Release plan",
+                        "layer": "l2_fact",
+                        "status": "active",
+                        "user_id": "local",
+                        "agent_id": "all-apps",
+                        "session_id": "s1",
+                        "source": "cursor",
+                        "tags": ["shipping"],
+                    },
+                    {
+                        "memory_id": "other",
+                        "content": "Unrelated",
+                        "layer": "l2_fact",
+                        "status": "active",
+                        "user_id": "local",
+                        "agent_id": "all-apps",
+                        "session_id": "s2",
+                        "source": "cursor",
+                        "tags": [],
+                    },
+                ]
+                return {
+                    "vdb": {
+                        "memories": rows,
+                        "total": len(rows),
+                        "limit": kwargs["limit"],
+                        "offset": kwargs["offset"],
+                    }
+                }
+
+        class Handle:
+            async def client(self):
+                return Client()
+
+            async def close(self):
+                return None
+
+        async with app.router.lifespan_context(app):
+            app.state.sdk_client_handle = Handle()
+            async with client_for(app) as client:
+                response = await client.get(
+                    "/api/v2/memory-library",
+                    params={"source": "cursor", "query": "release"},
+                )
+                assert response.status_code == 200
+                body = response.json()
+                assert body["total"] == 1
+                assert [item["memory_id"] for item in body["memories"]] == [
+                    "release"
+                ]
+                assert calls[0]["include_sources"] == ["cursor"]
+                assert calls[0]["limit"] == 100_000
+
+    asyncio.run(scenario())

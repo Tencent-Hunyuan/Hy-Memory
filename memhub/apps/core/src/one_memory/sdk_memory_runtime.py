@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,9 @@ from one_memory.memory_queue import ExtractionWindowPreset, QueueDepths
 from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.semantic_deadline import SemanticMemoryHit
+
+# Only a code-shaped message is a code; anything else may carry provider text.
+_STABLE_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}")
 
 logger = logging.getLogger(__name__)
 RAW_RETENTION_DAYS = 3
@@ -236,8 +240,22 @@ class SdkMemoryRuntime:
             decision=decision,
         )
 
+    async def _mutation_client(self) -> Any:
+        """The write client, with no-model and keychain refusals as SDK codes.
+
+        Callers record these against the edit or deletion instead of failing
+        the request that already committed it.
+        """
+        try:
+            return await self.coordinator.client()
+        except RuntimeError as error:
+            code = str(error)
+            if not _STABLE_CODE.fullmatch(code):
+                code = "hy_memory_client_unavailable"
+            raise HySdkError(code) from error
+
     async def update_hy_memory(self, memory_id: str, content: str) -> dict[str, object]:
-        client = await self.coordinator.client()
+        client = await self._mutation_client()
         try:
             result = await asyncio.to_thread(client.update, memory_id, content)
         except Exception as error:
@@ -247,7 +265,7 @@ class SdkMemoryRuntime:
         return result
 
     async def finish_deletion(self, memory_id: str) -> None:
-        client = await self.coordinator.client()
+        client = await self._mutation_client()
         try:
             result = await asyncio.to_thread(client.delete, memory_id)
         except Exception as error:

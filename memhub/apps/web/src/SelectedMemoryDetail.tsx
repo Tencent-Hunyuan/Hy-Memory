@@ -1,4 +1,8 @@
-import type { MemoryDetail, SourceResponse } from "@one-memory/contracts";
+import type {
+  MemoryDetail,
+  SdkMemoryStatus,
+  SourceResponse,
+} from "@one-memory/contracts";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiErrorCode, correctMemory, getMemory, mutateMemory } from "./api";
@@ -10,7 +14,7 @@ import { traceUiAction } from "./ui-trace";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 import "./selected-memory.css";
 
-type Page = "read" | "edit" | "original" | "delete";
+type Page = "read" | "edit" | "delete";
 
 export function SelectedMemoryDetail({
   detail,
@@ -50,8 +54,17 @@ export function SelectedMemoryDetail({
   }, []);
   const memory = detail.memory;
   const evidence = detail.evidence[0];
-  const statusLabel =
-    memory.status === "confirmed"
+  const sdkStatusLabels: Record<SdkMemoryStatus, Parameters<typeof t>[0]> = {
+    active: "selectedMemory.status.active",
+    superseded: "selectedMemory.status.superseded",
+    shadow: "selectedMemory.status.shadow",
+    negated: "selectedMemory.status.negated",
+    conflicted: "selectedMemory.status.conflicted",
+    archived: "selectedMemory.status.archived",
+  };
+  const statusLabel = detail.sdk_status
+    ? t(sdkStatusLabels[detail.sdk_status])
+    : memory.status === "confirmed"
       ? t("selectedMemory.status.confirmed")
       : memory.status === "deleted"
         ? t("selectedMemory.status.deleted")
@@ -60,7 +73,7 @@ export function SelectedMemoryDetail({
           : t("selectedMemory.status.unknown");
   const source = sourceNameOr(
     sources,
-    evidence?.source_id,
+    detail.source_id ?? evidence?.source_id,
     t("selectedMemory.sourceUnknown"),
   );
   const dirty = page === "edit" && draft !== memory.content;
@@ -221,13 +234,6 @@ export function SelectedMemoryDetail({
       if (alive.current) setBusy(false);
     }
   }
-  const author =
-    evidence?.written_by === "person" || evidence?.written_by === "user"
-      ? t("selectedMemory.author.you")
-      : evidence?.written_by === "agent" || evidence?.written_by === "assistant"
-        ? t("selectedMemory.author.assistant")
-        : t("selectedMemory.author.unknown");
-  const timestamp = clockStamp(evidence?.created_at, locale);
   const split = memory.content.search(/[。\n]/);
   const heading =
     split > 0 && split < 85
@@ -242,23 +248,37 @@ export function SelectedMemoryDetail({
         data-hide-actions={hideActions ? "true" : "false"}
       >
         <p className="selected-memory-status">
-          {statusLabel} ·{" "}
-          {t("selectedMemory.version", {
-            revision: new Intl.NumberFormat(locale).format(memory.revision),
-          })}
+          {statusLabel}
+          {!detail.sdk_status &&
+            ` · ${t("selectedMemory.version", {
+              revision: new Intl.NumberFormat(locale).format(memory.revision),
+            })}`}
         </p>
         <h3>{heading}</h3>
         {body && <p className="selected-memory-body">{body}</p>}
-        <p className="selected-memory-source">
-          {t("selectedMemory.sourceLine", { source, time: timestamp })}
-        </p>
+        {detail.source_id || detail.evidence.length ? (
+          <p className="selected-memory-source">
+            {t("selectedMemory.sourceLine", {
+              source,
+              time: clockStamp(
+                detail.sdk_memory_at ?? evidence?.created_at,
+                locale,
+              ),
+            })}
+          </p>
+        ) : null}
         <p className="selected-memory-times">
           {t("selectedMemory.timestamps", {
             conversation: clockStamp(
-              conversationAt?.at ?? evidence?.created_at,
+              conversationAt?.at ??
+                detail.sdk_memory_at ??
+                evidence?.created_at,
               locale,
             ),
-            created: clockStamp(memory.updated_at, locale),
+            created: clockStamp(
+              detail.sdk_created_at ?? memory.updated_at,
+              locale,
+            ),
           })}
         </p>
         {!hideActions && (
@@ -276,27 +296,6 @@ export function SelectedMemoryDetail({
             {t("selectedMemory.edit")}
           </R6Button>
         )}
-        <section className="selected-memory-evidence">
-          <h4>{t("selectedMemory.evidence")}</h4>
-          <small>
-            {t("selectedMemory.evidenceLine", { author, time: timestamp })}
-          </small>
-          <blockquote>
-            {evidence?.available
-              ? evidence.verbatim
-              : t("selectedMemory.evidenceUnavailable")}
-          </blockquote>
-          {!hideActions && (
-            <R6Button
-              onClick={(event) => {
-                trigger.current = event.currentTarget;
-                setPage("original");
-              }}
-            >
-              {t("selectedMemory.viewOriginal")}
-            </R6Button>
-          )}
-        </section>
         {!hideActions && (
           <R6Button variant="quiet" onClick={() => setShowHistory((v) => !v)}>
             {t("selectedMemory.history")}
@@ -345,9 +344,7 @@ export function SelectedMemoryDetail({
             aria-label={
               page === "edit"
                 ? t("selectedMemory.editTitle")
-                : page === "original"
-                  ? t("selectedMemory.originalTitle")
-                  : t("selectedMemory.delete")
+                : t("selectedMemory.delete")
             }
             onKeyDown={(event) => {
               if (event.key === "Tab") {
@@ -380,13 +377,8 @@ export function SelectedMemoryDetail({
               <h1 ref={focus} tabIndex={-1}>
                 {page === "edit"
                   ? t("selectedMemory.editTitle")
-                  : page === "original"
-                    ? t("selectedMemory.originalTitle")
-                    : t("selectedMemory.delete")}
+                  : t("selectedMemory.delete")}
               </h1>
-              {page === "original" && (
-                <R6Button onClick={close}>{t("selectedMemory.back")}</R6Button>
-              )}
             </header>
             {page === "edit" ? (
               <div className="selected-editor">
@@ -442,40 +434,6 @@ export function SelectedMemoryDetail({
                     {t("selectedMemory.save")}
                   </R6Button>
                 </div>
-              </div>
-            ) : page === "original" ? (
-              <div className="selected-original">
-                <small>
-                  {source} · {timestamp}
-                </small>
-                <p>{author}</p>
-                {detail.evidence.map((item) => (
-                  <section key={item.evidence_id}>
-                    <small>
-                      {sourceNameOr(
-                        sources,
-                        item.source_id,
-                        t("selectedMemory.sourceUnknown"),
-                      )}{" "}
-                      ·{" "}
-                      {item.written_by === "person"
-                        ? t("selectedMemory.author.user")
-                        : item.written_by === "agent"
-                          ? t("selectedMemory.author.agent")
-                          : t("selectedMemory.author.unknown")}
-                    </small>
-                    <blockquote>
-                      {item.available
-                        ? item.verbatim
-                        : t("selectedMemory.sourceUnavailable")}
-                    </blockquote>
-                  </section>
-                ))}
-                <small>{t("selectedMemory.related")}</small>
-                <h2>{heading}</h2>
-                <R6Button onClick={close}>
-                  {t("selectedMemory.viewMemory")}
-                </R6Button>
               </div>
             ) : (
               <div className="selected-delete">

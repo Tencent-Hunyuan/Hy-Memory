@@ -139,7 +139,6 @@
 | `test_live_watch.py` | `contract` | 覆盖 a new turn lands well inside the ten second target、start prime catches a change that predates the watcher、a run that predates the change is followed by a fresh one 等 15 个场景。 |
 | `test_live_watch_grants.py` | `integration` | 覆盖 explicit sync grant starts watch without restart and revocation stops it 场景。 |
 | `test_local_embedding.py` | `contract` | Guards for the built-in embedding model. |
-| `test_local_embedding_offsets.py` | `contract` | 覆盖 real locked tokenizer offsets are unicode codepoints、known emoji and combining offsets are not utf8 or utf16 units、offsets are not truncated or padded and do not create onnx session 等 9 个场景。 |
 | `test_local_onnx_provider.py` | `contract` | Expect local ONNX embedding to be the default and to feed Hy Memory. |
 | `test_log_file.py` | `contract` | 覆盖 what the watchdog says survives a dock launch、the log lives where the data does、a machine left running for months does not fill up 等 4 个场景。 |
 | `test_log_privacy.py` | `integration` | The file log is shipped to us in bug reports; it must not carry originals. |
@@ -232,21 +231,8 @@
 | `test_recall_scope_control.py` | `integration` | 覆盖 external scope cannot override shared or host workspace boundary、scope only mutation is versioned without changing status or reindexing 场景。 |
 | `test_recall_scope_off_loop.py` | `contract` | The workspace lookup behind an external recall must not run on the loop. |
 | `test_recent_first_import.py` | `contract` | Recent-file priority survives restart through a selection-bound frozen copy. |
-| `test_retrieval_chunking.py` | `contract` | 覆盖 default 384 body 64 overlap and exact source slices、all prefix and special tokens count toward strict 512 budget、real tokenizer covers long chinese middle and tail object locations 等 20 个场景。 |
-| `test_retrieval_eligibility_benchmark.py` | `contract` | 覆盖 scale probe proves composite authority index changes the plan 场景。 |
-| `test_retrieval_index_store.py` | `contract` | 覆盖 constructor and reads do not create database or schema、explicit initialization rolls back and never grants model policy、consumer and jobs commit together 等 19 个场景。 |
-| `test_retrieval_index_supervisor.py` | `contract` | 覆盖 stop waits for native exit and does not close resources、async cancellation repeatedly waits for native thread、idle no trigger no spin and duplicate start rejected 等 14 个场景。 |
-| `test_retrieval_index_worker.py` | `contract` | 覆盖 tick indexes complete original and reopen can search、change during native encoding never publishes、cancel after encode does not publish and is reclaimable 等 10 个场景。 |
 | `test_retrieval_lifespan.py` | `integration` | 覆盖 retrieval defaults off and does not create index、enabling retrieval requires runtime ownership、index enabled serve imports without building an unmanaged app 等 6 个场景。 |
-| `test_retrieval_mapped_content.py` | `contract` | 覆盖 raw authors keep exact body and do not mutate evidence、raw and author qualification rejects without tokenizing、ambiguous generated and body hygiene are not admitted 等 22 个场景。 |
-| `test_retrieval_mapped_integration.py` | `contract` | 覆盖 empty materialization rechecks excluded map、completed excluded missing active binding is not empty success、old empty completion is invalidated when a new indexed record arrives 等 24 个场景。 |
-| `test_retrieval_provisioning.py` | `contract` | The index has to come up through the product, not through a test helper. |
 | `test_retrieval_query_plan.py` | `contract` | Local QueryPlan: extract URL/path objects. |
-| `test_retrieval_raw_candidates.py` | `contract` | 覆盖 positive only current authorized published chunks are searched、empty authority never reads database or vector、unapproved source never enters vector query 等 15 个场景。 |
-| `test_retrieval_raw_evidence.py` | `contract` | 覆盖 materialized text is exact current original、stale candidates do not authorize original read、budget does not cut a chunk into fake partial object 等 6 个场景。 |
-| `test_retrieval_raw_lane.py` | `contract` | v1 raw lane must not claim complete empty when the derived index is partial. |
-| `test_retrieval_runtime.py` | `contract` | 覆盖 constructor and missing start create nothing、stop releases supervisor worker but preserves immutable snapshot、not initialized or invalid configuration never creates index 等 21 个场景。 |
-| `test_retrieval_vector_store.py` | `contract` | 覆盖 constructor does no io and unopened calls do not create、open existing missing store or collection never creates、real chroma collection has no embedding function or documents 等 32 个场景。 |
 | `test_runtime.py` | `integration` | 覆盖 runtime writes and removes ownership receipt、runtime rejects second owner for same data directory、nonpublishing maintenance owner still excludes a second core 等 4 个场景。 |
 | `test_runtime_client.py` | `contract` | 覆盖 runtime inspection authenticates the discovered instance、runtime inspection rejects untrusted receipts without probing、runtime inspection distinguishes stopped and identity mismatch 场景。 |
 | `test_sanitization_source_map.py` | `contract` | 覆盖 mapping matches existing sanitizer and exact original slices、synthetic replacements never claim original locations、repeated identical suffix is mapped by positions not string search 等 6 个场景。 |
@@ -329,4 +315,4 @@
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 | `test_zcode_source.py` | `contract` | The ZCode source: rollout parsing, detection, and the capability card. |
 
-共 324 个测试文件。
+共 310 个测试文件。

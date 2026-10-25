@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { MemoryDetail } from "@one-memory/contracts";
+import type { MemoryDetail, SourceResponse } from "@one-memory/contracts";
 import {
   act,
   cleanup,
@@ -14,7 +14,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
 
-it("localizes informational details and dates while preserving evidence and memory", async () => {
+it("localizes memory details without exposing the retired evidence surface", async () => {
   delete window.oneMemory;
   localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
   render(
@@ -29,9 +29,9 @@ it("localizes informational details and dates while preserving evidence and memo
   );
   expect(await screen.findByText("Guardada · Versión 2")).toBeTruthy();
   expect(
-    screen.getByRole("heading", { name: "Evidencia original" }),
-  ).toBeTruthy();
-  expect(screen.getByText("这次先确认范围。")).toBeTruthy();
+    screen.queryByRole("heading", { name: "Evidencia original" }),
+  ).toBeNull();
+  expect(screen.queryByText("这次先确认范围。")).toBeNull();
   expect(correct).not.toHaveBeenCalled();
   expect(remove).not.toHaveBeenCalled();
   localStorage.clear();
@@ -145,6 +145,29 @@ it.each([
   expect(screen.getByText(`${label} · 第 2 版`)).toBeTruthy();
   expect(screen.queryByText("待核对 · 第 2 版")).toBeNull();
 });
+it("shows the native SDK state without inventing a revision", () => {
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        memory: { ...detail.memory, revision: 0 },
+        evidence: [],
+        sdk_status: "shadow",
+        source_id: "cursor",
+        sdk_memory_at: "2026-09-18T00:00:00Z",
+        sdk_created_at: "2026-09-19T00:00:00Z",
+      }}
+      sources={[
+        { source_id: "cursor", display_name: "Cursor" } as SourceResponse,
+      ]}
+      onChanged={vi.fn()}
+      hideActions
+    />,
+  );
+  expect(screen.getByText("已隐藏")).toBeTruthy();
+  expect(screen.queryByText(/第 0 版/)).toBeNull();
+  expect(screen.getByText(/^来源 Cursor · /)).toBeTruthy();
+});
 it("opens full editor and saves content without rewriting scope", async () => {
   const changed = vi.fn();
   render(
@@ -204,27 +227,7 @@ it("keeps draft after conflict until latest revision is explicitly acknowledged"
     ),
   );
 });
-it("original page never substitutes unavailable evidence with stale text", () => {
-  const view = render(
-    <SelectedMemoryDetail detail={detail} sources={[]} onChanged={() => {}} />,
-  );
-  fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
-  expect(screen.getAllByText("这次先确认范围。").length).toBeGreaterThan(0);
-  view.rerender(
-    <SelectedMemoryDetail
-      detail={{
-        ...detail,
-        evidence: [{ ...detail.evidence[0], available: false }],
-      }}
-      sources={[]}
-      onChanged={() => {}}
-    />,
-  );
-  expect(screen.queryByText("这次先确认范围。")).toBeNull();
-  expect(screen.getByText("来源权限已变化或原文不可用。")).toBeTruthy();
-});
-
-it.each(["编辑", "查看原文", "删除记忆"])(
+it.each(["编辑", "删除记忆"])(
   "returns focus to %s without scrolling the background",
   (name) => {
     render(
@@ -275,7 +278,6 @@ it.each(["escape", "cancel"])(
       "value",
       "尚未保存的草稿",
     );
-    expect(screen.getByText("这次先确认范围。")).toBeTruthy();
     expect(correct).not.toHaveBeenCalled();
     confirm.mockReturnValue(true);
     close();
@@ -535,7 +537,7 @@ it("suspends the editor without losing its draft or leaving the background inert
   );
 });
 
-it("stamps today's source time the same way as 06A and 06E", () => {
+it("stamps today's source and conversation time without an evidence page", () => {
   render(
     <SelectedMemoryDetail
       detail={{
@@ -552,8 +554,6 @@ it("stamps today's source time the same way as 06A and 06E", () => {
     />,
   );
   expect(screen.getByText(/来源 workbuddy · 今天 /)).toBeTruthy();
-  expect(screen.getByText(/原对话 今天 /)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
-  expect(screen.getByRole("heading", { name: "原始对话" })).toBeTruthy();
-  expect(screen.getByText(/^workbuddy · 今天 /)).toBeTruthy();
+  expect(screen.getByText(/对话时间 今天 /)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
 });

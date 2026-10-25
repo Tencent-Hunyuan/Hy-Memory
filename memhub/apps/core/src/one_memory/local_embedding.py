@@ -10,16 +10,12 @@ weights alone.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
-from hashlib import sha256
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from one_memory.embedding_assets import (
     BUILTIN_EMBEDDING_DIMENSIONS,
     BUILTIN_EMBEDDING_MAX_TOKENS,
-    EMBEDDING_ASSETS,
-    AssetVerificationError,
     MissingEmbeddingAssetsError,
     assets_present,
     resolve_asset_dir,
@@ -34,28 +30,6 @@ _FETCH_HINT = (
 )
 
 
-@dataclass(frozen=True)
-class TokenOffset:
-    """Half-open Python Unicode code point offsets; synthetic specials use [0,0)."""
-
-    start_cp: int
-    end_cp: int
-    special: bool = False
-
-
-@dataclass(frozen=True)
-class TokenizedText:
-    """Untruncated, unpadded encoding, including tokenizer postprocessor specials."""
-
-    token_ids: tuple[int, ...]
-    offsets: tuple[TokenOffset, ...]
-
-    def __post_init__(self) -> None:
-        # Defensive copies also keep runtime callers from retaining mutable lists.
-        object.__setattr__(self, "token_ids", tuple(self.token_ids))
-        object.__setattr__(self, "offsets", tuple(self.offsets))
-
-
 class LocalEmbedder:
     """Encodes text with the built-in model, loading it on first use."""
 
@@ -68,43 +42,6 @@ class LocalEmbedder:
         self._session: Any | None = None
         self._tokenizer: Any | None = None
         self._input_names: frozenset[str] = frozenset()
-        self._offset_lock = threading.Lock()
-        self._offset_tokenizer: Any | None = None
-
-    def tokenize_with_offsets(self, text: str) -> TokenizedText:
-        """Tokenize original text without encode()'s truncation or batch padding.
-
-        The Python tokenizers binding returns code point offsets into the input,
-        even when its model normalizer changes spelling. This separate lazy
-        tokenizer uses the exact locked asset; it never loads an ONNX session or
-        mutates the tokenizer shared by encode(). Offsets are not UTF-16 indices.
-        """
-        if not isinstance(text, str):
-            raise TypeError("embedding_offsets_require_text")
-        with self._offset_lock:
-            if self._offset_tokenizer is None:
-                directory = resolve_asset_dir()
-                path = directory / "tokenizer.json"
-                if not path.is_file():
-                    raise MissingEmbeddingAssetsError(f"{_FETCH_HINT} Looked in {directory}.")
-                data = path.read_bytes()
-                expected = next(a.sha256 for a in EMBEDDING_ASSETS if a.filename == path.name)
-                if sha256(data).hexdigest() != expected:
-                    raise AssetVerificationError("tokenizer.json: locked digest mismatch")
-                from tokenizers import Tokenizer
-
-                tokenizer = Tokenizer.from_str(data.decode("utf-8"))
-                tokenizer.no_truncation()
-                tokenizer.no_padding()
-                self._offset_tokenizer = tokenizer
-            encoding = self._offset_tokenizer.encode(text, add_special_tokens=True)
-            offsets = tuple(
-                TokenOffset(start, end, bool(special))
-                for (start, end), special in zip(
-                    encoding.offsets, encoding.special_tokens_mask, strict=True
-                )
-            )
-            return TokenizedText(tuple(encoding.ids), offsets)
 
     def _load(self) -> tuple[Any, Any]:
         # Double-checked under a lock: memory processing encodes from worker

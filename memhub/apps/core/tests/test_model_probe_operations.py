@@ -592,7 +592,6 @@ def test_probe_api_optional_body_lookup_and_authentication(tmp_path, monkeypatch
                 automatic_memory_processing=False,
                 live_sync_enabled=False,
                 live_sync_watch_enabled=False,
-                retrieval_index_enabled=False,
             ),
             source_catalog={},
             secret_store=secrets,

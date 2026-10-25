@@ -2,7 +2,6 @@ import asyncio
 import io
 import json
 import sqlite3
-from types import SimpleNamespace
 
 from one_memory import cli
 from one_memory.config import Settings
@@ -115,56 +114,7 @@ def test_restore_sdk_bundle_uses_full_data_plane_restore(tmp_path, monkeypatch) 
     assert '"restored_files":4' in document
 
 
-def test_migration_bundle_refuses_while_runtime_is_running(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("running", "runtime_verified"),
-    )
-    output = io.StringIO()
-
-    code = cli.run(
-        [
-            "migration-bundle",
-            "--bundle-id",
-            "migration-1",
-            "--runtime-build",
-            "build-13",
-            "--yes",
-            "--json",
-        ],
-        output=output,
-    )
-    assert code == 4
-    assert "sdk_migration_bundle_runtime_running" in output.getvalue()
-
-
-def test_migration_bundle_previews_before_writing(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
-    )
-    output = io.StringIO()
-
-    code = cli.run(
-        [
-            "migration-bundle",
-            "--bundle-id",
-            "migration-1",
-            "--runtime-build",
-            "build-13",
-            "--json",
-        ],
-        output=output,
-    )
-    assert code == 4
-    assert '"state": "preview"' in output.getvalue() or '"state":"preview"' in output.getvalue()
-
-
-def test_migration_bundle_success_reports_bundle_identity(tmp_path, monkeypatch) -> None:
+def _stopped(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
     monkeypatch.setattr(
         cli,
@@ -172,283 +122,8 @@ def test_migration_bundle_success_reports_bundle_identity(tmp_path, monkeypatch)
         lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
     )
 
-    class Result:
-        bundle_id = "migration-1"
-        bundle_path = tmp_path / "backups" / "migration-1.sdk-bundle"
-        file_count = 4
-        total_bytes = 123
 
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_bundle.create_sdk_migration_bundle",
-        lambda **_kwargs: Result(),
-    )
-    output = io.StringIO()
-    code = cli.run(
-        [
-            "migration-bundle",
-            "--bundle-id",
-            "migration-1",
-            "--runtime-build",
-            "build-13",
-            "--yes",
-            "--json",
-        ],
-        output=output,
-    )
-    assert code == 0
-    document = output.getvalue().replace(" ", "")
-    assert '"state":"created"' in document
-    assert '"bundle_id":"migration-1"' in document
-
-
-def test_migration_bundle_reuses_an_existing_verified_bundle(tmp_path, monkeypatch) -> None:
-    from one_memory.sdk_migration_bundle import MigrationBundleRejected
-
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
-    )
-
-    def exists(**_kwargs):
-        raise MigrationBundleRejected("sdk_migration_bundle_exists")
-
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_bundle.create_sdk_migration_bundle",
-        exists,
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_bundle.inspect_sdk_migration_bundle",
-        lambda **_kwargs: {"file_count": 4, "total_bytes": 123},
-    )
-    output = io.StringIO()
-
-    code = cli.run(
-        [
-            "migration-bundle",
-            "--bundle-id",
-            "migration-1",
-            "--runtime-build",
-            "build-13",
-            "--yes",
-            "--json",
-        ],
-        output=output,
-    )
-
-    assert code == 0
-    assert '"state": "reused"' in output.getvalue()
-
-
-def test_sdk_migrate_preview_never_commits_cutover(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
-    )
-    output = io.StringIO()
-    code = cli.run(
-        [
-            "sdk-migrate",
-            "--migration-id",
-            "migration-1",
-            "--bundle-id",
-            "bundle-1",
-            "--json",
-        ],
-        output=output,
-    )
-    assert code == 4
-    document = output.getvalue().replace(" ", "")
-    assert '"state":"preview"' in document
-    assert '"commits_cutover":false' in document
-
-
-def test_sdk_migrate_runs_offline_backfill_without_cutover(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_bundle.inspect_sdk_migration_bundle",
-        lambda **_kwargs: {"runtime_build": "v1.0.4"},
-    )
-
-    async def fake_migrate(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr("one_memory.memory_server.migration_runner.migrate", fake_migrate)
-
-    profile = SimpleNamespace(
-        has_api_key=False,
-        embedding_provider_kind="openai",
-        embedding_model="embedding",
-        embedding_dimensions=1024,
-    )
-
-    class Profiles:
-        def __init__(self, _database):
-            pass
-
-        def active_identity(self):
-            return ("profile", 1)
-
-        def snapshot(self, *_identity):
-            return profile
-
-        def resolve_snapshot_secret(self, *_args):
-            return None
-
-    class Secrets:
-        pass
-
-    class Lease:
-        client = SimpleNamespace(
-            _loop_thread=None,
-            _vector_store=None,
-            _embed_service=None,
-            _graph_store=None,
-        )
-
-        def close(self):
-            return None
-
-    async def backfill(**_kwargs):
-        return SimpleNamespace(
-            state="ready",
-            phase="reconciled",
-            migration_id="migration-1",
-            counts={"verified": 2},
-            memory_items=1,
-            raw_items=1,
-        )
-
-    monkeypatch.setattr("one_memory.model_profiles.ModelProfileStore", Profiles)
-    monkeypatch.setattr("one_memory.secrets.KeyringSecretStore", Secrets)
-    monkeypatch.setattr(
-        "one_memory.hy_sdk_runtime.acquire_client",
-        lambda *_args, **_kwargs: Lease(),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.run_sdk_data_plane_backfill",
-        backfill,
-    )
-    output = io.StringIO()
-    code = cli.run(
-        [
-            "sdk-migrate",
-            "--migration-id",
-            "migration-1",
-            "--bundle-id",
-            "bundle-1",
-            "--yes",
-            "--json",
-        ],
-        output=output,
-    )
-    assert code == 0
-    document = output.getvalue().replace(" ", "")
-    assert '"state":"ready"' in document
-    assert '"commits_cutover":false' in document
-
-
-def test_sdk_cutover_is_offline_confirmed_and_returns_marker(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.commit_reconciled_cutover",
-        lambda **_kwargs: SimpleNamespace(
-            migration_id="migration-1",
-            backup_bundle_id="bundle-1",
-            sdk_version="2.0.5",
-            completed_at="2026-10-21T00:00:00Z",
-        ),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.activate_sdk_migration_staging",
-        lambda *, commit, **_kwargs: commit(),
-    )
-    monkeypatch.setattr(
-        "one_memory.sdk_migration_runner.resume_legacy_cleanup",
-        lambda **_kwargs: (),
-    )
-    output = io.StringIO()
-
-    code = cli.run(
-        [
-            "sdk-cutover",
-            "--migration-id",
-            "migration-1",
-            "--bundle-id",
-            "bundle-1",
-            "--yes",
-            "--json",
-        ],
-        output=output,
-    )
-
-    assert code == 0
-    document = output.getvalue().replace(" ", "")
-    assert '"state":"cutover"' in document
-    assert '"sdk_version":"2.0.5"' in document
-
-
-def test_sdk_cutover_never_runs_while_runtime_is_live(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    monkeypatch.setattr(
-        cli,
-        "inspect_runtime",
-        lambda _data_dir: RuntimeStatus("running", "healthy"),
-    )
-    output = io.StringIO()
-
-    code = cli.run(
-        [
-            "sdk-cutover",
-            "--migration-id",
-            "migration-1",
-            "--bundle-id",
-            "bundle-1",
-            "--yes",
-            "--json",
-        ],
-        output=output,
-    )
-
-    assert code == 4
-    assert '"code": "sdk_cutover_runtime_running"' in output.getvalue()
-
-
-def test_sdk_migration_status_distinguishes_empty_and_legacy_data(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
-    empty = io.StringIO()
-    assert cli.run(["sdk-migration-status", "--json"], output=empty) == 0
-    assert '"state": "empty"' in empty.getvalue()
-
-    database = tmp_path / "one-memory.sqlite3"
-    with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE evidence (evidence_id TEXT PRIMARY KEY)")
-        connection.execute("INSERT INTO evidence VALUES ('e1')")
-    required = io.StringIO()
-    assert cli.run(["sdk-migration-status", "--json"], output=required) == 0
-    assert '"state": "required"' in required.getvalue()
-    assert '"raw": 1' in required.getvalue()
-
-
-def test_sdk_migration_status_exposes_a_resumable_active_identity(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        cli,
-        "load_settings",
-        lambda: Settings(_env_file=None, data_dir=tmp_path),
-    )
+def _legacy_home(tmp_path) -> None:
     database = tmp_path / "one-memory.sqlite3"
     asyncio.run(migrate(SqliteMigrationStore(database), MIGRATIONS))
     with sqlite3.connect(database) as connection:
@@ -460,22 +135,82 @@ def test_sdk_migration_status_exposes_a_resumable_active_identity(tmp_path, monk
             ") VALUES ('e1','k','local','cursor','s','raw_conversation',"
             "'user','person','hello','hash',1,'now','now')"
         )
-    SdkDataPlaneMigrationStore(database).start(
-        migration_id="sdk-authority-v2-0123456789abcdef",
-        source_runtime_build="17",
-        target_sdk_version="2.0.5",
-        source_schema_version=MIGRATIONS[-1].version,
-        namespace_fingerprint="namespace",
-        backend_fingerprint="backend",
-        backup_bundle_id=(
-            "sdk-authority-v2-0123456789abcdef-pre-cutover"
-        ),
+
+
+def test_sdk_migrate_never_runs_while_runtime_is_live(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("running", "healthy"),
+    )
+    output = io.StringIO()
+    code = cli.run(["sdk-migrate", "--runtime-build", "20", "--yes", "--json"], output=output)
+    assert code == 4
+    assert json.loads(output.getvalue())["code"] == "sdk_migration_runtime_running"
+
+
+def test_sdk_migrate_previews_without_confirmation(tmp_path, monkeypatch) -> None:
+    _stopped(monkeypatch, tmp_path)
+    _legacy_home(tmp_path)
+    output = io.StringIO()
+    assert cli.run(["sdk-migrate", "--runtime-build", "20", "--json"], output=output) == 4
+    assert json.loads(output.getvalue())["state"] == "preview"
+    assert SdkDataPlaneMigrationStore(tmp_path / "one-memory.sqlite3").authority().value == (
+        "legacy"
     )
 
+
+def test_sdk_migrate_requires_the_runtime_build(tmp_path, monkeypatch) -> None:
+    _stopped(monkeypatch, tmp_path)
+    assert cli.run(["sdk-migrate", "--yes"], output=io.StringIO()) == 2
+
+
+def test_sdk_migrate_reports_each_step_then_the_result(tmp_path, monkeypatch) -> None:
+    _stopped(monkeypatch, tmp_path)
+    _legacy_home(tmp_path)
     output = io.StringIO()
-    assert cli.run(["sdk-migration-status", "--json"], output=output) == 0
-    document = json.loads(output.getvalue())
-    assert document["migration_id"] == "sdk-authority-v2-0123456789abcdef"
-    assert document["bundle_id"] == (
-        "sdk-authority-v2-0123456789abcdef-pre-cutover"
-    )
+
+    code = cli.run(["sdk-migrate", "--runtime-build", "20", "--yes", "--json"], output=output)
+
+    assert code == 0, output.getvalue()
+    lines = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [line["step"] for line in lines[:-1]] == ["bundle", "prepare", "cutover", "cleanup"]
+    assert lines[-1]["state"] == "cutover"
+    assert lines[-1]["bundle_id"] == f"{lines[-1]['migration_id']}-pre-cutover"
+    assert not (tmp_path / ".sdk-migration-capture-fence.json").exists()
+
+    again = io.StringIO()
+    assert cli.run(["sdk-migrate", "--runtime-build", "20", "--yes", "--json"], output=again) == 0
+    assert json.loads(again.getvalue())["state"] == "not_required"
+
+
+def test_sdk_migrate_failure_is_one_named_code(tmp_path, monkeypatch) -> None:
+    import errno
+
+    _stopped(monkeypatch, tmp_path)
+
+    def full_disk(**_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr("one_memory.sdk_migration_runner.run_startup_migration", full_disk)
+    output = io.StringIO()
+    assert cli.run(["sdk-migrate", "--runtime-build", "20", "--yes", "--json"], output=output) == 1
+    assert json.loads(output.getvalue()) == {
+        "schema_version": 1,
+        "state": "failed",
+        "code": "sdk_migration_disk_space_insufficient",
+    }
+
+
+def test_sdk_migration_status_says_whether_migrate_has_work(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+
+    def status() -> dict[str, object]:
+        output = io.StringIO()
+        assert cli.run(["sdk-migration-status", "--json"], output=output) == 0
+        return json.loads(output.getvalue())
+
+    assert status()["state"] == "not_required"
+    _legacy_home(tmp_path)
+    assert status() == {"schema_version": 1, "authority": "legacy", "state": "required"}

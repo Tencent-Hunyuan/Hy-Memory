@@ -13,7 +13,8 @@ dependencies = [
     "filelock>=3.32.4",
     # Public SDK version validated against MemHub's permission and recall contracts.
     "hy-memory==2.0.5",
-    # Retrieval's derived vector index directly consumes these locked versions.
+    # chromadb arrives through the HY SDK; locked here so an unrelated upgrade
+    # cannot move the SDK's store. Built-in embedding consumes numpy directly.
     "chromadb==1.5.9",
     "numpy==2.5.2",
     "httpx>=0.28.1",
