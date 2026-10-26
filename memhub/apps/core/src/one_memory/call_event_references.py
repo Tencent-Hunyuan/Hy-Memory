@@ -10,6 +10,7 @@ from pydantic import Field, model_validator
 from one_memory.call_event_store import CallEvent, CallReference
 from one_memory.database_access import main_database
 from one_memory.memory_evidence_freshness import register_memory_freshness
+from one_memory.source_read_access import memory_source_readable
 
 
 class SourceRecordRef(CallReference):
@@ -76,17 +77,13 @@ def _memory(db: sqlite3.Connection, reference: CallReference) -> SourceRecordRef
     if row["status"] == "deleted" or row["deleted_at"] is not None:
         return _hidden(reference)
 
-    # Same local revocation/ownership predicate as SourceReadAccess.memories.
-    # Its public methods open their own connections, so cannot be used here.
+    # Same local revocation/ownership predicate as SourceReadAccess.memories,
+    # taken from there rather than copied: its public methods open their own
+    # connections, so the predicate is the part that can be shared.
     access = db.execute(
         "SELECT EXISTS (SELECT 1 FROM governed_memory_evidence "
-        "WHERE memory_id=? AND active=1), NOT EXISTS ("
-        "SELECT 1 FROM governed_memory_evidence link "
-        "LEFT JOIN evidence e ON e.evidence_id=link.evidence_id "
-        "LEFT JOIN source_grants g ON g.user_id=e.user_id AND g.source_id=e.source_id "
-        "WHERE link.memory_id=? AND +link.active=1 "
-        "AND (e.evidence_id IS NULL OR e.user_id!='local' OR g.revoked_at IS NOT NULL))",
-        (reference.id, reference.id),
+        "WHERE memory_id=? AND active=1), " + memory_source_readable("?", "?"),
+        (reference.id, reference.id, "local"),
     ).fetchone()
     if not all(access):
         return _hidden(reference)

@@ -25,6 +25,7 @@ from one_memory.memory_evidence_freshness import register_memory_freshness
 from one_memory.recall import _terms
 from one_memory.retrieval.models import Channel, RetrievalPath, TimeRange
 from one_memory.semantic_deadline import SemanticMemoryHit, SemanticOutcome
+from one_memory.source_read_access import memory_source_readable
 
 _BODY_LIMIT = 20000
 _REFERENCE_LIMIT = 128
@@ -283,28 +284,18 @@ def _memory_readable(freshness: str) -> str:
     return _READABLE + f" AND {freshness}"
 
 
-# Match the local governed read policy before scoring or candidate LIMIT. A
-# missing grant is not a revocation; a missing/cross-user active citation is.
-_READABLE = """
+# Match the local governed read policy before scoring or candidate LIMIT. That
+# policy is `source_read_access`'s and is spelled once there so it cannot drift
+# from the endpoint that answers 403; this module only adds its own status
+# filter on top.
+_READABLE = f"""
     m.user_id = 'local' AND m.status = 'confirmed' AND m.deleted_at IS NULL
-    AND NOT EXISTS (
-        SELECT 1 FROM governed_memory_evidence link
-        LEFT JOIN evidence e ON e.evidence_id = link.evidence_id
-        LEFT JOIN source_grants g ON g.user_id = e.user_id AND g.source_id = e.source_id
-        WHERE link.memory_id = m.memory_id AND +link.active = 1
-          AND (e.evidence_id IS NULL OR e.user_id != m.user_id OR g.revoked_at IS NOT NULL)
-    )
+    AND {memory_source_readable("m.memory_id", "m.user_id")}
 """
 
-_SDK_MEMBER_READABLE = """
+_SDK_MEMBER_READABLE = f"""
     m.user_id = 'local' AND m.status != 'deleted' AND m.deleted_at IS NULL
-    AND NOT EXISTS (
-        SELECT 1 FROM governed_memory_evidence link
-        LEFT JOIN evidence e ON e.evidence_id = link.evidence_id
-        LEFT JOIN source_grants g ON g.user_id = e.user_id AND g.source_id = e.source_id
-        WHERE link.memory_id = m.memory_id AND +link.active = 1
-          AND (e.evidence_id IS NULL OR e.user_id != m.user_id OR g.revoked_at IS NOT NULL)
-    )
+    AND {memory_source_readable("m.memory_id", "m.user_id")}
 """
 
 
