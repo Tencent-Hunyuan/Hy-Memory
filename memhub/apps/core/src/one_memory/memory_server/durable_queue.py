@@ -409,6 +409,64 @@ def _matches_payload_except_priority(stored: str, payload: str) -> bool:
     return old == new
 
 
+def _record_identity(records: object) -> tuple[tuple[object, object, object], ...] | None:
+    """The fields that decide whether two payloads describe the same input.
+
+    Evidence content and revision are the durable identity. Workspace,
+    project, origin metadata and timestamps can be enriched on a later import
+    without revising the record, so they must not turn a replay into a
+    different write.
+    """
+    if not isinstance(records, list):
+        return None
+    identity: list[tuple[object, object, object]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            return None
+        identity.append(
+            (record.get("evidence_id"), record.get("revision"), record.get("content_hash"))
+        )
+    return tuple(identity)
+
+
+def _matches_evidence_identity_replay(stored: str, payload: str) -> bool:
+    """Same evidence revision and content, under the same key, is a replay.
+
+    The idempotency key covers (evidence_id, revision, content_hash), but the
+    frozen payload also carries workspace, project, origin metadata and the
+    batch identity. A later import can fill those in without revising the
+    evidence, which used to make `submit` raise "already exists with different
+    content" for the same records.
+    """
+    try:
+        old = json.loads(stored)
+        new = json.loads(payload)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    if old.get("evidence_ids") != new.get("evidence_ids"):
+        return False
+    old_identity = _record_identity(old.get("input_records"))
+    new_identity = _record_identity(new.get("input_records"))
+    return old_identity is not None and old_identity == new_identity
+
+
+def _differs_only_in_input_records(stored: str, payload: str) -> bool:
+    try:
+        old = json.loads(stored)
+        new = json.loads(payload)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    old_without = dict(old)
+    new_without = dict(new)
+    old_without.pop("input_records", None)
+    new_without.pop("input_records", None)
+    return old_without == new_without
+
+
 def _matches_legacy_reference_replay(stored: str, payload: str) -> bool:
     """Match an old id-only caller to the same job's frozen payload."""
     try:
@@ -748,11 +806,13 @@ class DurableWriteQueue:
                 legacy_reaped_match = bool(
                     already_settled and _matches_reaped_legacy_payload(stored_payload, payload)
                 )
+                identity_replay = _matches_evidence_identity_replay(stored_payload, payload)
                 if (
                     not _matches_stored_payload(stored_payload, payload)
                     and not priority_replay
                     and not _matches_legacy_reference_replay(stored_payload, payload)
                     and not legacy_reaped_match
+                    and not identity_replay
                 ):
                     raise ValueError(f"idempotency key {key} already exists with different content")
                 if already_settled:
@@ -771,6 +831,31 @@ class DurableWriteQueue:
                         "WHERE job_id=? AND priority='normal' AND hy_invoked=0",
                         (now, str(existing["job_id"])),
                     )
+                # The job has not crossed into HY yet, so its frozen inputs can
+                # pick up metadata a later import learned (workspace/project)
+                # without changing the evidence identity or creating a second
+                # job. A started job keeps the inputs it was claimed with.
+                if (
+                    identity_replay
+                    and _differs_only_in_input_records(stored_payload, payload)
+                    and str(existing["state"]) == PENDING
+                    and int(existing["hy_invoked"]) == 0
+                ):
+                    refreshed = connection.execute(
+                        "UPDATE memory_write_jobs SET payload_json=?, updated_at=? "
+                        "WHERE job_id=? AND state=? AND hy_invoked=0",
+                        (payload, now, str(existing["job_id"]), PENDING),
+                    )
+                    if refreshed.rowcount == 1:
+                        return DurableWriteRecord(
+                            job_id=str(existing["job_id"]),
+                            request_id=key,
+                            state=PENDING,
+                            enqueued=False,
+                            created_at=str(existing["created_at"]),
+                            updated_at=now,
+                            detail="pending job refreshed with updated evidence metadata",
+                        )
                 safe_identity_retry = (
                     str(existing["state"]) == FAILED
                     and int(existing["hy_invoked"]) == 0

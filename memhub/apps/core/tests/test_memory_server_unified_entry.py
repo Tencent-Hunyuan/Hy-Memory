@@ -185,6 +185,57 @@ def test_replaying_the_same_evidence_does_not_create_a_second_row(tmp_path) -> N
     assert replay.enqueued is False
 
 
+def test_enriched_metadata_replays_the_pending_job_and_refreshes_its_inputs(
+    tmp_path,
+) -> None:
+    """Workspace learned after import is metadata, not a second write.
+
+    The idempotency key covers evidence id, revision and content hash, while
+    the payload also carries workspace/project. A later import can fill those
+    in without revising the evidence; that used to raise "already exists with
+    different content" and stopped the catch-up on the first such row.
+    """
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    record = _record(store)
+    intake = UnifiedWriteIntake(DurableWriteQueue(path, evidence=store))
+
+    first = intake.submit_records((record,))
+    enriched = record.model_copy(update={"workspace": "/work/atlas", "project": "atlas"})
+    replay = intake.submit_records((enriched,))
+
+    assert replay.record.job_id == first.record.job_id
+    assert replay.enqueued is False
+    frozen = intake.queue.payload_for(first.record.job_id)
+    assert frozen is not None
+    assert frozen.input_records[0].workspace == "/work/atlas"
+
+
+def test_a_different_round_range_replays_without_rewriting_the_pending_job(
+    tmp_path,
+) -> None:
+    """The window can move while the same evidence is still pending.
+
+    `submit_evidence` derives its key from the evidence identity but its
+    payload carries the caller's round range. A second window must be a replay,
+    and must not rewrite the batch identity a claimed job will read.
+    """
+    path = tmp_path / "one-memory.sqlite3"
+    store = EvidenceStore(path)
+    record = _record(store)
+    intake = UnifiedWriteIntake(DurableWriteQueue(path, evidence=store))
+
+    first = intake.submit_evidence(record, first_round=1, last_round=1)
+    replay = intake.submit_evidence(record, first_round=2, last_round=2)
+
+    assert replay.record.job_id == first.record.job_id
+    assert replay.enqueued is False
+    frozen = intake.queue.payload_for(first.record.job_id)
+    assert frozen is not None
+    assert frozen.batch_identity.first_round == 1
+    assert frozen.batch_identity.last_round == 1
+
+
 def test_rewound_harness_revision_appends_a_job_with_immutable_input(tmp_path) -> None:
     path = tmp_path / "one-memory.sqlite3"
     store = EvidenceStore(path)
