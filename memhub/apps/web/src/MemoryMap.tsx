@@ -25,6 +25,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -220,6 +221,8 @@ export function MemoryMap(props: Props) {
   const compact = useMediaPreference("(max-width: 1100px)");
   const composing = useRef(false);
   const pane = useRef<HTMLElement>(null);
+  const memoryList = useRef<HTMLUListElement>(null);
+  const inspectorBody = useRef<HTMLDivElement>(null);
   const openedDefault = useRef(false);
   const scrollSelection = useRef(false);
   const controlledSource = library
@@ -367,6 +370,11 @@ export function MemoryMap(props: Props) {
   const activeId = active.some((memory) => memory.memory_id === requestedId)
     ? requestedId
     : null;
+  const inspectorIdentity = activeId
+    ? `memory:${activeId}`
+    : selectedSource
+      ? `source:${selectedSource.source_id}`
+      : (visibleGroupNode?.node_id ?? "empty");
   const visibleDetail =
     detail &&
     (!activeId || activeId === detail.memory.memory_id) &&
@@ -427,6 +435,19 @@ export function MemoryMap(props: Props) {
       container.scrollTop += itemBounds.bottom - containerBounds.bottom;
     }
   }, [activeId]);
+  useLayoutEffect(() => {
+    // Detail content owns its own scrollport. A newly selected memory must
+    // start at its heading instead of inheriting the previous inspector view.
+    if (inspectorIdentity === "empty") return;
+    if (inspectorBody.current) inspectorBody.current.scrollTop = 0;
+  }, [inspectorIdentity]);
+  const settledPageOffset = library?.page?.offset;
+  useLayoutEffect(() => {
+    // A settled page is a new reading surface, not a continuation of the
+    // previous page's scroll position.
+    if (settledPageOffset === undefined) return;
+    if (memoryList.current) memoryList.current.scrollTop = 0;
+  }, [settledPageOffset]);
 
   const clear = useCallback(() => {
     setSelectedId(null);
@@ -586,6 +607,7 @@ export function MemoryMap(props: Props) {
             <label htmlFor="selected-source-filter">{text("来源")}</label>
             <OptionMenu
               id="selected-source-filter"
+              ariaLabel={text("来源")}
               className="om-option-menu--plain"
               value={controlledSource}
               options={[
@@ -781,6 +803,7 @@ export function MemoryMap(props: Props) {
           </p>
         )}
         <ul
+          ref={memoryList}
           className="map-memory-list"
           aria-label={text("地图记忆列表")}
           id="memory-pane-memories"
@@ -874,18 +897,21 @@ export function MemoryMap(props: Props) {
             </p>
           )}
         {library?.page &&
-          !library.loading &&
+          (!library.loading || library.page.total > 0) &&
           !library.failed &&
           !library.stale && (
-            <nav aria-label={text("地图记忆分页")} className="map-pagination">
+            <nav
+              aria-label={text("地图记忆分页")}
+              aria-busy={library.loading || undefined}
+              className="map-pagination"
+            >
               <button
                 type="button"
                 className="quiet map-tool"
                 aria-label={text("上一页记忆")}
                 title={text("上一页记忆")}
-                disabled={library.page.offset === 0}
+                disabled={library.loading || library.page.offset === 0}
                 onClick={() => {
-                  clear();
                   if (axis === "topic") setGroupKey("");
                   if (library.page)
                     library.onPage(library.page.offset - library.page.limit);
@@ -914,10 +940,10 @@ export function MemoryMap(props: Props) {
                 aria-label={text("下一页记忆")}
                 title={text("下一页记忆")}
                 disabled={
+                  library.loading ||
                   library.page.offset + library.page.limit >= library.page.total
                 }
                 onClick={() => {
-                  clear();
                   if (axis === "topic") setGroupKey("");
                   if (library.page)
                     library.onPage(library.page.offset + library.page.limit);
@@ -1117,142 +1143,144 @@ export function MemoryMap(props: Props) {
             </button>
           )}
         </header>
-        {selectedSource ? (
-          inspectorOpen &&
-          !overlaysSuspended && (
-            <SourceImportReceipt
-              key={selectedSource.source_id}
-              source={selectedSource}
-            />
-          )
-        ) : props.simplified && inspectorDetail ? (
-          <div
-            aria-busy={
-              refreshing ||
-              inspectorDetail.memory.memory_id !== activeId ||
-              undefined
-            }
-            onClickCapture={(event) => {
-              // React portal events follow this owner too, including editor saves.
-              if (
-                refreshing &&
-                (event.target as Element).closest("button, summary")
-              ) {
-                event.preventDefault();
-                event.stopPropagation();
+        <div className="map-inspector-body" ref={inspectorBody}>
+          {selectedSource ? (
+            inspectorOpen &&
+            !overlaysSuspended && (
+              <SourceImportReceipt
+                key={selectedSource.source_id}
+                source={selectedSource}
+              />
+            )
+          ) : props.simplified && inspectorDetail ? (
+            <div
+              aria-busy={
+                refreshing ||
+                inspectorDetail.memory.memory_id !== activeId ||
+                undefined
               }
-            }}
-            onSubmitCapture={(event) => {
-              if (refreshing) {
-                event.preventDefault();
-                event.stopPropagation();
-              }
-            }}
-          >
-            {/* The pane used to keep the previously read memory on screen
+              onClickCapture={(event) => {
+                // React portal events follow this owner too, including editor saves.
+                if (
+                  refreshing &&
+                  (event.target as Element).closest("button, summary")
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onSubmitCapture={(event) => {
+                if (refreshing) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+            >
+              {/* The pane used to keep the previously read memory on screen
                 until the new one arrived, which read as "nothing happened"
                 for two or three seconds. A read is not a value: show that a
                 read is happening instead. */}
-            {activeId && inspectorDetail.memory.memory_id !== activeId ? (
-              <div className="map-detail-loading">
+              {activeId && inspectorDetail.memory.memory_id !== activeId ? (
+                <div className="map-detail-loading">
+                  <div className="map-detail-skeleton" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                  <p role="status">{text("正在读取这条记忆…")}</p>
+                </div>
+              ) : (
+                <SelectedMemoryDetail
+                  detail={inspectorDetail}
+                  sources={sources}
+                  conversationAt={
+                    library?.page?.source_time_by_memory?.[
+                      inspectorDetail.memory.memory_id
+                    ] ?? null
+                  }
+                />
+              )}
+            </div>
+          ) : inspectorDetail || visibleGroupNode ? (
+            <NodeDetail
+              key={
+                inspectorDetail?.memory.memory_id ||
+                visibleGroupNode?.node_id ||
+                "empty"
+              }
+              compact
+              node={visibleGroupNode}
+              graph={projection}
+              detail={inspectorDetail}
+              draft={props.draft}
+              busy={busy}
+              matterLabel={label}
+              onDraft={props.onDraft}
+              onSave={props.onSave}
+              onDelete={props.onDelete}
+              requestIds={props.requestIds}
+              onClose={closeInspector}
+            />
+          ) : (
+            <div
+              className={`map-inspector-empty${activeId ? " map-inspector-loading" : ""}`}
+            >
+              {activeId ? (
                 <div className="map-detail-skeleton" aria-hidden="true">
                   <i />
                   <i />
                   <i />
                   <i />
                 </div>
-                <p role="status">{text("正在读取这条记忆…")}</p>
-              </div>
-            ) : (
-              <SelectedMemoryDetail
-                detail={inspectorDetail}
-                sources={sources}
-                conversationAt={
-                  library?.page?.source_time_by_memory?.[
-                    inspectorDetail.memory.memory_id
-                  ] ?? null
-                }
-              />
-            )}
-          </div>
-        ) : inspectorDetail || visibleGroupNode ? (
-          <NodeDetail
-            key={
-              inspectorDetail?.memory.memory_id ||
-              visibleGroupNode?.node_id ||
-              "empty"
-            }
-            compact
-            node={visibleGroupNode}
-            graph={projection}
-            detail={inspectorDetail}
-            draft={props.draft}
-            busy={busy}
-            matterLabel={label}
-            onDraft={props.onDraft}
-            onSave={props.onSave}
-            onDelete={props.onDelete}
-            requestIds={props.requestIds}
-            onClose={closeInspector}
-          />
-        ) : (
-          <div
-            className={`map-inspector-empty${activeId ? " map-inspector-loading" : ""}`}
-          >
-            {activeId ? (
-              <div className="map-detail-skeleton" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-                <i />
-              </div>
-            ) : (
-              <FileText size={28} strokeWidth={1} />
-            )}
-            {props.detailLoad?.memoryId === activeId &&
-            props.detailLoad.status === "failed" ? (
-              <>
-                <p role="alert">
-                  {text("这条记忆的原文暂时无法读取，选择已保留。")}
-                </p>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => activeId && onOpenMemory(activeId)}
-                >
-                  {text("重试读取原文")}
-                </button>
-              </>
-            ) : props.simplified && !activeId && filtered.length ? (
-              // Nothing is selected, but this conversation has already
-              // settled: naming what came out of it beats a placeholder that
-              // asks for the settle that already happened. Only the
-              // single-column surface needs it — the three-column one already
-              // lists the same memories in the pane beside this one.
-              <>
+              ) : (
+                <FileText size={28} strokeWidth={1} />
+              )}
+              {props.detailLoad?.memoryId === activeId &&
+              props.detailLoad.status === "failed" ? (
+                <>
+                  <p role="alert">
+                    {text("这条记忆的原文暂时无法读取，选择已保留。")}
+                  </p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => activeId && onOpenMemory(activeId)}
+                  >
+                    {text("重试读取原文")}
+                  </button>
+                </>
+              ) : props.simplified && !activeId && filtered.length ? (
+                // Nothing is selected, but this conversation has already
+                // settled: naming what came out of it beats a placeholder that
+                // asks for the settle that already happened. Only the
+                // single-column surface needs it — the three-column one already
+                // lists the same memories in the pane beside this one.
+                <>
+                  <p>
+                    {text(
+                      "已沉淀 {count} 条记忆",
+                      { count: plain(filtered.length) },
+                      filtered.length,
+                    )}
+                  </p>
+                  <ul
+                    className="map-settled-list"
+                    aria-label={text("已沉淀的记忆")}
+                  >
+                    {filtered.map((m) => (
+                      <li key={m.memory_id}>{m.content}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
                 <p>
-                  {text(
-                    "已沉淀 {count} 条记忆",
-                    { count: plain(filtered.length) },
-                    filtered.length,
-                  )}
+                  {text(activeId ? "正在读取记忆详情…" : "沉淀记忆后查看详情")}
                 </p>
-                <ul
-                  className="map-settled-list"
-                  aria-label={text("已沉淀的记忆")}
-                >
-                  {filtered.map((m) => (
-                    <li key={m.memory_id}>{m.content}</li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              <p>
-                {text(activeId ? "正在读取记忆详情…" : "沉淀记忆后查看详情")}
-              </p>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
+        </div>
       </MemoryEvidencePanel>
     </section>
   );

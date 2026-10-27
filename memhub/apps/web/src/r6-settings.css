@@ -1,8 +1,8 @@
 /* R6 source 139:5728 / 6765 / 7176 / 7585. Overrides stay inside settings. */
 .r6-settings {
   box-sizing: border-box;
-  padding: 26px 40px 46px;
-  color: #262a2e;
+  padding: 30px 40px 48px;
+  color: #304757;
   min-width: 0;
   width: 100%;
   flex: 1;
@@ -10,161 +10,230 @@
   letter-spacing: 0;
 }
 .r6-settings > h1 {
-  height: 44px;
+  height: auto;
   font:
-    500 28px / 44px "Noto Sans SC",
+    600 26px / 36px "Noto Sans SC",
     "PingFang SC",
     sans-serif;
-  margin: 0 0 28px;
+  margin: 0 0 22px;
 }
 .r6-settings .r6-language-setting {
-  margin-bottom: 24px;
+  position: relative;
+  z-index: 2;
+  margin-bottom: 20px;
   padding: 20px 24px;
-  border: 1px solid #dce4eb;
-  border-radius: 16px;
-  background: #fff;
+  border: 1px solid #d5dfe8;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 78%);
 }
 .r6-language-setting-title {
-  margin: 0 0 18px;
-  font-size: 18px;
-  line-height: 28px;
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 26px;
 }
 .r6-settings .r6-language-setting-row {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 104px minmax(0, 1fr);
   align-items: center;
   gap: 16px;
   min-height: 44px;
 }
 .r6-settings .r6-language-setting-row label {
   min-width: 0;
-  font-size: 14px;
-  line-height: 24px;
+  color: #4f6373;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
   white-space: nowrap;
 }
-.r6-settings .r6-language-setting select {
-  box-sizing: border-box;
+.r6-settings .r6-language-option-menu {
   width: 100%;
-  max-width: 100%;
   min-width: 0;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid #dce4eb;
-  border-radius: 8px;
-  color: inherit;
-  background: #fff;
-  font: inherit;
 }
-.r6-settings .r6-language-setting select:focus-visible {
-  outline: 2px solid #225f9d;
+.r6-settings .r6-language-option-menu .om-option-menu-button {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 42px 0 14px;
+  border: 1px solid #c6d2da;
+  border-radius: 8px;
+  color: #304757;
+  background: #fff;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-settings .r6-language-option-menu .om-option-menu-button::after {
+  top: 16px;
+  right: 16px;
+}
+.r6-settings
+  .r6-language-option-menu
+  .om-option-menu-button[aria-expanded="true"] {
+  border-color: #7892a6;
+  box-shadow: 0 0 0 3px rgb(85 124 147 / 12%);
+}
+.r6-settings .r6-language-option-menu .om-option-menu-panel {
+  top: calc(100% + 6px);
+  padding: 6px;
+  border-color: #c6d2da;
+  box-shadow: 0 12px 32px rgb(48 71 87 / 13%);
+}
+.r6-settings .r6-language-option-menu .om-option-menu-panel [role="option"] {
+  min-height: 38px;
+  padding: 8px 10px;
+  color: #304757;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-settings
+  .r6-language-option-menu
+  .om-option-menu-panel
+  [role="option"][aria-selected="true"] {
+  background: #dfe9ef;
+  font-weight: 500;
+}
+.r6-settings
+  .r6-language-option-menu
+  .om-option-menu-panel
+  [role="option"][data-active="true"] {
+  color: #304757;
+  background: #e9f0f4;
+}
+.r6-settings
+  .r6-language-option-menu
+  .om-option-menu-panel
+  [role="option"]:active:not(:disabled) {
+  color: #304757;
+  background: #d4e2ea;
+}
+.r6-settings .r6-language-option-menu .om-option-menu-button:focus-visible {
+  outline: 2px solid #557c93;
   outline-offset: 2px;
 }
 .r6-language-setting-description {
-  margin: 16px 0 0;
+  margin: 12px 0 0 120px;
   color: #5e6e7a;
   font-size: 13px;
-  line-height: 22px;
+  line-height: 21px;
   overflow-wrap: anywhere;
 }
 .r6-settings .r6-settings-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 0;
+  align-items: stretch;
+  border: 1px solid #d5dfe8;
+  border-radius: 12px;
+  background: #fff;
 }
 .r6-settings .r6-settings-layout > nav {
   box-sizing: border-box;
-  min-height: 710px;
-  padding: 13px 11px;
-  background: rgb(255 255 255 / 27.45%);
-  border: 1px solid white;
-  border-radius: 16px;
-  box-shadow: inset 0 1px white;
-  backdrop-filter: blur(72px);
+  min-height: 560px;
+  padding: 16px 12px;
+  background: #f3f7f9;
+  border: 0;
+  border-right: 1px solid #d5dfe8;
+  border-radius: 11px 0 0 11px;
+  box-shadow: none;
+  backdrop-filter: none;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 14px;
+  gap: 4px;
 }
 .r6-settings .r6-settings-layout > nav > button {
   box-sizing: border-box;
-  padding: 8px 16px;
+  padding: 8px 12px;
   height: auto;
-  min-height: 46px;
+  min-height: 42px;
   text-align: left;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #262a2e;
+  color: #405665;
   font:
-    400 16px / 28px "Noto Sans SC",
+    400 14px / 22px "Noto Sans SC",
     "PingFang SC",
     sans-serif;
   box-shadow: none;
   transform: none;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition:
+    color 140ms ease-out,
+    background-color 140ms ease-out;
 }
 .r6-settings .r6-settings-layout > nav > button[aria-current="page"] {
-  background: #e1eaf0;
+  color: #304757;
+  background: #dfe9ef;
+  font-weight: 500;
 }
 .r6-settings .r6-settings-layout > nav > button:hover:not(:disabled) {
-  background: rgb(225 234 240 / 65%);
+  color: #304757;
+  background: #e9f0f4;
   transform: none;
+}
+.r6-settings .r6-settings-layout > nav > button:active:not(:disabled) {
+  color: #304757;
+  background: #d4e2ea;
 }
 .r6-settings .r6-settings-content {
   box-sizing: border-box;
   min-width: 0;
-  min-height: 710px;
-  padding: 25px 31px;
+  min-height: 560px;
+  padding: 28px 34px;
   background: #fff;
-  border: 1px solid #dce4eb;
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0 11px 11px 0;
   overflow-wrap: anywhere;
 }
 .r6-settings .r6-settings-content > section[hidden] {
   display: none;
 }
 .r6-settings .r6-settings-content > section > h2 {
-  min-height: 36px;
+  min-height: 32px;
   font:
-    500 22px / 36px "Noto Sans SC",
+    600 20px / 32px "Noto Sans SC",
     "PingFang SC",
     sans-serif;
   margin: 0;
+  text-wrap: balance;
 }
 .r6-settings .r6-setting-row {
   box-sizing: border-box;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 30px 0 25px;
+  gap: 32px;
+  padding: 24px 0;
   border-bottom: 1px solid #d8e2ea;
-  min-height: 132px;
+  min-height: 108px;
 }
 .r6-settings .r6-setting-row > div {
   flex: 1;
   min-width: 0;
+  max-width: 68ch;
 }
 .r6-settings .r6-setting-row > button {
-  margin-top: 12px;
+  margin-top: 0;
   flex-shrink: 0;
 }
 .r6-settings .r6-setting-row h3 {
   font:
-    400 18px / 28px "Noto Sans SC",
+    500 16px / 26px "Noto Sans SC",
     "PingFang SC",
     sans-serif;
-  margin: 0 0 10px;
+  margin: 0 0 6px;
 }
 .r6-settings .r6-setting-row p {
-  font-size: 14px;
-  line-height: 26px;
-  color: #63707b;
+  font-size: 13px;
+  line-height: 23px;
+  color: #5e6e7a;
   margin: 0;
   overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 .r6-settings .r6-setting-row > span {
   font-size: 13px;
@@ -205,6 +274,97 @@
   font-size: 14px;
   color: #4f6373;
 }
+.r6-settings .connection-fallback {
+  margin: 22px 0 0;
+  padding: 0;
+  border: 0;
+}
+.r6-settings .connection-fallback summary {
+  width: fit-content;
+  min-height: 36px;
+  padding: 6px 8px;
+  margin-left: -8px;
+  border-radius: 6px;
+  color: #405665;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 24px;
+  transition:
+    color 140ms ease-out,
+    background-color 140ms ease-out;
+}
+.r6-settings .connection-fallback summary:hover {
+  color: #304757;
+  background: #e9f0f4;
+}
+.r6-settings .connection-fallback summary:active {
+  color: #304757;
+  background: #d4e2ea;
+}
+.r6-settings .connection-fallback .connection-boundary {
+  max-width: 68ch;
+  margin: 16px 0 20px;
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 23px;
+  text-wrap: pretty;
+}
+.r6-settings .connection-fallback .custom-harness-name {
+  max-width: 560px;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: #4f6373;
+  font-size: 13px;
+  font-weight: 500;
+}
+.r6-settings .connection-fallback .custom-harness-name input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 13px;
+  border: 1px solid #c6d2da;
+  border-radius: 8px;
+  background: #fff;
+  color: #304757;
+  font-size: 14px;
+}
+.r6-settings .connection-fallback .custom-harness-name input:hover {
+  border-color: #aabcc8;
+}
+.r6-settings .connection-fallback .custom-harness-name input:focus-visible {
+  outline: 2px solid #557c93;
+  outline-offset: 2px;
+}
+.r6-settings .connection-fallback > button:not(.quiet) {
+  min-height: 42px;
+  padding: 0 18px;
+  border: 1px solid #5b6f7e;
+  border-radius: 8px;
+  background: #4f6373;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease-out,
+    transform 90ms ease-out;
+}
+.r6-settings .connection-fallback > button:not(.quiet):hover:not(:disabled) {
+  border-color: #5b6f7e;
+  background: #435966;
+  color: #fff;
+}
+.r6-settings .connection-fallback > button:not(.quiet):active:not(:disabled) {
+  background: #3d4f5d;
+  color: #fff;
+  transform: scale(0.985);
+}
+.r6-settings .connection-fallback > button:not(.quiet):disabled {
+  border-color: #c6d2da;
+  background: #dbe4e9;
+  color: #647783;
+  cursor: default;
+}
 .r6-settings .r6-settings-error {
   color: #953f3f;
   font-size: 14px;
@@ -222,7 +382,7 @@
   line-height: 24px;
 }
 .r6-settings .r6-model-overview {
-  padding: 32px 0 24px;
+  padding: 26px 0 20px;
   border-bottom: 0;
 }
 .r6-settings .r6-model-caption {
@@ -233,7 +393,7 @@
 }
 .r6-settings .r6-current-model {
   font:
-    400 24px / 40px "Noto Sans SC",
+    500 22px / 34px "Noto Sans SC",
     "PingFang SC",
     sans-serif;
   margin: 0 0 7px;
@@ -363,21 +523,24 @@
 }
 .r6-settings .r6-settings-help .r6-setting-row {
   display: flex;
-  min-height: 132px;
-  padding: 30px 0 25px;
+  min-height: 108px;
+  padding: 24px 0;
   align-items: center;
   gap: 32px;
 }
 .r6-settings .r6-settings-help .r6-setting-row h3 {
-  font-size: 18px;
-  margin-bottom: 10px;
+  font-size: 16px;
+  margin-bottom: 6px;
 }
 .r6-settings .r6-settings-help .r6-setting-row p {
-  font-size: 14px;
+  font-size: 13px;
 }
-.r6-settings .r6-settings-help .r6-setting-row > button {
+.r6-settings .r6-settings-help .r6-setting-row > button:not(.r6-switch) {
   min-width: 132px;
   margin-top: 0;
+  margin-left: auto;
+}
+.r6-settings .r6-settings-help .r6-setting-row > .r6-switch {
   margin-left: auto;
 }
 .r6-settings .r6-settings-help .r6-settings-about {
@@ -534,10 +697,9 @@
   }
   .r6-settings .r6-settings-layout {
     grid-template-columns: 176px minmax(0, 1fr);
-    gap: 20px;
   }
   .r6-settings .r6-settings-content {
-    padding: 25px 23px;
+    padding: 26px 28px;
   }
   .r6-settings .r6-setting-row {
     flex-wrap: wrap;
@@ -559,12 +721,27 @@
     flex-direction: row;
     flex-wrap: wrap;
     gap: 8px;
+    border-right: 0;
+    border-bottom: 1px solid #d5dfe8;
+    border-radius: 11px 11px 0 0;
   }
   .r6-settings .r6-settings-layout > nav > button {
     font-size: 14px;
   }
   .r6-settings .model-form {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .r6-settings .r6-settings-content {
+    min-height: 0;
+    padding: 24px 20px;
+    border-radius: 0 0 11px 11px;
+  }
+  .r6-settings .r6-language-setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .r6-language-setting-description {
+    margin-left: 0;
   }
 }
 @media (prefers-reduced-transparency: reduce) {

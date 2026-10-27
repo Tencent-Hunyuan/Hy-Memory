@@ -1809,8 +1809,7 @@ const baseEnglishMessages = {
     "{count} memories created{filter} · Showing {shown}",
   "memory:（{filter}）": " ({filter})",
   "memory:第 {page} 页": "Page {page}",
-  "memory:原话已保存，正在等待整理：":
-    "Original text saved, awaiting processing: ",
+  "memory:正在等待整理：": "Awaiting processing: ",
   "memory:记忆未在生成": "Memories are not being created",
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Memories are not being created: {reason} ({count} pending)",

@@ -401,7 +401,7 @@ export function R6Settings({
             className="r6-settings-connections"
           >
             <h2>{text("连接其他应用")}</h2>
-            <ConnectionFallback />
+            <ConnectionFallback defaultExpanded />
           </section>
           {showDiagnostics && (
             <section

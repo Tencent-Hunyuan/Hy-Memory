@@ -953,7 +953,7 @@ export function MemorySpace({
       {simplified && pendingAdd ? (
         <p className="memory-pending-add" role="status">
           <span>
-            {t("memory:原话已保存，正在等待整理：")}
+            {t("memory:正在等待整理：")}
             {pendingAdd.text}
           </span>
           {pendingAdd.state === "waiting_for_model" ? (

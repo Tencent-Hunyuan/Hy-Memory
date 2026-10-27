@@ -212,6 +212,7 @@ it("searches only when 搜索 is pressed, not on every keystroke", async () => {
       }}
     />,
   );
+  expect(screen.getByRole("combobox", { name: "来源" })).toBeTruthy();
   await userEvent.type(
     screen.getByRole("textbox", { name: "筛选地图记忆" }),
     "版本号",
@@ -263,6 +264,29 @@ it("OBS-15: switching memory shows a read in progress instead of the previous me
   // belonged to the selection that is now the second one.
   expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
   expect(screen.getByRole("status").textContent).toContain("正在读取这条记忆");
+});
+
+it("keeps the detail header outside the scrolling body and resets detail scroll on selection", async () => {
+  const { container } = render(
+    <Host simplified sources={[importedSources[0]]} />,
+  );
+  const heading = screen
+    .getByRole("heading", { name: "记忆详情" })
+    .closest(".map-inspector-heading");
+  const body = container.querySelector<HTMLElement>(".map-inspector-body");
+  expect(heading?.nextElementSibling).toBe(body);
+  if (!body) throw new Error("Memory detail scroll body is missing");
+  body.scrollTop = 180;
+  await userEvent.click(
+    within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
+      "button",
+      { name: /第二条/ },
+    ),
+  );
+  expect(body.scrollTop).toBe(0);
+  body.scrollTop = 120;
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 Codex" }));
+  expect(body.scrollTop).toBe(0);
 });
 
 it("OBS-12: the graph legend stays with the graph instead of sitting under a stage without one", () => {
@@ -544,6 +568,73 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
       .getByRole("navigation", { name: "地图记忆分页" })
       .classList.contains("map-pagination"),
   ).toBe(true);
+});
+
+it("keeps pagination and current detail stable while the next page is loading", async () => {
+  const onPage = vi.fn();
+  const page = {
+    items: memories,
+    total: 202,
+    offset: 0,
+    limit: 100,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const libraryView = { ...pagedView(page), onPage };
+  const view = render(<Host simplified libraryView={libraryView} />);
+  const list = screen.getByRole("list", { name: "地图记忆列表" });
+  list.scrollTop = 160;
+  const pager = screen.getByRole("navigation", { name: "地图记忆分页" });
+  await userEvent.click(
+    within(pager).getByRole("button", { name: "下一页记忆" }),
+  );
+  expect(onPage).toHaveBeenCalledWith(100);
+  view.rerender(
+    <Host simplified libraryView={{ ...libraryView, loading: true }} />,
+  );
+  expect(
+    screen
+      .getByRole("navigation", { name: "地图记忆分页" })
+      .getAttribute("aria-busy"),
+  ).toBe("true");
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "下一页记忆",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  expect(list.scrollTop).toBe(160);
+
+  const nextItems = memories.map((memory, index) => ({
+    ...memory,
+    memory_id: `next-${index}`,
+    content: `下一页第 ${index + 1} 条`,
+  }));
+  view.rerender(
+    <Host
+      simplified
+      items={nextItems}
+      libraryView={{
+        ...libraryView,
+        page: {
+          ...page,
+          items: nextItems,
+          offset: 100,
+          source_ids_by_memory: {
+            "next-0": ["codex"],
+            "next-1": ["codex"],
+          },
+        },
+        loading: false,
+      }}
+    />,
+  );
+  expect(list.scrollTop).toBe(0);
+  expect(within(list).getByText("下一页第 1 条")).toBeTruthy();
+  await waitFor(() =>
+    expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull(),
+  );
 });
 
 it("names the SDK's no-source bucket 未识别来源, apart from a source under review", () => {

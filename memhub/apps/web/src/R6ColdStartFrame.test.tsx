@@ -99,7 +99,7 @@ it("keeps selection status outside decorative fades and readable when disabled",
   ).toMatch(/opacity:\s*1/);
 });
 
-it("keeps the native selector keyboard-focusable and switches both languages", async () => {
+it("keeps the product language menu keyboard-focusable and switches both languages", async () => {
   render(
     <LanguageProvider>
       <R6ColdStartFrame
@@ -116,17 +116,19 @@ it("keeps the native selector keyboard-focusable and switches both languages", a
   const selector = screen.getByRole("combobox");
   await user.tab();
   expect(document.activeElement).toBe(selector);
-  await user.selectOptions(selector, "es");
+  await user.click(selector);
+  await user.click(screen.getByRole("option", { name: "Español" }));
   expect(document.documentElement.lang).toBe("es");
   expect(screen.getByRole("combobox").getAttribute("id")).toBe(selector.id);
-  await user.selectOptions(selector, "zh-CN");
+  await user.click(selector);
+  await user.click(screen.getByRole("option", { name: "简体中文" }));
   expect(document.documentElement.lang).toBe("zh-CN");
   expect(screen.getByRole("combobox", { name: "界面语言" })).toBe(selector);
 });
 
 it.each([1, 2, 3] as const)(
   "offers a compact language selector on step %s",
-  (step) => {
+  async (step) => {
     render(
       <LanguageProvider>
         <R6ColdStartFrame
@@ -141,6 +143,7 @@ it.each([1, 2, 3] as const)(
     );
     const selector = screen.getByRole("combobox", { name: "界面语言" });
     expect(selector.closest(".r6-language-selector--compact")).toBeTruthy();
+    await userEvent.click(selector);
     expect(
       screen.getByRole("option", { name: "简体中文" }).getAttribute("lang"),
     ).toBe("zh-CN");

@@ -14,16 +14,20 @@ import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { OptionMenu } from "./OptionMenu";
 import { Answer, NodeDetail } from "./Workbench";
 
-it("localiza la selección vacía del menú auxiliar", () => {
+it("localiza y mantiene cerrado el menú auxiliar sin opciones", async () => {
   window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
   render(
     <LanguageProvider>
       <OptionMenu value="" options={[]} onChange={vi.fn()} />
     </LanguageProvider>,
   );
-  expect(
-    screen.getByRole("button", { name: "Selecciona una opción" }),
-  ).toBeTruthy();
+  const menu = screen.getByRole("combobox", {
+    name: "Selecciona una opción",
+  });
+  menu.focus();
+  await userEvent.keyboard("{Enter}{ArrowDown}");
+  expect(menu.getAttribute("aria-expanded")).toBe("false");
+  expect(menu.getAttribute("aria-activedescendant")).toBeNull();
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);
 });
 

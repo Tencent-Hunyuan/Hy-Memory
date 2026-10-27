@@ -201,8 +201,9 @@ it("keeps an added memory visible while it waits for model processing", async ()
   render(<MemorySpace simplified onConfigureModel={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "补充记忆" }));
   expect(
-    screen.getByText(/原话已保存，正在等待整理：项目周会统一安排在周三上午。/),
+    screen.getByText(/正在等待整理：项目周会统一安排在周三上午。/),
   ).toBeTruthy();
+  expect(screen.queryByText(/原话已保存/)).toBeNull();
   expect(screen.getByRole("button", { name: "配置整理模型" })).toBeTruthy();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
 });

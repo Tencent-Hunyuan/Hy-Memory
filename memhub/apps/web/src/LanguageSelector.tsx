@@ -1,11 +1,30 @@
 import { isLanguagePreference } from "@one-memory/i18n";
 import { useId, useState } from "react";
 import { useGuiLanguage } from "./gui-language";
+import { OptionMenu } from "./OptionMenu";
 
 export function LanguageSelector({ compact = false }: { compact?: boolean }) {
   const id = useId();
   const { preference, setPreference, t, error } = useGuiLanguage();
   const [pending, setPending] = useState(false);
+  const options = [
+    { value: "system", label: t("languageSystem") },
+    {
+      value: "zh-CN",
+      label: compact ? "简体中文" : t("languageChinese"),
+      lang: "zh-CN",
+    },
+    {
+      value: "en",
+      label: compact ? "English" : t("languageEnglish"),
+      lang: "en",
+    },
+    {
+      value: "es",
+      label: compact ? "Español" : t("languageSpanish"),
+      lang: "es",
+    },
+  ] as const;
   return (
     <section
       aria-labelledby={compact ? `${id}-label` : `${id}-title`}
@@ -26,14 +45,16 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
         <label id={`${id}-label`} htmlFor={`${id}-select`} hidden={compact}>
           {t(compact ? "languageTitle" : "languageLabel")}
         </label>
-        <select
+        <OptionMenu
           id={`${id}-select`}
-          aria-label={compact ? t("languageTitle") : undefined}
-          aria-describedby={compact ? undefined : `${id}-description`}
+          ariaLabel={compact ? t("languageTitle") : undefined}
+          labelledBy={compact ? undefined : `${id}-label`}
+          describedBy={compact ? undefined : `${id}-description`}
           value={preference}
           disabled={pending}
-          onChange={async (event) => {
-            const value = event.currentTarget.value;
+          options={options}
+          className="r6-language-option-menu"
+          onChange={async (value) => {
             if (!isLanguagePreference(value)) return;
             setPending(true);
             try {
@@ -42,18 +63,7 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
               setPending(false);
             }
           }}
-        >
-          <option value="system">{t("languageSystem")}</option>
-          <option value="zh-CN" lang="zh-CN">
-            {compact ? "简体中文" : t("languageChinese")}
-          </option>
-          <option value="en" lang="en">
-            {compact ? "English" : t("languageEnglish")}
-          </option>
-          <option value="es" lang="es">
-            {compact ? "Español" : t("languageSpanish")}
-          </option>
-        </select>
+        />
       </div>
       {!compact && (
         <p id={`${id}-description`} className="r6-language-setting-description">

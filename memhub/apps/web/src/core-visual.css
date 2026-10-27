@@ -1086,8 +1086,9 @@ button.map-tool {
   border-radius: 6px;
 }
 .map-inspector {
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 24px;
   background: var(--glass-drawer);
   border-left: 1px solid var(--bd);
@@ -1095,9 +1096,18 @@ button.map-tool {
 }
 .map-inspector-heading {
   display: flex;
+  flex: none;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 22px;
+}
+.map-inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .map-inspector-heading h2 {
   font-size: 13px;
