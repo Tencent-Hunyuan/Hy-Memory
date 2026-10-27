@@ -94,6 +94,83 @@ describe("RuntimeService", () => {
     );
   });
 
+  it("reclaims a lease older than the current boot even when a recycled PID answers the liveness probe", async () => {
+    // Issue #184: a forced power-off leaves runtime-service.lock behind;
+    // after the reboot the owner's PID is another process, so the old
+    // liveness-only check reports "already running" forever and launchd's
+    // KeepAlive loops the wrapper. A lease from a previous boot can never
+    // have a living owner, regardless of what the PID table says.
+    const dataDir = await directory("runtime-service-prevboot-");
+    const lock = path.join(dataDir, "runtime-service.lock");
+    await import("node:fs/promises").then(({ mkdir }) =>
+      mkdir(lock, { mode: 0o700 }),
+    );
+    await writeFile(
+      path.join(lock, "owner.json"),
+      JSON.stringify({ pid: 777 }),
+      {
+        mode: 0o600,
+      },
+    );
+    await chmod(lock, 0o700);
+    const leaseTime = Date.now();
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      // The recycled PID answers the probe: the liveness check alone
+      // would refuse forever.
+      processIsAlive: () => true,
+      // This boot began minutes after the lease was taken.
+      bootTime: () => leaseTime + 10 * 60_000,
+    });
+
+    await service.start();
+    await service.stop();
+  });
+
+  it("reclaims a lease whose owner.json was never written once the machine has rebooted", async () => {
+    // Issue #184's hard case: a power cut inside the mkdir → privateWrite
+    // window leaves the lock directory with no owner.json at all. That used
+    // to be runtime_service_lock_invalid forever; after a reboot it is
+    // provably from a previous boot and is cleared.
+    const dataDir = await directory("runtime-service-prevboot- corrupt-");
+    const lock = path.join(dataDir, "runtime-service.lock");
+    await import("node:fs/promises").then(({ mkdir }) =>
+      mkdir(lock, { mode: 0o700 }),
+    );
+    await chmod(lock, 0o700);
+    const leaseTime = Date.now();
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      processIsAlive: () => true,
+      bootTime: () => leaseTime + 10 * 60_000,
+    });
+
+    await service.start();
+    await service.stop();
+  });
+
+  it("still refuses a corrupt lease from the current boot", async () => {
+    // Same-boot corruption stays refused: the boot-time shortcut only
+    // applies when the lease provably predates the boot.
+    const dataDir = await directory("runtime-service-corrupt-sameboot-");
+    const lock = path.join(dataDir, "runtime-service.lock");
+    await import("node:fs/promises").then(({ mkdir }) =>
+      mkdir(lock, { mode: 0o700 }),
+    );
+    await chmod(lock, 0o700);
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      bootTime: () => Date.now() - 60 * 60_000, // booted an hour ago
+    });
+
+    await expect(service.start()).rejects.toThrow(
+      "runtime_service_lock_invalid",
+    );
+  });
+
   it("reclaims a stale validated lease", async () => {
     const dataDir = await directory("runtime-service-stale-");
     const lock = path.join(dataDir, "runtime-service.lock");
