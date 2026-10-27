@@ -36,7 +36,11 @@ from one_memory.hy_graph_admin import (
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.local_embedding import LocalEmbedder
-from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind
+from one_memory.model_profiles import (
+    ModelProfileSnapshot,
+    ProviderKind,
+    disable_thinking_params,
+)
 
 _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
@@ -244,14 +248,22 @@ def build_sdk_config(
         embedding_provider, embedding_endpoint, embedding_model, dimensions
     )
 
+    llm: dict[str, Any] = {
+        "provider": "openai",
+        "model": profile.model,
+        "api_key": generation_key,
+        "base_url": generation_endpoint,
+    }
+    # The SDK sends `extra_body` on every chat call, chat and coding/working
+    # alike. Without it DeepSeek spent the whole agent_max_tokens on thinking
+    # and answered finish_reason=length with no content.
+    thinking_off = disable_thinking_params(profile)
+    if thinking_off:
+        llm["extra_body"] = thinking_off
+
     return MemoryConfig.from_dict(
         {
-            "llm": {
-                "provider": "openai",
-                "model": profile.model,
-                "api_key": generation_key,
-                "base_url": generation_endpoint,
-            },
+            "llm": llm,
             "embedder": {
                 "provider": "openai",
                 "model": (
