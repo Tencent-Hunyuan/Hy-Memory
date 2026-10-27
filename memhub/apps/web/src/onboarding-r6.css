@@ -55,18 +55,29 @@
   gap: 6px 10px;
   font-size: 12px;
 }
-.onboarding-r6-titlebar select {
+.onboarding-r6-titlebar .r6-language-option-menu {
+  width: 144px;
+  max-width: 100%;
+}
+.onboarding-r6-titlebar .r6-language-option-menu .om-option-menu-button {
+  height: 32px;
   min-width: 0;
   max-width: 100%;
   min-height: 32px;
-  padding: 4px 8px;
+  padding: 4px 32px 4px 10px;
   border: 1px solid #9badbd;
   border-radius: 8px;
   color: inherit;
   background: #f7fafc;
   font: inherit;
 }
-.onboarding-r6-titlebar select:focus-visible {
+.onboarding-r6-titlebar .r6-language-option-menu .om-option-menu-button::after {
+  top: 10px;
+  right: 11px;
+}
+.onboarding-r6-titlebar
+  .r6-language-option-menu
+  .om-option-menu-button:focus-visible {
   outline: 2px solid #356d99;
   outline-offset: 2px;
 }

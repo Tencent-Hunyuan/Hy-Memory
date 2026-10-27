@@ -28,11 +28,15 @@ describe("ConnectionFallback", () => {
     } as unknown as Window["oneMemory"];
     render(
       <LanguageProvider>
-        <ConnectionFallback />
+        <ConnectionFallback defaultExpanded />
       </LanguageProvider>,
     );
     const user = userEvent.setup();
-    await user.click(await screen.findByText("Conectar otras herramientas"));
+    expect(
+      (await screen.findByText("Conectar otras herramientas")).closest(
+        "details",
+      ),
+    ).toHaveProperty("open", true);
     await user.type(
       screen.getByLabelText("Nombre del Harness"),
       "Harness 原名",
@@ -59,8 +63,11 @@ describe("ConnectionFallback", () => {
       createCustomHarnessSkill,
       copyText,
     } as unknown as Window["oneMemory"];
-    render(<ConnectionFallback />);
-    await user.click(screen.getByText("连接其他工具"));
+    render(<ConnectionFallback defaultExpanded />);
+    expect(screen.getByText("连接其他工具").closest("details")).toHaveProperty(
+      "open",
+      true,
+    );
     const generate = screen.getByRole("button", { name: "生成配对 Skill" });
     expect(generate).toHaveProperty("disabled", true);
     await user.type(screen.getByLabelText("Harness 名称"), "Kimi Code");
@@ -90,8 +97,7 @@ describe("ConnectionFallback", () => {
       createCustomHarnessSkill,
       copyText: vi.fn().mockRejectedValue(new Error()),
     } as unknown as Window["oneMemory"];
-    render(<ConnectionFallback />);
-    await user.click(screen.getByText("连接其他工具"));
+    render(<ConnectionFallback defaultExpanded />);
     await user.type(screen.getByLabelText("Harness 名称"), "Kimi Code");
     await user.click(screen.getByRole("button", { name: "生成配对 Skill" }));
     await user.click(await screen.findByRole("button", { name: "重试" }));
@@ -103,6 +109,10 @@ describe("ConnectionFallback", () => {
   });
   it("does not invent runtime paths in the browser", () => {
     render(<ConnectionFallback />);
+    expect(screen.getByText("连接其他工具").closest("details")).toHaveProperty(
+      "open",
+      false,
+    );
     expect(screen.queryByLabelText("配对 Skill")).toBeNull();
     expect(screen.getByText("本机配对仅在桌面 App 中可用。")).toBeTruthy();
   });

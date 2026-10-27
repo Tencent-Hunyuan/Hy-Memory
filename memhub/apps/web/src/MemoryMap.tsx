@@ -607,6 +607,7 @@ export function MemoryMap(props: Props) {
             <label htmlFor="selected-source-filter">{text("来源")}</label>
             <OptionMenu
               id="selected-source-filter"
+              ariaLabel={text("来源")}
               className="om-option-menu--plain"
               value={controlledSource}
               options={[

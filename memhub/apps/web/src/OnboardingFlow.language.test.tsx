@@ -117,7 +117,8 @@ it("changes the first-screen language without losing source choices or starting 
     ),
   );
   await user.click(screen.getByLabelText("导入 Cursor 历史"));
-  await user.selectOptions(selector, "es");
+  await user.click(selector);
+  await user.click(screen.getByRole("option", { name: "Español" }));
   expect(screen.getByRole("combobox", { name: "Idioma de la interfaz" })).toBe(
     selector,
   );
@@ -125,7 +126,8 @@ it("changes the first-screen language without losing source choices or starting 
     screen.getByLabelText("Importar el historial de Cursor"),
   ).toHaveProperty("checked", false);
   await user.click(screen.getByLabelText("Importar el historial de Cursor"));
-  await user.selectOptions(selector, "zh-CN");
+  await user.click(selector);
+  await user.click(screen.getByRole("option", { name: "简体中文" }));
   expect(screen.getByLabelText("导入 Cursor 历史")).toHaveProperty(
     "checked",
     true,

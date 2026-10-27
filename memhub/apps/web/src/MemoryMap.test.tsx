@@ -212,6 +212,7 @@ it("searches only when 搜索 is pressed, not on every keystroke", async () => {
       }}
     />,
   );
+  expect(screen.getByRole("combobox", { name: "来源" })).toBeTruthy();
   await userEvent.type(
     screen.getByRole("textbox", { name: "筛选地图记忆" }),
     "版本号",
