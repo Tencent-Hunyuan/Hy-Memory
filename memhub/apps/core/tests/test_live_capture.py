@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
@@ -107,7 +108,15 @@ def test_same_message_id_from_the_file_does_not_duplicate(tmp_path) -> None:
     assert store.count() == 1
 
 
+def _quiet_for_ten_minutes(database: Path, store: EvidenceStore) -> tuple[str, ...]:
+    """What Core's drain does once a live conversation has been quiet."""
+    return DurableWriteQueue(database, evidence=store).flush_idle_assemblies(
+        now=datetime.now(UTC) + timedelta(minutes=11)
+    )
+
+
 def test_hook_submits_complete_turn_to_the_live_durable_lane(tmp_path) -> None:
+    """The turn rule holds the turn until the next user message or 10 quiet minutes."""
     store = _grant(tmp_path, "workbuddy", sync=True)
     database = tmp_path / "one-memory.sqlite3"
 
@@ -133,9 +142,12 @@ def test_hook_submits_complete_turn_to_the_live_durable_lane(tmp_path) -> None:
     )
 
     with closing(sqlite3.connect(database)) as db:
+        assert db.execute("SELECT state FROM memory_write_jobs").fetchall() == [("assembling",)]
+    assert len(_quiet_for_ten_minutes(database, store)) == 1
+    with closing(sqlite3.connect(database)) as db:
         row = db.execute(
             "SELECT priority,evidence_ids_json FROM memory_write_jobs "
-            "WHERE idempotency_key LIKE 'turn:v1:%'"
+            "WHERE idempotency_key LIKE 'turn:v2:%'"
         ).fetchone()
     assert row[0] == "live"
     assert len(json.loads(row[1])) == 2
@@ -159,6 +171,41 @@ def test_hook_submits_complete_turn_to_the_live_durable_lane(tmp_path) -> None:
     with closing(sqlite3.connect(database)) as db:
         assert db.execute("SELECT COUNT(*) FROM memory_write_jobs").fetchone() == (1,)
         assert db.execute("SELECT COUNT(*) FROM evidence").fetchone() == (2,)
+
+
+def test_hook_writes_five_turns_once_the_next_user_message_arrives(tmp_path) -> None:
+    store = _grant(tmp_path, "workbuddy", sync=True)
+    database = tmp_path / "one-memory.sqlite3"
+
+    def say(event: str, field: str, message_id: str, text: str) -> None:
+        assert capture_hook(
+            "workbuddy",
+            {
+                "hook_event_name": event,
+                "session_id": "sess-five",
+                "message_id": message_id,
+                field: text,
+            },
+            database,
+        )
+
+    for index in range(5):
+        say("UserPromptSubmit", "prompt", f"u{index}", f"第 {index} 个偏好")
+        say("Stop", "last_assistant_message", f"a{index}", f"记住第 {index} 个")
+    with closing(sqlite3.connect(database)) as db:
+        assert db.execute("SELECT state FROM memory_write_jobs").fetchall() == [("assembling",)]
+
+    say("UserPromptSubmit", "prompt", "u5", "第 5 个偏好")
+
+    with closing(sqlite3.connect(database)) as db:
+        rows = db.execute(
+            "SELECT state,evidence_ids_json FROM memory_write_jobs ORDER BY queue_seq"
+        ).fetchall()
+    assert [(state, len(json.loads(ids))) for state, ids in rows] == [
+        ("assembling", 0),
+        ("pending", 10),
+    ]
+    assert store.count() == 11
 
 
 def test_file_adopts_the_hook_row_when_the_text_is_unique(tmp_path) -> None:
@@ -211,6 +258,7 @@ def test_hook_job_completes_after_file_identity_adoption(tmp_path) -> None:
         },
         database,
     )
+    assert len(_quiet_for_ten_minutes(database, store)) == 1
     for message_id, role, author, text in (
         ("file-user", "user", WrittenBy.PERSON, "我喜欢蓝莓"),
         ("file-assistant", "assistant", WrittenBy.AGENT, "我会记住你喜欢蓝莓"),

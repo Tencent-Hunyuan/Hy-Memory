@@ -1,8 +1,8 @@
-"""D74: a turn reaches HY whole; only what HY will read counts toward the ceiling."""
+"""D74: a turn reaches HY whole; only what HY will read counts toward the batch size."""
 
 from datetime import UTC, datetime
 
-from one_memory.conversation_processing import _conversation_chunks
+from one_memory.conversation_processing import turn_batches
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 
@@ -36,66 +36,33 @@ def test_tool_heavy_turn_is_one_window(tmp_path):
         *[("assistant", "定位中") for _ in range(30)],
         ("assistant", "原因是 fixture 没清理" * 100),
     )
-    chunks = _conversation_chunks(records)
-    assert len(chunks) == 1
-    assert chunks[0] == tuple(records)
+    batches = turn_batches(records, flush=True).batches
+    assert batches == (tuple(records),)
 
 
 def test_long_answer_is_not_cut(tmp_path):
     records = _turn(tmp_path, ("user", "写一份方案"), ("assistant", "段落。" * 7_000))
-    chunks = _conversation_chunks(records)
-    assert chunks == [tuple(records)]
-    assert all(":segment:" not in record.evidence_id for record in chunks[0])
+    batches = turn_batches(records, flush=True).batches
+    assert batches == (tuple(records),)
+    assert all(":segment:" not in record.evidence_id for record in batches[0])
 
 
-def test_text_over_the_ceiling_still_splits(tmp_path):
-    records = _turn(tmp_path, ("user", "整理"), ("assistant", "句子。" * 25_000))
-    chunks = _conversation_chunks(records)
-    assert len(chunks) > 1
-    assert all(chunk[0].evidence_id == records[0].evidence_id for chunk in chunks)
+def test_a_turn_far_over_the_batch_size_is_still_one_window(tmp_path):
+    """The rule never splits a turn: it is written alone, whole.
 
-
-def test_switch_restores_the_old_split(tmp_path, monkeypatch):
-    monkeypatch.setenv("ONE_MEMORY_SPLIT_TURNS", "1")
-    records = _turn(tmp_path, ("user", "写一份方案"), ("assistant", "段落。" * 7_000))
-    assert len(_conversation_chunks(records)) > 1
-
-
-def test_explicit_limits_keep_old_semantics(tmp_path):
-    records = _turn(tmp_path, ("user", "q"), *[("assistant", "a" * 100) for _ in range(30)])
-    assert len(_conversation_chunks(records, max_turns=6, max_characters=1200)) > 1
-
-
-def test_one_window_is_capped_in_raw_bytes(tmp_path):
-    """HY counts 2 KiB per tool record, but we still hold the raw text.
-
-    `client.add` is in-process, so a window's raw bytes are what the process
-    actually holds even though HY will cut each tool record down before it
-    reaches the model. Past the byte ceiling the window is cut, so no single
-    call can grow without bound.
+    The old windows cut text past 60k characters and raw bytes past 2 MB into
+    segments that repeated the user question. HY reads at most
+    `_HY_TOOL_CHARACTERS` of each tool record, so the window HY reads stays
+    bounded by the turn's own text.
     """
-    from one_memory.conversation_processing import _WINDOW_BYTE_CEILING
-
     records = _turn(
         tmp_path,
         ("user", "跑一下全部测试"),
         *[("tool", "y" * 400_000) for _ in range(20)],
+        ("assistant", "句子。" * 25_000),
     )
-    chunks = _conversation_chunks(records)
-    assert len(chunks) > 1
-    assert all(
-        sum(len(item.verbatim.encode("utf-8")) for item in chunk) <= _WINDOW_BYTE_CEILING
-        for chunk in chunks
-    )
-
-
-def test_the_byte_ceiling_counts_bytes_not_characters(tmp_path):
-    """One CJK character is three bytes; a character count would let three
-    times as much through."""
-    from one_memory.conversation_processing import _WINDOW_BYTE_CEILING, _window_bytes
-
-    assert _window_bytes(_turn(tmp_path, ("user", "中文"))[0]) > len("中文")
-    assert _WINDOW_BYTE_CEILING == 2_000_000
+    batches = turn_batches(records, flush=True).batches
+    assert batches == (tuple(records),)
 
 
 def test_the_sdk_strips_tool_messages_on_the_chat_path():

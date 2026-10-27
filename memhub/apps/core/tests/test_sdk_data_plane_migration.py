@@ -705,6 +705,29 @@ def test_cutover_waits_until_the_new_runtime_reads_every_chat_memory(store, acti
     assert store.authority() is MemoryAuthority.SDK
 
 
+def test_sdk_migrate_repairs_metadata_after_cutover_and_writes_the_receipt(store, active_profile):
+    """76/76 memories showed source=default after an upgrade whose repair failed.
+
+    The repair now runs here, offline, right after the cutover commits; Core's
+    startup finds the receipt and does nothing.
+    """
+    _confirmed(store, "m1")
+    home = store.database_path.parent
+
+    result = run_startup_migration(
+        data_dir=home,
+        runtime_build="21",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        open_client=_reading({"m1"}),
+    )
+
+    assert result.state == "cutover"
+    receipt = home / f".sdk-metadata-repair-v2-{result.migration_id}.json"
+    assert receipt.is_file()
+    assert json.loads(receipt.read_text())["migration_id"] == result.migration_id
+
+
 def test_retired_coding_experiences_do_not_block_but_an_empty_store_does(store, active_profile):
     _confirmed(store, "chat-1")
     _confirmed(store, "exp-kept", "exp-retired", kind="coding")

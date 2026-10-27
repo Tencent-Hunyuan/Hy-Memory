@@ -662,11 +662,15 @@ class ImportRunner:
                         and self.sdk_queue is not None
                         and event.cursor.read_to_end
                     ):
+                        # History ends at this end of file, so its last turn
+                        # and a short batch are written. Live polling keeps
+                        # them for the next increment or the idle flush.
                         self.sdk_queue.finalize_sdk_file(
                             user_id=current.user_id,
                             source_id=current.source_id,
                             file_key=event.cursor.file_key,
                             connection=connection,
+                            flush=not self._live_import,
                         )
                         continue
                     if self.on_stable_evidence is not None and event.cursor.read_to_end:

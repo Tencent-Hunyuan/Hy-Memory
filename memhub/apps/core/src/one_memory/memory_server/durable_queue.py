@@ -24,10 +24,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from one_memory.background_work import in_the_background
+from one_memory.conversation_processing import TURN_IDLE_FLUSH_SECONDS, turn_batches
 from one_memory.database_access import main_database
 from one_memory.diagnostic_log import diagnostic_event
 from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
@@ -894,16 +895,30 @@ class DurableWriteQueue:
         priority: str,
         connection: sqlite3.Connection,
     ) -> None:
-        """Append fresh-install input to an assembling queue row.
+        """Append input to its conversation's assembling queue row.
 
-        The row is not claimable until the scanner commits EOF and finalizes
-        it. No Evidence table is involved.
+        The row is not claimable. `finalize_sdk_file` turns what is complete
+        into write jobs (`turn_batches`) and keeps the rest here for the next
+        increment; `flush_idle_assemblies` writes a live row's rest once the
+        conversation has been quiet. `updated_at` moves only when a record is
+        new or revised, so a re-read does not keep a quiet conversation open.
+        No Evidence table is involved.
         """
         assembly_key = (
             f"assembly:{record.user_id}:{record.source_id}:"
             f"{hashlib.sha256(file_key.encode()).hexdigest()}:"
             f"{hashlib.sha256(record.conversation_id.encode()).hexdigest()}"
         )
+        session_key = internal_session_id_for(record.conversation_id, record.source_id)
+        written = connection.execute(
+            "SELECT 1 FROM memory_write_jobs AS job, json_each(job.evidence_ids_json) AS ref "
+            "WHERE job.session_key=? AND job.state!='assembling' AND ref.value=? LIMIT 1",
+            (session_key, record.evidence_id),
+        ).fetchone()
+        if written is not None:
+            # A re-read of a record a job already holds: staging it again
+            # would regroup it with later turns into a second job.
+            return
         row = connection.execute(
             "SELECT job_id,payload_json,priority FROM memory_write_jobs "
             "WHERE idempotency_key=? AND state='assembling'",
@@ -914,8 +929,20 @@ class DurableWriteQueue:
             payload = json.loads(str(row["payload_json"]))
             records = list(payload.get("input_records") or [])
         dumped = record.model_dump(mode="json")
-        if not any(item.get("evidence_id") == record.evidence_id for item in records):
+        index = next(
+            (
+                position
+                for position, item in enumerate(records)
+                if item.get("evidence_id") == record.evidence_id
+            ),
+            None,
+        )
+        changed = index is None or records[index] != dumped
+        if index is None:
             records.append(dumped)
+        elif changed:
+            # A revision replaces the carried copy in place.
+            records[index] = dumped
         now = datetime.now(UTC).isoformat()
         payload_json = json.dumps(
             {
@@ -926,15 +953,13 @@ class DurableWriteQueue:
             sort_keys=True,
         )
         if row is not None:
+            merged_priority = "live" if "live" in (row["priority"], priority) else "normal"
+            if not changed and merged_priority == row["priority"]:
+                return
             connection.execute(
-                "UPDATE memory_write_jobs SET payload_json=?,priority=?,updated_at=? "
-                "WHERE job_id=?",
-                (
-                    payload_json,
-                    "live" if row["priority"] == "live" or priority == "live" else "normal",
-                    now,
-                    str(row["job_id"]),
-                ),
+                "UPDATE memory_write_jobs SET payload_json=?,priority=?,"
+                "updated_at=CASE WHEN ? THEN ? ELSE updated_at END WHERE job_id=?",
+                (payload_json, merged_priority, int(changed), now, str(row["job_id"])),
             )
             return
         queue_seq = int(
@@ -952,7 +977,7 @@ class DurableWriteQueue:
             (
                 str(uuid4()),
                 queue_seq,
-                internal_session_id_for(record.conversation_id, record.source_id),
+                session_key,
                 record.source_id,
                 assembly_key,
                 assembly_key,
@@ -982,92 +1007,215 @@ class DurableWriteQueue:
         source_id: str,
         file_key: str,
         connection: sqlite3.Connection,
+        flush: bool = True,
     ) -> tuple[str, ...]:
+        """Write what one file's assembling rows hold that the turn rule completes.
+
+        `flush` (history at end of file) completes the last turn and writes a
+        short batch; without it (live polling) those stay in the row.
+        """
         rows = connection.execute(
             "SELECT * FROM memory_write_jobs WHERE state='assembling' "
             "AND source_key=? ORDER BY queue_seq",
             (source_id,),
         ).fetchall()
-        finalized = []
+        finalized: list[str] = []
         for row in rows:
             payload = json.loads(str(row["payload_json"]))
             if payload.get("file_key") != file_key:
                 continue
-            records = tuple(
-                EvidenceRecord.model_validate(item)
-                for item in payload.get("input_records") or []
-                if item.get("user_id") == user_id
+            finalized.extend(
+                self._write_assembled_turns(connection, row, user_id=user_id, flush=flush)
             )
-            if not records:
-                connection.execute(
-                    "DELETE FROM memory_write_jobs WHERE job_id=?",
-                    (str(row["job_id"]),),
+        return tuple(finalized)
+
+    def assemble_live_records(
+        self,
+        records: tuple[EvidenceRecord, ...],
+        *,
+        file_key: str,
+    ) -> tuple[str, ...]:
+        """Stage live records and write what is complete, in one transaction.
+
+        For live capture outside the import runner (host hooks): the same
+        assembling rows, turn rule and idle flush as live file polling.
+        """
+        if not records:
+            return ()
+        first = records[0]
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            for record in records:
+                self.stage_sdk_input(
+                    record, file_key=file_key, priority="live", connection=connection
                 )
-                continue
-            first = records[0]
-            session_id = internal_session_id_for(
-                first.conversation_id,
-                first.source_id,
-            )
-            material = ":".join(f"{item.evidence_id}:{item.content_hash}" for item in records)
-            request_id = f"turn:v2:{hashlib.sha256(material.encode()).hexdigest()}"
-            existing = connection.execute(
-                "SELECT job_id FROM memory_write_jobs WHERE idempotency_key=? AND job_id!=?",
-                (request_id, str(row["job_id"])),
-            ).fetchone()
-            if existing is not None:
-                connection.execute(
-                    "DELETE FROM memory_write_jobs WHERE job_id=?",
-                    (str(row["job_id"]),),
-                )
-                finalized.append(str(existing["job_id"]))
-                continue
-            request = WriteRequest(
-                internal_session_id=session_id,
+            return self.finalize_sdk_file(
+                user_id=first.user_id,
                 source_id=first.source_id,
-                batch_identity=BatchIdentity(
-                    internal_session_id=session_id,
-                    first_round=1,
-                    last_round=1,
-                ),
-                evidence_ids=[item.evidence_id for item in records],
-                input_records=records,
-                idempotency_key=request_id,
-                priority="live" if str(row["priority"]) == "live" else "normal",
-                event_at=max(
-                    (item.created_at for item in records if item.created_at),
-                    default=first.imported_at,
-                ),
-                time_quality="exact" if any(item.created_at for item in records) else "approximate",
+                file_key=file_key,
+                connection=connection,
+                flush=False,
             )
+
+    def flush_idle_assemblies(self, *, now: datetime | None = None) -> tuple[str, ...]:
+        """Write the rest of every live conversation quiet for 10 minutes.
+
+        Its last turn counts as complete and a batch short of 5 turns is
+        written. History rows are left alone: their end of file flushes them.
+        """
+        current = now or datetime.now(UTC)
+        cutoff = (current - timedelta(seconds=TURN_IDLE_FLUSH_SECONDS)).isoformat()
+        query = (
+            "SELECT * FROM memory_write_jobs WHERE state='assembling' AND priority='live' "
+            "AND updated_at<=? ORDER BY queue_seq"
+        )
+        # A read first: most ticks find nothing and must not take the writer.
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            if connection.execute(query, (cutoff,)).fetchone() is None:
+                return ()
+        finalized: list[str] = []
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            for row in connection.execute(query, (cutoff,)).fetchall():
+                finalized.extend(self._write_assembled_turns(connection, row, flush=True))
+        return tuple(finalized)
+
+    def _write_assembled_turns(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        flush: bool,
+        user_id: str | None = None,
+    ) -> list[str]:
+        """Turn one assembling row's complete batches into jobs; keep the carry."""
+        payload = json.loads(str(row["payload_json"]))
+        records = tuple(
+            EvidenceRecord.model_validate(item)
+            for item in payload.get("input_records") or []
+            if user_id is None or item.get("user_id") == user_id
+        )
+        grouped = turn_batches(records, flush=flush)
+        priority: Literal["live", "normal"] = "live" if str(row["priority"]) == "live" else "normal"
+        job_ids = [
+            self._insert_turn_batch(connection, batch, priority=priority)
+            for batch in grouped.batches
+        ]
+        if not grouped.carry:
             connection.execute(
-                "UPDATE memory_write_jobs SET session_key=?,batch_id=?,"
-                "idempotency_key=?,payload_json=?,evidence_ids_json=?,state='pending',"
-                "event_at=?,time_quality=?,updated_at=? WHERE job_id=?",
+                "DELETE FROM memory_write_jobs WHERE job_id=?", (str(row["job_id"]),)
+            )
+        elif grouped.batches or len(grouped.carry) != len(records):
+            # `updated_at` stays: the idle clock counts new messages only.
+            connection.execute(
+                "UPDATE memory_write_jobs SET payload_json=? WHERE job_id=?",
                 (
-                    session_id,
-                    request.batch_identity.batch_id,
-                    request_id,
                     json.dumps(
-                        request.model_dump(
-                            mode="json",
-                            exclude={"event_at", "time_quality"},
-                        ),
+                        {
+                            **payload,
+                            "input_records": [
+                                record.model_dump(mode="json") for record in grouped.carry
+                            ],
+                        },
                         sort_keys=True,
                     ),
-                    json.dumps(list(request.evidence_ids)),
-                    (
-                        request.event_at.isoformat()
-                        if request.event_at
-                        else datetime.now(UTC).isoformat()
-                    ),
-                    request.time_quality,
-                    datetime.now(UTC).isoformat(),
                     str(row["job_id"]),
                 ),
             )
-            finalized.append(str(row["job_id"]))
-        return tuple(finalized)
+        return job_ids
+
+    def _insert_turn_batch(
+        self,
+        connection: sqlite3.Connection,
+        records: tuple[EvidenceRecord, ...],
+        *,
+        priority: Literal["live", "normal"],
+    ) -> str:
+        """One pending job for one batch of whole turns, keyed by its content.
+
+        Same records, same key: a re-read returns the job already written.
+        """
+        first = records[0]
+        session_id = internal_session_id_for(first.conversation_id, first.source_id)
+        material = ":".join(f"{item.evidence_id}:{item.content_hash}" for item in records)
+        request_id = f"turn:v2:{hashlib.sha256(material.encode()).hexdigest()}"
+        existing = connection.execute(
+            "SELECT job_id FROM memory_write_jobs WHERE idempotency_key=?",
+            (request_id,),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["job_id"])
+        request = WriteRequest(
+            internal_session_id=session_id,
+            source_id=first.source_id,
+            batch_identity=BatchIdentity(
+                internal_session_id=session_id,
+                first_round=1,
+                last_round=1,
+            ),
+            evidence_ids=[item.evidence_id for item in records],
+            input_records=records,
+            idempotency_key=request_id,
+            priority=priority,
+        )
+        # The batch's time is its first user message's, as for every other job.
+        event_at, time_quality = self._event_time_for_request(request)
+        now = datetime.now(UTC)
+        job_id = str(uuid4())
+        queue_seq = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(queue_seq),0)+1 FROM memory_write_jobs"
+            ).fetchone()[0]
+        )
+        event = event_at or now
+        if event.tzinfo is None:
+            event = event.replace(tzinfo=UTC)
+        connection.execute(
+            "INSERT INTO memory_write_jobs ("
+            "job_id,queue_seq,session_key,source_key,batch_id,idempotency_key,"
+            "payload_json,evidence_ids_json,state,priority,attempts,max_attempts,"
+            "lease_owner,lease_expires_at,hy_invoked,last_error,event_at,time_quality,"
+            "created_at,updated_at,sdk_raw_ids_json,sdk_memory_ids_json"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                job_id,
+                queue_seq,
+                session_id,
+                first.source_id,
+                request.batch_identity.batch_id,
+                request_id,
+                json.dumps(
+                    request.model_dump(mode="json", exclude={"event_at", "time_quality"}),
+                    sort_keys=True,
+                ),
+                json.dumps(list(request.evidence_ids)),
+                PENDING,
+                priority,
+                0,
+                3,
+                None,
+                None,
+                0,
+                None,
+                event.astimezone(UTC).isoformat(),
+                time_quality,
+                now.isoformat(),
+                now.isoformat(),
+                "[]",
+                "[]",
+            ),
+        )
+        if not self.sdk_authority:
+            # Legacy catch-up reads coverage from these references.
+            connection.executemany(
+                "INSERT INTO memory_write_job_evidence (job_id, evidence_id) VALUES (?,?)",
+                ((job_id, evidence_id) for evidence_id in request.evidence_ids),
+            )
+        return job_id
 
     def _freeze_request_inputs(self, request: WriteRequest) -> WriteRequest:
         if request.input_records or self.evidence is None:
@@ -2500,6 +2648,9 @@ class DurableWriteDrain:
         #: a model outage clears on its own, and a queue that never goes idle
         #: must still re-admit the write once the wait has elapsed.
         self._last_model_readmit: datetime | None = None
+        #: A live conversation quiet for 10 minutes has its last turn and short
+        #: batch written (`flush_idle_assemblies`); checked on the same timer.
+        self._last_assembly_flush: datetime | None = None
         #: Idle polls do not need to hit the single writer every 50ms. A
         #: 1m Evidence table makes a miss expensive enough that the tail
         #: call-event write can be behind it; back off only while idle and
@@ -3031,6 +3182,15 @@ class DurableWriteDrain:
                     await self._run_idle_maintenance(
                         self.queue.readmit_model_waiters,
                         operation_name="readmit_model_waiters",
+                    )
+                if (
+                    self._last_assembly_flush is None
+                    or tick_started - self._last_assembly_flush >= self._reap_interval
+                ):
+                    self._last_assembly_flush = tick_started
+                    await self._run_idle_maintenance(
+                        self.queue.flush_idle_assemblies,
+                        operation_name="flush_idle_assemblies",
                     )
                 if self.reconcile_unknown is not None and (
                     self._last_unknown_reconcile is None

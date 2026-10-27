@@ -256,24 +256,19 @@ def record_capture_rejection(
 
 
 def _submit_live_memory(store: EvidenceStore, record: EvidenceRecord, *, changed: bool) -> None:
+    """Add the record to its conversation's live assembling row.
+
+    The turn rule decides what is written (`turn_batches`): a turn is
+    complete when the next user message arrives, batches are 5 turns or
+    8000 characters, and Core writes the rest after 10 quiet minutes.
+    """
     if not changed or not _sync_open(store.database_path, record.source_id):
         return
-    from one_memory.conversation_processing import _conversation_chunks
     from one_memory.memory_server.durable_queue import DurableWriteQueue
-    from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 
-    intake = UnifiedWriteIntake(DurableWriteQueue(store.database_path, evidence=store))
-    for chunk in _conversation_chunks(
-        store.list_conversation(record.evidence_id),
-        max_turns=12,
-        completed_only=True,
-    ):
-        if (
-            record in chunk
-            and any(item.role == "user" for item in chunk)
-            and any(item.role == "assistant" for item in chunk)
-        ):
-            intake.submit_records(chunk, priority="live")
+    DurableWriteQueue(store.database_path, evidence=store).assemble_live_records(
+        (record,), file_key=f"hook:{record.conversation_id}"
+    )
 
 
 def _conversation(payload: dict[str, object]) -> str | None:

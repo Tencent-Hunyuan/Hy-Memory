@@ -125,6 +125,31 @@ def describe_error(error: BaseException) -> dict[str, object]:
     return {"chain": chain}
 
 
+_PY_FRAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*\.py:\d{1,7}:[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def error_frames(error: BaseException, *, limit: int = 16) -> tuple[str, ...]:
+    """The raised error's innermost `file.py:line:function` frames, for a stack field.
+
+    Library frames are kept (a KeyError raised inside Chroma is located by
+    them); `<module>`-style names are dropped because stack fields refuse them.
+    """
+    chain = describe_error(error)["chain"]
+    frames = chain[0].get("frames", ()) if chain else ()  # type: ignore[index,union-attr]
+    return tuple(frame for frame in frames if _PY_FRAME.fullmatch(frame))[-limit:]
+
+
+def error_chain_text(error: BaseException) -> str:
+    """`describe_error` as one log token: `Type@file:line:function>...;Cause@...`.
+
+    For a plain text log (core.log). Types and frames only, never a message.
+    """
+    return ";".join(
+        f"{entry['type']}@{'>'.join(entry.get('frames', ()))}"  # type: ignore[arg-type]
+        for entry in describe_error(error)["chain"]  # type: ignore[union-attr]
+    )
+
+
 def _build() -> dict[str, object]:
     from one_memory import __version__
 

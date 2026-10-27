@@ -47,8 +47,8 @@ from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import sdk_context_router
 from one_memory.conversation_processing import (
-    _conversation_chunks,
     memory_task_timeout_seconds,
+    turn_batches,
 )
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
@@ -95,6 +95,8 @@ from one_memory.hy_sdk_runtime import (
     SdkClientHandle,
     builtin_retrieval_snapshot,
     close_all_shared_runtimes,
+    hold_stores_offline,
+    release_stores,
     sdk_relevance_floor,
 )
 from one_memory.hy_sdk_types import (
@@ -223,6 +225,7 @@ from one_memory.sdk_memory_qa import (
     SdkMemoryAnswerer,
 )
 from one_memory.sdk_memory_runtime import SdkMemoryRuntime
+from one_memory.sdk_migration_log import error_chain_text, error_frames
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.secrets import (
     KeyringSecretStore,
@@ -710,7 +713,8 @@ def create_app(
                 raise SdkMigrationRequired()
             if app.state.memory_authority is MemoryAuthority.SDK:
                 # The metadata repair after a cutover reads every bundle: it is
-                # recovery work, so it runs after readiness (`recover_after_ready`).
+                # recovery work, so it runs after readiness (`recover_after_ready`)
+                # while the SDK's stores are held offline (see there).
                 app.state.memory_governance_store = RetiredGovernanceStore(database_path)
                 app.state.evidence_store = RetiredEvidenceStore(database_path)
             else:
@@ -1026,28 +1030,25 @@ def create_app(
 
             app.state.memory_write_intake = UnifiedWriteIntake(
                 memory_write_queue,
-                source_writes_permitted=lambda source_id: (
-                    source_id == "one-memory-manual" or _source_writes_on(app, source_id)
-                ),
+                source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
             )
             app.state.start_memory_backfill = lambda: _start_backfill(app)
 
             async def enqueue_stable_evidence(record: EvidenceRecord) -> None:
-                priority = "live" if live_sync_arrival.get() else "normal"
+                live = live_sync_arrival.get()
                 conversation = await asyncio.to_thread(
                     app.state.evidence_store.list_conversation, record.evidence_id
                 )
-                for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True):
-                    if (
-                        record not in chunk
-                        or not any(item.role == "user" for item in chunk)
-                        or not any(item.role == "assistant" for item in chunk)
-                    ):
-                        continue
+                # Legacy authority. The turn rule groups the whole conversation
+                # from its start, so a batch's records and key never change:
+                # history (end of file) writes it all, live writes complete
+                # batches and leaves the rest to catch-up (`_run_backfill`).
+                batches = turn_batches(conversation, flush=not live).batches
+                for batch in _batches_settled_by(batches, record):
                     await asyncio.to_thread(
                         app.state.memory_write_intake.submit_records,
-                        chunk,
-                        priority=priority,
+                        batch,
+                        priority="live" if live else "normal",
                     )
 
             app.state.memory_addition_store = MemoryAdditionStore(
@@ -1189,10 +1190,14 @@ def create_app(
                     except Exception as error:
                         failed.append(name)
                         app.state.recovery_failed_steps = tuple(failed)
+                        # Where it failed, as `file:line:function` frames of
+                        # the exception chain, never its message: a bare
+                        # `error_type=KeyError` named no location.
                         logger.warning(
-                            "core_recovery_step_failed step=%s error_type=%s",
+                            "core_recovery_step_failed step=%s error_type=%s chain=%s",
                             name,
                             type(error).__name__,
+                            error_chain_text(error),
                         )
                         diagnostic_event(
                             level="warn",
@@ -1200,20 +1205,42 @@ def create_app(
                             event="core.recovery_step_failed",
                             outcome="failed",
                             error_type=type(error).__name__,
+                            safe_stack=error_frames(error) or None,
                             duration_ms=elapsed_ms(step_started),
                             details={"phase": name},
                         )
 
                 async def repair_sdk_metadata() -> None:
+                    # `sdk-migrate` repairs right after its cutover and writes
+                    # the receipt, so this normally finds it and returns. It
+                    # stays for homes whose repair failed before that (no
+                    # receipt). It opens its own Chroma client on the SDK's
+                    # vector store, and Chroma's shared System is not safe
+                    # beside another client: a first library request that
+                    # opened the SDK client meanwhile lost it (KeyError).
+                    # The stores were held offline before readiness, so any
+                    # SDK client waits for this step.
                     from one_memory.hy_sdk_migration import (
                         repair_sdk_metadata_from_bundle,
                     )
 
-                    repair = await asyncio.to_thread(
-                        repair_sdk_metadata_from_bundle,
-                        data_dir=runtime_settings.data_dir,
-                        database_path=database_path,
+                    if not app.state.sdk_stores_held:
+                        logger.warning("sdk_metadata_repair_deferred reason=sdk_client_open")
+                        return
+                    # The hold is this step's from here; shutdown leaves it.
+                    app.state.sdk_stores_held = False
+                    work = asyncio.ensure_future(
+                        asyncio.to_thread(
+                            repair_sdk_metadata_from_bundle,
+                            data_dir=runtime_settings.data_dir,
+                            database_path=database_path,
+                        )
                     )
+                    # Released when the thread ends, not when this coroutine
+                    # is cancelled: a cancelled await leaves the thread
+                    # writing Chroma.
+                    work.add_done_callback(lambda _work: release_stores(runtime_settings.data_dir))
+                    repair = await asyncio.shield(work)
                     if repair.vector_rows or repair.coding_rows:
                         logger.info(
                             "sdk_metadata_repair_completed mapped=%d vector=%d coding=%d",
@@ -1337,7 +1364,12 @@ def create_app(
                 )
 
             app.state.recovery_task = None
+            app.state.sdk_stores_held = False
             try:
+                if app.state.memory_authority is MemoryAuthority.SDK:
+                    # Before the first request can open an SDK client; the
+                    # metadata repair step releases it.
+                    app.state.sdk_stores_held = hold_stores_offline(runtime_settings.data_dir)
                 diagnostic_event(
                     level="info",
                     component="core.lifecycle",
@@ -1394,6 +1426,10 @@ def create_app(
                 if app.state.live_sync_watch is not None:
                     await app.state.live_sync_watch.shutdown()
                 await app.state.live_sync_supervisor.shutdown()
+                if app.state.sdk_stores_held:
+                    # Recovery never reached the metadata repair step.
+                    release_stores(runtime_settings.data_dir)
+                    app.state.sdk_stores_held = False
                 await app.state.import_supervisor.shutdown()
                 app.state.memory_write_drain.stop()
                 if app.state.memory_write_drain_task is not None:
@@ -2824,11 +2860,24 @@ def create_app(
         dependencies=protected,
     )
     async def sdk_home_summary() -> SdkHomeSummary:
+        """The home card: the memory page's count and its newest memory.
+
+        The count is `memory_stats` total (chat + working + coding
+        experiences, facts not counted), the same set the memory page lists
+        with scene="all". Without a scene `list_memories` counts chat only,
+        which showed 55 on the home card against 94 on the memory page.
+        """
         try:
             client = await _sdk_client_handle(app).client()
+            stats = await asyncio.to_thread(
+                client.memory_stats,
+                user_id="local",
+                statuses=["active"],
+            )
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
+                scene="all",
                 statuses=["active"],
                 limit=1,
                 offset=0,
@@ -2838,8 +2887,9 @@ def create_app(
             _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
+        total = stats.get("total") if isinstance(stats, dict) else None
         return SdkHomeSummary(
-            memory_count=page.total,
+            memory_count=total if isinstance(total, int) and total >= 0 else page.total,
             latest=page.memories[0] if page.memories else None,
             observed_at=datetime.now(UTC),
         )
@@ -4330,14 +4380,11 @@ async def _run_backfill(app: FastAPI) -> None:
                     _evidence_store(app).list_conversation,
                     evidence_id,
                 )
-                for chunk in _conversation_chunks(
-                    conversation,
-                    max_turns=12,
-                    completed_only=True,
-                ):
-                    if not any(item.evidence_id in evidence_ids for item in chunk):
+                # Catch-up is history: the last turn and a short batch are written.
+                for batch in turn_batches(conversation, flush=True).batches:
+                    if not any(item.evidence_id in evidence_ids for item in batch):
                         continue
-                    await asyncio.to_thread(intake.submit_records, chunk, priority="normal")
+                    await asyncio.to_thread(intake.submit_records, batch, priority="normal")
             cursor = evidence_ids[-1]
     except asyncio.CancelledError:
         raise
@@ -4354,6 +4401,22 @@ async def _run_backfill(app: FastAPI) -> None:
         # record: the whole corpus went unextracted and there was nothing
         # anywhere saying which store, which method, or which query.
         logger.exception("memory catch-up failed, no further memories will be made")
+
+
+def _batches_settled_by(
+    batches: tuple[tuple[EvidenceRecord, ...], ...],
+    record: EvidenceRecord,
+) -> list[tuple[EvidenceRecord, ...]]:
+    """The batches one arriving record can have made writable.
+
+    Its own batch, and the last two: a user message completes the turn
+    before it, which can close that turn's batch and, at the 8000-character
+    cut, the batch before it. Submitting is idempotent, so an older batch
+    named again is only a hit.
+    """
+    chosen = [batch for batch in batches if record in batch]
+    chosen.extend(batch for batch in batches[-2:] if batch not in chosen)
+    return chosen
 
 
 def _sdk_memory_runtime(app: FastAPI) -> SdkMemoryRuntime:
@@ -4651,10 +4714,17 @@ def _evidence_store(app: FastAPI) -> EvidenceStore:
 
 
 def _source_writes_on(app: FastAPI, source_id: str) -> bool:
-    """Whether this source's conversations may become memories."""
+    """Whether this source's conversations may become memories.
+
+    A hand-added memory is allowed unless its grant was explicitly revoked;
+    a missing grant row is allowed. The SDK add path writes no grant row, so
+    requiring one left every SDK-authority manual add unclaimable: Pending
+    forever with attempts=0 while later jobs ran. Intake, claim and execute
+    all ask this one question.
+    """
     if source_id == "one-memory-manual":
         receipt = _grant_store(app).receipt(user_id="local", source_id=source_id)
-        return receipt is not None and receipt.revoked_at is None
+        return receipt is None or receipt.revoked_at is None
     return _source_processing_enabled(app, source_id)
 
 
