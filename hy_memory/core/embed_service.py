@@ -80,7 +80,7 @@ def _count_tokens(text: str) -> int:
     try:
         import tiktoken
 
-        return len(tiktoken.get_encoding("cl100k_base").encode(text))
+        return len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
     except Exception:
         return len(text) // _CHARS_PER_TOKEN_FALLBACK + 1
 
@@ -98,7 +98,8 @@ def _truncate_for_embedding(text: str, limit: int = _EMBED_MAX_TOKENS) -> str:
         import tiktoken
 
         enc = tiktoken.get_encoding("cl100k_base")
-        ids = enc.encode(text)
+        # Input is ordinary user text, not a tokenizer control-token stream.
+        ids = enc.encode(text, disallowed_special=())
         if len(ids) <= limit:
             return text
         dropped = len(ids) - limit
