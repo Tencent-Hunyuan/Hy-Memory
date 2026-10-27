@@ -130,10 +130,18 @@ class MemoryAdditionStore:
                 raise RuntimeError("sdk_memory_add_intake_unavailable")
             record = materialize_write_input(value, observed_at=now)
             with main_database(self.write_queue.database_path).read() as database:
+                # No grant row is written here: a missing row means allowed,
+                # only an explicit revocation refuses (same as the claim gate).
+                grant = database.execute(
+                    "SELECT revoked_at FROM source_grants WHERE user_id='local' AND source_id=?",
+                    (SOURCE_ID,),
+                ).fetchone()
                 existing = database.execute(
                     "SELECT request_id FROM memory_note_requests WHERE note_id=?",
                     (record.evidence_id,),
                 ).fetchone()
+            if grant is not None and grant[0] is not None:
+                raise ValueError("memory_add_source_revoked")
             if existing is not None:
                 current = self.require(record.evidence_id)
                 if current.verbatim != record.verbatim:

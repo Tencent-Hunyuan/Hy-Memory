@@ -167,6 +167,57 @@ def test_revoked_manual_source_is_not_silently_reauthorized(tmp_path):
 
 
 @pytest.mark.fresh_sdk
+def test_sdk_manual_add_without_a_grant_row_is_claimed(tmp_path, monkeypatch):
+    """The SDK add path writes no grant row; the claim gate used to require one.
+
+    The intake admitted the job, the drain skipped it on every tick, and the
+    note stayed Pending with attempts=0 while later jobs ran. A missing grant
+    row is allowed; only an explicit revocation holds the job.
+    """
+
+    async def scenario():
+        app = application(tmp_path)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            addition = {"request_id": str(uuid4()), "text": "Remember this.", "scope": "all-apps"}
+            assert (await client.post("/api/v2/memories", json=addition)).status_code == 201
+            database = app.state.settings.data_dir / "one-memory.sqlite3"
+            with sqlite3.connect(database) as db:
+                assert (
+                    db.execute(
+                        "SELECT COUNT(*) FROM source_grants WHERE source_id='one-memory-manual'"
+                    ).fetchone()[0]
+                    == 0
+                )
+                request_id = db.execute("SELECT request_id FROM memory_note_requests").fetchone()[0]
+            job = app.state.memory_write_queue.get(request_id)
+            assert job is not None and job.state == "pending"
+            monkeypatch.setattr(
+                app.state.model_profile_store, "active_identity", lambda: ("profile", 1)
+            )
+
+            assert app.state.memory_write_drain.claim(limit=1) == (job.job_id,)
+
+            # An explicit revocation still holds the job and refuses new adds.
+            app.state.memory_write_queue.settle(job.job_id, state="pending", owner=None)
+            with sqlite3.connect(database) as db:
+                db.execute(
+                    "INSERT INTO source_grants (user_id,source_id,root_path,requested_path,"
+                    "root_identity,candidate_kind,granted_at,revoked_at,revision) VALUES "
+                    "('local','one-memory-manual','x','x','manual','default',"
+                    "'2026-10-01T00:00:00+00:00','2026-10-27T00:00:00+00:00',1)"
+                )
+            assert app.state.memory_write_drain.claim(limit=1) == ()
+            refused = await client.post(
+                "/api/v2/memories",
+                json={**addition, "request_id": str(uuid4())},
+            )
+            assert refused.status_code == 409
+            assert refused.json()["detail"] == "memory_add_source_revoked"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
 def test_sdk_memory_write_accepts_openai_messages_without_evidence_tables(tmp_path):
     async def scenario():
         app = application(tmp_path)

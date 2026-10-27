@@ -1026,9 +1026,7 @@ def create_app(
 
             app.state.memory_write_intake = UnifiedWriteIntake(
                 memory_write_queue,
-                source_writes_permitted=lambda source_id: (
-                    source_id == "one-memory-manual" or _source_writes_on(app, source_id)
-                ),
+                source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
             )
             app.state.start_memory_backfill = lambda: _start_backfill(app)
 
@@ -4665,10 +4663,17 @@ def _evidence_store(app: FastAPI) -> EvidenceStore:
 
 
 def _source_writes_on(app: FastAPI, source_id: str) -> bool:
-    """Whether this source's conversations may become memories."""
+    """Whether this source's conversations may become memories.
+
+    A hand-added memory is allowed unless its grant was explicitly revoked;
+    a missing grant row is allowed. The SDK add path writes no grant row, so
+    requiring one left every SDK-authority manual add unclaimable: Pending
+    forever with attempts=0 while later jobs ran. Intake, claim and execute
+    all ask this one question.
+    """
     if source_id == "one-memory-manual":
         receipt = _grant_store(app).receipt(user_id="local", source_id=source_id)
-        return receipt is not None and receipt.revoked_at is None
+        return receipt is None or receipt.revoked_at is None
     return _source_processing_enabled(app, source_id)
 
 
