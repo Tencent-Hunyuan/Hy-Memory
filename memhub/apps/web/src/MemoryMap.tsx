@@ -941,8 +941,7 @@ export function MemoryMap(props: Props) {
                 title={text("下一页记忆")}
                 disabled={
                   library.loading ||
-                  library.page.offset + library.page.limit >=
-                    library.page.total
+                  library.page.offset + library.page.limit >= library.page.total
                 }
                 onClick={() => {
                   if (axis === "topic") setGroupKey("");

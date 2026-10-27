@@ -82,10 +82,6 @@ export function OptionMenu(props: {
     <div
       className={["om-option-menu", props.className].filter(Boolean).join(" ")}
       ref={root}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-          setOpen(false);
-      }}
     >
       <button
         ref={button}
@@ -108,6 +104,10 @@ export function OptionMenu(props: {
             : undefined
         }
         disabled={props.disabled}
+        onBlur={(event) => {
+          if (!root.current?.contains(event.relatedTarget as Node | null))
+            setOpen(false);
+        }}
         onClick={() => {
           if (preferredIndex < 0) return;
           setActiveIndex(preferredIndex);
