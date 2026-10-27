@@ -82,7 +82,10 @@ def repair_sdk_metadata_from_bundle(
     database_path: Path,
     now: datetime | None = None,
 ) -> MetadataRepairResult:
-    """Restore metadata lost by historical cutovers from their verified bundles."""
+    """Restore metadata lost by historical cutovers from their verified bundles.
+
+    Offline only: no SDK client may be open on this home (see `_repair_vector`).
+    """
     migration_id = _sdk_migration_id(database_path)
     if migration_id is None:
         return MetadataRepairResult(None, 0, 0, 0)
@@ -329,8 +332,11 @@ def _repair_vector(
     from one_memory.sdk_vector_reattach import open_offline_chroma
 
     client = open_offline_chroma(directory)
-    # The SDK client is not open yet (startup has not created its handle), so
-    # this is the only writer; release the store before the SDK takes it.
+    # This must be the only Chroma client on the directory: Chroma shares one
+    # System per path, and this client's close() drops it from under any
+    # other (KeyError on its next lookup). `sdk-migrate` runs it after the
+    # cutover with Runtime stopped; Core's startup fallback runs it while
+    # `hold_stores_offline` keeps every SDK client waiting.
     try:
         repaired = 0
         ids = tuple(mapping)

@@ -829,6 +829,7 @@ def run_startup_migration(
                 ignore_errors=True,
             )
         discard_failed_state(data_dir)
+        _repair_metadata_after_cutover(data_dir, database_path, log)
         progress("cleanup")
         with log.step("cleanup.drop_legacy_tables") as step:
             dropped = resume_legacy_cleanup(data_dir=data_dir, database_path=database_path)
@@ -845,6 +846,25 @@ def run_startup_migration(
         reattached=reattached,
         readback=readback,
     )
+
+
+def _repair_metadata_after_cutover(data_dir: Path, database_path: Path, log: _StepLog) -> None:
+    """Restore lost metadata here, where Runtime is stopped and no Chroma client is open.
+
+    Writes the repair receipt, so Core's startup fallback finds it and does
+    nothing. Authority is already committed: a failure is logged and left to
+    that fallback instead of failing the migration.
+    """
+    from one_memory.hy_sdk_migration import repair_sdk_metadata_from_bundle
+
+    try:
+        with log.step("cutover.metadata_repair") as step:
+            repair = repair_sdk_metadata_from_bundle(data_dir=data_dir, database_path=database_path)
+            step["mapped"] = repair.mapped
+            step["vector_rows"] = repair.vector_rows
+            step["coding_rows"] = repair.coding_rows
+    except Exception:
+        return
 
 
 def _restore_after_failure(

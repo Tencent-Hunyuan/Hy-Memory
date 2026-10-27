@@ -56,6 +56,16 @@ class _RuntimeEntry:
 
 _RUNTIMES: dict[Path, _RuntimeEntry] = {}
 
+# Homes whose SDK-owned local stores are held offline for maintenance, and
+# the client constructions in flight per home. Chroma keeps one process-wide
+# System per path with no lock around create, lookup and release, so a
+# second client that opens or closes beside the SDK's pulls the System out
+# from under it (KeyError on the next lookup). Maintenance therefore runs
+# only while no SDK client exists for that home, and new clients wait.
+_STORE_GATE = threading.Condition()
+_OFFLINE_STORES: set[Path] = set()
+_OPENING: dict[Path, int] = {}
+
 
 class LocalOnnxEmbeddingService:
     """Public ``EmbeddingService`` implementation backed by MemHub's ONNX model."""
@@ -307,7 +317,60 @@ def acquire_client(
     data_dir: Path,
     http_transport_factory: Callable[[], Any] | None = None,
 ) -> ClientLease:
-    """Construct a public SDK client and return its explicit runtime lease."""
+    """Construct a public SDK client and return its explicit runtime lease.
+
+    Waits while `hold_stores_offline` holds this home's stores.
+    """
+    key = data_dir.resolve()
+    with _STORE_GATE:
+        while key in _OFFLINE_STORES:
+            _STORE_GATE.wait()
+        _OPENING[key] = _OPENING.get(key, 0) + 1
+    try:
+        return _acquire_client(
+            profile,
+            api_key=api_key,
+            data_dir=data_dir,
+            http_transport_factory=http_transport_factory,
+        )
+    finally:
+        with _STORE_GATE:
+            _OPENING[key] -= 1
+            if not _OPENING[key]:
+                del _OPENING[key]
+            _STORE_GATE.notify_all()
+
+
+def hold_stores_offline(data_dir: Path) -> bool:
+    """Hold this home's SDK stores for offline maintenance; False if a client is open.
+
+    While held, `acquire_client` for the home waits. Every SDK client in Core
+    is built there, so nothing reads or writes Chroma beside the maintenance.
+    `release_stores` ends the hold; it is idempotent.
+    """
+    key = data_dir.resolve()
+    with _STORE_GATE:
+        with _RUNTIME_LOCK:
+            open_runtime = key in _RUNTIMES
+        if key in _OFFLINE_STORES or _OPENING.get(key) or open_runtime:
+            return False
+        _OFFLINE_STORES.add(key)
+        return True
+
+
+def release_stores(data_dir: Path) -> None:
+    with _STORE_GATE:
+        _OFFLINE_STORES.discard(data_dir.resolve())
+        _STORE_GATE.notify_all()
+
+
+def _acquire_client(
+    profile: ModelProfileSnapshot,
+    *,
+    api_key: str | None,
+    data_dir: Path,
+    http_transport_factory: Callable[[], Any] | None,
+) -> ClientLease:
     config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir)
     config.http_transport_factory = http_transport_factory
     mismatch = inspect_graph_width_mismatch(config)

@@ -95,6 +95,8 @@ from one_memory.hy_sdk_runtime import (
     SdkClientHandle,
     builtin_retrieval_snapshot,
     close_all_shared_runtimes,
+    hold_stores_offline,
+    release_stores,
     sdk_relevance_floor,
 )
 from one_memory.hy_sdk_types import (
@@ -223,6 +225,7 @@ from one_memory.sdk_memory_qa import (
     SdkMemoryAnswerer,
 )
 from one_memory.sdk_memory_runtime import SdkMemoryRuntime
+from one_memory.sdk_migration_log import error_chain_text, error_frames
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.secrets import (
     KeyringSecretStore,
@@ -710,7 +713,8 @@ def create_app(
                 raise SdkMigrationRequired()
             if app.state.memory_authority is MemoryAuthority.SDK:
                 # The metadata repair after a cutover reads every bundle: it is
-                # recovery work, so it runs after readiness (`recover_after_ready`).
+                # recovery work, so it runs after readiness (`recover_after_ready`)
+                # while the SDK's stores are held offline (see there).
                 app.state.memory_governance_store = RetiredGovernanceStore(database_path)
                 app.state.evidence_store = RetiredEvidenceStore(database_path)
             else:
@@ -1187,10 +1191,14 @@ def create_app(
                     except Exception as error:
                         failed.append(name)
                         app.state.recovery_failed_steps = tuple(failed)
+                        # Where it failed, as `file:line:function` frames of
+                        # the exception chain, never its message: a bare
+                        # `error_type=KeyError` named no location.
                         logger.warning(
-                            "core_recovery_step_failed step=%s error_type=%s",
+                            "core_recovery_step_failed step=%s error_type=%s chain=%s",
                             name,
                             type(error).__name__,
+                            error_chain_text(error),
                         )
                         diagnostic_event(
                             level="warn",
@@ -1198,20 +1206,42 @@ def create_app(
                             event="core.recovery_step_failed",
                             outcome="failed",
                             error_type=type(error).__name__,
+                            safe_stack=error_frames(error) or None,
                             duration_ms=elapsed_ms(step_started),
                             details={"phase": name},
                         )
 
                 async def repair_sdk_metadata() -> None:
+                    # `sdk-migrate` repairs right after its cutover and writes
+                    # the receipt, so this normally finds it and returns. It
+                    # stays for homes whose repair failed before that (no
+                    # receipt). It opens its own Chroma client on the SDK's
+                    # vector store, and Chroma's shared System is not safe
+                    # beside another client: a first library request that
+                    # opened the SDK client meanwhile lost it (KeyError).
+                    # The stores were held offline before readiness, so any
+                    # SDK client waits for this step.
                     from one_memory.hy_sdk_migration import (
                         repair_sdk_metadata_from_bundle,
                     )
 
-                    repair = await asyncio.to_thread(
-                        repair_sdk_metadata_from_bundle,
-                        data_dir=runtime_settings.data_dir,
-                        database_path=database_path,
+                    if not app.state.sdk_stores_held:
+                        logger.warning("sdk_metadata_repair_deferred reason=sdk_client_open")
+                        return
+                    # The hold is this step's from here; shutdown leaves it.
+                    app.state.sdk_stores_held = False
+                    work = asyncio.ensure_future(
+                        asyncio.to_thread(
+                            repair_sdk_metadata_from_bundle,
+                            data_dir=runtime_settings.data_dir,
+                            database_path=database_path,
+                        )
                     )
+                    # Released when the thread ends, not when this coroutine
+                    # is cancelled: a cancelled await leaves the thread
+                    # writing Chroma.
+                    work.add_done_callback(lambda _work: release_stores(runtime_settings.data_dir))
+                    repair = await asyncio.shield(work)
                     if repair.vector_rows or repair.coding_rows:
                         logger.info(
                             "sdk_metadata_repair_completed mapped=%d vector=%d coding=%d",
@@ -1335,7 +1365,12 @@ def create_app(
                 )
 
             app.state.recovery_task = None
+            app.state.sdk_stores_held = False
             try:
+                if app.state.memory_authority is MemoryAuthority.SDK:
+                    # Before the first request can open an SDK client; the
+                    # metadata repair step releases it.
+                    app.state.sdk_stores_held = hold_stores_offline(runtime_settings.data_dir)
                 diagnostic_event(
                     level="info",
                     component="core.lifecycle",
@@ -1392,6 +1427,10 @@ def create_app(
                 if app.state.live_sync_watch is not None:
                     await app.state.live_sync_watch.shutdown()
                 await app.state.live_sync_supervisor.shutdown()
+                if app.state.sdk_stores_held:
+                    # Recovery never reached the metadata repair step.
+                    release_stores(runtime_settings.data_dir)
+                    app.state.sdk_stores_held = False
                 await app.state.import_supervisor.shutdown()
                 app.state.memory_write_drain.stop()
                 if app.state.memory_write_drain_task is not None:
