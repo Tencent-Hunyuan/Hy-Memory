@@ -9,6 +9,7 @@ import {
   rmdir,
   writeFile,
 } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { processIsAlive } from "./core-supervisor.js";
@@ -35,6 +36,10 @@ export interface RuntimeServiceOptions {
   ): ManagedRuntime | Promise<ManagedRuntime>;
   pid?: number;
   processIsAlive?: (pid: number) => boolean;
+  /** Wall-clock epoch (ms) of the current boot. The default is derived from
+   * `os.uptime()`; injectable so tests can put a lease before or after the
+   * boot without moving the machine's clock. */
+  bootTime?: () => number;
   diagnostics?: DiagnosticSink;
 }
 
@@ -45,6 +50,9 @@ interface LeaseIdentity {
 
 /** Publishes one outer Runtime identity around the Core+sidecar supervisor. */
 export class RuntimeService {
+  /** See removeStaleLease: absorbs a forward clock step since boot. */
+  private static readonly BOOT_SLACK_MS = 2 * 60_000;
+
   private readonly options: RuntimeServiceOptions;
   private lease: LeaseIdentity | null = null;
   private supervisor: ManagedRuntime | null = null;
@@ -223,6 +231,23 @@ export class RuntimeService {
     ) {
       throw new Error("runtime_service_lock_unsafe");
     }
+    // A lease created before the current boot cannot have a living owner:
+    // every process from that boot is gone, and a PID that answers the
+    // liveness probe now is a different process that merely reused the
+    // number. Before this check, a forced power-off (issue #184) left
+    // runtime-service.lock behind, the reboot recycled the owner's PID, and
+    // launchd's KeepAlive restarted the wrapper into
+    // runtime_service_already_running without end.
+    //
+    // The slack absorbs a forward clock step since boot: an NTP correction
+    // would otherwise make a lease taken moments after boot look older than
+    // the boot itself. With the slack, only a jump larger than two minutes
+    // within that window could mistake a live lease for a stale one.
+    const bootTime = this.options.bootTime ?? defaultBootTime;
+    if (info.mtimeMs < bootTime() - RuntimeService.BOOT_SLACK_MS) {
+      await this.clearLeaseDir(lock);
+      return;
+    }
     let owner: unknown;
     try {
       owner = JSON.parse(await readFile(path.join(lock, "owner.json"), "utf8"));
@@ -239,6 +264,10 @@ export class RuntimeService {
     if ((this.options.processIsAlive ?? processIsAlive)(pid)) {
       throw new Error("runtime_service_already_running");
     }
+    await this.clearLeaseDir(lock);
+  }
+
+  private async clearLeaseDir(lock: string): Promise<void> {
     const stale = `${lock}.stale.${randomUUID()}`;
     await rename(lock, stale);
     await rm(stale, { recursive: true });
@@ -300,6 +329,12 @@ export class RuntimeService {
   private pid(): number {
     return this.options.pid ?? process.pid;
   }
+}
+
+function defaultBootTime(): number {
+  // Wall-clock epoch of the current boot, as far as the clock admits today.
+  // os.uptime() is boot-based (includes suspend) on every supported platform.
+  return Date.now() - os.uptime() * 1000;
 }
 
 async function privateWrite(target: string, value: string): Promise<void> {
