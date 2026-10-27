@@ -451,6 +451,11 @@ class ChromaVectorStore(VectorStoreBase):
             logger.warning("[vector-store] list_by_user called without user_id/user_ids, refused")
             return []
         effective_aids = list(agent_ids) if agent_ids else ([agent_id] if agent_id else [])
+        if layers and not allow_raw_layer and all(
+            (layer.value if hasattr(layer, "value") else str(layer)) == MemoryLayer.L1_RAW.value
+            for layer in layers
+        ):
+            return []
 
         def _list():
             if len(effective_uids) == 1:
@@ -485,9 +490,6 @@ class ChromaVectorStore(VectorStoreBase):
                     where_conditions.append({"layer": {"$eq": layer_values[0]}})
                 elif layer_values:
                     where_conditions.append({"layer": {"$in": layer_values}})
-                else:
-                    # 只点名了 raw：补排除条件，结果必然为空集
-                    where_conditions.append({"layer": {"$ne": MemoryLayer.L1_RAW.value}})
             elif not allow_raw_layer:
                 where_conditions.append({"layer": {"$ne": MemoryLayer.L1_RAW.value}})
 
