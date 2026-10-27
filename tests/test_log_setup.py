@@ -222,3 +222,81 @@ class TestSingleLineAndJsonFormat:
         monkeypatch.delenv("MEMORY_LOG_FORMAT", raising=False)
         fmt = log_setup._make_formatter()
         assert isinstance(fmt, log_setup.SingleLineFormatter)
+
+
+import logging.handlers  # noqa: E402
+import os  # noqa: E402
+
+
+class TestRotatedFileRetention:
+    """轮转文件的保留窗口必须把 .gz 一并清点（issue #158 机制问题 1/2）。
+
+    TimedRotatingFileHandler 默认的 extMatch 只认 `YYYY-MM-DD`，外部 gzip
+    得到的 `hy_memory.log.2026-10-18.gz` 不匹配 → 压缩文件永久逃出
+    backupCount 清理；且轮转文件总数不足 backupCount 时清理整体放弃。
+    """
+
+    def _file_handler(self):
+        hy_logger = logging.getLogger("hy_memory")
+        return next(
+            h for h in hy_logger.handlers
+            if isinstance(h, logging.handlers.TimedRotatingFileHandler)
+        )
+
+    def _make_rotated_files(self, log_dir, days):
+        for i, day in enumerate(days):
+            suffix = ".gz" if i % 2 else ""
+            path = os.path.join(log_dir, f"hy_memory.log.{day}{suffix}")
+            with open(path, "wb") as f:
+                f.write(b"rotated")
+
+    def test_gz_rotated_files_count_toward_retention(self):
+        log_setup.setup_logging(retention_days=3)
+        h = self._file_handler()
+        log_dir = os.path.dirname(h.baseFilename)
+        # 5 个轮转日（日期递增），偶数下标是外部 gzip 后的样子
+        self._make_rotated_files(
+            log_dir,
+            ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17"],
+        )
+        to_delete = h.getFilesToDelete()
+        # 5 > backupCount=3：最旧的 2 个必须删除，无论是否带 .gz
+        assert len(to_delete) == 2, f"expected 2 deletions, got {to_delete}"
+        names = [os.path.basename(f) for f in to_delete]
+        assert "hy_memory.log.2026-10-13" in names
+        assert "hy_memory.log.2026-10-14.gz" in names
+
+    def test_fewer_rotated_files_than_retention_deletes_nothing(self):
+        log_setup.setup_logging(retention_days=15)
+        h = self._file_handler()
+        log_dir = os.path.dirname(h.baseFilename)
+        self._make_rotated_files(log_dir, ["2026-10-13", "2026-10-14"])
+        assert h.getFilesToDelete() == []
+
+    def test_rollover_compresses_rotated_file(self, monkeypatch):
+        import gzip as _gzip
+        log_setup.setup_logging()
+        h = self._file_handler()
+        log_dir = os.path.dirname(h.baseFilename)
+        logger = logging.getLogger("hy_memory.retention_test")
+        logger.info("GZIP_ME_TOKEN")
+        h.flush()
+        h.doRollover()
+        rolled = [
+            f for f in os.listdir(log_dir)
+            if f.startswith("hy_memory.log.") and f.endswith(".gz")
+        ]
+        assert rolled, "rollover must produce a .gz rotated file"
+        with _gzip.open(os.path.join(log_dir, rolled[0]), "rb") as f:
+            assert b"GZIP_ME_TOKEN" in f.read()
+
+    def test_retention_days_env(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_RETENTION_DAYS", "2")
+        log_setup.setup_logging()
+        assert self._file_handler().backupCount == 2
+
+    def test_compress_disabled_env(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_COMPRESS", "0")
+        log_setup.setup_logging()
+        h = self._file_handler()
+        assert h.namer is None and h.rotator is None

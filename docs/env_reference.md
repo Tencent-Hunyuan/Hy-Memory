@@ -190,6 +190,8 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 | `MEMORY_LOG_LEVEL` | `INFO` | 运行日志级别 |
 | `MEMORY_LOG_FORMAT` | `text` | `text` / `json` |
 | `MEMORY_LOG_DIR` | — | 统一日志根目录 |
+| `MEMORY_LOG_RETENTION_DAYS` | `15` | 日志文件保留天数（正整数）；`.gz` 与旧版未压缩轮转文件一并计入清理 |
+| `MEMORY_LOG_COMPRESS` | `1` | 轮转文件 gzip 压缩；设 `0` / `false` / `no` / `off` 关闭 |
 | `MEMORY_TRACE_LOG_DIR` | — | JSONL 日志目录的兼容旧名；优先使用 `MEMORY_LOG_DIR` |
 | `MEMORY_PIPELINE_TRACE_ENABLED` | `true` | 是否写入 cache 的 pipeline trace 表 |
 | `MEMORY_MEMORY_OPERATIONS_ENABLED` | `false` | 是否写入 memory operation 审计记录 |

@@ -3,7 +3,8 @@
 HY Memory - 日志系统配置
 
 标准 Python logging + TimedRotatingFileHandler，
-每天一个文件，保留 15 天。支持 request_id 注入，
+每天一个文件，轮转后 gzip 压缩，保留 N 天（默认 15，可用
+MEMORY_LOG_RETENTION_DAYS 配置）。支持 request_id 注入，
 可按 request_id grep 日志过滤完整请求链路。
 
 Usage:
@@ -18,8 +19,11 @@ Usage:
 """
 
 import contextvars
+import gzip
 import logging
 import os
+import re
+import shutil
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -108,8 +112,63 @@ _LOG_FORMAT = (
 )
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# 轮转文件名: hy_memory.log.YYYY-MM-DD，或 gzip 压缩后的 ...YYYY-MM-DD.gz。
+# TimedRotatingFileHandler 自身的 extMatch（`(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)`
+# fullmatch）认不出 `.gz` 后缀，外部 gzip 过的轮转文件因此永远不进
+# backupCount 清理列表（issue #158 实测：越压越涨）。
+_ROTATED_SUFFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:\.gz)?$")
+
 # 全局标记，避免重复配置
 _logging_configured = False
+
+
+def _gzip_namer(default_name: str) -> str:
+    """轮转文件名追加 .gz（Python logging howto 的 namer 用法）"""
+    return default_name + ".gz"
+
+
+def _gzip_rotator(source: str, dest: str) -> None:
+    """把刚轮转出去的文件压缩成 gzip，再删掉原文件。"""
+    with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
+        shutil.copyfileobj(f_in, f_out)
+    os.remove(source)
+
+
+def _env_int(name: str, default: int) -> int:
+    """读取正整数环境变量；未设置/非法时用默认值。"""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+class _DailyRotatingFileHandler(TimedRotatingFileHandler):
+    """每天午夜轮转 + 可选 gzip 压缩 + 保留 N 天（.gz 一并计入）。
+
+    覆写 getFilesToDelete：不再依赖基类的 extMatch（认不出 `.gz`），
+    而是自行清点 `hy_memory.log.YYYY-MM-DD` 与 `.gz` 两种轮转文件，
+    文件名即 ISO 日期，字符串排序即时间顺序；超出 backupCount 的最旧
+    文件删除。旧版本留下的未压缩轮转文件同样被清点，升级后不会逃逸。
+    """
+
+    def getFilesToDelete(self):
+        dir_name, base_name = os.path.split(self.baseFilename)
+        prefix = base_name + "."
+        rotated = [
+            f for f in os.listdir(dir_name)
+            if f.startswith(prefix) and _ROTATED_SUFFIX_RE.fullmatch(f[len(prefix):])
+        ]
+        if len(rotated) < self.backupCount:
+            return []
+        rotated.sort()
+        return [
+            os.path.join(dir_name, f)
+            for f in rotated[: len(rotated) - self.backupCount]
+        ]
 
 
 class SingleLineFormatter(logging.Formatter):
@@ -184,13 +243,14 @@ def _default_log_dir() -> str:
 
 def setup_logging(
     log_dir: Optional[str] = None,
-    retention_days: int = 15,
+    retention_days: Optional[int] = None,
     level: Optional[int] = None,
 ) -> None:
     """
     配置 hy_memory 模块的日志。
 
-    - 文件输出: TimedRotatingFileHandler, 每天午夜滚动, 保留 retention_days 天
+    - 文件输出: _DailyRotatingFileHandler, 每天午夜滚动, gzip 压缩滚动文件,
+      保留 retention_days 天（.gz 与旧版未压缩文件一并计入清理）
     - 控制台输出: 双流分离 — DEBUG/INFO 走 stdout，WARNING/ERROR/CRITICAL 走 stderr
       （遵循 Unix 惯例；OpenClaw 等监控平台会把 stderr 整体标 WARN，
        INFO 走 stdout 才不会被误归为告警）
@@ -198,8 +258,13 @@ def setup_logging(
 
     Args:
         log_dir:        日志目录。默认 {MEMORY_DATA_DIR}/logs/
-        retention_days: 日志保留天数，默认 15
+        retention_days: 日志保留天数。默认从环境变量 MEMORY_LOG_RETENTION_DAYS
+                        读取，缺省 15
         level:          日志级别。默认从环境变量 MEMORY_LOG_LEVEL 读取，缺省 INFO
+
+    环境变量:
+        MEMORY_LOG_RETENTION_DAYS: 保留天数，正整数，默认 15
+        MEMORY_LOG_COMPRESS:      滚动文件是否 gzip 压缩，默认 1；设 0/false/no/off 关闭
 
     可多次调用，但只有首次生效。
     """
@@ -210,6 +275,11 @@ def setup_logging(
 
     if level is None:
         level = getattr(logging, os.getenv("MEMORY_LOG_LEVEL", "INFO").upper(), logging.INFO)
+    if retention_days is None:
+        retention_days = _env_int("MEMORY_LOG_RETENTION_DAYS", 15)
+    compress = os.getenv("MEMORY_LOG_COMPRESS", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
 
     # 确定日志目录并创建
     resolved_dir = log_dir or _default_log_dir()
@@ -231,15 +301,18 @@ def setup_logging(
 
     # ---- 文件 Handler ----
     log_file = os.path.join(resolved_dir, "hy_memory.log")
-    file_handler = TimedRotatingFileHandler(
+    file_handler = _DailyRotatingFileHandler(
         filename=log_file,
         when="midnight",
         interval=1,
         backupCount=retention_days,
         encoding="utf-8",
     )
-    # 滚动后文件名: hy_memory.log.2026-03-21
+    # 滚动后文件名: hy_memory.log.2026-03-21[.gz]
     file_handler.suffix = "%Y-%m-%d"
+    if compress:
+        file_handler.namer = _gzip_namer
+        file_handler.rotator = _gzip_rotator
     file_handler.setFormatter(formatter)
     file_handler.setLevel(level)
     file_handler.addFilter(req_filter)
@@ -275,5 +348,5 @@ def setup_logging(
 
     root_logger.debug(
         f"Logging configured: dir={resolved_dir} "
-        f"retention={retention_days}d level={logging.getLevelName(level)}"
+        f"retention={retention_days}d compress={compress} level={logging.getLevelName(level)}"
     )
