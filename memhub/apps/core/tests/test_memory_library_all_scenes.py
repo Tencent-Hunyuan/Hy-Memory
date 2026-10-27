@@ -90,6 +90,7 @@ class FakeSdk:
         self.productivity = {}
         self.search_calls = []
         self.list_calls = []
+        self.stats_calls = []
         self.get_calls = []
         self.update_calls = []
         self.delete_calls = []
@@ -224,6 +225,22 @@ class FakeSdk:
             "limit": kwargs["limit"],
             "offset": kwargs["offset"],
             "request_id": "list",
+            "elapsed_ms": 1.0,
+        }
+
+    def memory_stats(self, *, user_id, statuses=None):
+        self.stats_calls.append({"user_id": user_id, "statuses": statuses})
+        experiences = [
+            variant for (kind, variant, _id) in self.productivity if kind == "experience"
+        ]
+        facts = [variant for (kind, variant, _id) in self.productivity if kind == "fact"]
+        scenes = {"chat": {"count": len(self.chat)}}
+        for variant in ("coding", "working"):
+            scenes[variant] = {"count": experiences.count(variant), "facts": facts.count(variant)}
+        return {
+            "total": len(self.chat) + len(experiences),
+            "scenes": scenes,
+            "request_id": "stats",
             "elapsed_ms": 1.0,
         }
 
@@ -645,5 +662,35 @@ def test_scene_filter_narrows_search_and_binds_the_window(tmp_path, monkeypatch)
         assert other.json()["window_reset"] is True
         assert [item["memory_id"] for item in other.json()["memories"]] == ["chat-1"]
         assert len(sdk.search_calls) == 2
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_home_summary_counts_what_the_memory_page_lists(tmp_path, monkeypatch):
+    """Home showed 55 (chat only) while the memory page showed 94."""
+
+    async def scenario(app, sdk, client):
+        sdk.add_chat(chat_row("chat-1", "cursor chat"))
+        sdk.add_chat(chat_row("chat-2", "codebuddy chat", source="codebuddy"))
+        sdk.add_productivity("experience", experience_row("exp-w", "task w", "solution w"))
+        sdk.add_productivity(
+            "experience", experience_row("exp-c", "task c", "solution c", variant="coding")
+        )
+        # Facts are not listed on the memory page, so they are not counted.
+        sdk.add_productivity("fact", fact_row("fact-1", "The pytest suite runs in CI"))
+
+        response = await client.get("/api/v2/home-summary")
+        assert response.status_code == 200
+        body = response.json()
+        library = (await client.get("/api/v2/memory-library")).json()
+        assert body["memory_count"] == library["total"] == 4
+        assert sdk.stats_calls == [{"user_id": "local", "statuses": ["active"]}]
+        # The newest memory across scenes, not the newest chat memory.
+        home_list = sdk.list_calls[0]
+        assert home_list["scene"] == "all"
+        assert (home_list["offset"], home_list["limit"], home_list["order"]) == (0, 1, "desc")
+        assert body["latest"]["memory_id"] == "exp-w"
+        assert body["latest"]["scene"] == "working"
 
     run_with_sdk(tmp_path, monkeypatch, scenario)

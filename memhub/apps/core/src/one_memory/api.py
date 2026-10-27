@@ -2824,11 +2824,24 @@ def create_app(
         dependencies=protected,
     )
     async def sdk_home_summary() -> SdkHomeSummary:
+        """The home card: the memory page's count and its newest memory.
+
+        The count is `memory_stats` total (chat + working + coding
+        experiences, facts not counted), the same set the memory page lists
+        with scene="all". Without a scene `list_memories` counts chat only,
+        which showed 55 on the home card against 94 on the memory page.
+        """
         try:
             client = await _sdk_client_handle(app).client()
+            stats = await asyncio.to_thread(
+                client.memory_stats,
+                user_id="local",
+                statuses=["active"],
+            )
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
+                scene="all",
                 statuses=["active"],
                 limit=1,
                 offset=0,
@@ -2838,8 +2851,9 @@ def create_app(
             _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
+        total = stats.get("total") if isinstance(stats, dict) else None
         return SdkHomeSummary(
-            memory_count=page.total,
+            memory_count=total if isinstance(total, int) and total >= 0 else page.total,
             latest=page.memories[0] if page.memories else None,
             observed_at=datetime.now(UTC),
         )
