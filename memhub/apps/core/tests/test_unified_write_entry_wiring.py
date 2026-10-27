@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import sqlite3
 from uuid import uuid4
 
@@ -197,17 +198,20 @@ def test_live_import_callback_submits_realtime_priority(tmp_path) -> None:
             )
             app.state.config_store.set_sync(source_id, True)
             user = _committed_record(app, source_id=source_id, message_id="live-user")
-            record = app.state.evidence_store.put(
-                EvidenceInput(
-                    source_id=source_id,
-                    conversation_id=user.conversation_id,
-                    message_id="live-assistant",
-                    role="assistant",
-                    written_by=WrittenBy.AGENT,
-                    verbatim="Live reply",
-                    origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
-                )
-            ).record
+            # Live writes by the turn rule: 5 complete turns, the fifth
+            # completed by the next user message.
+            for index in range(10):
+                record = app.state.evidence_store.put(
+                    EvidenceInput(
+                        source_id=source_id,
+                        conversation_id=user.conversation_id,
+                        message_id=f"live-{index}",
+                        role="assistant" if index % 2 == 0 else "user",
+                        written_by=WrittenBy.AGENT if index % 2 == 0 else WrittenBy.PERSON,
+                        verbatim=f"Live line {index}",
+                        origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+                    )
+                ).record
             callback = app.state.import_supervisor.on_stable_evidence
             assert callback is not None
             token = live_sync_arrival.set(True)
@@ -216,11 +220,12 @@ def test_live_import_callback_submits_realtime_priority(tmp_path) -> None:
             finally:
                 live_sync_arrival.reset(token)
             with sqlite3.connect(app.state.evidence_store.database_path) as db:
-                priority = db.execute(
-                    "SELECT priority FROM memory_write_jobs WHERE idempotency_key LIKE ?",
+                rows = db.execute(
+                    "SELECT priority,evidence_ids_json FROM memory_write_jobs "
+                    "WHERE idempotency_key LIKE ?",
                     ("turn:v1:%",),
-                ).fetchone()[0]
-            assert priority == "live"
+                ).fetchall()
+            assert [(priority, len(json.loads(ids))) for priority, ids in rows] == [("live", 10)]
 
     asyncio.run(scenario())
 

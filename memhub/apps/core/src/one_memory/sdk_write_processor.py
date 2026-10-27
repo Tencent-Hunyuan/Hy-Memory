@@ -16,6 +16,7 @@ from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 PRODUCT_AGENT_ID = "all-apps"
 _MESSAGE_ROLES = frozenset({"user", "assistant", "tool"})
+_CONVERSATION_ROLES = frozenset({"user", "assistant"})
 
 
 @dataclass(frozen=True)
@@ -41,12 +42,23 @@ class SdkWriteProcessor:
     ) -> SdkWriteReceipt:
         if not records:
             raise RuntimeError("hy_memory_task_without_inputs")
+        extracted = all(_is_extracted_content(record) for record in records)
+        if not extracted and not any(
+            record.content_kind is EvidenceContentKind.RAW_CONVERSATION
+            and record.role in _CONVERSATION_ROLES
+            for record in records
+        ):
+            # Nothing to remember: tool records alone. The SDK strips them on
+            # the chat path and answers 400 "content or messages is
+            # required", which used to settle the job as unknown. Completed
+            # with no memories, and the SDK is never called.
+            return SdkWriteReceipt()
 
         scope = _write_scope(records)
         metadata = _write_metadata(records, scope)
         client = await self._client_handle.client()
 
-        if all(_is_extracted_content(record) for record in records):
+        if extracted:
             contents = [sanitize_model_input(record.verbatim) for record in records]
             await before_hy_invocation()
             result = await asyncio.to_thread(

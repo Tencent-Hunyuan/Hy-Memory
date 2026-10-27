@@ -1118,6 +1118,75 @@ def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_additions
     assert len(client.calls) == 1
 
 
+def test_a_batch_with_no_user_or_assistant_message_is_nothing_to_remember(tmp_path) -> None:
+    """Tool-only input came back 400 "content or messages is required" (16 unknown).
+
+    The SDK strips tool records on the chat path. Such a batch completes with
+    no memories; the SDK is never called and nothing is recorded unknown.
+    """
+    from one_memory.imports.models import WrittenBy
+    from one_memory.sdk_write_processor import SdkWriteProcessor
+
+    client = _SdkPublicClient()
+    processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
+    tools = tuple(
+        _sdk_evidence(f"tool-{index}", text="3 passed").model_copy(
+            update={"role": "tool", "written_by": WrittenBy.TOOL}
+        )
+        for index in range(2)
+    )
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(
+        WriteRequest(
+            internal_session_id="sess-tools",
+            source_id="cursor",
+            batch_identity=BatchIdentity(
+                internal_session_id="sess-tools", first_round=1, last_round=1
+            ),
+            evidence_ids=[item.evidence_id for item in tools],
+            input_records=tools,
+            idempotency_key="tools-only",
+        )
+    )
+    _claim_through_drain(queue, record.job_id)
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=processor,
+            evidence=_EvidenceStore(set()),
+        )
+    )
+
+    assert client.calls == []
+    assert client.events == []
+    [row] = _rows(path)
+    assert (row["state"], row["hy_invoked"], row["sdk_memory_ids_json"]) == (COMPLETED, 0, "[]")
+
+
+def test_the_drain_tick_writes_a_quiet_live_conversation(tmp_path, monkeypatch) -> None:
+    """The 10-minute idle flush runs on the drain's maintenance timer."""
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    flushed: list[str] = []
+    monkeypatch.setattr(queue, "flush_idle_assemblies", lambda: flushed.append("flush") or ())
+    drain = DurableWriteDrain(queue, execute=_never_execute, reap_interval=timedelta(0))
+
+    async def tick() -> None:
+        task = asyncio.create_task(drain.run_forever())
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if flushed:
+                break
+        drain.stop()
+        await task
+
+    asyncio.run(tick())
+    assert flushed
+
+
 def test_sdk_unknown_outcome_inquiry_uses_only_public_receipt() -> None:
     from one_memory.sdk_write_processor import SdkWriteProcessor, SdkWriteReceipt
 

@@ -47,8 +47,8 @@ from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import sdk_context_router
 from one_memory.conversation_processing import (
-    _conversation_chunks,
     memory_task_timeout_seconds,
+    turn_batches,
 )
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
@@ -1035,21 +1035,20 @@ def create_app(
             app.state.start_memory_backfill = lambda: _start_backfill(app)
 
             async def enqueue_stable_evidence(record: EvidenceRecord) -> None:
-                priority = "live" if live_sync_arrival.get() else "normal"
+                live = live_sync_arrival.get()
                 conversation = await asyncio.to_thread(
                     app.state.evidence_store.list_conversation, record.evidence_id
                 )
-                for chunk in _conversation_chunks(conversation, max_turns=12, completed_only=True):
-                    if (
-                        record not in chunk
-                        or not any(item.role == "user" for item in chunk)
-                        or not any(item.role == "assistant" for item in chunk)
-                    ):
-                        continue
+                # Legacy authority. The turn rule groups the whole conversation
+                # from its start, so a batch's records and key never change:
+                # history (end of file) writes it all, live writes complete
+                # batches and leaves the rest to catch-up (`_run_backfill`).
+                batches = turn_batches(conversation, flush=not live).batches
+                for batch in _batches_settled_by(batches, record):
                     await asyncio.to_thread(
                         app.state.memory_write_intake.submit_records,
-                        chunk,
-                        priority=priority,
+                        batch,
+                        priority="live" if live else "normal",
                     )
 
             app.state.memory_addition_store = MemoryAdditionStore(
@@ -4381,14 +4380,11 @@ async def _run_backfill(app: FastAPI) -> None:
                     _evidence_store(app).list_conversation,
                     evidence_id,
                 )
-                for chunk in _conversation_chunks(
-                    conversation,
-                    max_turns=12,
-                    completed_only=True,
-                ):
-                    if not any(item.evidence_id in evidence_ids for item in chunk):
+                # Catch-up is history: the last turn and a short batch are written.
+                for batch in turn_batches(conversation, flush=True).batches:
+                    if not any(item.evidence_id in evidence_ids for item in batch):
                         continue
-                    await asyncio.to_thread(intake.submit_records, chunk, priority="normal")
+                    await asyncio.to_thread(intake.submit_records, batch, priority="normal")
             cursor = evidence_ids[-1]
     except asyncio.CancelledError:
         raise
@@ -4405,6 +4401,22 @@ async def _run_backfill(app: FastAPI) -> None:
         # record: the whole corpus went unextracted and there was nothing
         # anywhere saying which store, which method, or which query.
         logger.exception("memory catch-up failed, no further memories will be made")
+
+
+def _batches_settled_by(
+    batches: tuple[tuple[EvidenceRecord, ...], ...],
+    record: EvidenceRecord,
+) -> list[tuple[EvidenceRecord, ...]]:
+    """The batches one arriving record can have made writable.
+
+    Its own batch, and the last two: a user message completes the turn
+    before it, which can close that turn's batch and, at the 8000-character
+    cut, the batch before it. Submitting is idempotent, so an older batch
+    named again is only a hit.
+    """
+    chosen = [batch for batch in batches if record in batch]
+    chosen.extend(batch for batch in batches[-2:] if batch not in chosen)
+    return chosen
 
 
 def _sdk_memory_runtime(app: FastAPI) -> SdkMemoryRuntime:
