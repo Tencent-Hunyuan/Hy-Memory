@@ -219,12 +219,14 @@
 }
 .r6-shell .r6-memory .map-inspector {
   padding: 14px 22px 24px;
-  background: rgb(255 255 255 / 30%);
+  background: #f2f6f8;
   border: 0;
   border-radius: 0;
-  overflow-y: auto;
-  overflow-anchor: none;
+  overflow: hidden;
   min-height: 0;
+  isolation: isolate;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .r6-shell .r6-memory .map-inspector-heading {
   padding: 0;
@@ -498,11 +500,8 @@
     width: min(418px, calc(100vw - 32px));
   }
   .r6-shell .r6-memory .map-inspector-heading {
-    position: sticky;
-    top: -14px;
-    z-index: 1;
-    background: #eff5f8;
-    padding: 10px 0;
+    position: static;
+    padding: 0;
   }
   .selected-editor {
     padding-left: 0;

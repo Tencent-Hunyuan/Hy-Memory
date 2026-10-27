@@ -370,7 +370,7 @@ export const memoryChineseMessages = {
     "已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
   "memory:（{filter}）": "（{filter}）",
   "memory:第 {page} 页": "第 {page} 页",
-  "memory:原话已保存，正在等待整理：": "原话已保存，正在等待整理：",
+  "memory:正在等待整理：": "正在等待整理：",
   "memory:记忆未在生成": "记忆未在生成",
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "还没有开始生成记忆：{reason}（{count} 条待处理）",
@@ -786,8 +786,7 @@ export const memorySpanishMessages: Record<
     "{count} memoria guardada{filter} · {shown} visibles",
   "memory:（{filter}）": " ({filter})",
   "memory:第 {page} 页": "Página {page}",
-  "memory:原话已保存，正在等待整理：":
-    "Texto guardado; pendiente de procesar: ",
+  "memory:正在等待整理：": "Pendiente de procesar: ",
   "memory:记忆未在生成": "Generación de memorias detenida",
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Aún no se generan memorias: {reason} ({count} pendientes)",
