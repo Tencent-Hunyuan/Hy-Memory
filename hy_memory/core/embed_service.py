@@ -254,7 +254,7 @@ class EmbedService:
         #      端点**（用错 base_url/api_key）；
         #   2) 性能：一个慢端点拖住其他端点；
         #   3) 观测：batch_size / queue_depth 跨端点混算，失真。
-        # 分桶 key 使用当前生效的 (base_url, api_key)。
+        # 分桶 key 使用当前 event loop 和生效的 (base_url, api_key)。
         self._queue_locks: Dict[tuple, asyncio.Lock] = {}
         self._queue_pending: Dict[tuple, List[tuple]] = {}   # bucket -> [(text, Future, enter_at, lock_wait_ms, depth)]
         self._queue_flush_tasks: Dict[tuple, Optional[asyncio.Task]] = {}
@@ -497,7 +497,7 @@ class EmbedService:
             await self._send_batch(batch)
 
     def _queue_bucket_key(self) -> tuple:
-        """当前生效端点 → 攒批桶 key。
+        """当前 event loop + 生效端点 → 攒批桶 key。
 
         取当前 contextvar 里的 per-call override，无 override 时落到 client 自身配置。
         这样共享 client 的多个端点各自成桶，既不会把不同
@@ -511,7 +511,9 @@ class EmbedService:
                 base_url = _ov["base_url"]
             if _ov.get("api_key") is not None:
                 api_key = _ov["api_key"]
-        return (base_url or "", api_key or "")
+        # Locks, futures and delayed flush tasks are owned by their event loop.
+        # A timer in another loop must not suppress this loop's flush.
+        return (id(asyncio.get_running_loop()), base_url or "", api_key or "")
 
     def _detach_batch(self, bucket: tuple) -> Optional[List[tuple]]:
         """把指定桶的 pending 队列整批摘走并清空；空队列返回 None。
