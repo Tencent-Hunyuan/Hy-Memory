@@ -44,6 +44,7 @@ from .data.vector_store import create_vector_store
 from .data.history_store import HistoryStore
 from .data.cache import create_cache
 from .utils.log_setup import setup_logging, set_request_id, request_id_scope
+from .utils.extraction_history import resolve_history_turns
 from .utils.async_executor import (
     await_concurrent_future_guarded,
     concurrent_result_guarded,
@@ -1723,6 +1724,7 @@ class HyMemoryClient:
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
+        history_turns: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         写入记忆。
@@ -1745,6 +1747,8 @@ class HyMemoryClient:
                           不保证持久化或随查询返回；调用方需要保存并读回的业务字段
                           请使用 meta。
             memory_at:    记忆时间戳（不传则用当前时间），用于导入历史记忆
+            history_turns: 本次抽取使用的历史轮数；None 使用 extractor 配置（默认 5），
+                          0 关闭历史查询。只影响历史上下文，不裁剪本次新增消息。
             scene:        显式指定写入路由，跳过 LLM 自动判定。
                           - None（默认）：含 tool 时 LLM 判 chat/working/coding；
                             无 tool 时直接走 chat
@@ -1788,6 +1792,7 @@ class HyMemoryClient:
                 workspace_id=workspace_id, branch=branch,
                 request_id=request_id, meta=meta,
                 embed_override=embed_override,
+                history_turns=history_turns,
             ),
             include_runtime_diag=True,
         )
@@ -2740,13 +2745,18 @@ class HyMemoryClient:
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
+        history_turns: Optional[int] = None,
     ) -> Dict[str, Any]:
         """写入记忆（异步）
 
         embed_override: 本次写入的 embedding 端点覆盖（不改 model/dims，只换接入点）。
             dict，可含 base_url / api_key / extra_headers / timeout；None = 用 client 配置。
             可用于按请求切换任意 OpenAI-compatible embedding endpoint。
+        history_turns: 本次抽取历史轮数；None 使用配置，0 关闭历史查询，详见 add()。
         """
+        # 无效覆盖不能先认领 request_id，否则参数错误会留下非终态写入回执。
+        if history_turns is not None:
+            resolve_history_turns(None, history_turns)
         request_id = request_id or str(uuid.uuid4())
         replay = await self._claim_write_outcome(
             request_id=request_id,
@@ -2771,6 +2781,7 @@ class HyMemoryClient:
                         metadata=metadata, memory_at=memory_at,
                         scene=scene, workspace_id=workspace_id, branch=branch,
                         request_id=request_id, meta=meta,
+                        history_turns=history_turns,
                     )
             else:
                 result = await self._async_add_impl(
@@ -2779,6 +2790,7 @@ class HyMemoryClient:
                     metadata=metadata, memory_at=memory_at,
                     scene=scene, workspace_id=workspace_id, branch=branch,
                     request_id=request_id, meta=meta,
+                    history_turns=history_turns,
                 )
         except BaseException:
             await self._mark_write_outcome_unknown(request_id)
@@ -2867,6 +2879,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        history_turns: Optional[int] = None,
     ) -> Dict[str, Any]:
         """写入记忆（异步）
 
@@ -2973,6 +2986,7 @@ class HyMemoryClient:
                     request_id=request_id,
                     source=source,
                     memory_at=memory_at,
+                    history_turns=history_turns,
                 )
                 # Public receipt always identifies the productivity namespace.
                 resp["variant"] = scene_variant
@@ -3023,6 +3037,7 @@ class HyMemoryClient:
         extra = dict(metadata) if metadata else {}
         extra["agent_mode"] = agent_mode
         extra["mode"] = self._mode
+        extra["history_turns"] = history_turns
 
         write_req = WriteRequest(
             content=content,

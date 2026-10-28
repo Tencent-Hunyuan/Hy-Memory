@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from ..agent.llm_provider import LLMProvider
 from ..core.embed_service import EmbedService
 from ..pipelines.base import ChatMessage
+from ..utils.extraction_history import resolve_history_turns
 from .extractor import CodingMemoryExtractor
 from .fact_reconciler import WorkingFactReconciler
 from .judge import classify_messages_is_coding
@@ -81,6 +82,7 @@ class CodingWriter:
         request_id: Optional[str] = None,
         source: str = "default",
         memory_at: Optional[datetime] = None,
+        history_turns: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         working/coding 段写入端到端。memory_at 是对话时间，记到这次写出的经验和
@@ -115,21 +117,21 @@ class CodingWriter:
         )
 
         # 1. 历史与新输入分离。
-        #    - history_messages：之前 write 的最近 5 个 user-turn，仅作上下文
+        #    - history_messages：之前 write 的最近 K 个 user-turn，仅作上下文
         #    - current_messages：本次 write 的全部 turn，只限制单条消息体积，不裁 turn
-        history_turns = int(
-            getattr(self.store.config.extractor, "history_turns", 5) or 5
-        )
-        try:
-            history_messages = await self.store.get_recent_trace_messages(
-                user_id=user_id,
-                agent_id=agent_id or "default_agent",
-                max_user_turns=history_turns,
-                source=source,
-            )
-        except Exception as e:
-            logger.warning(f"[coding-write] recent trace lookup failed, continue without history: {e}")
-            history_messages = []
+        history_turns = resolve_history_turns(self.store.config, history_turns)
+        history_messages = []
+        # store 的 trace 查询会把 0 提升到 1；关闭时必须在查询前短路。
+        if history_turns > 0:
+            try:
+                history_messages = await self.store.get_recent_trace_messages(
+                    user_id=user_id,
+                    agent_id=agent_id or "default_agent",
+                    max_user_turns=history_turns,
+                    source=source,
+                )
+            except Exception as e:
+                logger.warning(f"[coding-write] recent trace lookup failed, continue without history: {e}")
         current_messages = prepare_extractor_messages(
             messages, tool_max_bytes=tool_max_bytes,
         )
@@ -144,6 +146,7 @@ class CodingWriter:
             drafts, fact_drafts = await self.extractor.extract(
                 messages,
                 history_messages=history_messages,
+                history_turns=history_turns,
                 tool_result_max_bytes=tool_max_bytes,
                 user_id=user_id,
                 agent_id=agent_id,
