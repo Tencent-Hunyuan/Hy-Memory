@@ -19,7 +19,7 @@ If you run into a problem, please open an Issue with the version, platform,repro
 ## 发行与平台合同
 
 源码当前固定使用公开 PyPI 正式版 `hy-memory==2.0.8`。MemHub 源码版本为 `1.0.5`
-（build 35），GitHub 仓库为
+（build 36），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
