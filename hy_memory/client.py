@@ -1544,6 +1544,7 @@ class HyMemoryClient:
                 # LLM 写的"这个结论一路怎么改成现在这样"，直接进提示词；
                 # 没被覆盖过就是空串。不参与检索——召回认的是 statement 的当前值。
                 "fact_chain_summary": fact.fact_chain_summary,
+                "memory_at": _epoch_seconds(fact.memory_at),
                 "created_at": fact.created_at.isoformat() if fact.created_at else None,
                 "score": round(float(score), 4),
                 "source": fact.source,
@@ -1652,6 +1653,8 @@ class HyMemoryClient:
                 "score": (round(float(score_by_id[d.experience_id]), 4)
                           if d.experience_id in score_by_id else None),
                 "confidence": d.confidence,
+                "memory_at": _epoch_seconds(d.memory_at),
+                "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
                 "extraction_source": d.extraction_source,
@@ -1953,6 +1956,7 @@ class HyMemoryClient:
                   "content"    chat 正文；经验为 "task\nsolution"；事实为 statement
                   "score"      RRF 融合分；"lane_score" 为该路原始分；"lane_rank" 为该路名次
                   "source", "created_at", "updated_at"（秒级 epoch，取不到为 None）
+                  "memory_at"  对话时间（秒级 epoch），各路原有字段，三路同名同格式
                 chat 路内部名次：normal → schema → proactive 依次排；working/coding 路
                 内部名次：事实与经验各按原顺序交替（事实在前），两层谁也不压谁。
         """
@@ -2144,7 +2148,8 @@ class HyMemoryClient:
                           "limit", "offset", "request_id", "elapsed_ms"}
                 每条带 "scene"、"kind"（chat | experience）、"memory_id"、"content"
                 （经验为 "task\nsolution"）、"source"、"status"、"created_at"、
-                "updated_at"（秒级 epoch），以及该路原有字段。
+                "updated_at"（秒级 epoch），以及该路原有字段（含对话时间
+                "memory_at"，秒级 epoch，三路同名同格式）。
         """
         return self._loop_thread.run(
             self.async_list_memories(
@@ -2967,6 +2972,7 @@ class HyMemoryClient:
                     session_id=session_id,
                     request_id=request_id,
                     source=source,
+                    memory_at=memory_at,
                 )
                 # Public receipt always identifies the productivity namespace.
                 resp["variant"] = scene_variant
@@ -5920,6 +5926,7 @@ class HyMemoryClient:
                 "source_fact_ids": list(d.source_fact_ids),
                 "confidence": d.confidence,
                 "status": MemoryStatus.ACTIVE.value,
+                "memory_at": _epoch_seconds(d.memory_at),
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,

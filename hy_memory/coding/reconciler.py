@@ -577,6 +577,7 @@ class CodingMemoryReconciler:
             confidence=d.confidence,
             source=d.source,
             extraction_source=d.extraction_source,
+            memory_at=d.memory_at,
         )
 
 
