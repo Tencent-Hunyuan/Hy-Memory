@@ -36,6 +36,7 @@ from one_memory.hy_graph_admin import (
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.local_embedding import LocalEmbedder
+from one_memory.log_file import confine_hy_sdk_logging
 from one_memory.model_profiles import (
     ModelProfileSnapshot,
     ProviderKind,
@@ -391,6 +392,10 @@ def _acquire_client(
     except BaseException:
         _release_runtime(key)
         raise
+    finally:
+        # The constructor's first step configures HY's text log (once per
+        # process), so by here it exists whether or not construction succeeded.
+        confine_hy_sdk_logging()
     return ClientLease(client, key)
 
 

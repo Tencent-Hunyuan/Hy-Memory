@@ -18,7 +18,6 @@ const UI_TRACE = "one-memory:log-ui-trace";
 const DEBUG_LOGS = "one-memory:get-debug-logs";
 const DEBUG_LOG_NAME =
   /^diagnostic-(runtime|core|host-bridge|desktop|cli)\.jsonl(?:\.\d+)?$/;
-const PIPELINE_LOG_NAME = /^\d{4}-\d{2}-\d{2}\.log$/;
 const SERVICE_LOG_NAMES = [
   "service.log",
   "service-error.log",
@@ -30,24 +29,16 @@ interface ServiceLogCursor {
   files: Array<{ device: number; inode: number; offset: number }>;
 }
 
-interface PipelineLogCursor {
-  relativePath: string;
-  device: number;
-  inode: number;
-  offset: number;
-}
-
 export interface DebugLogCursor {
   diagnosticLogs: Array<{ device: number; inode: number; offset: number }>;
   serviceLogs: ServiceLogCursor[];
-  pipelineLogs: PipelineLogCursor[];
 }
 
 export interface DebugLogEntry {
   id: string;
   timestamp: string;
   level: "debug" | "info" | "warn" | "error";
-  service: "runtime" | "core" | "host-bridge" | "desktop" | "cli" | "hy-memory";
+  service: "runtime" | "core" | "host-bridge" | "desktop" | "cli";
   component: string;
   event: string;
   outcome: string;
@@ -57,7 +48,7 @@ export interface DebugLogEntry {
   trace_id?: string;
   details?: Record<string, string | number | boolean | null>;
   message?: string;
-  source: "diagnostic" | "stdout" | "stderr" | "pipeline";
+  source: "diagnostic" | "stdout" | "stderr";
 }
 
 export interface DebugLogSnapshot {
@@ -259,7 +250,6 @@ export async function readDebugLogSnapshot(
   cursor: DebugLogCursor = {
     diagnosticLogs: [],
     serviceLogs: [],
-    pipelineLogs: [],
   },
 ): Promise<DebugLogSnapshot> {
   const started = Number.isFinite(startedAt) ? startedAt : Date.now();
@@ -300,7 +290,6 @@ export async function readDebugLogSnapshot(
       );
     }
   }
-  entries.push(...(await readPipelineLogEntries(dataDir, cursor, started)));
   entries.sort((left, right) =>
     left.timestamp === right.timestamp
       ? left.id.localeCompare(right.id)
@@ -319,7 +308,6 @@ export async function captureDebugLogCursor(
 ): Promise<DebugLogCursor> {
   const directory = path.join(dataDir, "logs");
   const names = await readdir(directory).catch(() => []);
-  const pipelineRoot = path.join(dataDir, "hy-memory", "governed-v2", "logs");
   return {
     diagnosticLogs: (
       await Promise.all(
@@ -355,7 +343,6 @@ export async function captureDebugLogCursor(
         };
       }),
     ),
-    pipelineLogs: await pipelineLogFiles(pipelineRoot),
   };
 }
 
@@ -462,8 +449,8 @@ async function readServiceLogEntries(
       if (!message) continue;
       const level = serviceLogLevel(message, cursor.name);
       // Raw stdout is an implementation trace, not a product event. Core's
-      // structured diagnostics and HY pipeline logs already carry meaningful
-      // successful work with request/task identity. Showing raw INFO/DEBUG
+      // structured diagnostics already carry meaningful successful work with
+      // request/task identity. Showing raw INFO/DEBUG
       // here duplicated those events and turned polling access logs, file
       // watchers and library initialization into thousands of fake "useful"
       // rows. Keep raw output only when it needs attention.
@@ -541,135 +528,6 @@ function logLineTimestamp(
       return new Date(Math.max(startedAt, parsed)).toISOString();
   }
   return new Date(Math.max(startedAt, fallback)).toISOString();
-}
-
-async function pipelineLogFiles(root: string): Promise<PipelineLogCursor[]> {
-  const rootInfo = await lstat(root).catch(() => null);
-  if (!rootInfo?.isDirectory() || rootInfo.isSymbolicLink()) return [];
-  const files: PipelineLogCursor[] = [];
-  const visit = async (directory: string): Promise<void> => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const target = path.join(directory, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) {
-        await visit(target);
-        continue;
-      }
-      // The same root also contains HY's human-readable hy_memory.log.
-      // Pipeline files are date-named JSONL; accepting every .log file makes
-      // the Debug poller repeatedly parse unrelated text and still display no
-      // HY entries.
-      if (!entry.isFile() || !PIPELINE_LOG_NAME.test(entry.name)) continue;
-      const info = await safeRegularFile(target);
-      if (!info) continue;
-      files.push({
-        relativePath: path.relative(root, target),
-        device: info.dev,
-        inode: info.ino,
-        offset: info.size,
-      });
-    }
-  };
-  await visit(root);
-  return files;
-}
-
-async function readPipelineLogEntries(
-  dataDir: string,
-  cursor: DebugLogCursor,
-  startedAt: number,
-): Promise<DebugLogEntry[]> {
-  const root = path.join(dataDir, "hy-memory", "governed-v2", "logs");
-  const current = await pipelineLogFiles(root);
-  const baseline = new Map(
-    cursor.pipelineLogs.map((file) => [
-      `${file.device}:${file.inode}`,
-      file.offset,
-    ]),
-  );
-  const entries: DebugLogEntry[] = [];
-  for (const file of current) {
-    const target = path.join(root, file.relativePath);
-    const offset = baseline.get(`${file.device}:${file.inode}`) ?? 0;
-    const info = await safeRegularFile(target);
-    if (!info || info.size <= offset) continue;
-    const content = await readFileFromOffset(target, offset).catch(() => "");
-    let lineNumber = 0;
-    for (const line of content.split("\n")) {
-      lineNumber += 1;
-      if (!line.trim()) continue;
-      const entry = pipelineLogEntry(
-        line,
-        file,
-        lineNumber,
-        offset,
-        startedAt,
-        info.mtimeMs,
-      );
-      if (entry) entries.push(entry);
-    }
-  }
-  return entries;
-}
-
-function pipelineLogEntry(
-  line: string,
-  file: PipelineLogCursor,
-  lineNumber: number,
-  offset: number,
-  startedAt: number,
-  fallbackTime: number,
-): DebugLogEntry | null {
-  let value: Record<string, unknown>;
-  try {
-    value = JSON.parse(line) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-  const step = typeof value.step === "string" ? value.step.trim() : "";
-  if (!step || !/^[A-Za-z0-9_-]{1,80}$/.test(step)) return null;
-  const rawTimestamp =
-    typeof value.timestamp === "string" ? value.timestamp : "";
-  const parsedTimestamp = Date.parse(rawTimestamp);
-  const timestamp = new Date(
-    Math.max(
-      startedAt,
-      Number.isFinite(parsedTimestamp) ? parsedTimestamp : fallbackTime,
-    ),
-  ).toISOString();
-  const elapsed = safeFiniteNumber(value.elapsed_ms);
-  const tokens = safeFiniteNumber(value.tokens);
-  const requestId =
-    typeof value.request_id === "string" && value.request_id.length <= 256
-      ? value.request_id
-      : undefined;
-  return {
-    id: `hy-pipeline:${file.device}:${file.inode}:${offset}:${lineNumber}`,
-    timestamp,
-    level: "info",
-    service: "hy-memory",
-    component: "hy.pipeline",
-    event: `hy.pipeline.${step.toLowerCase().replaceAll("_", "-")}`,
-    outcome: "observed",
-    ...(elapsed === undefined ? {} : { duration_ms: elapsed }),
-    ...(requestId ? { trace_id: requestId } : {}),
-    details: {
-      phase: step,
-      ...(tokens === undefined ? {} : { count: tokens }),
-    },
-    message: [
-      step,
-      ...(tokens === undefined ? [] : [`${Math.round(tokens)} tokens`]),
-      ...(elapsed === undefined ? [] : [`${Math.round(elapsed)} ms`]),
-    ].join(" · "),
-    source: "pipeline",
-  };
-}
-
-function safeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
 }
 
 export function installDiagnosticsIpc(

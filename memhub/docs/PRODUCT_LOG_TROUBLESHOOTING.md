@@ -7,12 +7,12 @@
 3. 如果停住，停在导入、模型调用还是最终写入。
 
 默认 `info` 下的官方结构化事件不应写入会话正文、模型输入输出或 API Key；但本地原始日志允许
-新增受限标量标签，仍应按私人数据处理，不能直接对外发送。`debug` 会额外启用 HY pipeline
-trace，其中可能包含完整 prompt/response 和获授权的对话正文。
+新增受限标量标签，仍应按私人数据处理，不能直接对外发送。`debug` 会让 HY 的
+`hy_memory.log` 记录 DEBUG 行，其中可能包含完整 prompt/response 和获授权的对话正文。
 
 排查时只通过 App 的“导出日志”提供文件：导出过程会按安全白名单重新生成诊断事件，不会打包
-原始日志。不要直接发送 `diagnostic-*.jsonl`、整个 `~/.one-memory` 数据目录或 debug pipeline
-日志；后者如确需分享，必须由开发人员另行确认并脱敏。
+原始日志。不要直接发送 `diagnostic-*.jsonl`、整个 `~/.one-memory` 数据目录或 debug 级别的
+`hy_memory.log`；后者如确需分享，必须由开发人员另行确认并脱敏。
 
 ## 1. Log level 设什么
 
@@ -181,8 +181,8 @@ memhub logs --since 24h --errors-only --tail 500 --json
 memhub status --json
 ```
 
-以下 `jq` 命令仅用于 `diagnostic-core.jsonl`，不要对 `core.log`、`service.log` 或 debug
-pipeline 日志直接运行后把完整输出发给他人。
+以下 `jq` 命令仅用于 `diagnostic-core.jsonl`，不要对 `core.log`、`service.log` 或
+`hy_memory.log` 直接运行后把完整输出发给他人。
 
 ### 查看最近的失败
 

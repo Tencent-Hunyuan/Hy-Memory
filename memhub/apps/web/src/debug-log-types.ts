@@ -4,14 +4,7 @@ export interface DebugLogEntry {
   id: string;
   timestamp: string;
   level: DebugLogLevel;
-  service:
-    | "runtime"
-    | "core"
-    | "host-bridge"
-    | "desktop"
-    | "cli"
-    | "hy-memory"
-    | "renderer";
+  service: "runtime" | "core" | "host-bridge" | "desktop" | "cli" | "renderer";
   component: string;
   event: string;
   outcome: string;
@@ -21,7 +14,7 @@ export interface DebugLogEntry {
   trace_id?: string;
   details?: Record<string, string | number | boolean | null>;
   message?: string;
-  source: "diagnostic" | "stdout" | "stderr" | "console" | "pipeline";
+  source: "diagnostic" | "stdout" | "stderr" | "console";
 }
 
 export interface DebugLogSnapshot {
