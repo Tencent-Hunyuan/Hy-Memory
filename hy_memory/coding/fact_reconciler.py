@@ -454,9 +454,10 @@ class WorkingFactReconciler:
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         source: str = "default",
+        memory_at: Optional[datetime] = None,
     ) -> Tuple[List[WorkingFact], List[FactReconcileOp]]:
         """
-        执行 reconcile + 持久化。
+        执行 reconcile + 持久化。memory_at 是这段对话的时间，记到新事实上。
 
         Returns:
             (真正落库的新事实, 执行过的 ops)。LLM 挂掉时退化为全 INSERT 不覆盖，
@@ -493,6 +494,7 @@ class WorkingFactReconciler:
             workspace_id=workspace_id,
             branch=branch,
             source=source,
+            memory_at=memory_at,
         )
         logger.info(
             f"[fact-reconcile] drafts={len(drafts)} inserted={len(facts)} "
@@ -781,6 +783,7 @@ class WorkingFactReconciler:
         workspace_id: Optional[str],
         branch: Optional[str] = None,
         source: str = "default",
+        memory_at: Optional[datetime] = None,
     ) -> Tuple[List[WorkingFact], List[FactReconcileOp]]:
         inserted: List[WorkingFact] = []
         ops: List[FactReconcileOp] = []
@@ -801,6 +804,7 @@ class WorkingFactReconciler:
                 subject=draft.subject,
                 details=draft.details,
                 status="active",
+                memory_at=memory_at,
             )
 
             allowed = {c.fact_id for c in (candidates[idx] if idx < len(candidates) else [])}

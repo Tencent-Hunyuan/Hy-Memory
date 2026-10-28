@@ -25,6 +25,11 @@ FactStatus = Literal["active", "superseded"]
 MAX_FACT_CHAIN_ENTRIES = 8
 
 
+def _epoch(value: Optional[datetime]) -> Optional[int]:
+    """memory_at 对外是秒级 epoch，与 chat 一致。"""
+    return int(value.timestamp()) if isinstance(value, datetime) else None
+
+
 # ================================================================
 # 草稿（LLM extract 阶段输出）
 # ================================================================
@@ -53,6 +58,8 @@ class CodingMemoryDraft:
     files: List[str] = field(default_factory=list)
     source: str = "default"
     extraction_source: str = "auto_extract"
+    # 对话时间（SDK 注入，同 chat 的 memory_at）
+    memory_at: Optional[datetime] = None
 
     def __post_init__(self) -> None:
         from ..utils.source_filter import normalize_source
@@ -73,6 +80,7 @@ class CodingMemoryDraft:
             "files": list(self.files),
             "source": self.source,
             "extraction_source": self.extraction_source,
+            "memory_at": _epoch(self.memory_at),
         }
 
 
@@ -111,6 +119,9 @@ class CodingMemory:
     extraction_source: str = "auto_extract"
 
     # 时间
+    # memory_at 是对话时间（同 chat），created_at / updated_at 是写库时间。
+    # UPDATE 合并时取两者中较晚的那个对话时间，见 store.update。
+    memory_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -135,6 +146,7 @@ class CodingMemory:
             "confidence": self.confidence,
             "source": self.source,
             "extraction_source": self.extraction_source,
+            "memory_at": _epoch(self.memory_at),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -249,6 +261,7 @@ class WorkingFact:
     fact_chain_summary: str = ""
 
     # 时间
+    memory_at: Optional[datetime] = None   # 对话时间（同 chat），没传时是收到请求的时间
     created_at: Optional[datetime] = None  # 产生时间，新的优先
 
     def __post_init__(self) -> None:
@@ -272,6 +285,7 @@ class WorkingFact:
             "derived_experience_ids": list(self.derived_experience_ids),
             "status": self.status,
             "fact_chain_summary": self.fact_chain_summary,
+            "memory_at": _epoch(self.memory_at),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

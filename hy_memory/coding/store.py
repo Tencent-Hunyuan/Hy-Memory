@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS coding_memory_meta (
     confidence       REAL NOT NULL DEFAULT 0.7,
     source           TEXT NOT NULL DEFAULT 'default',
     extraction_source TEXT NOT NULL DEFAULT 'auto_extract',
+    memory_at        INTEGER,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -109,6 +110,7 @@ CREATE TABLE IF NOT EXISTS working_fact (
     derived_experience_ids TEXT NOT NULL DEFAULT '[]',
     status                 TEXT NOT NULL DEFAULT 'active',
     fact_chain_summary     TEXT NOT NULL DEFAULT '',
+    memory_at              INTEGER,
     created_at             TEXT NOT NULL
 );
 -- 反查前驱（谁的 fact_link 指向我）走这个索引，写演变总结时要顺着链往回走
@@ -164,6 +166,8 @@ _ADDED_COLUMNS = {
     "coding_memory_meta": {
         "source_fact_ids": "TEXT NOT NULL DEFAULT '[]'",
         "extraction_source": "TEXT NOT NULL DEFAULT 'auto_extract'",
+        # 对话时间，秒级 epoch（同 chat）。老库里的行是 NULL：那时没存过。
+        "memory_at": "INTEGER",
     },
     # 早期版本存过一列 fact_chain（机械累积的历代说法），已废弃：同样的信息顺着
     # fact_link 反查就有。老库里那一列留着不管，有默认值不影响插入。
@@ -177,6 +181,7 @@ _ADDED_COLUMNS = {
         "subject": "TEXT NOT NULL DEFAULT ''",
         "details": "TEXT NOT NULL DEFAULT ''",
         "source": "TEXT NOT NULL DEFAULT 'default'",
+        "memory_at": "INTEGER",
     },
 }
 
@@ -290,6 +295,29 @@ def _parse_dt(s: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _from_epoch(value: Any) -> Optional[datetime]:
+    """memory_at 列（秒级 epoch）→ datetime；NULL 或坏值返回 None。"""
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value))
+    except Exception:
+        return None
+
+
+def _to_epoch(value: Optional[datetime]) -> Optional[int]:
+    return int(value.timestamp()) if isinstance(value, datetime) else None
+
+
+def _later(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
+    """两个对话时间取较晚的；一边缺就取另一边。"""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if _to_epoch(a) >= _to_epoch(b) else b
+
+
 def _row_to_memory(row: sqlite3.Row) -> CodingMemory:
     """SQLite row → CodingMemory"""
     return CodingMemory(
@@ -308,6 +336,7 @@ def _row_to_memory(row: sqlite3.Row) -> CodingMemory:
         confidence=row["confidence"],
         source=row["source"],
         extraction_source=row["extraction_source"],
+        memory_at=_from_epoch(row["memory_at"]),
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
     )
@@ -334,6 +363,7 @@ def _row_to_fact(row: sqlite3.Row) -> WorkingFact:
         # 老库刚 ADD COLUMN 时可能取不到这一列，用 keys() 兜一下
         fact_chain_summary=(row["fact_chain_summary"] or ""
                             if "fact_chain_summary" in row.keys() else ""),
+        memory_at=_from_epoch(row["memory_at"]),
         created_at=_parse_dt(row["created_at"]),
     )
 
@@ -597,6 +627,8 @@ class CodingMemoryStore:
         memory.updated_at = datetime.utcnow()
         if memory.created_at is None:
             memory.created_at = prev.created_at
+        # 合并后的经验讲的是两段对话，对话时间取较晚的那段
+        memory.memory_at = _later(prev.memory_at, memory.memory_at)
         await _run_in_pool(self._upsert_sql_sync, memory)
         # 删旧 VDB
         await self._delete_vec_keys_by_count(memory.experience_id, prev_key_count)
@@ -1199,8 +1231,8 @@ class CodingMemoryStore:
                     experience_id, user_id, agent_id, task, search_keys, solution,
                     boundary_envs, workspace_id, branch, session_id,
                     files, source_fact_ids, confidence, source, extraction_source,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    memory_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(experience_id) DO UPDATE SET
                     user_id         = excluded.user_id,
                     agent_id        = excluded.agent_id,
@@ -1216,6 +1248,7 @@ class CodingMemoryStore:
                     confidence      = excluded.confidence,
                     source          = excluded.source,
                     extraction_source = excluded.extraction_source,
+                    memory_at       = excluded.memory_at,
                     updated_at      = excluded.updated_at
                 """,
                 (
@@ -1226,6 +1259,7 @@ class CodingMemoryStore:
                     json.dumps(memory.files, ensure_ascii=False),
                     json.dumps(memory.source_fact_ids, ensure_ascii=False),
                     memory.confidence, memory.source, memory.extraction_source,
+                    _to_epoch(memory.memory_at),
                     (memory.created_at or datetime.utcnow()).isoformat(),
                     (memory.updated_at or datetime.utcnow()).isoformat(),
                 ),
@@ -1366,8 +1400,8 @@ class CodingMemoryStore:
                     fact_id, user_id, agent_id, session_id, workspace_id, branch,
                     source, statement, files, subject, details,
                     fact_link, derived_experience_ids,
-                    status, fact_chain_summary, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, fact_chain_summary, memory_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fact_id) DO UPDATE SET
                     user_id                = excluded.user_id,
                     agent_id               = excluded.agent_id,
@@ -1382,7 +1416,8 @@ class CodingMemoryStore:
                     fact_link              = excluded.fact_link,
                     derived_experience_ids = excluded.derived_experience_ids,
                     status                 = excluded.status,
-                    fact_chain_summary     = excluded.fact_chain_summary
+                    fact_chain_summary     = excluded.fact_chain_summary,
+                    memory_at              = excluded.memory_at
                 """,
                 (
                     fact.fact_id, fact.user_id, fact.agent_id,
@@ -1395,6 +1430,7 @@ class CodingMemoryStore:
                     json.dumps(fact.derived_experience_ids, ensure_ascii=False),
                     fact.status,
                     fact.fact_chain_summary or "",
+                    _to_epoch(fact.memory_at),
                     (fact.created_at or datetime.utcnow()).isoformat(),
                 ),
             )
