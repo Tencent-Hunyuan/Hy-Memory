@@ -37,6 +37,7 @@ from one_memory.sdk_migration_runner import (
     abandoned_legacy_work,
     commit_sdk_cutover,
     move_pending_dispatches,
+    prepare_legacy_work_for_cutover,
     prepare_legacy_write_queue_for_cutover,
     recover_abandoned_staging,
     resume_legacy_cleanup,
@@ -896,6 +897,116 @@ def test_legacy_work_that_may_have_reached_the_sdk_does_not_block_cutover(tmp_pa
     assert store.authority() is MemoryAuthority.SDK
 
 
+def test_pre_upgrade_unknown_writes_are_settled_at_cutover_not_retried(store):
+    """A migrated 1.0.4 home kept 1000+ jobs unknown forever.
+
+    The legacy pipeline invoked them, so the SDK's write-outcome inquiry knows
+    none of them and the automatic reconcile could never settle one.
+    """
+    from one_memory.memory_server.durable_queue import (
+        CANCELLED,
+        PENDING,
+        RUNNING,
+        UNKNOWN,
+    )
+
+    queue = DurableWriteQueue(store.database_path)
+
+    def job(key: str, state: str, *, invoked: bool) -> str:
+        identifier = queue.submit(
+            WriteRequest(
+                internal_session_id="session-1",
+                source_id="cursor",
+                batch_identity=BatchIdentity(
+                    internal_session_id="session-1", first_round=1, last_round=1
+                ),
+                evidence_ids=["gone"],
+                idempotency_key=key,
+            )
+        ).job_id
+        with main_database(store.database_path).write() as database, database:
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,hy_invoked=?,"
+                "last_error='model_content_outcome_unknown' WHERE job_id=?",
+                (state, int(invoked), identifier),
+            )
+        return identifier
+
+    # Their Evidence is gone too, which must not block the cutover.
+    unknown = [job(f"unknown-{index}", UNKNOWN, invoked=True) for index in range(3)]
+    sent_running = job("sent-running", RUNNING, invoked=True)
+    finished = job("finished", "completed", invoked=True)
+
+    first = prepare_legacy_work_for_cutover(store.database_path)
+    assert first.abandoned == {"unknown_write_jobs": 4}
+    # Resumed after an interruption: nothing changes, the count is the same.
+    again = prepare_legacy_work_for_cutover(store.database_path)
+    assert again.as_document() == first.as_document()
+
+    with main_database(store.database_path).read() as database:
+        rows = dict(
+            (str(row[0]), (str(row[1]), str(row[2]), int(row[3])))
+            for row in database.execute(
+                "SELECT job_id,state,last_error,hy_invoked FROM memory_write_jobs"
+            )
+        )
+    for identifier in (*unknown, sent_running):
+        assert rows[identifier] == (CANCELLED, "abandoned_at_cutover", 1)
+    assert rows[finished][0] == "completed"
+    surviving = DurableWriteQueue(store.database_path, sdk_authority=True)
+    assert surviving.unknown_jobs() == ()
+    # Never requeued: they may already have written.
+    assert surviving.retry_unknown_confirmed(unknown[0]) == 0
+    assert surviving.readmit_parked() == 0
+    assert PENDING not in {state for state, _, _ in rows.values()}
+
+
+def test_retrying_unknown_writes_works_after_the_legacy_tables_are_dropped(store):
+    """The retry button raised `no such table: memory_tasks` after an upgrade."""
+    from one_memory.memory_server.durable_queue import PENDING, UNKNOWN
+    from one_memory.target_schema import drop_legacy_tables
+
+    queue = DurableWriteQueue(store.database_path)
+    identifier = queue.submit(
+        WriteRequest(
+            internal_session_id="session-1",
+            source_id="cursor",
+            batch_identity=BatchIdentity(
+                internal_session_id="session-1", first_round=1, last_round=1
+            ),
+            evidence_ids=["e1"],
+            idempotency_key="after-upgrade",
+        )
+    ).job_id
+    drop_legacy_tables(store.database_path)
+    assert legacy_tables_present(store.database_path) == ()
+    old = datetime(2000, 1, 1, tzinfo=UTC).isoformat()
+
+    def make_unknown(code: str, attempts: int) -> None:
+        with main_database(store.database_path).write() as database, database:
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,hy_invoked=1,last_error=?,"
+                "attempts=?,updated_at=? WHERE job_id=?",
+                (UNKNOWN, code, attempts, old, identifier),
+            )
+
+    for sdk_authority in (True, False):
+        surviving = DurableWriteQueue(store.database_path, sdk_authority=sdk_authority)
+        make_unknown("model_content_outcome_unknown", 1)
+        assert surviving.resolve_unknown_from_linked_output(identifier) is False
+        assert surviving.retry_unknown_confirmed(identifier) == 1
+        assert surviving.get("after-upgrade").state == PENDING
+
+        make_unknown("hy_memory_timeout", 1)
+        since = datetime.now(UTC)
+        assert surviving.retry_timed_out_unknown_after_reconcile(older_than=since) == 1
+        make_unknown("model_content_outcome_unknown", 1)
+        assert surviving.retry_first_unknown_after_reconcile(older_than=since) == 1
+        if sdk_authority:
+            # The SDK-authority queue never brings a dropped table back.
+            assert legacy_tables_present(store.database_path) == ()
+
+
 def _protective(home: Path) -> Path:
     return home / "hy-memory" / ".governed-v2.pre-migration-0123456789abcdef"
 
@@ -1264,6 +1375,8 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
 
     graph = asyncio.run(scenario())
     assert listed[0]["include_sources"] == ["cursor"]
+    assert listed[0]["scene"] == "all"
+    assert listed[0]["statuses"] == ["active"]
     assert (listed[0]["offset"], listed[0]["limit"]) == (100, 100)
     assert (graph["total_memories"], graph["projected_memories"]) == (7, 4)
     assert {node["node_id"] for node in graph["nodes"]} == {
@@ -1286,6 +1399,71 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
         "derived_from",
     }
     assert graph["hy_graph_available"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_sdk
+def test_sdk_memory_map_still_draws_memories_from_a_revoked_source(tmp_path) -> None:
+    # Revoking a source stops new reads from it; memories already distilled
+    # from it stay visible, so the map agrees with the list.
+    async def scenario():
+        app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
+
+        class Client:
+            def list_memories(self, **_kwargs):
+                return {
+                    "vdb": {
+                        "memories": [
+                            {
+                                "memory_id": "kept",
+                                "content": "distilled before revocation",
+                                "layer": "l2_fact",
+                                "status": "active",
+                                "user_id": "local",
+                                "agent_id": "all-apps",
+                                "session_id": "s1",
+                                "source": "cursor",
+                            }
+                        ],
+                        "total": 1,
+                    }
+                }
+
+        class Handle:
+            async def client(self):
+                return Client()
+
+            async def close(self):
+                return None
+
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer authority-test"},
+            ) as client,
+        ):
+            app.state.sdk_client_handle = Handle()
+            database = app.state.settings.data_dir / "one-memory.sqlite3"
+            with sqlite3.connect(database) as db:
+                db.execute(
+                    "INSERT INTO source_grants "
+                    "(user_id,source_id,root_path,requested_path,root_identity,"
+                    "candidate_kind,granted_at,revoked_at,revision) VALUES "
+                    "('local','cursor','/fixture','/fixture','fixture','default',"
+                    "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
+                )
+            response = await client.get(
+                "/api/v2/memories/graph",
+                params={"source": "cursor", "limit": 100},
+            )
+            assert response.status_code == 200
+            return response.json()
+
+    graph = asyncio.run(scenario())
+    assert (graph["total_memories"], graph["projected_memories"]) == (1, 1)
+    assert "memory:kept" in {node["node_id"] for node in graph["nodes"]}
 
 
 def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:

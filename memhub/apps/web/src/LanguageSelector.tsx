@@ -54,6 +54,11 @@ export function LanguageSelector({ compact = false }: { compact?: boolean }) {
           disabled={pending}
           options={options}
           className="r6-language-option-menu"
+          panelClassName={
+            compact
+              ? "r6-language-option-menu-panel--compact"
+              : "r6-language-option-menu-panel--settings"
+          }
           onChange={async (value) => {
             if (!isLanguagePreference(value)) return;
             setPending(true);

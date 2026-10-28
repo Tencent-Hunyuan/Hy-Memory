@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 function fail(message, receipt) {
   if (receipt) process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
@@ -146,18 +147,35 @@ function doctorCheck(document, id) {
   return check;
 }
 
-async function waitForRecall(prefix, phrase) {
+/**
+ * Whether an imported phrase reached Core's durable write queue.
+ *
+ * Recall cannot prove an import here: this runner has no generation model,
+ * and with SDK authority nothing reaches the SDK (not even its raw layer)
+ * until a model is active. What the lifecycle can prove is that the import
+ * was read and queued for the SDK, durably, in the Runtime's own database.
+ */
+async function waitForQueued(phrase) {
   const deadline = Date.now() + 90_000;
-  let attempt = 0;
+  const database = path.join(dataDir, "one-memory.sqlite3");
   while (Date.now() < deadline) {
-    attempt += 1;
-    const result = run(
-      `${prefix}-${attempt}`,
-      ["recall", phrase, "--json"],
-      [0, 1, 3],
-      15_000,
-    );
-    if (result.stdout.includes(phrase)) return true;
+    if (existsSync(database)) {
+      let connection;
+      try {
+        connection = new DatabaseSync(database, { readOnly: true });
+        const row = connection
+          .prepare(
+            "SELECT COUNT(*) AS count FROM memory_write_jobs " +
+              "WHERE instr(payload_json, ?) > 0",
+          )
+          .get(phrase);
+        if (Number(row?.count) > 0) return true;
+      } catch {
+        // The queue table appears once Core has migrated its schema.
+      } finally {
+        connection?.close();
+      }
+    }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   return false;
@@ -320,12 +338,11 @@ try {
     "--import",
     "--json",
   ]);
-  observations.initial_recalled = await waitForRecall(
-    "recall-initial",
+  observations.initial_queued = await waitForQueued(
     "Linux lifecycle initial phrase",
   );
-  if (!observations.initial_recalled)
-    throw new Error("initial import was not recalled");
+  if (!observations.initial_queued)
+    throw new Error("initial import was not queued for the SDK");
   status.import = "passed";
 
   writeFileSync(
@@ -338,12 +355,11 @@ try {
     [0],
     30_000,
   );
-  observations.append_recalled = await waitForRecall(
-    "recall-appended",
+  observations.append_queued = await waitForQueued(
     "Linux lifecycle appended phrase",
   );
-  if (!observations.append_recalled)
-    throw new Error("appended turn was not recalled");
+  if (!observations.append_queued)
+    throw new Error("appended turn was not queued for the SDK");
   status.append_sync = "passed";
 
   const beforeUpgrade = await waitForRunningStatus("status-before-upgrade");
@@ -378,12 +394,11 @@ try {
   if (!observations.idempotent_upgrade_instance_id_changed) {
     throw new Error("idempotent upgrade did not restart the Runtime");
   }
-  observations.post_upgrade_recalled = await waitForRecall(
-    "recall-after-upgrade",
+  observations.post_upgrade_queued = await waitForQueued(
     "Linux lifecycle appended phrase",
   );
-  if (!observations.post_upgrade_recalled) {
-    throw new Error("idempotent upgrade lost previously recalled data");
+  if (!observations.post_upgrade_queued) {
+    throw new Error("idempotent upgrade lost previously queued data");
   }
   status.upgrade_idempotent = "passed";
 

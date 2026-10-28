@@ -144,13 +144,12 @@ button svg {
   background: #edf0f3;
 }
 .om-option-menu-panel {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 1100;
   max-height: 280px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   background: #fff;
   border: 1px solid #c0ccd5;
@@ -178,10 +177,8 @@ button svg {
 .om-option-menu-panel [role="option"]:hover:not(:disabled),
 button.om-option-menu-button:hover:not(:disabled),
 .cold-start button.om-option-menu-button:hover:not(:disabled),
-.cold-start .om-option-menu-panel button[role="option"]:hover:not(:disabled),
 .r6-settings button.om-option-menu-button:hover:not(:disabled),
-.r6-settings .om-option-menu-panel button[role="option"]:hover:not(:disabled),
-.r6-memory .om-option-menu-panel button[role="option"]:hover:not(:disabled) {
+.r6-memory button.om-option-menu-button:hover:not(:disabled) {
   color: #262a2e;
   background: #e7eef2;
   border-color: transparent;

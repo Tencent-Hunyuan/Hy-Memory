@@ -195,7 +195,7 @@ export function ApplicationsHome({
     null,
   );
   const [syncHealth, setSyncHealth] = useState<LiveSyncHealth[]>([]);
-  const [failed, setFailed] = useState(false);
+  const [summaryFailures, setSummaryFailures] = useState(0);
   const [recentCall, setRecentCall] = useState<CallEvent | null>(null);
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [callState, setCallState] = useState<
@@ -554,13 +554,17 @@ export function ApplicationsHome({
       busy = false;
       if (stopped) return;
       if (home.status === "fulfilled") {
-        setFailed(false);
         // stale=true 表示这轮读取超时，数字不代表现状：保留上一次的概览，
-        // 等 10 秒后的下一轮轮询补上，绝不清零也不报错。
-        if (!("stale" in home.value) || !home.value.stale)
+        // 等 10 秒后的下一轮轮询补上。重复 stale 仍要进入可恢复状态，
+        // 不能永远停在“正在核对”。
+        if (!("stale" in home.value) || !home.value.stale) {
+          setSummaryFailures(0);
           setSummary(home.value);
+        } else {
+          setSummaryFailures((count) => count + 1);
+        }
       } else {
-        setFailed(true);
+        setSummaryFailures((count) => count + 1);
       }
       if (state.status === "fulfilled") setProcessing(state.value);
       if (sync.status === "fulfilled") setSyncHealth(sync.value);
@@ -578,7 +582,8 @@ export function ApplicationsHome({
   }, [active, requestKey]);
   const visible = summary;
   const latest = visible?.latest;
-  const summaryUnavailable = failed;
+  const summaryUnavailable = visible === null && summaryFailures >= 2;
+  const summaryStale = visible !== null && summaryFailures >= 2;
   const hasCall =
     recentCall !== null &&
     (callState === "ready" || callState === "incomplete");
@@ -642,7 +647,7 @@ export function ApplicationsHome({
       ? t("apps.running")
       : sedimentation?.enabled === false
         ? t("apps.paused")
-        : t("apps.unchecked");
+        : t("apps.checkingStatus");
   const stateDetail =
     sedimentation?.enabled === false
       ? t("apps.stoppedNew")
@@ -821,42 +826,27 @@ export function ApplicationsHome({
               <h2>{t("apps.overview")}</h2>
             </header>
             <div className="r6-home-metrics">
-              <div>
+              <div role="status" aria-live="polite" aria-atomic="true">
                 <p>{t("apps.memories")}</p>
-                {/* The figure slot used to hold the word 读取中 while the first
-                  read was in flight, which is how "大数字不可见" (D51) shows up
-                  on a slow link: the biggest type on the page spends the first
-                  frame saying something that is not a number. A bar of the same
-                  height reserves the digits instead, and the wording moves to a
-                  live region so screen readers still hear it. 暂无法读取 stays a
-                  word, because that is a settled state rather than progress. */}
-                {!visible && !summaryUnavailable ? (
-                  <>
-                    <p className="r6-home-figure">
-                      <span
-                        className="r6-home-figure-pending"
-                        aria-hidden="true"
-                      />
-                    </p>
-                    <small role="status">{t("apps.readingCount")}</small>
-                  </>
-                ) : (
-                  <>
-                    <p className="r6-home-figure">
-                      <strong className={visible ? "" : "r6-home-word"}>
-                        {visible
-                          ? new Intl.NumberFormat(locale).format(
-                              visible.memory_count,
-                            )
-                          : t("apps.unreadable")}
-                      </strong>
-                      {visible && t("apps.unit") ? (
-                        <i>{t("apps.unit")}</i>
-                      ) : null}
-                    </p>
-                    <small>{t("apps.scope")}</small>
-                  </>
-                )}
+                <p className="r6-home-figure">
+                  <strong>
+                    {new Intl.NumberFormat(locale).format(
+                      visible?.memory_count ?? 0,
+                    )}
+                  </strong>
+                  {t("apps.unit") ? <i>{t("apps.unit")}</i> : null}
+                </p>
+                <small>
+                  {visible
+                    ? summaryStale
+                      ? t("apps.showingPrevious")
+                      : t("apps.scope")
+                    : summaryUnavailable
+                      ? t("apps.countWillUpdate")
+                      : summaryFailures
+                        ? t("apps.startingRetry")
+                        : t("apps.readingCount")}
+                </small>
               </div>
               <div>
                 <p>{t("apps.processing")}</p>
@@ -867,12 +857,16 @@ export function ApplicationsHome({
                 <p>{t("apps.recentUpdate")}</p>
                 <strong className={time ? "r6-home-time" : "r6-home-word"}>
                   {time ??
-                    (visible ? t("apps.notGenerated") : t("apps.unchecked"))}
+                    (visible
+                      ? t("apps.notGenerated")
+                      : t("apps.checkingRecent"))}
                 </strong>
                 <small>
                   {time
                     ? `${latestClock?.today ? `${t("apps.today")}· ` : ""}${t("apps.saved")}`
-                    : t("apps.separate")}
+                    : visible
+                      ? t("apps.separate")
+                      : t("apps.recentWillUpdate")}
                 </small>
               </div>
             </div>
@@ -972,7 +966,9 @@ export function ApplicationsHome({
                               .join(" · ")
                           : activity === "importing"
                             ? t("apps.savingConversations")
-                            : t("apps.waitingMemories")}
+                            : activity === "loading"
+                              ? t("apps.recentWillUpdate")
+                              : t("apps.waitingMemories")}
                   </small>
                 </section>
                 {(activity === "unavailable" ||

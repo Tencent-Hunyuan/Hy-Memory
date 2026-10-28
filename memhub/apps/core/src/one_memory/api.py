@@ -2980,11 +2980,13 @@ def create_app(
         """
         try:
             client = await _sdk_client_handle(app).client()
-            # The map draws the page the list shows, so it reads the same
-            # source filter and window rather than the newest memories overall.
+            # The map visualizes the active source scope, independently of the
+            # left list's 20-row pagination window.
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
+                scene="all",
+                statuses=["active"],
                 include_sources=[source] if source else None,
                 limit=limit,
                 offset=offset,
@@ -3150,25 +3152,25 @@ def create_app(
             raise HTTPException(status_code=422, detail="memory_task_requires_experience")
         namespace = _namespace_kwargs(request.kind, request.variant)
         try:
-            client = await app.state.sdk_write_coordinator.client()
-            update_kwargs: dict[str, object] = dict(namespace)
-            if request.task is not None:
-                update_kwargs["task"] = request.task
-            result = await asyncio.to_thread(
-                client.update, memory_id, request.content, **update_kwargs
-            )
-            if not isinstance(result, dict):
-                raise HySdkError("hy_memory_update_rejected")
-            if result.get("success") is not True:
-                if "not found" in str(result.get("error_message") or ""):
-                    raise HTTPException(status_code=404, detail="memory_not_found")
-                raise HySdkError("hy_memory_update_rejected")
-            # The SDK names the namespace it wrote; read that one back.
-            if result.get("kind") in {"experience", "fact"}:
-                namespace = {"kind": result["kind"]}
-                if result.get("variant") in {"working", "coding"}:
-                    namespace["variant"] = result["variant"]
-            raw = await asyncio.to_thread(client.get, memory_id, **namespace)
+            async with app.state.sdk_write_coordinator.use_client() as client:
+                update_kwargs: dict[str, object] = dict(namespace)
+                if request.task is not None:
+                    update_kwargs["task"] = request.task
+                result = await asyncio.to_thread(
+                    client.update, memory_id, request.content, **update_kwargs
+                )
+                if not isinstance(result, dict):
+                    raise HySdkError("hy_memory_update_rejected")
+                if result.get("success") is not True:
+                    if "not found" in str(result.get("error_message") or ""):
+                        raise HTTPException(status_code=404, detail="memory_not_found")
+                    raise HySdkError("hy_memory_update_rejected")
+                # The SDK names the namespace it wrote; read that one back.
+                if result.get("kind") in {"experience", "fact"}:
+                    namespace = {"kind": result["kind"]}
+                    if result.get("variant") in {"working", "coding"}:
+                        namespace["variant"] = result["variant"]
+                raw = await asyncio.to_thread(client.get, memory_id, **namespace)
             memory = None if raw is None else HySdkMemoryRecord.from_sdk(raw)
         except HTTPException:
             raise
@@ -3197,10 +3199,10 @@ def create_app(
     ) -> Response:
         _check_memory_namespace(kind, variant)
         try:
-            client = await app.state.sdk_write_coordinator.client()
-            result = await asyncio.to_thread(
-                client.delete, memory_id, **_namespace_kwargs(kind, variant)
-            )
+            async with app.state.sdk_write_coordinator.use_client() as client:
+                result = await asyncio.to_thread(
+                    client.delete, memory_id, **_namespace_kwargs(kind, variant)
+                )
             if not isinstance(result, dict):
                 raise HySdkError("hy_memory_delete_rejected")
             error_code = result.get("error_code")
@@ -3442,9 +3444,9 @@ def create_app(
         """Retry unknown writes only behind the user's explicit confirmation."""
         del request
         reconciled = await _sdk_memory_runtime(app).reconcile_unknown_outputs()
-        from one_memory.memory_server.durable_queue import DurableWriteQueue
-
-        queue = DurableWriteQueue(app.state.memory_write_queue_path)
+        # The startup queue knows the authority. A fresh legacy-mode queue
+        # would recreate the job-evidence table the SDK cutover dropped.
+        queue = app.state.memory_write_queue
         unknown = queue.unknown_jobs(limit=2048)
         if app.state.memory_authority is MemoryAuthority.LEGACY:
             for job in unknown:

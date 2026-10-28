@@ -52,6 +52,7 @@ from one_memory.memory_tasks import (
 from one_memory.memory_tasks import (
     POLICY_STOPPED_CODES as _TASK_POLICY_STOPPED_CODES,
 )
+from one_memory.sdk_migration_log import error_chain_text
 from one_memory.service_levels import ServiceLevel, service_level_context
 
 logger = logging.getLogger(__name__)
@@ -241,14 +242,16 @@ PERMISSION_REQUIRED_CODES = frozenset(
 )
 
 #: Model-side codes the SDK write coordinator raises before it can lease a
-#: client (no active profile, missing credential, secure storage down). They prove
-#: nothing was sent, so the write parks instead of being lost. Transport codes
-#: that can arrive after a request was in flight stay `unknown`.
+#: client (no active profile, missing credential, secure storage down, or the
+#: client failed to construct). They prove nothing was sent, so the write
+#: parks instead of being lost. Transport codes that can arrive after a
+#: request was in flight stay `unknown`.
 MODEL_NOT_READY_CODES = frozenset(
     {
         "model_profile_not_active",
         "model_secret_unavailable",
         "secure_storage_unavailable",
+        "hy_memory_client_unavailable",
     }
 )
 
@@ -291,6 +294,23 @@ _VALID_JOB_STATES = frozenset(
 
 #: A row in one of these states can never be moved back to a live one.
 _TERMINAL_WRITE_STATES = frozenset({COMPLETED, FAILED, DEAD, CANCELLED})
+
+#: The legacy task rows a write job can be linked to. The SDK cutover drops
+#: them (`target_schema.LEGACY_TABLES_IN_DROP_ORDER`, inputs before tasks), so
+#: the job-only paths must not assume any of them.
+_LEGACY_TASK_LINK_TABLES = ("memory_tasks", "memory_task_inputs", "memory_write_job_evidence")
+
+
+def _legacy_task_links_present(connection: sqlite3.Connection) -> bool:
+    present = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?)",
+            _LEGACY_TASK_LINK_TABLES,
+        )
+    }
+    return present == set(_LEGACY_TASK_LINK_TABLES)
+
 
 #: Columns a current schema declares but an older `memory_write_jobs` may lack.
 #: `CREATE TABLE IF NOT EXISTS` is a no-op for an existing table, so without
@@ -1982,21 +2002,24 @@ class DurableWriteQueue:
                 or str(row["last_error"]) in NON_RETRYABLE_POST_WRITE_CODES
             ):
                 return 0
-            connection.execute(
-                """
-                UPDATE memory_tasks
-                SET status='pending', runner_token=NULL, attempts=0,
-                    last_error_code='model_content_manual_retry_requested', updated_at=?
-                WHERE status='unknown' AND task_id IN (
-                    SELECT inputs.task_id
-                    FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
-                    JOIN memory_write_job_evidence AS linked
-                      ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
-                    WHERE linked.job_id=?
+            # After the SDK cutover the legacy task tables are gone and the
+            # job is the only row to reset.
+            if not self.sdk_authority and _legacy_task_links_present(connection):
+                connection.execute(
+                    """
+                    UPDATE memory_tasks
+                    SET status='pending', runner_token=NULL, attempts=0,
+                        last_error_code='model_content_manual_retry_requested', updated_at=?
+                    WHERE status='unknown' AND task_id IN (
+                        SELECT inputs.task_id
+                        FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+                        JOIN memory_write_job_evidence AS linked
+                          ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+                        WHERE linked.job_id=?
+                    )
+                    """,
+                    (now, job_id),
                 )
-                """,
-                (now, job_id),
-            )
             changed = connection.execute(
                 """
                 UPDATE memory_write_jobs
@@ -2098,9 +2121,7 @@ class DurableWriteQueue:
                 f"WHERE state=? AND job_id IN ({placeholders})",
                 (PENDING, now, UNKNOWN, *job_ids),
             )
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
-            ).fetchone():
+            if _legacy_task_links_present(connection):
                 connection.execute(
                     f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
                     f"last_error_code='model_content_reconciled_absent_retry', updated_at=? "
@@ -2158,9 +2179,7 @@ class DurableWriteQueue:
                 f"WHERE state=? AND attempts=1 AND job_id IN ({placeholders})",
                 (PENDING, now, UNKNOWN, *job_ids),
             )
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
-            ).fetchone():
+            if _legacy_task_links_present(connection):
                 connection.execute(
                     f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
                     f"last_error_code='model_content_unknown_auto_retry', updated_at=? "
@@ -2177,6 +2196,14 @@ class DurableWriteQueue:
     def resolve_unknown_from_linked_output(self, job_id: str) -> bool:
         """Close an unknown durable row when local governance output proves success."""
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            if not (
+                _legacy_task_links_present(connection)
+                and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_task_outputs'"
+                ).fetchone()
+            ):
+                # No legacy governance output survives the SDK cutover.
+                return False
             row = connection.execute(
                 """
                 SELECT 1
@@ -2559,9 +2586,22 @@ async def execute_job(
         if code == "model_profile_not_active":
             logger.debug("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
         elif state in PARKED_STATES:
-            logger.info("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
+            logger.info(
+                "durable_write_job_parked job_id=%s error_code=%s chain=%s",
+                job_id,
+                code,
+                error_chain_text(error),
+            )
         else:
-            logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
+            # Where it failed, as `file:line:function` frames of the exception
+            # chain, never its message: `error_code=AttributeError` alone
+            # named no location.
+            logger.error(
+                "durable_write_job_failed job_id=%s error_code=%s chain=%s",
+                job_id,
+                code,
+                error_chain_text(error),
+            )
         return
     await in_the_background(
         queue.settle,

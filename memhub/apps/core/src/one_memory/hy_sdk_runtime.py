@@ -67,6 +67,16 @@ _STORE_GATE = threading.Condition()
 _OFFLINE_STORES: set[Path] = set()
 _OPENING: dict[Path, int] = {}
 
+# One client constructs at a time per home, its first-time store setup
+# included. The constructor opens Chroma's `PersistentClient`, and two first
+# opens on one directory race over that same unlocked System cache. On a
+# clean install the write drain's client and a UI read client started in the
+# same second; neither reached `VectorStore ready`, and the first write job
+# was lost as unknown. Taken inside `acquire_client`, after the offline gate
+# and never while `_STORE_GATE` is held, so it cannot deadlock with
+# `hold_stores_offline`, which refuses while `_OPENING` counts a client.
+_CONSTRUCTING: dict[Path, threading.Lock] = {}
+
 
 class LocalOnnxEmbeddingService:
     """Public ``EmbeddingService`` implementation backed by MemHub's ONNX model."""
@@ -382,13 +392,16 @@ def _acquire_client(
     embedding_service: LocalOnnxEmbeddingService | None = None
     if (profile.embedding_provider_kind or profile.provider_kind) is ProviderKind.LOCAL_ONNX:
         embedding_service = LocalOnnxEmbeddingService()
+    with _STORE_GATE:
+        constructing = _CONSTRUCTING.setdefault(key, threading.Lock())
     try:
-        client = HyMemoryClient(
-            config=config,
-            mode="ultra" if graph_store_enabled() else "pro",
-            runtime=runtime,
-            embedding_service=embedding_service,
-        )
+        with constructing:
+            client = HyMemoryClient(
+                config=config,
+                mode="ultra" if graph_store_enabled() else "pro",
+                runtime=runtime,
+                embedding_service=embedding_service,
+            )
     except BaseException:
         _release_runtime(key)
         raise

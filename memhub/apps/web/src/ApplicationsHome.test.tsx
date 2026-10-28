@@ -172,7 +172,7 @@ it.each([
     expect(sedimentation).toHaveBeenCalledOnce();
   },
 );
-it("localizes failure and empty states without leaking errors", async () => {
+it("localizes startup recovery and empty states without leaking errors", async () => {
   summary.mockRejectedValue(new Error("synthetic_private_error"));
   Object.assign(window.oneMemory ?? {}, {
     getLanguagePreference: vi
@@ -191,12 +191,15 @@ it("localizes failure and empty states without leaking errors", async () => {
     </LanguageProvider>,
   );
   expect(
-    await screen.findByText("No se puede leer el estado de las memorias"),
+    await screen.findByText(
+      "El servicio se está iniciando; se actualizará automáticamente",
+    ),
   ).toBeTruthy();
+  expect(screen.getByText("0")).toBeTruthy();
   expect(screen.getByText("Aún no hay aplicaciones para mostrar")).toBeTruthy();
   expect(
-    screen.getByRole("button", { name: "Reintentar lectura" }),
-  ).toBeTruthy();
+    screen.queryByRole("button", { name: "Reintentar lectura" }),
+  ).toBeNull();
   expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
 it("shows latest recorded call separately without exposing recent-update detail entries", async () => {
@@ -765,7 +768,7 @@ it("keeps authoritative home and processing data when only the source snapshot b
   expect(screen.getAllByText("整理中")).toHaveLength(2);
   expect(screen.queryByText("状态待核对")).toBeNull();
 });
-it("does not turn a failed home summary into zero or expose a private error", async () => {
+it("keeps a neutral zero while the first home summary read recovers", async () => {
   summary.mockRejectedValue(new Error("private offline detail"));
   render(
     <ApplicationsHome
@@ -775,9 +778,116 @@ it("does not turn a failed home summary into zero or expose a private error", as
       onSettings={() => {}}
     />,
   );
-  await waitFor(() => expect(screen.getByText("暂无法读取")).toBeTruthy());
-  expect(screen.queryByText("0")).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+  );
+  expect(screen.getByText("0")).toBeTruthy();
+  expect(screen.getByText("正在准备记忆概览")).toBeTruthy();
+  expect(screen.queryByText(/暂时?无法读取|读取失败/)).toBeNull();
   expect(document.body.textContent).not.toContain("private offline detail");
+});
+it("offers a calm retry after repeated home summary failures", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    summary.mockRejectedValue(new Error("private offline detail"));
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("记忆概览还没准备好")).toBeTruthy();
+    expect(
+      screen.getByText("后台恢复后会自动更新，也可以重新读取。"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新读取" })).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("counts repeated stale summaries and recovers on the next confirmed read", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stale = {
+      memory_count: 0,
+      latest: null,
+      observed_at: "2026-09-19T00:00:00Z",
+      stale: true,
+    };
+    summary
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({
+        memory_count: 4,
+        latest: null,
+        observed_at: "2026-09-19T00:01:00Z",
+      });
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("记忆概览还没准备好")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByText("4")).toBeTruthy();
+    expect(screen.queryByText("记忆概览还没准备好")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("labels a retained count as previous data after repeated stale reads", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stale = {
+      memory_count: 0,
+      latest: null,
+      observed_at: "2026-09-19T00:00:00Z",
+      stale: true,
+    };
+    summary
+      .mockResolvedValueOnce({
+        memory_count: 601,
+        latest: null,
+        observed_at: "2026-09-19T00:00:00Z",
+      })
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({
+        memory_count: 4,
+        latest: null,
+        observed_at: "2026-09-19T00:01:00Z",
+      });
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    expect(await screen.findByText("601")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(screen.getByText("601")).toBeTruthy();
+    expect(screen.getByText("正在显示上次数据，稍后自动更新")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("4")).toBeTruthy();
+    expect(screen.queryByText("正在显示上次数据，稍后自动更新")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 it("never calls a recall event a success when only stored memories are available", async () => {
   render(
@@ -1200,7 +1310,7 @@ it("keeps the conversation-sync checking copy before the first home read", () =>
   expect(screen.queryByText(/个应用已开启/)).toBeNull();
 });
 
-it("does not claim there are no memories while the first summary read is pending", async () => {
+it("shows a provisional zero while the first summary read is pending", async () => {
   summary.mockImplementation(() => new Promise(() => {}));
   history.mockResolvedValue({
     available: true,
@@ -1216,7 +1326,9 @@ it("does not claim there are no memories while the first summary read is pending
       onSettings={() => {}}
     />,
   );
-  await screen.findByText("正在读取动态");
+  await screen.findByText("正在准备记忆概览");
+  expect(screen.getByText("0")).toBeTruthy();
+  expect(screen.getByText("正在核对本机记忆…")).toBeTruthy();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
 });
 
