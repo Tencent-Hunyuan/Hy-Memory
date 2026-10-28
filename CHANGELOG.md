@@ -68,6 +68,22 @@ Hy Memory and MemHub are versioned and released independently.
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
 
+## Hy Memory 2.0.7 — 2026-10-28
+
+- Coding and working experiences and facts now keep their conversation time.
+  `add(..., memory_at=...)` reached only the chat path before; the
+  productivity path dropped it, so every experience had only its write time
+  and MemHub showed them as "时间未知" (time unknown). `coding_memory_meta`
+  and `working_fact` gain a nullable `memory_at` column (epoch seconds) in
+  both the working and coding stores; existing databases get it on open, and
+  their old rows stay `None`. Without `memory_at` a write uses the time the
+  request arrived, as chat does. When an experience is updated by a later
+  conversation it keeps the later of the two times.
+- `list_memories` (`scene="coding"`, `"working"` and `"all"`), `get` and
+  `search` return `memory_at` for experiences and facts in the same field and
+  format as chat (epoch seconds, `None` when unknown). Experience search
+  results now also carry `created_at`.
+
 ## Hy Memory 2.0.6 — 2026-10-27
 
 - Published
