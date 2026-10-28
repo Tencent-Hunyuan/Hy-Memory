@@ -4,6 +4,12 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+## MemHub 1.0.5 — 2026-10-28
+
+Build 35, on `hy-memory==2.0.8`. Linux x64/arm64 Runtime and macOS arm64
+App and Runtime. Upgrading from 1.0.4 migrates the existing library to SDK
+authority on first launch.
+
 - MemHub turns off the HY pipeline log and trace at every diagnostic level
   (hy-memory 2.0.8 `MEMORY_PIPELINE_LOG_ENABLED=false`,
   `MEMORY_PIPELINE_TRACE_ENABLED=false`), so the per-step JSONL files under
