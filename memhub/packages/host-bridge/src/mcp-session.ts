@@ -127,6 +127,8 @@ export class McpSession {
   }
 
   private async listedTools() {
+    // Any change to this set moves MCP_TOOL_NAMES and MCP_TOOLSET_VERSION in
+    // `mcp-toolset.ts`, so installed entries change and hosts relist.
     const definitions = [
       recallToolDefinition(),
       writeToolDefinition(),

@@ -226,6 +226,7 @@ describe("host runtime attestation", () => {
     "repairInstalledCommand",
     "repairInstalledCommands",
     "syncStaleInstalls",
+    "refreshInstalledHosts",
     "previewInstall",
     "install",
     "setPermission",

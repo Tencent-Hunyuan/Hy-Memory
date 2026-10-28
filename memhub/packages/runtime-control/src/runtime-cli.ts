@@ -600,6 +600,7 @@ export function guardedPermissions(
     "previewSyncHook",
     "applySyncHook",
     "syncStaleInstalls",
+    "refreshInstalledHosts",
   ]);
   return new Proxy(owner, {
     get(target, property, receiver) {
@@ -739,10 +740,17 @@ export async function createRuntimeService(
       ).filter((host) => host.hostId !== "openclaw");
       await verifyHostRuntime().then(
         async () => {
-          await permissions.repairInstalledCommands(
+          // Every Runtime start after an upgrade, the App's or `memhub
+          // upgrade`'s, comes through here first; once per build after that.
+          await permissions.refreshInstalledHosts(
             hosts.map((host) => host.layout),
+            {
+              build:
+                config.buildIdentity?.buildNumber ??
+                config.buildIdentity?.version,
+              diagnostics: hostDiagnostics,
+            },
           );
-          await permissions.syncStaleInstalls(hosts.map((host) => host.layout));
         },
         () => undefined,
       );

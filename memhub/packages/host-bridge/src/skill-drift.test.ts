@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { applyCursorInstall, planCursorInstall } from "./cursor-installer.js";
+import { MCP_TOOLSET_KEY, MCP_TOOLSET_VERSION } from "./mcp-toolset.js";
 import {
   applyRecallInstall,
   applyRecallUninstall,
@@ -15,6 +16,7 @@ import {
   planRecallUninstall,
   SKILL_MARKER,
   SKILL_VERSION,
+  verifyRecallInstall,
 } from "./recall-installer.js";
 import {
   checkSkillDrift,
@@ -385,6 +387,59 @@ describe("skill drift (R-33)", () => {
       state: "stale",
       detail: "more than one managed capture command is installed",
     });
+  }, 30_000);
+
+  it("marks stale an MCP entry written before the tool set was stamped, and sync stamps it", async () => {
+    // Our entry is otherwise identical across upgrades, so hosts that cache a
+    // tool list by config fingerprint keep the removed tools until it changes.
+    const cursorDir = await fixtureDir();
+    const discovery = path.join(cursorDir, "broker.json");
+    await writeFile(discovery, "{}\n");
+    await applyCursorInstall(
+      await planCursorInstall(options(cursorDir, discovery)),
+    );
+    const layout = cursorLayout(cursorDir);
+    const configPath = layout.configPath as string;
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    expect(config.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+      MCP_TOOLSET_VERSION,
+    );
+    // What an earlier release wrote and journaled: the same entry, no stamp.
+    delete config.mcpServers["one-memory"].env[MCP_TOOLSET_KEY];
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const journal = JSON.parse(await readFile(layout.journalPath, "utf8"));
+    journal.installed_server_hash = createHash("sha256")
+      .update(JSON.stringify(config.mcpServers["one-memory"]))
+      .digest("hex");
+    await writeFile(layout.journalPath, `${JSON.stringify(journal)}\n`);
+
+    // Still intact as installed, so the link is not reported broken...
+    await expect(verifyRecallInstall(layout)).resolves.toMatchObject({
+      hostId: "cursor",
+    });
+    // ...but stale against this release, and safe to sync without asking.
+    await expect(
+      checkSkillDrift(layout, runtime(discovery)),
+    ).resolves.toMatchObject({
+      state: "stale",
+      detail: "the MCP entry predates the tool set this MemHub serves",
+    });
+    const sync = await planSkillSync(layout, runtime(discovery));
+    expect(sync?.requiresConfirmation).toBe(false);
+    if (sync === null) throw new Error("expected a stale entry sync");
+    await applyRecallInstall(sync.plan);
+
+    const synced = JSON.parse(await readFile(configPath, "utf8")) as {
+      mcpServers: Record<string, { env: Record<string, string> }>;
+    };
+    expect(synced.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+      MCP_TOOLSET_VERSION,
+    );
+    await expect(
+      checkSkillDrift(layout, runtime(discovery)),
+    ).resolves.toMatchObject({ state: "in_sync" });
   }, 30_000);
 
   it("requires recall for dependent answers, not on every unrelated turn", async () => {

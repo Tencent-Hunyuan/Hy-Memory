@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyRecallInstall,
+  MCP_TOOLSET_VERSION,
   mcpConfigPath,
   opencodeLayout,
   planRecallInstall,
@@ -46,6 +47,7 @@ describe("OpenCode recall installer", () => {
         ELECTRON_RUN_AS_NODE: "1",
         ONE_MEMORY_MANAGED_BY: "one-memory",
         ONE_MEMORY_BROKER_DISCOVERY: "/opt/one-memory/runtime.json",
+        ONE_MEMORY_MCP_TOOLSET: MCP_TOOLSET_VERSION,
       },
       enabled: true,
     });
