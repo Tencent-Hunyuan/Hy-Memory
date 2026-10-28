@@ -4,6 +4,18 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub turns off the HY pipeline log and trace at every diagnostic level
+  (hy-memory 2.0.8 `MEMORY_PIPELINE_LOG_ENABLED=false`,
+  `MEMORY_PIPELINE_TRACE_ENABLED=false`), so the per-step JSONL files under
+  `hy-memory/governed-v2/logs/` and the `pipeline_logs` rows stop growing.
+  The Debug panel no longer shows the HY pipeline section. Existing files are
+  left in place.
+- HY SDK text logs are written once, to `hy_memory.log`. They are no longer
+  copied to `service.log` and `service-error.log` through the SDK's
+  stdout/stderr streams. SDK warnings and errors also go to `core.log`, so the
+  Debug panel still shows them. A live switch of the diagnostic level now also
+  changes the level of `hy_memory.log`.
+
 - MemHub shows when working and coding experiences were talked about. After
   the SDK upgrade every one of them read "时间未知" (time unknown) because the
   SDK never stored their conversation time; hy-memory 2.0.7 stores it and

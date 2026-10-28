@@ -79,7 +79,7 @@
 | `test_database_file_permissions.py` | `contract` | 覆盖 a new main database is readable by its owner alone、the wal sidecars are not left world readable、a database from an older build is tightened on open 场景。 |
 | `test_db_session_utc.py` | `contract` | The MySQL session must be pinned to UTC. |
 | `test_derived_echo.py` | `contract` | A host that saves our injection back must not mint a new user decision. |
-| `test_detailed_logging.py` | `contract` | 覆盖 detailed pipeline logging defaults off and survives restart、live log level applies to full hy and provider call chain、info collects hy info without enabling debug pipeline content 等 7 个场景。 |
+| `test_detailed_logging.py` | `contract` | 覆盖 detailed logging defaults off and survives restart、hy pipeline log and trace stay off at every level、live level change reaches the hy text log file 等 7 个场景。 |
 | `test_diagnostic_log.py` | `contract` | 覆盖 high frequency success events are summarized but warnings are not、structured log is private correlated and owner only、arbitrary detail and absolute stack are rejected 等 14 个场景。 |
 | `test_diagnostic_log_durability.py` | `contract` | 写线程报告的「已落盘」必须是真的。 |
 | `test_diagnostic_log_off_loop.py` | `contract` | 诊断日志不得在调用线程上做磁盘 I/O。 |
@@ -112,6 +112,7 @@
 | `test_hy_log_privacy.py` | `contract` | HY SDK records are not rewritten by One Memory's logging setup. |
 | `test_hy_network_egress.py` | `contract` | Where a real HY client is allowed to send bytes, and where it is not. |
 | `test_hy_runtime_config.py` | `contract` | MEMORY.md is the audited record of what we send HY; keep it answerable. |
+| `test_hy_sdk_log_routing.py` | `contract` | HY SDK text logs go to hy_memory.log only, with warnings also in core.log. |
 | `test_hy_step_trace_switch.py` | `contract` | Rule 15: the per-step HY trace is off unless the debug tier asks for it. |
 | `test_import_api.py` | `integration` | 覆盖 resume during cleanup returns conflict without internal error、authorize detect import and revoke api flow、protected api rejects missing token and foreign origin 等 5 个场景。 |
 | `test_import_control_races_review.py` | `contract` | Read-only review repro: real runner/store, synthetic delayed adapter cleanup. |
@@ -307,4 +308,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 302 个测试文件。
+共 303 个测试文件。

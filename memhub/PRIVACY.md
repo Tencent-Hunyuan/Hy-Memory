@@ -29,10 +29,12 @@ prompt/response、密钥、访问令牌或完整本地路径。结构化日志�
 文件。详细合同见
 [`docs/contracts/diagnostic-logging.md`](docs/contracts/diagnostic-logging.md)。
 
-用户显式把诊断级别切换为 `debug` 时，Core 会启用 HY pipeline trace，并将
-`MEMORY_LOG_LLM_CONTENT` 设为 `true`。该模式会把完整模型 prompt/response 写入本地调试
-日志，其中可能包含获授权的对话正文和模型输出；它只应用于有意识的故障排查，不应长期
-开启，也不应在未经检查和脱敏时分享相关日志。切回 `info` 会停止后续正文记录，但不会
+HY pipeline 日志与 trace 在任何级别下都关闭。HY SDK 的文本日志只写入
+`hy-memory/governed-v2/logs/hy_memory.log`，其中的 WARNING 及以上同时写入 `core.log`；
+SDK 不在 INFO 及以上级别记录对话或记忆正文。用户显式把诊断级别切换为 `debug` 时，Core 将
+`MEMORY_LOG_LLM_CONTENT` 设为 `true`。该模式会把完整模型 prompt/response 写入
+`hy_memory.log` 的 DEBUG 行，其中可能包含获授权的对话正文和模型输出；它只应用于有意识的
+故障排查，不应长期开启，也不应在未经检查和脱敏时分享相关日志。切回 `info` 会停止后续正文记录，但不会
 自动删除此前已写入的调试文件。
 
 具体行为以当前源码、网络请求实现和发布说明为准。发现实现与本说明不一致时，请按
