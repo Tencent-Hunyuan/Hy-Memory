@@ -36,7 +36,8 @@ def count_tokens(text: str) -> int:
     enc = _get_encoder()
     if enc:
         try:
-            return len(enc.encode(text))
+            # Quoted control-token spellings are ordinary input text.
+            return len(enc.encode(text, disallowed_special=()))
         except Exception as e:
             logger.debug(f"[token_count] encode failed, char fallback: {e}")
     return max(1, len(text) // 4)
