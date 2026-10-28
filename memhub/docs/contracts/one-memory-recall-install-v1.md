@@ -39,10 +39,12 @@ which talks to a broker on the same machine.
 | `ONE_MEMORY_BROKER_DISCOVERY` | absolute path to the discovery file | How the server finds the running app. Wrong value means recall returns nothing, with no error. |
 | `ONE_MEMORY_MANAGED_BY` | `one-memory` | Marks the entry as ours, so our installer will update or remove it later instead of treating it as a stranger's and leaving it alone. |
 | `ELECTRON_RUN_AS_NODE` | `1` | The MCP entry ships inside the app bundle and is started through the app's own binary. Without this the binary opens the window instead of running the script. |
+| `ONE_MEMORY_MCP_TOOLSET` | tool set version, e.g. `3` | Names the MemHub tool set the entry was written for. MemHub changes it only when tools are added, removed or renamed, so hosts that cache a server's tool list by its launch config restart the server and drop removed tools. The server itself ignores it. |
 
 `ONE_MEMORY_MANAGED_BY` is optional for a hand-made entry. Set it if you want
 MemHub to manage the entry for you afterwards; leave it out if you would
-rather own the entry yourself.
+rather own the entry yourself. `ONE_MEMORY_MCP_TOOLSET` is optional too; a
+managed entry without the current value is rewritten on the next upgrade.
 
 ## 3. MCP hosts
 
@@ -57,7 +59,8 @@ Register a stdio server named `one-memory`. The product name is MemHub; the conf
       "env": {
         "ELECTRON_RUN_AS_NODE": "1",
         "ONE_MEMORY_BROKER_DISCOVERY": "<absolute path to the discovery file>",
-        "ONE_MEMORY_MANAGED_BY": "one-memory"
+        "ONE_MEMORY_MANAGED_BY": "one-memory",
+        "ONE_MEMORY_MCP_TOOLSET": "3"
       }
     }
   }
