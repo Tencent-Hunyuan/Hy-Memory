@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import functools
 from concurrent.futures import Executor
 from typing import Any, Callable, Optional
@@ -39,7 +40,9 @@ async def run_in_executor_guarded(
 
 async def to_thread_guarded(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Guarded equivalent of ``asyncio.to_thread`` using the default pool."""
-    return await run_in_executor_guarded(None, func, *args, **kwargs)
+    context = contextvars.copy_context()
+    call = functools.partial(func, *args, **kwargs)
+    return await run_in_executor_guarded(None, context.run, call)
 
 
 def concurrent_result_guarded(
