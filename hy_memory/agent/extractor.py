@@ -1177,7 +1177,7 @@ class Extractor:
                         if not tc_id:
                             logger.error(
                                 f"[extractor] tool_call_id is empty! "
-                                f"raw tc: {json.dumps(tc_raw, ensure_ascii=False, default=str)[:500]}"
+                                f"raw_keys={list(tc_raw.keys())}"
                             )
                         try:
                             t_res = await tool_registry.dispatch(
@@ -1311,11 +1311,12 @@ class Extractor:
                 if parsed is None:
                     if not all_tool_calls:
                         logger.warning(
-                            f"[extractor] JSON parse failed: {raw_text[:200]}"
+                            f"[extractor] JSON parse failed ({len(raw_text)} chars)"
                         )
+                        logger.debug(f"[extractor] unparsable output: {raw_text[:200]!r}")
                         return ExtractResult(
                             success=False,
-                            error=f"JSON parse failed: {raw_text[:200]}",
+                            error=f"JSON parse failed ({len(raw_text)} chars)",
                             error_code="JSON_PARSE_FAILED",
                             raw_response=raw_text,
                             tokens_used=total_tokens,

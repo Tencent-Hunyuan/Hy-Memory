@@ -3587,8 +3587,9 @@ class BaseReadPipeline(ReadPipeline):
                 f"hidden_l0={len(hidden_l0_hits)} fwd_l6={len(forward_l6)} rev_l6={len(reverse_l6)} "
                 f"fused_l6={len(fused_l6)} graph_intent={len(graph_intention_hits)} "
                 f"returned={len(final_results)} "
-                f"query='{request.query[:80]}'"
+                f"query({len(request.query or '')} chars)"
             )
+            logger.debug(f"[read/{self.VERSION}] query={request.query[:80]!r}")
 
             response.success = True
 

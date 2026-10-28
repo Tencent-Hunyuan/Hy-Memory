@@ -388,7 +388,10 @@ class CodingMemoryReconciler:
                     obj = None
 
         if not obj or not isinstance(obj, dict):
-            logger.warning(f"[coding-reconcile] failed to parse ops output: {text!r}")
+            logger.warning(
+                f"[coding-reconcile] failed to parse ops output ({len(text or '')} chars)"
+            )
+            logger.debug(f"[coding-reconcile] unparsable ops output: {text!r}")
             return []
         ops_raw = obj.get("ops") or []
         if not isinstance(ops_raw, list):
@@ -441,10 +444,10 @@ class CodingMemoryReconciler:
         for op in ops:
             if op.action == "ADD":
                 if op.draft_idx is None or not (0 <= op.draft_idx < len(drafts)):
-                    logger.warning(f"[coding-reconcile] drop invalid ADD: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop invalid ADD: {_op_ref(op)}")
                     continue
                 if op.draft_idx in consumed:
-                    logger.warning(f"[coding-reconcile] drop ADD on consumed draft: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop ADD on consumed draft: {_op_ref(op)}")
                     continue
                 d = drafts[op.draft_idx]
                 memory = self._draft_to_new_memory(d)
@@ -458,18 +461,18 @@ class CodingMemoryReconciler:
 
             elif op.action == "UPDATE":
                 if op.draft_idx is None or not (0 <= op.draft_idx < len(drafts)):
-                    logger.warning(f"[coding-reconcile] drop invalid UPDATE: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop invalid UPDATE: {_op_ref(op)}")
                     continue
                 if not op.target_experience_id:
-                    logger.warning(f"[coding-reconcile] drop UPDATE missing target: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop UPDATE missing target: {_op_ref(op)}")
                     continue
                 if not self._target_was_offered(op, candidates_per_draft):
                     logger.warning(
-                        f"[coding-reconcile] drop UPDATE outside authority scope: {op.to_dict()}"
+                        f"[coding-reconcile] drop UPDATE outside authority scope: {_op_ref(op)}"
                     )
                     continue
                 if op.draft_idx in consumed:
-                    logger.warning(f"[coding-reconcile] drop UPDATE on consumed draft: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop UPDATE on consumed draft: {_op_ref(op)}")
                     continue
                 d = drafts[op.draft_idx]
                 memory = self._draft_to_new_memory(d, experience_id=op.target_experience_id)
@@ -488,17 +491,17 @@ class CodingMemoryReconciler:
 
             elif op.action == "DELETE":
                 if not op.target_experience_id:
-                    logger.warning(f"[coding-reconcile] drop DELETE missing target: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop DELETE missing target: {_op_ref(op)}")
                     continue
                 if not self._target_was_offered(op, candidates_per_draft):
                     logger.warning(
-                        f"[coding-reconcile] drop DELETE outside authority scope: {op.to_dict()}"
+                        f"[coding-reconcile] drop DELETE outside authority scope: {_op_ref(op)}"
                     )
                     continue
                 # DELETE 需要知道 user_id；通过 draft_idx（如有）或第一个 draft 推断
                 user_id = self._infer_user_id(op, drafts)
                 if not user_id:
-                    logger.warning(f"[coding-reconcile] drop DELETE no user_id context: {op.to_dict()}")
+                    logger.warning(f"[coding-reconcile] drop DELETE no user_id context: {_op_ref(op)}")
                     continue
                 try:
                     ok = await self.store.delete(op.target_experience_id, user_id=user_id)
@@ -584,6 +587,14 @@ class CodingMemoryReconciler:
 # ================================================================
 # Helpers
 # ================================================================
+
+def _op_ref(op: ReconcileOp) -> str:
+    """op 的日志引用：只带动作与编号，不带 LLM 写的 reason。"""
+    return (
+        f"action={op.action} draft_idx={op.draft_idx} "
+        f"target={op.target_experience_id}"
+    )
+
 
 def _truncate(s: str, n: int) -> str:
     if not s:
