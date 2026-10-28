@@ -106,6 +106,13 @@ Graph 写入和读侧 Rerank 的高级开关见 [pro_graph_design.md](pro_graph_
 | `MEMORY_ENABLE_QUERY_REWRITE` | `false` | Coding 关闭时控制 default 多-query 是否 rewrite；Coding 开启时多-query 无论此值都会分类并 rewrite |
 | `MEMORY_QUERY_REWRITE_MAX_CHARS` | `1000` | default 多-query rewrite 长度保护 |
 
+Chat 抽取的历史窗口先按写入时间 `gmt_created` 选取最新的 raw 记录，再按时间正序
+拼接上下文；同秒记录以确定性的 point ID 排序。当前正在写入的 raw 在取窗口前排除，
+用户、agent 及 ACTIVE/SHADOW 范围保持不变，不增加 session 隔离。
+Chroma 通过 ID-only 时间范围查询定位窗口，只为选中的记录加载正文；Qdrant 有
+`gmt_created` 整数范围索引时使用服务端排序，旧集合缺少该索引时仅分页扫描 ID 和
+时间戳后选取窗口，不扫描全部正文或向量。普通 `list_by_user` 的默认顺序不变。
+
 默认单 query Search 是零 LLM light search。`search_mode=agentic` 下，单 query、多 queries
 都会执行一次合并的场景判断、rewrite 和时间解析。default 多-query 超过长度保护时不做
 rewrite；Coding 开启时只分类，关闭时零 LLM。

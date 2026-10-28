@@ -420,6 +420,8 @@ class VectorStoreBase(ABC):
         only_latest: bool = False,
         with_vectors: bool = True,
         allow_raw_layer: bool = False,
+        order_by_created: bool = False,
+        exclude_node_ids: Optional[List[str]] = None,
     ) -> List[MemoryNode]:
         """
         枚举用户的记忆节点。
@@ -437,6 +439,9 @@ class VectorStoreBase(ABC):
                 **默认 False**，即返回链上全部版本。clone 等全量复制场景依赖该默认值，
                 改动前务必确认调用方不需要历史版本
             with_vectors: 是否返回 embedding。只需要 payload/tags 时应传 False，避免拉取大向量。
+            order_by_created: 内部历史读取按 gmt_created 倒序取 limit，时间并列按
+                确定性的 point_id 倒序；默认 False 保留后端原有枚举顺序。
+            exclude_node_ids: 在 limit 之前排除的 node_id（例如正在写入的 raw）。
             allow_raw_layer: 是否允许返回 L1_RAW 原始对话层。**默认 False**：
                 对外读路径一律不返回原始对话。仅内部管线（writer 拼多轮对话历史）
                 需要时显式置 True。
@@ -658,6 +663,24 @@ class VectorStoreBase(ABC):
     # ================================================================
     # 通用工具方法（所有后端共用）
     # ================================================================
+
+    @staticmethod
+    def _recent_payload_to_node(payload: Dict[str, Any]) -> MemoryNode:
+        node = VectorStoreBase._payload_to_node(payload)
+        created = payload.get("gmt_created")
+        if isinstance(created, bool) or not isinstance(created, (int, float)):
+            node.gmt_created = None
+        return node
+
+    @staticmethod
+    def _created_payload_key(payload: Dict[str, Any], point_id: str) -> tuple:
+        """Stable creation ordering shared by recent-history backend queries."""
+        created = payload.get("gmt_created")
+        # Missing legacy timestamps sort before dated records, without inventing
+        # a current timestamp while constructing their MemoryNode.
+        if isinstance(created, bool) or not isinstance(created, (int, float)):
+            created = float("-inf")
+        return created, str(point_id).lower()
 
     @staticmethod
     def _node_id_to_point_id(node_id: str) -> str:

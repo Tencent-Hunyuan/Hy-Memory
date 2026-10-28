@@ -2955,6 +2955,8 @@ class MemoryWriter(WritePipeline):
                 limit=max(50, max_turns),
                 with_vectors=False,
                 allow_raw_layer=True,
+                order_by_created=True,
+                exclude_node_ids=[exclude_memory_id] if exclude_memory_id else None,
             )
             if not nodes:
                 return ""
@@ -2963,7 +2965,10 @@ class MemoryWriter(WritePipeline):
             nodes = [n for n in nodes if n.node_id != exclude_memory_id]
 
             # 按 gmt_created 升序（时间正序）
-            nodes.sort(key=lambda n: n.gmt_created or datetime.min)
+            nodes.sort(key=lambda n: (
+                n.gmt_created or datetime.min,
+                VectorStoreBase._node_id_to_point_id(n.node_id).lower(),
+            ))
 
             # 拆分每条 L1_RAW 内容为单条 messages。
             # L1_RAW content 格式: "[user]: xxx\n[assistant]: yyy\n[user]: zzz..."

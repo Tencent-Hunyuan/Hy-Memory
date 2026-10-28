@@ -596,13 +596,14 @@ class FaissVectorStore(VectorStoreBase):
         only_latest: bool = False,
         with_vectors: bool = True,
         allow_raw_layer: bool = False,
+        order_by_created: bool = False,
+        exclude_node_ids: Optional[List[str]] = None,
     ) -> List[MemoryNode]:
         """枚举用户的记忆节点，支持多 user / 多 agent
 
         allow_raw_layer: 默认 False，即不返回 L1_RAW（对外读路径）。
         """
-        import asyncio
-        import numpy as np
+        import heapq
 
         effective_uids = list(user_ids) if user_ids else ([user_id] if user_id else [])
         if not effective_uids:
@@ -622,29 +623,48 @@ class FaissVectorStore(VectorStoreBase):
                 # 只点名了 raw：置为不可能命中的空白名单，结果必然为空集
                 layer_values = {"__blocked__"}
 
+        excluded_ids = set(exclude_node_ids or [])
+
+        def _matching():
+            for pid, entry in self._data.items():
+                payload = entry["payload"]
+                if payload.get("node_id") in excluded_ids:
+                    continue
+                if payload.get("user_id") not in uid_set:
+                    continue
+                if aid_set and payload.get("agent_id") not in aid_set:
+                    continue
+                source = payload.get("source") or "default"
+                if include_set and source not in include_set:
+                    continue
+                if source in exclude_set:
+                    continue
+                if only_latest and not payload.get("is_latest", True):
+                    continue
+                if status_values and payload.get("status", "") not in status_values:
+                    continue
+                if layer_values and payload.get("layer", "") not in layer_values:
+                    continue
+                if not allow_raw_layer and payload.get("layer", "") == _raw_value:
+                    continue
+                yield pid, entry
+
         def _list():
             nodes = []
             with self._lock:
-                for pid, entry in self._data.items():
-                    payload = entry["payload"]
-                    if payload.get("user_id") not in uid_set:
-                        continue
-                    if aid_set and payload.get("agent_id") not in aid_set:
-                        continue
-                    source = payload.get("source") or "default"
-                    if include_set and source not in include_set:
-                        continue
-                    if source in exclude_set:
-                        continue
-                    if only_latest and not payload.get("is_latest", True):
-                        continue
-                    if status_values and payload.get("status", "") not in status_values:
-                        continue
-                    if layer_values and payload.get("layer", "") not in layer_values:
-                        continue
-                    if not allow_raw_layer and payload.get("layer", "") == _raw_value:
-                        continue
-                    node = self._payload_to_node(payload)
+                # Select payloads before materializing nodes or reconstructing
+                # vectors; historical reads need only the newest bounded page.
+                entries = (
+                    heapq.nlargest(
+                        max(0, limit), _matching(),
+                        key=lambda item: self._created_payload_key(item[1]["payload"], item[0]),
+                    ) if order_by_created else _matching()
+                )
+                for _pid, entry in entries:
+                    node = (
+                        self._recent_payload_to_node(entry["payload"])
+                        if order_by_created else self._payload_to_node(entry["payload"])
+                    )
                     # 从 FAISS index 取向量
                     idx = entry.get("idx")
                     if with_vectors and idx is not None and self._index is not None:
