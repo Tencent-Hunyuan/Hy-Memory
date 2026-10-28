@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -56,7 +57,12 @@ class SdkWriteProcessor:
 
         scope = _write_scope(records)
         metadata = _write_metadata(records, scope)
-        client = await self._client_handle.client()
+        try:
+            client = await self._client_handle.client()
+        except Exception as error:
+            # Before `before_hy_invocation`: nothing was sent, so the job
+            # waits and retries instead of being left `unknown`.
+            raise RuntimeError("hy_memory_client_unavailable") from error
 
         if extracted:
             contents = [sanitize_model_input(record.verbatim) for record in records]
@@ -125,7 +131,14 @@ class SdkWriteProcessor:
 
 
 class SdkWriteCoordinator:
-    """Resolve the active model profile, then execute one public SDK write."""
+    """Resolve the active model profile, then execute one public SDK write.
+
+    A model profile change retires the previous profile's handle, but only
+    closes it once nothing uses it. Closing it at once tore the client out
+    from under a write still running on it: the SDK cleared its stores and
+    the SharedRuntime closed mid-`add`, the job failed with AttributeError
+    after HY was invoked, and it was left `unknown`.
+    """
 
     def __init__(
         self,
@@ -142,6 +155,9 @@ class SdkWriteCoordinator:
         self.transport_factory = transport_factory
         self.sedimentation_enabled = sedimentation_enabled
         self._handles: dict[tuple[str, int], SdkClientHandle] = {}
+        #: Uses in flight per handle; a retired handle closes at zero.
+        self._uses: dict[SdkClientHandle, int] = {}
+        self._retired: set[SdkClientHandle] = set()
         self._lock = asyncio.Lock()
 
     async def process_sdk_job(
@@ -153,28 +169,30 @@ class SdkWriteCoordinator:
     ) -> SdkWriteReceipt:
         if not self.sedimentation_enabled():
             raise RuntimeError("model_sedimentation_disabled")
-        handle = await self._active_handle()
-        return await SdkWriteProcessor(handle).process_sdk_job(
-            records,
-            request_id=request_id,
-            before_hy_invocation=before_hy_invocation,
-        )
+        async with self._active_handle() as handle:
+            return await SdkWriteProcessor(handle).process_sdk_job(
+                records,
+                request_id=request_id,
+                before_hy_invocation=before_hy_invocation,
+            )
 
     async def inquire_write_outcome(
         self, request_id: str
     ) -> SdkWriteReceipt | None:
-        return await SdkWriteProcessor(
-            await self._active_handle()
-        ).inquire_write_outcome(request_id)
+        async with self._active_handle() as handle:
+            return await SdkWriteProcessor(handle).inquire_write_outcome(request_id)
 
     async def close(self) -> None:
         async with self._lock:
-            handles, self._handles = tuple(self._handles.values()), {}
+            handles = (*self._handles.values(), *self._retired)
+            self._handles, self._retired, self._uses = {}, set(), {}
         await asyncio.gather(*(handle.close() for handle in handles))
 
-    async def client(self) -> Any:
-        """Return the public SDK client selected by the active write profile."""
-        return await (await self._active_handle()).client()
+    @asynccontextmanager
+    async def use_client(self) -> AsyncIterator[Any]:
+        """The public SDK client of the active write profile, kept open while used."""
+        async with self._active_handle() as handle:
+            yield await handle.client()
 
     async def active_profile_credentials(
         self,
@@ -183,7 +201,9 @@ class SdkWriteCoordinator:
         _identity, profile, secret = await asyncio.to_thread(self._read_active_credentials)
         return profile, secret
 
-    async def _active_handle(self) -> SdkClientHandle:
+    @asynccontextmanager
+    async def _active_handle(self) -> AsyncIterator[SdkClientHandle]:
+        """Use the active profile's handle; retire the others, closing the unused."""
         identity, profile, secret = await asyncio.to_thread(
             self._read_active_credentials
         )
@@ -197,14 +217,25 @@ class SdkWriteCoordinator:
                     http_transport_factory=self.transport_factory(profile),
                 )
                 self._handles[identity] = handle
-            stale = [
-                value
-                for key, value in self._handles.items()
-                if key != identity
-            ]
+            self._retired.update(value for key, value in self._handles.items() if key != identity)
             self._handles = {identity: handle}
-        await asyncio.gather(*(value.close() for value in stale))
-        return handle
+            self._uses[handle] = self._uses.get(handle, 0) + 1
+            unused = {value for value in self._retired if not self._uses.get(value)}
+            self._retired -= unused
+        await asyncio.gather(*(value.close() for value in unused))
+        try:
+            yield handle
+        finally:
+            # Bookkeeping without an await, so a cancelled caller still
+            # releases its use.
+            remaining = self._uses.get(handle, 0) - 1
+            if remaining > 0:
+                self._uses[handle] = remaining
+            else:
+                self._uses.pop(handle, None)
+            if remaining <= 0 and handle in self._retired:
+                self._retired.discard(handle)
+                await handle.close()
 
     def _read_active_credentials(
         self,
