@@ -1375,6 +1375,8 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
 
     graph = asyncio.run(scenario())
     assert listed[0]["include_sources"] == ["cursor"]
+    assert listed[0]["scene"] == "all"
+    assert listed[0]["statuses"] == ["active"]
     assert (listed[0]["offset"], listed[0]["limit"]) == (100, 100)
     assert (graph["total_memories"], graph["projected_memories"]) == (7, 4)
     assert {node["node_id"] for node in graph["nodes"]} == {
@@ -1397,6 +1399,71 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
         "derived_from",
     }
     assert graph["hy_graph_available"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_sdk
+def test_sdk_memory_map_still_draws_memories_from_a_revoked_source(tmp_path) -> None:
+    # Revoking a source stops new reads from it; memories already distilled
+    # from it stay visible, so the map agrees with the list.
+    async def scenario():
+        app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
+
+        class Client:
+            def list_memories(self, **_kwargs):
+                return {
+                    "vdb": {
+                        "memories": [
+                            {
+                                "memory_id": "kept",
+                                "content": "distilled before revocation",
+                                "layer": "l2_fact",
+                                "status": "active",
+                                "user_id": "local",
+                                "agent_id": "all-apps",
+                                "session_id": "s1",
+                                "source": "cursor",
+                            }
+                        ],
+                        "total": 1,
+                    }
+                }
+
+        class Handle:
+            async def client(self):
+                return Client()
+
+            async def close(self):
+                return None
+
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer authority-test"},
+            ) as client,
+        ):
+            app.state.sdk_client_handle = Handle()
+            database = app.state.settings.data_dir / "one-memory.sqlite3"
+            with sqlite3.connect(database) as db:
+                db.execute(
+                    "INSERT INTO source_grants "
+                    "(user_id,source_id,root_path,requested_path,root_identity,"
+                    "candidate_kind,granted_at,revoked_at,revision) VALUES "
+                    "('local','cursor','/fixture','/fixture','fixture','default',"
+                    "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
+                )
+            response = await client.get(
+                "/api/v2/memories/graph",
+                params={"source": "cursor", "limit": 100},
+            )
+            assert response.status_code == 200
+            return response.json()
+
+    graph = asyncio.run(scenario())
+    assert (graph["total_memories"], graph["projected_memories"]) == (1, 1)
+    assert "memory:kept" in {node["node_id"] for node in graph["nodes"]}
 
 
 def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:

@@ -2980,11 +2980,13 @@ def create_app(
         """
         try:
             client = await _sdk_client_handle(app).client()
-            # The map draws the page the list shows, so it reads the same
-            # source filter and window rather than the newest memories overall.
+            # The map visualizes the active source scope, independently of the
+            # left list's 20-row pagination window.
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
+                scene="all",
+                statuses=["active"],
                 include_sources=[source] if source else None,
                 limit=limit,
                 offset=offset,

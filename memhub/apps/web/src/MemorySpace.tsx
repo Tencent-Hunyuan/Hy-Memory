@@ -166,11 +166,14 @@ export function MemorySpace({
   // The SDK library is no longer where a memory opens from the map; the id is
   // kept so the panel still has a focus target for its own tests.
   const [sdkFocusedMemoryId] = useState<string | null>(null);
-  // The list, its count, its source and time labels and the graph are all one
-  // page: the library page and the graph for that same source and window,
-  // read together. Reading the graph from a different, unfiltered window made
-  // rows, sources and totals disagree.
-  const [sdkGraph, setSdkGraph] = useState<MemoryGraphResponse | null>(null);
+  // The graph covers the active source scope (up to its visual cap), while the
+  // list pages through that scope. Keep source+query with the value so a
+  // filter change cannot paint the previous filter's graph during the new read.
+  const [sdkGraph, setSdkGraph] = useState<{
+    scope: string;
+    status: "ready" | "failed";
+    value: MemoryGraphResponse | null;
+  } | null>(null);
   // Bumping this re-reads the page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
   const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
@@ -191,6 +194,17 @@ export function MemorySpace({
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
   const [sdkLibrarySource, setSdkLibrarySource] = useState("");
   const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
+  const sdkRequestedScope = JSON.stringify([
+    sdkLibraryQuery.trim(),
+    sdkLibrarySource,
+  ]);
+  const sdkGraphSettled = sdkGraph?.scope === sdkRequestedScope;
+  const visibleSdkGraph =
+    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "ready"
+      ? sdkGraph.value
+      : null;
+  const sdkGraphFailed =
+    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "failed";
   // A keyword search pages through one server-side result window. The id is
   // kept for the query and source it was searched with; a new query or
   // source starts without one, so the server searches afresh.
@@ -233,22 +247,26 @@ export function MemorySpace({
             request.signal,
           ),
           // The overlay is decoration: the list stands without it. It reads
-          // chat memories only, newest first; a mixed page's chat rows are
-          // among the newest offset+page chat memories, so that prefix holds
-          // every relation the page can draw.
-          getSdkMemoryGraph(
-            {
-              source,
-              offset: 0,
-              limit: query
-                ? 100
-                : Math.min(
-                    300,
-                    Math.max(100, sdkLibraryOffset + SDK_MEMORY_PAGE_SIZE),
-                  ),
-            },
-            request.signal,
-          ).catch(() => null),
+          // the full active/source-filtered scene up to the API's visual cap.
+          // Reading only the first list-page prefix made "All applications"
+          // look identical to Cursor whenever newer Cursor memories occupied
+          // that prefix.
+          query
+            ? Promise.resolve({
+                status: "ready" as const,
+                value: null,
+              })
+            : getSdkMemoryGraph(
+                {
+                  source,
+                  offset: 0,
+                  limit: 300,
+                },
+                request.signal,
+              ).then(
+                (value) => ({ status: "ready" as const, value }),
+                () => ({ status: "failed" as const, value: null }),
+              ),
         ]);
         if (cancelled) return;
         if (sdkSearchWindow.current.key === windowKey)
@@ -265,7 +283,7 @@ export function MemorySpace({
           settledSource: sdkLibrarySource,
           settledQuery: sdkLibraryQuery,
         });
-        setSdkGraph(graph);
+        setSdkGraph({ scope: windowKey, ...graph });
       } catch {
         if (cancelled || request.signal.aborted) return;
         setSdkLibrary((current) => ({
@@ -1026,6 +1044,8 @@ export function MemorySpace({
                 page: sdkLibrary.page,
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
+                graphLoading: !sdkGraphSettled,
+                graphFailed: sdkGraphFailed,
                 stale: false,
                 settledSource: sdkLibrary.settledSource,
                 settledQuery: sdkLibrary.settledQuery,
@@ -1040,7 +1060,7 @@ export function MemorySpace({
         }
         hidden={!active || displayedMode !== "map"}
         memories={sdkLibrary.page?.items ?? []}
-        graph={sdkGraph}
+        graph={visibleSdkGraph}
         sources={sources}
         processing={processing}
         arrival={memoryArrival}

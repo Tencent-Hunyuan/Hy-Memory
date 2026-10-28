@@ -95,6 +95,9 @@ type Props = {
     page: MemoryLibraryPage | null;
     loading: boolean;
     failed: boolean;
+    /** The graph for the current source/query scope has not arrived yet. */
+    graphLoading?: boolean;
+    graphFailed?: boolean;
     stale: boolean;
     settledSource?: string;
     settledQuery?: string;
@@ -316,6 +319,31 @@ export function MemoryMap(props: Props) {
     [active, group, search, serverPaged, axis, groupKey],
   );
   const projection = useMemo(() => {
+    // Until the new scope's graph arrives (or after it failed), drawing the
+    // previous scope's graph would show the wrong source.
+    if (serverPaged && (library?.graphLoading || library?.graphFailed))
+      return {
+        total_memories: library.page?.total ?? 0,
+        projected_memories: 0,
+        hy_graph_available: false,
+        nodes: [],
+        edges: [],
+      };
+    // Source filtering owns the graph scope, while pagination owns only the
+    // left-hand list window. Projecting the graph back down to the current
+    // 20-row page made "All applications" look like whichever source happened
+    // to dominate that page. Keyword search is intentionally page-scoped.
+    if (serverPaged && !library?.query) {
+      return (
+        baseGraph ??
+        projectMap(
+          graph,
+          active,
+          axis,
+          filtered.map((m) => m.memory_id),
+        )
+      );
+    }
     const result = projectMap(
       graph,
       active,
@@ -347,7 +375,21 @@ export function MemoryMap(props: Props) {
           confidence: null,
         })),
     };
-  }, [graph, axis, filtered, active, groupKey, search, sources, serverPaged]);
+  }, [
+    baseGraph,
+    graph,
+    axis,
+    filtered,
+    active,
+    groupKey,
+    search,
+    sources,
+    serverPaged,
+    library?.query,
+    library?.graphLoading,
+    library?.graphFailed,
+    library?.page?.total,
+  ]);
   const visibleGroupNode = groupNode
     ? (projection.nodes.find(
         (node) =>
@@ -1059,22 +1101,33 @@ export function MemoryMap(props: Props) {
           ) : (
             <div className="map-empty-stage">
               <Network size={32} strokeWidth={1} />
-              <p>
+              <p
+                {...(library?.graphFailed || library?.graphLoading
+                  ? { role: "status", "aria-live": "polite" as const }
+                  : {})}
+              >
                 {library?.stale
                   ? text("可在沉淀记忆后查看视图")
-                  : library?.failed
+                  : library?.graphFailed || library?.failed
                     ? text("记忆暂时无法读取")
-                    : library?.page &&
-                        (library.query || library.source || groupKey)
-                      ? text("当前筛选没有可显示的记忆")
-                      : !loaded
-                        ? text("正在读取记忆…")
-                        : active.length
-                          ? text("当前筛选没有可显示的记忆")
-                          : arrival.importedMessages > 0
-                            ? text("已保存的对话还未生成记忆")
-                            : text("还没有可显示的记忆")}
+                    : library?.graphLoading
+                      ? text("正在读取记忆地图…")
+                      : library?.page &&
+                          (library.query || library.source || groupKey)
+                        ? text("当前筛选没有可显示的记忆")
+                        : !loaded
+                          ? text("正在读取记忆…")
+                          : active.length
+                            ? text("当前筛选没有可显示的记忆")
+                            : arrival.importedMessages > 0
+                              ? text("已保存的对话还未生成记忆")
+                              : text("还没有可显示的记忆")}
               </p>
+              {library?.graphFailed ? (
+                <R6Button onClick={library.onRetry}>
+                  {text("重新读取地图记忆")}
+                </R6Button>
+              ) : null}
             </div>
           )}
         </div>

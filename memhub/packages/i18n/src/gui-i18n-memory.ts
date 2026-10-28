@@ -187,6 +187,7 @@ export const memoryChineseMessages = {
   "memory:刚导入的原话，还不是沉淀后的记忆": "刚导入的原话，还不是沉淀后的记忆",
   "memory:来源归属": "来源归属",
   "memory:可在沉淀记忆后查看视图": "可在沉淀记忆后查看视图",
+  "memory:正在读取记忆地图…": "正在读取记忆地图…",
   "memory:查看选中来源原文": "查看选中来源原文",
   "memory:查看选中记忆原文": "查看选中记忆原文",
   "memory:查看原文": "查看原文",
@@ -589,6 +590,7 @@ export const memorySpanishMessages: Record<
   "memory:来源归属": "Relación con el origen",
   "memory:可在沉淀记忆后查看视图":
     "La vista estará disponible cuando se generen memorias",
+  "memory:正在读取记忆地图…": "Leyendo el mapa de memorias…",
   "memory:查看选中来源原文": "Ver texto del origen seleccionado",
   "memory:查看选中记忆原文": "Ver texto de la memoria seleccionada",
   "memory:查看原文": "Ver texto original",
