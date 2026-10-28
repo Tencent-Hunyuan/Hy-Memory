@@ -13,7 +13,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -259,6 +258,40 @@ it("OBS-15: switching memory shows a read in progress instead of the previous me
   expect(screen.getByRole("status").textContent).toContain("正在读取这条记忆");
 });
 
+it("shows a stable loading surface when the selected memory is read again", async () => {
+  const view = render(<Host simplified />);
+  await act(async () => {});
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  view.rerender(<Host simplified deferMemoryId="m0" />);
+  await userEvent.click(
+    within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
+      "button",
+      { name: /第一条/ },
+    ),
+  );
+  expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
+  expect(screen.getByRole("status").textContent).toContain("正在读取这条记忆");
+  expect(document.querySelector(".map-detail-loading")).toBeTruthy();
+});
+
+it("shows retry instead of stale content when the selected memory reread fails", async () => {
+  const view = render(<Host simplified />);
+  await act(async () => {});
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  view.rerender(<Host simplified failMemoryId="m0" />);
+  await userEvent.click(
+    within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
+      "button",
+      { name: /第一条/ },
+    ),
+  );
+  expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
+  expect(screen.getByRole("alert").textContent).toContain(
+    "这条记忆的原文暂时无法读取",
+  );
+  expect(screen.getByRole("button", { name: "重试读取原文" })).toBeTruthy();
+});
+
 it("keeps the detail header outside the scrolling body and resets detail scroll on selection", async () => {
   const { container } = render(
     <Host simplified sources={[importedSources[0]]} />,
@@ -269,6 +302,14 @@ it("keeps the detail header outside the scrolling body and resets detail scroll 
   const body = container.querySelector<HTMLElement>(".map-inspector-body");
   expect(heading?.nextElementSibling).toBe(body);
   if (!body) throw new Error("Memory detail scroll body is missing");
+  body.scrollTop = 90;
+  await userEvent.click(
+    within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
+      "button",
+      { name: /第一条/ },
+    ),
+  );
+  expect(body.scrollTop).toBe(0);
   body.scrollTop = 180;
   await userEvent.click(
     within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
@@ -348,6 +389,7 @@ function Host({
   processing = null,
   loaded = true,
   deferMemoryId,
+  failMemoryId,
   onViewHistory,
   onConfigureModel = () => {},
   libraryView,
@@ -363,11 +405,16 @@ function Host({
   processing?: MemoryProcessingSummary | null;
   loaded?: boolean;
   deferMemoryId?: string;
+  failMemoryId?: string;
   onViewHistory?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
 } = {}) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
+  const [detailLoad, setDetailLoad] = useState<{
+    memoryId: string;
+    status: "loading" | "failed";
+  } | null>(null);
   return (
     <MemoryMap
       simplified={simplified}
@@ -389,14 +436,25 @@ function Host({
             }
           : null
       }
+      detailLoad={detailLoad}
       draft={detail?.memory.content ?? ""}
       busy={false}
       answer={null}
       streaming={null}
       requestIds={{ current: new Map() }}
       onOpenMemory={(id) => {
+        if (failMemoryId && id === failMemoryId) {
+          setDetail(null);
+          setDetailLoad({ memoryId: id, status: "failed" });
+          return;
+        }
         // Lets a test leave one read unanswered.
-        if (deferMemoryId && id === deferMemoryId) return;
+        if (deferMemoryId && id === deferMemoryId) {
+          setDetail(null);
+          setDetailLoad({ memoryId: id, status: "loading" });
+          return;
+        }
+        setDetailLoad(null);
         setDetail({
           memory: items.find((m) => m.memory_id === id) ?? items[0],
           evidence: [
@@ -414,7 +472,10 @@ function Host({
           index_sync: null,
         });
       }}
-      onCloseDetail={() => setDetail(null)}
+      onCloseDetail={() => {
+        setDetail(null);
+        setDetailLoad(null);
+      }}
       onAsk={() => {}}
       onDraft={() => {}}
       onSave={() => {}}
@@ -580,6 +641,8 @@ it("keeps pagination and current detail stable while the next page is loading", 
   const libraryView = { ...pagedView(page), onPage };
   const view = render(<Host simplified libraryView={libraryView} />);
   const list = screen.getByRole("list", { name: "地图记忆列表" });
+  const statusSlot = document.querySelector(".map-list-status");
+  expect(statusSlot?.getAttribute("data-visible")).toBe("false");
   list.scrollTop = 160;
   const pager = screen.getByRole("navigation", { name: "地图记忆分页" });
   await userEvent.click(
@@ -594,6 +657,8 @@ it("keeps pagination and current detail stable while the next page is loading", 
       .getByRole("navigation", { name: "地图记忆分页" })
       .getAttribute("aria-busy"),
   ).toBe("true");
+  expect(document.querySelector(".map-list-status")).toBe(statusSlot);
+  expect(statusSlot?.getAttribute("data-visible")).toBe("true");
   expect(
     (
       screen.getByRole("button", {
@@ -629,10 +694,131 @@ it("keeps pagination and current detail stable while the next page is loading", 
     />,
   );
   expect(list.scrollTop).toBe(0);
+  expect(document.querySelector(".map-list-status")).toBe(statusSlot);
+  expect(statusSlot?.getAttribute("data-visible")).toBe("false");
   expect(within(list).getByText("下一页第 1 条")).toBeTruthy();
-  await waitFor(() =>
-    expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull(),
+  expect(
+    await screen.findByRole("heading", { name: "下一页第 1 条" }),
+  ).toBeTruthy();
+  expect(
+    within(list)
+      .getByRole("button", { name: /下一页第 1 条/ })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
+});
+
+it("keeps the page intent through a failed read and selects the first row after retry", async () => {
+  const onPage = vi.fn();
+  const onRetry = vi.fn();
+  const page = {
+    items: memories,
+    total: 202,
+    offset: 0,
+    limit: 100,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const base = { ...pagedView(page), onPage, onRetry };
+  const view = render(<Host simplified libraryView={base} />);
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "下一页记忆" }));
+  expect(
+    within(screen.getByRole("list", { name: "地图记忆列表" }))
+      .getByRole("button", { name: /第一条/ })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+
+  view.rerender(
+    <Host
+      simplified
+      libraryView={{
+        ...base,
+        loading: false,
+        failed: true,
+        requestedOffset: 100,
+      }}
+    />,
   );
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  await userEvent.click(
+    screen.getByRole("button", { name: "重新读取地图记忆" }),
+  );
+  expect(onRetry).toHaveBeenCalledOnce();
+  expect(
+    within(screen.getByRole("list", { name: "地图记忆列表" }))
+      .getByRole("button", { name: /第一条/ })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "搜索",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+
+  const nextItems = memories.map((memory, index) => ({
+    ...memory,
+    memory_id: `retry-${index}`,
+    content: `重试页第 ${index + 1} 条`,
+  }));
+  view.rerender(
+    <Host
+      simplified
+      items={nextItems}
+      libraryView={{
+        ...base,
+        requestedOffset: 100,
+        page: {
+          ...page,
+          items: nextItems,
+          offset: 100,
+          source_ids_by_memory: {
+            "retry-0": ["codex"],
+            "retry-1": ["codex"],
+          },
+        },
+        loading: false,
+        failed: false,
+      }}
+    />,
+  );
+  expect(
+    await screen.findByRole("heading", { name: "重试页第 1 条" }),
+  ).toBeTruthy();
+});
+
+it("returns to the shown page when a failed page request is cancelled by a row click", async () => {
+  const onPage = vi.fn();
+  const page = {
+    items: memories,
+    total: 202,
+    offset: 0,
+    limit: 100,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const base = { ...pagedView(page), onPage };
+  const view = render(<Host simplified libraryView={base} />);
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "下一页记忆" }));
+  view.rerender(
+    <Host
+      simplified
+      libraryView={{
+        ...base,
+        failed: true,
+        requestedOffset: 100,
+      }}
+    />,
+  );
+  await userEvent.click(
+    within(screen.getByRole("list", { name: "地图记忆列表" })).getByRole(
+      "button",
+      { name: /第二条/ },
+    ),
+  );
+  expect(onPage.mock.calls).toEqual([[100], [0]]);
+  expect(await screen.findByRole("heading", { name: "第二条" })).toBeTruthy();
 });
 
 it("names the SDK's no-source bucket 未识别来源, apart from a source under review", () => {
@@ -712,8 +898,10 @@ it("badges each listed memory with its scene and pages 20 at a time", () => {
   expect((next as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(next);
   expect(view.onPage).toHaveBeenCalledWith(40);
-  fireEvent.click(screen.getByRole("button", { name: "上一页记忆" }));
-  expect(view.onPage).toHaveBeenCalledWith(0);
+  const previous = screen.getByRole("button", { name: "上一页记忆" });
+  expect((previous as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(previous);
+  expect(view.onPage).not.toHaveBeenCalledWith(0);
 });
 
 it("says a filtered source is empty rather than that nothing matched", () => {

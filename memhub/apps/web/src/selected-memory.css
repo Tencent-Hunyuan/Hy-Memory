@@ -263,12 +263,14 @@
   display: block;
   flex: none;
   min-width: 0;
+  max-width: 100%;
   font-size: 17px;
   line-height: 29px;
   letter-spacing: normal;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .selected-memory-source {
   margin: 32px 0 22px;

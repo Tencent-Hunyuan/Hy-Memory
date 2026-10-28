@@ -1029,6 +1029,7 @@ export function MemorySpace({
                 stale: false,
                 settledSource: sdkLibrary.settledSource,
                 settledQuery: sdkLibrary.settledQuery,
+                requestedOffset: sdkLibraryOffset,
                 unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,
                 onSource: setSdkLibrarySource,
