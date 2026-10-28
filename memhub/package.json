@@ -2,7 +2,7 @@
   "name": "one-memory",
   "version": "1.0.5",
   "release": {
-    "build_number": 33,
+    "build_number": 34,
     "macos_min_version": "13.0",
     "app_update": "manual",
     "runtime_manifest_schema": 1,
