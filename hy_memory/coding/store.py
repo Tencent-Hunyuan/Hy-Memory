@@ -605,7 +605,11 @@ class CodingMemoryStore:
         await self._upsert_vec_keys(memory)
         logger.info(
             f"[coding-store] inserted experience_id={memory.experience_id} "
-            f"task={memory.task!r} keys={1 + len(memory.search_keys)}"
+            f"keys={1 + len(memory.search_keys)}"
+        )
+        logger.debug(
+            f"[coding-store] inserted experience_id={memory.experience_id} "
+            f"task={memory.task!r}"
         )
 
     async def update(self, memory: CodingMemory) -> None:
@@ -1002,7 +1006,8 @@ class CodingMemoryStore:
             fact.created_at = datetime.utcnow()
         await _run_in_pool(self._upsert_fact_sql_sync, fact)
         await self._upsert_fact_vec(fact)
-        logger.info(
+        logger.info(f"[coding-store] inserted fact_id={fact.fact_id}")
+        logger.debug(
             f"[coding-store] inserted fact_id={fact.fact_id} "
             f"statement={fact.statement!r}"
         )

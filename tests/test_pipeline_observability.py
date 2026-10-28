@@ -1,4 +1,4 @@
-"""Pipeline log（始终）与 trace（可关）分离。"""
+"""Pipeline log（默认开，可关）与 trace（可关）分离。"""
 
 import asyncio
 import json
@@ -10,6 +10,7 @@ from hy_memory.config import MemoryConfig
 from hy_memory.data.cache_sqlite import SqliteCache
 from hy_memory.utils.pipeline_observability import (
     is_llm_content_logging_enabled,
+    is_pipeline_log_enabled,
     is_pipeline_trace_enabled,
     resolve_pipeline_log_dir,
 )
@@ -38,6 +39,14 @@ class TestPipelineObservabilityConfig:
         monkeypatch.delenv("MEMORY_TRACE_LOG_DIR", raising=False)
         monkeypatch.setenv("MEMORY_DATA_DIR", str(tmp_path / "data"))
         assert resolve_pipeline_log_dir() == str(tmp_path / "data" / "logs" / "pipeline")
+
+    def test_log_enabled_default(self, monkeypatch):
+        monkeypatch.delenv("MEMORY_PIPELINE_LOG_ENABLED", raising=False)
+        assert is_pipeline_log_enabled() is True
+
+    def test_log_disabled(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_PIPELINE_LOG_ENABLED", "false")
+        assert is_pipeline_log_enabled() is False
 
     def test_trace_enabled_default(self, monkeypatch):
         monkeypatch.delenv("MEMORY_PIPELINE_TRACE_ENABLED", raising=False)
@@ -87,6 +96,98 @@ class TestObservabilityHookBehavior:
 
             logs = await cache.get_pipeline_logs(request_id="req-1")
             assert logs == []
+            await cache.close()
+
+        run(_test())
+
+    def test_log_flag_on_writes_jsonl(self, env_setup, monkeypatch):
+        """显式开启与默认一致：照常写 JSONL。"""
+        monkeypatch.setenv("MEMORY_PIPELINE_LOG_ENABLED", "true")
+        monkeypatch.setenv("MEMORY_PIPELINE_TRACE_ENABLED", "false")
+
+        async def _test():
+            from datetime import date
+            from hy_memory.utils.pipeline_observability import (
+                drain_pipeline_log_tasks,
+                install_pipeline_observability,
+            )
+
+            config = MemoryConfig.from_dict({"cache": {"backend": "sqlite"}})
+            cache = SqliteCache(config)
+            await cache.initialize()
+            install_pipeline_observability(cache, log_label="test")
+            await cache.store_pipeline_log(
+                request_id="req-on", user_id="u1", agent_id="a1", step="S1_EMBED",
+            )
+            await drain_pipeline_log_tasks()
+
+            log_file = Path(env_setup) / "default" / f"{date.today().isoformat()}.log"
+            assert json.loads(log_file.read_text(encoding="utf-8").strip())["step"] == "S1_EMBED"
+            await cache.close()
+
+        run(_test())
+
+    def test_log_off_trace_off_is_noop(self, env_setup, monkeypatch):
+        """两者都关：不包装、不写文件、不写库，store_pipeline_log 直接返回 True。"""
+        monkeypatch.setenv("MEMORY_PIPELINE_LOG_ENABLED", "false")
+        monkeypatch.setenv("MEMORY_PIPELINE_TRACE_ENABLED", "false")
+
+        async def _test():
+            from hy_memory.utils.pipeline_observability import (
+                _noop_store_pipeline_log,
+                drain_pipeline_log_tasks,
+                install_pipeline_observability,
+            )
+
+            config = MemoryConfig.from_dict({"cache": {"backend": "sqlite"}})
+            cache = SqliteCache(config)
+            await cache.initialize()
+            original_store = cache.store_pipeline_log
+            install_pipeline_observability(cache, log_label="test")
+            assert cache.store_pipeline_log is _noop_store_pipeline_log
+
+            ok = await cache.store_pipeline_log(
+                request_id="req-off", user_id="ns__u1", agent_id="a1",
+                step="S1_EMBED", prompt="p", response="r",
+            )
+            await drain_pipeline_log_tasks()
+
+            assert ok is True
+            assert not Path(env_setup).exists()
+            # 原始 store 仍能写库，说明表本身可用；空操作确实没写
+            assert await cache.get_pipeline_logs(request_id="req-off") == []
+            await original_store(
+                request_id="req-probe", user_id="u1", agent_id="a1",
+                step="PROBE", prompt="", response="",
+            )
+            assert len(await cache.get_pipeline_logs(request_id="req-probe")) == 1
+            await cache.close()
+
+        run(_test())
+
+    def test_log_off_trace_on_writes_db_only(self, env_setup, monkeypatch):
+        """只关 Log：不写 JSONL，Trace 照常落库。"""
+        monkeypatch.setenv("MEMORY_PIPELINE_LOG_ENABLED", "false")
+        monkeypatch.setenv("MEMORY_PIPELINE_TRACE_ENABLED", "true")
+
+        async def _test():
+            from hy_memory.utils.pipeline_observability import (
+                drain_pipeline_log_tasks,
+                install_pipeline_observability,
+            )
+
+            config = MemoryConfig.from_dict({"cache": {"backend": "sqlite"}})
+            cache = SqliteCache(config)
+            await cache.initialize()
+            install_pipeline_observability(cache, log_label="test")
+            await cache.store_pipeline_log(
+                request_id="req-db", user_id="u1", agent_id="a1", step="S1_EMBED",
+            )
+            await drain_pipeline_log_tasks()
+
+            assert not Path(env_setup).exists()
+            logs = await cache.get_pipeline_logs(request_id="req-db")
+            assert [row["step"] for row in logs] == ["S1_EMBED"]
             await cache.close()
 
         run(_test())

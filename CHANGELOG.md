@@ -76,6 +76,24 @@ Hy Memory and MemHub are versioned and released independently.
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
 
+## Hy Memory 2.0.8 — 2026-10-28
+
+- New `MEMORY_PIPELINE_LOG_ENABLED` (default `true`) turns the pipeline JSONL
+  log (`{MEMORY_LOG_DIR}/<subdir>/<date>.log`) off. With `false` no JSONL
+  file or directory is written. When `MEMORY_PIPELINE_TRACE_ENABLED` is also
+  `false`, `store_pipeline_log` becomes a no-op that returns `True` at once:
+  no timing, redaction, background task or database write. The init log line
+  now states whether the JSONL log is on or off.
+- Conversation and memory text no longer appears in INFO or WARNING logs. The
+  `[add]` input, search queries and rewrites, coding experience tasks, fact
+  statements and subjects, reconcile op details, extracted info, embedding
+  inputs and unparsable model output moved to DEBUG. INFO lines keep ids,
+  counts and character lengths; parse-failure warnings remain but report only
+  the length of the output, e.g. `failed to parse output (812 chars)`. The
+  `[embed]` INFO line now carries `request.input_chars` instead of
+  `request.input`. The `JSON_PARSE_FAILED` error message from extraction no
+  longer embeds the model output either.
+
 ## Hy Memory 2.0.7 — 2026-10-28
 
 - Published

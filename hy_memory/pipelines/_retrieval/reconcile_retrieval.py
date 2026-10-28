@@ -115,11 +115,16 @@ class ReconcileHybridRetriever:
         fused_max = max(fused_all) if fused_all else 0.0
 
         base = (
-            f"[reconcile-hybrid][{req}] pool={pool_size} q_terms={q_terms!r} "
+            f"[reconcile-hybrid][{req}] pool={pool_size} q_terms={len(q_terms)} "
             f"raw_bm25 max={raw_max:.4f} nonzero={raw_nonzero}/{len(raw_bm25)} "
             f"bm25_norm max={norm_max:.4f} nonzero={norm_nonzero}/{len(bm25_norms)} "
             f"sem_max={sem_max:.4f} fused_max={fused_max:.4f} "
             f"kept={kept}/{len(fused_all)} min_score={self._cfg.min_score} "
+            f"query({len(query_text or '')} chars)"
+        )
+        # query 是待对账的新记忆原文，词项与预览只进 DEBUG
+        logger.debug(
+            f"[reconcile-hybrid][{req}] q_terms={q_terms!r} "
             f"query={q_preview!r} lemmatized={lem_preview!r}"
         )
 

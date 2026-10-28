@@ -570,9 +570,12 @@ class WorkingFactReconciler:
                     kept.append(fact)
             if blocked:
                 logger.info(
-                    f"[fact-reconcile] subject gate blocked {len(blocked)} candidate(s) "
-                    f"for subject={draft.subject!r}: "
-                    + ", ".join(f"{f.fact_id}({f.subject!r})" for f in blocked)
+                    f"[fact-reconcile] subject gate blocked {len(blocked)} candidate(s): "
+                    + ", ".join(f.fact_id for f in blocked)
+                )
+                logger.debug(
+                    f"[fact-reconcile] subject gate: draft subject={draft.subject!r} "
+                    f"blocked subjects={[f.subject for f in blocked]!r}"
                 )
             result.append(kept)
         return result
@@ -745,7 +748,10 @@ class WorkingFactReconciler:
                     obj = None
 
         if not isinstance(obj, dict):
-            logger.warning(f"[fact-reconcile] failed to parse ops output: {text!r}")
+            logger.warning(
+                f"[fact-reconcile] failed to parse ops output ({len(text or '')} chars)"
+            )
+            logger.debug(f"[fact-reconcile] unparsable ops output: {text!r}")
             return {}
         ops_raw = obj.get("ops")
         if not isinstance(ops_raw, list):
@@ -835,8 +841,11 @@ class WorkingFactReconciler:
                 # 别的主体的状态不是。闸门关掉时这道复查一并跳过，否则闸门就没关干净。
                 if self.subject_gate and _subject_conflict(draft.subject, old.subject):
                     logger.warning(
-                        f"[fact-reconcile] refused cross-subject SUPERSEDE: "
-                        f"{old.fact_id}({old.subject!r}) by draft subject {draft.subject!r}"
+                        f"[fact-reconcile] refused cross-subject SUPERSEDE: {old.fact_id}"
+                    )
+                    logger.debug(
+                        f"[fact-reconcile] cross-subject: old subject={old.subject!r} "
+                        f"draft subject={draft.subject!r}"
                     )
                     continue
                 try:

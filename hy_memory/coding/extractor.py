@@ -1166,7 +1166,10 @@ class CodingMemoryExtractor:
                     obj = None
 
         if not isinstance(obj, dict):
-            logger.warning(f"[coding-extract] failed to parse output: {text!r}")
+            logger.warning(
+                f"[coding-extract] failed to parse output ({len(text or '')} chars)"
+            )
+            logger.debug(f"[coding-extract] unparsable output: {text!r}")
             return [], []
 
         # "memories" 是双层化之前的 key，老 prompt 缓存 / 旧模型可能还这么回

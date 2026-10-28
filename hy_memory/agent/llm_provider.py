@@ -129,8 +129,7 @@ def _parse_tool_calls_list(raw_calls: list, _json) -> List[Dict[str, Any]]:
         tc_id = tc.get("id") or ""
         if not tc_id:
             logger.error(
-                f"[llm] tool_call missing 'id'! raw: "
-                f"{_json.dumps(tc, ensure_ascii=False, default=str)[:500]}"
+                f"[llm] tool_call missing 'id'! keys={list(tc.keys())}"
             )
 
         # 保留原始 tc 完整结构，只规范化 arguments

@@ -211,7 +211,9 @@ def parse_tool_calls_from_json(raw: Any) -> List[ToolCall]:
                 try:
                     args = json.loads(args_raw) if args_raw.strip() else {}
                 except json.JSONDecodeError:
-                    logger.warning(f"[tools] failed to parse arguments as JSON: {args_raw[:120]}")
+                    logger.warning(
+                        f"[tools] failed to parse arguments as JSON ({len(args_raw)} chars)"
+                    )
                     args = {}
             elif isinstance(args_raw, dict):
                 args = args_raw

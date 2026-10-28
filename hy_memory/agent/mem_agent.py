@@ -234,7 +234,7 @@ class MemAgent:
                     f"identity={len(identity)} facts={len(facts)} "
                     f"basic_info={basic_field_count}fields"
                 )
-                logger.info(f"MemAgent: extracted_info={extract_result.info}")
+                logger.debug(f"MemAgent: extracted_info={extract_result.info}")
 
             # 3. 冲突检测（如果有已有记忆）
             if mode == ProcessMode.FULL and existing_memories:

@@ -50,7 +50,7 @@ def is_canonical_state_node(node: Any) -> bool:
 
 
 def _log_ops_detail(ops: List["ReconcileOp"]) -> None:
-    """以单条 INFO（JSON list）输出 reconcile 的逐条结果，便于线上 debug。"""
+    """以单条 DEBUG（JSON list）输出 reconcile 的逐条结果；含记忆正文，不进 INFO。"""
     if not ops:
         return
     view = [
@@ -68,7 +68,7 @@ def _log_ops_detail(ops: List["ReconcileOp"]) -> None:
         }
         for o in ops
     ]
-    logger.info(
+    logger.debug(
         f"[reconciler] ops detail: {json.dumps(view, ensure_ascii=False, default=str)}"
     )
 
@@ -1514,9 +1514,10 @@ class MemoryReconciler:
                 logger.warning(
                     f"[reconciler] RECONCILE JSON parse failed "
                     f"(attempt {_attempt+1}/{_MAX_PARSE_ATTEMPTS}), "
-                    f"retrying: raw="
-                    f"{raw_response[:200] if _log_llm_content_enabled() else '<redacted>'}"
+                    f"retrying: raw({len(raw_response or '')} chars)"
                 )
+                if _log_llm_content_enabled():
+                    logger.debug(f"[reconciler] unparsable raw={raw_response[:200]!r}")
 
             recon_elapsed = (_time.perf_counter() - t_recon) * 1000
 
@@ -1806,7 +1807,8 @@ class MemoryReconciler:
                 except Exception as _re:
                     logger.debug(f"[reconciler] json_repair failed: {_re}")
             if data is None:
-                logger.warning(f"[reconciler] failed to parse ops JSON: {text[:200]}")
+                logger.warning(f"[reconciler] failed to parse ops JSON ({len(text)} chars)")
+                logger.debug(f"[reconciler] unparsable ops output: {text[:200]!r}")
                 return []
 
         if not isinstance(data, list):
@@ -2018,11 +2020,11 @@ class MemoryReconciler:
                 if clash is not None:
                     logger.warning(
                         f"[reconciler] memory_id {clash} already touched by '{touched[clash]}', "
-                        f"current op '{op.op} ({op.reason[:60]})' dropped"
+                        f"current op '{op.op}' dropped"
                     )
                     continue
                 for t in target_ids:
-                    touched[t] = f"{op.op}({op.reason[:40]})"
+                    touched[t] = op.op
             validated.append(op)
 
         return validated

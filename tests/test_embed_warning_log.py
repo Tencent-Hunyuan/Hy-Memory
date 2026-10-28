@@ -90,7 +90,10 @@ class TestEmbedInfoLog:
             assert payload["provider"] == "openai"
             assert payload["model"] == "text-embedding-test"
             assert payload["api"] == "https://example.com/v1/embeddings"
-            assert payload["request"]["input"] == ["hello world"]
+            # 待向量化的原文不进 INFO，只记每条字符数
+            assert "input" not in payload["request"]
+            assert payload["request"]["input_chars"] == [11]
+            assert "hello world" not in info_msgs[0]
             assert payload["request"]["dimensions"] == 8
             assert payload["response"]["vector_dims"] == [8]
             assert payload["response"]["vector_count"] == 1
