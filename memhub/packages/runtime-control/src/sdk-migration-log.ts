@@ -33,6 +33,9 @@ export const SDK_MIGRATION_LOG_NAME = "sdk-migration.log";
 const MAX_BYTES = 4 * 1024 * 1024;
 const SAFE_TEXT = /^[A-Za-z0-9_.:/@+-]{0,160}$/;
 const MAX_ITEMS = 32;
+// Preserve invocation order within this process, including fire-and-forget
+// progress followed by an awaited terminal event. Homes remain independent.
+const pendingWrites = new Map<string, Promise<void>>();
 
 export function sdkMigrationLogPath(dataDir: string): string {
   return path.join(dataDir, "logs", SDK_MIGRATION_LOG_NAME);
@@ -103,17 +106,28 @@ export async function writeSdkMigrationLog(
       platform: process.platform,
       ...(entry.details === undefined ? {} : { details: entry.details }),
     });
-    const target = sdkMigrationLogPath(dataDir);
-    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    const size = await stat(target).then(
-      (info) => info.size,
-      () => 0,
-    );
-    if (size > MAX_BYTES) await rename(target, `${target}.1`);
-    await appendFile(target, `${JSON.stringify(line)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    const target = path.resolve(sdkMigrationLogPath(dataDir));
+    const previous = pendingWrites.get(target) ?? Promise.resolve();
+    const pending = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+        const size = await stat(target).then(
+          (info) => info.size,
+          () => 0,
+        );
+        if (size > MAX_BYTES) await rename(target, `${target}.1`);
+        await appendFile(target, `${JSON.stringify(line)}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+      });
+    pendingWrites.set(target, pending);
+    try {
+      await pending;
+    } finally {
+      if (pendingWrites.get(target) === pending) pendingWrites.delete(target);
+    }
   } catch {
     // Never let the log decide whether a migration or a startup happens.
   }
