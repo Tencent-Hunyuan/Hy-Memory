@@ -426,6 +426,7 @@ def _repair_coding(
         path = root / name
         if not path.is_file():
             continue
+        _ensure_coding_schema(path)
         with closing(sqlite3.connect(path)) as database:
             tables = {
                 str(row[0])
@@ -437,7 +438,8 @@ def _repair_coding(
             ):
                 if table not in tables:
                     continue
-                # hy-memory 2.0.7 added the conversation time; older stores lack it.
+                # _ensure_coding_schema added it; an SDK without the column
+                # (before 2.0.7) leaves the time to the vector repair alone.
                 has_memory_at = "memory_at" in _columns(database, table)
                 rows = database.execute(
                     f"SELECT {identifier},source,created_at,"
@@ -478,6 +480,32 @@ def _repair_coding(
                     repaired += 1
             database.commit()
     return repaired
+
+
+def _ensure_coding_schema(path: Path) -> None:
+    """Bring a Coding/Working store to the installed SDK's schema.
+
+    A migrated home's stores were written by an older SDK and may lack columns
+    the repair writes (``memory_at`` since hy-memory 2.0.7). The repair runs
+    before any SDK client opens them, so the SDK's own schema step is run here
+    rather than repeating its DDL. ``CodingMemoryStore`` has no public
+    schema-only entry point: ``initialize()`` also opens its Chroma
+    collections, which must stay closed during the offline repair. So only its
+    SQLite step runs, on a store object that carries nothing but that path.
+    """
+    from hy_memory.coding.store import (  # type: ignore[import-untyped]
+        CodingMemoryStore,
+    )
+
+    # Relies on the pinned SDK's internals (hy-memory==2.0.7 is pinned exactly).
+    store = CodingMemoryStore.__new__(CodingMemoryStore)
+    store._db_path = str(path)
+    store._conn = None
+    try:
+        store._init_sqlite_sync()
+    finally:
+        if store._conn is not None:
+            store._conn.close()
 
 
 def _batches[T](values: list[T] | tuple[T, ...]) -> Iterator[tuple[T, ...]]:
