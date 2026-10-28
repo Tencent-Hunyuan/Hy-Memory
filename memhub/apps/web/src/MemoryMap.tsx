@@ -48,7 +48,6 @@ import {
 import { OptionMenu } from "./OptionMenu";
 import { R6Button } from "./R6Controls";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
-import { SourceImportReceipt } from "./SourceImportReceipt";
 import { sourceNameOr } from "./source-label";
 import { useMediaPreference } from "./use-media-preference";
 import { Answer, NodeDetail, type SavedAnswer } from "./Workbench";
@@ -97,6 +96,8 @@ type Props = {
     loading: boolean;
     failed: boolean;
     stale: boolean;
+    settledSource?: string;
+    settledQuery?: string;
     /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
     unattributedSource?: string;
     onQuery(value: string): void;
@@ -213,6 +214,9 @@ export function MemoryMap(props: Props) {
   }, [submittedQuery]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [groupNode, setGroupNode] = useState<MemoryGraphNode | null>(null);
+  const [pendingSourceSelection, setPendingSourceSelection] = useState<
+    string | null
+  >(null);
   const [question, setQuestion] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [filterNotice, setFilterNotice] = useState("");
@@ -363,6 +367,7 @@ export function MemoryMap(props: Props) {
     // Source revocation also clears a suspended preview, without closing shared memory detail.
     if (groupNode && !visibleGroupNode) {
       setGroupNode(null);
+      setPendingSourceSelection(null);
       setInspectorOpen(false);
     }
   }, [groupNode, visibleGroupNode]);
@@ -389,6 +394,7 @@ export function MemoryMap(props: Props) {
   const pick = useCallback(
     (memoryId: string, scroll = true) => {
       if (!active.some((memory) => memory.memory_id === memoryId)) return;
+      setPendingSourceSelection(null);
       scrollSelection.current = scroll;
       if (!filtered.some((memory) => memory.memory_id === memoryId)) {
         setGroupKey("");
@@ -402,6 +408,32 @@ export function MemoryMap(props: Props) {
     },
     [active, filtered, onOpenMemory],
   );
+  useEffect(() => {
+    if (
+      !library ||
+      !pendingSourceSelection ||
+      overlaysSuspended ||
+      library.loading ||
+      library.failed ||
+      !selectedSource ||
+      selectedSource.source_id !== pendingSourceSelection ||
+      library.source !== pendingSourceSelection ||
+      (library.settledSource ?? library.source) !== pendingSourceSelection ||
+      (library.settledQuery ?? library.query).trim() ||
+      library.page?.offset !== 0
+    )
+      return;
+    setPendingSourceSelection(null);
+    const first = active[0];
+    if (first) pick(first.memory_id, false);
+  }, [
+    active,
+    library,
+    overlaysSuspended,
+    pendingSourceSelection,
+    pick,
+    selectedSource,
+  ]);
   useEffect(() => {
     if (!props.simplified || openedDefault.current || overlaysSuspended) return;
     if (library?.loading && filtered.length === 0) return;
@@ -452,6 +484,7 @@ export function MemoryMap(props: Props) {
   const clear = useCallback(() => {
     setSelectedId(null);
     setGroupNode(null);
+    setPendingSourceSelection(null);
     setInspectorOpen(false);
     onCloseDetail();
   }, [onCloseDetail]);
@@ -483,6 +516,7 @@ export function MemoryMap(props: Props) {
       clear();
       return;
     }
+    setPendingSourceSelection(null);
     setInspectorOpen(false);
   }
   function chooseGroup(key: string) {
@@ -509,8 +543,17 @@ export function MemoryMap(props: Props) {
       setAxis("source");
       setGroupKey(`source:${node.source_id}`);
       if (library) {
+        setPendingSourceSelection(node.source_id);
+        library.onQuery("");
         library.onSource(node.source_id);
         library.resetPage();
+      } else {
+        const first = sourceGroups
+          .find((entry) => entry.key === `source:${node.source_id}`)
+          ?.memoryIds.find((memoryId) =>
+            active.some((memory) => memory.memory_id === memoryId),
+          );
+        if (first) pick(first, false);
       }
     }
     if (node.node_type === "topic") {
@@ -987,11 +1030,13 @@ export function MemoryMap(props: Props) {
             <button
               type="button"
               className="quiet map-tool"
-              aria-label={text(
-                selectedSource ? "查看选中来源原文" : "查看选中记忆原文",
-              )}
+              aria-label={text("记忆详情")}
               title={text("查看原文")}
-              onClick={() => setInspectorOpen(true)}
+              onClick={() => {
+                setInspectorOpen(true);
+                if (selectedSource && library)
+                  setPendingSourceSelection(selectedSource.source_id);
+              }}
             >
               <FileText size={17} />
             </button>
@@ -1126,7 +1171,7 @@ export function MemoryMap(props: Props) {
             {inspectorDetail
               ? text("记忆详情")
               : selectedSource
-                ? text("来源原文")
+                ? text("记忆详情")
                 : visibleGroupNode
                   ? text("关联节点")
                   : text("记忆详情")}
@@ -1145,13 +1190,33 @@ export function MemoryMap(props: Props) {
         </header>
         <div className="map-inspector-body" ref={inspectorBody}>
           {selectedSource ? (
-            inspectorOpen &&
-            !overlaysSuspended && (
-              <SourceImportReceipt
-                key={selectedSource.source_id}
-                source={selectedSource}
-              />
-            )
+            <div className="map-inspector-empty map-inspector-loading">
+              {library?.failed &&
+              library.source === selectedSource.source_id ? (
+                <>
+                  <p role="alert">{text("记忆暂时无法读取")}</p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={library.onRetry}
+                  >
+                    {text("重试")}
+                  </button>
+                </>
+              ) : pendingSourceSelection || library?.loading ? (
+                <>
+                  <div className="map-detail-skeleton" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                  <p role="status">{text("正在读取记忆详情…")}</p>
+                </>
+              ) : (
+                <p>{text("还没有已生成的记忆")}</p>
+              )}
+            </div>
           ) : props.simplified && inspectorDetail ? (
             <div
               aria-busy={
