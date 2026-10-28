@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { modelProbeMatchesRevision } from "./model-probe-client";
 import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
@@ -459,13 +460,10 @@ export function ModelSettings({
     if (
       result &&
       result.profile_id === profile.profile_id &&
-      result.profile_revision !== profile.revision
+      !modelProbeMatchesRevision(result, profile.profile_id, profile.revision)
     ) {
-      // A newer revision used to be accepted here, and then activation turned
-      // on whatever the configuration had become. The user is told the
-      // settings they filled in passed, so this hands them a model they never
-      // tested. `ready` below cannot catch it either: by then the probe and
-      // the activated profile are both on the new revision and agree.
+      // Measuring the embedding width can advance the revision once. Only the
+      // receipt's bound input can distinguish that from testing an external edit.
       setSetupError(
         result.profile_revision > profile.revision
           ? "这份配置在测试期间被改过，刚才测的是改动后的版本。配置已保存但未启用，请重新测试并启用。"
@@ -476,7 +474,11 @@ export function ModelSettings({
     if (
       !result ||
       result.profile_id !== profile.profile_id ||
-      result.profile_revision !== profile.revision ||
+      !modelProbeMatchesRevision(
+        result,
+        profile.profile_id,
+        profile.revision,
+      ) ||
       !result.capabilities.endpoint_reachable ||
       !result.capabilities.model_available ||
       !result.capabilities.embedding_available
