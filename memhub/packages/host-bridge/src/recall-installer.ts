@@ -58,6 +58,7 @@ import {
   readDshServer,
   removeDshServer,
 } from "./dsh-patch.js";
+import { MCP_TOOLSET_KEY, MCP_TOOLSET_VERSION } from "./mcp-toolset.js";
 import {
   RECALL_PRESENTATION_GUIDANCE,
   RECALL_PRESENTATION_GUIDANCE_ZH,
@@ -88,8 +89,12 @@ export {
   type RecallLinkState,
   type RecallProbe,
 } from "./recall-probe.js";
-
-export { planRecallRepoint, type RecallRepoint };
+export {
+  MCP_TOOLSET_KEY,
+  MCP_TOOLSET_VERSION,
+  planRecallRepoint,
+  type RecallRepoint,
+};
 
 /** Rewrite hosts whose installed command is not the one we would write now.
  *
@@ -2844,6 +2849,9 @@ function managedServer(runtime: RecallRuntime): ManagedServer {
       ELECTRON_RUN_AS_NODE: "1",
       [DISCOVERY_KEY]: runtime.discoveryPath,
       [OWNER_KEY]: OWNER_VALUE,
+      // Moves the host's fingerprint of this entry when the tool set changes;
+      // see `MCP_TOOLSET_VERSION`. An entry without it reads as stale.
+      [MCP_TOOLSET_KEY]: MCP_TOOLSET_VERSION,
       ...(runtime.credentialFile === undefined
         ? {}
         : { ONE_MEMORY_HOST_CREDENTIAL_FILE: runtime.credentialFile }),

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { captureFilePath, namesCapture } from "./capture-hooks.js";
 import { PLUGIN_HOOKS } from "./codebuddy-plugin.js";
+import { MCP_TOOLSET_KEY, MCP_TOOLSET_VERSION } from "./mcp-toolset.js";
 import {
   asInstalled,
   expectedPluginHooks,
@@ -9,6 +10,7 @@ import {
   type RecallHostLayout,
   type RecallInstallPlan,
   type RecallRuntime,
+  readInstalledRecallCommand,
   renderSkillContent,
   SKILL_VERSION,
 } from "./recall-installer.js";
@@ -99,7 +101,23 @@ export async function checkSkillDrift(
   runtime: RecallRuntime,
 ): Promise<SkillDrift | null> {
   const skill = await checkSkillFileDrift(layout, runtime);
-  if (skill === null || skill.state === "modified") return skill;
+  if (skill === null) {
+    // A host with no skill mechanism still has an entry whose tool set can
+    // age. One whose skill is merely missing is left alone: syncing would put
+    // back a file somebody removed.
+    if (skillFilePath(layout) !== null) return null;
+    return (await serverToolsetDrift(layout)) === "stale"
+      ? {
+          hostId: layout.hostId,
+          state: "stale",
+          installedVersion: null,
+          currentVersion: SKILL_VERSION,
+          skillPath: null,
+          detail: TOOLSET_STALE_DETAIL,
+        }
+      : null;
+  }
+  if (skill.state === "modified") return skill;
   const hooks = await pluginHooksDrift(layout, runtime);
   if (hooks === "modified") {
     return {
@@ -108,15 +126,19 @@ export async function checkSkillDrift(
       detail: "the plugin hook file was edited after install",
     };
   }
-  if (hooks === "stale" && skill.state === "in_sync") {
+  if (skill.state === "stale") return skill;
+  if (hooks === "stale") {
     return {
       ...skill,
       state: "stale",
       detail: "plugin hooks are still ours, but have moved since install",
     };
   }
+  if ((await serverToolsetDrift(layout)) === "stale") {
+    return { ...skill, state: "stale", detail: TOOLSET_STALE_DETAIL };
+  }
   const capture = await captureHooksDrift(layout);
-  if (capture === "stale" && skill.state === "in_sync") {
+  if (capture === "stale") {
     return {
       ...skill,
       state: "stale",
@@ -124,6 +146,29 @@ export async function checkSkillDrift(
     };
   }
   return skill;
+}
+
+const TOOLSET_STALE_DETAIL =
+  "the MCP entry predates the tool set this MemHub serves";
+
+/** Whether our MCP entry names the tool set this release serves.
+ *
+ * The entry is otherwise identical across upgrades, so a host that caches a
+ * server's tool list under a fingerprint of its config (WorkBuddy does) keeps
+ * listing tools that are gone until the entry itself changes. Only an entry
+ * marked as ours is read; a CLI-channel host has no entry at all.
+ */
+async function serverToolsetDrift(
+  layout: RecallHostLayout,
+): Promise<"in_sync" | "stale" | null> {
+  if (layout.channel !== "mcp") return null;
+  // A config the host cannot parse either is not ours to judge here; the
+  // install and link checks report it.
+  const installed = await readInstalledRecallCommand(layout).catch(() => null);
+  if (installed === null) return null;
+  return installed.env[MCP_TOOLSET_KEY] === MCP_TOOLSET_VERSION
+    ? "in_sync"
+    : "stale";
 }
 
 /** Detect duplicated command hooks left by earlier installs.

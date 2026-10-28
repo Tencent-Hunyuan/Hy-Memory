@@ -19,7 +19,10 @@ export function SelectedMemoryDetail({
   detail: MemoryDetail;
   sources: SourceResponse[];
   /** D99: when the cited conversation happened, in the list's own terms. */
-  conversationAt?: { at: string; basis: "conversation" | "import" } | null;
+  conversationAt?: {
+    at: string;
+    basis: "conversation" | "import" | "write";
+  } | null;
 }) {
   const { locale, t } = useGuiLanguage();
   const memory = detail.memory;
@@ -42,6 +45,17 @@ export function SelectedMemoryDetail({
           ? t("selectedMemory.status.superseded")
           : t("selectedMemory.status.unknown");
   const sourceId = detail.source_id ?? evidence?.source_id;
+  const created = clockStamp(
+    detail.sdk_created_at ?? memory.updated_at,
+    locale,
+  );
+  // An SDK experience or fact stored before hy-memory 2.0.7 has no
+  // conversation time. It shows when it was written, named as such, instead
+  // of "时间未知".
+  const writtenOnly =
+    detail.sdk_ref !== undefined &&
+    detail.sdk_ref.kind !== "chat" &&
+    !detail.sdk_memory_at;
   const source =
     detail.sdk_status && sourceId === UNATTRIBUTED_SOURCE_ID
       ? t("selectedMemory.sourceUnattributed")
@@ -77,25 +91,28 @@ export function SelectedMemoryDetail({
         <p className="selected-memory-source">
           {t("selectedMemory.sourceLine", {
             source,
-            time: clockStamp(
-              detail.sdk_memory_at ?? evidence?.created_at,
-              locale,
-            ),
+            time: writtenOnly
+              ? t("selectedMemory.writeTime", { created })
+              : clockStamp(
+                  detail.sdk_memory_at ?? evidence?.created_at,
+                  locale,
+                ),
           })}
         </p>
       ) : null}
-      <p className="selected-memory-times">
-        {t("selectedMemory.timestamps", {
-          conversation: clockStamp(
-            conversationAt?.at ?? detail.sdk_memory_at ?? evidence?.created_at,
-            locale,
-          ),
-          created: clockStamp(
-            detail.sdk_created_at ?? memory.updated_at,
-            locale,
-          ),
-        })}
-      </p>
+      {writtenOnly ? null : (
+        <p className="selected-memory-times">
+          {t("selectedMemory.timestamps", {
+            conversation: clockStamp(
+              conversationAt?.at ??
+                detail.sdk_memory_at ??
+                evidence?.created_at,
+              locale,
+            ),
+            created,
+          })}
+        </p>
+      )}
     </article>
   );
 }

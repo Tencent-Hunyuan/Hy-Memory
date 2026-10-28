@@ -1046,6 +1046,8 @@ export function MemorySpace({
                 failed: sdkLibrary.failed,
                 graphFailed: sdkGraphFailed,
                 stale: !sdkGraphSettled,
+                settledSource: sdkLibrary.settledSource,
+                settledQuery: sdkLibrary.settledQuery,
                 unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,
                 onSource: setSdkLibrarySource,

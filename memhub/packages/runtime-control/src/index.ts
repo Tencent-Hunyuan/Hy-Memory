@@ -79,6 +79,7 @@ export {
 } from "./host-control-client.js";
 export {
   HostPermissions,
+  type HostRefreshReport,
   LOCAL_EXPERIENCE_UNAVAILABLE,
   type RecallPermissionStatus,
   type RevokeRecallPermissionInput,

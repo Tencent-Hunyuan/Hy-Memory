@@ -37,6 +37,7 @@ from one_memory.sdk_migration_runner import (
     abandoned_legacy_work,
     commit_sdk_cutover,
     move_pending_dispatches,
+    prepare_legacy_work_for_cutover,
     prepare_legacy_write_queue_for_cutover,
     recover_abandoned_staging,
     resume_legacy_cleanup,
@@ -137,19 +138,38 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
     )
     coding = data_dir / "hy-memory" / "governed-v2" / "coding_cv.sqlite3"
     with sqlite3.connect(coding) as database:
-        database.execute(
-            "CREATE TABLE coding_memory_meta ("
-            "experience_id TEXT,user_id TEXT,agent_id TEXT,solution TEXT,"
-            "source TEXT,created_at TEXT,updated_at TEXT)"
+        # A store written by hy-memory 2.0.6, before the conversation time
+        # column: the repair must add it through the SDK and then fill it.
+        database.executescript(
+            """
+            CREATE TABLE coding_memory_meta (
+                experience_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default_agent', task TEXT NOT NULL,
+                search_keys TEXT NOT NULL DEFAULT '[]', solution TEXT NOT NULL,
+                boundary_envs TEXT NOT NULL DEFAULT '', workspace_id TEXT,
+                branch TEXT, session_id TEXT, files TEXT NOT NULL DEFAULT '[]',
+                source_fact_ids TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 0.7,
+                source TEXT NOT NULL DEFAULT 'default',
+                extraction_source TEXT NOT NULL DEFAULT 'auto_extract',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE working_fact (
+                fact_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default_agent', session_id TEXT,
+                workspace_id TEXT, branch TEXT, source TEXT NOT NULL DEFAULT 'default',
+                statement TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]',
+                subject TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '',
+                fact_link TEXT, derived_experience_ids TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'active',
+                fact_chain_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+            );
+            """
         )
         database.execute(
-            "CREATE TABLE working_fact ("
-            "fact_id TEXT,user_id TEXT,agent_id TEXT,statement TEXT,"
-            "source TEXT,created_at TEXT)"
-        )
-        database.execute(
-            "INSERT INTO coding_memory_meta VALUES "
-            "('sdk-1','local','scope','remember','default','now','now')"
+            "INSERT INTO coding_memory_meta "
+            "(experience_id,user_id,agent_id,task,solution,source,created_at,updated_at) "
+            "VALUES ('sdk-1','local','scope','remember','remember','default','now','now')"
         )
 
     result = repair_sdk_metadata_from_bundle(
@@ -168,10 +188,11 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
         2026, 10, 18, tzinfo=UTC
     )
     with sqlite3.connect(coding) as database:
-        source, created_at = database.execute(
-            "SELECT source,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
+        source, memory_at, created_at = database.execute(
+            "SELECT source,memory_at,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
         ).fetchone()
     assert source == "workbuddy"
+    assert datetime.fromtimestamp(memory_at, tz=UTC) == datetime(2026, 10, 17, tzinfo=UTC)
     assert created_at.startswith("2026-10-18T00:00:00")
 
     repeated = repair_sdk_metadata_from_bundle(
@@ -874,6 +895,116 @@ def test_legacy_work_that_may_have_reached_the_sdk_does_not_block_cutover(tmp_pa
         sdk_version="2.0.5",
     )
     assert store.authority() is MemoryAuthority.SDK
+
+
+def test_pre_upgrade_unknown_writes_are_settled_at_cutover_not_retried(store):
+    """A migrated 1.0.4 home kept 1000+ jobs unknown forever.
+
+    The legacy pipeline invoked them, so the SDK's write-outcome inquiry knows
+    none of them and the automatic reconcile could never settle one.
+    """
+    from one_memory.memory_server.durable_queue import (
+        CANCELLED,
+        PENDING,
+        RUNNING,
+        UNKNOWN,
+    )
+
+    queue = DurableWriteQueue(store.database_path)
+
+    def job(key: str, state: str, *, invoked: bool) -> str:
+        identifier = queue.submit(
+            WriteRequest(
+                internal_session_id="session-1",
+                source_id="cursor",
+                batch_identity=BatchIdentity(
+                    internal_session_id="session-1", first_round=1, last_round=1
+                ),
+                evidence_ids=["gone"],
+                idempotency_key=key,
+            )
+        ).job_id
+        with main_database(store.database_path).write() as database, database:
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,hy_invoked=?,"
+                "last_error='model_content_outcome_unknown' WHERE job_id=?",
+                (state, int(invoked), identifier),
+            )
+        return identifier
+
+    # Their Evidence is gone too, which must not block the cutover.
+    unknown = [job(f"unknown-{index}", UNKNOWN, invoked=True) for index in range(3)]
+    sent_running = job("sent-running", RUNNING, invoked=True)
+    finished = job("finished", "completed", invoked=True)
+
+    first = prepare_legacy_work_for_cutover(store.database_path)
+    assert first.abandoned == {"unknown_write_jobs": 4}
+    # Resumed after an interruption: nothing changes, the count is the same.
+    again = prepare_legacy_work_for_cutover(store.database_path)
+    assert again.as_document() == first.as_document()
+
+    with main_database(store.database_path).read() as database:
+        rows = dict(
+            (str(row[0]), (str(row[1]), str(row[2]), int(row[3])))
+            for row in database.execute(
+                "SELECT job_id,state,last_error,hy_invoked FROM memory_write_jobs"
+            )
+        )
+    for identifier in (*unknown, sent_running):
+        assert rows[identifier] == (CANCELLED, "abandoned_at_cutover", 1)
+    assert rows[finished][0] == "completed"
+    surviving = DurableWriteQueue(store.database_path, sdk_authority=True)
+    assert surviving.unknown_jobs() == ()
+    # Never requeued: they may already have written.
+    assert surviving.retry_unknown_confirmed(unknown[0]) == 0
+    assert surviving.readmit_parked() == 0
+    assert PENDING not in {state for state, _, _ in rows.values()}
+
+
+def test_retrying_unknown_writes_works_after_the_legacy_tables_are_dropped(store):
+    """The retry button raised `no such table: memory_tasks` after an upgrade."""
+    from one_memory.memory_server.durable_queue import PENDING, UNKNOWN
+    from one_memory.target_schema import drop_legacy_tables
+
+    queue = DurableWriteQueue(store.database_path)
+    identifier = queue.submit(
+        WriteRequest(
+            internal_session_id="session-1",
+            source_id="cursor",
+            batch_identity=BatchIdentity(
+                internal_session_id="session-1", first_round=1, last_round=1
+            ),
+            evidence_ids=["e1"],
+            idempotency_key="after-upgrade",
+        )
+    ).job_id
+    drop_legacy_tables(store.database_path)
+    assert legacy_tables_present(store.database_path) == ()
+    old = datetime(2000, 1, 1, tzinfo=UTC).isoformat()
+
+    def make_unknown(code: str, attempts: int) -> None:
+        with main_database(store.database_path).write() as database, database:
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,hy_invoked=1,last_error=?,"
+                "attempts=?,updated_at=? WHERE job_id=?",
+                (UNKNOWN, code, attempts, old, identifier),
+            )
+
+    for sdk_authority in (True, False):
+        surviving = DurableWriteQueue(store.database_path, sdk_authority=sdk_authority)
+        make_unknown("model_content_outcome_unknown", 1)
+        assert surviving.resolve_unknown_from_linked_output(identifier) is False
+        assert surviving.retry_unknown_confirmed(identifier) == 1
+        assert surviving.get("after-upgrade").state == PENDING
+
+        make_unknown("hy_memory_timeout", 1)
+        since = datetime.now(UTC)
+        assert surviving.retry_timed_out_unknown_after_reconcile(older_than=since) == 1
+        make_unknown("model_content_outcome_unknown", 1)
+        assert surviving.retry_first_unknown_after_reconcile(older_than=since) == 1
+        if sdk_authority:
+            # The SDK-authority queue never brings a dropped table back.
+            assert legacy_tables_present(store.database_path) == ()
 
 
 def _protective(home: Path) -> Path:

@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Pipeline 可观测性：Log（文件 JSONL，始终开启）与 Trace（SQLite pipeline_logs，可关闭）。
+Pipeline 可观测性：Log（文件 JSONL，默认开启，可关闭）与 Trace（SQLite pipeline_logs，可关闭）。
 
 - Log：运维 tail/grep，每个环节即时一行，不依赖后续步骤成功与否。
 - Trace：Inspector / 调试，落库 pipeline_logs（需 MEMORY_CACHE_BACKEND=sqlite 等持久化后端）。
 
 环境变量：
+  MEMORY_PIPELINE_LOG_ENABLED    — Log 写 JSONL 文件，默认 true；false 时完全不写
   MEMORY_PIPELINE_TRACE_ENABLED  — Trace 落库，默认 true；OpenClaw C 端可设 false
   MEMORY_MEMORY_OPERATIONS_ENABLED — memory_operations 审计表落库，默认 false
   MEMORY_LOG_DIR                 — Log 目录（优先）
   MEMORY_TRACE_LOG_DIR           — Log 目录（兼容旧名）
+
+Log 与 Trace 都关闭时不包装 store_pipeline_log，而是换成立即返回 True 的
+空操作：热路径不做任何计时、脱敏或后台任务，也不写库。
 
 子目录（{log_dir}/{subdir}/{date}.log）由 PipelineLogWriter 从每条记录的
 user_id 前缀（第一个 "__" 左侧）切分；无前缀回落 "default"。该前缀是
@@ -94,6 +98,16 @@ def is_pipeline_trace_enabled() -> bool:
     )
 
 
+def is_pipeline_log_enabled() -> bool:
+    """是否把 pipeline step 写成 JSONL 文件（{log_dir}/<subdir>/<date>.log）。默认开启。"""
+    return os.getenv("MEMORY_PIPELINE_LOG_ENABLED", "true").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+
+
 def is_memory_operations_enabled() -> bool:
     """是否将知识库变动写入 memory_operations 审计表。默认关闭（false）。"""
     return os.getenv("MEMORY_MEMORY_OPERATIONS_ENABLED", "false").lower() in (
@@ -125,7 +139,7 @@ def redact_content(value: str) -> str:
 
 def resolve_pipeline_log_dir() -> str:
     """
-    JSONL pipeline log 根目录（始终使用，有默认值）。
+    JSONL pipeline log 根目录（MEMORY_PIPELINE_LOG_ENABLED 开启时使用，有默认值）。
 
     优先级: MEMORY_LOG_DIR > MEMORY_TRACE_LOG_DIR > {MEMORY_DATA_DIR}/logs/pipeline
     """
@@ -228,6 +242,7 @@ def wrap_store_pipeline_log(
 ) -> Callable[..., Any]:
     """包装 cache.store_pipeline_log：计时同步、JSONL/DB 异步落盘，不堵主请求。
 
+    - log_writer 为 None 时不写 JSONL（MEMORY_PIPELINE_LOG_ENABLED=false）
     - step-to-step elapsed_ms / event_at_ms 在调用瞬间打点（与业务墙钟对齐）
     - event_at_ms：调用方传入非 0 值则直接复用（App 已在自己被调用的那一刻
       同步打点，比这里更接近真实事件时刻）；传 0 / 不传才用本地 time.time()
@@ -410,7 +425,8 @@ def wrap_store_pipeline_log(
         try:
             loop = asyncio.get_running_loop()
             # JSONL 用线程池，与 loop 无亲和，留在当前 loop。
-            _track_task(loop.create_task(_persist_jsonl()))
+            if log_writer is not None:
+                _track_task(loop.create_task(_persist_jsonl()))
             # DB trace 用 cache pool（可能 aiomysql，绑定 owner_loop）。若当前不在
             # owner_loop（如 search 走独立 loop），派发回 owner_loop 执行，避免跨 loop。
             if trace_enabled:
@@ -446,25 +462,26 @@ def wrap_store_pipeline_log(
                         )
         except RuntimeError:
             # 无 running loop（极少见）：退化为同步写，保证不丢日志
-            try:
-                log_writer.write_step(
-                    request_id=request_id,
-                    user_id=user_id,
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    step=step,
-                    prompt=prompt,
-                    response=response,
-                    parsed=parsed,
-                    memory_ids=mem_ids,
-                    elapsed_ms=step_elapsed_ms,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=total_tokens,
-                    event_at_ms=event_at_ms,
-                )
-            except Exception:
-                pass
+            if log_writer is not None:
+                try:
+                    log_writer.write_step(
+                        request_id=request_id,
+                        user_id=user_id,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        step=step,
+                        prompt=prompt,
+                        response=response,
+                        parsed=parsed,
+                        memory_ids=mem_ids,
+                        elapsed_ms=step_elapsed_ms,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        event_at_ms=event_at_ms,
+                    )
+                except Exception:
+                    pass
             if trace_enabled:
                 try:
                     result = original_store(
@@ -496,12 +513,20 @@ def wrap_store_pipeline_log(
     return _store_pipeline_observability
 
 
+async def _noop_store_pipeline_log(*args: Any, **kwargs: Any) -> bool:
+    """Log 与 Trace 都关闭时的 store_pipeline_log：不计时、不写文件、不写库。"""
+    return True
+
+
 def install_pipeline_observability(
     cache: Any,
     *,
     log_label: str = "init",
 ) -> None:
     """给 cache 安装 JSONL + Trace 包装（fire-and-forget）。
+
+    MEMORY_PIPELINE_LOG_ENABLED=false 时不写 JSONL；若 Trace 也关闭，
+    store_pipeline_log 被换成空操作（不包装、不写库）。
 
     在 cache 所属 loop（write loop / _LoopThread）上调用，本函数会捕获该 loop
     作为 owner_loop 传给包装器：search 走独立 loop 后，从 search loop 触发的 DB
@@ -514,15 +539,31 @@ def install_pipeline_observability(
     except RuntimeError:
         owner_loop = None
 
-    log_dir = resolve_pipeline_log_dir()
-    log_writer = PipelineLogWriter(log_dir)
+    log_enabled = is_pipeline_log_enabled()
     trace_enabled = is_pipeline_trace_enabled()
-    logger.info(
-        f"[{log_label}] Pipeline log (JSONL) enabled: {log_dir}/<subdir>/<date>.log "
-        f"(subdir from user_id prefix before '__', else default) ; "
-        f"pipeline trace (DB)={'on' if trace_enabled else 'off'} ; "
-        f"persist=async(fire-and-forget)"
-    )
+    if not log_enabled and not trace_enabled:
+        logger.info(
+            f"[{log_label}] Pipeline log (JSONL) disabled ; pipeline trace (DB)=off ; "
+            f"store_pipeline_log=no-op"
+        )
+        cache.store_pipeline_log = _noop_store_pipeline_log
+        return
+
+    log_writer = None
+    if log_enabled:
+        log_dir = resolve_pipeline_log_dir()
+        log_writer = PipelineLogWriter(log_dir)
+        logger.info(
+            f"[{log_label}] Pipeline log (JSONL) enabled: {log_dir}/<subdir>/<date>.log "
+            f"(subdir from user_id prefix before '__', else default) ; "
+            f"pipeline trace (DB)={'on' if trace_enabled else 'off'} ; "
+            f"persist=async(fire-and-forget)"
+        )
+    else:
+        logger.info(
+            f"[{log_label}] Pipeline log (JSONL) disabled ; "
+            f"pipeline trace (DB)=on ; persist=async(fire-and-forget)"
+        )
     cache.store_pipeline_log = wrap_store_pipeline_log(
         cache.store_pipeline_log,
         log_writer=log_writer,

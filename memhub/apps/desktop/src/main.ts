@@ -1369,6 +1369,24 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     });
     await runtimeSupervisor.start();
     if (isQuitting()) return;
+    // A standalone Runtime refreshes the hosts it installed as it starts, so
+    // an upgrade through the App or `memhub upgrade` is covered there. An
+    // embedded one is this process: do the same here, now it is up. Only a
+    // packaged build, so a source checkout never repoints real hosts at itself.
+    if (localPermissions && app.isPackaged) {
+      void localPermissions
+        .refreshInstalledHosts(
+          hosts.map((host) => host.layout),
+          {
+            build:
+              packagedBuildNumber === undefined
+                ? undefined
+                : String(packagedBuildNumber),
+            diagnostics: hostDiagnostics,
+          },
+        )
+        .catch(() => undefined);
+    }
     if (
       app.isPackaged &&
       process.platform === "darwin" &&

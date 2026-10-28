@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { RecallRuntime } from "./recall-installer.js";
 import {
   DISCOVERY_KEY,
+  MCP_TOOLSET_KEY,
+  MCP_TOOLSET_VERSION,
   OWNER_KEY,
   OWNER_VALUE,
   renderConnectionMaterial,
@@ -60,6 +62,7 @@ describe("mcp install snippet", () => {
     const env = parsed.mcpServers[SERVER_NAME].env;
     expect(env[DISCOVERY_KEY]).toBe(runtime().discoveryPath);
     expect(env[OWNER_KEY]).toBe(OWNER_VALUE);
+    expect(env[MCP_TOOLSET_KEY]).toBe(MCP_TOOLSET_VERSION);
     expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
   });
 
@@ -174,9 +177,10 @@ describe("public contract document", () => {
     // reports it to us. Same class of problem R-33 treated for skill text,
     // and treated the same way: one source, checked by a test.
     const doc = await fs.readFile(CONTRACT_DOC, "utf8");
-    for (const key of [DISCOVERY_KEY, OWNER_KEY]) {
+    for (const key of [DISCOVERY_KEY, OWNER_KEY, MCP_TOOLSET_KEY]) {
       expect(doc).toContain(key);
     }
+    expect(doc).toContain(`"${MCP_TOOLSET_KEY}": "${MCP_TOOLSET_VERSION}"`);
     expect(doc).toContain(OWNER_VALUE);
     expect(doc).toContain(SERVER_NAME);
   });

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Pipeline Log Writer — 环节级 JSONL 日志（始终开启，与 SQLite Trace 分离）。
+Pipeline Log Writer — 环节级 JSONL 日志（默认开启，MEMORY_PIPELINE_LOG_ENABLED=false 关闭；
+与 SQLite Trace 分离）。
 
 目录: {log_dir}/{subdir}/{date}.log
 每行: request_id, namespace, user_id, agent_id, step, prompt, content, parsed,

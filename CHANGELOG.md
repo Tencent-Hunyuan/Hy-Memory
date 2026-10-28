@@ -4,6 +4,26 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub turns off the HY pipeline log and trace at every diagnostic level
+  (hy-memory 2.0.8 `MEMORY_PIPELINE_LOG_ENABLED=false`,
+  `MEMORY_PIPELINE_TRACE_ENABLED=false`), so the per-step JSONL files under
+  `hy-memory/governed-v2/logs/` and the `pipeline_logs` rows stop growing.
+  The Debug panel no longer shows the HY pipeline section. Existing files are
+  left in place.
+- HY SDK text logs are written once, to `hy_memory.log`. They are no longer
+  copied to `service.log` and `service-error.log` through the SDK's
+  stdout/stderr streams. SDK warnings and errors also go to `core.log`, so the
+  Debug panel still shows them. A live switch of the diagnostic level now also
+  changes the level of `hy_memory.log`.
+
+- MemHub shows when working and coding experiences were talked about. After
+  the SDK upgrade every one of them read "时间未知" (time unknown) because the
+  SDK never stored their conversation time; hy-memory 2.0.7 stores it and
+  Core now passes it through the memory list, detail, search and home
+  summary. An experience stored before 2.0.7 shows its write time, labelled
+  "写入于" / "写入时间", instead of "时间未知". Metadata repair also writes
+  the conversation time it recovers from the migration bundle into the SDK's
+  coding/working stores when they already have the column.
 - The SDK migration no longer fails its first run on a home with legacy
   vectors: reattaching them left a Chroma instance open with its own settings,
   and the readback that followed could not open the same store
@@ -67,6 +87,44 @@ Hy Memory and MemHub are versioned and released independently.
   parked pre-invocation work, and drop only the obsolete
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
+
+## Hy Memory 2.0.8 — 2026-10-28
+
+- Published
+  [`hy-memory==2.0.8`](https://pypi.org/project/hy-memory/2.0.8/).
+- New `MEMORY_PIPELINE_LOG_ENABLED` (default `true`) turns the pipeline JSONL
+  log (`{MEMORY_LOG_DIR}/<subdir>/<date>.log`) off. With `false` no JSONL
+  file or directory is written. When `MEMORY_PIPELINE_TRACE_ENABLED` is also
+  `false`, `store_pipeline_log` becomes a no-op that returns `True` at once:
+  no timing, redaction, background task or database write. The init log line
+  now states whether the JSONL log is on or off.
+- Conversation and memory text no longer appears in INFO or WARNING logs. The
+  `[add]` input, search queries and rewrites, coding experience tasks, fact
+  statements and subjects, reconcile op details, extracted info, embedding
+  inputs and unparsable model output moved to DEBUG. INFO lines keep ids,
+  counts and character lengths; parse-failure warnings remain but report only
+  the length of the output, e.g. `failed to parse output (812 chars)`. The
+  `[embed]` INFO line now carries `request.input_chars` instead of
+  `request.input`. The `JSON_PARSE_FAILED` error message from extraction no
+  longer embeds the model output either.
+
+## Hy Memory 2.0.7 — 2026-10-28
+
+- Published
+  [`hy-memory==2.0.7`](https://pypi.org/project/hy-memory/2.0.7/).
+- Coding and working experiences and facts now keep their conversation time.
+  `add(..., memory_at=...)` reached only the chat path before; the
+  productivity path dropped it, so every experience had only its write time
+  and MemHub showed them as "时间未知" (time unknown). `coding_memory_meta`
+  and `working_fact` gain a nullable `memory_at` column (epoch seconds) in
+  both the working and coding stores; existing databases get it on open, and
+  their old rows stay `None`. Without `memory_at` a write uses the time the
+  request arrived, as chat does. When an experience is updated by a later
+  conversation it keeps the later of the two times.
+- `list_memories` (`scene="coding"`, `"working"` and `"all"`), `get` and
+  `search` return `memory_at` for experiences and facts in the same field and
+  format as chat (epoch seconds, `None` when unknown). Experience search
+  results now also carry `created_at`.
 
 ## Hy Memory 2.0.6 — 2026-10-27
 

@@ -91,7 +91,7 @@ def test_bundle_contains_management_sdk_config_and_verified_manifest(tmp_path):
     assert manifest["bundle_id"] == "migration-1"
     assert manifest["sdk_namespace"] == "governed-v2"
     assert manifest["runtime_build"] == "build-13"
-    assert manifest["snapshot_sdk_version"] == "2.0.6"
+    assert manifest["snapshot_sdk_version"] == "2.0.8"
     paths = {item["path"]: item for item in manifest["files"]}
     assert {
         "management/one-memory.sqlite3",

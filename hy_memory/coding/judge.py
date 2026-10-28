@@ -195,8 +195,10 @@ async def classify_messages_scene(
         result = _parse_scene_json(resp.content)
         if result is None:
             logger.warning(
-                f"[coding-judge] failed to parse classify_messages output: {resp.content!r}; defaulting to chat"
+                f"[coding-judge] failed to parse classify_messages output "
+                f"({len(resp.content or '')} chars); defaulting to chat"
             )
+            logger.debug(f"[coding-judge] unparsable classify_messages output: {resp.content!r}")
             await _store_coding_log(
                 cache, request_id=request_id, user_id=user_id, agent_id=agent_id,
                 session_id=session_id, step="CODING_JUDGE", prompt=prompt,
@@ -207,9 +209,8 @@ async def classify_messages_scene(
             return "chat"
         scene = result["scene"]
         parsed = {**result, "is_coding": scene != "chat"}
-        logger.info(
-            f"[coding-judge] scene={scene} reason={result.get('reason', '')!r}"
-        )
+        logger.info(f"[coding-judge] scene={scene}")
+        logger.debug(f"[coding-judge] scene={scene} reason={result.get('reason', '')!r}")
         await _store_coding_log(
             cache, request_id=request_id, user_id=user_id, agent_id=agent_id,
             session_id=session_id, step="CODING_JUDGE", prompt=prompt,
@@ -295,8 +296,10 @@ async def classify_queries_scene(
         result = _parse_scene_json(resp.content)
         if result is None:
             logger.warning(
-                f"[coding-judge] failed to parse classify_queries output: {resp.content!r}; defaulting to chat"
+                f"[coding-judge] failed to parse classify_queries output "
+                f"({len(resp.content or '')} chars); defaulting to chat"
             )
+            logger.debug(f"[coding-judge] unparsable classify_queries output: {resp.content!r}")
             return "chat"
         scene = result["scene"]
         logger.info(f"[coding-judge] queries scene={scene}")
@@ -422,15 +425,18 @@ async def classify_and_rewrite_queries(
     scene = _parse_scene_label(head)
     if scene is None:
         logger.warning(
-            f"[coding-judge] classify_and_rewrite unrecognized head={head!r}; falling back to chat"
+            f"[coding-judge] classify_and_rewrite unrecognized head "
+            f"({len(head)} chars); falling back to chat"
         )
+        logger.debug(f"[coding-judge] classify_and_rewrite unrecognized head={head!r}")
         return {"scene": "chat", "is_coding": False, "rewrite_query": rewrite, "ok": False}
     is_coding = scene != "chat"
 
     logger.info(
         f"[coding-judge] classify_and_rewrite scene={scene} "
-        f"rewrite={rewrite!r}"
+        f"rewrite({len(rewrite)} chars)"
     )
+    logger.debug(f"[coding-judge] classify_and_rewrite rewrite={rewrite!r}")
     return {"scene": scene, "is_coding": is_coding, "rewrite_query": rewrite, "ok": True}
 
 
@@ -569,8 +575,9 @@ async def analyze_queries(
         parsed_scene = _parse_scene_label(head)
         if parsed_scene is None:
             logger.warning(
-                f"[coding-judge] analyze_queries unrecognized head={head!r}; ok=False"
+                f"[coding-judge] analyze_queries unrecognized head ({len(head)} chars); ok=False"
             )
+            logger.debug(f"[coding-judge] analyze_queries unrecognized head={head!r}")
             return {**fallback, "since_raw": ""}
         scene = parsed_scene
         idx = 1
@@ -589,9 +596,10 @@ async def analyze_queries(
     created_after = _since_to_created_after(since_raw, current_time)
 
     logger.info(
-        f"[coding-judge] analyze scene={scene} rewrite={rewrite!r} "
+        f"[coding-judge] analyze scene={scene} rewrite({len(rewrite)} chars) "
         f"since={since_raw!r} created_after={created_after}"
     )
+    logger.debug(f"[coding-judge] analyze rewrite={rewrite!r}")
     return {
         "scene": scene, "is_coding": scene != "chat", "rewrite_query": rewrite,
         "created_after": created_after, "since_raw": since_raw, "ok": True,
@@ -614,7 +622,10 @@ def _since_to_created_after(since_raw: str, current_time: str) -> Optional[float
             return dt.timestamp()
         except (ValueError, TypeError):
             continue
-    logger.warning(f"[coding-judge] analyze_queries unparsable SINCE={since_raw!r}")
+    logger.warning(
+        f"[coding-judge] analyze_queries unparsable SINCE ({len(since_raw)} chars)"
+    )
+    logger.debug(f"[coding-judge] analyze_queries unparsable SINCE={since_raw!r}")
     return None
 
 

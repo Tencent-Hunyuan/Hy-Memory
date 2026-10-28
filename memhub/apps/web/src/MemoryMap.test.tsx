@@ -5,7 +5,6 @@ import type {
   MemoryGraphNode,
   MemoryGraphResponse,
   MemoryProcessingSummary,
-  SourceImportReceipt as Receipt,
   SourceResponse,
 } from "@one-memory/contracts";
 import {
@@ -40,12 +39,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { MemoryMap } from "./MemoryMap";
 import type { MemoryArrival } from "./memory-arrival-state";
 
-const { sourceReceipt } = vi.hoisted(() => ({
-  sourceReceipt: vi.fn(),
-}));
-vi.mock("./api", () => ({
-  getSourceImportReceipt: sourceReceipt,
-}));
 vi.mock("./MemoryGraph3D", () => ({
   MemoryGraph3D: ({
     graph,
@@ -680,7 +673,7 @@ it("D96: the memory page has no raw-dialogue tab and never loads the dialogue li
 it("D96: lists a memory by when its conversation happened, not when it was generated", () => {
   const today = new Date().toISOString();
   const thisYear = new Date().getFullYear();
-  const items = ["第一条", "第二条", "第三条"].map((content, i) => ({
+  const items = ["第一条", "第二条", "第三条", "第四条"].map((content, i) => ({
     ...memories[0],
     memory_id: `t${i}`,
     content,
@@ -695,10 +688,11 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
         total: 519,
         offset: 100,
         limit: 100,
-        source_ids_by_memory: { t0: [], t1: [], t2: [] },
+        source_ids_by_memory: { t0: [], t1: [], t2: [], t3: [] },
         source_time_by_memory: {
           t0: { at: `${thisYear}-10-02T10:54:00`, basis: "conversation" },
           t1: { at: `${thisYear}-09-30T08:00:00`, basis: "import" },
+          t3: { at: `${thisYear}-09-29T08:00:00`, basis: "write" },
         },
       })}
     />,
@@ -710,6 +704,10 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
   expect(
     within(list).getByRole("button", { name: /第二条/ }).textContent,
   ).toContain("导入于 9月30日");
+  // An experience stored without a conversation time names its write time.
+  expect(
+    within(list).getByRole("button", { name: /第四条/ }).textContent,
+  ).toContain("写入于 9月29日");
   // D99: the generated day keeps its own line, so a memory made today from an
   // old conversation still reads as new rather than looking misplaced.
   expect(
@@ -1145,35 +1143,6 @@ const importedSources = [
     imported_conversations: 1,
   },
 ] as SourceResponse[];
-const importedReceipt: Receipt = {
-  source_id: "codex",
-  measured_at: "2026-09-14T00:00:00Z",
-  messages: 5,
-  conversations: 2,
-  person_messages: 2,
-  agent_messages: 2,
-  tool_messages: 0,
-  unknown_author_messages: 1,
-  unknown_time_messages: 1,
-  examples: [
-    {
-      evidence_id: "raw-codex",
-      role: "user",
-      written_by: "person",
-      created_at: null,
-      excerpt: "合成来源原文，不是治理记忆。",
-      truncated: false,
-    },
-  ],
-};
-async function openSourceReceipt() {
-  await userEvent.click(
-    screen.getByRole("button", { name: "图中选择 Codex · 2 段" }),
-  );
-  await userEvent.click(screen.getByText("查看已读内容"));
-  await waitFor(() => expect(sourceReceipt).toHaveBeenCalledWith("codex"));
-}
-
 it("REV09: selecting an imported source retains the canvas and only its authorized node", async () => {
   render(<Host items={[]} sources={importedSources} />);
   const canvas = screen.getByTestId("canvas");
@@ -1188,7 +1157,8 @@ it("REV09: selecting an imported source retains the canvas and only its authoriz
   expect(
     screen.getByRole("list", { name: "地图记忆列表" }).children,
   ).toHaveLength(0);
-  expect(sourceReceipt).not.toHaveBeenCalled();
+  expect(screen.getByRole("heading", { name: "记忆详情" })).toBeTruthy();
+  expect(screen.getByText("还没有已生成的记忆")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: /全部记忆/ }));
   expect(within(canvas).getAllByRole("button")).toHaveLength(2);
   expect(canvas.dataset.selected ?? "").toBe("");
@@ -1210,83 +1180,248 @@ it("REV09: fallback search matches source names and IDs without bypassing the se
   );
   await userEvent.type(search, "cOdEx");
   expect(screen.getByTestId("canvas").dataset.selected).toBe("source:codex");
-  expect(screen.getByText("查看已读内容")).toBeTruthy();
+  expect(screen.getByText("还没有已生成的记忆")).toBeTruthy();
   await userEvent.clear(search);
   await userEvent.type(search, "Cursor");
   expect(screen.queryByTestId("canvas")).toBeNull();
-  expect(screen.queryByText("查看已读内容")).toBeNull();
+  expect(screen.queryByText("正在读取记忆详情…")).toBeNull();
   await userEvent.clear(search);
   expect(screen.getByTestId("canvas").dataset.selected ?? "").toBe("");
-  expect(screen.queryByText("查看已读内容")).toBeNull();
+  expect(screen.queryByText("正在读取记忆详情…")).toBeNull();
 });
 
-it("REV09: source selection uses the actual permission-checked receipt API", async () => {
-  sourceReceipt.mockResolvedValue(importedReceipt);
-  render(<Host items={[]} sources={importedSources} />);
-  await openSourceReceipt();
-  expect(
-    await screen.findByText(importedReceipt.examples[0].excerpt),
-  ).toBeTruthy();
-  expect(screen.getByText("用户 · 时间未知")).toBeTruthy();
-  expect(screen.getByText("原始消息").nextElementSibling?.textContent).toBe(
-    "5",
+it("selecting a source node waits for its settled page, then opens the first memory", async () => {
+  const onQuery = vi.fn();
+  const onSource = vi.fn();
+  const resetPage = vi.fn();
+  const oldPage = {
+    items: memories,
+    total: 2,
+    offset: 0,
+    limit: 20,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const view = render(
+    <Host
+      simplified
+      sources={importedSources}
+      libraryView={{
+        ...pagedView(oldPage),
+        query: "旧查询",
+        settledQuery: "旧查询",
+        onQuery,
+        onSource,
+        resetPage,
+      }}
+    />,
   );
-  // No raw conversation is read by id on the SDK data plane.
-  expect(screen.queryByRole("button", { name: "查看完整对话" })).toBeNull();
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 Codex" }));
+  expect(onQuery).toHaveBeenCalledWith("");
+  expect(onSource).toHaveBeenCalledWith("codex");
+  expect(resetPage).toHaveBeenCalledOnce();
+
+  view.rerender(
+    <Host
+      simplified
+      sources={importedSources}
+      libraryView={{
+        ...pagedView(oldPage),
+        source: "codex",
+        settledSource: "",
+        loading: true,
+        onQuery,
+        onSource,
+        resetPage,
+      }}
+    />,
+  );
+  expect(
+    screen
+      .getAllByRole("status")
+      .some((node) => node.textContent === "正在读取记忆详情…"),
+  ).toBe(true);
+
+  const settledItems = [memories[1], memories[0]];
+  view.rerender(
+    <Host
+      simplified
+      items={settledItems}
+      sources={importedSources}
+      libraryView={{
+        ...pagedView({
+          ...oldPage,
+          items: settledItems,
+          source_ids_by_memory: { m1: ["codex"], m0: ["codex"] },
+        }),
+        source: "codex",
+        settledSource: "codex",
+        settledQuery: "",
+        onQuery,
+        onSource,
+        resetPage,
+      }}
+    />,
+  );
+  expect(await screen.findByRole("heading", { name: "第二条" })).toBeTruthy();
+  expect(screen.queryByText("查看已读内容")).toBeNull();
+  expect(document.querySelector(".source-import-receipt")).toBeNull();
 });
 
-it.each(["revoked", "removed", "revoked-hidden"])(
-  "REV09: %s source drops fallback, preview and a late receipt without reopening on reauthorization",
-  async (state) => {
-    let finish: (value: Receipt) => void = () => {};
-    sourceReceipt.mockImplementation(
-      () =>
-        new Promise<Receipt>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    const view = render(<Host items={[]} sources={[importedSources[0]]} />);
-    await openSourceReceipt();
-    view.rerender(
-      <Host
-        items={[]}
-        hidden={state === "revoked-hidden"}
-        sources={
-          state === "removed"
-            ? []
-            : [{ ...importedSources[0], authorized: false }]
-        }
-      />,
-    );
-    expect(screen.queryByTestId("canvas")).toBeNull();
-    expect(document.querySelector(".source-import-receipt")).toBeNull();
-    await act(async () => finish(importedReceipt));
-    view.rerender(<Host items={[]} sources={[importedSources[0]]} />);
-    expect(screen.getByTestId("canvas").dataset.selected ?? "").toBe("");
-    expect(screen.queryByText(importedReceipt.examples[0].excerpt)).toBeNull();
-    expect(screen.queryByText("查看已读内容")).toBeNull();
-    expect(sourceReceipt).toHaveBeenCalledTimes(1);
-  },
-);
+it("does not replace a newer memory choice when a source page settles", async () => {
+  const page = {
+    items: memories,
+    total: 2,
+    offset: 0,
+    limit: 20,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const view = render(
+    <Host simplified sources={importedSources} libraryView={pagedView(page)} />,
+  );
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 Codex" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "图中选择 第二条" }),
+  );
+  expect(await screen.findByRole("heading", { name: "第二条" })).toBeTruthy();
 
-it("REV09: compact preview close keeps source selection for reopening", async () => {
+  view.rerender(
+    <Host
+      simplified
+      sources={importedSources}
+      libraryView={{
+        ...pagedView(page),
+        source: "codex",
+        settledSource: "codex",
+      }}
+    />,
+  );
+  expect(screen.getByRole("heading", { name: "第二条" })).toBeTruthy();
+});
+
+it("closing the compact source inspector cancels its pending auto-open", async () => {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query.includes("max-width"),
     addEventListener() {},
     removeEventListener() {},
   }));
-  sourceReceipt.mockResolvedValue(importedReceipt);
-  render(<Host items={[]} sources={importedSources} />);
-  await openSourceReceipt();
-  await screen.findByText(importedReceipt.examples[0].excerpt);
-  await userEvent.click(screen.getByRole("button", { name: "关闭记忆详情" }));
-  expect(document.querySelector(".source-import-receipt")).toBeNull();
-  expect(screen.getByTestId("canvas").dataset.selected).toBe("source:codex");
-  await userEvent.click(
-    screen.getByRole("button", { name: "查看选中来源原文" }),
+  const page = {
+    items: memories,
+    total: 2,
+    offset: 0,
+    limit: 20,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const view = render(
+    <Host simplified sources={importedSources} libraryView={pagedView(page)} />,
   );
-  expect(screen.getByRole("dialog", { name: "记忆与原文" })).toBeTruthy();
-  expect(screen.getByText("查看已读内容")).toBeTruthy();
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 Codex" }));
+  await userEvent.click(screen.getByRole("button", { name: "关闭记忆详情" }));
+
+  view.rerender(
+    <Host
+      simplified
+      sources={importedSources}
+      libraryView={{
+        ...pagedView(page),
+        source: "codex",
+        settledSource: "codex",
+      }}
+    />,
+  );
+  expect(screen.queryByRole("dialog", { name: "记忆与原文" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "第一条" })).toBeNull();
+});
+
+it("keeps the source selection and offers retry when its page fails", async () => {
+  const onRetry = vi.fn();
+  const page = {
+    items: memories,
+    total: 2,
+    offset: 0,
+    limit: 20,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const view = render(
+    <Host simplified sources={importedSources} libraryView={pagedView(page)} />,
+  );
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 Codex" }));
+  view.rerender(
+    <Host
+      simplified
+      sources={importedSources}
+      libraryView={{
+        ...pagedView(page),
+        source: "codex",
+        settledSource: "codex",
+        failed: true,
+        onRetry,
+      }}
+    />,
+  );
+  expect(
+    screen
+      .getAllByRole("alert")
+      .some((node) => node.textContent === "记忆暂时无法读取"),
+  ).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "重试" }));
+  expect(onRetry).toHaveBeenCalledOnce();
+});
+
+it("drops a pending source selection when that source is revoked", async () => {
+  const page = {
+    items: memories,
+    total: 2,
+    offset: 0,
+    limit: 20,
+    source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+  };
+  const view = render(
+    <Host
+      simplified
+      sources={[importedSources[0]]}
+      libraryView={pagedView(page)}
+    />,
+  );
+  await act(async () => {});
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 Codex" }));
+  expect(screen.getByTestId("canvas").dataset.selected).toBe("source:codex");
+
+  view.rerender(
+    <Host
+      simplified
+      sources={[{ ...importedSources[0], authorized: false }]}
+      libraryView={{
+        ...pagedView(page),
+        source: "codex",
+        settledSource: "codex",
+      }}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "图中选择 Codex" })).toBeNull();
+  expect(screen.queryByTestId("canvas")).toBeNull();
+  expect(
+    screen.getByRole("list", { name: "地图记忆列表" }).children,
+  ).toHaveLength(0);
+  expect(screen.queryByText("正在读取记忆详情…")).toBeNull();
+
+  view.rerender(
+    <Host
+      simplified
+      sources={[importedSources[0]]}
+      libraryView={{
+        ...pagedView(page),
+        source: "codex",
+        settledSource: "codex",
+      }}
+    />,
+  );
+  expect(screen.getByTestId("canvas").dataset.selected).not.toBe(
+    "source:codex",
+  );
 });
 
 it("REV09: first governed memories replace fallback without remounting the graph or breaking memory IDs", async () => {
@@ -1325,5 +1460,4 @@ it.each([
   render(<Host items={[]} sources={sources} />);
   expect(screen.queryByTestId("canvas")).toBeNull();
   expect(document.querySelector(".source-import-receipt")).toBeNull();
-  expect(sourceReceipt).not.toHaveBeenCalled();
 });

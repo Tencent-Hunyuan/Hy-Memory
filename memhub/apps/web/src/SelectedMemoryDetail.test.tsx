@@ -176,3 +176,41 @@ it("stamps today's source and conversation time without an evidence page", () =>
   expect(screen.getByText(/对话时间 今天 /)).toBeTruthy();
   expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
 });
+it("shows an experience's conversation time when the SDK stored one", () => {
+  const today = new Date().toISOString();
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        evidence: [],
+        sdk_status: "active",
+        source_id: "codebuddy",
+        sdk_memory_at: today,
+        sdk_created_at: today,
+        sdk_ref: { scene: "coding", kind: "experience", variant: "coding" },
+      }}
+      sources={[]}
+    />,
+  );
+  expect(screen.getByText(/对话时间 今天 /)).toBeTruthy();
+  expect(screen.queryByText(/时间未知/)).toBeNull();
+});
+it("labels an experience without a conversation time by its write time", () => {
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        evidence: [],
+        sdk_status: "active",
+        source_id: "codebuddy",
+        sdk_memory_at: null,
+        sdk_created_at: new Date().toISOString(),
+        sdk_ref: { scene: "working", kind: "experience", variant: "working" },
+      }}
+      sources={[]}
+    />,
+  );
+  expect(screen.getByText(/来源 codebuddy · 写入时间 今天 /)).toBeTruthy();
+  expect(screen.queryByText(/对话时间/)).toBeNull();
+  expect(screen.queryByText(/时间未知/)).toBeNull();
+});

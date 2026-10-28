@@ -36,6 +36,7 @@ from one_memory.hy_graph_admin import (
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.local_embedding import LocalEmbedder
+from one_memory.log_file import confine_hy_sdk_logging
 from one_memory.model_profiles import (
     ModelProfileSnapshot,
     ProviderKind,
@@ -65,6 +66,16 @@ _RUNTIMES: dict[Path, _RuntimeEntry] = {}
 _STORE_GATE = threading.Condition()
 _OFFLINE_STORES: set[Path] = set()
 _OPENING: dict[Path, int] = {}
+
+# One client constructs at a time per home, its first-time store setup
+# included. The constructor opens Chroma's `PersistentClient`, and two first
+# opens on one directory race over that same unlocked System cache. On a
+# clean install the write drain's client and a UI read client started in the
+# same second; neither reached `VectorStore ready`, and the first write job
+# was lost as unknown. Taken inside `acquire_client`, after the offline gate
+# and never while `_STORE_GATE` is held, so it cannot deadlock with
+# `hold_stores_offline`, which refuses while `_OPENING` counts a client.
+_CONSTRUCTING: dict[Path, threading.Lock] = {}
 
 
 class LocalOnnxEmbeddingService:
@@ -381,16 +392,23 @@ def _acquire_client(
     embedding_service: LocalOnnxEmbeddingService | None = None
     if (profile.embedding_provider_kind or profile.provider_kind) is ProviderKind.LOCAL_ONNX:
         embedding_service = LocalOnnxEmbeddingService()
+    with _STORE_GATE:
+        constructing = _CONSTRUCTING.setdefault(key, threading.Lock())
     try:
-        client = HyMemoryClient(
-            config=config,
-            mode="ultra" if graph_store_enabled() else "pro",
-            runtime=runtime,
-            embedding_service=embedding_service,
-        )
+        with constructing:
+            client = HyMemoryClient(
+                config=config,
+                mode="ultra" if graph_store_enabled() else "pro",
+                runtime=runtime,
+                embedding_service=embedding_service,
+            )
     except BaseException:
         _release_runtime(key)
         raise
+    finally:
+        # The constructor's first step configures HY's text log (once per
+        # process), so by here it exists whether or not construction succeeded.
+        confine_hy_sdk_logging()
     return ClientLease(client, key)
 
 

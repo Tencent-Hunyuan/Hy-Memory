@@ -13,7 +13,7 @@ spec.loader.exec_module(module)
 
 
 def test_hy_memory_notice_comes_from_the_installed_dist_info(tmp_path: Path) -> None:
-    dist_info = tmp_path / "hy_memory-2.0.6.dist-info"
+    dist_info = tmp_path / "hy_memory-2.0.8.dist-info"
     licenses = dist_info / "licenses"
     licenses.mkdir(parents=True)
     (dist_info / "METADATA").write_text(
@@ -21,7 +21,7 @@ def test_hy_memory_notice_comes_from_the_installed_dist_info(tmp_path: Path) -> 
             (
                 "Metadata-Version: 2.4",
                 "Name: hy-memory",
-                "Version: 2.0.6",
+                "Version: 2.0.8",
                 "License-Expression: Apache-2.0",
                 "",
             )
@@ -38,7 +38,7 @@ def test_hy_memory_notice_comes_from_the_installed_dist_info(tmp_path: Path) -> 
     notice = module.hy_memory_notice(dist_info)
 
     assert notice["name"] == "hy-memory"
-    assert notice["version"] == "2.0.6"
+    assert notice["version"] == "2.0.8"
     assert notice["license"] == "Apache-2.0"
     assert notice["copyright"] == "Copyright (C) 2026 Tencent. All rights reserved."
     assert "Licensed under the Apache License" in notice["text"]

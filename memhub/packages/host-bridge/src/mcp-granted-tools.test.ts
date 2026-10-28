@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type GrantedTools, McpSession } from "./mcp-session.js";
+import { MCP_TOOL_NAMES, MCP_TOOLSET_VERSION } from "./mcp-toolset.js";
 
 function sessionWith(granted: GrantedTools): McpSession {
   return new McpSession(
@@ -69,5 +70,16 @@ describe("BUG-15: the listed tools follow what the grant allows", () => {
   it("lists everything when there is no grant to read", async () => {
     const names = await listedNames(sessionWith(async () => null));
     expect(names).toHaveLength(3);
+  });
+});
+
+describe("the tool set stamped on installed entries", () => {
+  it("names exactly the tools the server lists", async () => {
+    // Change a tool without moving MCP_TOOLSET_VERSION and hosts that cache
+    // tool lists by config fingerprint keep showing the old set. Update both,
+    // and this pinned version, together.
+    const names = await listedNames(sessionWith(async () => null));
+    expect(names).toEqual([...MCP_TOOL_NAMES]);
+    expect(MCP_TOOLSET_VERSION).toBe("3");
   });
 });

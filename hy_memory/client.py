@@ -744,7 +744,7 @@ class HyMemoryClient:
     def _install_pipeline_observability_hooks(self) -> None:
         """
         包装 cache.store_pipeline_log：
-        - Log：JSONL 文件，始终写入（环节级，不依赖 Trace 开关）
+        - Log：JSONL 文件，由 MEMORY_PIPELINE_LOG_ENABLED 控制（默认开启）
         - Trace：SQLite pipeline_logs，由 MEMORY_PIPELINE_TRACE_ENABLED 控制（Inspector）
         - 落盘 fire-and-forget，不阻塞 search/write 热路径
         """
@@ -958,7 +958,7 @@ class HyMemoryClient:
                 parsed_tool_calls = json.loads(raw_tool_calls) if raw_tool_calls else []
             except Exception:
                 logger.warning(
-                    "tool_calls 是非法 JSON 字符串，已忽略: %r", raw_tool_calls[:200]
+                    "tool_calls 是非法 JSON 字符串，已忽略 (%d chars)", len(raw_tool_calls)
                 )
                 parsed_tool_calls = []
             raw_tool_calls = parsed_tool_calls if isinstance(parsed_tool_calls, list) else []
@@ -1544,6 +1544,7 @@ class HyMemoryClient:
                 # LLM 写的"这个结论一路怎么改成现在这样"，直接进提示词；
                 # 没被覆盖过就是空串。不参与检索——召回认的是 statement 的当前值。
                 "fact_chain_summary": fact.fact_chain_summary,
+                "memory_at": _epoch_seconds(fact.memory_at),
                 "created_at": fact.created_at.isoformat() if fact.created_at else None,
                 "score": round(float(score), 4),
                 "source": fact.source,
@@ -1652,6 +1653,8 @@ class HyMemoryClient:
                 "score": (round(float(score_by_id[d.experience_id]), 4)
                           if d.experience_id in score_by_id else None),
                 "confidence": d.confidence,
+                "memory_at": _epoch_seconds(d.memory_at),
+                "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
                 "extraction_source": d.extraction_source,
@@ -1953,6 +1956,7 @@ class HyMemoryClient:
                   "content"    chat 正文；经验为 "task\nsolution"；事实为 statement
                   "score"      RRF 融合分；"lane_score" 为该路原始分；"lane_rank" 为该路名次
                   "source", "created_at", "updated_at"（秒级 epoch，取不到为 None）
+                  "memory_at"  对话时间（秒级 epoch），各路原有字段，三路同名同格式
                 chat 路内部名次：normal → schema → proactive 依次排；working/coding 路
                 内部名次：事实与经验各按原顺序交替（事实在前），两层谁也不压谁。
         """
@@ -2144,7 +2148,8 @@ class HyMemoryClient:
                           "limit", "offset", "request_id", "elapsed_ms"}
                 每条带 "scene"、"kind"（chat | experience）、"memory_id"、"content"
                 （经验为 "task\nsolution"）、"source"、"status"、"created_at"、
-                "updated_at"（秒级 epoch），以及该路原有字段。
+                "updated_at"（秒级 epoch），以及该路原有字段（含对话时间
+                "memory_at"，秒级 epoch，三路同名同格式）。
         """
         return self._loop_thread.run(
             self.async_list_memories(
@@ -2967,6 +2972,7 @@ class HyMemoryClient:
                     session_id=session_id,
                     request_id=request_id,
                     source=source,
+                    memory_at=memory_at,
                 )
                 # Public receipt always identifies the productivity namespace.
                 resp["variant"] = scene_variant
@@ -3002,13 +3008,13 @@ class HyMemoryClient:
                 f"[add] writing {preview} user={uid} "
                 f"agent_id={agent_id} session_id={session_id} mode={self._mode}"
             )
-            logger.info(f"[add] messages detail: {[m.to_dict() for m in chat_messages]}")
+            logger.debug(f"[add] messages detail: {[m.to_dict() for m in chat_messages]}")
         else:
             logger.info(
                 f"[add] writing text({len(content)} chars) user={uid} "
-                f"agent_id={agent_id} session_id={session_id} mode={self._mode} "
-                f"content={content}"
+                f"agent_id={agent_id} session_id={session_id} mode={self._mode}"
             )
+            logger.debug(f"[add] text content={content!r}")
 
         # mode → agent_mode 映射
         # lite: 不调 LLM agent
@@ -4028,14 +4034,14 @@ class HyMemoryClient:
             decided_variant = HyMemoryClient._scene_variant(scene)
             logger.info(
                 f"[search] scene explicit={decided_scene} (no LLM judge); "
-                f"target={effective_target_query!r}"
+                f"target({len(effective_target_query or '')} chars)"
             )
         elif not agentic_enabled and not queries_supplied:
             # 默认 light search 仅指 query="..."：固定 normal，绝不调用 LLM。
             decided_scene = "normal"
             logger.info(
                 f"[search] search_mode=default single-query scene=normal (no LLM); "
-                f"target={target_query!r}"
+                f"target({len(target_query or '')} chars)"
             )
         elif agentic_enabled:
             # agentic：单/多 query 都强制一次 LLM 完成三分类 + rewrite + 时间解析。
@@ -4070,14 +4076,18 @@ class HyMemoryClient:
                 rewrite_created_after = ar.get("created_after")
                 logger.info(
                     f"[search] agentic scene={decided_scene} via rewrite-LLM "
-                    f"(classify={want_classify}); orig={target_query!r} "
-                    f"effective={effective_target_query!r} rewrite_used={rewrite_used} "
+                    f"(classify={want_classify}); rewrite_used={rewrite_used} "
                     f"created_after={rewrite_created_after}"
+                )
+                logger.debug(
+                    f"[search] agentic rewrite: orig={target_query!r} "
+                    f"effective={effective_target_query!r}"
                 )
             else:
                 decided_scene = "normal"
                 logger.info(
-                    f"[search] agentic rewrite-LLM fallback=normal; target={target_query!r}"
+                    f"[search] agentic rewrite-LLM fallback=normal; "
+                    f"target({len(target_query or '')} chars)"
                 )
         elif rewrite_enabled and not _too_long:
             # default + queries= 的原逻辑：配置开启时一次 LLM 做 rewrite/time，
@@ -4156,7 +4166,7 @@ class HyMemoryClient:
             decided_scene = "normal"
             logger.info(
                 f"[search] default multi-query features disabled; no LLM; "
-                f"target={target_query!r}"
+                f"target({len(target_query or '')} chars)"
             )
 
         # ────────────────────────────────────────────────────────────
@@ -4209,7 +4219,7 @@ class HyMemoryClient:
             else:
                 logger.info(
                     f"[search] routing to PRODUCTIVITY path variant={decided_variant}: "
-                    f"target={effective_target_query!r} "
+                    f"target({len(effective_target_query or '')} chars) "
                     f"workspace_id={workspace_id!r} branch={branch!r}"
                 )
                 return await self._search_coding(
@@ -4237,9 +4247,11 @@ class HyMemoryClient:
         # Chat 召回链路（原有逻辑）
         # ────────────────────────────────────────────────────────────
         logger.info(
-            f"[search] query='{effective_target_query}' user_ids={effective_user_ids} "
+            f"[search] query({len(effective_target_query or '')} chars) "
+            f"user_ids={effective_user_ids} "
             f"agent_ids={effective_agent_ids} session_ids={effective_session_ids} limit={limit}"
         )
+        logger.debug(f"[search] query={effective_target_query!r}")
 
         # rewrite 抽出的时间下界与用户显式 created_after 取更晚者（更严格）
         effective_created_after = created_after
@@ -5920,6 +5932,7 @@ class HyMemoryClient:
                 "source_fact_ids": list(d.source_fact_ids),
                 "confidence": d.confidence,
                 "status": MemoryStatus.ACTIVE.value,
+                "memory_at": _epoch_seconds(d.memory_at),
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,

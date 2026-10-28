@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from contextlib import suppress
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -164,44 +165,45 @@ class SdkMemoryRuntime:
             if str(error) == "model_profile_not_active":
                 return HyGraphSnapshot(consulted=False)
             raise
-        try:
-            client = await self.coordinator.client()
-        except Exception as error:
-            raise HySdkError("hy_memory_graph_read_failed") from error
-        return await asyncio.to_thread(
-            read_graph_snapshot,
-            client,
-            "local",
-            "*",
-            limit,
-        )
+        async with AsyncExitStack() as stack:
+            try:
+                client = await stack.enter_async_context(self.coordinator.use_client())
+            except Exception as error:
+                raise HySdkError("hy_memory_graph_read_failed") from error
+            return await asyncio.to_thread(
+                read_graph_snapshot,
+                client,
+                "local",
+                "*",
+                limit,
+            )
 
     async def digest(self) -> dict[str, object]:
-        client = await self.coordinator.client()
-        try:
-            raw = await asyncio.to_thread(
-                client.list_memories,
-                user_id="local",
-                limit=1_000,
-                offset=0,
-            )
-            agent_ids = _agent_ids(raw)
-            digests = [
-                {
-                    "agent_id": agent_id,
-                    "schemas_recorded": 0,
-                    **dict(
-                        await asyncio.to_thread(
-                            client.evolve,
-                            user_id="local",
-                            agent_id=agent_id,
-                        )
-                    ),
-                }
-                for agent_id in agent_ids
-            ]
-        except Exception as error:
-            raise HySdkError("hy_memory_digest_failed") from error
+        async with self.coordinator.use_client() as client:
+            try:
+                raw = await asyncio.to_thread(
+                    client.list_memories,
+                    user_id="local",
+                    limit=1_000,
+                    offset=0,
+                )
+                agent_ids = _agent_ids(raw)
+                digests = [
+                    {
+                        "agent_id": agent_id,
+                        "schemas_recorded": 0,
+                        **dict(
+                            await asyncio.to_thread(
+                                client.evolve,
+                                user_id="local",
+                                agent_id=agent_id,
+                            )
+                        ),
+                    }
+                    for agent_id in agent_ids
+                ]
+            except Exception as error:
+                raise HySdkError("hy_memory_digest_failed") from error
         return {
             "success": all(result.get("success") is not False for result in digests),
             "scope_count": len(digests),
@@ -240,36 +242,39 @@ class SdkMemoryRuntime:
             decision=decision,
         )
 
-    async def _mutation_client(self) -> Any:
+    @asynccontextmanager
+    async def _mutation_client(self) -> AsyncIterator[Any]:
         """The write client, with no-model and keychain refusals as SDK codes.
 
         Callers record these against the edit or deletion instead of failing
         the request that already committed it.
         """
-        try:
-            return await self.coordinator.client()
-        except RuntimeError as error:
-            code = str(error)
-            if not _STABLE_CODE.fullmatch(code):
-                code = "hy_memory_client_unavailable"
-            raise HySdkError(code) from error
+        async with AsyncExitStack() as stack:
+            try:
+                client = await stack.enter_async_context(self.coordinator.use_client())
+            except RuntimeError as error:
+                code = str(error)
+                if not _STABLE_CODE.fullmatch(code):
+                    code = "hy_memory_client_unavailable"
+                raise HySdkError(code) from error
+            yield client
 
     async def update_hy_memory(self, memory_id: str, content: str) -> dict[str, object]:
-        client = await self._mutation_client()
-        try:
-            result = await asyncio.to_thread(client.update, memory_id, content)
-        except Exception as error:
-            raise HySdkError("hy_memory_update_failed") from error
+        async with self._mutation_client() as client:
+            try:
+                result = await asyncio.to_thread(client.update, memory_id, content)
+            except Exception as error:
+                raise HySdkError("hy_memory_update_failed") from error
         if not isinstance(result, dict) or result.get("success") is not True:
             raise HySdkError("hy_memory_update_rejected")
         return result
 
     async def finish_deletion(self, memory_id: str) -> None:
-        client = await self._mutation_client()
-        try:
-            result = await asyncio.to_thread(client.delete, memory_id)
-        except Exception as error:
-            raise HySdkError("hy_memory_delete_failed") from error
+        async with self._mutation_client() as client:
+            try:
+                result = await asyncio.to_thread(client.delete, memory_id)
+            except Exception as error:
+                raise HySdkError("hy_memory_delete_failed") from error
         if not isinstance(result, dict):
             raise HySdkError("hy_memory_delete_rejected")
         error_code = result.get("error_code")
