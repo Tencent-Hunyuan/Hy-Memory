@@ -973,6 +973,8 @@ class System2Writer(WritePipeline):
         handled_node_ids: Optional[set[str]] = None,
     ) -> int:
         """Record a completed S2 review even when it intentionally emits no Schema."""
+        from .system2_agent import fact_source_keys
+
         updated = 0
         for cluster in batch.get("clusters") or []:
             for fact in cluster.get("facts") or []:
@@ -987,13 +989,9 @@ class System2Writer(WritePipeline):
                         continue
                     custom = dict(node.custom or {})
                     custom["s2_reviewed_count"] = int(custom.get("s2_reviewed_count") or 0) + 1
-                    source_ids = {
-                        str(value) for value in custom.get("source_raw_memory_ids") or [] if str(value)
-                    }
-                    legacy_source = str(getattr(node, "source_raw_memory_id", "") or "")
-                    if legacy_source:
-                        source_ids.add(legacy_source)
-                    custom["s2_reviewed_source_count"] = len(source_ids)
+                    # Freshness also counts a session when no raw provenance is
+                    # present; use the same source definition for its checkpoint.
+                    custom["s2_reviewed_source_count"] = len(fact_source_keys(node))
                     await vector_store.update_payload(node_id, {"custom": custom})
                     updated += 1
                 except Exception as exc:
@@ -1006,7 +1004,9 @@ class System2Writer(WritePipeline):
         vector_store,
         excluded_node_ids: Optional[set[str]] = None,
     ) -> int:
-        """Checkpoint raw-source counts consumed by the global therapy pass."""
+        """Checkpoint source counts consumed by the global therapy pass."""
+        from .system2_agent import fact_source_keys
+
         updated = 0
         seen = set()
         for cluster in materials.get("clusters") or []:
@@ -1022,13 +1022,7 @@ class System2Writer(WritePipeline):
                     if node is None:
                         continue
                     custom = dict(node.custom or {})
-                    source_ids = {
-                        str(value) for value in custom.get("source_raw_memory_ids") or [] if str(value)
-                    }
-                    legacy_source = str(getattr(node, "source_raw_memory_id", "") or "")
-                    if legacy_source:
-                        source_ids.add(legacy_source)
-                    custom["s2_holistic_therapy_reviewed_source_count"] = len(source_ids)
+                    custom["s2_holistic_therapy_reviewed_source_count"] = len(fact_source_keys(node))
                     await vector_store.update_payload(node_id, {"custom": custom})
                     updated += 1
                 except Exception as exc:
