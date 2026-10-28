@@ -439,6 +439,8 @@ class ChromaVectorStore(VectorStoreBase):
         only_latest: bool = False,
         with_vectors: bool = True,
         allow_raw_layer: bool = False,
+        order_by_created: bool = False,
+        exclude_node_ids: Optional[List[str]] = None,
     ) -> List[MemoryNode]:
         """枚举用户的记忆节点，支持多 user / 多 agent
 
@@ -475,6 +477,8 @@ class ChromaVectorStore(VectorStoreBase):
                     where_conditions.append({"status": {"$eq": status_values[0]}})
                 else:
                     where_conditions.append({"status": {"$in": status_values}})
+            if exclude_node_ids:
+                where_conditions.append({"node_id": {"$nin": list(exclude_node_ids)}})
             if only_latest:
                 where_conditions.append({"is_latest": {"$eq": True}})
             if layers:
@@ -499,6 +503,11 @@ class ChromaVectorStore(VectorStoreBase):
             include = ["metadatas"]
             if with_vectors:
                 include.append("embeddings")
+            if order_by_created:
+                ids = self._recent_created_ids(self._collection, where, limit)
+                if not ids:
+                    return {"ids": []}
+                return self._collection.get(ids=ids, where=where, include=include)
             return self._collection.get(
                 where=where,
                 include=include,
@@ -513,17 +522,81 @@ class ChromaVectorStore(VectorStoreBase):
             for i, _id in enumerate(results["ids"]):
                 meta = metadatas[i] if i < len(metadatas) else {}
                 payload = self._chroma_metadata_to_payload(meta)
-                node = self._payload_to_node(payload)
+                node = (
+                    self._recent_payload_to_node(payload)
+                    if order_by_created else self._payload_to_node(payload)
+                )
                 if with_vectors and embeddings is not None and i < len(embeddings) and embeddings[i] is not None:
                     emb = embeddings[i]
                     node.embedding = list(emb) if hasattr(emb, '__iter__') else emb
                 nodes.append(node)
+
+        if order_by_created:
+            nodes.sort(key=lambda node: self._created_payload_key(
+                {"gmt_created": node.gmt_created.timestamp() if node.gmt_created else None},
+                self._node_id_to_point_id(node.node_id),
+            ), reverse=True)
 
         logger.info(
             f"[vector-store] list_by_user: user_ids={effective_uids} "
             f"agent_ids={effective_aids} found={len(nodes)}"
         )
         return nodes
+
+    @staticmethod
+    def _recent_created_ids(collection, where: Dict[str, Any], limit: int) -> List[str]:
+        """Find the newest IDs without reading every raw transcript as metadata.
+
+        Chroma includes content/search_text inside metadatas and cannot project
+        individual keys. Its indexed numeric predicates and ID-only reads locate
+        the Kth timestamp first; only the final K records need full metadata.
+        """
+        import heapq
+
+        if limit <= 0:
+            return []
+
+        def ids(condition, *, size=limit, offset=0):
+            return collection.get(
+                where=condition, include=[], limit=size, offset=offset,
+            )["ids"]
+
+        def dated(operator, value):
+            return {"$and": [where, {"gmt_created": {operator: value}}]}
+
+        candidates = ids(where)
+        if len(candidates) < limit:
+            return candidates
+        # Payload timestamps are integer epoch seconds produced from Python
+        # datetimes. These bounds include their full range plus timezone offsets.
+        low, high = -62135683200, 253402387200
+        dated_ids = ids(dated("$gte", low))
+        if len(dated_ids) < limit:
+            # Legacy records without a timestamp fill only the unused slots.
+            selected = set(dated_ids)
+            condition = where
+            needed = limit - len(selected)
+        else:
+            while high - low > 1:
+                middle = (low + high) // 2
+                if len(ids(dated("$gte", middle))) >= limit:
+                    low = middle
+                else:
+                    high = middle
+            selected = set(ids(dated("$gt", low)))
+            condition = dated("$eq", low)
+            needed = limit - len(selected)
+
+        def tied_ids():
+            offset = 0
+            while True:
+                page = ids(condition, size=256, offset=offset)
+                yield from (point_id for point_id in page if point_id not in selected)
+                if len(page) < 256:
+                    break
+                offset += len(page)
+
+        return list(selected) + heapq.nlargest(needed, tied_ids(), key=str.lower)
 
     # ================================================================
     # 统计
