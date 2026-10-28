@@ -265,6 +265,17 @@ class MemoryWriter(WritePipeline):
         legacy_source = str(getattr(old_node, "source_raw_memory_id", "") or "")
         if legacy_source and legacy_source not in source_ids:
             source_ids.append(legacy_source)
+        new_source = str(source_raw_memory_id or "")
+        if new_source and not any(str(value) for value in source_ids):
+            # A session fallback is replaced by the first raw source, not added
+            # to it. Reopen the review even though both source sets have size 1.
+            for checkpoint in (
+                "s2_reviewed_source_count",
+                "s2_holistic_therapy_reviewed_source_count",
+                "s2_profile_reviewed_source_count",
+            ):
+                if checkpoint in custom:
+                    custom[checkpoint] = 0
         if (
             "s2_reviewed_source_count" not in custom
             and (int(custom.get("s2_reviewed_count") or 0) > 0
@@ -273,7 +284,7 @@ class MemoryWriter(WritePipeline):
             # Freeze the provenance consumed by the previous evoling pass
             # before appending this write. The new source then reopens the node.
             custom["s2_reviewed_source_count"] = len(source_ids)
-        for source_id in (str(source_raw_memory_id or ""),):
+        for source_id in (new_source,):
             if source_id and source_id not in source_ids:
                 source_ids.append(source_id)
         if source_ids:
