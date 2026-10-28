@@ -4911,6 +4911,7 @@ class HyMemoryClient:
         # 更新节点
         node.content = content
         node.embedding = new_embedding
+        node.gmt_modified = datetime.now()
 
         await self._vector_store.upsert(node)
         try:
