@@ -1529,8 +1529,8 @@ class MemoryReconciler:
                     error_code = "LLM_UNAVAILABLE"
                 elif raw_response.strip():
                     error_msg = (
-                        f"RECONCILE JSON parse failed after {_n_attempts} attempts: "
-                        f"{raw_response[:200] if _log_llm_content_enabled() else '<redacted>'}"
+                        f"RECONCILE JSON parse failed after {_n_attempts} attempts "
+                        f"({len(raw_response)} chars)"
                     )
                     error_code = "JSON_PARSE_FAILED"
                 else:
