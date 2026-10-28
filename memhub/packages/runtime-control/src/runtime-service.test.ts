@@ -2,9 +2,11 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,6 +38,38 @@ function supervisor() {
     start: vi.fn(async () => undefined),
     stop: vi.fn(async (): Promise<void> => {}),
   };
+}
+
+const PREVIOUS_BOOT = "00000000-0000-4000-8000-00000000000a";
+const CURRENT_BOOT = "00000000-0000-4000-8000-00000000000b";
+
+/** Seed a lock as an existing owner would leave it; no owner = legacy debris. */
+async function seedLock(dataDir: string, owner?: object): Promise<string> {
+  const lock = path.join(dataDir, "runtime-service.lock");
+  await mkdir(lock, { mode: 0o700 });
+  if (owner) {
+    await writeFile(path.join(lock, "owner.json"), JSON.stringify(owner), {
+      mode: 0o600,
+    });
+  }
+  await chmod(lock, 0o700);
+  return lock;
+}
+
+async function ownerOf(dataDir: string): Promise<Record<string, unknown>> {
+  return JSON.parse(
+    await readFile(
+      path.join(dataDir, "runtime-service.lock", "owner.json"),
+      "utf8",
+    ),
+  );
+}
+
+/** Every lock, staging and cleared-lease entry in the data dir. */
+async function lockEntries(dataDir: string): Promise<string[]> {
+  return (await readdir(dataDir))
+    .filter((name) => name.startsWith("runtime-service.lock"))
+    .sort();
 }
 
 describe("RuntimeService", () => {
@@ -71,18 +105,7 @@ describe("RuntimeService", () => {
 
   it("refuses a live owner of the same Runtime home", async () => {
     const dataDir = await directory("runtime-service-live-");
-    const lock = path.join(dataDir, "runtime-service.lock");
-    await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(lock, { mode: 0o700 }),
-    );
-    await writeFile(
-      path.join(lock, "owner.json"),
-      JSON.stringify({ pid: 777 }),
-      {
-        mode: 0o600,
-      },
-    );
-    await chmod(lock, 0o700);
+    await seedLock(dataDir, { pid: 777 });
     const service = new RuntimeService({
       dataDir,
       createSupervisor: supervisor,
@@ -94,104 +117,228 @@ describe("RuntimeService", () => {
     );
   });
 
-  it("reclaims a lease older than the current boot even when a recycled PID answers the liveness probe", async () => {
+  it("reclaims a previous-boot lease even when a recycled PID answers the liveness probe", async () => {
     // Issue #184: a forced power-off leaves runtime-service.lock behind;
-    // after the reboot the owner's PID is another process, so the old
+    // after the reboot the owner's PID belongs to another process, so a
     // liveness-only check reports "already running" forever and launchd's
-    // KeepAlive loops the wrapper. A lease from a previous boot can never
-    // have a living owner, regardless of what the PID table says.
+    // KeepAlive loops the wrapper. A lease from another boot can never have
+    // a living owner, whatever the PID table says.
     const dataDir = await directory("runtime-service-prevboot-");
-    const lock = path.join(dataDir, "runtime-service.lock");
-    await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(lock, { mode: 0o700 }),
-    );
-    await writeFile(
-      path.join(lock, "owner.json"),
-      JSON.stringify({ pid: 777 }),
-      {
-        mode: 0o600,
-      },
-    );
-    await chmod(lock, 0o700);
-    const leaseTime = Date.now();
+    await seedLock(dataDir, { pid: 777, boot_id: PREVIOUS_BOOT });
     const service = new RuntimeService({
       dataDir,
       createSupervisor: supervisor,
-      // The recycled PID answers the probe: the liveness check alone
-      // would refuse forever.
+      pid: 4321,
       processIsAlive: () => true,
-      // This boot began minutes after the lease was taken.
-      bootTime: () => leaseTime + 10 * 60_000,
+      bootId: () => CURRENT_BOOT,
     });
 
     await service.start();
-    await service.stop();
-  });
-
-  it("reclaims a lease whose owner.json was never written once the machine has rebooted", async () => {
-    // Issue #184's hard case: a power cut inside the mkdir → privateWrite
-    // window leaves the lock directory with no owner.json at all. That used
-    // to be runtime_service_lock_invalid forever; after a reboot it is
-    // provably from a previous boot and is cleared.
-    const dataDir = await directory("runtime-service-prevboot- corrupt-");
-    const lock = path.join(dataDir, "runtime-service.lock");
-    await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(lock, { mode: 0o700 }),
-    );
-    await chmod(lock, 0o700);
-    const leaseTime = Date.now();
-    const service = new RuntimeService({
-      dataDir,
-      createSupervisor: supervisor,
-      processIsAlive: () => true,
-      bootTime: () => leaseTime + 10 * 60_000,
+    expect(await ownerOf(dataDir)).toMatchObject({
+      pid: 4321,
+      boot_id: CURRENT_BOOT,
     });
-
-    await service.start();
     await service.stop();
+    expect(await lockEntries(dataDir)).toEqual([]);
   });
 
-  it("still refuses a corrupt lease from the current boot", async () => {
-    // Same-boot corruption stays refused: the boot-time shortcut only
-    // applies when the lease provably predates the boot.
-    const dataDir = await directory("runtime-service-corrupt-sameboot-");
-    const lock = path.join(dataDir, "runtime-service.lock");
-    await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(lock, { mode: 0o700 }),
-    );
-    await chmod(lock, 0o700);
+  it("refuses a live owner from the current boot", async () => {
+    const dataDir = await directory("runtime-service-sameboot-live-");
+    await seedLock(dataDir, { pid: 777, boot_id: CURRENT_BOOT });
     const service = new RuntimeService({
       dataDir,
       createSupervisor: supervisor,
-      bootTime: () => Date.now() - 60 * 60_000, // booted an hour ago
+      pid: 4321,
+      processIsAlive: (pid) => pid === 777,
+      bootId: () => CURRENT_BOOT,
     });
 
     await expect(service.start()).rejects.toThrow(
-      "runtime_service_lock_invalid",
+      "runtime_service_already_running",
     );
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 777 });
+  });
+
+  it("reclaims a dead owner from the current boot", async () => {
+    const dataDir = await directory("runtime-service-sameboot-dead-");
+    await seedLock(dataDir, { pid: 777, boot_id: CURRENT_BOOT });
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      pid: 4321,
+      processIsAlive: () => false,
+      bootId: () => CURRENT_BOOT,
+    });
+
+    await service.start();
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 4321 });
+    await service.stop();
+  });
+
+  it.each([
+    ["the lease predates boot ids", { pid: 777 }, CURRENT_BOOT],
+    ["the lease has an empty boot id", { pid: 777, boot_id: "" }, CURRENT_BOOT],
+    [
+      "the current boot id is unknown",
+      { pid: 777, boot_id: PREVIOUS_BOOT },
+      null,
+    ],
+  ])("falls back to the PID probe when %s", async (_case, owner, current) => {
+    const dataDir = await directory("runtime-service-unknown-boot-");
+    await seedLock(dataDir, owner);
+    const live = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      pid: 4321,
+      processIsAlive: (pid) => pid === 777,
+      bootId: () => current,
+    });
+    await expect(live.start()).rejects.toThrow(
+      "runtime_service_already_running",
+    );
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 777 });
+
+    const dead = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      pid: 4321,
+      processIsAlive: () => false,
+      bootId: () => current,
+    });
+    await dead.start();
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 4321 });
+    await dead.stop();
+  });
+
+  it("records the platform boot id in owner.json", async () => {
+    const dataDir = await directory("runtime-service-boot-id-");
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+    });
+
+    await service.start();
+    const owner = await ownerOf(dataDir);
+    if (process.platform === "darwin" || process.platform === "linux") {
+      expect(owner.boot_id).toMatch(/^[0-9A-Za-z-]{8,64}$/);
+    } else {
+      expect(owner.boot_id).toBeNull();
+    }
+    expect(owner.pid).toBe(process.pid);
+    await service.stop();
+  });
+
+  it("leaves no lock behind when publishing fails before the rename", async () => {
+    // The lock only appears through a rename of a fully written staging
+    // directory, so a failure (or power cut) while staging cannot leave a
+    // lock without owner.json.
+    const dataDir = await directory("runtime-service-publish-failure-");
+    const broken = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      bootId: () => {
+        throw new Error("simulated crash while staging");
+      },
+    });
+
+    await expect(broken.start()).rejects.toThrow(
+      "runtime_service_lock_unavailable",
+    );
+    expect(await lockEntries(dataDir)).toEqual([]);
+
+    const next = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      pid: 4321,
+      bootId: () => CURRENT_BOOT,
+    });
+    await next.start();
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 4321 });
+    await next.stop();
+  });
+
+  it("clears an owner-less legacy lock created before the current boot", async () => {
+    // Older versions created the lock with mkdir and wrote owner.json
+    // afterwards; a power cut in between left an empty lock that used to
+    // fail as runtime_service_lock_invalid forever.
+    const dataDir = await directory("runtime-service-legacy-prevboot-");
+    const lock = await seedLock(dataDir);
+    const createdAt = (await stat(lock)).mtimeMs;
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      pid: 4321,
+      bootId: () => CURRENT_BOOT,
+      legacyBootTime: () => createdAt + 60_000,
+    });
+
+    await service.start();
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 4321 });
+    await service.stop();
+  });
+
+  it.each([
+    ["it may be from the current boot", (createdAt: number) => createdAt - 1],
+    ["the boot time is unknown", () => null],
+  ])(
+    "keeps refusing an owner-less legacy lock when %s",
+    async (_case, boot) => {
+      const dataDir = await directory("runtime-service-legacy-sameboot-");
+      const lock = await seedLock(dataDir);
+      const createdAt = (await stat(lock)).mtimeMs;
+      const service = new RuntimeService({
+        dataDir,
+        createSupervisor: supervisor,
+        bootId: () => CURRENT_BOOT,
+        legacyBootTime: () => boot(createdAt),
+      });
+
+      await expect(service.start()).rejects.toThrow(
+        "runtime_service_lock_invalid",
+      );
+      // rename() may replace an empty directory; the publish step must not.
+      expect(await readdir(lock)).toEqual([]);
+      expect(await lockEntries(dataDir)).toEqual(["runtime-service.lock"]);
+    },
+  );
+
+  it("removes staging and cleared-lease debris after acquiring", async () => {
+    const dataDir = await directory("runtime-service-debris-");
+    const staging = path.join(dataDir, "runtime-service.lock.tmp-crashed");
+    await mkdir(staging, { mode: 0o700 });
+    await writeFile(
+      path.join(staging, "owner.json"),
+      JSON.stringify({ pid: 9 }),
+    );
+    await mkdir(path.join(dataDir, "runtime-service.lock.stale.crashed"), {
+      mode: 0o700,
+    });
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: supervisor,
+      pid: 4321,
+      bootId: () => CURRENT_BOOT,
+    });
+
+    await service.start();
+    expect(await lockEntries(dataDir)).toEqual(["runtime-service.lock"]);
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 4321 });
+    await service.stop();
+    expect(await lockEntries(dataDir)).toEqual([]);
   });
 
   it("reclaims a stale validated lease", async () => {
     const dataDir = await directory("runtime-service-stale-");
-    const lock = path.join(dataDir, "runtime-service.lock");
-    await import("node:fs/promises").then(({ mkdir }) =>
-      mkdir(lock, { mode: 0o700 }),
-    );
-    await writeFile(
-      path.join(lock, "owner.json"),
-      JSON.stringify({ pid: 777 }),
-      {
-        mode: 0o600,
-      },
-    );
-    await chmod(lock, 0o700);
+    await seedLock(dataDir, { pid: 777 });
     const service = new RuntimeService({
       dataDir,
       createSupervisor: supervisor,
+      pid: 4321,
       processIsAlive: () => false,
     });
 
     await service.start();
+    expect(await ownerOf(dataDir)).toMatchObject({ pid: 4321 });
     await service.stop();
   });
 
@@ -463,7 +610,7 @@ describe("RuntimeService", () => {
     const real = path.join(parent, "real");
     const link = path.join(parent, "data");
     await mkdir(real, { mode: 0o755 });
-    await import("node:fs/promises").then(({ symlink }) => symlink(real, link));
+    await symlink(real, link);
     const service = new RuntimeService({
       dataDir: link,
       createSupervisor: () => supervisor(),
