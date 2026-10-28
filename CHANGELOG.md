@@ -90,6 +90,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Hy Memory 2.0.8 — 2026-10-28
 
+- Published
+  [`hy-memory==2.0.8`](https://pypi.org/project/hy-memory/2.0.8/).
 - New `MEMORY_PIPELINE_LOG_ENABLED` (default `true`) turns the pipeline JSONL
   log (`{MEMORY_LOG_DIR}/<subdir>/<date>.log`) off. With `false` no JSONL
   file or directory is written. When `MEMORY_PIPELINE_TRACE_ENABLED` is also
