@@ -35,6 +35,8 @@ from one_memory.memory_server.durable_queue import (
     COMPLETED,
     FAILED,
     REAPED_PAYLOAD_MARKER,
+    RUNNING,
+    UNKNOWN,
     DurableWriteQueue,
 )
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
@@ -317,11 +319,45 @@ def move_pending_dispatches(database_path: Path) -> int:
     return len(conversations)
 
 
+#: Why a pre-cutover write job that may have reached HY was closed.
+ABANDONED_AT_CUTOVER = "abandoned_at_cutover"
+
+
+def settle_legacy_unknown_write_jobs(database_path: Path) -> int:
+    """Close write jobs the legacy pipeline left possibly-sent. Safe to repeat.
+
+    They ran under the legacy pipeline, so the SDK's `get_write_outcome` knows
+    none of them and the unknown reconcile can never settle them: a migrated
+    1.0.4 home showed 1000+ unknown forever. They are not retried, since they
+    may already have written and the SDK has no idempotency key. `cancelled`,
+    not `failed`: the upgrade ended them, nothing broke, and a `failed` count
+    would put the home in the failed state for good. `hy_invoked` is kept, so
+    no readmission path can pick one up again.
+    """
+    with main_database(database_path).read(row_factory=sqlite3.Row) as database:
+        if "memory_write_jobs" not in _tables(database):
+            return 0
+    now = datetime.now(UTC).isoformat()
+    with main_database(database_path).write(autocommit=True) as database:
+        # A `running` row already marked invoked would be reclaimed to
+        # `unknown` on the next open, so it is the same case.
+        return int(
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,lease_owner=NULL,"
+                "lease_expires_at=NULL,last_error=?,updated_at=? "
+                "WHERE state=? OR (state=? AND hy_invoked=1)",
+                (CANCELLED, ABANDONED_AT_CUTOVER, now, UNKNOWN, RUNNING),
+            ).rowcount
+        )
+
+
 def abandoned_legacy_work(database_path: Path) -> dict[str, int]:
     """Count legacy work that ends with the cutover instead of blocking it.
 
     A task that may have reached the SDK is not replayed: the SDK already holds
     whatever it committed. Pending user deletions are not carried over.
+    Settled write jobs are counted by their code, so a repeated preparation
+    reports the same number.
     """
     abandoned: dict[str, int] = {}
     with main_database(database_path).read(row_factory=sqlite3.Row) as database:
@@ -331,6 +367,11 @@ def abandoned_legacy_work(database_path: Path) -> dict[str, int]:
                 "invoked_tasks",
                 "memory_tasks",
                 "status='unknown' OR (status='running' AND hy_invocation_count > 0)",
+            ),
+            (
+                "unknown_write_jobs",
+                "memory_write_jobs",
+                f"state='{CANCELLED}' AND last_error='{ABANDONED_AT_CUTOVER}'",
             ),
             ("deletions", "memory_deletions", "status IN ('pending','running')"),
         )
@@ -354,6 +395,10 @@ def prepare_legacy_work_for_cutover(
     running, so a failure names it.
     """
     trace = {} if trace is None else trace
+    # First: a possibly-sent job never runs again, so its input is not
+    # frozen, and input released since must not block the cutover.
+    trace["sub_step"] = "unknown_write_jobs"
+    settle_legacy_unknown_write_jobs(database_path)
     trace["sub_step"] = "write_queue"
     frozen, moved = prepare_legacy_write_queue_for_cutover(database_path)
     trace["sub_step"] = "pending_dispatches"

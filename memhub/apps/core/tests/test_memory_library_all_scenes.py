@@ -6,6 +6,7 @@ and delete pass the memory's kind/variant through to the SDK.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -310,12 +311,13 @@ def run_with_sdk(tmp_path, monkeypatch, scenario):
             async def close(self):
                 return None
 
+        @asynccontextmanager
         async def write_client():
-            return sdk
+            yield sdk
 
         async with app.router.lifespan_context(app):
             app.state.sdk_client_handle = Handle()
-            monkeypatch.setattr(app.state.sdk_write_coordinator, "client", write_client)
+            monkeypatch.setattr(app.state.sdk_write_coordinator, "use_client", write_client)
             async with client_for(app) as client:
                 await scenario(app, sdk, client)
 

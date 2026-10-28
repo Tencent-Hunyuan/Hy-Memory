@@ -1187,6 +1187,167 @@ def test_the_drain_tick_writes_a_quiet_live_conversation(tmp_path, monkeypatch) 
     assert flushed
 
 
+class _SwitchableProfiles:
+    """Active profile identity that a test can change mid-write."""
+
+    def __init__(self) -> None:
+        self.identity = ("profile-a", 1)
+
+    def active_identity(self):
+        return self.identity
+
+    def snapshot(self, profile_id, revision):
+        return type(
+            "Snapshot", (), {"profile_id": profile_id, "revision": revision, "has_api_key": False}
+        )()
+
+    def resolve_snapshot_secret(self, *_args):
+        return None
+
+
+class _TrackedHandle:
+    def __init__(self, profile, **_kwargs) -> None:
+        self.profile_id = profile.profile_id
+        self.closed = False
+
+    async def client(self):
+        return self
+
+    async def close(self):
+        self.closed = True
+
+
+def _coordinator(monkeypatch, opened: list[_TrackedHandle]):
+    from one_memory import sdk_write_processor
+
+    def handle(profile, **kwargs):
+        value = _TrackedHandle(profile, **kwargs)
+        opened.append(value)
+        return value
+
+    monkeypatch.setattr(sdk_write_processor, "SdkClientHandle", handle)
+    profiles = _SwitchableProfiles()
+    coordinator = sdk_write_processor.SdkWriteCoordinator(
+        profiles=profiles,  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=None,
+        transport_factory=lambda _profile: None,
+        sedimentation_enabled=lambda: True,
+    )
+    return coordinator, profiles
+
+
+def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeypatch) -> None:
+    """Build 35 lost a clean install's first write as unknown (AttributeError).
+
+    Saving a model profile changed the active identity while the write ran on
+    the old profile's client. The next coordinator call closed that client at
+    once: the SDK cleared its stores and the SharedRuntime closed mid-`add`.
+    """
+    from one_memory import sdk_write_processor
+
+    opened: list[_TrackedHandle] = []
+    coordinator, profiles = _coordinator(monkeypatch, opened)
+    seen: list[tuple[str, bool]] = []
+    writing = asyncio.Event()
+
+    async def process(self, records, *, request_id, before_hy_invocation):
+        client = await self._client_handle.client()
+        await before_hy_invocation()
+        seen.append((client.profile_id, client.closed))
+        if client.profile_id == "profile-a":
+            await writing.wait()
+        # Still open while its own write runs.
+        seen.append((client.profile_id, client.closed))
+        return sdk_write_processor.SdkWriteReceipt()
+
+    monkeypatch.setattr(sdk_write_processor.SdkWriteProcessor, "process_sdk_job", process)
+
+    async def noop():
+        return None
+
+    async def scenario():
+        first = asyncio.create_task(
+            coordinator.process_sdk_job((), request_id="a", before_hy_invocation=noop)
+        )
+        while not seen:
+            await asyncio.sleep(0)
+        profiles.identity = ("profile-b", 2)
+        # A second job and an inquiry under the new profile.
+        await coordinator.process_sdk_job((), request_id="b", before_hy_invocation=noop)
+        assert [handle.closed for handle in opened] == [False, False]
+        writing.set()
+        await first
+        old, new = opened
+        # Retired after its last use, and new work used the new profile.
+        assert old.closed is True and new.closed is False
+        await coordinator.close()
+        assert new.closed is True
+
+    asyncio.run(scenario())
+    assert seen == [
+        ("profile-a", False),
+        ("profile-b", False),
+        ("profile-b", False),
+        ("profile-a", False),
+    ]
+
+
+def test_an_unused_stale_handle_still_closes_at_once(monkeypatch) -> None:
+    opened: list[_TrackedHandle] = []
+    coordinator, profiles = _coordinator(monkeypatch, opened)
+
+    async def scenario():
+        async with coordinator.use_client() as client:
+            assert client.profile_id == "profile-a"
+        assert opened[0].closed is False
+        profiles.identity = ("profile-b", 2)
+        async with coordinator.use_client() as client:
+            assert client.profile_id == "profile-b"
+            assert opened[0].closed is True
+        assert opened[1].closed is False
+        await coordinator.close()
+        assert opened[1].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_a_client_that_fails_to_construct_parks_the_job_instead_of_unknown(tmp_path) -> None:
+    """Nothing was sent when the client could not be built, so it retries on its own."""
+    from one_memory.sdk_write_processor import SdkWriteProcessor
+
+    class _BrokenHandle:
+        async def client(self):
+            raise AttributeError("'RustBindingsAPI' object has no attribute 'bindings'")
+
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+
+    class _Supervisor:
+        async def process_sdk_job(self, _records, **kwargs):
+            return await SdkWriteProcessor(_BrokenHandle()).process_sdk_job(  # type: ignore[arg-type]
+                (_sdk_evidence("e1"),), **kwargs
+            )
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Supervisor(),
+            evidence=_EvidenceStore({"e1"}),
+        )
+    )
+
+    [row] = _rows(path)
+    assert (row["state"], row["hy_invoked"]) == (WAITING_FOR_MODEL, 0)
+    assert row["last_error"] == "hy_memory_client_unavailable"
+    later = datetime.now(UTC) + timedelta(minutes=5)
+    assert queue.readmit_model_waiters(now=later) == 1
+    assert _state(path, record.job_id) == PENDING
+
+
 def test_sdk_unknown_outcome_inquiry_uses_only_public_receipt() -> None:
     from one_memory.sdk_write_processor import SdkWriteProcessor, SdkWriteReceipt
 
@@ -1697,6 +1858,46 @@ def test_a_raw_provider_message_is_never_stored_as_the_error(tmp_path) -> None:
     assert "secret diary" not in stored
     assert "http" not in stored
     assert stored == "RuntimeError"
+
+
+def test_a_failed_job_logs_where_it_failed_but_never_the_message(tmp_path, caplog) -> None:
+    """`error_code=AttributeError` alone named no location; frames, never the message."""
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+
+    def closed_store(client):
+        return client.private_store_name.write
+
+    class _Failing:
+        async def process_sdk_job(self, _records, **kwargs):
+            await kwargs["before_hy_invocation"]()
+            try:
+                closed_store(type("Client", (), {"private_store_name": None})())
+            except AttributeError as error:
+                raise RuntimeError("quoting 'my secret diary'") from error
+
+    with caplog.at_level(logging.ERROR, logger="one_memory.memory_server.durable_queue"):
+        asyncio.run(
+            execute_job(
+                record.job_id,
+                queue=queue,
+                supervisor=_Failing(),
+                evidence=_EvidenceStore({"e1"}),
+            )
+        )
+
+    [line] = [
+        message.getMessage()
+        for message in caplog.records
+        if "durable_write_job_failed" in message.getMessage()
+    ]
+    assert f"job_id={record.job_id} error_code=RuntimeError chain=RuntimeError@" in line
+    assert ";AttributeError@" in line
+    assert "test_memory_server_durable_queue.py:" in line and ":closed_store" in line
+    assert "secret diary" not in line
+    assert "private_store_name" not in line
 
 
 def test_a_machine_error_code_is_preserved(tmp_path) -> None:
