@@ -65,7 +65,7 @@ export function SelectedMemoryDetail({
   // (CJK text has none, so it breaks at the limit itself).
   const punctuation = memory.content.search(/[。！？!?\n]/);
   const space = memory.content.lastIndexOf(" ", HEADING_LIMIT);
-  const split =
+  const fallbackSplit =
     punctuation > 0 && punctuation < HEADING_LIMIT
       ? punctuation + 1
       : memory.content.length > HEADING_LIMIT
@@ -73,11 +73,26 @@ export function SelectedMemoryDetail({
           ? space
           : HEADING_LIMIT
         : -1;
-  const heading =
-    split > 0 ? memory.content.slice(0, split).trim() : memory.content;
-  const body = split > 0 ? memory.content.slice(split).trim() : "";
+  const fallbackHeading =
+    fallbackSplit > 0
+      ? memory.content.slice(0, fallbackSplit).trim()
+      : memory.content;
+  const fallbackBody =
+    fallbackSplit > 0 ? memory.content.slice(fallbackSplit).trim() : "";
+  const experience =
+    detail.sdk_ref?.kind === "experience" &&
+    Boolean(detail.sdk_task?.trim() || detail.sdk_solution?.trim());
+  const heading = experience
+    ? detail.sdk_task?.trim() || fallbackHeading
+    : fallbackHeading;
+  const body = experience
+    ? detail.sdk_solution?.trim() || (detail.sdk_task ? "" : fallbackBody)
+    : fallbackBody;
   return (
-    <article className="selected-memory-detail">
+    <article
+      className="selected-memory-detail"
+      data-memory-kind={experience ? "experience" : "memory"}
+    >
       <p className="selected-memory-status">
         {statusLabel}
         {!detail.sdk_status &&

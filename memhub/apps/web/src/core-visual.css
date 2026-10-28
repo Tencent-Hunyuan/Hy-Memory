@@ -788,11 +788,15 @@ button.rail-button.active::before {
 }
 .map-list-status {
   flex: none;
+  min-height: 28px;
   margin: 0;
   padding: 4px;
   color: var(--tx3);
   font-size: 12px;
   line-height: 20px;
+}
+.map-list-status[data-visible="false"] {
+  visibility: hidden;
 }
 .map-filter-notice {
   font-size: 12px;
@@ -878,6 +882,10 @@ button.rail-button.active::before {
   color: var(--tx);
   background: #fdfefe;
   border-color: #c7d3dc;
+}
+.map-memory-item:disabled {
+  opacity: 1;
+  cursor: default;
 }
 .map-state {
   width: 5px;
@@ -1142,6 +1150,7 @@ button.map-tool {
 }
 .map-detail-loading {
   display: grid;
+  min-height: 280px;
   gap: 10px;
   padding: 4px 0;
 }
@@ -1152,8 +1161,13 @@ button.map-tool {
 }
 @keyframes map-detail-enter {
   from {
-    opacity: 0;
-    transform: translateY(4px);
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .map-detail-surface,
+  .map-detail-loading {
+    animation: map-detail-enter 140ms cubic-bezier(0, 0, 0.2, 1);
   }
 }
 .map-inspector .wb-detail {

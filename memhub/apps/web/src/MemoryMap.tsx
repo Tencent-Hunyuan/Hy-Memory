@@ -101,6 +101,7 @@ type Props = {
     stale: boolean;
     settledSource?: string;
     settledQuery?: string;
+    requestedOffset?: number;
     /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
     unattributedSource?: string;
     onQuery(value: string): void;
@@ -224,6 +225,15 @@ export function MemoryMap(props: Props) {
   const [pendingSourceSelection, setPendingSourceSelection] = useState<
     string | null
   >(null);
+  const [pendingPageOffset, setPendingPageOffset] = useState<number | null>(
+    null,
+  );
+  const [pageRetrying, setPageRetrying] = useState(false);
+  const pageRetrySawLoading = useRef(false);
+  const [detailResetRevision, setDetailResetRevision] = useState(0);
+  const pageTransitioning =
+    !!library?.loading ||
+    (pendingPageOffset !== null && (!library?.failed || pageRetrying));
   const [question, setQuestion] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [filterNotice, setFilterNotice] = useState("");
@@ -426,6 +436,7 @@ export function MemoryMap(props: Props) {
     : selectedSource
       ? `source:${selectedSource.source_id}`
       : (visibleGroupNode?.node_id ?? "empty");
+  const inspectorResetKey = `${inspectorIdentity}:${detailResetRevision}`;
   const visibleDetail =
     detail &&
     (!activeId || activeId === detail.memory.memory_id) &&
@@ -437,10 +448,24 @@ export function MemoryMap(props: Props) {
   const inspectorDetail =
     visibleDetail ??
     (activeId && lastDetail.current ? lastDetail.current : null);
+  const readingActiveDetail =
+    !!activeId &&
+    props.detailLoad?.memoryId === activeId &&
+    props.detailLoad.status === "loading";
+  const failedActiveDetail =
+    !!activeId &&
+    props.detailLoad?.memoryId === activeId &&
+    props.detailLoad.status === "failed";
   const pick = useCallback(
     (memoryId: string, scroll = true) => {
       if (!active.some((memory) => memory.memory_id === memoryId)) return;
+      if (pendingPageOffset !== null && library?.failed && library.page)
+        library.onPage(library.page.offset);
       setPendingSourceSelection(null);
+      setPendingPageOffset(null);
+      setPageRetrying(false);
+      pageRetrySawLoading.current = false;
+      setDetailResetRevision((current) => current + 1);
       scrollSelection.current = scroll;
       if (!filtered.some((memory) => memory.memory_id === memoryId)) {
         setGroupKey("");
@@ -452,7 +477,7 @@ export function MemoryMap(props: Props) {
       setInspectorOpen(true);
       onOpenMemory(memoryId);
     },
-    [active, filtered, onOpenMemory],
+    [active, filtered, library, onOpenMemory, pendingPageOffset],
   );
   useEffect(() => {
     if (
@@ -480,6 +505,24 @@ export function MemoryMap(props: Props) {
     pick,
     selectedSource,
   ]);
+  useLayoutEffect(() => {
+    if (pendingPageOffset === null || !library || library.loading) return;
+    if (library.failed || library.stale) return;
+    const expectedOffset = library.requestedOffset ?? pendingPageOffset;
+    if (library.page?.offset !== expectedOffset) return;
+    setPendingPageOffset(null);
+    setPageRetrying(false);
+    pageRetrySawLoading.current = false;
+    const first = active[0];
+    if (first) {
+      pick(first.memory_id, false);
+      return;
+    }
+    setSelectedId(null);
+    setGroupNode(null);
+    setInspectorOpen(false);
+    onCloseDetail();
+  }, [active, library, onCloseDetail, pendingPageOffset, pick]);
   useEffect(() => {
     if (!props.simplified || openedDefault.current || overlaysSuspended) return;
     if (library?.loading && filtered.length === 0) return;
@@ -497,6 +540,17 @@ export function MemoryMap(props: Props) {
     detail,
     pick,
   ]);
+  useEffect(() => {
+    if (!pageRetrying || !library) return;
+    if (library.loading) {
+      pageRetrySawLoading.current = true;
+      return;
+    }
+    if (pageRetrySawLoading.current && library.failed) {
+      pageRetrySawLoading.current = false;
+      setPageRetrying(false);
+    }
+  }, [library, pageRetrying]);
   useEffect(() => {
     if (!activeId || !scrollSelection.current) return;
     scrollSelection.current = false;
@@ -516,9 +570,9 @@ export function MemoryMap(props: Props) {
   useLayoutEffect(() => {
     // Detail content owns its own scrollport. A newly selected memory must
     // start at its heading instead of inheriting the previous inspector view.
-    if (inspectorIdentity === "empty") return;
+    if (inspectorResetKey.startsWith("empty:")) return;
     if (inspectorBody.current) inspectorBody.current.scrollTop = 0;
-  }, [inspectorIdentity]);
+  }, [inspectorResetKey]);
   const settledPageOffset = library?.page?.offset;
   useLayoutEffect(() => {
     // A settled page is a new reading surface, not a continuation of the
@@ -531,12 +585,16 @@ export function MemoryMap(props: Props) {
     setSelectedId(null);
     setGroupNode(null);
     setPendingSourceSelection(null);
+    setPendingPageOffset(null);
+    setPageRetrying(false);
+    pageRetrySawLoading.current = false;
     setInspectorOpen(false);
     onCloseDetail();
   }, [onCloseDetail]);
   useEffect(() => {
     // A background map does not own the shared inspector in another mode.
-    if (overlaysSuspended || library?.loading) return;
+    if (overlaysSuspended || library?.loading || pendingPageOffset !== null)
+      return;
     if (
       requestedId &&
       !active.some((memory) => memory.memory_id === requestedId)
@@ -556,6 +614,7 @@ export function MemoryMap(props: Props) {
     clear,
     overlaysSuspended,
     library?.loading,
+    pendingPageOffset,
   ]);
   function closeInspector() {
     if (!compact) {
@@ -564,6 +623,14 @@ export function MemoryMap(props: Props) {
     }
     setPendingSourceSelection(null);
     setInspectorOpen(false);
+  }
+  function retryLibrary() {
+    if (!library) return;
+    if (pendingPageOffset !== null) {
+      pageRetrySawLoading.current = false;
+      setPageRetrying(true);
+    }
+    library.onRetry();
   }
   function chooseGroup(key: string) {
     setGroupNode(null);
@@ -619,6 +686,17 @@ export function MemoryMap(props: Props) {
       ? text("未识别来源")
       : null) ??
     text("全部记忆");
+  const libraryStatus = !library
+    ? ""
+    : library.failed
+      ? text("读取失败")
+      : library.stale
+        ? text("正在核对来源…")
+        : pageTransitioning
+          ? refreshing && library.page?.total !== 0
+            ? text("正在核对…")
+            : text("正在读取…")
+          : "";
   if (
     props.simplified &&
     (!library ||
@@ -819,21 +897,20 @@ export function MemoryMap(props: Props) {
             <button
               type="submit"
               className="map-search-submit"
-              disabled={library.loading || hidden}
+              disabled={pageTransitioning || hidden}
             >
               {text("搜索")}
             </button>
           ) : null}
         </form>
-        {library && (library.loading || library.stale || library.failed) ? (
-          <p className="map-list-status" aria-live="polite">
-            {library.failed
-              ? text("读取失败")
-              : library.stale
-                ? text("正在核对来源…")
-                : refreshing && library.page?.total !== 0
-                  ? text("正在核对…")
-                  : text("正在读取…")}
+        {library ? (
+          <p
+            className="map-list-status"
+            aria-live="polite"
+            aria-hidden={!libraryStatus || undefined}
+            data-visible={libraryStatus ? "true" : "false"}
+          >
+            {libraryStatus || "\u00a0"}
           </p>
         ) : null}
         {!props.simplified && (
@@ -903,6 +980,7 @@ export function MemoryMap(props: Props) {
                 type="button"
                 className="map-memory-item"
                 aria-pressed={activeId === m.memory_id}
+                disabled={pageTransitioning}
                 onClick={() => pick(m.memory_id)}
               >
                 <span className={`map-state ${m.status}`} aria-hidden="true" />
@@ -956,7 +1034,7 @@ export function MemoryMap(props: Props) {
         {library?.failed && (
           <div role="alert">
             <p>{text("记忆读取失败，请重试。")}</p>
-            <R6Button onClick={library.onRetry}>
+            <R6Button onClick={retryLibrary}>
               {text("重新读取地图记忆")}
             </R6Button>
           </div>
@@ -991,7 +1069,7 @@ export function MemoryMap(props: Props) {
           !library.stale && (
             <nav
               aria-label={text("地图记忆分页")}
-              aria-busy={library.loading || undefined}
+              aria-busy={pageTransitioning || undefined}
               className="map-pagination"
             >
               <button
@@ -999,11 +1077,16 @@ export function MemoryMap(props: Props) {
                 className="quiet map-tool"
                 aria-label={text("上一页记忆")}
                 title={text("上一页记忆")}
-                disabled={library.loading || library.page.offset === 0}
+                disabled={pageTransitioning || library.page.offset === 0}
                 onClick={() => {
                   if (axis === "topic") setGroupKey("");
-                  if (library.page)
-                    library.onPage(library.page.offset - library.page.limit);
+                  if (library.page) {
+                    const offset = library.page.offset - library.page.limit;
+                    setPageRetrying(false);
+                    pageRetrySawLoading.current = false;
+                    setPendingPageOffset(offset);
+                    library.onPage(offset);
+                  }
                 }}
               >
                 <ChevronLeft size={16} aria-hidden="true" />
@@ -1029,13 +1112,18 @@ export function MemoryMap(props: Props) {
                 aria-label={text("下一页记忆")}
                 title={text("下一页记忆")}
                 disabled={
-                  library.loading ||
+                  pageTransitioning ||
                   library.page.offset + library.page.limit >= library.page.total
                 }
                 onClick={() => {
                   if (axis === "topic") setGroupKey("");
-                  if (library.page)
-                    library.onPage(library.page.offset + library.page.limit);
+                  if (library.page) {
+                    const offset = library.page.offset + library.page.limit;
+                    setPageRetrying(false);
+                    pageRetrySawLoading.current = false;
+                    setPendingPageOffset(offset);
+                    library.onPage(offset);
+                  }
                 }}
               >
                 <ChevronRight size={16} aria-hidden="true" />
@@ -1220,7 +1308,7 @@ export function MemoryMap(props: Props) {
       <MemoryEvidencePanel
         open={inspectorOpen && !!(activeId || visibleGroupNode)}
         suspended={overlaysSuspended}
-        scrollResetKey={activeId ?? visibleGroupNode?.node_id ?? "empty"}
+        scrollResetKey={inspectorResetKey}
         onClose={closeInspector}
       >
         <header className="map-inspector-heading">
@@ -1255,7 +1343,7 @@ export function MemoryMap(props: Props) {
                   <button
                     type="button"
                     className="secondary"
-                    onClick={library.onRetry}
+                    onClick={retryLibrary}
                   >
                     {text("重试")}
                   </button>
@@ -1276,8 +1364,17 @@ export function MemoryMap(props: Props) {
             </div>
           ) : props.simplified && inspectorDetail ? (
             <div
+              key={`${inspectorDetail.memory.memory_id}:${detailResetRevision}:${
+                readingActiveDetail
+                  ? "loading"
+                  : failedActiveDetail
+                    ? "failed"
+                    : "ready"
+              }`}
+              className="map-detail-surface"
               aria-busy={
                 refreshing ||
+                readingActiveDetail ||
                 inspectorDetail.memory.memory_id !== activeId ||
                 undefined
               }
@@ -1302,7 +1399,21 @@ export function MemoryMap(props: Props) {
                 until the new one arrived, which read as "nothing happened"
                 for two or three seconds. A read is not a value: show that a
                 read is happening instead. */}
-              {activeId && inspectorDetail.memory.memory_id !== activeId ? (
+              {failedActiveDetail ? (
+                <div className="map-detail-loading">
+                  <p role="alert">
+                    {text("这条记忆的原文暂时无法读取，选择已保留。")}
+                  </p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => activeId && onOpenMemory(activeId)}
+                  >
+                    {text("重试读取原文")}
+                  </button>
+                </div>
+              ) : readingActiveDetail ||
+                (activeId && inspectorDetail.memory.memory_id !== activeId) ? (
                 <div className="map-detail-loading">
                   <div className="map-detail-skeleton" aria-hidden="true">
                     <i />

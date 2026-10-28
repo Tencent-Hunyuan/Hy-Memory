@@ -136,6 +136,70 @@ it("splits long memory text into a bounded heading and readable body", () => {
     "selected-memory-body",
   );
 });
+it("renders an SDK experience from its structured task and solution", () => {
+  const task =
+    "review an uncommitted diff for privacy and correctness blockers";
+  const solution = `Reusable checklist:\n1. Run \`git diff --check\`.\n2. Inspect ${"/very-long-path".repeat(20)}.`;
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        memory: {
+          ...detail.memory,
+          content: `${task}\n${solution}`,
+          revision: 0,
+        },
+        evidence: [],
+        sdk_status: "active",
+        sdk_ref: {
+          scene: "coding",
+          kind: "experience",
+          variant: "coding",
+        },
+        sdk_task: task,
+        sdk_solution: solution,
+      }}
+      sources={[]}
+    />,
+  );
+  expect(screen.getByRole("heading", { name: task })).toBeTruthy();
+  const body = document.querySelector(".selected-memory-body");
+  expect(body?.textContent).toBe(solution);
+  expect(
+    screen
+      .getByRole("heading", { name: task })
+      .closest("[data-memory-kind]")
+      ?.getAttribute("data-memory-kind"),
+  ).toBe("experience");
+});
+it("does not apply experience fields to a fact memory", () => {
+  const content = `${"事实".repeat(40)}。补充说明`;
+  render(
+    <SelectedMemoryDetail
+      detail={{
+        ...detail,
+        memory: { ...detail.memory, content, revision: 0 },
+        evidence: [],
+        sdk_status: "active",
+        sdk_ref: {
+          scene: "working",
+          kind: "fact",
+          variant: "working",
+        },
+        sdk_task: "不应显示的任务标题",
+        sdk_solution: "不应显示的经验正文",
+      }}
+      sources={[]}
+    />,
+  );
+  expect(screen.queryByText("不应显示的任务标题")).toBeNull();
+  expect(screen.queryByText("不应显示的经验正文")).toBeNull();
+  expect(
+    document
+      .querySelector(".selected-memory-detail")
+      ?.getAttribute("data-memory-kind"),
+  ).toBe("memory");
+});
 it.each([
   [
     "a late sentence end",
