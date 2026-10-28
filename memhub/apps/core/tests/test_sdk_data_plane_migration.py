@@ -1325,17 +1325,6 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
             "source": "default",
         }
         for memory_id in ("c", "d")
-    ] + [
-        {
-            "memory_id": "revoked",
-            "content": "must not be returned",
-            "layer": "l2_fact",
-            "status": "active",
-            "user_id": "local",
-            "agent_id": "all-apps",
-            "session_id": "revoked-session",
-            "source": "workbuddy",
-        }
     ]
     listed = []
 
@@ -1363,15 +1352,6 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
         ):
             original = app.state.sdk_client_handle
             app.state.sdk_client_handle = Handle()
-            database = app.state.settings.data_dir / "one-memory.sqlite3"
-            with sqlite3.connect(database) as db:
-                db.execute(
-                    "INSERT INTO source_grants "
-                    "(user_id,source_id,root_path,requested_path,root_identity,"
-                    "candidate_kind,granted_at,revoked_at,revision) VALUES "
-                    "('local','workbuddy','/fixture','/fixture','fixture','default',"
-                    "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
-                )
 
             async def graph_snapshot(*, limit):
                 del limit
@@ -1389,14 +1369,8 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
                 "/api/v2/memories/graph",
                 params={"source": "cursor", "offset": 100, "limit": 100},
             )
-            revoked = await client.get(
-                "/api/v2/memories/graph",
-                params={"source": "workbuddy", "limit": 100},
-            )
             app.state.sdk_client_handle = original
             assert response.status_code == 200
-            assert revoked.status_code == 409
-            assert revoked.json()["detail"] == "memory_source_revoked"
             return response.json()
 
     graph = asyncio.run(scenario())
@@ -1404,15 +1378,15 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
     assert listed[0]["scene"] == "all"
     assert listed[0]["statuses"] == ["active"]
     assert (listed[0]["offset"], listed[0]["limit"]) == (100, 100)
-    assert (graph["total_memories"], graph["projected_memories"]) == (4, 4)
+    assert (graph["total_memories"], graph["projected_memories"]) == (7, 4)
     assert {node["node_id"] for node in graph["nodes"]} == {
         "memory:a",
         "memory:b",
         "memory:c",
         "memory:d",
         "source:cursor",
+        "hy:t1",
     }
-    assert "memory:revoked" not in {node["node_id"] for node in graph["nodes"]}
     # "default_session" is the SDK's filler, not a conversation.
     assert [
         (edge["source_node_id"], edge["target_node_id"])
@@ -1422,33 +1396,27 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
     assert {edge["relation"] for edge in graph["edges"]} == {
         "evidence_source",
         "same_conversation",
+        "derived_from",
     }
-    assert graph["hy_graph_available"] is False
+    assert graph["hy_graph_available"] is True
 
 
 @pytest.mark.integration
 @pytest.mark.fresh_sdk
-def test_sdk_memory_graph_rechecks_revocation_after_the_sdk_read(tmp_path) -> None:
+def test_sdk_memory_map_still_draws_memories_from_a_revoked_source(tmp_path) -> None:
+    # Revoking a source stops new reads from it; memories already distilled
+    # from it stay visible, so the map agrees with the list.
     async def scenario():
         app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
-        database = app.state.settings.data_dir / "one-memory.sqlite3"
 
         class Client:
             def list_memories(self, **_kwargs):
-                with sqlite3.connect(database) as db:
-                    db.execute(
-                        "INSERT INTO source_grants "
-                        "(user_id,source_id,root_path,requested_path,root_identity,"
-                        "candidate_kind,granted_at,revoked_at,revision) VALUES "
-                        "('local','cursor','/fixture','/fixture','fixture','default',"
-                        "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
-                    )
                 return {
                     "vdb": {
                         "memories": [
                             {
-                                "memory_id": "revoked-during-read",
-                                "content": "must not escape",
+                                "memory_id": "kept",
+                                "content": "distilled before revocation",
                                 "layer": "l2_fact",
                                 "status": "active",
                                 "user_id": "local",
@@ -1477,14 +1445,25 @@ def test_sdk_memory_graph_rechecks_revocation_after_the_sdk_read(tmp_path) -> No
             ) as client,
         ):
             app.state.sdk_client_handle = Handle()
+            database = app.state.settings.data_dir / "one-memory.sqlite3"
+            with sqlite3.connect(database) as db:
+                db.execute(
+                    "INSERT INTO source_grants "
+                    "(user_id,source_id,root_path,requested_path,root_identity,"
+                    "candidate_kind,granted_at,revoked_at,revision) VALUES "
+                    "('local','cursor','/fixture','/fixture','fixture','default',"
+                    "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
+                )
             response = await client.get(
                 "/api/v2/memories/graph",
                 params={"source": "cursor", "limit": 100},
             )
-            assert response.status_code == 409
-            assert response.json()["detail"] == "memory_source_revoked"
+            assert response.status_code == 200
+            return response.json()
 
-    asyncio.run(scenario())
+    graph = asyncio.run(scenario())
+    assert (graph["total_memories"], graph["projected_memories"]) == (1, 1)
+    assert "memory:kept" in {node["node_id"] for node in graph["nodes"]}
 
 
 def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:

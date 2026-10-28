@@ -2978,12 +2978,6 @@ def create_app(
         (`hy_graph_projection`, the visualization exception). Shape matches
         the legacy map so the same view draws both.
         """
-        revoked_sources = await asyncio.to_thread(
-            _read_access(app).revoked_source_ids,
-            user_id="local",
-        )
-        if source in revoked_sources:
-            raise HTTPException(status_code=409, detail="memory_source_revoked")
         try:
             client = await _sdk_client_handle(app).client()
             # The map visualizes the active source scope, independently of the
@@ -3004,16 +2998,9 @@ def create_app(
             _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
-        revoked_sources = await asyncio.to_thread(
-            _read_access(app).revoked_source_ids,
-            user_id="local",
-        )
-        if source in revoked_sources:
-            raise HTTPException(status_code=409, detail="memory_source_revoked")
         vdb = raw.get("vdb") if isinstance(raw, dict) else None
         total = vdb.get("total") if isinstance(vdb, dict) else None
-        visible = [memory for memory in page.memories if memory.layer != "l1_raw"]
-        memories = [memory for memory in visible if memory.source not in revoked_sources]
+        memories = [memory for memory in page.memories if memory.layer != "l1_raw"]
         catalog = await asyncio.to_thread(_source_catalog, app)
         nodes: dict[str, MemoryGraphNode] = {}
         edges: list[MemoryGraphEdge] = []
@@ -3106,18 +3093,8 @@ def create_app(
                         origin="hy_relation",
                     )
                 )
-        final_revoked_sources = await asyncio.to_thread(
-            _read_access(app).revoked_source_ids,
-            user_id="local",
-        )
-        if final_revoked_sources != revoked_sources:
-            raise HTTPException(status_code=409, detail="memory_source_access_changed")
         return MemoryGraphResponse(
-            total_memories=(
-                total
-                if isinstance(total, int) and not revoked_sources
-                else len(memories)
-            ),
+            total_memories=total if isinstance(total, int) else len(memories),
             projected_memories=len(memories),
             nodes=tuple(nodes.values()),
             edges=tuple(edges),

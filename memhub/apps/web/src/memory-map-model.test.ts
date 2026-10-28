@@ -7,7 +7,6 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
   mapGroups,
-  omitRevokedSourceGraph,
   projectMap,
   projectPagedSourceMap,
 } from "./memory-map-model";
@@ -95,18 +94,6 @@ describe("memory map membership", () => {
     expect(result.nodes.map((n) => n.node_id)).not.toContain("source:cursor");
     expect(result.nodes.map((n) => n.node_id)).not.toContain("memory:c");
     expect(result.edges).toHaveLength(2);
-  });
-  it("removes revoked source subgraphs while retaining authorized ones", () => {
-    const result = omitRevokedSourceGraph(graph, [
-      { source_id: "codex", authorized: false },
-      { source_id: "cursor", authorized: true },
-    ] as SourceResponse[]);
-    expect(result?.nodes.map((node) => node.node_id)).toEqual([
-      "memory:c",
-      "source:cursor",
-    ]);
-    expect(result?.edges.map((edge) => edge.edge_id)).toEqual(["c"]);
-    expect(result?.projected_memories).toBe(1);
   });
   it("builds topic edges only from actual tags, without creating new facts", () => {
     const result = projectMap(graph, memories, "topic", ["a", "b"]);
