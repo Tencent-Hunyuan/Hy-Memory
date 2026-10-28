@@ -336,6 +336,7 @@ export const memoryChineseMessages = {
   "memory: · 导入数量仍在更新，可刷新核对": " · 导入数量仍在更新，可刷新核对",
   "memory:对话于 {day}": "对话于 {day}",
   "memory:导入于 {day}": "导入于 {day}",
+  "memory:写入于 {day}": "写入于 {day}",
   "memory:已开始处理所选对话": "已开始处理所选对话",
   "memory:处理请求已受理": "处理请求已受理",
   "memory:模型连接已通过。首批记忆生成后，会逐步出现在记忆列表里。":
@@ -750,6 +751,7 @@ export const memorySpanishMessages: Record<
     " · La importación continúa; actualiza para verificar",
   "memory:对话于 {day}": "Conversación del {day}",
   "memory:导入于 {day}": "Importada el {day}",
+  "memory:写入于 {day}": "Escrita el {day}",
   "memory:已开始处理所选对话": "Procesamiento de conversaciones iniciado",
   "memory:处理请求已受理": "Solicitud de procesamiento aceptada",
   "memory:模型连接已通过。首批记忆生成后，会逐步出现在记忆列表里。":

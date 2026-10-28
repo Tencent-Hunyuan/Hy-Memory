@@ -137,10 +137,12 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
     )
     coding = data_dir / "hy-memory" / "governed-v2" / "coding_cv.sqlite3"
     with sqlite3.connect(coding) as database:
+        # hy-memory 2.0.7 stores the conversation time; working_fact below is
+        # left without it, as a store not yet opened by 2.0.7.
         database.execute(
             "CREATE TABLE coding_memory_meta ("
             "experience_id TEXT,user_id TEXT,agent_id TEXT,solution TEXT,"
-            "source TEXT,created_at TEXT,updated_at TEXT)"
+            "source TEXT,memory_at INTEGER,created_at TEXT,updated_at TEXT)"
         )
         database.execute(
             "CREATE TABLE working_fact ("
@@ -149,7 +151,7 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
         )
         database.execute(
             "INSERT INTO coding_memory_meta VALUES "
-            "('sdk-1','local','scope','remember','default','now','now')"
+            "('sdk-1','local','scope','remember','default',NULL,'now','now')"
         )
 
     result = repair_sdk_metadata_from_bundle(
@@ -168,10 +170,11 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
         2026, 10, 18, tzinfo=UTC
     )
     with sqlite3.connect(coding) as database:
-        source, created_at = database.execute(
-            "SELECT source,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
+        source, memory_at, created_at = database.execute(
+            "SELECT source,memory_at,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
         ).fetchone()
     assert source == "workbuddy"
+    assert datetime.fromtimestamp(memory_at, tz=UTC) == datetime(2026, 10, 17, tzinfo=UTC)
     assert created_at.startswith("2026-10-18T00:00:00")
 
     repeated = repair_sdk_metadata_from_bundle(

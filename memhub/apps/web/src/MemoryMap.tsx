@@ -139,7 +139,7 @@ function monthDay(value: string, locale: GuiLocale): string | null {
 
 /** D96: when the cited conversation happened, not when the memory was generated. */
 function sourceStamp(
-  time: { at: string; basis: "conversation" | "import" } | undefined,
+  time: { at: string; basis: "conversation" | "import" | "write" } | undefined,
   fallback: string | null | undefined,
   locale: GuiLocale = "zh-CN",
 ): string {
@@ -147,7 +147,11 @@ function sourceStamp(
   if (time && day)
     return memoryText(
       locale,
-      time.basis === "conversation" ? "对话于 {day}" : "导入于 {day}",
+      time.basis === "conversation"
+        ? "对话于 {day}"
+        : time.basis === "write"
+          ? "写入于 {day}"
+          : "导入于 {day}",
       { day },
     );
   return dayStamp(fallback, locale);

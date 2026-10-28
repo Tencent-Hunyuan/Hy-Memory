@@ -108,6 +108,7 @@ export const currentChineseMessages = {
   "selectedMemory.version": "第 {revision} 版",
   "selectedMemory.sourceLine": "来源 {source} · {time}",
   "selectedMemory.timestamps": "对话时间 {conversation} · 沉淀时间 {created}",
+  "selectedMemory.writeTime": "写入时间 {created}",
   "selectedMemory.edit": "编辑",
   "selectedMemory.evidence": "原始依据",
   "selectedMemory.evidenceLine": "{author} · 原对话 {time}：",
@@ -258,6 +259,7 @@ export const currentEnglishMessages: Record<
   "selectedMemory.sourceLine": "Source {source} · {time}",
   "selectedMemory.timestamps":
     "Conversation time {conversation} · Created {created}",
+  "selectedMemory.writeTime": "Written {created}",
   "selectedMemory.edit": "Edit",
   "selectedMemory.evidence": "Original evidence",
   "selectedMemory.evidenceLine": "{author} · Original conversation {time}:",
@@ -418,6 +420,7 @@ export const currentSpanishMessages: Record<
   "selectedMemory.sourceLine": "Origen {source} · {time}",
   "selectedMemory.timestamps":
     "Conversación {conversation} · Guardada {created}",
+  "selectedMemory.writeTime": "Escrita {created}",
   "selectedMemory.edit": "Editar",
   "selectedMemory.evidence": "Evidencia original",
   "selectedMemory.evidenceLine": "{author} · Conversación original {time}:",

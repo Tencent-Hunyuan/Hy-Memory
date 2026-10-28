@@ -151,6 +151,7 @@ class HySdkMemoryRecord(BaseModel):
         if not content.strip():
             raise HySdkReadError("hy_memory_record_shape_unknown")
         status = str(raw.get("status") or "active")
+        memory_at = raw.get("memory_at")
         created_at = _epoch(raw.get("created_at"))
         updated_at = _epoch(raw.get("updated_at"))
         try:
@@ -167,6 +168,9 @@ class HySdkMemoryRecord(BaseModel):
                     str(raw["session_id"]) if isinstance(raw.get("session_id"), str) else None
                 ),
                 source=str(raw["source"]) if isinstance(raw.get("source"), str) else None,
+                # Conversation time; hy-memory 2.0.7 stores it for experiences
+                # and facts. Older stores leave it unknown.
+                memory_at=memory_at if isinstance(memory_at, int) else None,
                 gmt_created=created_at,
                 scene=cast(MemoryScene, variant),
                 kind=cast(MemoryKindName, kind),

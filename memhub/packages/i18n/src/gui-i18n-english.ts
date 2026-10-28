@@ -1774,6 +1774,7 @@ const baseEnglishMessages = {
     " · Import count is still updating; refresh to check",
   "memory:对话于 {day}": "Conversation on {day}",
   "memory:导入于 {day}": "Imported on {day}",
+  "memory:写入于 {day}": "Written on {day}",
   "memory:已开始处理所选对话": "Processing selected conversations",
   "memory:处理请求已受理": "Processing request received",
   "memory:模型连接已通过。首批记忆生成后，会逐步出现在记忆列表里。":

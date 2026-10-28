@@ -437,10 +437,13 @@ def _repair_coding(
             ):
                 if table not in tables:
                     continue
+                # hy-memory 2.0.7 added the conversation time; older stores lack it.
+                has_memory_at = "memory_at" in _columns(database, table)
                 rows = database.execute(
-                    f"SELECT {identifier},source,created_at FROM {table}"
+                    f"SELECT {identifier},source,created_at,"
+                    f"{'memory_at' if has_memory_at else 'NULL'} FROM {table}"
                 ).fetchall()
-                for memory_id, source, created_at in rows:
+                for memory_id, source, created_at, memory_at in rows:
                     desired = mapping.get(str(memory_id))
                     if desired is None:
                         continue
@@ -449,6 +452,13 @@ def _repair_coding(
                     if desired.source and source in {None, "", "default"}:
                         updates.append("source=?")
                         values.append(desired.source)
+                    if (
+                        has_memory_at
+                        and desired.memory_at is not None
+                        and memory_at != desired.memory_at
+                    ):
+                        updates.append("memory_at=?")
+                        values.append(desired.memory_at)
                     if desired.created_at is not None:
                         desired_created_at = (
                             datetime.fromtimestamp(desired.created_at, tz=UTC)
