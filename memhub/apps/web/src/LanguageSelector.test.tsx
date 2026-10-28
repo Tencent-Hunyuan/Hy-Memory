@@ -1,11 +1,18 @@
 // @vitest-environment jsdom
 
 import { translate } from "@one-memory/i18n";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { LanguageSelector } from "./LanguageSelector";
+import { optionMenuPosition } from "./OptionMenu";
 
 afterEach(() => {
   cleanup();
@@ -158,4 +165,142 @@ it("announces storage errors without replacing the confirmed choice", async () =
   expect((screen.getByRole("combobox") as HTMLButtonElement).value).toBe(
     "zh-CN",
   );
+});
+
+it("keeps a right-edge menu inside the viewport", () => {
+  expect(
+    optionMenuPosition(
+      { top: 8, right: 1016, bottom: 40, left: 872, width: 144 },
+      160,
+      1024,
+      600,
+    ),
+  ).toMatchObject({
+    top: 44,
+    left: 868,
+    width: 144,
+    maxHeight: 280,
+    placement: "below",
+  });
+});
+
+it("flips the menu above when the lower edge has no room", () => {
+  expect(
+    optionMenuPosition(
+      { top: 540, right: 500, bottom: 572, left: 356, width: 144 },
+      180,
+      1024,
+      600,
+    ),
+  ).toMatchObject({
+    top: 356,
+    left: 356,
+    width: 144,
+    maxHeight: 280,
+    placement: "above",
+  });
+});
+
+it("limits the panel to the actual space when neither side has 280px", () => {
+  expect(
+    optionMenuPosition(
+      { top: 40, right: 160, bottom: 60, left: 16, width: 144 },
+      180,
+      320,
+      100,
+    ),
+  ).toMatchObject({
+    top: 64,
+    left: 16,
+    width: 144,
+    maxHeight: 24,
+    placement: "below",
+  });
+});
+
+it("portals the open menu outside clipping layout containers", async () => {
+  render(
+    <LanguageProvider>
+      <div data-testid="clipping-parent">
+        <LanguageSelector compact />
+      </div>
+    </LanguageProvider>,
+  );
+  await userEvent.click(screen.getByRole("combobox"));
+  const listbox = screen.getByRole("listbox");
+  expect(listbox.parentElement).toBe(document.body);
+  expect(
+    listbox.classList.contains("r6-language-option-menu-panel--compact"),
+  ).toBe(true);
+});
+
+it("keeps the menu open while its portal scrollbar or padding is pressed", async () => {
+  render(
+    <LanguageProvider>
+      <LanguageSelector compact />
+    </LanguageProvider>,
+  );
+  const selector = screen.getByRole("combobox");
+  await userEvent.click(selector);
+  const listbox = screen.getByRole("listbox");
+  fireEvent.mouseDown(listbox);
+  fireEvent.blur(selector, { relatedTarget: null });
+  expect(selector.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.mouseUp(document);
+});
+
+it("clears the portal pointer guard when the menu closes mid-press", async () => {
+  render(
+    <LanguageProvider>
+      <LanguageSelector compact />
+    </LanguageProvider>,
+  );
+  const selector = screen.getByRole("combobox");
+  await userEvent.click(selector);
+  fireEvent.mouseDown(screen.getByRole("listbox"));
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(selector.getAttribute("aria-expanded")).toBe("false");
+
+  await userEvent.click(selector);
+  fireEvent.blur(selector, { relatedTarget: null });
+  expect(selector.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("clears the portal pointer guard when the window loses focus", async () => {
+  render(
+    <LanguageProvider>
+      <LanguageSelector compact />
+    </LanguageProvider>,
+  );
+  const selector = screen.getByRole("combobox");
+  await userEvent.click(selector);
+  fireEvent.mouseDown(screen.getByRole("listbox"));
+  fireEvent.blur(window);
+  fireEvent.blur(selector, { relatedTarget: null });
+  expect(selector.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("closes the portal when its anchor scrolls completely out of view", async () => {
+  render(
+    <LanguageProvider>
+      <LanguageSelector compact />
+    </LanguageProvider>,
+  );
+  const selector = screen.getByRole("combobox");
+  vi.spyOn(selector, "getBoundingClientRect").mockReturnValue({
+    top: 20,
+    right: 1168,
+    bottom: 52,
+    left: 1024,
+    width: 144,
+    height: 32,
+    x: 1024,
+    y: 20,
+    toJSON: () => ({}),
+  });
+  await userEvent.click(selector);
+  await waitFor(() =>
+    expect(selector.getAttribute("aria-expanded")).toBe("false"),
+  );
+  expect(screen.queryByRole("listbox")).toBeNull();
 });

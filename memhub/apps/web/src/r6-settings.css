@@ -72,37 +72,27 @@
   border-color: #7892a6;
   box-shadow: 0 0 0 3px rgb(85 124 147 / 12%);
 }
-.r6-settings .r6-language-option-menu .om-option-menu-panel {
-  top: calc(100% + 6px);
+.r6-language-option-menu-panel--settings {
   padding: 6px;
   border-color: #c6d2da;
   box-shadow: 0 12px 32px rgb(48 71 87 / 13%);
 }
-.r6-settings .r6-language-option-menu .om-option-menu-panel [role="option"] {
+.r6-language-option-menu-panel--settings [role="option"] {
   min-height: 38px;
   padding: 8px 10px;
   color: #304757;
   font-size: 13px;
   line-height: 22px;
 }
-.r6-settings
-  .r6-language-option-menu
-  .om-option-menu-panel
-  [role="option"][aria-selected="true"] {
+.r6-language-option-menu-panel--settings [role="option"][aria-selected="true"] {
   background: #dfe9ef;
   font-weight: 500;
 }
-.r6-settings
-  .r6-language-option-menu
-  .om-option-menu-panel
-  [role="option"][data-active="true"] {
+.r6-language-option-menu-panel--settings [role="option"][data-active="true"] {
   color: #304757;
   background: #e9f0f4;
 }
-.r6-settings
-  .r6-language-option-menu
-  .om-option-menu-panel
-  [role="option"]:active:not(:disabled) {
+.r6-language-option-menu-panel--settings [role="option"]:active:not(:disabled) {
   color: #304757;
   background: #d4e2ea;
 }
