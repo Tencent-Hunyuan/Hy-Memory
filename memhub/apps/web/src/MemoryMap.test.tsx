@@ -465,12 +465,12 @@ it("does not present an unverified empty page as zero memories", () => {
   view.rerender(
     <Host simplified items={[]} libraryView={{ ...base, stale: true }} />,
   );
-  expect(screen.getAllByText("正在核对来源…")).toHaveLength(2);
+  expect(screen.getByText("正在核对来源…")).toBeTruthy();
   expect(screen.queryByText(/0 条/)).toBeNull();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
 });
 
-it("does not show the previous source graph while a searched source is changing", () => {
+it("does not show the previous source graph while the new scope's graph loads", () => {
   render(
     <Host
       simplified
@@ -483,12 +483,14 @@ it("does not show the previous source graph while a searched source is changing"
           source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
         }),
         query: "项目",
-        stale: true,
+        graphLoading: true,
       }}
     />,
   );
   expect(screen.queryByTestId("canvas")).toBeNull();
-  expect(screen.getAllByText("正在核对来源…")).toHaveLength(2);
+  expect(screen.getByText("正在读取记忆地图…")).toBeTruthy();
+  // The list keeps its own state: graph loading is not page staleness.
+  expect(screen.queryByText("正在核对来源…")).toBeNull();
 });
 
 it("shows a retry instead of collapsing a failed graph to the current page", async () => {
@@ -1401,11 +1403,11 @@ it("drops a pending source selection when that source is revoked", async () => {
       }}
     />,
   );
-  expect(screen.queryByRole("button", { name: "图中选择 Codex" })).toBeNull();
-  expect(screen.queryByTestId("canvas")).toBeNull();
-  expect(
-    screen.getByRole("list", { name: "地图记忆列表" }).children,
-  ).toHaveLength(0);
+  // Memories already distilled from a revoked source stay on the map, but the
+  // revoked source can no longer be the selection.
+  expect(screen.getByTestId("canvas").dataset.selected).not.toBe(
+    "source:codex",
+  );
   expect(screen.queryByText("正在读取记忆详情…")).toBeNull();
 
   view.rerender(

@@ -1621,6 +1621,7 @@ const baseEnglishMessages = {
     "Newly imported original text, not yet memories",
   "memory:来源归属": "Source connections",
   "memory:可在沉淀记忆后查看视图": "Create memories to view the graph",
+  "memory:正在读取记忆地图…": "Loading memory map…",
   "memory:查看选中来源原文": "View selected source text",
   "memory:查看选中记忆原文": "View selected memory text",
   "memory:查看原文": "View original conversation",

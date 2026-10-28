@@ -64,6 +64,7 @@ vi.mock("./MemoryMap", () => ({
         source_ids_by_memory?: Record<string, string[]>;
         offset: number;
       } | null;
+      graphLoading?: boolean;
       graphFailed?: boolean;
       stale: boolean;
       unattributedSource?: string;
@@ -95,6 +96,9 @@ vi.mock("./MemoryMap", () => ({
       <span data-testid="map-detail">{detail?.memory.memory_id ?? ""}</span>
       <span data-testid="map-offset">{libraryView?.page?.offset ?? ""}</span>
       <span data-testid="map-stale">{String(libraryView?.stale)}</span>
+      <span data-testid="map-graph-loading">
+        {String(libraryView?.graphLoading)}
+      </span>
       <span data-testid="map-graph-failed">
         {String(libraryView?.graphFailed)}
       </span>
@@ -382,9 +386,11 @@ it("hides the previous source graph until the all-applications graph settles", a
 
   fireEvent.click(screen.getByText("pick all"));
   await waitFor(() =>
-    expect(screen.getByTestId("map-stale").textContent).toBe("true"),
+    expect(screen.getByTestId("map-graph-loading").textContent).toBe("true"),
   );
   expect(screen.getByTestId("map-nodes").textContent).toBe("none");
+  // Waiting for the graph is not page staleness: the list stays usable.
+  expect(screen.getByTestId("map-stale").textContent).toBe("false");
 
   await act(async () => {
     releasePage(allPage);
@@ -393,7 +399,7 @@ it("hides the previous source graph until the all-applications graph settles", a
   await waitFor(() =>
     expect(screen.getByTestId("map-nodes").textContent).toBe("4"),
   );
-  expect(screen.getByTestId("map-stale").textContent).toBe("false");
+  expect(screen.getByTestId("map-graph-loading").textContent).toBe("false");
 
   const searchPage = {
     memories: [record("search-result")],
@@ -410,14 +416,14 @@ it("hides the previous source graph until the all-applications graph settles", a
   const graphCalls = api.sdkGraph.mock.calls.length;
   fireEvent.click(screen.getByText("search deploy"));
   await waitFor(() =>
-    expect(screen.getByTestId("map-stale").textContent).toBe("true"),
+    expect(screen.getByTestId("map-graph-loading").textContent).toBe("true"),
   );
   expect(screen.getByTestId("map-nodes").textContent).toBe("none");
   expect(api.sdkGraph).toHaveBeenCalledTimes(graphCalls);
 
   await act(async () => releaseSearch(searchPage));
   await waitFor(() =>
-    expect(screen.getByTestId("map-stale").textContent).toBe("false"),
+    expect(screen.getByTestId("map-graph-loading").textContent).toBe("false"),
   );
 });
 

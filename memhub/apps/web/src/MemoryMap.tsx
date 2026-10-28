@@ -42,7 +42,6 @@ import { memoryText, useMemoryLanguage } from "./memory-language";
 import {
   type MapAxis,
   mapGroups,
-  omitRevokedSourceGraph,
   projectMap,
   projectPagedSourceMap,
 } from "./memory-map-model";
@@ -96,6 +95,8 @@ type Props = {
     page: MemoryLibraryPage | null;
     loading: boolean;
     failed: boolean;
+    /** The graph for the current source/query scope has not arrived yet. */
+    graphLoading?: boolean;
     graphFailed?: boolean;
     stale: boolean;
     settledSource?: string;
@@ -185,24 +186,20 @@ export function MemoryMap(props: Props) {
   const library = props.libraryView;
   const serverPaged = library !== undefined;
   const unattributedLabel = text("未识别来源");
-  const authorizedBaseGraph = useMemo(
-    () => omitRevokedSourceGraph(baseGraph, sources),
-    [baseGraph, sources],
-  );
   const graph = useMemo(
     () =>
       serverPaged
         ? projectPagedSourceMap(
-            authorizedBaseGraph,
+            baseGraph,
             library?.page ?? null,
             sources,
             library?.unattributedSource
               ? { [library.unattributedSource]: unattributedLabel }
               : undefined,
           )
-        : authorizedBaseGraph,
+        : baseGraph,
     [
-      authorizedBaseGraph,
+      baseGraph,
       serverPaged,
       library?.page,
       library?.unattributedSource,
@@ -244,18 +241,10 @@ export function MemoryMap(props: Props) {
       ? `source:${library.source}`
       : ""
     : groupKey;
-  const active = useMemo(() => {
-    const revoked = new Set(
-      sources
-        .filter((source) => source.authorized === false)
-        .map((source) => source.source_id),
-    );
-    return memories.filter((memory) => {
-      if (memory.status === "deleted") return false;
-      const sourceIds = library?.page?.source_ids_by_memory?.[memory.memory_id];
-      return !sourceIds?.some((sourceId) => revoked.has(sourceId));
-    });
-  }, [library?.page?.source_ids_by_memory, memories, sources]);
+  const active = useMemo(
+    () => memories.filter((m) => m.status !== "deleted"),
+    [memories],
+  );
   const arrival = resolveMemoryArrival({
     arrival: props.arrival,
     processing: props.processing,
@@ -330,7 +319,9 @@ export function MemoryMap(props: Props) {
     [active, group, search, serverPaged, axis, groupKey],
   );
   const projection = useMemo(() => {
-    if (serverPaged && (library?.stale || library?.graphFailed))
+    // Until the new scope's graph arrives (or after it failed), drawing the
+    // previous scope's graph would show the wrong source.
+    if (serverPaged && (library?.graphLoading || library?.graphFailed))
       return {
         total_memories: library.page?.total ?? 0,
         projected_memories: 0,
@@ -344,7 +335,7 @@ export function MemoryMap(props: Props) {
     // to dominate that page. Keyword search is intentionally page-scoped.
     if (serverPaged && !library?.query) {
       return (
-        authorizedBaseGraph ??
+        baseGraph ??
         projectMap(
           graph,
           active,
@@ -385,7 +376,7 @@ export function MemoryMap(props: Props) {
         })),
     };
   }, [
-    authorizedBaseGraph,
+    baseGraph,
     graph,
     axis,
     filtered,
@@ -395,7 +386,7 @@ export function MemoryMap(props: Props) {
     sources,
     serverPaged,
     library?.query,
-    library?.stale,
+    library?.graphLoading,
     library?.graphFailed,
     library?.page?.total,
   ]);
@@ -1111,24 +1102,26 @@ export function MemoryMap(props: Props) {
             <div className="map-empty-stage">
               <Network size={32} strokeWidth={1} />
               <p
-                {...(library?.graphFailed
+                {...(library?.graphFailed || library?.graphLoading
                   ? { role: "status", "aria-live": "polite" as const }
                   : {})}
               >
                 {library?.stale
-                  ? text("正在核对来源…")
+                  ? text("可在沉淀记忆后查看视图")
                   : library?.graphFailed || library?.failed
                     ? text("记忆暂时无法读取")
-                    : library?.page &&
-                        (library.query || library.source || groupKey)
-                      ? text("当前筛选没有可显示的记忆")
-                      : !loaded
-                        ? text("正在读取记忆…")
-                        : active.length
-                          ? text("当前筛选没有可显示的记忆")
-                          : arrival.importedMessages > 0
-                            ? text("已保存的对话还未生成记忆")
-                            : text("还没有可显示的记忆")}
+                    : library?.graphLoading
+                      ? text("正在读取记忆地图…")
+                      : library?.page &&
+                          (library.query || library.source || groupKey)
+                        ? text("当前筛选没有可显示的记忆")
+                        : !loaded
+                          ? text("正在读取记忆…")
+                          : active.length
+                            ? text("当前筛选没有可显示的记忆")
+                            : arrival.importedMessages > 0
+                              ? text("已保存的对话还未生成记忆")
+                              : text("还没有可显示的记忆")}
               </p>
               {library?.graphFailed ? (
                 <R6Button onClick={library.onRetry}>
