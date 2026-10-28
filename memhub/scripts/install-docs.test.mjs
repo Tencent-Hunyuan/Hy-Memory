@@ -25,7 +25,8 @@ test("installation docs disclose publication and lifecycle boundaries", async ()
   assert.match(installation, /Linux x64.*GitHub Actions/s);
   assert.match(installation, /Linux arm64.*GitHub Actions/s);
   assert.match(installation, /macOS arm64.*Developer ID/s);
-  assert.match(installation, /macOS x64.*Developer ID/s);
+  // v1.0.5 ships no Intel build; the table has to say so rather than omit it.
+  assert.match(installation, /\| macOS x64 \| 无 \|/);
   assert.match(installation, /release-manifest\.json/);
   assert.match(installation, /fake Release/);
   assert.match(installation, /--source/);

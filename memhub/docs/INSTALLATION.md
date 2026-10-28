@@ -1,13 +1,13 @@
 # MemHub 安装与发行
 
-MemHub `v1.0.5`（build 14）的发行目标如下：
+MemHub `v1.0.5`（build 35）的发行目标如下：
 
 | 平台 | 发行物 | 构建与验收 |
 | --- | --- | --- |
 | Linux x64 | Runtime tar.gz | GitHub Actions 原生 x64 runner |
 | Linux arm64 | Runtime tar.gz | GitHub Actions 原生 arm64 runner |
 | macOS arm64 | DMG 与 Runtime tar.gz | Developer ID 签名、公证和原生 arm64 验收 |
-| macOS x64 | DMG 与 Runtime tar.gz | Developer ID 签名、公证和原生 Intel 验收 |
+| macOS x64 | 无 | 本版本不提供 Intel 构建 |
 | Windows | 无 | 当前不支持 |
 
 正式支持以对应 GitHub Release 的 `release-manifest.json` 为准。Manifest 记录版本、

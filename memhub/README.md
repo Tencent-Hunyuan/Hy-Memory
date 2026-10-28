@@ -19,12 +19,12 @@ If you run into a problem, please open an Issue with the version, platform,repro
 ## 发行与平台合同
 
 源码当前固定使用公开 PyPI 正式版 `hy-memory==2.0.8`。MemHub 源码版本为 `1.0.5`
-（build 14），GitHub 仓库为
+（build 35），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-`v1.0.5` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
+`v1.0.5` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64 App 和 Runtime。
 Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命周期验收；macOS
 制品由发行流水线完成 Developer ID 签名、公证和验收后手动上传。Windows 不支持。
 只有同时出现在 GitHub Release 与 `release-manifest.json` 中、且通过公开校验的制品才属于
