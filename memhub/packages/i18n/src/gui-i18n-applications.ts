@@ -10,6 +10,7 @@ export const applicationsChineseMessages = {
   "apps.readingCount": "正在核对本机记忆…",
   "apps.startingRetry": "后台正在启动，稍后自动更新",
   "apps.countWillUpdate": "记忆数量稍后自动更新",
+  "apps.showingPrevious": "正在显示上次数据，稍后自动更新",
   "apps.unreadable": "暂无法读取",
   "apps.unit": "条",
   "apps.scope": "按应用授权范围使用",
@@ -130,6 +131,8 @@ export const applicationsSpanishMessages: Record<
   "apps.startingRetry":
     "El servicio se está iniciando; se actualizará automáticamente",
   "apps.countWillUpdate": "El total de memorias se actualizará automáticamente",
+  "apps.showingPrevious":
+    "Se muestran los datos anteriores; se actualizarán automáticamente",
   "apps.unreadable": "No disponible",
   "apps.unit": "",
   "apps.scope": "Según los permisos de cada aplicación",

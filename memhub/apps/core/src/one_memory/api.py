@@ -3004,6 +3004,12 @@ def create_app(
             _log_skipped_sdk_memories(skipped)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
+        revoked_sources = await asyncio.to_thread(
+            _read_access(app).revoked_source_ids,
+            user_id="local",
+        )
+        if source in revoked_sources:
+            raise HTTPException(status_code=409, detail="memory_source_revoked")
         vdb = raw.get("vdb") if isinstance(raw, dict) else None
         total = vdb.get("total") if isinstance(vdb, dict) else None
         visible = [memory for memory in page.memories if memory.layer != "l1_raw"]
@@ -3100,6 +3106,12 @@ def create_app(
                         origin="hy_relation",
                     )
                 )
+        final_revoked_sources = await asyncio.to_thread(
+            _read_access(app).revoked_source_ids,
+            user_id="local",
+        )
+        if final_revoked_sources != revoked_sources:
+            raise HTTPException(status_code=409, detail="memory_source_access_changed")
         return MemoryGraphResponse(
             total_memories=(
                 total

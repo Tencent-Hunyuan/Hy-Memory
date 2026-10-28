@@ -554,11 +554,15 @@ export function ApplicationsHome({
       busy = false;
       if (stopped) return;
       if (home.status === "fulfilled") {
-        setSummaryFailures(0);
         // stale=true 表示这轮读取超时，数字不代表现状：保留上一次的概览，
-        // 等 10 秒后的下一轮轮询补上，绝不清零也不报错。
-        if (!("stale" in home.value) || !home.value.stale)
+        // 等 10 秒后的下一轮轮询补上。重复 stale 仍要进入可恢复状态，
+        // 不能永远停在“正在核对”。
+        if (!("stale" in home.value) || !home.value.stale) {
+          setSummaryFailures(0);
           setSummary(home.value);
+        } else {
+          setSummaryFailures((count) => count + 1);
+        }
       } else {
         setSummaryFailures((count) => count + 1);
       }
@@ -579,6 +583,7 @@ export function ApplicationsHome({
   const visible = summary;
   const latest = visible?.latest;
   const summaryUnavailable = visible === null && summaryFailures >= 2;
+  const summaryStale = visible !== null && summaryFailures >= 2;
   const hasCall =
     recentCall !== null &&
     (callState === "ready" || callState === "incomplete");
@@ -821,7 +826,7 @@ export function ApplicationsHome({
               <h2>{t("apps.overview")}</h2>
             </header>
             <div className="r6-home-metrics">
-              <div>
+              <div role="status" aria-live="polite" aria-atomic="true">
                 <p>{t("apps.memories")}</p>
                 <p className="r6-home-figure">
                   <strong>
@@ -831,9 +836,11 @@ export function ApplicationsHome({
                   </strong>
                   {t("apps.unit") ? <i>{t("apps.unit")}</i> : null}
                 </p>
-                <small {...(visible ? {} : { role: "status" })}>
+                <small>
                   {visible
-                    ? t("apps.scope")
+                    ? summaryStale
+                      ? t("apps.showingPrevious")
+                      : t("apps.scope")
                     : summaryUnavailable
                       ? t("apps.countWillUpdate")
                       : summaryFailures

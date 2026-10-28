@@ -498,6 +498,33 @@ it("does not show the previous source graph while a searched source is changing"
   expect(screen.getAllByText("正在核对来源…")).toHaveLength(2);
 });
 
+it("shows a retry instead of collapsing a failed graph to the current page", async () => {
+  const onRetry = vi.fn();
+  render(
+    <Host
+      simplified
+      libraryView={{
+        ...pagedView({
+          items: memories,
+          total: memories.length,
+          offset: 0,
+          limit: 20,
+          source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+        }),
+        graphFailed: true,
+        onRetry,
+      }}
+    />,
+  );
+  expect(screen.queryByTestId("canvas")).toBeNull();
+  expect(screen.getByText("记忆暂时无法读取")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("记忆暂时无法读取");
+  await userEvent.click(
+    screen.getByRole("button", { name: "重新读取地图记忆" }),
+  );
+  expect(onRetry).toHaveBeenCalledOnce();
+});
+
 it("starts with receipt-backed source grouping, keeping topics secondary", () => {
   render(<Host />);
   expect(

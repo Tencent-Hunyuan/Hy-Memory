@@ -1295,6 +1295,67 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
     assert graph["hy_graph_available"] is False
 
 
+@pytest.mark.integration
+@pytest.mark.fresh_sdk
+def test_sdk_memory_graph_rechecks_revocation_after_the_sdk_read(tmp_path) -> None:
+    async def scenario():
+        app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
+        database = app.state.settings.data_dir / "one-memory.sqlite3"
+
+        class Client:
+            def list_memories(self, **_kwargs):
+                with sqlite3.connect(database) as db:
+                    db.execute(
+                        "INSERT INTO source_grants "
+                        "(user_id,source_id,root_path,requested_path,root_identity,"
+                        "candidate_kind,granted_at,revoked_at,revision) VALUES "
+                        "('local','cursor','/fixture','/fixture','fixture','default',"
+                        "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
+                    )
+                return {
+                    "vdb": {
+                        "memories": [
+                            {
+                                "memory_id": "revoked-during-read",
+                                "content": "must not escape",
+                                "layer": "l2_fact",
+                                "status": "active",
+                                "user_id": "local",
+                                "agent_id": "all-apps",
+                                "session_id": "s1",
+                                "source": "cursor",
+                            }
+                        ],
+                        "total": 1,
+                    }
+                }
+
+        class Handle:
+            async def client(self):
+                return Client()
+
+            async def close(self):
+                return None
+
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer authority-test"},
+            ) as client,
+        ):
+            app.state.sdk_client_handle = Handle()
+            response = await client.get(
+                "/api/v2/memories/graph",
+                params={"source": "cursor", "limit": 100},
+            )
+            assert response.status_code == 409
+            assert response.json()["detail"] == "memory_source_revoked"
+
+    asyncio.run(scenario())
+
+
 def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:
     """Build 21 logged RetiredAuthorityAccess after every successful write."""
     from types import SimpleNamespace

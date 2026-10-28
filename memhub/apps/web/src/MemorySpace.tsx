@@ -171,6 +171,7 @@ export function MemorySpace({
   // filter change cannot paint the previous filter's graph during the new read.
   const [sdkGraph, setSdkGraph] = useState<{
     scope: string;
+    status: "ready" | "failed";
     value: MemoryGraphResponse | null;
   } | null>(null);
   // Bumping this re-reads the page and graph after an edit or a delete.
@@ -199,7 +200,11 @@ export function MemorySpace({
   ]);
   const sdkGraphSettled = sdkGraph?.scope === sdkRequestedScope;
   const visibleSdkGraph =
-    sdkGraph?.scope === sdkRequestedScope ? sdkGraph.value : null;
+    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "ready"
+      ? sdkGraph.value
+      : null;
+  const sdkGraphFailed =
+    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "failed";
   // A keyword search pages through one server-side result window. The id is
   // kept for the query and source it was searched with; a new query or
   // source starts without one, so the server searches afresh.
@@ -247,7 +252,10 @@ export function MemorySpace({
           // look identical to Cursor whenever newer Cursor memories occupied
           // that prefix.
           query
-            ? Promise.resolve(null)
+            ? Promise.resolve({
+                status: "ready" as const,
+                value: null,
+              })
             : getSdkMemoryGraph(
                 {
                   source,
@@ -255,7 +263,10 @@ export function MemorySpace({
                   limit: 300,
                 },
                 request.signal,
-              ).catch(() => null),
+              ).then(
+                (value) => ({ status: "ready" as const, value }),
+                () => ({ status: "failed" as const, value: null }),
+              ),
         ]);
         if (cancelled) return;
         if (sdkSearchWindow.current.key === windowKey)
@@ -272,7 +283,7 @@ export function MemorySpace({
           settledSource: sdkLibrarySource,
           settledQuery: sdkLibraryQuery,
         });
-        setSdkGraph({ scope: windowKey, value: graph });
+        setSdkGraph({ scope: windowKey, ...graph });
       } catch {
         if (cancelled || request.signal.aborted) return;
         setSdkLibrary((current) => ({
@@ -1033,6 +1044,7 @@ export function MemorySpace({
                 page: sdkLibrary.page,
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
+                graphFailed: sdkGraphFailed,
                 stale: !sdkGraphSettled,
                 unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,

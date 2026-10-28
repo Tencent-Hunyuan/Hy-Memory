@@ -96,6 +96,7 @@ type Props = {
     page: MemoryLibraryPage | null;
     loading: boolean;
     failed: boolean;
+    graphFailed?: boolean;
     stale: boolean;
     /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
     unattributedSource?: string;
@@ -308,7 +309,7 @@ export function MemoryMap(props: Props) {
     [active, group, search, serverPaged, axis, groupKey],
   );
   const projection = useMemo(() => {
-    if (serverPaged && library?.stale)
+    if (serverPaged && (library?.stale || library?.graphFailed))
       return {
         total_memories: library.page?.total ?? 0,
         projected_memories: 0,
@@ -374,6 +375,7 @@ export function MemoryMap(props: Props) {
     serverPaged,
     library?.query,
     library?.stale,
+    library?.graphFailed,
     library?.page?.total,
   ]);
   const visibleGroupNode = groupNode
@@ -1046,10 +1048,14 @@ export function MemoryMap(props: Props) {
           ) : (
             <div className="map-empty-stage">
               <Network size={32} strokeWidth={1} />
-              <p>
+              <p
+                {...(library?.graphFailed
+                  ? { role: "status", "aria-live": "polite" as const }
+                  : {})}
+              >
                 {library?.stale
                   ? text("正在核对来源…")
-                  : library?.failed
+                  : library?.graphFailed || library?.failed
                     ? text("记忆暂时无法读取")
                     : library?.page &&
                         (library.query || library.source || groupKey)
@@ -1062,6 +1068,11 @@ export function MemoryMap(props: Props) {
                             ? text("已保存的对话还未生成记忆")
                             : text("还没有可显示的记忆")}
               </p>
+              {library?.graphFailed ? (
+                <R6Button onClick={library.onRetry}>
+                  {text("重新读取地图记忆")}
+                </R6Button>
+              ) : null}
             </div>
           )}
         </div>

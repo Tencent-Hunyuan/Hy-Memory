@@ -811,6 +811,84 @@ it("offers a calm retry after repeated home summary failures", async () => {
     vi.useRealTimers();
   }
 });
+it("counts repeated stale summaries and recovers on the next confirmed read", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stale = {
+      memory_count: 0,
+      latest: null,
+      observed_at: "2026-09-19T00:00:00Z",
+      stale: true,
+    };
+    summary
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({
+        memory_count: 4,
+        latest: null,
+        observed_at: "2026-09-19T00:01:00Z",
+      });
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("记忆概览还没准备好")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByText("4")).toBeTruthy();
+    expect(screen.queryByText("记忆概览还没准备好")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("labels a retained count as previous data after repeated stale reads", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stale = {
+      memory_count: 0,
+      latest: null,
+      observed_at: "2026-09-19T00:00:00Z",
+      stale: true,
+    };
+    summary
+      .mockResolvedValueOnce({
+        memory_count: 601,
+        latest: null,
+        observed_at: "2026-09-19T00:00:00Z",
+      })
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({
+        memory_count: 4,
+        latest: null,
+        observed_at: "2026-09-19T00:01:00Z",
+      });
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    expect(await screen.findByText("601")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(screen.getByText("601")).toBeTruthy();
+    expect(screen.getByText("正在显示上次数据，稍后自动更新")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("4")).toBeTruthy();
+    expect(screen.queryByText("正在显示上次数据，稍后自动更新")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 it("never calls a recall event a success when only stored memories are available", async () => {
   render(
     <ApplicationsHome

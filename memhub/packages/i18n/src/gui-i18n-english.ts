@@ -1309,6 +1309,8 @@ const baseEnglishMessages = {
   "apps.startingRetry":
     "The background service is starting; this will update automatically",
   "apps.countWillUpdate": "The memory count will update automatically",
+  "apps.showingPrevious":
+    "Showing the previous data; this will update automatically",
   "apps.unreadable": "Unavailable",
   "apps.unit": "items",
   "apps.scope": "Used within app permissions",

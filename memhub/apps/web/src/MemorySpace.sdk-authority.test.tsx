@@ -64,6 +64,7 @@ vi.mock("./MemoryMap", () => ({
         source_ids_by_memory?: Record<string, string[]>;
         offset: number;
       } | null;
+      graphFailed?: boolean;
       stale: boolean;
       unattributedSource?: string;
       onSource(value: string): void;
@@ -94,6 +95,9 @@ vi.mock("./MemoryMap", () => ({
       <span data-testid="map-detail">{detail?.memory.memory_id ?? ""}</span>
       <span data-testid="map-offset">{libraryView?.page?.offset ?? ""}</span>
       <span data-testid="map-stale">{String(libraryView?.stale)}</span>
+      <span data-testid="map-graph-failed">
+        {String(libraryView?.graphFailed)}
+      </span>
       <button type="button" onClick={() => onOpenMemory("e1")}>
         open e1
       </button>
@@ -229,6 +233,18 @@ it("draws the map from SDK memories on SDK authority, without legacy reads", asy
     { source: undefined, offset: 0, limit: 300 },
     expect.any(AbortSignal),
   );
+});
+
+it("keeps a graph read failure explicit instead of presenting the list page as the graph", async () => {
+  sdkAuthority();
+  api.sdkGraph.mockRejectedValue(new Error("graph unavailable"));
+  render(<MemorySpace simplified active />);
+
+  await waitFor(() =>
+    expect(screen.getByTestId("map-loaded").textContent).toBe("true"),
+  );
+  expect(screen.getByTestId("map-graph-failed").textContent).toBe("true");
+  expect(screen.getByTestId("map-nodes").textContent).toBe("none");
 });
 
 it("keeps rows, sources, count and graph on the one filtered page", async () => {
