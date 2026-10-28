@@ -355,6 +355,7 @@ function Host({
   processing = null,
   loaded = true,
   deferMemoryId,
+  graphValue = graph,
   onViewHistory,
   onConfigureModel = () => {},
   libraryView,
@@ -370,6 +371,7 @@ function Host({
   processing?: MemoryProcessingSummary | null;
   loaded?: boolean;
   deferMemoryId?: string;
+  graphValue?: MemoryGraphResponse;
   onViewHistory?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
@@ -382,7 +384,7 @@ function Host({
       hidden={hidden}
       overlayBlocked={overlayBlocked}
       memories={items}
-      graph={graph}
+      graph={graphValue}
       sources={sources}
       arrival={arrival}
       onViewHistory={onViewHistory}
@@ -470,10 +472,32 @@ it("does not present an unverified empty page as zero memories", () => {
   view.rerender(
     <Host simplified items={[]} libraryView={{ ...base, stale: true }} />,
   );
-  expect(screen.getByText("正在核对来源…")).toBeTruthy();
+  expect(screen.getAllByText("正在核对来源…")).toHaveLength(2);
   expect(screen.queryByText(/0 条/)).toBeNull();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
 });
+
+it("does not show the previous source graph while a searched source is changing", () => {
+  render(
+    <Host
+      simplified
+      libraryView={{
+        ...pagedView({
+          items: memories,
+          total: memories.length,
+          offset: 0,
+          limit: 20,
+          source_ids_by_memory: { m0: ["codex"], m1: ["codex"] },
+        }),
+        query: "项目",
+        stale: true,
+      }}
+    />,
+  );
+  expect(screen.queryByTestId("canvas")).toBeNull();
+  expect(screen.getAllByText("正在核对来源…")).toHaveLength(2);
+});
+
 it("starts with receipt-backed source grouping, keeping topics secondary", () => {
   render(<Host />);
   expect(
@@ -483,6 +507,118 @@ it("starts with receipt-backed source grouping, keeping topics secondary", () =>
     screen.getByRole("button", { name: "主题" }).getAttribute("aria-pressed"),
   ).toBe("false");
   expect(screen.getByRole("button", { name: "Codex2" })).toBeDefined();
+});
+
+it("restores the full graph scope when the source filter returns to all applications", async () => {
+  const workbuddyMemory = {
+    ...memories[1],
+    memory_id: "workbuddy-memory",
+    content: "较早的 WorkBuddy 记忆",
+  };
+  const allGraph = {
+    total_memories: 2,
+    projected_memories: 2,
+    hy_graph_available: false,
+    nodes: [
+      graph.nodes.find((node) => node.node_id === "memory:m0"),
+      graph.nodes.find((node) => node.node_id === "source:codex"),
+      {
+        node_id: "memory:workbuddy-memory",
+        node_type: "memory",
+        memory_id: "workbuddy-memory",
+        label: workbuddyMemory.content,
+      },
+      {
+        node_id: "source:workbuddy",
+        node_type: "source",
+        source_id: "workbuddy",
+        label: "WorkBuddy",
+      },
+    ].filter(Boolean),
+    edges: [
+      {
+        edge_id: "cursor-memory",
+        source_node_id: "source:codex",
+        target_node_id: "memory:m0",
+        relation: "evidence_source",
+        origin: "provenance",
+      },
+      {
+        edge_id: "workbuddy-memory",
+        source_node_id: "source:workbuddy",
+        target_node_id: "memory:workbuddy-memory",
+        relation: "evidence_source",
+        origin: "provenance",
+      },
+    ],
+  } as MemoryGraphResponse;
+  const cursorGraph = {
+    ...allGraph,
+    total_memories: 1,
+    projected_memories: 1,
+    nodes: allGraph.nodes.filter(
+      (node) => node.node_id === "memory:m0" || node.node_id === "source:codex",
+    ),
+    edges: [allGraph.edges[0]],
+  };
+
+  function ScopeHarness() {
+    const [source, setSource] = useState("codex");
+    return (
+      <Host
+        simplified
+        items={[memories[0]]}
+        graphValue={source ? cursorGraph : allGraph}
+        sources={
+          [
+            {
+              source_id: "codex",
+              display_name: "Cursor",
+              authorized: true,
+            },
+            {
+              source_id: "workbuddy",
+              display_name: "WorkBuddy",
+              authorized: true,
+            },
+            {
+              source_id: "retired",
+              display_name: "Retired",
+              authorized: false,
+            },
+          ] as SourceResponse[]
+        }
+        libraryView={{
+          ...pagedView({
+            items: [memories[0]],
+            total: source ? 1 : 2,
+            offset: 0,
+            limit: 20,
+            source_ids_by_memory: { m0: ["codex"] },
+          }),
+          source,
+          onSource: setSource,
+        }}
+      />
+    );
+  }
+
+  render(<ScopeHarness />);
+  expect(
+    screen.queryByRole("button", {
+      name: "图中选择 较早的 WorkBuddy 记忆",
+    }),
+  ).toBeNull();
+  await userEvent.click(screen.getByRole("combobox", { name: "来源" }));
+  await userEvent.click(screen.getByRole("option", { name: "全部应用" }));
+  expect(
+    screen.getByRole("button", {
+      name: "图中选择 较早的 WorkBuddy 记忆",
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "图中选择 WorkBuddy" }),
+  ).toBeTruthy();
 });
 
 function pagedView(

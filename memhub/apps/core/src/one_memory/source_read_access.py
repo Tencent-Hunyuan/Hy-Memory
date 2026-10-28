@@ -135,3 +135,14 @@ class SourceReadAccess:
                 ).fetchone()
                 is not None
             )
+
+    def revoked_source_ids(self, *, user_id: str) -> frozenset[str]:
+        with main_database(self.database_path).read() as db:
+            return frozenset(
+                str(row[0])
+                for row in db.execute(
+                    "SELECT source_id FROM source_grants "
+                    "WHERE user_id=? AND revoked_at IS NOT NULL",
+                    (user_id,),
+                )
+            )

@@ -5,6 +5,7 @@ import type {
   SdkMemoryRecord,
 } from "@one-memory/contracts";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -63,6 +64,7 @@ vi.mock("./MemoryMap", () => ({
         source_ids_by_memory?: Record<string, string[]>;
         offset: number;
       } | null;
+      stale: boolean;
       unattributedSource?: string;
       onSource(value: string): void;
       onQuery(value: string): void;
@@ -91,6 +93,7 @@ vi.mock("./MemoryMap", () => ({
       <span data-testid="map-busy">{String(busy)}</span>
       <span data-testid="map-detail">{detail?.memory.memory_id ?? ""}</span>
       <span data-testid="map-offset">{libraryView?.page?.offset ?? ""}</span>
+      <span data-testid="map-stale">{String(libraryView?.stale)}</span>
       <button type="button" onClick={() => onOpenMemory("e1")}>
         open e1
       </button>
@@ -132,6 +135,15 @@ vi.mock("./MemoryMap", () => ({
         }}
       >
         pick workbuddy
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          libraryView?.onSource("");
+          libraryView?.resetPage();
+        }}
+      >
+        pick all
       </button>
     </div>
   ),
@@ -214,7 +226,7 @@ it("draws the map from SDK memories on SDK authority, without legacy reads", asy
     expect.any(AbortSignal),
   );
   expect(api.sdkGraph).toHaveBeenCalledWith(
-    { source: undefined, offset: 0, limit: 100 },
+    { source: undefined, offset: 0, limit: 300 },
     expect.any(AbortSignal),
   );
 });
@@ -251,10 +263,146 @@ it("keeps rows, sources, count and graph on the one filtered page", async () => 
     expect.any(AbortSignal),
   );
   expect(api.sdkGraph).toHaveBeenLastCalledWith(
-    { source: "workbuddy", offset: 0, limit: 100 },
+    { source: "workbuddy", offset: 0, limit: 300 },
     expect.any(AbortSignal),
   );
   expect(await screen.findByText(/566/)).toBeTruthy();
+});
+
+it("hides the previous source graph until the all-applications graph settles", async () => {
+  sdkAuthority();
+  render(<MemorySpace simplified active />);
+  await waitFor(() =>
+    expect(screen.getByTestId("map-nodes").textContent).toBe("3"),
+  );
+
+  const workbuddyPage = {
+    memories: [{ ...record("w1"), source: "workbuddy" }],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  };
+  const workbuddyGraph: MemoryGraphResponse = {
+    total_memories: 1,
+    projected_memories: 1,
+    nodes: [
+      {
+        node_id: "memory:w1",
+        node_type: "memory",
+        label: "w1",
+        memory_id: "w1",
+        source_id: null,
+        kind: null,
+        status: "active",
+        confidence: null,
+      },
+      {
+        node_id: "source:workbuddy",
+        node_type: "source",
+        label: "WorkBuddy",
+        source_id: "workbuddy",
+        memory_id: null,
+        kind: null,
+        status: null,
+        confidence: null,
+      },
+    ],
+    edges: [],
+    hy_graph_available: false,
+  };
+  api.sdkLibrary.mockResolvedValue(workbuddyPage);
+  api.sdkGraph.mockResolvedValue(workbuddyGraph);
+  fireEvent.click(screen.getByText("pick workbuddy"));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-nodes").textContent).toBe("2"),
+  );
+
+  const allPage = {
+    memories: [record("a"), { ...record("w1"), source: "workbuddy" }],
+    total: 2,
+    limit: 20,
+    offset: 0,
+  };
+  const allGraph: MemoryGraphResponse = {
+    ...workbuddyGraph,
+    total_memories: 2,
+    projected_memories: 2,
+    nodes: [
+      ...workbuddyGraph.nodes,
+      {
+        node_id: "memory:a",
+        node_type: "memory",
+        label: "a",
+        memory_id: "a",
+        source_id: null,
+        kind: null,
+        status: "active",
+        confidence: null,
+      },
+      {
+        node_id: "source:cursor",
+        node_type: "source",
+        label: "Cursor",
+        source_id: "cursor",
+        memory_id: null,
+        kind: null,
+        status: null,
+        confidence: null,
+      },
+    ],
+  };
+  let releasePage: (value: typeof allPage) => void = () => {};
+  let releaseGraph: (value: MemoryGraphResponse) => void = () => {};
+  api.sdkLibrary.mockReturnValueOnce(
+    new Promise((resolve) => {
+      releasePage = resolve;
+    }),
+  );
+  api.sdkGraph.mockReturnValueOnce(
+    new Promise((resolve) => {
+      releaseGraph = resolve;
+    }),
+  );
+
+  fireEvent.click(screen.getByText("pick all"));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-stale").textContent).toBe("true"),
+  );
+  expect(screen.getByTestId("map-nodes").textContent).toBe("none");
+
+  await act(async () => {
+    releasePage(allPage);
+    releaseGraph(allGraph);
+  });
+  await waitFor(() =>
+    expect(screen.getByTestId("map-nodes").textContent).toBe("4"),
+  );
+  expect(screen.getByTestId("map-stale").textContent).toBe("false");
+
+  const searchPage = {
+    memories: [record("search-result")],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  };
+  let releaseSearch: (value: typeof searchPage) => void = () => {};
+  api.sdkLibrary.mockReturnValueOnce(
+    new Promise((resolve) => {
+      releaseSearch = resolve;
+    }),
+  );
+  const graphCalls = api.sdkGraph.mock.calls.length;
+  fireEvent.click(screen.getByText("search deploy"));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-stale").textContent).toBe("true"),
+  );
+  expect(screen.getByTestId("map-nodes").textContent).toBe("none");
+  expect(api.sdkGraph).toHaveBeenCalledTimes(graphCalls);
+
+  await act(async () => releaseSearch(searchPage));
+  await waitFor(() =>
+    expect(screen.getByTestId("map-stale").textContent).toBe("false"),
+  );
 });
 
 it("opens an SDK memory in place instead of switching away from the map", async () => {

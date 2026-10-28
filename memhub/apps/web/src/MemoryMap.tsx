@@ -308,6 +308,29 @@ export function MemoryMap(props: Props) {
     [active, group, search, serverPaged, axis, groupKey],
   );
   const projection = useMemo(() => {
+    if (serverPaged && library?.stale)
+      return {
+        total_memories: library.page?.total ?? 0,
+        projected_memories: 0,
+        hy_graph_available: false,
+        nodes: [],
+        edges: [],
+      };
+    // Source filtering owns the graph scope, while pagination owns only the
+    // left-hand list window. Projecting the graph back down to the current
+    // 20-row page made "All applications" look like whichever source happened
+    // to dominate that page. Keyword search is intentionally page-scoped.
+    if (serverPaged && !library?.query) {
+      return (
+        baseGraph ??
+        projectMap(
+          graph,
+          active,
+          axis,
+          filtered.map((m) => m.memory_id),
+        )
+      );
+    }
     const result = projectMap(
       graph,
       active,
@@ -339,7 +362,20 @@ export function MemoryMap(props: Props) {
           confidence: null,
         })),
     };
-  }, [graph, axis, filtered, active, groupKey, search, sources, serverPaged]);
+  }, [
+    baseGraph,
+    graph,
+    axis,
+    filtered,
+    active,
+    groupKey,
+    search,
+    sources,
+    serverPaged,
+    library?.query,
+    library?.stale,
+    library?.page?.total,
+  ]);
   const visibleGroupNode = groupNode
     ? (projection.nodes.find(
         (node) =>
@@ -1012,7 +1048,7 @@ export function MemoryMap(props: Props) {
               <Network size={32} strokeWidth={1} />
               <p>
                 {library?.stale
-                  ? text("可在沉淀记忆后查看视图")
+                  ? text("正在核对来源…")
                   : library?.failed
                     ? text("记忆暂时无法读取")
                     : library?.page &&

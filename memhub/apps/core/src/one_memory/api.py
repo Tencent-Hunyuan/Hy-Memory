@@ -2978,13 +2978,21 @@ def create_app(
         (`hy_graph_projection`, the visualization exception). Shape matches
         the legacy map so the same view draws both.
         """
+        revoked_sources = await asyncio.to_thread(
+            _read_access(app).revoked_source_ids,
+            user_id="local",
+        )
+        if source in revoked_sources:
+            raise HTTPException(status_code=409, detail="memory_source_revoked")
         try:
             client = await _sdk_client_handle(app).client()
-            # The map draws the page the list shows, so it reads the same
-            # source filter and window rather than the newest memories overall.
+            # The map visualizes the active source scope, independently of the
+            # left list's 20-row pagination window.
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id="local",
+                scene="all",
+                statuses=["active"],
                 include_sources=[source] if source else None,
                 limit=limit,
                 offset=offset,
@@ -2998,7 +3006,8 @@ def create_app(
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
         vdb = raw.get("vdb") if isinstance(raw, dict) else None
         total = vdb.get("total") if isinstance(vdb, dict) else None
-        memories = [memory for memory in page.memories if memory.layer != "l1_raw"]
+        visible = [memory for memory in page.memories if memory.layer != "l1_raw"]
+        memories = [memory for memory in visible if memory.source not in revoked_sources]
         catalog = await asyncio.to_thread(_source_catalog, app)
         nodes: dict[str, MemoryGraphNode] = {}
         edges: list[MemoryGraphEdge] = []
@@ -3092,7 +3101,11 @@ def create_app(
                     )
                 )
         return MemoryGraphResponse(
-            total_memories=total if isinstance(total, int) else len(memories),
+            total_memories=(
+                total
+                if isinstance(total, int) and not revoked_sources
+                else len(memories)
+            ),
             projected_memories=len(memories),
             nodes=tuple(nodes.values()),
             edges=tuple(edges),
