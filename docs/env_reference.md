@@ -52,7 +52,7 @@
 | `MEMORY_EMBEDDER_EXTRA_HEADERS` | — | JSON object，附加 HTTP headers |
 | `MEMORY_EMBEDDER_EXTRA_BODY` | — | JSON object，附加请求 body |
 
-例如 `qwen3-embedding-4b` 的服务输出 2560 维、但不接受 `dimensions` 时，设置
+例如固定输出 2560 维、但不接受 `dimensions` 参数的兼容服务，设置
 `MEMORY_EMBEDDING_DIMS=2560` 和 `MEMORY_EMBEDDER_SEND_DIMENSIONS=false`。
 Python 配置等价于 `EmbedderConfig(embedding_dims=2560, send_dimensions=False)`；
 默认仍发送已配置的维度，保持现有支持降维的模型行为。响应维度与配置不符时立即失败，
