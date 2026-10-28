@@ -487,6 +487,74 @@ def test_a_scheduled_pipe_is_not_the_person_speaking(tmp_path: Path) -> None:
     assert ScanIssueCode.NOT_WRITTEN_BY_PERSON in _skip_codes(events)
 
 
+def test_pi_does_not_import_a_sessions_subagent_transcripts(tmp_path: Path) -> None:
+    """A sub-agent transcript is not a conversation the person had.
+
+    Oh My Pi keeps the parent session in `<cwd>/<session>.jsonl` and writes
+    each sub-agent's transcript into `<cwd>/<session>/<SubAgent>.jsonl`. In
+    the child, `user` is the parent agent assigning the task, so importing it
+    attributes a robot's instructions to the person.
+    """
+    root = tmp_path / "pi"
+    root.mkdir()
+    parent_text = "plan the migration"
+    subagent_text = "do the migration subtask"
+    _write_jsonl(
+        root / "session-a.jsonl",
+        [
+            {"type": "session", "id": "session-a", "cwd": "/work/atlas"},
+            {
+                "type": "message",
+                "id": "parent-turn",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": parent_text}],
+                },
+            },
+        ],
+    )
+    artifact = root / "session-a"
+    artifact.mkdir()
+    _write_jsonl(
+        artifact / "explorer.jsonl",
+        [
+            {"type": "session", "id": "explorer", "cwd": "/work/atlas"},
+            {
+                "type": "message",
+                "id": "subagent-turn",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": subagent_text}],
+                },
+            },
+        ],
+    )
+    # A directory whose name does not belong to a session file is ordinary
+    # nested content and must keep importing.
+    loose = root / "notes"
+    loose.mkdir()
+    loose_text = "a note kept in a subdirectory"
+    _write_jsonl(
+        loose / "note.jsonl",
+        [
+            {"type": "session", "id": "note", "cwd": "/work/atlas"},
+            {
+                "type": "message",
+                "id": "note-turn",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": loose_text}],
+                },
+            },
+        ],
+    )
+
+    events = _scan(create_pi_adapter(_grant(PI_DESCRIPTOR.source_id, root, tmp_path)))
+
+    assert set(_evidence_text(events)) == {parent_text, loose_text}
+    assert subagent_text not in _evidence_text(events)
+
+
 def test_deepseek_zstd_keeps_only_explicit_human_and_assistant(tmp_path: Path) -> None:
     root = tmp_path / "dsh"
     session = root / "run-a"

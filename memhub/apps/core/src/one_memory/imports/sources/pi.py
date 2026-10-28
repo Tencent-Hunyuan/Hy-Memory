@@ -1,8 +1,13 @@
+import stat
 from pathlib import PurePosixPath
 
 from pydantic import JsonValue
 
-from one_memory.imports.access import AuthorizedSourceRoot, safe_project_label
+from one_memory.imports.access import (
+    AuthorizedSourceFile,
+    AuthorizedSourceRoot,
+    safe_project_label,
+)
 from one_memory.imports.adapters import (
     ScanIssueCode,
     SourceCapabilities,
@@ -50,11 +55,35 @@ def create_pi_adapter(
         parser=parse_pi_record,
         source_version=source_version,
         header_selector=_is_session_header,
+        file_predicate=_include_pi_transcript,
     )
 
 
 def _is_session_header(record: dict[str, JsonValue]) -> bool:
     return record.get("type") == "session"
+
+
+#: Oh My Pi writes one session as `<cwd>/<session>.jsonl`, and every sub-agent
+#: transcript into `<cwd>/<session>/<SubAgent>.jsonl`. The walk is recursive, so
+#: without this predicate those transcripts are imported as conversations of
+#: their own -- and their `user` turns are the parent agent assigning a task,
+#: not the person speaking. A transcript is a sub-agent artifact exactly when
+#: its parent directory has a sibling `<dir>.jsonl` session file.
+#:
+#: `lstat` rather than `is_file`: a symlink named like the session must not
+#: turn an unrelated directory into an artifact folder.
+def _is_subagent_transcript(source_file: AuthorizedSourceFile) -> bool:
+    parent = source_file.path.parent
+    session_file = parent.parent / f"{parent.name}.jsonl"
+    try:
+        details = session_file.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(details.st_mode)
+
+
+def _include_pi_transcript(source_file: AuthorizedSourceFile) -> bool:
+    return not _is_subagent_transcript(source_file)
 
 
 #: Pi is invoked unattended by whatever embeds it, not only by a person, and
