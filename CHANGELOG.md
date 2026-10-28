@@ -78,6 +78,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Hy Memory 2.0.7 — 2026-10-28
 
+- Published
+  [`hy-memory==2.0.7`](https://pypi.org/project/hy-memory/2.0.7/).
 - Coding and working experiences and facts now keep their conversation time.
   `add(..., memory_at=...)` reached only the chat path before; the
   productivity path dropped it, so every experience had only its write time
