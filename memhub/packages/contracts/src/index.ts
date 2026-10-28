@@ -468,10 +468,12 @@ export interface MemoryLibraryPage {
   limit: number;
   /** Active evidence sources for each returned memory, from the same authorized page snapshot. */
   source_ids_by_memory?: Record<string, string[]>;
-  /** When each returned memory's cited conversation happened (D96). `import` when only the import time is known. */
+  /** When each returned memory's cited conversation happened (D96). `import`
+   * when only the import time is known; `write` for an SDK experience or fact
+   * stored without a conversation time, which shows when it was written. */
   source_time_by_memory?: Record<
     string,
-    { at: string; basis: "conversation" | "import" }
+    { at: string; basis: "conversation" | "import" | "write" }
   >;
   /** True when the read budget ran out mid-page (typically during a history
    * import): a partial snapshot, not an authoritative view. Show "importing"

@@ -4,6 +4,14 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub shows when working and coding experiences were talked about. After
+  the SDK upgrade every one of them read "时间未知" (time unknown) because the
+  SDK never stored their conversation time; hy-memory 2.0.7 stores it and
+  Core now passes it through the memory list, detail, search and home
+  summary. An experience stored before 2.0.7 shows its write time, labelled
+  "写入于" / "写入时间", instead of "时间未知". Metadata repair also writes
+  the conversation time it recovers from the migration bundle into the SDK's
+  coding/working stores when they already have the column.
 - The SDK migration no longer fails its first run on a home with legacy
   vectors: reattaching them left a Chroma instance open with its own settings,
   and the readback that followed could not open the same store
@@ -70,6 +78,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Hy Memory 2.0.7 — 2026-10-28
 
+- Published
+  [`hy-memory==2.0.7`](https://pypi.org/project/hy-memory/2.0.7/).
 - Coding and working experiences and facts now keep their conversation time.
   `add(..., memory_at=...)` reached only the chat path before; the
   productivity path dropped it, so every experience had only its write time

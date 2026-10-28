@@ -119,8 +119,12 @@ it("carries each memory's scene and namespace, and edits an experience's solutio
   });
   expect(page.window_id).toBe("w1");
   expect(page.window_reset).toBe(true);
-  // An experience has no conversation time to show as "imported".
-  expect(page.source_time_by_memory?.e).toBeUndefined();
+  // Stored without a conversation time: it shows when it was written, not
+  // an "import".
+  expect(page.source_time_by_memory?.e).toEqual({
+    at: new Date((NOW - 86_400) * 1_000).toISOString(),
+    basis: "write",
+  });
   expect(page.items[1]).toMatchObject({
     kind: "working",
     updated_at: new Date((NOW - 3_600) * 1_000).toISOString(),
@@ -139,4 +143,30 @@ it("carries each memory's scene and namespace, and edits an experience's solutio
   expect(sdkNamespace(sdkMemoryRef(record({})))).toBeUndefined();
   expect(sdkEditableText(experience)).toBe("Pin seed");
   expect(sdkEditableText(record({}))).toBe("memory");
+});
+
+it("shows an experience's conversation time when the SDK stored one", () => {
+  const at = NOW - 2 * 86_400;
+  const experience = record({
+    memory_id: "e",
+    layer: "experience",
+    scene: "coding",
+    kind: "experience",
+    variant: "coding",
+    memory_at: at,
+    created_at: NOW - 3_600,
+  });
+  const page = sdkLibraryPage({
+    memories: [experience],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  });
+  expect(page.source_time_by_memory?.e).toEqual({
+    at: new Date(at * 1_000).toISOString(),
+    basis: "conversation",
+  });
+  expect(sdkDetail(experience).sdk_memory_at).toBe(
+    new Date(at * 1_000).toISOString(),
+  );
 });

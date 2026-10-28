@@ -154,22 +154,24 @@ export function sdkDetail(record: SdkMemoryRecord): MemoryDetail {
 export function sdkLibraryPage(page: SdkMemoryPage): MemoryLibraryPage {
   const sourceTime: Record<
     string,
-    { at: string; basis: "conversation" | "import" }
+    { at: string; basis: "conversation" | "import" | "write" }
   > = {};
   const sourceIds: Record<string, string[]> = {};
   const refs: Record<string, SdkMemoryRef> = {};
   for (const record of page.memories) {
     sourceIds[record.memory_id] = [sourceOf(record)];
     refs[record.memory_id] = sdkMemoryRef(record);
-    // An experience or fact has no conversation time; the list shows when it
-    // was last updated instead of calling its creation an import.
-    if (refs[record.memory_id].kind !== "chat") continue;
+    // An experience or fact stored before hy-memory 2.0.7 has no
+    // conversation time. It shows when it was written, labelled as such,
+    // rather than calling its creation an import.
+    const chat = refs[record.memory_id].kind === "chat";
     const conversation = plausible(record.memory_at);
-    const at = conversation ?? plausible(record.gmt_created);
+    const at =
+      conversation ?? plausible(chat ? record.gmt_created : record.created_at);
     if (at === null) continue;
     sourceTime[record.memory_id] = {
       at: new Date(at * 1_000).toISOString(),
-      basis: conversation !== null ? "conversation" : "import",
+      basis: conversation !== null ? "conversation" : chat ? "import" : "write",
     };
   }
   return {

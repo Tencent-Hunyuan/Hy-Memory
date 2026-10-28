@@ -55,6 +55,9 @@ def chat_row(memory_id, content, *, source="cursor"):
     }
 
 
+EXPERIENCE_MEMORY_AT = 1_789_990_000
+
+
 def experience_row(memory_id, task, solution, *, variant="working", source="codebuddy"):
     return {
         "experience_id": memory_id,
@@ -63,6 +66,8 @@ def experience_row(memory_id, task, solution, *, variant="working", source="code
         "task": task,
         "solution": solution,
         "source": source,
+        # Conversation time, epoch seconds like chat (hy-memory 2.0.7).
+        "memory_at": EXPERIENCE_MEMORY_AT,
         "created_at": "2026-10-01T08:00:00",
         "updated_at": "2026-10-02T08:00:00",
         "_variant": variant,
@@ -446,6 +451,7 @@ def test_keyword_filter_reads_experience_and_fact_text(tmp_path, monkeypatch):
         assert experience["content"] == "Fix flaky tests\nPin the pytest seed"
         assert experience["status"] == "active"
         assert experience["updated_at"] > experience["created_at"]
+        assert experience["memory_at"] == EXPERIENCE_MEMORY_AT
         fact = by_id["fact-1"]
         assert (fact["scene"], fact["kind"], fact["variant"]) == ("coding", "fact", "coding")
         assert fact["content"] == "The pytest suite runs in CI"
@@ -488,6 +494,10 @@ def test_empty_query_lists_all_scenes_with_source_filter_and_totals(tmp_path, mo
             "chat",
             "chat",
         ]
+        assert [item["memory_at"] for item in body["memories"][:2]] == [
+            EXPERIENCE_MEMORY_AT,
+            EXPERIENCE_MEMORY_AT,
+        ]
         call = sdk.list_calls[0]
         assert call["scene"] == "all"
         assert call["include_sources"] is None
@@ -527,6 +537,7 @@ def test_detail_edit_delete_pass_kind_and_variant(tmp_path, monkeypatch):
         assert record["task"] == "Old task"
         assert record["solution"] == "Old solution"
         assert record["content"] == "Old task\nOld solution"
+        assert record["memory_at"] == EXPERIENCE_MEMORY_AT
         assert sdk.get_calls[-1] == ("exp-1", "experience", "working")
 
         # Chat detail with no namespace keeps the plain SDK call.
@@ -692,5 +703,6 @@ def test_home_summary_counts_what_the_memory_page_lists(tmp_path, monkeypatch):
         assert (home_list["offset"], home_list["limit"], home_list["order"]) == (0, 1, "desc")
         assert body["latest"]["memory_id"] == "exp-w"
         assert body["latest"]["scene"] == "working"
+        assert body["latest"]["memory_at"] == EXPERIENCE_MEMORY_AT
 
     run_with_sdk(tmp_path, monkeypatch, scenario)

@@ -137,19 +137,38 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
     )
     coding = data_dir / "hy-memory" / "governed-v2" / "coding_cv.sqlite3"
     with sqlite3.connect(coding) as database:
-        database.execute(
-            "CREATE TABLE coding_memory_meta ("
-            "experience_id TEXT,user_id TEXT,agent_id TEXT,solution TEXT,"
-            "source TEXT,created_at TEXT,updated_at TEXT)"
+        # A store written by hy-memory 2.0.6, before the conversation time
+        # column: the repair must add it through the SDK and then fill it.
+        database.executescript(
+            """
+            CREATE TABLE coding_memory_meta (
+                experience_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default_agent', task TEXT NOT NULL,
+                search_keys TEXT NOT NULL DEFAULT '[]', solution TEXT NOT NULL,
+                boundary_envs TEXT NOT NULL DEFAULT '', workspace_id TEXT,
+                branch TEXT, session_id TEXT, files TEXT NOT NULL DEFAULT '[]',
+                source_fact_ids TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 0.7,
+                source TEXT NOT NULL DEFAULT 'default',
+                extraction_source TEXT NOT NULL DEFAULT 'auto_extract',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE working_fact (
+                fact_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default_agent', session_id TEXT,
+                workspace_id TEXT, branch TEXT, source TEXT NOT NULL DEFAULT 'default',
+                statement TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]',
+                subject TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '',
+                fact_link TEXT, derived_experience_ids TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'active',
+                fact_chain_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+            );
+            """
         )
         database.execute(
-            "CREATE TABLE working_fact ("
-            "fact_id TEXT,user_id TEXT,agent_id TEXT,statement TEXT,"
-            "source TEXT,created_at TEXT)"
-        )
-        database.execute(
-            "INSERT INTO coding_memory_meta VALUES "
-            "('sdk-1','local','scope','remember','default','now','now')"
+            "INSERT INTO coding_memory_meta "
+            "(experience_id,user_id,agent_id,task,solution,source,created_at,updated_at) "
+            "VALUES ('sdk-1','local','scope','remember','remember','default','now','now')"
         )
 
     result = repair_sdk_metadata_from_bundle(
@@ -168,10 +187,11 @@ def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
         2026, 10, 18, tzinfo=UTC
     )
     with sqlite3.connect(coding) as database:
-        source, created_at = database.execute(
-            "SELECT source,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
+        source, memory_at, created_at = database.execute(
+            "SELECT source,memory_at,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
         ).fetchone()
     assert source == "workbuddy"
+    assert datetime.fromtimestamp(memory_at, tz=UTC) == datetime(2026, 10, 17, tzinfo=UTC)
     assert created_at.startswith("2026-10-18T00:00:00")
 
     repeated = repair_sdk_metadata_from_bundle(

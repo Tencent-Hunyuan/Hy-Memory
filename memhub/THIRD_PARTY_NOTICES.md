@@ -9,7 +9,7 @@ Per-package license texts are not reproduced here yet; the license
 column is filled in as part of release review, and the SBOM records
 `NOASSERTION` until then rather than guessing.
 
-## hy-memory 2.0.6
+## hy-memory 2.0.7
 
 License: Apache-2.0
 

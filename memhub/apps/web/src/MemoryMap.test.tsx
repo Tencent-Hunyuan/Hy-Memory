@@ -517,7 +517,7 @@ it("D96: the memory page has no raw-dialogue tab and never loads the dialogue li
 it("D96: lists a memory by when its conversation happened, not when it was generated", () => {
   const today = new Date().toISOString();
   const thisYear = new Date().getFullYear();
-  const items = ["第一条", "第二条", "第三条"].map((content, i) => ({
+  const items = ["第一条", "第二条", "第三条", "第四条"].map((content, i) => ({
     ...memories[0],
     memory_id: `t${i}`,
     content,
@@ -532,10 +532,11 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
         total: 519,
         offset: 100,
         limit: 100,
-        source_ids_by_memory: { t0: [], t1: [], t2: [] },
+        source_ids_by_memory: { t0: [], t1: [], t2: [], t3: [] },
         source_time_by_memory: {
           t0: { at: `${thisYear}-10-02T10:54:00`, basis: "conversation" },
           t1: { at: `${thisYear}-09-30T08:00:00`, basis: "import" },
+          t3: { at: `${thisYear}-09-29T08:00:00`, basis: "write" },
         },
       })}
     />,
@@ -547,6 +548,10 @@ it("D96: lists a memory by when its conversation happened, not when it was gener
   expect(
     within(list).getByRole("button", { name: /第二条/ }).textContent,
   ).toContain("导入于 9月30日");
+  // An experience stored without a conversation time names its write time.
+  expect(
+    within(list).getByRole("button", { name: /第四条/ }).textContent,
+  ).toContain("写入于 9月29日");
   // D99: the generated day keeps its own line, so a memory made today from an
   // old conversation still reads as new rather than looking misplaced.
   expect(
