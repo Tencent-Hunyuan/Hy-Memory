@@ -47,6 +47,7 @@ from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
 from ..utils.tracer import PipelineTracer, create_tracer
 from ..utils.log_setup import get_request_id
+from ..utils.extraction_history import resolve_history_turns
 from ..utils.pipeline_observability import is_pipeline_trace_enabled
 from ._retrieval import tag_index as _tag_index_helper
 from ._retrieval.retrieval_clauses import (
@@ -2684,7 +2685,9 @@ class MemoryWriter(WritePipeline):
                 _recent_history_ms = 0.0
                 _recent_history_count = 0
                 try:
-                    _hist_turns = getattr(self.config.extractor, "history_turns", 5) or 5
+                    _hist_turns = resolve_history_turns(
+                        self.config, request.extra.get("history_turns"),
+                    )
                     _t_recent_history = datetime.now()
                     _history_context = await self._get_recent_history(
                         vector_store, request.user_id, request.agent_id,
@@ -2942,6 +2945,9 @@ class MemoryWriter(WritePipeline):
         Returns:
             格式化的历史上下文字符串，空字符串表示无历史。
         """
+        # 0 是明确关闭；也避免 [-0:] 意外把全部消息作为历史注入。
+        if max_turns <= 0:
+            return ""
         try:
             # 仅需 content/node_id/gmt_created 拼历史，不涉及 embedding。
             # allow_raw_layer=True：向量库默认对所有查询排除 L1_RAW（对外读路径
