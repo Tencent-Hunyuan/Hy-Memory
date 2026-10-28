@@ -369,7 +369,7 @@ class ModelProber:
             return _stage(stage, False, body_error, started)
         if expected_model is not None:
             try:
-                if not _models_include(response.json(), expected_model):
+                if not _models_include(response.json(), expected_model, models_url=url):
                     return _stage(stage, False, ProbeCode.MODEL_NOT_FOUND, started)
             except ValueError:
                 return _stage(stage, False, ProbeCode.INVALID_RESPONSE, started)
@@ -702,18 +702,34 @@ def _response_content(body: object) -> object:
     return body
 
 
-def _models_include(body: object, expected: str) -> bool:
+def _models_include(body: object, expected: str, *, models_url: str = "") -> bool:
     if not isinstance(body, dict):
         return False
     values = body.get("models") if isinstance(body.get("models"), list) else body.get("data")
     if not isinstance(values, list):
         return False
+    endpoint = httpx.URL(models_url)
+    # Google's documented OpenAI endpoint may list resource names while chat
+    # accepts bare model IDs. Keep this alias out of other providers' namespaces
+    # and leave the configured model unchanged for the actual generation probe.
+    google_alias = (
+        endpoint.scheme == "https"
+        and endpoint.host == "generativelanguage.googleapis.com"
+        and endpoint.port in {None, 443}
+        and endpoint.path == "/v1beta/openai/models"
+    )
     for value in values:
         if not isinstance(value, dict):
             continue
         model_id = value.get("id") or value.get("name") or value.get("model")
         if model_id == expected or (
             isinstance(model_id, str) and model_id.removesuffix(":latest") == expected
+        ):
+            return True
+        if (
+            google_alias
+            and isinstance(model_id, str)
+            and model_id.removeprefix("models/") == expected.removeprefix("models/")
         ):
             return True
     return False
