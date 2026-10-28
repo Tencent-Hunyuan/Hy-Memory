@@ -42,6 +42,7 @@ import threading
 import time
 
 from ..config import MemoryConfig
+from ..embedding import EmbeddingDimensionMismatchError
 from .workload import embedding_slot
 from ..utils.log_setup import get_request_id
 
@@ -219,6 +220,7 @@ class EmbedServiceConfig:
     queue_batch_window_ms: float = 100.0   # 收口窗口；到点即发，有多少发多少
     extra_headers: Optional[Dict[str, str]] = None
     extra_body: Optional[Dict[str, Any]] = None
+    send_dimensions: bool = True
 
 
 class EmbedService:
@@ -283,6 +285,7 @@ class EmbedService:
             api_key=embedder.api_key,
             base_url=embedder.base_url,
             embedding_dims=embedder.embedding_dims,
+            send_dimensions=embedder.send_dimensions,
             max_retries=embedder.max_retries if embedder.max_retries is not None else 5,
             retry_delay=embedder.retry_delay if embedder.retry_delay is not None else 3.0,
             timeout=embedder.timeout if embedder.timeout is not None else 60,
@@ -784,7 +787,8 @@ class EmbedService:
         - 本地 vLLM / Ollama 等
 
         请求参数：model + input (+ dimensions) + extra_headers + extra_body。
-        `embedding_dims` 为空或 0 时不发送 dimensions。
+        `embedding_dims` 为空或 0，或 `send_dimensions=False` 时不发送 dimensions。
+        配置的维度仍用于校验响应，避免将不兼容的向量写入 collection。
 
         Returns:
             (vectors, meta)：meta 为 response headers + body 非 vector 字段
@@ -823,7 +827,7 @@ class EmbedService:
             "model": self._embed_config.model,
             "input": texts,
         }
-        if self._embed_config.embedding_dims:
+        if self._embed_config.embedding_dims and self._embed_config.send_dimensions:
             kwargs["dimensions"] = self._embed_config.embedding_dims
 
         # ── Per-call 端点覆盖（contextvar）──────────────────────────
@@ -846,8 +850,13 @@ class EmbedService:
 
         if _eff_extra_headers:
             kwargs["extra_headers"] = _eff_extra_headers
-        if self._embed_config.extra_body:
-            kwargs["extra_body"] = self._embed_config.extra_body
+        extra_body = dict(self._embed_config.extra_body or {})
+        # extra_body is merged after named arguments by the OpenAI client. Keep
+        # it from restoring dimensions when omitted, without mutating caller data.
+        if not self._embed_config.send_dimensions:
+            extra_body.pop("dimensions", None)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         api_url = _embeddings_api_url(_eff_base_url)
         # 入参全量落日志（不含 api_key）；header 中鉴权字段脱敏
@@ -856,7 +865,7 @@ class EmbedService:
             "input": texts,
             "input_count": len(texts),
             "dimensions": kwargs.get("dimensions"),
-            "extra_body": self._embed_config.extra_body,
+            "extra_body": extra_body or None,
             "extra_headers": _redact_headers(_eff_extra_headers),
             "timeout": _eff_timeout,
             "endpoint_overridden": bool(_ov),
@@ -908,6 +917,13 @@ class EmbedService:
                         f"got={len(vectors)}"
                     )
                 dims = [len(v) for v in vectors]
+                # Omitting the request parameter must not disable collection-width
+                # validation. A fixed-width model mismatch cannot heal on retry.
+                expected_dims = self._embed_config.embedding_dims
+                if expected_dims and any(dim != expected_dims for dim in dims):
+                    raise EmbeddingDimensionMismatchError(
+                        f"Embedding dimension mismatch: expected={expected_dims} got={dims}"
+                    )
                 meta = {
                     "http_status": raw.status_code,
                     "response_headers": resp_headers,
@@ -951,12 +967,15 @@ class EmbedService:
                 # 状态码优先——它是三者里唯一不受 message 措辞影响的判据。
                 _status = getattr(e, "status_code", None)
                 _retryable = (
-                    (isinstance(_status, int)
-                     and (_status >= 500 or _status in _RETRYABLE_STATUS))
-                    or isinstance(e, _RETRYABLE)
-                    or any(
-                        kw in _err_msg.lower()
-                        for kw in ("timeout", "timed out", "connection", "read operation")
+                    not isinstance(e, EmbeddingDimensionMismatchError)
+                    and (
+                        (isinstance(_status, int)
+                         and (_status >= 500 or _status in _RETRYABLE_STATUS))
+                        or isinstance(e, _RETRYABLE)
+                        or any(
+                            kw in _err_msg.lower()
+                            for kw in ("timeout", "timed out", "connection", "read operation")
+                        )
                     )
                 )
                 meta = {
