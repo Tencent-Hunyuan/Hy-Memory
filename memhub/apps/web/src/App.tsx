@@ -167,7 +167,9 @@ function AppContent() {
   // back from the sign-in that created it.
   const sessionId = imports.health?.instance_id ?? null;
   const recoveredSession = useRef<string | null>(null);
-  useEffect(() => {
+  // Subscribe with the error DOM commit: a focus/visibility event before
+  // passive effects run would otherwise be lost, leaving startup on the error.
+  useLayoutEffect(() => {
     if (startupRead !== "error") return;
     if (sessionId) {
       if (recoveredSession.current === sessionId) return;
