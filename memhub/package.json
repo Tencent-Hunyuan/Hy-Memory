@@ -42,7 +42,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "bash scripts/run-tests-isolated.sh workspace",
-    "test:release-scripts": "node --test scripts/*.test.cjs scripts/*.test.mjs scripts/platform/linux/fake-release-bootstrap.test.mjs scripts/platform/linux/linux-runtime-scripts.test.mjs scripts/platform/linux/linux-upgrade-rollback.test.mjs scripts/platform/linux/release-proxy.test.mjs scripts/platform/linux/self-contained-runtime.test.mjs scripts/platform/macos/macos-release-scripts.test.mjs scripts/platform/macos/service-lifecycle.test.mjs",
+    "test:release-scripts": "node --test scripts/*.test.cjs scripts/*.test.mjs scripts/platform/linux/fake-release-bootstrap.test.mjs scripts/platform/linux/linux-runtime-scripts.test.mjs scripts/platform/linux/linux-upgrade-rollback.test.mjs scripts/platform/linux/release-proxy.test.mjs scripts/platform/linux/self-contained-runtime.test.mjs scripts/platform/macos/macos-release-scripts.test.mjs scripts/platform/macos/service-lifecycle.test.mjs scripts/platform/linux/verify-linux-support.test.mjs scripts/platform/windows/verify-windows-support.test.mjs",
     "lint": "biome check .",
     "format": "biome format --write .",
     "check:structure": "python3 scripts/verify_structure.py",
