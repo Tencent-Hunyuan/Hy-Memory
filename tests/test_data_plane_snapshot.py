@@ -123,3 +123,74 @@ def test_restore_refuses_active_writers_without_touching_live_data(tmp_path):
         )
     assert caught.value.code == "data_plane_restore_writers_running"
     assert (target / "value").read_text(encoding="utf-8") == "old"
+
+
+@pytest.mark.parametrize("relative_target", ["snapshot", "backups/snapshot"])
+def test_snapshot_rejects_target_inside_source_before_writing(tmp_path, relative_target):
+    source = tmp_path / "source"
+    source.mkdir()
+    original = source / "memory.bin"
+    original.write_bytes(b"saved memory")
+    target = source / relative_target
+
+    with pytest.raises(DataPlaneSnapshotRejected) as caught:
+        snapshot_local_data_plane(
+            source_root=source, target_root=target, writers_stopped=True,
+        )
+
+    assert caught.value.code == "data_plane_snapshot_target_inside_source"
+    assert original.read_bytes() == b"saved memory"
+    assert list(source.iterdir()) == [original]
+
+
+def test_snapshot_rejects_resolved_target_inside_source(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    original = source / "memory.bin"
+    original.write_bytes(b"saved memory")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(source, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(DataPlaneSnapshotRejected) as caught:
+        snapshot_local_data_plane(
+            source_root=source, target_root=alias / "snapshot", writers_stopped=True,
+        )
+
+    assert caught.value.code == "data_plane_snapshot_target_inside_source"
+    assert original.read_bytes() == b"saved memory"
+    assert list(source.iterdir()) == [original]
+    assert alias.is_symlink()
+
+
+def test_snapshot_rejects_source_as_target_without_touching_it(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    original = source / "memory.bin"
+    original.write_bytes(b"saved memory")
+
+    with pytest.raises(DataPlaneSnapshotRejected) as caught:
+        snapshot_local_data_plane(
+            source_root=source, target_root=source, writers_stopped=True,
+        )
+
+    assert caught.value.code == "data_plane_snapshot_target_exists"
+    assert original.read_bytes() == b"saved memory"
+    assert list(source.iterdir()) == [original]
+
+
+def test_snapshot_allows_similarly_named_sibling(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "memory.bin").write_bytes(b"saved memory")
+    target = tmp_path / "source-backup"
+
+    result = snapshot_local_data_plane(
+        source_root=source, target_root=target, writers_stopped=True,
+    )
+
+    assert [item["path"] for item in result.files] == ["memory.bin"]
+    assert result.total_bytes == len(b"saved memory")
+    assert (target / "memory.bin").read_bytes() == b"saved memory"

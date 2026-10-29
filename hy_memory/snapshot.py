@@ -58,6 +58,10 @@ def snapshot_local_data_plane(
         raise DataPlaneSnapshotRejected("data_plane_snapshot_source_invalid")
     if target.exists():
         raise DataPlaneSnapshotRejected("data_plane_snapshot_target_exists")
+    # The destination must not become part of the tree we are copying. Otherwise
+    # os.walk also visits the newly created snapshot and copies it into itself.
+    if source in target.parents:
+        raise DataPlaneSnapshotRejected("data_plane_snapshot_target_inside_source")
 
     try:
         target.mkdir(parents=True)
