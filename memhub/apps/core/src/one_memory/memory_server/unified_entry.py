@@ -98,23 +98,6 @@ class UnifiedWriteIntake:
             enqueued=durable.enqueued,
         )
 
-    def readmit_cancelled_evidence(
-        self,
-        record: EvidenceRecord,
-        *,
-        job_id: str,
-        first_round: int,
-        last_round: int,
-        priority: WritePriority = "normal",
-    ) -> int:
-        request = self._evidence_request(
-            record,
-            first_round=first_round,
-            last_round=last_round,
-            priority=priority,
-        )
-        return self.queue.readmit_cancelled_permission_confirmed(job_id, request)
-
     @staticmethod
     def _evidence_request(
         record: EvidenceRecord,

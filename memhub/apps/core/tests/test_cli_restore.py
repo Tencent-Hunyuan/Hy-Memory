@@ -200,6 +200,7 @@ def test_sdk_migrate_failure_is_one_named_code(tmp_path, monkeypatch) -> None:
         "schema_version": 1,
         "state": "failed",
         "code": "sdk_migration_disk_space_insufficient",
+        "data_restored": False,
     }
 
 

@@ -65,6 +65,13 @@ export interface HealthResponse {
    */
   memory_backfill?: "running" | "done" | "failed";
   memory_backfill_error?: string | null;
+  /**
+   * Work an earlier run left unfinished (write queue, interrupted imports,
+   * live sync) is picked up after Core is ready. "running" is not degraded:
+   * readiness never waits for it. Absent from cores older than this field.
+   */
+  recovery?: "pending" | "running" | "done" | "failed";
+  recovery_failed_steps?: string[];
 }
 
 export type ImportStatus =
@@ -461,15 +468,28 @@ export interface MemoryLibraryPage {
   limit: number;
   /** Active evidence sources for each returned memory, from the same authorized page snapshot. */
   source_ids_by_memory?: Record<string, string[]>;
-  /** When each returned memory's cited conversation happened (D96). `import` when only the import time is known. */
+  /** When each returned memory's cited conversation happened (D96). `import`
+   * when only the import time is known; `write` for an SDK experience or fact
+   * stored without a conversation time, which shows when it was written. */
   source_time_by_memory?: Record<
     string,
-    { at: string; basis: "conversation" | "import" }
+    { at: string; basis: "conversation" | "import" | "write" }
   >;
   /** True when the read budget ran out mid-page (typically during a history
    * import): a partial snapshot, not an authoritative view. Show "importing"
    * and retry; never render this state as a failure. */
   stale?: boolean;
+  /** Set on a search whose relevance window was full: matches were looked for
+   * only among this many most relevant memories, so `total` may undercount. */
+  search_window?: number | null;
+  /** SDK keyword search: the server-side result window to page with. */
+  window_id?: string | null;
+  /** SDK keyword search: the window passed in had expired, so this is page 1
+   * of a fresh search. */
+  window_reset?: boolean;
+  /** SDK pages: which scene each returned memory is from, and the namespace
+   * to name when opening, editing or deleting it. */
+  sdk_memory_refs?: Record<string, SdkMemoryRef>;
 }
 
 export interface MemoryLibraryQuery {
@@ -523,6 +543,11 @@ export interface MemoryDetail {
   source_id?: string | null;
   sdk_memory_at?: string | null;
   sdk_created_at?: string | null;
+  /** SDK memories: the namespace to name on edit/delete. */
+  sdk_ref?: SdkMemoryRef;
+  /** SDK experiences: the task and solution, edited apart. */
+  sdk_task?: string | null;
+  sdk_solution?: string | null;
   // Null for a memory nobody has rewritten: there is no index to be behind,
   // and the interface should not explain a state the user never caused.
   index_sync: MemoryIndexSync | null;
@@ -535,6 +560,20 @@ export type SdkMemoryStatus =
   | "negated"
   | "conflicted"
   | "archived";
+
+/** Which part of the library a memory lives in. */
+export type SdkMemoryScene = "chat" | "working" | "coding";
+/** What the memory is: a chat memory, a working/coding experience or fact. */
+export type SdkMemoryKind = "chat" | "experience" | "fact";
+/** The productivity namespace of an experience or fact. */
+export type SdkMemoryVariant = "working" | "coding";
+
+/** Enough to address one memory again: get/update/delete pass kind+variant. */
+export interface SdkMemoryRef {
+  scene: SdkMemoryScene;
+  kind: SdkMemoryKind;
+  variant: SdkMemoryVariant | null;
+}
 
 export interface SdkMemoryRecord {
   memory_id: string;
@@ -553,6 +592,16 @@ export interface SdkMemoryRecord {
   source: string | null;
   memory_at: number | null;
   gmt_created: number | null;
+  /** Absent only from pre-2.0.6 Core responses, which were all chat. */
+  scene?: SdkMemoryScene;
+  kind?: SdkMemoryKind;
+  variant?: SdkMemoryVariant | null;
+  /** Experiences: the task and the solution; `content` is both, joined. */
+  task?: string | null;
+  solution?: string | null;
+  /** Epoch seconds. */
+  created_at?: number | null;
+  updated_at?: number | null;
 }
 
 export interface SdkMemoryPage {
@@ -560,17 +609,21 @@ export interface SdkMemoryPage {
   total: number;
   limit: number;
   offset: number;
+  search_window?: number | null;
+  /** Keyword search: pass back with the next offset to page the same
+   * results. Null on a plain listing. */
+  window_id?: string | null;
+  /** Keyword search: the window_id sent had expired or did not match, the
+   * search ran again and this page is page 1 (offset 0) of the new window. */
+  window_reset?: boolean;
+  /** Plain listing: memories per scene under the same filters. */
+  totals?: Partial<Record<SdkMemoryScene, number>> | null;
 }
 
 export interface SdkUserProfileResponse {
   request_id: string;
   profile: Record<string, unknown> | null;
   elapsed_ms: number;
-}
-
-export interface MemoryAuthorityResponse {
-  authority: "legacy" | "sdk";
-  migration_id: string | null;
 }
 
 export interface SdkRawRecord {
@@ -698,11 +751,18 @@ export interface RecallRequest {
 }
 
 export interface RecallHit {
+  /** A memory id, or in raw mode the id of the original conversation excerpt. */
   memory_id: string;
   content: string;
-  /** `hy-sdk` means content already includes SDK-rendered logical time/history. */
-  content_format?: "plain" | "hy-sdk";
-  kind: MemoryKind;
+  /** `hy-sdk` means content already includes SDK-rendered logical time/history.
+   * `raw` means an original conversation excerpt, not a memory. */
+  content_format?: "plain" | "hy-sdk" | "raw";
+  /** `raw` only in raw mode: an excerpt carries no evidence ids and no scopes. */
+  kind: MemoryKind | "raw";
+  /** The app an excerpt came from (raw mode). */
+  source?: string | null;
+  /** The conversation an excerpt came from (raw mode). */
+  session_id?: string | null;
   scopes: string[];
   evidence_ids: string[];
   updated_at: string;
@@ -725,6 +785,13 @@ export interface RecallReceipt {
   truncated_by?: TruncationBudget | null;
   /** Scored (or known surplus) candidates left unreturned. */
   unexamined_count?: number;
+  /** Absent means `memory`. `raw` means Core searched imported original
+   * conversations instead, and the hits are excerpts, not confirmed memories. */
+  mode?: "memory" | "raw";
+  /** Why recall fell back to raw conversations. */
+  fallback_reason?: "model_unavailable" | "no_memories" | null;
+  /** Sources the caller was not allowed to read, left out of this result. */
+  excluded_sources?: string[];
 }
 
 export interface LiveSyncHealth {
@@ -977,13 +1044,16 @@ export interface ManualExtractReceipt {
   batches_current: number;
 }
 
-export interface MemoryNoteInput {
+/** Body of `POST /api/v2/memories`: add one memory directly. */
+export interface MemoryAddInput {
   request_id: string;
   text: string;
   scope: "all-apps";
 }
 
-export interface MemoryNoteReceipt {
+/** Receipt of `POST /api/v2/memories` and
+ * `GET /api/v2/memories/additions/{request_id}`. */
+export interface MemoryAddReceipt {
   evidence_id: string;
   text: string;
   scope: "all-apps";
@@ -1001,7 +1071,6 @@ export interface MemoryNoteReceipt {
   error: string | null;
 }
 
-export type SavedMemoryNoteEvidence = MemoryEvidenceExcerpt;
 export type {
   BackupRestoreFailureCode,
   BackupRestoreRequest,

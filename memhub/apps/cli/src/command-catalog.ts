@@ -58,6 +58,12 @@ const CONFIRM_OPTION: CommandOption = {
   flag: "--yes",
   summary: "确认执行；不加该参数时只输出计划，不做任何改动。",
 };
+/** The one confirmation convention, for irreversible operations only. */
+const DESTRUCTIVE_CONFIRM_OPTION: CommandOption = {
+  flag: "--yes",
+  summary:
+    "确认这次不可逆操作；不加时只说明将要做什么，不做任何改动，exit 0。（旧的 --confirm 仍作为别名接受。）",
+};
 const JSON_OPTION: CommandOption = {
   flag: "--json",
   summary: "以 JSON 输出到 stdout，供脚本与 Agent 消费。",
@@ -70,21 +76,6 @@ const INTERVAL_OPTION: CommandOption = {
   flag: "--interval <seconds>",
   summary: "刷新间隔，默认 5 秒，范围 1..300；必须与 --watch 一起使用。",
 };
-const PLAN_FILE_OPTION: CommandOption = {
-  flag: "--plan-file <path>",
-  summary: "读取先前 --json 保存的有界计划文件。",
-};
-const EXPLICIT_CONFIRM_OPTION: CommandOption = {
-  flag: "--confirm",
-  summary: "确认执行计划文件逐字描述的操作；缺少时绝不写入。",
-};
-// Same flag, but for commands that name their target directly instead of
-// going through a saved plan file; the plan-file wording would be wrong here.
-const DIRECT_CONFIRM_OPTION: CommandOption = {
-  flag: "--confirm",
-  summary: "确认执行上面预览的这次操作；缺少时绝不写入。",
-};
-
 const SERVICE_OPTIONS: readonly CommandOption[] = [
   PLATFORM_OPTION,
   HOME_OPTION,
@@ -154,55 +145,77 @@ const INSTALL_OPTIONS: readonly CommandOption[] = [
 const INSTALL_USAGE =
   "[--source <path> | --release-manifest-url <https-url>] [--channel <stable|prerelease>] [--install-root <path>] [--home <path>] [--bin-dir <path>] [--data-dir <path>] [--uid <id>] [--xdg-config-home <path>] [--no-shell-path] [--shell-profile <path>] [--preserve-data-dir] [--allow-downgrade] [--yes]";
 
+const USAGE_EXITS = [EXIT_OK, EXIT_FAILED, EXIT_USAGE] as const;
+const RUNTIME_EXITS = [
+  EXIT_OK,
+  EXIT_FAILED,
+  EXIT_USAGE,
+  EXIT_RUNTIME_STOPPED,
+] as const;
+
+const KIND_OPTION: CommandOption = {
+  flag: "--kind <chat|experience|fact>",
+  summary:
+    "记忆所在的命名空间；工作/编码场景的经验和事实需要同时给 --variant。list 输出里每条都带 kind/variant。",
+};
+const VARIANT_OPTION: CommandOption = {
+  flag: "--variant <working|coding>",
+  summary:
+    "经验或事实属于工作还是编码场景；必须和 --kind experience|fact 一起用。",
+};
+
 export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "serve",
     summary: "在前台启动完整 Runtime（Core 与 Host Gateway），不注册系统服务。",
     usage: "memhub serve",
     options: [],
-    exit_codes: [EXIT_OK, EXIT_FAILED],
+    exit_codes: USAGE_EXITS,
   },
   {
     name: "start",
-    summary: "启动本机 Runtime；已有通过身份校验的实例时只连接，不重复启动。",
+    summary:
+      "启动本机 Runtime；已有通过身份校验的实例时只连接，不重复启动。受管服务会同时恢复登录时自动启动。",
     usage: "memhub start [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_RUNTIME_STOPPED],
+    exit_codes: USAGE_EXITS,
   },
   {
     name: "stop",
-    summary: "停止通过身份校验的本机 Runtime；身份不明确时不发送信号。",
+    summary:
+      "停止通过身份校验的本机 Runtime；身份不明确时不发送信号。受管服务（launchd/systemd、App）停止后登录时也不会自动启动，直到再次运行 memhub start。",
     usage: "memhub stop [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED],
+    exit_codes: USAGE_EXITS,
   },
   {
     name: "restart",
     summary: "先停止再启动本机 Runtime，两步串行执行。",
     usage: "memhub restart [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED],
+    exit_codes: USAGE_EXITS,
   },
   {
     name: "status",
     summary: "只读查询 Runtime 运行状态；不启动服务、不迁移数据、不改配置。",
     usage: "memhub status [--watch] [--interval <seconds>] [--json]",
     options: [WATCH_OPTION, INTERVAL_OPTION, JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "doctor",
-    summary: "按诊断口径做同样的只读检查；默认不修复任何东西。",
+    summary:
+      "按诊断口径做只读检查并给出修复建议；默认不修复任何东西。Runtime 未运行时 exit 3。",
     usage: "memhub doctor [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "logs",
     summary:
-      "读取本机脱敏诊断日志；logs export 会把排查包直接存到下载目录。默认显示最近一次会话的 200 条事件。",
+      "读取本机脱敏诊断日志；logs export 会把排查包（含系统崩溃报告）直接存到下载目录。默认显示最近一次会话的 200 条事件。",
     usage:
-      "memhub logs export [--json]\nmemhub logs [--since <15m|2h|7d|RFC3339>] [--session <id>] [--trace <id>] [--incident <id>] [--operation <id>] [--request <id>] [--job <id>] [--task <id>] [--component <name>] [--event <name>] [--errors-only] [--tail <1..5000>] [--follow] [--json]",
+      "memhub logs export [--json]\n            memhub logs [--since <15m|2h|7d|RFC3339>] [--session <id>] [--trace <id>] [--incident <id>] [--operation <id>] [--request <id>] [--job <id>] [--task <id>] [--component <name>] [--event <name>] [--errors-only] [--tail <1..5000>] [--follow] [--json]",
     options: [
       {
         flag: "--since <time>",
@@ -226,64 +239,46 @@ export const COMMANDS: readonly CommandDescriptor[] = [
           "以 NDJSON 输出到 stdout（每行一个脱敏事件；非单 JSON 文档），供脚本与 Agent 消费。",
       },
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE],
+    exit_codes: USAGE_EXITS,
   },
   {
     name: "init",
     summary:
-      "首次接入：选择来源 → 选择是否导入历史。接入即开启该 Harness 的处理；后续可用 sync pause/resume 冻结或恢复。在终端且不带 --source 时进入交互引导（默认全选）；非终端或加 --json 时不读 stdin、只列出可用来源和下一步。--all-detected 一次接入所有已检测来源。",
+      "首次接入引导。在终端里（未加 --json）进入交互向导：选择来源 → 是否开启处理 → 配置模型。非终端或加 --json 时不读 stdin，只列出可接入的来源和下一步命令。脚本接入请用 sources connect。",
+    usage: "memhub init [--json]",
+    options: [JSON_OPTION],
+    exit_codes: RUNTIME_EXITS,
+  },
+  {
+    name: "sources",
+    summary:
+      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。",
     usage:
-      "memhub init [--json]\n            memhub init --source <id> [--source <id> ...] [--import] [--dry-run] [--full-rescan] [--confirm-overrides] [--json]\n            memhub init --all-detected [--import] [--dry-run] [--json]",
+      "memhub sources list [--json]\n            memhub sources connect <id> [<id> ...] [--import] [--confirm-overrides] [--request-id <uuid>] [--json]\n            memhub sources connect --all-detected [--import] [--confirm-overrides] [--json]\n            memhub sources receipt <request-id> [--json]",
     options: [
       {
-        flag: "--source <id>",
-        summary: "要接入的来源，可重复；终端下不给则进入交互引导。",
+        flag: "--import",
+        summary:
+          "接入后立即导入历史会话并开启持续同步；不加时只授权，处理保持冻结。",
       },
       {
         flag: "--all-detected",
         summary:
-          "接入并（加 --import 时）导入全部 location_state=found 的来源。",
-      },
-      {
-        flag: "--import",
-        summary: "接入后立即导入该来源的历史会话（默认只接入不导入）。",
-      },
-      {
-        flag: "--dry-run",
-        summary: "只出计划，不接入也不导入；用于先看会做什么。",
-      },
-      {
-        flag: "--full-rescan",
-        summary: "导入时忽略既有游标做全量重扫。",
+          "接入全部已检测到（location_state=found）的来源；与具体来源互斥。",
       },
       {
         flag: "--confirm-overrides",
-        summary: "确认接受环境覆盖类来源（如 DSH_HOME 指定的目录）。",
+        summary:
+          "确认接受目录来自环境变量覆盖的来源（如 DSH_HOME 指定的目录）；不加时这些来源被拒绝（指定来源时）或跳过并列出（--all-detected 时）。",
       },
-      JSON_OPTION,
-    ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
-    name: "setup",
-    summary: "生成无头首次导入计划；只读取已有来源，不探测目录、不写授权。",
-    usage: "memhub setup plan --source <id> [--source <id> ...] [--json]",
-    options: [
       {
-        flag: "--source <id>",
-        summary: "计划导入的来源，可重复 1..32 次。",
+        flag: "--request-id <uuid>",
+        summary:
+          "--import 的幂等键；用同一个 id 重试只会读回第一次的回执，不会重复导入。",
       },
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
-    name: "sources",
-    summary: "列出来源、执行已确认的导入计划。",
-    usage:
-      "memhub sources list [--json]\n            memhub sources import --plan-file <path> --confirm [--json]\n            memhub sources receipt <request-id> [--json]",
-    options: [PLAN_FILE_OPTION, EXPLICIT_CONFIRM_OPTION, JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "sync",
@@ -297,7 +292,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "progress",
@@ -318,17 +313,17 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       INTERVAL_OPTION,
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "jobs",
     summary:
-      "启动或控制单个导入任务：start 创建 history/sync 作业；pause/resume/cancel 控制已有作业。所有写操作先出计划，必须显式 --confirm；list/show 为只读。",
+      "查看或控制导入任务：start 创建 history/sync 任务；pause/resume/cancel 控制已有任务。都直接执行。",
     usage:
       "memhub jobs list [--json]\n" +
       "            memhub jobs show <job-id> [--json]\n" +
-      "            memhub jobs start --source <id> [--operation <history|sync>] [--confirm] [--json]\n" +
-      "            memhub jobs <pause|resume|cancel> --job <id> [--confirm] [--json]",
+      "            memhub jobs start --source <id> [--operation <history|sync>] [--json]\n" +
+      "            memhub jobs <pause|resume|cancel> --job <id> [--json]",
     options: [
       {
         flag: "--source <id>",
@@ -336,123 +331,116 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       {
         flag: "--operation <history|sync>",
-        summary: "start 的导入类型，默认 history。",
+        summary:
+          "start 的导入类型，默认 history；sync 与 scan --source 相同，立即增量同步一次。",
       },
       {
         flag: "--job <id>",
         summary: "pause/resume/cancel 的目标导入任务。",
       },
-      DIRECT_CONFIRM_OPTION,
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "models",
     summary:
-      "交互配置模型，或生成配置/探测计划、执行已确认操作与查询回执；脚本模式的凭据只从受控文件读取。",
+      "管理生成模型配置。add/test 直接提交并返回操作 ID（异步，用 receipt 查结果）；edit/activate 直接执行；remove 不可逆，需 --yes。<profile-id>/<operation-id> 都是 UUID；脚本模式的凭据只从受控文件读取。",
     usage:
-      "memhub models list [--json]\n            memhub models show <profile-id> [--json]\n            memhub models plan --config-file <path> [--json]\n            memhub models configure --plan-file <path> --confirm [--api-key-file <path>] [--json]\n            memhub models receipt <operation-id> [--json]\n            memhub models edit <profile-id> --config-file <path> [--confirm] [--api-key-file <path>] [--json]\n            memhub models activate <profile-id> [--confirm] [--json]\n            memhub models probe-plan <profile-id> [--json]\n            memhub models probe --plan-file <path> --confirm [--json]\n            memhub models probe-receipt <operation-id> [--json]\n            memhub models remove <profile-id> [--confirm] [--json]",
+      "memhub models list [--json]\n            memhub models show <profile-id> [--json]\n            memhub models add --config-file <path> [--api-key-file <path>] [--activate] [--json]\n            memhub models test <profile-id> [--json]\n            memhub models receipt <operation-id> [--json]\n            memhub models edit <profile-id> --config-file <path> [--api-key-file <path>] [--json]\n            memhub models activate <profile-id> [--json]\n            memhub models remove <profile-id> [--yes] [--json]",
     alternative_usage: "memhub models setup",
     options: [
       {
         flag: "--config-file <path>",
-        summary: "不含 api_key 的有界 JSON 模型配置。",
+        summary:
+          "有界 JSON 模型配置，不能含 api_key；edit 的补丁必须带 expected_revision。",
       },
-      PLAN_FILE_OPTION,
-      EXPLICIT_CONFIRM_OPTION,
       {
         flag: "--api-key-file <path>",
-        summary: "从 regular file 读取凭据；内容不进入参数、输出或错误。",
+        summary: "从属主专用的普通文件读取凭据；内容不进入参数、输出或错误。",
       },
+      {
+        flag: "--activate",
+        summary: "add 成功后把新配置设为当前使用。",
+      },
+      DESTRUCTIVE_CONFIRM_OPTION,
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "memories",
-    summary: "通过 SDK 数据面列出、查看、修改或物理删除记忆。",
+    summary:
+      "列出、搜索、查看、添加、修改或物理删除记忆（对话、工作、编码三个场景）。add 和 App 的「添加记忆」是同一个入口；delete 不可逆，需 --yes。",
     usage:
-      "memhub memories list [--status <state>] [--offset <n>] [--limit <n>] [--json]\n            memhub memories show <memory-id> [--json]\n            memhub memories update <memory-id> --content-file <path> [--confirm] [--json]\n            memhub memories delete <memory-id> [--confirm] [--json]",
+      "memhub memories list [--scene <all|chat|working|coding>] [--source <id>] [--query <text>] [--status <state>] [--offset <n>] [--limit <n>] [--json]\n            memhub memories show <memory-id> [--kind <kind>] [--variant <variant>] [--json]\n            memhub memories add <text> [--request-id <uuid>] [--json]\n            memhub memories add --content-file <path> [--request-id <uuid>] [--json]\n            memhub memories add-status <request-id> [--json]\n            memhub memories update <memory-id> --content-file <path> [--kind <kind>] [--variant <variant>] [--task <text>] [--json]\n            memhub memories delete <memory-id> [--kind <kind>] [--variant <variant>] [--yes] [--json]",
     options: [
       {
+        flag: "--scene <all|chat|working|coding>",
+        summary: "只列一个场景，默认 all。working/coding 列的是该场景的经验。",
+      },
+      { flag: "--source <id>", summary: "只列某个来源写入的记忆。" },
+      {
+        flag: "--query <text>",
+        summary:
+          "关键词搜索（只搜 active 记忆，在最相关的一批里匹配所有关键词，输出 search_window 时表示可能少计）。",
+      },
+      {
         flag: "--status <state>",
-        summary: `记忆状态，取值 ${MEMORY_STATUSES.join("、")}。`,
+        summary: `记忆状态，取值 ${MEMORY_STATUSES.join("、")}，默认 active。`,
       },
       { flag: "--offset <n>", summary: "跳过前 n 条，默认 0。" },
       {
         flag: "--limit <n>",
         summary: "本页最多返回多少条，默认 100，上限 500。",
       },
+      KIND_OPTION,
+      VARIANT_OPTION,
       {
         flag: "--content-file <path>",
         summary:
-          "从有界普通文件读取新增/纠正正文；计划只保存摘要，执行时再次校验。",
+          "从有界普通文件读取正文：add 的新记忆（≤12000 字），或 update 的新内容（经验为 solution）。",
       },
-      DIRECT_CONFIRM_OPTION,
+      {
+        flag: "--task <text>",
+        summary: "update 经验（--kind experience）时同时改写 task。",
+      },
+      {
+        flag: "--request-id <uuid>",
+        summary:
+          "add 的幂等键；用同一个 id 重试只会读回第一次的结果，不会重复添加。不给时自动生成并输出。",
+      },
+      DESTRUCTIVE_CONFIRM_OPTION,
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "profile",
     summary: "读取 SDK 组装后的用户长期画像（L0 + 已启用的长期画像补充）。",
     usage: "memhub profile [--json]",
-    options: [DATA_DIR_OPTION, JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    options: [JSON_OPTION],
+    exit_codes: RUNTIME_EXITS,
   },
   {
-    name: "calls",
+    name: "graph-width",
     summary:
-      "清除本机调用记录；不可逆删除，默认只出计划，必须显式 --confirm 才执行。",
+      "嵌入维度变化、图谱宽度不匹配时的处置决定。keep_existing 与 export_first 直接执行；rebuild_with_new 会归档旧图谱并重建，需 --yes。",
     usage:
-      "memhub calls clear --event <id> [--event <id> ...] [--confirm] [--json]\n            memhub calls clear --all [--confirm] [--json]",
-    options: [
-      {
-        flag: "--event <id>",
-        summary: "要清除的调用记录事件 ID，可重复，最多 100 条。",
-      },
-      {
-        flag: "--all",
-        summary: "清除全部调用记录；与 --event 互斥。",
-      },
-      DIRECT_CONFIRM_OPTION,
-      JSON_OPTION,
-    ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
-    name: "notes",
-    summary:
-      "端内新增记忆（memory-notes）：从普通文件新增，或显式确认后处理已有笔记。",
-    usage:
-      "memhub notes add --content-file <path> [--json]\n            memhub notes apply --plan-file <path> --content-file <path> --confirm [--json]\n            memhub notes process <note-id> [--confirm] [--json]",
-    options: [
-      {
-        flag: "--content-file <path>",
-        summary: "从有界普通文件读取新增正文；计划只保存摘要，执行时重新校验。",
-      },
-      PLAN_FILE_OPTION,
-      DIRECT_CONFIRM_OPTION,
-      JSON_OPTION,
-    ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
-  },
-  {
-    name: "graph",
-    summary: "图谱宽度不匹配时的用户决定；默认只出计划，--confirm 后才执行。",
-    usage:
-      "memhub graph width --decision <keep_existing|rebuild_with_new|export_first> [--confirm] [--json]",
+      "memhub graph-width --decision <keep_existing|export_first|rebuild_with_new> [--yes] [--json]",
     options: [
       {
         flag: "--decision <decision>",
         summary:
-          "keep_existing（保持）、export_first（先导出）、rebuild_with_new（导出后重建）。",
+          "keep_existing（保持现有图谱）、export_first（先导出）、rebuild_with_new（导出后归档旧图谱并按新维度重建）。",
       },
-      DIRECT_CONFIRM_OPTION,
+      {
+        ...DESTRUCTIVE_CONFIRM_OPTION,
+        summary: "rebuild_with_new 必须加；其它决定不需要。",
+      },
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "host",
@@ -480,12 +468,12 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "recall",
     summary:
-      "从当前授权的原文与治理记忆统一检索上下文；本地只读，不调用模型、不触发补索引。",
+      "从原始对话与已沉淀记忆统一检索上下文；本地只读，不调用模型、不触发补索引。文本输出标明每条是「原始对话摘录」还是「记忆」（JSON 里是 kind: raw|memory）。",
     usage:
       "memhub recall <query> [--kind <raw|memory>] [--source <id>] [--limit <n>] [--character-budget <n>] [--timeout-ms <n>] [--json]\n            memhub recall --query-file <path> [...]\n            memhub recall --stdin [...]",
     options: [
@@ -516,21 +504,21 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_RUNTIME_STOPPED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "service-plan",
     summary: "生成用户级服务计划；只输出计划，不写文件也不执行命令。",
     usage: `memhub service-plan ${SERVICE_USAGE}`,
     options: SERVICE_OPTIONS,
-    exit_codes: [EXIT_OK, EXIT_PLAN_BLOCKED],
+    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_PLAN_BLOCKED],
   },
   {
     name: "service-install",
     summary: "预览用户级服务安装；只有 --yes 才写入服务文件并注册。",
     usage: `memhub service-install ${SERVICE_USAGE} [--yes]`,
     options: [...SERVICE_OPTIONS, CONFIRM_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
   },
   {
     name: "service-uninstall",
@@ -538,15 +526,15 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       "预览用户级服务卸载；只有 --yes 才注销并删除逐字匹配的受管服务文件，不删数据。",
     usage: `memhub service-uninstall ${SERVICE_USAGE} [--yes]`,
     options: [...SERVICE_OPTIONS, CONFIRM_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
   },
   {
     name: "install",
     summary:
-      "预览发行目录安装、memhub/memhub-cli/one-memory 短链接、PATH 条目与用户服务计划；只有 --yes 才执行并在失败时回滚。",
+      "预览发行目录安装、memhub/memhub-cli/one-memory 短链接、PATH 条目与用户服务计划；只有 --yes 才执行。记忆数据迁移开始前失败会回滚；迁移开始后失败保留新版本、拒绝启动，并输出迁移日志与反馈地址。",
     usage: `memhub install ${INSTALL_USAGE}`,
     options: INSTALL_OPTIONS,
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
   },
   {
     name: "uninstall",
@@ -559,24 +547,31 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "upgrade",
     summary:
-      "预览升级；只有 --yes 才切换受管版本并重启服务，失败时恢复旧版本，不删数据。",
+      "预览升级；只有 --yes 才切换受管版本并重启服务，不删数据。记忆数据迁移开始前失败会恢复旧版本；迁移开始后失败保留新版本、拒绝启动，并输出迁移日志与反馈地址（不会回滚到旧版本）。",
     usage: `memhub upgrade ${INSTALL_USAGE}`,
     options: INSTALL_OPTIONS,
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
   },
   {
     name: "delete-data",
     summary:
-      "独立、二次确认地删除 One Memory Home（数据）。这是唯一会删除数据的命令；uninstall 不会。默认只出预览；需 Runtime 已停止，并显式 --confirm <path> 复述该目录。",
+      "删除 MemHub 数据目录（记忆、来源、配置），不可逆。这是唯一会删除数据的命令；uninstall 不会。需要 Runtime 已停止；不加参数时只预览要删除的目录；删除需要 --yes 并用 --confirm 再写一遍同一个目录。",
     usage:
       "memhub delete-data [--data-dir <path>] [--yes --confirm <path>] [--json]",
     options: [
-      DATA_DIR_OPTION,
-      CONFIRM_OPTION,
+      {
+        flag: "--data-dir <path>",
+        summary: "要删除的数据目录绝对路径；默认当前使用的数据目录。",
+      },
+      {
+        ...DESTRUCTIVE_CONFIRM_OPTION,
+        summary:
+          "删除时必须加，且要同时给出 --confirm <path>；不加时只预览，exit 0。",
+      },
       {
         flag: "--confirm <path>",
         summary:
-          "第二次确认：逐字复述预览里的数据目录；缺少它时即使 --yes 也不删除。",
+          "删除时必须加：再写一遍要删除的数据目录，与预览中的目录完全一致才执行。",
       },
       JSON_OPTION,
     ],
@@ -588,113 +583,149 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       "onboarding reset 回到首次运行的引导流程。只清除引导完成状态：不删记忆数据，也不需要卸载重装。",
     usage: "memhub onboarding reset [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "help",
     summary: "显示总帮助或单个命令的用法。",
     usage: "memhub help [command] [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK],
+    exit_codes: [EXIT_OK, EXIT_USAGE],
   },
   {
     name: "version",
     summary: "显示 CLI 版本。",
     usage: "memhub version [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK],
+    exit_codes: [EXIT_OK, EXIT_USAGE],
   },
   {
-    name: "path",
+    name: "scan-roots",
     summary:
-      "查看或登记被扫描的目录（scan roots）。list 只读；add/remove 预览后加 --yes 才提交；均已接入 Runtime 的 scan-roots 端点。",
+      "查看或登记被扫描的目录（scan roots）。add/remove 直接执行。（旧名 path 仍可用。）",
     usage:
-      "memhub path list [--json]\n" +
-      "            memhub path add --root <path> [--source <id>] [--no-recursive] [--yes]\n" +
-      "            memhub path remove --root <path> [--yes]",
-    options: [DATA_DIR_OPTION, JSON_OPTION, CONFIRM_OPTION],
-    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+      "memhub scan-roots list [--json]\n" +
+      "            memhub scan-roots add --root <path> [--source <id>] [--no-recursive] [--json]\n" +
+      "            memhub scan-roots remove --root <path> [--json]",
+    options: [
+      { flag: "--root <path>", summary: "要登记或移除的目录。" },
+      {
+        flag: "--source <id>",
+        summary: "把目录绑定到某个来源；不给时由 Runtime 自动识别。",
+      },
+      { flag: "--no-recursive", summary: "只扫描该目录本身，不进入子目录。" },
+      JSON_OPTION,
+    ],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "adapter",
     summary:
-      "查看 Harness Adapter 的就绪状态与最近一次探测结果（list），或现场探测某个来源（probe --source <id>）；两者均为只读，已接入 Runtime 的 adapters/探测端点。",
+      "查看 Harness Adapter 的就绪状态与最近一次探测结果（list），或现场探测某个来源（probe --source <id>）；两者均为只读。",
     usage:
       "memhub adapter list [--json]\n" +
       "            memhub adapter probe --source <id> [--json]",
-    options: [DATA_DIR_OPTION, JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED],
+    options: [
+      { flag: "--source <id>", summary: "probe 的目标来源。" },
+      JSON_OPTION,
+    ],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "scan",
     summary:
-      "立即扫描；默认只输出计划，加 --yes 才真正执行。指定 --source 扫描单个来源，--all 一次扫描/导入全部已检测来源（Runtime 按来源寻址，不接受裸路径）。",
-    usage:
-      "memhub scan [--source <id>] [--full] [--yes] [--json]\n            memhub scan --all [--yes] [--json]",
+      "立即增量扫描一个已连接并开启同步的来源，返回导入任务（与 jobs start --operation sync 相同）。接入全部来源请用 sources connect --all-detected --import。",
+    usage: "memhub scan --source <id> [--json]",
     options: [
       {
         flag: "--source <id>",
-        summary: "按单个来源扫描；与 --all 互斥。",
+        summary: "要扫描的来源。",
       },
-      {
-        flag: "--all",
-        summary:
-          "处理全部 location_state=found 的来源，按来源逐条回执；部分成功返回非 0。",
-      },
-      {
-        flag: "--full",
-        summary: "忽略既有游标做全量重扫；默认只读取增量。",
-      },
-      DATA_DIR_OPTION,
       JSON_OPTION,
-      CONFIRM_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "write",
-    summary: "提交 OpenAI messages 到 SDK 写入队列，或按 request id 查询状态。",
-    usage:
-      "memhub write submit --messages-file <path> --session <id> [--source <id>] [--request-id <id>] [--memory-at <RFC3339>] [--live] [--json]\n            memhub write status --id <request-id> [--json]",
-    options: [DATA_DIR_OPTION, JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED],
-  },
-  {
-    name: "task",
     summary:
-      "兼容别名：按 request id 查询写入状态；新脚本请使用 write status。",
-    usage: "memhub task --id <request-id> [--json]",
-    options: [DATA_DIR_OPTION, JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED],
+      "提交一段 OpenAI 格式的对话（messages）到写入队列，异步加工成记忆；或按 request id 查询状态。request id 是幂等键：不给时自动生成并输出，重试请带上同一个。新增一条结论式记忆请用 memories add。",
+    usage:
+      "memhub write submit --messages-file <path> --session <id> [--source <id>] [--request-id <id>] [--memory-at <RFC3339>] [--live] [--json]\n            memhub write status <request-id> [--json]",
+    options: [
+      {
+        flag: "--messages-file <path>",
+        summary:
+          "OpenAI messages 数组（或 {messages:[…]}），1..200 条，role 为 user/assistant/tool，至少一条 user。",
+      },
+      { flag: "--session <id>", summary: "会话 ID。" },
+      { flag: "--source <id>", summary: "来源应用，默认 memhub-cli。" },
+      {
+        flag: "--request-id <id>",
+        summary:
+          "幂等键：同 id 同内容不会重复入队，同 id 不同内容被拒绝（409）。",
+      },
+      { flag: "--memory-at <RFC3339>", summary: "对话发生时间，必须带时区。" },
+      { flag: "--live", summary: "优先处理。" },
+      JSON_OPTION,
+    ],
+    exit_codes: RUNTIME_EXITS,
   },
   {
     name: "backup",
     summary:
-      "备份与恢复 MemHub 数据（两阶段）。create 调用 Runtime 的备份端点；restore 会覆盖现有数据，要求 Runtime 已停止且 `--confirm` 逐字重复 `--source`，随后由非 Runtime 维护态 Core 完成受管校验、保护性备份和原子替换。",
+      "备份与恢复主库（来源、写入队列、配置）。注意：不包含记忆本身——SDK 记忆库 hy-memory/ 不在备份里，restore 也不会替换它。create 的目标要放在 <数据目录>/backups/ 下才能被 restore 使用；restore 覆盖现有主库，需 Runtime 已停止，并加 --yes 与 --confirm <同一个备份路径>。",
     usage:
-      "memhub backup create --target <path> [--yes] [--json]\n" +
-      "            memhub backup restore --source <path> --yes --confirm <path> [--json]",
+      "memhub backup create --target <path> [--json]\n" +
+      "            memhub backup restore --source <path> [--yes --confirm <path>] [--json]",
     options: [
-      DATA_DIR_OPTION,
-      JSON_OPTION,
-      CONFIRM_OPTION,
+      {
+        flag: "--target <path>",
+        summary: "create 的备份文件路径，必须在数据目录内。",
+      },
+      {
+        flag: "--source <path>",
+        summary:
+          "restore 的备份文件，必须是 <数据目录>/backups/ 下的受管备份。",
+      },
+      {
+        ...DESTRUCTIVE_CONFIRM_OPTION,
+        summary:
+          "restore 必须加，且要同时给出 --confirm <path>；create 不需要。",
+      },
       {
         flag: "--confirm <path>",
-        summary: "restore 要求逐字重复 --source 路径；不一致时不做任何改动。",
+        summary:
+          "restore 必须加：再写一遍 --source 的备份路径，完全一致才执行。",
       },
+      JSON_OPTION,
     ],
-    exit_codes: [EXIT_OK, EXIT_USAGE, EXIT_FAILED, EXIT_PLAN_BLOCKED],
+    exit_codes: [...RUNTIME_EXITS, EXIT_PLAN_BLOCKED],
   },
   {
     name: "ui",
     summary:
-      "用系统默认浏览器打开 Runtime 托管的 Web Console：先向 Core 换取一次性 loopback 登录码，再交给系统浏览器由 Core 置 HttpOnly/SameSite=Strict session；CLI 不向浏览器暴露裸 Core token。Core 未提供该合同时如实返回 ui_session_contract_unavailable（exit 4）。",
+      "用系统默认浏览器打开 Runtime 托管的 Web Console：先向 Core 换取一次性 loopback 登录码，再交给系统浏览器由 Core 置 HttpOnly/SameSite=Strict session；CLI 不向浏览器暴露裸 Core token。Runtime 未运行时 exit 3；Core 未提供该合同时如实返回 ui_session_contract_unavailable（exit 4）。",
     usage: "memhub ui [--json]",
     options: [JSON_OPTION],
-    exit_codes: [EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_PLAN_BLOCKED],
+    exit_codes: [...RUNTIME_EXITS, EXIT_PLAN_BLOCKED],
   },
 ];
 
+/** Old names that still run but are not listed: `path` → `scan-roots`,
+ * `task` → `write status`, `graph width` → `graph-width`. */
+export const HIDDEN_COMMAND_ALIASES: Readonly<Record<string, string>> = {
+  path: "scan-roots",
+  task: "write",
+  graph: "graph-width",
+};
+
 export function findCommand(name: string): CommandDescriptor | undefined {
   return COMMANDS.find((command) => command.name === name);
+}
+
+/** A listed command, or the command a hidden alias now runs as. */
+export function findCommandOrAlias(
+  name: string,
+): CommandDescriptor | undefined {
+  return findCommand(HIDDEN_COMMAND_ALIASES[name] ?? name);
 }

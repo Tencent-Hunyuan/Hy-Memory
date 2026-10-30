@@ -25,11 +25,14 @@ import {
   installUserService,
   RecallBrokerSupervisor,
   RuntimeSupervisor,
+  readInstalledRuntimeSource,
   readPublishedCorePort,
   readRuntimeServiceOwner,
+  readSdkMigrationBlock,
   removeRuntimeServiceOwner,
   runtimeInstallLayout,
   runtimeServiceEnableMarkerPath,
+  type SdkMigrationSource,
   stopRuntimeProcess,
   waitForRuntimeProcess,
   writeRuntimeServiceOwner,
@@ -102,6 +105,7 @@ import {
   wasOpenedByLegacyLoginItem,
 } from "./login-item";
 import { readLoginPreference, setLoginPreference } from "./login-preference";
+import { showMigrationFailureDialog } from "./migration-failure-dialog";
 import { isAllowedNavigation } from "./navigation-policy";
 import { installDenyAllPermissionPolicy } from "./permissions";
 import { isHostPresent, recallHosts } from "./recall-hosts";
@@ -743,7 +747,6 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       resourcesPath: process.resourcesPath,
       platform: process.platform,
     }),
-    readerEnabled: process.platform !== "win32",
     dataDir,
     attempts: app.isPackaged ? 300 : 50,
     delayMs: app.isPackaged ? 250 : 200,
@@ -1075,6 +1078,9 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
   );
   installPackagedWebProtocol();
 
+  // The Runtime this launch replaced, when it moved `current`: the migration
+  // log (and so the issue a person files) names the version upgraded from.
+  let upgradeSource: SdkMigrationSource | null = null;
   const migrateAtStartup = async (core: {
     command: string;
     args: string[];
@@ -1083,6 +1089,8 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     const migration = await runStartupSdkMigration({
       dataDir,
       core,
+      caller: "desktop",
+      sourceRuntime: upgradeSource,
       runtimeBuild:
         packagedBuildNumber === undefined
           ? typeof app.getVersion === "function"
@@ -1199,6 +1207,12 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         }
         if (installed !== null) {
           runtimeChanged = !installed.reused_current;
+          if (runtimeChanged) {
+            upgradeSource = await readInstalledRuntimeSource(
+              installRoot,
+              installed.previous_current_target,
+            );
+          }
           await installBundledCliIfNeeded({
             home: app.getPath("home"),
             installRoot,
@@ -1216,6 +1230,12 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           command: stable?.captureCommand ?? layout.coreCommand,
           args: [],
         });
+      } else if (desktopBackgroundLaunch) {
+        // A login launch does not migrate, and the service exits on a home a
+        // failed migration froze: say so now instead of waiting for a
+        // Runtime that will not come. Opening MemHub retries the migration.
+        const frozen = await readSdkMigrationBlock(dataDir);
+        if (frozen?.frozen !== undefined) throw new Error(frozen.code);
       }
       const alreadyRunning = runtimeChanged
         ? false
@@ -1349,6 +1369,24 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     });
     await runtimeSupervisor.start();
     if (isQuitting()) return;
+    // A standalone Runtime refreshes the hosts it installed as it starts, so
+    // an upgrade through the App or `memhub upgrade` is covered there. An
+    // embedded one is this process: do the same here, now it is up. Only a
+    // packaged build, so a source checkout never repoints real hosts at itself.
+    if (localPermissions && app.isPackaged) {
+      void localPermissions
+        .refreshInstalledHosts(
+          hosts.map((host) => host.layout),
+          {
+            build:
+              packagedBuildNumber === undefined
+                ? undefined
+                : String(packagedBuildNumber),
+            diagnostics: hostDiagnostics,
+          },
+        )
+        .catch(() => undefined);
+    }
     if (
       app.isPackaged &&
       process.platform === "darwin" &&
@@ -1694,6 +1732,38 @@ if (desktopVersion !== null) {
         "MemHub desktop failed",
         error instanceof Error ? error.name : "UnknownError",
       );
+      // An unfinished upgrade gets its own dialog: MemHub never runs on a
+      // half-migrated home, so the person is handed the log to report it.
+      if (
+        showMigrationFailureDialog({
+          error,
+          dataDir: runtimeDataDir,
+          locale: languagePreferences?.read().locale ?? "zh-CN",
+          dependencies: {
+            showMessageBoxSync: (options) => dialog.showMessageBoxSync(options),
+            showItemInFolder: (target) => shell.showItemInFolder(target),
+            openExternal: (url) => shell.openExternal(url),
+          },
+          environment: {
+            appVersion:
+              typeof app.getVersion === "function" ? app.getVersion() : null,
+            buildNumber: packagedBuildNumber ?? null,
+            osName:
+              process.platform === "darwin"
+                ? "macOS"
+                : process.platform === "win32"
+                  ? "Windows"
+                  : "Linux",
+            osVersion:
+              typeof process.getSystemVersion === "function"
+                ? process.getSystemVersion()
+                : null,
+            arch: process.arch,
+            home: app.getPath("home"),
+          },
+        })
+      )
+        return;
       dialog.showErrorBox(
         translate(
           languagePreferences?.read().locale ?? "zh-CN",

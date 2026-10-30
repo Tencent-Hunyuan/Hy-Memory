@@ -184,8 +184,16 @@ const CORE = new Map<string, { status: number; data: unknown }>([
     },
   ],
   [
-    "/api/v1/home-summary",
-    { status: 200, data: { memory_count: 42, latest: null, observed_at: "T" } },
+    "/api/v2/home-summary",
+    {
+      status: 200,
+      data: {
+        schema_version: 2,
+        memory_count: 42,
+        latest: null,
+        observed_at: "T",
+      },
+    },
   ],
 ]);
 
@@ -194,9 +202,7 @@ const READ_ONLY_PATHS = [
   "/api/v1/live-sync",
   "/api/v1/memory-processing",
   "/api/v1/model-profiles",
-  "/api/v1/home-summary",
-  "/api/v1/memory-library",
-  "/api/v1/memories/",
+  "/api/v2/home-summary",
   "/api/v2/memory-library",
   "/api/v2/memories/",
   "/api/v2/user-profile",
@@ -691,6 +697,66 @@ describe("CLI-21 memory reads", () => {
     expect(report.memories[1].content.length).toBeLessThan(400);
   });
 
+  it("lists working and coding memories with their scene and kind", async () => {
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: {
+        total: 2,
+        offset: 0,
+        limit: 20,
+        totals: { chat: 1, working: 1, coding: 0 },
+        window_id: null,
+        window_reset: false,
+        memories: [
+          memory("m1", "对话记忆"),
+          {
+            ...memory("e1", "修复测试\n固定随机种子"),
+            layer: "experience",
+            agent_id: "",
+            owner: null,
+            source_raw_ids: [],
+            scene: "working",
+            kind: "experience",
+            variant: "working",
+            task: "修复测试",
+            solution: "固定随机种子",
+            created_at: 1_790_000_000,
+            updated_at: 1_790_000_100,
+          },
+        ],
+      },
+    });
+    const streams = captureStreams();
+    try {
+      expect(await run(["memories", "list", "--json"], {})).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const report = JSON.parse(streams.stdout());
+    expect(report.page).toMatchObject({ state: "ok", total: 2, returned: 2 });
+    expect(report.memories[0]).toMatchObject({
+      memory_id: "m1",
+      scene: "chat",
+      kind: "chat",
+      variant: null,
+    });
+    expect(report.memories[1]).toMatchObject({
+      memory_id: "e1",
+      scene: "working",
+      kind: "experience",
+      variant: "working",
+      layer: "experience",
+    });
+
+    const text = captureStreams();
+    try {
+      expect(await run(["memories", "list"], {})).toBe(0);
+    } finally {
+      text.restore();
+    }
+    expect(text.stdout()).toContain("- e1  [working] active/experience");
+  });
+
   it("passes the requested filters through as query parameters", async () => {
     await run(
       [
@@ -812,11 +878,14 @@ describe("CLI-21 memory reads", () => {
       layer: "L2_FACT",
       status: "active",
     });
-    expect(report.evidence).toEqual([]);
-    expect(report.history).toEqual([]);
+    // Schema 2, like add/update/delete; the v1-era always-empty
+    // `evidence`/`history` fields are gone.
+    expect(report.schema_version).toBe(2);
+    expect(report).not.toHaveProperty("evidence");
+    expect(report).not.toHaveProperty("history");
   });
 
-  // Core registers /api/v1/memories/graph before /{memory_id}, and that static
+  // Core registers /api/v2/memories/graph before /{memory_id}, and that static
   // handler initializes the HY bridge. A memory id that collides with a
   // reserved segment must never become a request.
   it("refuses a memory id that collides with a static Core route", async () => {
@@ -830,18 +899,15 @@ describe("CLI-21 memory reads", () => {
       expect(streams.stdout()).toBe("");
     }
     expect(transport.get).not.toHaveBeenCalled();
-    expect(isReadOnlyPath("/api/v1/memories/graph")).toBe(false);
-    expect(isReadOnlyPath("/api/v1/memories/ask")).toBe(false);
-    expect(isReadOnlyPath("/api/v1/memories/m1")).toBe(true);
-    expect(isReadOnlyPath("/api/v2/memory-library")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/memories/graph")).toBe(false);
+    expect(isReadOnlyPath("/api/v2/memories/ask")).toBe(false);
     expect(isReadOnlyPath("/api/v2/memories/m1")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/memory-library")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/home-summary")).toBe(true);
+    // The retired v1 data plane is no longer a CLI read.
+    expect(isReadOnlyPath("/api/v1/memories/m1")).toBe(false);
+    expect(isReadOnlyPath("/api/v1/home-summary")).toBe(false);
     expect(isReadOnlyPath("/api/v1/model-content-permission")).toBe(false);
-    expect(
-      isReadOnlyPath(
-        "/api/v1/memory-mutations/123e4567-e89b-12d3-a456-426614174000",
-      ),
-    ).toBe(true);
-    expect(isReadOnlyPath("/api/v1/memory-mutations/../sources")).toBe(false);
   });
 
   it("refuses a memory id that would escape the memories path", async () => {
@@ -861,6 +927,26 @@ describe("CLI-21 memory reads", () => {
 // was cast to the expected type, so a wrong record, an unavailable excerpt, an
 // oversized page and a non-string model field all reached stdout as success.
 describe("malformed success responses", () => {
+  it("treats a v1-shaped home summary as invalid, not as a memory count", async () => {
+    transport.get.mockImplementation(async (url: string) =>
+      url === "/api/v2/home-summary"
+        ? {
+            status: 200,
+            data: { memory_count: 7, latest: null, observed_at: "T" },
+          }
+        : (CORE.get(url) ?? { status: 404, data: { detail: "not_found" } }),
+    );
+    const streams = captureStreams();
+    try {
+      await run(["status", "--json"], {});
+    } finally {
+      streams.restore();
+    }
+    expect(JSON.parse(streams.stdout()).sections.memories).toMatchObject({
+      state: "invalid",
+    });
+  });
+
   it("refuses a detail that is not the memory that was asked for", async () => {
     transport.get.mockResolvedValue({
       status: 200,
@@ -1054,14 +1140,16 @@ describe("backup create target refusal is rejected, not usage_error", () => {
     let code: number;
     try {
       code = await run(
-        ["backup", "create", "--target", "/tmp/outside.db", "--yes", "--json"],
+        ["backup", "create", "--target", "/tmp/outside.db", "--json"],
         {},
       );
     } finally {
       streams.restore();
     }
     expect(code!).toBe(1);
-    const document = JSON.parse(streams.stderr());
+    // A result, on stdout like every --json document.
+    expect(streams.stderr()).toBe("");
+    const document = JSON.parse(streams.stdout());
     expect(document.status).not.toBe("usage_error");
     expect(document).toMatchObject({
       command: "backup",

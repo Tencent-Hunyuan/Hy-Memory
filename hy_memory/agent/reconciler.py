@@ -50,7 +50,7 @@ def is_canonical_state_node(node: Any) -> bool:
 
 
 def _log_ops_detail(ops: List["ReconcileOp"]) -> None:
-    """以单条 INFO（JSON list）输出 reconcile 的逐条结果，便于线上 debug。"""
+    """以单条 DEBUG（JSON list）输出 reconcile 的逐条结果；含记忆正文，不进 INFO。"""
     if not ops:
         return
     view = [
@@ -68,7 +68,7 @@ def _log_ops_detail(ops: List["ReconcileOp"]) -> None:
         }
         for o in ops
     ]
-    logger.info(
+    logger.debug(
         f"[reconciler] ops detail: {json.dumps(view, ensure_ascii=False, default=str)}"
     )
 
@@ -221,6 +221,8 @@ Rules:
 * merge losslessly
 * preserve all useful information
 * do NOT create duplicates
+* if the two disagree on a value, keep the value from the memory with the later
+  `memory_at`; never let an older memory overwrite a newer value
 
 ### Same occurrence vs. another occurrence
 
@@ -255,6 +257,7 @@ Use ONLY when:
 * the new memory contradicts an existing memory
 * both cannot be true at the same time
 * the old memory would now give the wrong current-state answer
+* the new memory's `memory_at` is the same as or LATER than the existing memory's `memory_at`
 
 Examples:
 
@@ -268,6 +271,8 @@ Do NOT use for:
 * compatible preferences
 * wording differences
 * semantic equivalence
+* a new memory whose `memory_at` is EARLIER than the existing memory's — it is an
+  older state and must never replace a newer one (see "Time order")
 
 Rules:
 
@@ -289,7 +294,8 @@ Rules:
 ### Folding several existing memories into one chain
 
 If TWO OR MORE existing memories track the SAME dimension and the new memory is
-the latest change on that dimension, you may fold them into a single evolution
+the latest change on that dimension — its `memory_at` is later than every folded
+memory's `memory_at` — you may fold them into a single evolution
 chain. Use `memory_ids` (an ordered list, OLDEST → NEWEST) instead of a single
 `memory_id`:
 
@@ -318,8 +324,7 @@ older memories' text into it; they remain queryable in the chain history.
 * Separate dated occurrences stay separate ADDs; use `same_series` only for the
   same subject and same concrete activity/event type.
 * Keep each memory focused on one coherent topic.
-* Do not invent chronology.
-* `memory_at: null` means unknown time.
+* Follow "Time order" below.
 * **NEVER merge or supersede across different subjects.** The subject is whoever
   the content is about: "The user ..." vs "John ..." vs "Mary ...". Memories about
   different people are independent facts even when the sentence is otherwise
@@ -329,6 +334,27 @@ older memories' text into it; they remain queryable in the chain history.
 * A SUPERSEDE either targets ONE memory (`memory_id`) or folds several memories on the same dimension into one chain (`memory_ids`, oldest→newest). An UPDATE targets exactly ONE memory.
 * Never touch the same existing memory from more than one op.
 * Output language matches input memory language.
+
+---
+
+# Time order
+
+Every memory, new or existing, has `memory_at`: when it happened. Memories are
+NOT always written in the order they happened — history can be imported late,
+and a memory can be added while older history is still being processed. A new
+memory can therefore be OLDER than an existing one.
+
+* Decide which memory is newer ONLY by `memory_at`. "New memories" means "being
+  written now", not "more recent".
+* An older memory must never replace a newer one: no SUPERSEDE of a newer
+  memory, and no UPDATE that overwrites a newer value with an older one.
+* If a new memory is older than an existing memory it conflicts with, keep the
+  existing memory as the current state. ADD the new one as a past state, worded
+  in the past with its time (for example "In 2023 the user lived in Shanghai"),
+  or output nothing if it adds no information.
+* `memory_at: null` means unknown time. Unknown is NOT newer: never SUPERSEDE a
+  memory that has a known `memory_at` with one whose `memory_at` is null.
+* Do not invent chronology.
 
 ---
 
@@ -439,6 +465,81 @@ def append_reconcile_structure_prompt(
         from .prompts_zh import RECONCILE_STRUCTURE_METADATA_PROMPT_ZH
         return prompt + RECONCILE_STRUCTURE_METADATA_PROMPT_ZH
     return prompt + RECONCILE_STRUCTURE_METADATA_PROMPT_EN
+
+
+def _as_aware(value: Any) -> Optional[datetime]:
+    """memory_at as a comparable aware datetime; None when unknown or unreadable."""
+    if isinstance(value, str) and value:
+        try:
+            value = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, datetime):
+        return None
+    # Stored nodes rebuild memory_at from epoch seconds as naive local time
+    # (MemoryNode.from_dict), so a naive value is local, not UTC.
+    return value if value.tzinfo is not None else value.astimezone()
+
+
+def enforce_time_order(
+    ops: List["ReconcileOp"],
+    new_memory_at: Any,
+    existing: Dict[str, Any],
+) -> List["ReconcileOp"]:
+    """An older memory must never replace a newer one, whatever the model says.
+
+    Memories are not always written in the order they happened: history is
+    imported late, and a person can add a memory while older history is still
+    being processed. The prompt tells the model to compare `memory_at`; this
+    makes it hold. A SUPERSEDE or UPDATE aimed at an existing memory whose
+    `memory_at` is later than the memory being written is turned into an ADD,
+    so the newer memory stays the current state. Unknown times are not
+    compared. A content-less UPDATE (the legacy DELETE mapping) is dropped.
+    """
+    written_at = _as_aware(new_memory_at)
+    if written_at is None:
+        return ops
+    kept: List[ReconcileOp] = []
+    for op in ops:
+        if op.op not in ("SUPERSEDE", "UPDATE"):
+            kept.append(op)
+            continue
+        targets = list(op.memory_ids) if op.memory_ids else [op.memory_id]
+        newer = [
+            target for target in targets
+            if target and (node := existing.get(target)) is not None
+            and (target_at := _as_aware(getattr(node, "memory_at", None))) is not None
+            and target_at > written_at
+        ]
+        if not newer:
+            kept.append(op)
+            continue
+        logger.warning(
+            "[reconciler] %s blocked: memory_at %s is older than existing %s; "
+            "kept the newer memory",
+            op.op, written_at.isoformat(), ",".join(newer),
+        )
+        if not op.content:
+            continue
+        kept.append(ReconcileOp(
+            op="ADD",
+            content=op.content,
+            layer=op.layer,
+            owner=op.owner,
+            tags=list(op.tags),
+            tag_ners=list(op.tag_ners),
+            topic_paths=list(op.topic_paths),
+            event_facet=dict(op.event_facet),
+            topic_assignments=list(op.topic_assignments),
+            structure_references=list(op.structure_references),
+            topic_paths_provided=op.topic_paths_provided,
+            event_facet_provided=op.event_facet_provided,
+            topic_assignments_provided=op.topic_assignments_provided,
+            speculate=op.speculate,
+            related=list(op.related),
+            reason=f"time_order: older than {','.join(newer)}; {op.reason}"[:500],
+        ))
+    return kept
 
 
 def build_reconcile_prompt(
@@ -1399,6 +1500,7 @@ class MemoryReconciler:
                 _tok_total += response.tokens_used
                 raw_response = response.content
                 ops = self._parse_ops(raw_response)
+                ops = enforce_time_order(ops, current_time, candidate_map)
                 ops = self._inherit_exact_input_structure(
                     ops, new_memories_with_meta,
                 )
@@ -1412,9 +1514,10 @@ class MemoryReconciler:
                 logger.warning(
                     f"[reconciler] RECONCILE JSON parse failed "
                     f"(attempt {_attempt+1}/{_MAX_PARSE_ATTEMPTS}), "
-                    f"retrying: raw="
-                    f"{raw_response[:200] if _log_llm_content_enabled() else '<redacted>'}"
+                    f"retrying: raw({len(raw_response or '')} chars)"
                 )
+                if _log_llm_content_enabled():
+                    logger.debug(f"[reconciler] unparsable raw={raw_response[:200]!r}")
 
             recon_elapsed = (_time.perf_counter() - t_recon) * 1000
 
@@ -1426,8 +1529,8 @@ class MemoryReconciler:
                     error_code = "LLM_UNAVAILABLE"
                 elif raw_response.strip():
                     error_msg = (
-                        f"RECONCILE JSON parse failed after {_n_attempts} attempts: "
-                        f"{raw_response[:200] if _log_llm_content_enabled() else '<redacted>'}"
+                        f"RECONCILE JSON parse failed after {_n_attempts} attempts "
+                        f"({len(raw_response)} chars)"
                     )
                     error_code = "JSON_PARSE_FAILED"
                 else:
@@ -1704,7 +1807,8 @@ class MemoryReconciler:
                 except Exception as _re:
                     logger.debug(f"[reconciler] json_repair failed: {_re}")
             if data is None:
-                logger.warning(f"[reconciler] failed to parse ops JSON: {text[:200]}")
+                logger.warning(f"[reconciler] failed to parse ops JSON ({len(text)} chars)")
+                logger.debug(f"[reconciler] unparsable ops output: {text[:200]!r}")
                 return []
 
         if not isinstance(data, list):
@@ -1916,11 +2020,11 @@ class MemoryReconciler:
                 if clash is not None:
                     logger.warning(
                         f"[reconciler] memory_id {clash} already touched by '{touched[clash]}', "
-                        f"current op '{op.op} ({op.reason[:60]})' dropped"
+                        f"current op '{op.op}' dropped"
                     )
                     continue
                 for t in target_ids:
-                    touched[t] = f"{op.op}({op.reason[:40]})"
+                    touched[t] = op.op
             validated.append(op)
 
         return validated

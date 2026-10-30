@@ -42,8 +42,15 @@ import { isHostId } from "@one-memory/contracts";
  */
 export type HostReadTool =
   | "om_recall"
+  /** Legacy: MemHub_ask is gone. Stays parseable so a stored grant that
+   * names it still loads; nothing authorizes against it any more. */
   | "om_ask"
+  /** Authorizes the raw-conversation lane read by /context and by recall's
+   * raw fallback. No MCP tool of its own any more. */
   | "om_conversations"
+  /** Legacy: MemHub_matters is gone, but stores and approval callers may still
+   * carry this id. It stays parseable so an old grant does not break the
+   * store; nothing authorizes against it any more. */
   | "om_matters"
   | "om_diagnostic_trace";
 
@@ -304,7 +311,7 @@ export class HostGrantStore {
         hostId,
         revision: 1,
         status: "approved",
-        allowedTools: ["om_recall", "om_ask", "om_conversations", "om_matters"],
+        allowedTools: ["om_recall", "om_conversations", "om_diagnostic_trace"],
         allowedScopes: ["all-apps"],
         secretHash: hashSecret(secret),
       };

@@ -206,7 +206,6 @@ async function confirm() {
 }
 const defaultTools: RecallPermissionTool[] = [
   "om_recall",
-  "om_ask",
   "om_conversations",
   "om_diagnostic_trace",
 ];
@@ -275,7 +274,7 @@ describe("RecallPermissionControl", () => {
     const api = setup();
     await open();
     expect(check("检索记忆").checked).toBe(true);
-    expect(check("记忆问答（可选）").checked).toBe(true);
+    expect(screen.queryByRole("checkbox", { name: /记忆问答/ })).toBeNull();
     expect(check("读取原始对话").checked).toBe(true);
     expect(check("跨应用共享记忆（all-apps）").checked).toBe(true);
     expect(check("WorkBuddy 原始对话").checked).toBe(true);
@@ -325,12 +324,7 @@ describe("RecallPermissionControl", () => {
   it("disables the allow button when a narrowed selection is no longer grantable", async () => {
     const api = setup();
     await open();
-    for (const name of [
-      "检索记忆",
-      "记忆问答（可选）",
-      "读取原始对话",
-      "读取脱敏诊断记录",
-    ])
+    for (const name of ["检索记忆", "读取原始对话", "读取脱敏诊断记录"])
       await userEvent.click(check(name));
     expect(button("允许并保存").disabled).toBe(true);
     await userEvent.click(check("检索记忆"));
@@ -356,17 +350,21 @@ describe("RecallPermissionControl", () => {
     ]);
   });
 
-  it("discloses that ask may use the configured model, and lets it be left out", async () => {
-    const api = setup();
-    await open();
-    expect(screen.getByText(/可能使用已配置的模型处理/)).toBeTruthy();
-    await userEvent.click(check("记忆问答（可选）"));
+  it("retains an existing ask permission as legacy without offering it to a new installation", async () => {
+    const api = setup({ host: host(approved(["om_recall", "om_ask"])) });
+    await userEvent.click(button("调整调用权限"));
+    expect(check("记忆问答（已有授权）").checked).toBe(true);
+    expect(screen.getByText(/记忆问答工具已移除/)).toBeTruthy();
     await confirm();
     expect(api.set.mock.calls[0][1].allowedTools).toEqual([
       "om_recall",
-      "om_conversations",
-      "om_diagnostic_trace",
+      "om_ask",
     ]);
+    await userEvent.click(button("完成"));
+    api.unmount();
+    setup();
+    await open();
+    expect(screen.queryByRole("checkbox", { name: /记忆问答/ })).toBeNull();
   });
 
   it("offers only explicitly supplied valid workspace scopes, and includes them by default", async () => {

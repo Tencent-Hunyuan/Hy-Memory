@@ -1,9 +1,14 @@
 import type {
-  ConversationSearchHit,
-  ConversationTranscript,
+  GovernedMemory,
+  HostAskMemoryResponse,
+  MemoryDetail,
   MemoryGraphNode,
+  MemoryGraphResponse,
   MemoryLibraryPage,
-  RecentConversationItem,
+  MemoryProcessingSummary,
+  SdkAskMemory,
+  SdkMemoryScene,
+  SourceResponse,
 } from "@one-memory/contracts";
 import type { GuiLocale } from "@one-memory/i18n";
 import {
@@ -12,16 +17,19 @@ import {
   ChevronRight,
   FileText,
   Network,
-  RefreshCw,
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  getConversation,
-  getRecentConversations,
-  searchConversations,
-} from "./api";
+  type FormEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { HandoffBar } from "./HandoffBar";
 import { MemoryEvidencePanel } from "./MemoryEvidencePanel";
 import { MemoryGraph3D } from "./MemoryGraph3D";
@@ -37,32 +45,65 @@ import {
   projectMap,
   projectPagedSourceMap,
 } from "./memory-map-model";
-import { extractionStateLabel } from "./memory-processing-labels";
 import { OptionMenu } from "./OptionMenu";
-import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
-import { SourceImportReceipt } from "./SourceImportReceipt";
 import { sourceNameOr } from "./source-label";
 import { useMediaPreference } from "./use-media-preference";
-import { Answer, NodeDetail, type Workbench } from "./Workbench";
+import { Answer, NodeDetail, type SavedAnswer } from "./Workbench";
 
-type Props = Parameters<typeof Workbench>[0] & {
+type Props = {
+  memories: GovernedMemory[];
+  graph: MemoryGraphResponse | null;
+  sources: SourceResponse[];
+  processing: MemoryProcessingSummary | null;
+  loaded: boolean;
+  detail: MemoryDetail | null;
+  detailLoad?: {
+    memoryId: string;
+    status: "loading" | "failed";
+    error?: string;
+  } | null;
+  overlayBlocked?: boolean;
+  draft: string;
+  busy: boolean;
+  answer: HostAskMemoryResponse | null;
+  streaming: {
+    text: string;
+    memories: (GovernedMemory | SdkAskMemory)[];
+  } | null;
+  onDraft(next: string): void;
+  onOpenMemory(memoryId: string): void;
+  onCloseDetail(): void;
+  onSave(event: FormEvent<HTMLFormElement>): void;
+  onDelete(): void;
+  onAsk(question: string): void;
+  onSaveAnswer(draft: SavedAnswer): void;
+  onConnect(): void;
+  onConfigureModel(): void;
+  /** Cleared whenever the draft changes, so a retried correction never
+   * reuses the request id prepared for text the user has since replaced. */
+  requestIds: RefObject<Map<string, string>>;
   simplified?: boolean;
   hidden?: boolean;
   id?: string;
   arrival?: MemoryArrival;
   onViewHistory?(): void;
-  onMutationComplete?(id: string): void;
-  focusDialogue?: boolean;
-  onFocusDialogueConsumed?(): void;
   libraryView?: {
     query: string;
     source: string;
     page: MemoryLibraryPage | null;
     loading: boolean;
     failed: boolean;
+    /** The graph for the current source/query scope has not arrived yet. */
+    graphLoading?: boolean;
+    graphFailed?: boolean;
     stale: boolean;
+    settledSource?: string;
+    settledQuery?: string;
+    requestedOffset?: number;
+    /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
+    unattributedSource?: string;
     onQuery(value: string): void;
     onSource(value: string): void;
     resetPage(): void;
@@ -70,33 +111,6 @@ type Props = Parameters<typeof Workbench>[0] & {
     onRetry(): void;
   };
 };
-
-/** A search hit republished as a dialogue row.
- *
- * Both panes list the same shape, so a hit has to arrive carrying what a
- * recent conversation carries, including who wrote it: the author used to be
- * filled in here as the user because the endpoint never sent one, which made
- * every hit look like something the person themselves had said.
- */
-export function hitToDialogueItem(
-  item: ConversationSearchHit,
-): RecentConversationItem {
-  return {
-    ...item,
-    role: item.role ?? "",
-    written_by: item.written_by ?? "",
-    imported_at: item.created_at ?? "",
-    time_basis: item.created_at ? "conversation" : "import",
-    truncated: false,
-  };
-}
-
-function authorLabel(writtenBy: string) {
-  if (writtenBy === "person") return "你";
-  if (writtenBy === "agent") return "助手";
-  if (writtenBy === "tool") return "工具";
-  return "未知";
-}
 
 function dayStamp(
   value: string | null | undefined,
@@ -115,13 +129,6 @@ function dayStamp(
   return date.toLocaleDateString(locale);
 }
 
-/**
- * D96: the memory page no longer offers the raw-dialogue tab. The code stays
- * (the full mode's conversation search and a memory's own "原始对话 N 段"
- * still read dialogues); flipping this brings the tab back.
- */
-export const DIALOGUE_PANE_VISIBLE = false;
-
 /** "10月2日" / "2 oct", with the year only when it is not this year. */
 function monthDay(value: string, locale: GuiLocale): string | null {
   if (!Number.isFinite(Date.parse(value))) return null;
@@ -137,7 +144,7 @@ function monthDay(value: string, locale: GuiLocale): string | null {
 
 /** D96: when the cited conversation happened, not when the memory was generated. */
 function sourceStamp(
-  time: { at: string; basis: "conversation" | "import" } | undefined,
+  time: { at: string; basis: "conversation" | "import" | "write" } | undefined,
   fallback: string | null | undefined,
   locale: GuiLocale = "zh-CN",
 ): string {
@@ -145,11 +152,22 @@ function sourceStamp(
   if (time && day)
     return memoryText(
       locale,
-      time.basis === "conversation" ? "对话于 {day}" : "导入于 {day}",
+      time.basis === "conversation"
+        ? "对话于 {day}"
+        : time.basis === "write"
+          ? "写入于 {day}"
+          : "导入于 {day}",
       { day },
     );
   return dayStamp(fallback, locale);
 }
+
+/** The list's type badge for an SDK memory's scene. */
+const SCENE_LABELS: Record<SdkMemoryScene, string> = {
+  chat: "对话",
+  working: "工作",
+  coding: "编码",
+};
 
 export function MemoryMap(props: Props) {
   const { locale, text, count, plain } = useMemoryLanguage();
@@ -168,126 +186,66 @@ export function MemoryMap(props: Props) {
   } = props;
   const library = props.libraryView;
   const serverPaged = library !== undefined;
+  const unattributedLabel = text("未识别来源");
   const graph = useMemo(
     () =>
       serverPaged
-        ? projectPagedSourceMap(baseGraph, library?.page ?? null, sources)
+        ? projectPagedSourceMap(
+            baseGraph,
+            library?.page ?? null,
+            sources,
+            library?.unattributedSource
+              ? { [library.unattributedSource]: unattributedLabel }
+              : undefined,
+          )
         : baseGraph,
-    [baseGraph, serverPaged, library?.page, sources],
+    [
+      baseGraph,
+      serverPaged,
+      library?.page,
+      library?.unattributedSource,
+      sources,
+      unattributedLabel,
+    ],
   );
   const refreshing = !!library?.page && library.loading;
   const overlaysSuspended = hidden || !!props.overlayBlocked;
   const [axis, setAxis] = useState<MapAxis>("source");
   const [groupKey, setGroupKey] = useState("");
   const [search, setSearch] = useState("");
+  // On a server-paged list, typing only edits the words; the search runs when
+  // the reader submits it (the 搜索 button or Enter), not on every keystroke.
+  const [searchDraft, setSearchDraft] = useState(library?.query ?? "");
+  const submittedQuery = library?.query;
+  useEffect(() => {
+    if (submittedQuery !== undefined) setSearchDraft(submittedQuery);
+  }, [submittedQuery]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [groupNode, setGroupNode] = useState<MemoryGraphNode | null>(null);
-  const [question, setQuestion] = useState("");
-  const [evidenceId, setEvidenceId] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState<ConversationTranscript | null>(
+  const [pendingSourceSelection, setPendingSourceSelection] = useState<
+    string | null
+  >(null);
+  const [pendingPageOffset, setPendingPageOffset] = useState<number | null>(
     null,
   );
-  const [transcriptError, setTranscriptError] = useState("");
-  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [pageRetrying, setPageRetrying] = useState(false);
+  const pageRetrySawLoading = useRef(false);
+  const [detailResetRevision, setDetailResetRevision] = useState(0);
+  const pageTransitioning =
+    !!library?.loading ||
+    (pendingPageOffset !== null && (!library?.failed || pageRetrying));
+  const [question, setQuestion] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [filterNotice, setFilterNotice] = useState("");
   const [arrivedIds, setArrivedIds] = useState<string[]>([]);
-  const [libraryPane, setLibraryPane] = useState<"memories" | "dialogues">(
-    "memories",
-  );
-  const [dialoguePage, setDialoguePage] = useState<
-    RecentConversationItem[] | null
-  >(null);
-  const [dialogueFailed, setDialogueFailed] = useState(false);
-  const [selectedDialogueId, setSelectedDialogueId] = useState<string | null>(
-    null,
-  );
-  const [dialogueFilter, setDialogueFilter] = useState("");
-  const [dialogueTranscript, setDialogueTranscript] =
-    useState<ConversationTranscript | null>(null);
-  const [dialogueTranscriptError, setDialogueTranscriptError] = useState("");
-  const consumeDialogueFocus = useRef(props.onFocusDialogueConsumed);
-  consumeDialogueFocus.current = props.onFocusDialogueConsumed;
   const seenMemoryIds = useRef<Set<string> | null>(null);
   const compact = useMediaPreference("(max-width: 1100px)");
   const composing = useRef(false);
-  const generation = useRef(0);
-  const displayedVersion = useRef("");
   const pane = useRef<HTMLElement>(null);
-  const memoryPaneTabs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const memoryList = useRef<HTMLUListElement>(null);
+  const inspectorBody = useRef<HTMLDivElement>(null);
   const openedDefault = useRef(false);
   const scrollSelection = useRef(false);
-  useEffect(() => {
-    if (!props.focusDialogue) return;
-    if (DIALOGUE_PANE_VISIBLE) setLibraryPane("dialogues");
-    consumeDialogueFocus.current?.();
-  }, [props.focusDialogue]);
-  useEffect(() => {
-    if (libraryPane !== "dialogues" || hidden) return;
-    let stopped = false;
-    let busy = false;
-    const sourceId = library?.source || undefined;
-    async function load() {
-      if (busy || document.hidden) return;
-      busy = true;
-      try {
-        const query = dialogueFilter.trim();
-        const page = query
-          ? await searchConversations(query, 100)
-          : await getRecentConversations({ limit: 30, sourceId });
-        if (stopped) return;
-        const items = query
-          ? "hits" in page
-            ? page.hits
-                .filter((item) => !sourceId || item.source_id === sourceId)
-                .map(hitToDialogueItem)
-            : []
-          : "items" in page
-            ? page.items
-            : [];
-        setDialoguePage(items);
-        setDialogueFailed(false);
-        setSelectedDialogueId((current) =>
-          current && items.some((item) => item.evidence_id === current)
-            ? current
-            : (items[0]?.evidence_id ?? null),
-        );
-      } catch {
-        if (!stopped) setDialogueFailed(true);
-      } finally {
-        busy = false;
-      }
-    }
-    void load();
-    const stop = subscribePoll({
-      // This surface is the dialogue list (`getRecentConversations`), not the
-      // governed-memory library that `memory-library` keys elsewhere.
-      key: "conversations",
-      intervalMs: 10_000,
-      run: load,
-    });
-    return () => {
-      stopped = true;
-      stop();
-    };
-  }, [libraryPane, hidden, library?.source, dialogueFilter]);
-  useEffect(() => {
-    if (libraryPane !== "dialogues" || !selectedDialogueId || hidden) return;
-    let stopped = false;
-    setDialogueTranscript(null);
-    setDialogueTranscriptError("");
-    void getConversation(selectedDialogueId).then(
-      (value) => {
-        if (!stopped) setDialogueTranscript(value);
-      },
-      () => {
-        if (!stopped) setDialogueTranscriptError("原文暂时无法读取");
-      },
-    );
-    return () => {
-      stopped = true;
-    };
-  }, [libraryPane, selectedDialogueId, hidden]);
   const controlledSource = library
     ? library.source
       ? `source:${library.source}`
@@ -338,7 +296,11 @@ export function MemoryMap(props: Props) {
       const ids = library.page?.source_ids_by_memory?.[memoryId];
       return ids?.length
         ? ids
-            .map((id) => sourceNameOr(sources, id, text("来源待核对")))
+            .map((id) =>
+              id === library.unattributedSource
+                ? text("未识别来源")
+                : sourceNameOr(sources, id, text("来源待核对")),
+            )
             .join("、")
         : text("来源待核对");
     }
@@ -367,6 +329,31 @@ export function MemoryMap(props: Props) {
     [active, group, search, serverPaged, axis, groupKey],
   );
   const projection = useMemo(() => {
+    // Until the new scope's graph arrives (or after it failed), drawing the
+    // previous scope's graph would show the wrong source.
+    if (serverPaged && (library?.graphLoading || library?.graphFailed))
+      return {
+        total_memories: library.page?.total ?? 0,
+        projected_memories: 0,
+        hy_graph_available: false,
+        nodes: [],
+        edges: [],
+      };
+    // Source filtering owns the graph scope, while pagination owns only the
+    // left-hand list window. Projecting the graph back down to the current
+    // 20-row page made "All applications" look like whichever source happened
+    // to dominate that page. Keyword search is intentionally page-scoped.
+    if (serverPaged && !library?.query) {
+      return (
+        baseGraph ??
+        projectMap(
+          graph,
+          active,
+          axis,
+          filtered.map((m) => m.memory_id),
+        )
+      );
+    }
     const result = projectMap(
       graph,
       active,
@@ -398,7 +385,21 @@ export function MemoryMap(props: Props) {
           confidence: null,
         })),
     };
-  }, [graph, axis, filtered, active, groupKey, search, sources, serverPaged]);
+  }, [
+    baseGraph,
+    graph,
+    axis,
+    filtered,
+    active,
+    groupKey,
+    search,
+    sources,
+    serverPaged,
+    library?.query,
+    library?.graphLoading,
+    library?.graphFailed,
+    library?.page?.total,
+  ]);
   const visibleGroupNode = groupNode
     ? (projection.nodes.find(
         (node) =>
@@ -422,6 +423,7 @@ export function MemoryMap(props: Props) {
     // Source revocation also clears a suspended preview, without closing shared memory detail.
     if (groupNode && !visibleGroupNode) {
       setGroupNode(null);
+      setPendingSourceSelection(null);
       setInspectorOpen(false);
     }
   }, [groupNode, visibleGroupNode]);
@@ -429,6 +431,12 @@ export function MemoryMap(props: Props) {
   const activeId = active.some((memory) => memory.memory_id === requestedId)
     ? requestedId
     : null;
+  const inspectorIdentity = activeId
+    ? `memory:${activeId}`
+    : selectedSource
+      ? `source:${selectedSource.source_id}`
+      : (visibleGroupNode?.node_id ?? "empty");
+  const inspectorResetKey = `${inspectorIdentity}:${detailResetRevision}`;
   const visibleDetail =
     detail &&
     (!activeId || activeId === detail.memory.memory_id) &&
@@ -440,39 +448,81 @@ export function MemoryMap(props: Props) {
   const inspectorDetail =
     visibleDetail ??
     (activeId && lastDetail.current ? lastDetail.current : null);
-  const version = visibleDetail
-    ? `${visibleDetail.memory.memory_id}:${visibleDetail.memory.revision}:${visibleDetail.memory.status}:${visibleDetail.evidence.map((item) => `${item.evidence_id}:${item.available}`).join(",")}`
-    : "";
+  const readingActiveDetail =
+    !!activeId &&
+    props.detailLoad?.memoryId === activeId &&
+    props.detailLoad.status === "loading";
+  const failedActiveDetail =
+    !!activeId &&
+    props.detailLoad?.memoryId === activeId &&
+    props.detailLoad.status === "failed";
   const pick = useCallback(
     (memoryId: string, scroll = true) => {
       if (!active.some((memory) => memory.memory_id === memoryId)) return;
+      if (pendingPageOffset !== null && library?.failed && library.page)
+        library.onPage(library.page.offset);
+      setPendingSourceSelection(null);
+      setPendingPageOffset(null);
+      setPageRetrying(false);
+      pageRetrySawLoading.current = false;
+      setDetailResetRevision((current) => current + 1);
       scrollSelection.current = scroll;
       if (!filtered.some((memory) => memory.memory_id === memoryId)) {
         setGroupKey("");
         setSearch("");
         setFilterNotice("已清除筛选，定位到关联记忆。");
       }
-      generation.current++;
       setGroupNode(null);
       setSelectedId(memoryId);
-      setTranscript(null);
-      setEvidenceId(null);
-      setTranscriptError("");
-      setTranscriptLoading(false);
       setInspectorOpen(true);
       onOpenMemory(memoryId);
     },
-    [active, filtered, onOpenMemory],
+    [active, filtered, library, onOpenMemory, pendingPageOffset],
   );
   useEffect(() => {
-    if (displayedVersion.current === version) return;
-    displayedVersion.current = version;
-    generation.current++;
-    setTranscript(null);
-    setEvidenceId(null);
-    setTranscriptError("");
-    setTranscriptLoading(false);
-  }, [version]);
+    if (
+      !library ||
+      !pendingSourceSelection ||
+      overlaysSuspended ||
+      library.loading ||
+      library.failed ||
+      !selectedSource ||
+      selectedSource.source_id !== pendingSourceSelection ||
+      library.source !== pendingSourceSelection ||
+      (library.settledSource ?? library.source) !== pendingSourceSelection ||
+      (library.settledQuery ?? library.query).trim() ||
+      library.page?.offset !== 0
+    )
+      return;
+    setPendingSourceSelection(null);
+    const first = active[0];
+    if (first) pick(first.memory_id, false);
+  }, [
+    active,
+    library,
+    overlaysSuspended,
+    pendingSourceSelection,
+    pick,
+    selectedSource,
+  ]);
+  useLayoutEffect(() => {
+    if (pendingPageOffset === null || !library || library.loading) return;
+    if (library.failed || library.stale) return;
+    const expectedOffset = library.requestedOffset ?? pendingPageOffset;
+    if (library.page?.offset !== expectedOffset) return;
+    setPendingPageOffset(null);
+    setPageRetrying(false);
+    pageRetrySawLoading.current = false;
+    const first = active[0];
+    if (first) {
+      pick(first.memory_id, false);
+      return;
+    }
+    setSelectedId(null);
+    setGroupNode(null);
+    setInspectorOpen(false);
+    onCloseDetail();
+  }, [active, library, onCloseDetail, pendingPageOffset, pick]);
   useEffect(() => {
     if (!props.simplified || openedDefault.current || overlaysSuspended) return;
     if (library?.loading && filtered.length === 0) return;
@@ -491,6 +541,17 @@ export function MemoryMap(props: Props) {
     pick,
   ]);
   useEffect(() => {
+    if (!pageRetrying || !library) return;
+    if (library.loading) {
+      pageRetrySawLoading.current = true;
+      return;
+    }
+    if (pageRetrySawLoading.current && library.failed) {
+      pageRetrySawLoading.current = false;
+      setPageRetrying(false);
+    }
+  }, [library, pageRetrying]);
+  useEffect(() => {
     if (!activeId || !scrollSelection.current) return;
     scrollSelection.current = false;
     const container = pane.current;
@@ -506,21 +567,34 @@ export function MemoryMap(props: Props) {
       container.scrollTop += itemBounds.bottom - containerBounds.bottom;
     }
   }, [activeId]);
+  useLayoutEffect(() => {
+    // Detail content owns its own scrollport. A newly selected memory must
+    // start at its heading instead of inheriting the previous inspector view.
+    if (inspectorResetKey.startsWith("empty:")) return;
+    if (inspectorBody.current) inspectorBody.current.scrollTop = 0;
+  }, [inspectorResetKey]);
+  const settledPageOffset = library?.page?.offset;
+  useLayoutEffect(() => {
+    // A settled page is a new reading surface, not a continuation of the
+    // previous page's scroll position.
+    if (settledPageOffset === undefined) return;
+    if (memoryList.current) memoryList.current.scrollTop = 0;
+  }, [settledPageOffset]);
 
   const clear = useCallback(() => {
-    generation.current++;
     setSelectedId(null);
     setGroupNode(null);
-    setTranscript(null);
-    setEvidenceId(null);
-    setTranscriptError("");
-    setTranscriptLoading(false);
+    setPendingSourceSelection(null);
+    setPendingPageOffset(null);
+    setPageRetrying(false);
+    pageRetrySawLoading.current = false;
     setInspectorOpen(false);
     onCloseDetail();
   }, [onCloseDetail]);
   useEffect(() => {
     // A background map does not own the shared inspector in another mode.
-    if (overlaysSuspended || library?.loading) return;
+    if (overlaysSuspended || library?.loading || pendingPageOffset !== null)
+      return;
     if (
       requestedId &&
       !active.some((memory) => memory.memory_id === requestedId)
@@ -540,22 +614,30 @@ export function MemoryMap(props: Props) {
     clear,
     overlaysSuspended,
     library?.loading,
+    pendingPageOffset,
   ]);
   function closeInspector() {
     if (!compact) {
       clear();
       return;
     }
-    generation.current++;
-    setTranscript(null);
-    setTranscriptError("");
-    setTranscriptLoading(false);
+    setPendingSourceSelection(null);
     setInspectorOpen(false);
+  }
+  function retryLibrary() {
+    if (!library) return;
+    if (pendingPageOffset !== null) {
+      pageRetrySawLoading.current = false;
+      setPageRetrying(true);
+    }
+    library.onRetry();
   }
   function chooseGroup(key: string) {
     setGroupNode(null);
     if (library) {
       clear();
+      // A source picked on the map sets this too; keep both on the one choice.
+      setGroupKey(key);
       library.onSource(key.startsWith("source:") ? key.slice(7) : "");
       library.resetPage();
       return;
@@ -574,8 +656,17 @@ export function MemoryMap(props: Props) {
       setAxis("source");
       setGroupKey(`source:${node.source_id}`);
       if (library) {
+        setPendingSourceSelection(node.source_id);
+        library.onQuery("");
         library.onSource(node.source_id);
         library.resetPage();
+      } else {
+        const first = sourceGroups
+          .find((entry) => entry.key === `source:${node.source_id}`)
+          ?.memoryIds.find((memoryId) =>
+            active.some((memory) => memory.memory_id === memoryId),
+          );
+        if (first) pick(first, false);
       }
     }
     if (node.node_type === "topic") {
@@ -584,34 +675,28 @@ export function MemoryMap(props: Props) {
       setGroupKey(`topic:${node.label}`);
     }
   }
-  async function openConversation(id: string) {
-    if (transcriptLoading) return;
-    const turn = ++generation.current;
-    setTranscriptError("");
-    setTranscript(null);
-    setTranscriptLoading(true);
-    try {
-      const value = await getConversation(id);
-      if (turn === generation.current) setTranscript(value);
-    } catch {
-      if (turn === generation.current)
-        setTranscriptError("暂时无法读取这段对话，已保留当前记忆。");
-    } finally {
-      if (turn === generation.current) setTranscriptLoading(false);
-    }
-  }
-  const evidence = [...(visibleDetail?.evidence ?? [])].sort(
-    (a, b) =>
-      (Date.parse(b.created_at ?? "") || 0) -
-      (Date.parse(a.created_at ?? "") || 0),
-  );
   const label =
     group?.label ??
     sources.find(
       (source) =>
         source.authorized && groupKey === `source:${source.source_id}`,
     )?.display_name ??
+    (library?.unattributedSource &&
+    groupKey === `source:${library.unattributedSource}`
+      ? text("未识别来源")
+      : null) ??
     text("全部记忆");
+  const libraryStatus = !library
+    ? ""
+    : library.failed
+      ? text("读取失败")
+      : library.stale
+        ? text("正在核对来源…")
+        : pageTransitioning
+          ? refreshing && library.page?.total !== 0
+            ? text("正在核对…")
+            : text("正在读取…")
+          : "";
   if (
     props.simplified &&
     (!library ||
@@ -684,62 +769,18 @@ export function MemoryMap(props: Props) {
       }}
     >
       <nav className="map-library" aria-label={text("来源与主题")} ref={pane}>
-        {props.simplified && DIALOGUE_PANE_VISIBLE ? (
-          <div
-            className="map-library-pane"
-            role="tablist"
-            aria-label={text("记忆或原始对话")}
-            onKeyDown={(event) => {
-              const order = ["memories", "dialogues"] as const;
-              const current = order.indexOf(libraryPane);
-              const target =
-                event.key === "Home"
-                  ? order[0]
-                  : event.key === "End"
-                    ? order[order.length - 1]
-                    : event.key === "ArrowRight"
-                      ? order[(current + 1) % order.length]
-                      : event.key === "ArrowLeft"
-                        ? order[(current - 1 + order.length) % order.length]
-                        : null;
-              if (!target) return;
-              event.preventDefault();
-              setLibraryPane(target);
-              memoryPaneTabs.current[target]?.focus();
-            }}
-          >
-            {(
-              [
-                ["memories", "记忆"],
-                ["dialogues", "原始对话"],
-              ] as const
-            ).map(([value, title]) => (
-              <button
-                type="button"
-                role="tab"
-                key={value}
-                ref={(node) => {
-                  memoryPaneTabs.current[value] = node;
-                }}
-                aria-selected={libraryPane === value}
-                aria-controls={`memory-pane-${value}`}
-                onClick={() => setLibraryPane(value)}
-              >
-                {text(title)}
-              </button>
-            ))}
-          </div>
-        ) : null}
         {props.simplified ? (
           <div className="selected-source-filter">
             <label htmlFor="selected-source-filter">{text("来源")}</label>
             <OptionMenu
               id="selected-source-filter"
+              ariaLabel={text("来源")}
               className="om-option-menu--plain"
               value={controlledSource}
               options={[
                 { value: "", label: text("全部应用") },
                 ...(library?.source &&
+                library.source !== library.unattributedSource &&
                 !sources.some(
                   (source) =>
                     source.source_id === library.source && source.authorized,
@@ -752,12 +793,22 @@ export function MemoryMap(props: Props) {
                     ]
                   : []),
                 ...(library
-                  ? sources
-                      .filter((source) => source.authorized)
-                      .map((source) => ({
-                        value: `source:${source.source_id}`,
-                        label: source.display_name,
-                      }))
+                  ? [
+                      ...sources
+                        .filter((source) => source.authorized)
+                        .map((source) => ({
+                          value: `source:${source.source_id}`,
+                          label: source.display_name,
+                        })),
+                      ...(library.unattributedSource
+                        ? [
+                            {
+                              value: `source:${library.unattributedSource}`,
+                              label: text("未识别来源"),
+                            },
+                          ]
+                        : []),
+                    ]
                   : groups.map((group) => ({
                       value: group.key,
                       label: group.label,
@@ -789,84 +840,79 @@ export function MemoryMap(props: Props) {
             ))}
           </fieldset>
         )}
-        <div className="map-search">
+        {/* biome-ignore lint/a11y/useSemanticElements: the search form is the flex row .map-search styles; a <search> wrapper would add a box around it. */}
+        <form
+          className="map-search"
+          role="search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!library) return;
+            const words = searchDraft.trim();
+            setFilterNotice("");
+            clear();
+            if (words === library.query.trim()) {
+              library.onRetry();
+              return;
+            }
+            library.onQuery(words);
+            library.resetPage();
+          }}
+        >
           <Search size={16} aria-hidden="true" />
           <input
             aria-label={text("筛选地图记忆")}
             name="map-memory-search"
             autoComplete="off"
             placeholder={
-              libraryPane === "dialogues"
-                ? text("搜索原始对话")
-                : props.simplified
-                  ? text("搜索记忆")
-                  : text("筛选记忆…")
+              props.simplified ? text("搜索记忆") : text("筛选记忆…")
             }
-            value={
-              libraryPane === "dialogues"
-                ? dialogueFilter
-                : (library?.query ?? search)
-            }
+            value={library ? searchDraft : search}
             maxLength={library ? 512 : undefined}
             onKeyDown={(e) => {
-              // The refresh button next to this list re-reads the page;
-              // Enter has to do the same thing, not sit there doing nothing.
-              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-              e.preventDefault();
-              library?.onRetry();
+              // Enter that confirms an IME candidate is not a search.
+              if (e.key === "Enter" && e.nativeEvent.isComposing)
+                e.preventDefault();
             }}
             onChange={(e) => {
-              if (libraryPane === "dialogues") {
-                setDialogueFilter(e.target.value);
+              if (library) {
+                const next = e.target.value;
+                setSearchDraft(next);
+                // An empty search box means "no keyword filter". Keeping the
+                // last submitted query active after the reader removed its
+                // text made the source picker look empty even when that app
+                // had memories.
+                if (!next && library.query.trim()) {
+                  setFilterNotice("");
+                  clear();
+                  library.onQuery("");
+                  library.resetPage();
+                }
                 return;
               }
               setFilterNotice("");
               setSearch(e.target.value);
-              if (library) {
-                clear();
-                library.onQuery(e.target.value);
-                library.resetPage();
-              }
             }}
           />
-        </div>
-        {library && libraryPane === "memories" && (
-          <div className="map-list-heading" aria-live="polite">
-            <span>
-              {library.stale
-                ? library.page && library.page.total > 0
-                  ? text(
-                      "共 {count} 条 · 正在核对来源…",
-                      { count: plain(library.page.total) },
-                      library.page.total,
-                    )
-                  : text("正在核对来源…")
-                : library.failed
-                  ? text("读取失败")
-                  : library.loading && library.page?.total === 0
-                    ? text("正在读取…")
-                    : library.page
-                      ? `${text(
-                          "共 {count} 条",
-                          { count: plain(library.page.total) },
-                          library.page.total,
-                        )}${refreshing ? text(" · 正在核对…") : ""}`
-                      : text("正在读取…")}
-            </span>
-            {!library.stale && (
-              <button
-                type="button"
-                className="quiet map-tool"
-                aria-label={text("刷新地图记忆")}
-                title={text("刷新地图记忆")}
-                disabled={library.loading || hidden}
-                onClick={library.onRetry}
-              >
-                <RefreshCw size={16} aria-hidden="true" />
-              </button>
-            )}
-          </div>
-        )}
+          {library ? (
+            <button
+              type="submit"
+              className="map-search-submit"
+              disabled={pageTransitioning || hidden}
+            >
+              {text("搜索")}
+            </button>
+          ) : null}
+        </form>
+        {library ? (
+          <p
+            className="map-list-status"
+            aria-live="polite"
+            aria-hidden={!libraryStatus || undefined}
+            data-visible={libraryStatus ? "true" : "false"}
+          >
+            {libraryStatus || "\u00a0"}
+          </p>
+        ) : null}
         {!props.simplified && (
           <div className="map-groups">
             <button
@@ -922,62 +968,11 @@ export function MemoryMap(props: Props) {
             {text(filterNotice)}
           </p>
         )}
-        {libraryPane === "dialogues" ? (
-          <>
-            <div className="map-list-heading" aria-live="polite">
-              <span>
-                {dialogueFailed
-                  ? text("读取失败")
-                  : dialoguePage
-                    ? text("最近 {count} 条", { count: dialoguePage.length })
-                    : text("正在读取…")}
-              </span>
-            </div>
-            <ul
-              className="map-memory-list"
-              id="memory-pane-dialogues"
-              aria-label="原始对话"
-            >
-              {(dialoguePage ?? []).map((item) => (
-                <li key={item.evidence_id}>
-                  <button
-                    type="button"
-                    className="map-memory-item"
-                    aria-pressed={selectedDialogueId === item.evidence_id}
-                    onClick={() => setSelectedDialogueId(item.evidence_id)}
-                  >
-                    <span>
-                      {item.excerpt}
-                      {item.truncated ? "…" : ""}
-                    </span>
-                    <small>
-                      {sourceNameOr(sources, item.source_id, "来源待核对")} ·{" "}
-                      {dayStamp(item.imported_at)} ·{" "}
-                      {authorLabel(item.written_by)}
-                    </small>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {dialogueFailed ? (
-              <p role="alert">{text("原始对话暂时无法读取")}</p>
-            ) : null}
-            {dialoguePage && !dialoguePage.length ? (
-              <p className="map-empty">
-                {text(
-                  dialogueFilter.trim()
-                    ? "没有匹配的原始对话"
-                    : "还没有导入的原始对话",
-                )}
-              </p>
-            ) : null}
-          </>
-        ) : null}
         <ul
+          ref={memoryList}
           className="map-memory-list"
           aria-label={text("地图记忆列表")}
           id="memory-pane-memories"
-          hidden={libraryPane === "dialogues"}
         >
           {filtered.map((m) => (
             <li key={m.memory_id} data-memory-id={m.memory_id}>
@@ -985,10 +980,32 @@ export function MemoryMap(props: Props) {
                 type="button"
                 className="map-memory-item"
                 aria-pressed={activeId === m.memory_id}
+                disabled={pageTransitioning}
                 onClick={() => pick(m.memory_id)}
               >
                 <span className={`map-state ${m.status}`} aria-hidden="true" />
-                <span>{m.content}</span>
+                <span className="map-memory-content">{m.content}</span>
+                {library?.page?.sdk_memory_refs?.[m.memory_id] ? (
+                  <span
+                    className="map-memory-scene"
+                    data-scene={library.page.sdk_memory_refs[m.memory_id].scene}
+                  >
+                    {text(
+                      SCENE_LABELS[
+                        library.page.sdk_memory_refs[m.memory_id].scene
+                      ],
+                    )}
+                  </span>
+                ) : null}
+                {m.tags.length ? (
+                  <span className="map-memory-tags wb-tags">
+                    {m.tags.map((tag) => (
+                      <span key={tag} className="wb-tag">
+                        {tag}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
                 <small>
                   {props.simplified ? (
                     <>
@@ -1014,45 +1031,62 @@ export function MemoryMap(props: Props) {
             </li>
           ))}
         </ul>
-        {libraryPane === "memories" && library?.failed && (
+        {library?.failed && (
           <div role="alert">
             <p>{text("记忆读取失败，请重试。")}</p>
-            <R6Button onClick={library.onRetry}>
+            <R6Button onClick={retryLibrary}>
               {text("重新读取地图记忆")}
             </R6Button>
           </div>
         )}
-        {libraryPane === "memories" &&
-          library?.page &&
+        {library?.page &&
           !library.loading &&
           !library.failed &&
           !library.stale &&
           !filtered.length && (
             <p className="map-empty">
-              {library.query || library.source
+              {library.query
                 ? text("没有匹配的记忆")
-                : groupKey
-                  ? text("本页没有匹配的主题记忆")
-                  : text("还没有已生成的记忆")}
+                : library.source
+                  ? text("这个来源下还没有记忆")
+                  : groupKey
+                    ? text("本页没有匹配的主题记忆")
+                    : text("还没有已生成的记忆")}
             </p>
           )}
-        {libraryPane === "memories" &&
-          library?.page &&
+        {library?.page?.search_window &&
           !library.loading &&
+          !library.failed && (
+            <p className="map-empty">
+              {text("只在最相关的 {count} 条记忆里查找关键词", {
+                count: count(library.page.search_window),
+              })}
+            </p>
+          )}
+        {library?.page &&
+          (!library.loading || library.page.total > 0) &&
           !library.failed &&
           !library.stale && (
-            <nav aria-label={text("地图记忆分页")} className="map-list-heading">
+            <nav
+              aria-label={text("地图记忆分页")}
+              aria-busy={pageTransitioning || undefined}
+              className="map-pagination"
+            >
               <button
                 type="button"
                 className="quiet map-tool"
                 aria-label={text("上一页记忆")}
                 title={text("上一页记忆")}
-                disabled={library.page.offset === 0}
+                disabled={pageTransitioning || library.page.offset === 0}
                 onClick={() => {
-                  clear();
                   if (axis === "topic") setGroupKey("");
-                  if (library.page)
-                    library.onPage(library.page.offset - library.page.limit);
+                  if (library.page) {
+                    const offset = library.page.offset - library.page.limit;
+                    setPageRetrying(false);
+                    pageRetrySawLoading.current = false;
+                    setPendingPageOffset(offset);
+                    library.onPage(offset);
+                  }
                 }}
               >
                 <ChevronLeft size={16} aria-hidden="true" />
@@ -1078,14 +1112,18 @@ export function MemoryMap(props: Props) {
                 aria-label={text("下一页记忆")}
                 title={text("下一页记忆")}
                 disabled={
-                  library.page.offset + library.page.items.length >=
-                  library.page.total
+                  pageTransitioning ||
+                  library.page.offset + library.page.limit >= library.page.total
                 }
                 onClick={() => {
-                  clear();
                   if (axis === "topic") setGroupKey("");
-                  if (library.page)
-                    library.onPage(library.page.offset + library.page.limit);
+                  if (library.page) {
+                    const offset = library.page.offset + library.page.limit;
+                    setPageRetrying(false);
+                    pageRetrySawLoading.current = false;
+                    setPendingPageOffset(offset);
+                    library.onPage(offset);
+                  }
                 }}
               >
                 <ChevronRight size={16} aria-hidden="true" />
@@ -1113,20 +1151,12 @@ export function MemoryMap(props: Props) {
             <span className="map-kicker" hidden={props.simplified}>
               {text(axis === "topic" ? "主题视角（非事项）" : "来源视角")}
             </span>
-            <h2>
-              {libraryPane === "dialogues"
-                ? text("原始对话")
-                : props.simplified
-                  ? text("记忆关联")
-                  : label}
-            </h2>
+            <h2>{props.simplified ? text("记忆关联") : label}</h2>
             {props.simplified && (
               <p className="selected-graph-subtitle">
-                {libraryPane === "dialogues"
-                  ? text("刚导入的原话，还不是沉淀后的记忆")
-                  : projection.nodes.length
-                    ? text("来源归属")
-                    : text("可在沉淀记忆后查看视图")}
+                {projection.nodes.length
+                  ? text("来源归属")
+                  : text("可在沉淀记忆后查看视图")}
               </p>
             )}
           </div>
@@ -1134,49 +1164,20 @@ export function MemoryMap(props: Props) {
             <button
               type="button"
               className="quiet map-tool"
-              aria-label={text(
-                selectedSource ? "查看选中来源原文" : "查看选中记忆原文",
-              )}
+              aria-label={text("记忆详情")}
               title={text("查看原文")}
-              onClick={() => setInspectorOpen(true)}
+              onClick={() => {
+                setInspectorOpen(true);
+                if (selectedSource && library)
+                  setPendingSourceSelection(selectedSource.source_id);
+              }}
             >
               <FileText size={17} />
             </button>
           )}
-          {!props.simplified && (
-            <button
-              type="button"
-              className="quiet map-tool"
-              title="整理已有关系"
-              aria-label={text("整理已有关系")}
-              disabled={busy || !graph?.nodes.length}
-              onClick={props.onBuildRelations}
-            >
-              <Network size={17} />
-            </button>
-          )}
         </header>
         <div className="map-canvas" data-tour-id="memory-map-canvas">
-          {libraryPane === "dialogues" ? (
-            <div className="map-dialogue-reading">
-              {dialogueTranscriptError ? (
-                <p role="alert">{dialogueTranscriptError}</p>
-              ) : dialogueTranscript ? (
-                <ol className="map-transcript">
-                  {dialogueTranscript.messages.map((message) => (
-                    <li key={message.evidence_id}>
-                      <small>{authorLabel(message.written_by)}</small>
-                      <p>{message.verbatim}</p>
-                    </li>
-                  ))}
-                </ol>
-              ) : selectedDialogueId ? (
-                <p>{text("正在读取原文…")}</p>
-              ) : (
-                <p>{text("选择一条原始对话")}</p>
-              )}
-            </div>
-          ) : projection.nodes.length && (!props.simplified || !hidden) ? (
+          {projection.nodes.length && (!props.simplified || !hidden) ? (
             <MemoryGraph3D
               graph={projection}
               selectedNodeId={
@@ -1188,29 +1189,40 @@ export function MemoryMap(props: Props) {
           ) : (
             <div className="map-empty-stage">
               <Network size={32} strokeWidth={1} />
-              <p>
+              <p
+                {...(library?.graphFailed || library?.graphLoading
+                  ? { role: "status", "aria-live": "polite" as const }
+                  : {})}
+              >
                 {library?.stale
                   ? text("可在沉淀记忆后查看视图")
-                  : library?.failed
+                  : library?.graphFailed || library?.failed
                     ? text("记忆暂时无法读取")
-                    : library?.page &&
-                        (library.query || library.source || groupKey)
-                      ? text("当前筛选没有可显示的记忆")
-                      : !loaded
-                        ? text("正在读取记忆…")
-                        : active.length
-                          ? text("当前筛选没有可显示的记忆")
-                          : arrival.importedMessages > 0
-                            ? text("已保存的对话还未生成记忆")
-                            : text("还没有可显示的记忆")}
+                    : library?.graphLoading
+                      ? text("正在读取记忆地图…")
+                      : library?.page &&
+                          (library.query || library.source || groupKey)
+                        ? text("当前筛选没有可显示的记忆")
+                        : !loaded
+                          ? text("正在读取记忆…")
+                          : active.length
+                            ? text("当前筛选没有可显示的记忆")
+                            : arrival.importedMessages > 0
+                              ? text("已保存的对话还未生成记忆")
+                              : text("还没有可显示的记忆")}
               </p>
+              {library?.graphFailed ? (
+                <R6Button onClick={library.onRetry}>
+                  {text("重新读取地图记忆")}
+                </R6Button>
+              ) : null}
             </div>
           )}
         </div>
         <footer className="map-meta">
           {/* The legend explains the graph. Keeping it while the stage shows
               something else left it dangling under a view it cannot describe. */}
-          {!props.simplified && libraryPane === "memories" && (
+          {!props.simplified && (
             <div className="map-legend">
               <span data-kind="memory">{text("记忆")}</span>
               <span data-kind="topic">{text("主题")}</span>
@@ -1296,6 +1308,7 @@ export function MemoryMap(props: Props) {
       <MemoryEvidencePanel
         open={inspectorOpen && !!(activeId || visibleGroupNode)}
         suspended={overlaysSuspended}
+        scrollResetKey={inspectorResetKey}
         onClose={closeInspector}
       >
         <header className="map-inspector-heading">
@@ -1303,7 +1316,7 @@ export function MemoryMap(props: Props) {
             {inspectorDetail
               ? text("记忆详情")
               : selectedSource
-                ? text("来源原文")
+                ? text("记忆详情")
                 : visibleGroupNode
                   ? text("关联节点")
                   : text("记忆详情")}
@@ -1320,266 +1333,188 @@ export function MemoryMap(props: Props) {
             </button>
           )}
         </header>
-        {selectedSource ? (
-          inspectorOpen &&
-          !overlaysSuspended && (
-            <SourceImportReceipt
-              key={selectedSource.source_id}
-              source={selectedSource}
-            />
-          )
-        ) : props.simplified && inspectorDetail ? (
-          <div
-            aria-busy={
-              refreshing ||
-              inspectorDetail.memory.memory_id !== activeId ||
-              undefined
-            }
-            onClickCapture={(event) => {
-              // React portal events follow this owner too, including editor saves.
-              if (
-                refreshing &&
-                (event.target as Element).closest("button, summary")
-              ) {
-                event.preventDefault();
-                event.stopPropagation();
+        <div className="map-inspector-body" ref={inspectorBody}>
+          {selectedSource ? (
+            <div className="map-inspector-empty map-inspector-loading">
+              {library?.failed &&
+              library.source === selectedSource.source_id ? (
+                <>
+                  <p role="alert">{text("记忆暂时无法读取")}</p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={retryLibrary}
+                  >
+                    {text("重试")}
+                  </button>
+                </>
+              ) : pendingSourceSelection || library?.loading ? (
+                <>
+                  <div className="map-detail-skeleton" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                  <p role="status">{text("正在读取记忆详情…")}</p>
+                </>
+              ) : (
+                <p>{text("还没有已生成的记忆")}</p>
+              )}
+            </div>
+          ) : props.simplified && inspectorDetail ? (
+            <div
+              key={`${inspectorDetail.memory.memory_id}:${detailResetRevision}:${
+                readingActiveDetail
+                  ? "loading"
+                  : failedActiveDetail
+                    ? "failed"
+                    : "ready"
+              }`}
+              className="map-detail-surface"
+              aria-busy={
+                refreshing ||
+                readingActiveDetail ||
+                inspectorDetail.memory.memory_id !== activeId ||
+                undefined
               }
-            }}
-            onSubmitCapture={(event) => {
-              if (refreshing) {
-                event.preventDefault();
-                event.stopPropagation();
-              }
-            }}
-          >
-            {/* The pane used to keep the previously read memory on screen
+              onClickCapture={(event) => {
+                // React portal events follow this owner too, including editor saves.
+                if (
+                  refreshing &&
+                  (event.target as Element).closest("button, summary")
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+              onSubmitCapture={(event) => {
+                if (refreshing) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+            >
+              {/* The pane used to keep the previously read memory on screen
                 until the new one arrived, which read as "nothing happened"
                 for two or three seconds. A read is not a value: show that a
                 read is happening instead. */}
-            {activeId && inspectorDetail.memory.memory_id !== activeId ? (
-              <div className="map-detail-loading">
+              {failedActiveDetail ? (
+                <div className="map-detail-loading">
+                  <p role="alert">
+                    {text("这条记忆的原文暂时无法读取，选择已保留。")}
+                  </p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => activeId && onOpenMemory(activeId)}
+                  >
+                    {text("重试读取原文")}
+                  </button>
+                </div>
+              ) : readingActiveDetail ||
+                (activeId && inspectorDetail.memory.memory_id !== activeId) ? (
+                <div className="map-detail-loading">
+                  <div className="map-detail-skeleton" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                  <p role="status">{text("正在读取这条记忆…")}</p>
+                </div>
+              ) : (
+                <SelectedMemoryDetail
+                  detail={inspectorDetail}
+                  sources={sources}
+                  conversationAt={
+                    library?.page?.source_time_by_memory?.[
+                      inspectorDetail.memory.memory_id
+                    ] ?? null
+                  }
+                />
+              )}
+            </div>
+          ) : inspectorDetail || visibleGroupNode ? (
+            <NodeDetail
+              key={
+                inspectorDetail?.memory.memory_id ||
+                visibleGroupNode?.node_id ||
+                "empty"
+              }
+              compact
+              node={visibleGroupNode}
+              graph={projection}
+              detail={inspectorDetail}
+              draft={props.draft}
+              busy={busy}
+              matterLabel={label}
+              onDraft={props.onDraft}
+              onSave={props.onSave}
+              onDelete={props.onDelete}
+              requestIds={props.requestIds}
+              onClose={closeInspector}
+            />
+          ) : (
+            <div
+              className={`map-inspector-empty${activeId ? " map-inspector-loading" : ""}`}
+            >
+              {activeId ? (
                 <div className="map-detail-skeleton" aria-hidden="true">
                   <i />
                   <i />
                   <i />
                   <i />
                 </div>
-                <p role="status">{text("正在读取这条记忆…")}</p>
-              </div>
-            ) : (
-              <SelectedMemoryDetail
-                detail={inspectorDetail}
-                sources={sources}
-                conversationAt={
-                  library?.page?.source_time_by_memory?.[
-                    inspectorDetail.memory.memory_id
-                  ] ?? null
-                }
-                suspended={overlaysSuspended}
-                onChanged={(id) => props.onMutationComplete?.(id)}
-                hideActions
-              />
-            )}
-          </div>
-        ) : inspectorDetail || visibleGroupNode ? (
-          <NodeDetail
-            key={
-              inspectorDetail?.memory.memory_id ||
-              visibleGroupNode?.node_id ||
-              "empty"
-            }
-            compact
-            node={visibleGroupNode}
-            graph={projection}
-            detail={inspectorDetail}
-            draft={props.draft}
-            busy={busy}
-            matterLabel={label}
-            onDraft={props.onDraft}
-            onSave={props.onSave}
-            onAction={props.onAction}
-            onSyncIndex={props.onSyncIndex}
-            requestIds={props.requestIds}
-            onClose={closeInspector}
-          />
-        ) : (
-          <div
-            className={`map-inspector-empty${activeId ? " map-inspector-loading" : ""}`}
-          >
-            {activeId ? (
-              <div className="map-detail-skeleton" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-                <i />
-              </div>
-            ) : (
-              <FileText size={28} strokeWidth={1} />
-            )}
-            {props.detailLoad?.memoryId === activeId &&
-            props.detailLoad.status === "failed" ? (
-              <>
-                <p role="alert">
-                  {text("这条记忆的原文暂时无法读取，选择已保留。")}
-                </p>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => activeId && onOpenMemory(activeId)}
-                >
-                  {text("重试读取原文")}
-                </button>
-              </>
-            ) : props.simplified && !activeId && filtered.length ? (
-              // Nothing is selected, but this conversation has already
-              // settled: naming what came out of it beats a placeholder that
-              // asks for the settle that already happened. Only the
-              // single-column surface needs it — the three-column one already
-              // lists the same memories in the pane beside this one.
-              <>
-                <p>
-                  {text(
-                    "已沉淀 {count} 条记忆",
-                    { count: plain(filtered.length) },
-                    filtered.length,
-                  )}
-                </p>
-                <ul
-                  className="map-settled-list"
-                  aria-label={text("已沉淀的记忆")}
-                >
-                  {filtered.map((m) => (
-                    <li key={m.memory_id}>{m.content}</li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              <p>
-                {text(activeId ? "正在读取记忆详情…" : "沉淀记忆后查看详情")}
-              </p>
-            )}
-          </div>
-        )}
-        {!props.simplified && evidence.length > 0 && (
-          <h3 className="map-section-title">
-            原始对话 <span>{evidence.length}</span>
-          </h3>
-        )}
-        {!props.simplified &&
-          evidence.map((item) => (
-            <article
-              key={item.evidence_id}
-              className="map-evidence"
-              data-evidence-id={item.evidence_id}
-            >
-              <div className="map-evidence-meta">
-                <strong>
-                  {sourceNameOr(sources, item.source_id, "未知来源")}
-                </strong>
-                <span>{author(item.written_by)}</span>
-              </div>
-              <time>
-                {item.created_at && Number.isFinite(Date.parse(item.created_at))
-                  ? new Date(item.created_at).toLocaleString("zh-CN", {
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "时间未知"}
-              </time>
-              <button
-                type="button"
-                className="map-quote"
-                disabled={!item.available}
-                aria-expanded={evidenceId === item.evidence_id}
-                aria-controls={`evidence-body-${item.evidence_id}`}
-                onClick={() => {
-                  generation.current++;
-                  setTranscript(null);
-                  setTranscriptError("");
-                  setTranscriptLoading(false);
-                  setEvidenceId(
-                    evidenceId === item.evidence_id ? null : item.evidence_id,
-                  );
-                }}
-              >
-                {item.available ? item.verbatim : "来源原文已不可读取"}
-              </button>
-              {item.extraction_state &&
-                item.extraction_state !== "extracted" && (
-                  <small>{extractionStateLabel(item.extraction_state)}</small>
-                )}
-              {item.available && evidenceId === item.evidence_id && (
-                <div
-                  className="map-evidence-expanded"
-                  id={`evidence-body-${item.evidence_id}`}
-                >
-                  <p className="map-section-title">关联记忆</p>
-                  {active
-                    .filter((m) => m.evidence_ids.includes(item.evidence_id))
-                    .map((m) => (
-                      <button
-                        className="quiet map-related"
-                        type="button"
-                        key={m.memory_id}
-                        aria-label={`定位关联记忆：${m.content}`}
-                        onClick={() => pick(m.memory_id)}
-                      >
-                        {m.content}
-                        <ChevronRight size={14} />
-                      </button>
-                    ))}
+              ) : (
+                <FileText size={28} strokeWidth={1} />
+              )}
+              {props.detailLoad?.memoryId === activeId &&
+              props.detailLoad.status === "failed" ? (
+                <>
+                  <p role="alert">
+                    {text("这条记忆的原文暂时无法读取，选择已保留。")}
+                  </p>
                   <button
                     type="button"
-                    className="quiet"
-                    disabled={transcriptLoading}
-                    onClick={() => void openConversation(item.evidence_id)}
+                    className="secondary"
+                    onClick={() => activeId && onOpenMemory(activeId)}
                   >
-                    {transcriptLoading
-                      ? "正在读取完整对话…"
-                      : transcriptError
-                        ? "重试读取完整对话"
-                        : "看完整对话"}
+                    {text("重试读取原文")}
                   </button>
-                  {transcriptError && <p role="alert">{transcriptError}</p>}
-                  {transcript && (
-                    <ol className="map-transcript">
-                      {transcript.messages.map((m) => (
-                        <li key={m.evidence_id}>
-                          <small>{author(m.written_by)}</small>
-                          <p>{m.verbatim}</p>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
+                </>
+              ) : props.simplified && !activeId && filtered.length ? (
+                // Nothing is selected, but this conversation has already
+                // settled: naming what came out of it beats a placeholder that
+                // asks for the settle that already happened. Only the
+                // single-column surface needs it — the three-column one already
+                // lists the same memories in the pane beside this one.
+                <>
+                  <p>
+                    {text(
+                      "已沉淀 {count} 条记忆",
+                      { count: plain(filtered.length) },
+                      filtered.length,
+                    )}
+                  </p>
+                  <ul
+                    className="map-settled-list"
+                    aria-label={text("已沉淀的记忆")}
+                  >
+                    {filtered.map((m) => (
+                      <li key={m.memory_id}>{m.content}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p>
+                  {text(activeId ? "正在读取记忆详情…" : "沉淀记忆后查看详情")}
+                </p>
               )}
-            </article>
-          ))}
-        {!props.simplified && !!visibleDetail?.history.length && (
-          <details className="map-history">
-            <summary>修改历史 · {visibleDetail.history.length} 个版本</summary>
-            {visibleDetail.history.map((h) => (
-              <article key={h.revision}>
-                <small>第 {h.revision} 版</small>
-                <p>{h.content}</p>
-              </article>
-            ))}
-          </details>
-        )}
+            </div>
+          )}
+        </div>
       </MemoryEvidencePanel>
     </section>
   );
-}
-
-function author(who: string | null) {
-  return who === "person" || who === "user"
-    ? "你"
-    : who === "agent" || who === "assistant"
-      ? "Agent"
-      : who === "tool"
-        ? "工具"
-        : "作者待核对";
 }

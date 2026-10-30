@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 HY_MEMORY_DISTRIBUTION = "hy-memory"
-HY_MEMORY_VERSION = "2.0.5"
+HY_MEMORY_VERSION = "2.0.8"
 HY_MEMORY_NAMESPACE = "governed-v2"
 DiagnosticLogLevel = Literal["error", "warning", "info", "debug"]
 
@@ -109,9 +109,28 @@ def apply_diagnostic_log_level(level: DiagnosticLogLevel) -> None:
         if any(name == root or name.startswith(f"{root}.") for root in _NOISY_LIBRARY_LOGGERS):
             logging.getLogger(name).setLevel(noisy_level)
 
+    # HY configures its text log once, on the first client, at the level of
+    # that moment. Its file handler must follow later changes too, or a live
+    # switch to debug never reaches hy_memory.log.
+    for handler in logging.getLogger("hy_memory").handlers:
+        if isinstance(handler, logging.FileHandler):
+            handler.setLevel(selected)
+
     os.environ["MEMORY_LOG_LEVEL"] = logging.getLevelName(selected)
-    os.environ["MEMORY_PIPELINE_TRACE_ENABLED"] = "true" if level == "debug" else "false"
+    _apply_hy_pipeline_policy()
     os.environ["MEMORY_LOG_LLM_CONTENT"] = "true" if level == "debug" else "false"
+
+
+def _apply_hy_pipeline_policy() -> None:
+    """Keep HY's per-step pipeline log and trace off at every level.
+
+    Nothing in MemHub reads them: Core's own diagnostics carry the step
+    timing, and the JSONL/SQLite copies only grew on disk. With both off
+    the SDK skips the per-step bookkeeping altogether.
+    """
+
+    os.environ["MEMORY_PIPELINE_LOG_ENABLED"] = "false"
+    os.environ["MEMORY_PIPELINE_TRACE_ENABLED"] = "false"
 
 
 def hy_memory_version() -> str:
@@ -131,7 +150,9 @@ def configure_hy_runtime_environment(data_dir: Path) -> None:
     os.environ["MEMORY_LOG_DIR"] = str(log_dir)
     level = diagnostic_log_level(data_dir)
     os.environ["MEMORY_LOG_LEVEL"] = level.upper()
-    os.environ["MEMORY_PIPELINE_TRACE_ENABLED"] = "true" if level == "debug" else "false"
+    _apply_hy_pipeline_policy()
+    # Still meaningful with the pipeline log off: it decides whether HY's
+    # DEBUG lines in hy_memory.log carry full model prompts and responses.
     os.environ["MEMORY_LOG_LLM_CONTENT"] = "true" if level == "debug" else "false"
     os.environ["MEMORY_MEMORY_OPERATIONS_ENABLED"] = "false"
     os.environ["ANONYMIZED_TELEMETRY"] = "False"

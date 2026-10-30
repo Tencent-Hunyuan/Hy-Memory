@@ -7,12 +7,10 @@ import type {
 } from "@one-memory/contracts";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import {
-  type ValidatedMemoryTask,
   validateImportIssues,
   validateImportJob,
   validateImportJobs,
   validateLiveSync,
-  validateMemoryTasks,
   validateProcessing,
   validateSources,
 } from "./core-responses.js";
@@ -70,11 +68,6 @@ export interface ProgressDocument {
   generation: {
     summary_state: ReadState;
     summary: Record<string, unknown> | null;
-    tasks_state: ReadState;
-    tasks: Array<Record<string, unknown>>;
-    returned: number;
-    validated: number;
-    output_truncated: boolean;
   };
 }
 
@@ -134,12 +127,13 @@ export async function readProgress(
   const importsPath = options.jobId
     ? `/api/v1/import-jobs/${options.jobId}`
     : "/api/v1/import-jobs";
-  const [importsRead, sourcesRead, processingRead, tasksRead, issuesRead] =
+  // Generation progress comes from `memory-processing` alone: under SDK
+  // authority the per-task list (`/api/v1/memory-tasks`) is retired and empty.
+  const [importsRead, sourcesRead, processingRead, issuesRead] =
     await Promise.all([
       reader<unknown>(importsPath),
       reader<unknown>("/api/v1/sources"),
       reader<unknown>("/api/v1/memory-processing"),
-      reader<unknown>("/api/v1/memory-tasks"),
       options.jobId && options.issues
         ? reader<unknown>(`/api/v1/import-jobs/${options.jobId}/issues`)
         : Promise.resolve(null),
@@ -153,7 +147,6 @@ export async function readProgress(
     : validated(importsRead, validateImportJobs);
   const processing = validated(processingRead, validateProcessing);
   const sources = validated(sourcesRead, validateSources);
-  const tasks = validated(tasksRead, validateMemoryTasks);
   const issues =
     options.jobId && options.issues && issuesRead
       ? validated(issuesRead, (value) =>
@@ -162,24 +155,18 @@ export async function readProgress(
       : null;
 
   const jobs = imports.state === "ok" ? imports.data : [];
-  const taskItems = tasks.state === "ok" ? tasks.data : [];
   const issueItems = issues?.state === "ok" ? issues.data : [];
   const importState = stateOnly(imports);
   const summaryState = stateOnly(processing);
-  const tasksState = stateOnly(tasks);
 
   const hasReadFailure =
     importState.state !== "ok" ||
     sources.state !== "ok" ||
     summaryState.state !== "ok" ||
-    tasksState.state !== "ok" ||
     (issues !== null && issues.state !== "ok");
   const hasProblem =
     jobs.some((job) =>
       ["paused", "interrupted", "failed"].includes(job.status),
-    ) ||
-    taskItems.some((task) =>
-      ["waiting_for_model", "failed"].includes(task.status),
     ) ||
     (processing.state === "ok" &&
       (processing.data.failed > 0 ||
@@ -188,7 +175,6 @@ export async function readProgress(
     issueItems.length > 0;
   const hasActive =
     jobs.some((job) => ["pending", "running"].includes(job.status)) ||
-    taskItems.some((task) => ["pending", "running"].includes(task.status)) ||
     (processing.state === "ok" &&
       (processing.data.pending > 0 || processing.data.running > 0));
 
@@ -229,11 +215,6 @@ export async function readProgress(
       summary_state: summaryState,
       summary:
         processing.state === "ok" ? projectProcessing(processing.data) : null,
-      tasks_state: tasksState,
-      tasks: taskItems.slice(0, options.limit).map(projectTask),
-      returned: Math.min(taskItems.length, options.limit),
-      validated: taskItems.length,
-      output_truncated: taskItems.length > options.limit,
     },
   };
 }
@@ -289,10 +270,7 @@ export function renderProgressText(document: ProgressDocument): string {
       ? `记忆整理：待处理 ${document.generation.summary.pending} · 进行中 ${document.generation.summary.running} · 等待模型 ${document.generation.summary.waiting_for_model} · 失败 ${document.generation.summary.failed}`
       : "记忆整理：暂时无法读取",
   );
-  if (
-    document.imports.output_truncated ||
-    document.generation.output_truncated
-  ) {
+  if (document.imports.output_truncated) {
     lines.push("这里只显示汇总；完整记录请使用 --json。");
   }
   lines.push("");
@@ -353,11 +331,6 @@ export function unreadProgress(
     generation: {
       summary_state: failed,
       summary: null,
-      tasks_state: failed,
-      tasks: [],
-      returned: 0,
-      validated: 0,
-      output_truncated: false,
     },
   };
 }
@@ -368,7 +341,11 @@ function validated<T>(
 ):
   | { state: "ok"; data: T }
   | { state: Exclude<ReadState["state"], "ok">; code: string } {
-  if (outcome.state !== "ok") return outcome;
+  if (outcome.state !== "ok") {
+    // A Core refusal of the request itself reads as an invalid answer here.
+    const state = outcome.state === "rejected" ? "invalid" : outcome.state;
+    return { state, code: outcome.code };
+  }
   const data = validate(outcome.data);
   return data === null
     ? { state: "invalid", code: "response_invalid" }
@@ -464,8 +441,4 @@ function projectProcessing(
       count: stage.count,
     })),
   };
-}
-
-function projectTask(task: ValidatedMemoryTask): Record<string, unknown> {
-  return { ...task };
 }

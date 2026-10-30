@@ -18,13 +18,13 @@ If you run into a problem, please open an Issue with the version, platform,repro
 
 ## 发行与平台合同
 
-源码当前固定使用公开 PyPI 正式版 `hy-memory==2.0.5`。MemHub 源码版本为 `1.0.5`
-（build 14），GitHub 仓库为
+源码当前固定使用公开 PyPI 正式版 `hy-memory==2.0.8`。MemHub 源码版本为 `1.0.5`
+（build 36），GitHub 仓库为
 [`Tencent-Hunyuan/Hy-Memory`](https://github.com/Tencent-Hunyuan/Hy-Memory)，npm 包名为
 `memhub-cli`。当前代码架构见
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-`v1.0.5` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64/x64 App 和 Runtime。
+`v1.0.5` 的发行目标是 Linux x64/arm64 Runtime 与 macOS arm64 App 和 Runtime。
 Linux 制品由 GitHub Actions 在原生架构 runner 上构建并完成生命周期验收；macOS
 制品由发行流水线完成 Developer ID 签名、公证和验收后手动上传。Windows 不支持。
 只有同时出现在 GitHub Release 与 `release-manifest.json` 中、且通过公开校验的制品才属于
@@ -109,15 +109,16 @@ Node、Host Bridge 或模型。用户显式执行 `memhub install` 后，CLI 才
 Python Core 和运行所需的 Python 依赖位于 MemHub 受管 Runtime，不写入系统 Python。
 MemHub 的 SQLite 数据默认位于 `~/.one-memory`，不在 npm 包或 Runtime 版本目录中。
 `npm uninstall` 只移除 npm CLI；`memhub uninstall` 移除服务、受管 Runtime 和 CLI 链接，
-默认保留 Memory。只有独立的 `memhub delete-data` 在 Runtime 停止且二次确认精确路径后
-才会删除数据。
+默认保留 Memory。只有独立的 `memhub delete-data` 在 Runtime 停止、显式加 `--yes` 并用
+`--confirm <数据目录>` 再写一遍同一个目录后才会删除数据（不加参数只预览要删除的目录）。`memhub stop` 停止受管服务时也会关闭
+登录自动启动，再次 `memhub start` 会恢复。
 
 当前平台能力和安装边界以源码、CI 与发布说明为准。未完成真机验收的平台不会仅凭跨平台
 测试宣称可用。
 
 ## Hy Memory
 
-SDK 依赖固定为公开 PyPI 正式版 `hy-memory==2.0.5`。SDK 配置、权限边界及 search
+SDK 依赖固定为公开 PyPI 正式版 `hy-memory==2.0.8`。SDK 配置、权限边界及 search
 返回格式见 [`MEMORY.md`](MEMORY.md)。HY search 返回的 `content` 已包含 SDK 统一生成的
 逻辑时间和演化上下文；调用方不应再次转换时间戳或重复拼接 `When`。
 

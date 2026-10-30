@@ -112,6 +112,8 @@
 .r6-shell .r6-memory .map-search {
   height: 44px;
   margin: 13px 0 21px;
+  gap: 7px;
+  padding: 0 4px 0 12px;
   border: 1px solid #c6d2da;
   background: rgb(255 255 255 / 50%);
   border-radius: 8px;
@@ -120,7 +122,33 @@
   min-height: 40px;
   font-size: 13px;
 }
+.r6-shell .r6-memory .map-search-submit {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgb(64 87 103 / 18%);
+  border-radius: 6px;
+  background: #4f6373;
+  color: #fff;
+  font:
+    500 12px / 20px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 18%);
+  transition:
+    background-color var(--r6-fast),
+    border-color var(--r6-fast);
+}
+.r6-shell .r6-memory .map-search-submit:hover:not(:disabled) {
+  background: #435966;
+  border-color: rgb(48 71 87 / 28%);
+}
+.r6-shell .r6-memory .map-search-submit:focus-visible {
+  outline: 2px solid #557c93;
+  outline-offset: 2px;
+}
 .r6-shell .r6-memory .map-memory-list {
+  flex: 1 1 0;
+  min-height: 0;
   margin: 0;
   padding: 0;
 }
@@ -138,12 +166,18 @@
   gap: 8px;
   font-family: "Noto Sans SC", "PingFang SC", sans-serif;
 }
-.r6-shell .r6-memory .map-memory-item > span:not(.map-state) {
+.r6-shell .r6-memory .map-memory-item > .map-memory-content {
   min-height: 40px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.r6-shell .r6-memory .map-memory-tags.wb-tags {
+  grid-column: 2;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
 }
 .r6-shell .r6-memory .map-memory-item small {
   font-size: 11px;
@@ -185,12 +219,14 @@
 }
 .r6-shell .r6-memory .map-inspector {
   padding: 14px 22px 24px;
-  background: rgb(255 255 255 / 30%);
+  background: #f2f6f8;
   border: 0;
   border-radius: 0;
-  overflow-y: auto;
-  overflow-anchor: none;
+  overflow: hidden;
   min-height: 0;
+  isolation: isolate;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .r6-shell .r6-memory .map-inspector-heading {
   padding: 0;
@@ -202,6 +238,9 @@
   font-weight: 500;
 }
 .selected-memory-detail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   color: #384a57;
   font-family: "Noto Sans SC", "PingFang SC", sans-serif;
 }
@@ -212,18 +251,26 @@
   margin: 0 0 32px;
 }
 .selected-memory-detail > h3 {
+  display: block;
   font-size: 22px;
   line-height: 38px;
   font-weight: 500;
+  letter-spacing: normal;
   margin: 0 0 18px;
   overflow-wrap: anywhere;
 }
 .selected-memory-body {
+  display: block;
+  flex: none;
+  min-width: 0;
+  max-width: 100%;
   font-size: 17px;
   line-height: 29px;
+  letter-spacing: normal;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .selected-memory-source {
   margin: 32px 0 22px;
@@ -236,36 +283,6 @@
   font-size: 12px;
   color: #5e6e7a;
   line-height: 21px;
-}
-.selected-memory-evidence {
-  border-top: 1px solid #c7d6e0;
-  margin: 24px 0 16px;
-  padding-top: 22px;
-}
-.selected-memory-evidence h4 {
-  font-size: 16px;
-  line-height: 28px;
-  margin: 0 0 18px;
-  font-weight: 400;
-}
-.selected-memory-evidence small {
-  font-size: 12px;
-  color: #5e6e7a;
-}
-.selected-memory-evidence blockquote {
-  font-size: 15px;
-  line-height: 26px;
-  margin: 18px 0 44px;
-  border: 0;
-  padding: 0;
-  background: none;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.selected-memory-detail[data-hide-actions="true"]
-  .selected-memory-evidence
-  blockquote {
-  margin-bottom: 0;
 }
 .selected-memory-more {
   font-size: 12px;
@@ -304,8 +321,7 @@
   align-items: center;
   gap: 24px;
 }
-.selected-memory-page > header .r6-button,
-.selected-original > .r6-button {
+.selected-memory-page > header .r6-button {
   min-width: 150px;
 }
 .selected-memory-page h1 {
@@ -394,40 +410,6 @@
   border-left: 2px solid #8da4b3;
   white-space: pre-wrap;
 }
-.selected-original {
-  padding: 60px 46px;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-}
-.selected-original > small {
-  font-size: 14px;
-  color: #5e6e7a;
-}
-.selected-original > p {
-  margin-top: 70px;
-  font-size: 14px;
-}
-.selected-original blockquote {
-  margin: 24px 0 96px;
-  font-size: 24px;
-  line-height: 40px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.selected-original section {
-  margin-top: 24px;
-}
-.selected-original section > small {
-  font-size: 13px;
-  color: #5e6e7a;
-}
-.selected-original > h2 {
-  font-size: 21px;
-  font-weight: 400;
-  margin: 24px 0 32px;
-}
 .selected-delete {
   padding: 130px 66px 0;
   min-height: 0;
@@ -499,10 +481,6 @@
   .selected-delete > p {
     margin: 12px 0;
   }
-  .selected-original {
-    padding-top: 24px;
-    padding-bottom: 24px;
-  }
 }
 @media (max-width: 1250px) {
   .r6-shell .view.r6-memory {
@@ -524,11 +502,8 @@
     width: min(418px, calc(100vw - 32px));
   }
   .r6-shell .r6-memory .map-inspector-heading {
-    position: sticky;
-    top: -14px;
-    z-index: 1;
-    background: #eff5f8;
-    padding: 10px 0;
+    position: static;
+    padding: 0;
   }
   .selected-editor {
     padding-left: 0;
@@ -536,7 +511,6 @@
   .selected-memory-page {
     padding: 24px;
   }
-  .selected-original,
   .selected-delete {
     padding-left: 0;
     padding-right: 0;

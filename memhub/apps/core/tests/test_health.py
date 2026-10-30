@@ -45,6 +45,9 @@ def test_health_reports_the_single_core() -> None:
         "memory_backfill_error": None,
         "content_candidate_backfill": "idle",
         "content_candidate_backfill_failure": None,
+        # No lifespan ran, so recovery has not begun.
+        "recovery": "pending",
+        "recovery_failed_steps": [],
     }
 
 
@@ -210,6 +213,8 @@ def test_lifespan_drains_committed_pending_dispatch_through_enqueue(tmp_path, mo
 
     async def scenario() -> None:
         async with app.router.lifespan_context(app):
+            # Replayed by the recovery that runs after readiness.
+            await app.state.recovery_task
             assert record.evidence_id in seen
             assert evidence.take_all_stable_records() == ()
 
@@ -434,6 +439,7 @@ def test_a_backfill_that_fails_says_so_rather_than_disappearing(tmp_path, monkey
             app.router.lifespan_context(app),
             AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
         ):
+            await app.state.recovery_task
             await app.state.memory_backfill
 
             response = await client.get("/api/v1/health")
@@ -497,6 +503,7 @@ def test_a_failed_catch_up_leaves_a_traceback_behind(tmp_path, monkeypatch, capl
             app.router.lifespan_context(app),
             AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
         ):
+            await app.state.recovery_task
             with suppress(BaseException):
                 await app.state.memory_backfill
             return (await client.get("/api/v1/health")).json()

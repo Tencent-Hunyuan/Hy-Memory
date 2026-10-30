@@ -1,6 +1,5 @@
 """Independent synthetic read-path review; no lifespan, model or user database."""
 
-import asyncio
 import json
 import sqlite3
 import time
@@ -8,19 +7,15 @@ from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
-from httpx import ASGITransport, AsyncClient
 
-from one_memory import api, source_read_access
-from one_memory.config import Settings
+from one_memory import source_read_access
 from one_memory.context_memory import read_memory_context
 from one_memory.context_models import ContextSearchRequest
-from one_memory.home_summary import read_home_summary
 from one_memory.imports.grants import GRANT_SCHEMA
 from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_evidence_freshness import register_memory_freshness
 from one_memory.memory_governance import MemoryDraft, MemoryGovernanceStore, MemoryKind
-from one_memory.memory_library import read_memory_library
 from one_memory.memory_tasks import MemoryTaskOutput, MemoryTaskStore, evidence_ref
 from one_memory.source_read_access import SourceReadAccess
 from tests.person_door import as_person
@@ -89,8 +84,6 @@ def context(case, *, deadline=None):
 
 def visible(case, memory=None):
     return (
-        read_memory_library(case.path).total,
-        read_home_summary(case.path).memory_count,
         len(context(case).items),
         len(SourceReadAccess(case.path).memories([memory or case.memory])),
     )
@@ -104,9 +97,9 @@ def revise(case):
 
 def test_revised_evidence_remains_readable_after_freshness_retirement(case):
     """Evidence revision no longer hides library / context / source reads."""
-    assert visible(case) == (1, 1, 1, 1)
+    assert visible(case) == (1, 1)
     revise(case)
-    assert visible(case) == (1, 1, 1, 1)
+    assert visible(case) == (1, 1)
     assert case.governance.get(case.memory.memory_id, user_id="local") == case.memory
     assert case.tasks.outputs(case.output.task_id) == (case.output,)
 
@@ -117,7 +110,7 @@ def test_revised_evidence_remains_readable_after_freshness_retirement(case):
 def test_scope_only_revision_keeps_memory_readable_after_evidence_change(case, revise_first):
     if revise_first:
         revise(case)
-        assert visible(case) == (1, 1, 1, 1)
+        assert visible(case) == (1, 1)
     changed = as_person(case.governance).set_scopes(
         case.memory.memory_id,
         user_id="local",
@@ -127,9 +120,9 @@ def test_scope_only_revision_keeps_memory_readable_after_evidence_change(case, r
     )
     assert changed.content == case.memory.content
     if not revise_first:
-        assert visible(case, changed) == (1, 1, 1, 1)
+        assert visible(case, changed) == (1, 1)
         revise(case)
-    assert visible(case, changed) == (1, 1, 1, 1)
+    assert visible(case, changed) == (1, 1)
 
 
 def test_explicit_correct_remains_readable_but_never_overrides_revocation(case):
@@ -141,7 +134,7 @@ def test_explicit_correct_remains_readable_but_never_overrides_revocation(case):
         expected_revision=case.memory.revision,
         content="alpha beta explicit correction",
     )
-    assert visible(case, corrected) == (1, 1, 1, 1)
+    assert visible(case, corrected) == (1, 1)
     with closing(sqlite3.connect(case.path)) as db, db:
         db.execute(
             """INSERT INTO source_grants
@@ -150,14 +143,14 @@ def test_explicit_correct_remains_readable_but_never_overrides_revocation(case):
             VALUES ('local','cursor','/fixture','/fixture','fixture','default',?,?,1)""",
             ("2026-09-20T00:00:00Z", "2026-09-20T00:00:01Z"),
         )
-    assert visible(case, corrected) == (0, 0, 0, 0)
+    assert visible(case, corrected) == (0, 0)
 
 
 def test_missing_proof_is_legacy_compatibility_not_a_new_authorization(case):
     with closing(sqlite3.connect(case.path)) as db, db:
         db.execute("DELETE FROM memory_task_outputs")
     revise(case)
-    assert visible(case) == (1, 1, 1, 1)
+    assert visible(case) == (1, 1)
     result = read_memory_context(
         case.path,
         ContextSearchRequest(query="alpha beta"),
@@ -188,7 +181,6 @@ def test_revocation_before_freshness_snapshot_cannot_release_memory(case, monkey
     monkeypatch.setattr(source_read_access, "register_memory_freshness", revoke_then_register)
     returned = SourceReadAccess(case.path).memories([case.memory])
     assert changes == [True]
-    assert read_memory_library(case.path).total == 0
     assert returned == []
 
 
@@ -219,8 +211,7 @@ def _oversize(case, bad):
 def test_material_too_large_to_verify_reads_as_current(case, bad):
     """D76: a budget overrun is not stale and must not fail the whole read."""
     _oversize(case, bad)
-    assert read_home_summary(case.path).memory_count == 1
-    read_memory_library(case.path)
+    assert len(SourceReadAccess(case.path).memories([case.memory])) == 1
     assert context(case).status != "unavailable"
 
 
@@ -231,38 +222,10 @@ def test_bad_proof_material_no_longer_makes_reads_unavailable(case, bad):
             "UPDATE memory_task_outputs SET body=?",
             ('{"memory_revision":2,"memory_revision":2}',),
         )
-    assert visible(case) == (1, 1, 1, 1)
+    assert visible(case) == (1, 1)
     result = context(case)
     assert result.status != "unavailable"
     assert len(result.items) == 1
-
-
-def test_route_serves_memories_whose_proof_is_too_large(case, tmp_path):
-    app = api.create_app(
-        Settings(
-            data_dir=tmp_path / "unused",
-            api_token="fixture-token",
-            automatic_memory_processing=False,
-            live_sync_enabled=False,
-        ),
-        source_catalog={},
-    )
-    app.state.evidence_store = SimpleNamespace(database_path=case.path)
-    with closing(sqlite3.connect(case.path)) as db, db:
-        db.execute("UPDATE memory_task_outputs SET body=?", (" " * 65537,))
-
-    async def run():
-        async with AsyncClient(
-            transport=ASGITransport(app=app, raise_app_exceptions=False),
-            base_url="http://fixture",
-            headers={"Authorization": "Bearer fixture-token"},
-        ) as client:
-            library = await client.get("/api/v1/memory-library")
-            home = await client.get("/api/v1/home-summary")
-            assert library.status_code == 200
-            assert home.status_code == 200
-
-    asyncio.run(run())
 
 
 def test_expired_context_budget_never_reads_proofs(case):
@@ -285,7 +248,7 @@ def test_indexed_unrelated_proofs_keep_small_read_bounded(case):
         ).fetchall()
         assert any("memory_task_outputs_memory" in row[3] for row in plan)
     started = time.monotonic()
-    assert visible(case) == (1, 1, 1, 1)
+    assert visible(case) == (1, 1)
     elapsed = time.monotonic() - started
     print(f"indexed 4000 unrelated proofs, four reads: {elapsed:.6f}s")
     assert elapsed < 2

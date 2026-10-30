@@ -63,9 +63,7 @@ vi.mock("./ModelSettings", () => ({
   ModelSettings: () => <p>模型设置内容</p>,
 }));
 vi.mock("./ImportProgressStrip", () => ({ ImportProgressStrip: () => null }));
-vi.mock("./MatterWorkspace", () => ({ MatterWorkspace: () => null }));
 vi.mock("./HealthPanel", () => ({ HealthPanel: () => null }));
-vi.mock("./FirstUseGuide", () => ({ FirstUseGuide: () => null }));
 vi.mock("./OnboardingFlow", () => ({ OnboardingFlow: () => null }));
 
 beforeEach(() => {

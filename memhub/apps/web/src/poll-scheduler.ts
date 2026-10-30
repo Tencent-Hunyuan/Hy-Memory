@@ -28,8 +28,7 @@ export type PollKey =
   | "applications"
   | "calls"
   | "model-profiles"
-  | "note-evidence"
-  | "note-processing"
+  | "memory-add-processing"
   | "health";
 
 export interface PollTask {

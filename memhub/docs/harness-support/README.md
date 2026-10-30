@@ -23,6 +23,8 @@ Tools: om_recall, om_conversations, om_diagnostic_trace
 Scopes: all-apps, source:<当前来源>
 ```
 
+这些是授权项，不是 MCP 工具名。MCP 只暴露 `MemHub_recall`、`MemHub_write`、`MemHub_diagnostic_trace` 三个工具：`om_conversations` 授权原文通道（`/context` 与召回的原文回退），`MemHub_write` 不受授权控制，只要求已认证的安装。
+
 Preview 不会弹出给用户；开关点击本身被视为确认。关闭时通常先撤销 Credential，再恢复或删除受管文件。用户修改过的文件不会被强删。
 
 ## 支持矩阵

@@ -101,7 +101,7 @@ describe("memhub jobs", () => {
     expect(transport.post).not.toHaveBeenCalled();
   });
 
-  it("start previews without a POST", async () => {
+  it("start posts directly, without a preview step", async () => {
     const output = captureStdout();
     let code: number;
     try {
@@ -110,14 +110,14 @@ describe("memhub jobs", () => {
       output.restore();
     }
     expect(code!).toBe(0);
-    expect(transport.post).not.toHaveBeenCalled();
-    expect(JSON.parse(output.value())).toMatchObject({
-      state: "preview",
-      plan: { source_id: "codex", operation: "history" },
-    });
+    expect(transport.post).toHaveBeenCalledWith(
+      "/api/v1/import-jobs",
+      { source_id: "codex", operation: "history" },
+      undefined,
+    );
   });
 
-  it("start --confirm posts the exact Core request", async () => {
+  it("start still accepts a legacy --confirm", async () => {
     const output = captureStdout();
     let code: number;
     try {
@@ -146,7 +146,7 @@ describe("memhub jobs", () => {
   });
 
   it.each(["pause", "resume", "cancel"] as const)(
-    "%s previews without a POST",
+    "%s posts the action endpoint directly",
     async (action) => {
       const output = captureStdout();
       let code: number;
@@ -156,11 +156,11 @@ describe("memhub jobs", () => {
         output.restore();
       }
       expect(code!).toBe(0);
-      expect(transport.post).not.toHaveBeenCalled();
-      expect(JSON.parse(output.value())).toMatchObject({
-        state: "preview",
-        plan: { job_id: "job-1", action },
-      });
+      expect(transport.post).toHaveBeenCalledWith(
+        `/api/v1/import-jobs/job-1/${action}`,
+        {},
+        undefined,
+      );
     },
   );
 

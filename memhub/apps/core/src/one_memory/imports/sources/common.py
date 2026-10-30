@@ -644,7 +644,7 @@ def is_unchanged(source_file: AuthorizedSourceFile, cursors: dict[str, SourceCur
     return (
         previous is not None
         and previous.read_to_end
-        and previous.file_identity == source_file.file_identity
+        and previous.file_identity == _cursor_file_identity(source_file)
         and previous.observed_size == source_file.size
         and previous.observed_modified_ns == source_file.modified_ns
         # Chmod alone leaves size, mtime and inode untouched, so a file that
@@ -691,7 +691,7 @@ def touched_cursor(
     previous = options.cursors.get(source_file.safe_id)
     keep = (
         previous is not None
-        and previous.file_identity == source_file.file_identity
+        and _same_file(previous, source_file)
         and previous.observed_size <= source_file.size
     )
     # A kept cursor means the next scan resumes exactly where this one ended:
@@ -871,7 +871,7 @@ def resume_checkpoint(
     previous = options.cursors.get(source_file.safe_id)
     if previous is None:
         return None
-    if previous.file_identity != source_file.file_identity:
+    if not _same_file(previous, source_file):
         return None
     if source_file.size < previous.observed_size:
         return None
@@ -1046,12 +1046,33 @@ def source_cursor(
 ) -> SourceCursor:
     return SourceCursor(
         file_key=source_file.safe_id,
-        file_identity=source_file.file_identity,
+        file_identity=_cursor_file_identity(source_file),
         checkpoint=checkpoint,
         checkpoint_anchor=checkpoint_anchor,
         observed_size=source_file.size,
         observed_modified_ns=source_file.modified_ns,
     )
+
+
+def _cursor_file_identity(source_file: AuthorizedSourceFile) -> str:
+    return (
+        f"{source_file.file_identity}{_VERSION_SEPARATOR}{source_file.cursor_version}"
+        if source_file.cursor_version
+        else source_file.file_identity
+    )
+
+
+_VERSION_SEPARATOR = ":v:"
+
+
+def _same_file(previous: SourceCursor, source_file: AuthorizedSourceFile) -> bool:
+    """Whether a stored cursor still points into this file.
+
+    The stored identity may carry a change token (Cursor's WAL version). The
+    token says the file changed, which `is_unchanged` handles; it does not mean
+    the file was replaced, so resuming compares the bare `dev:ino` only.
+    """
+    return previous.file_identity.partition(_VERSION_SEPARATOR)[0] == source_file.file_identity
 
 
 _POSITION = re.compile(r"(?<=:)\d+(?=:|$)")

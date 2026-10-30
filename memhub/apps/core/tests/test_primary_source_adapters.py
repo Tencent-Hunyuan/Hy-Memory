@@ -136,6 +136,64 @@ def test_cursor_store_timestamp_envelope_keeps_only_the_user_query_text(tmp_path
     assert meta["turn_event_at"] == "2026-09-22T23:34:00+00:00"
 
 
+def test_cursor_wal_change_token_does_not_become_a_future_conversation_time(
+    tmp_path,
+) -> None:
+    root = tmp_path / ".cursor"
+    database = root / "chats" / "workspace" / "wal-time" / "store.db"
+    database.parent.mkdir(parents=True)
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA wal_autocheckpoint=0")
+    connection.execute("CREATE TABLE blobs (id TEXT, data TEXT)")
+    connection.execute(
+        "INSERT INTO blobs VALUES (?, ?)",
+        ("message", json.dumps({"role": "assistant", "content": "answer"})),
+    )
+    connection.commit()
+    stamp = 1_788_220_800
+    os.utime(database, (stamp, stamp))
+    try:
+        records = evidence(
+            asyncio.run(scan(CursorUnifiedSourceAdapter(grant=grant("cursor", root))))
+        )
+    finally:
+        connection.close()
+
+    assert len(records) == 1
+    assert int(records[0].evidence.created_at.timestamp()) == stamp
+
+
+def test_cursor_wal_store_resumes_from_its_rowid_after_new_frames(tmp_path) -> None:
+    """The WAL change token marks a store changed; it must not reset its checkpoint."""
+    root = tmp_path / ".cursor"
+    database = root / "chats" / "workspace" / "wal-resume" / "store.db"
+    database.parent.mkdir(parents=True)
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA wal_autocheckpoint=0")
+    connection.execute("CREATE TABLE blobs (id TEXT, data TEXT)")
+    connection.execute(
+        "INSERT INTO blobs VALUES (?, ?)",
+        ("old", json.dumps({"id": "old", "role": "user", "content": "old row"})),
+    )
+    connection.commit()
+    adapter = CursorUnifiedSourceAdapter(grant=grant("cursor", root))
+    try:
+        baseline = asyncio.run(adapter.live_baseline())
+        assert evidence(asyncio.run(scan(adapter, cursors=baseline))) == []
+        connection.execute(
+            "INSERT INTO blobs VALUES (?, ?)",
+            ("new", json.dumps({"id": "new", "role": "user", "content": "new row"})),
+        )
+        connection.commit()
+        appended = asyncio.run(scan(adapter, cursors=baseline))
+    finally:
+        connection.close()
+
+    assert [item.evidence.verbatim for item in evidence(appended)] == ["new row"]
+
+
 def test_cursor_transcript_timestamp_envelope_keeps_only_the_user_query_text(tmp_path) -> None:
     root = tmp_path / ".cursor"
     transcript = (

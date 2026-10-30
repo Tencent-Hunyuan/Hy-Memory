@@ -1,42 +1,22 @@
-import type {
-  Matter,
-  MatterContext,
-  MatterEvidence,
-  MatterPatch,
-  MatterRun,
-} from "@one-memory/contracts";
 import {
   CORE_SERVICE,
   type ConnectSourcesResponse,
-  type ConversationBrowserPage,
-  type ConversationMemories,
-  type ConversationSearchResponse,
-  type ConversationTranscript,
   type DetectionResponse,
   type ExtractionSettings,
   type ExtractionWindowPreset,
-  type GovernedMemory,
   type GraphWidthDecision,
   type GraphWidthDecisionReceipt,
   type GraphWidthStatus,
   type HealthResponse,
-  type HomeSummary,
   type HostAskMemoryEvent,
-  type HostAskMemoryResponse,
   type HostHomeSummary,
   type ImportIssue,
   type ImportJob,
   type LiveSyncHealth,
   type ManualExtractReceipt,
-  type MemoryAuthorityResponse,
-  type MemoryDetail,
+  type MemoryAddInput,
+  type MemoryAddReceipt,
   type MemoryGraphResponse,
-  type MemoryIndexSync,
-  type MemoryLibraryPage,
-  type MemoryLibraryQuery,
-  type MemoryNoteInput,
-  type MemoryNoteReceipt,
-  type MemoryOrigin,
   type MemoryProcessingSummary,
   type ModelCreationOperation,
   type ModelProbeOperationReceipt,
@@ -45,11 +25,11 @@ import {
   type ModelProfileInput,
   type ModelProfilePatch,
   type OnboardingState,
-  type RecentConversationsPage,
-  type SavedMemoryNoteEvidence,
+  type SdkMemoryKind,
   type SdkMemoryPage,
   type SdkMemoryRecord,
   type SdkMemoryStatus,
+  type SdkMemoryVariant,
   type SdkRawContextItem,
   type SdkRawPage,
   type SourceDirectoryCandidate,
@@ -62,22 +42,19 @@ import {
 // stays here is the transport adapter: axios wiring, recovery clients, and the
 // UI-facing error mapping.
 import {
-  buildMemoryActionRequest,
-  buildMemoryCorrectRequest,
-  buildMemoryCreateRequest,
-  buildMemoryNoteSaveRequest,
+  buildMemoryAddRequest,
   buildModelProfileCreateRequest,
   buildModelProfileUpdateRequest,
   buildSourceImportRequest,
   buildSourceSyncRequest,
   classifyModelRemove,
   hasSourceSyncTarget,
+  memoryAddStatusPath,
   normalizeManualExtractEvidence,
   parseExtractionSettingsReceipt,
   parseGraphWidthDecisionReceipt,
   parseManualExtractReceipt,
-  parseMemoryNoteReceipt,
-  parseMemoryReceipt,
+  parseMemoryAddReceipt,
   parseModelProfileReceipt,
   SourceSyncInputError,
 } from "@one-memory/operations";
@@ -89,6 +66,7 @@ import {
   recoverableFileUpload,
 } from "./file-upload-client";
 import { recoverableProbe } from "./model-probe-client";
+import { SDK_MEMORY_PAGE_SIZE } from "./sdk-memory-map";
 
 export const DEFAULT_CORE_URL = "http://127.0.0.1:8765";
 
@@ -172,71 +150,32 @@ export async function getCallReferencesRequest(
 
 export type { HealthResponse };
 
-export async function saveMemoryNote(
-  note: MemoryNoteInput,
+/** Add one memory directly (`POST /api/v2/memories`). */
+export async function addMemory(
+  input: MemoryAddInput,
   traceId?: string,
-): Promise<MemoryNoteReceipt> {
-  const request = buildMemoryNoteSaveRequest(note);
-  const response = await client.post<MemoryNoteReceipt>(
+): Promise<MemoryAddReceipt> {
+  const request = buildMemoryAddRequest(input);
+  const response = await client.post<MemoryAddReceipt>(
     request.path,
     request.body,
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
-  const receipt = parseMemoryNoteReceipt(response.data);
-  if (receipt === null) throw new Error("memory_note_receipt_invalid");
+  const receipt = parseMemoryAddReceipt(response.data);
+  if (receipt === null) throw new Error("memory_add_receipt_invalid");
   return receipt;
 }
 
-export async function getMemoryNotes(): Promise<MemoryNoteReceipt[]> {
-  const response = await client.get<unknown>("/api/v1/memory-notes");
-  if (!Array.isArray(response.data))
-    throw new Error("memory_note_receipt_invalid");
-  const notes = response.data.map(parseMemoryNoteReceipt);
-  if (notes.some((note) => note === null))
-    throw new Error("memory_note_receipt_invalid");
-  return notes as MemoryNoteReceipt[];
-}
-
-export async function getMemoryNoteOperation(
+/** Status of one addition, keyed by the request id it was submitted with. */
+export async function getMemoryAddStatus(
   requestId: string,
-): Promise<MemoryNoteReceipt> {
-  const response = await client.get<unknown>(
-    `/api/v1/memory-notes/operations/${encodeURIComponent(requestId)}`,
-  );
-  const receipt = parseMemoryNoteReceipt(response.data);
-  if (receipt === null) throw new Error("memory_note_receipt_invalid");
+): Promise<MemoryAddReceipt> {
+  const response = await client.get<unknown>(memoryAddStatusPath(requestId));
+  const receipt = parseMemoryAddReceipt(response.data);
+  if (receipt === null) throw new Error("memory_add_receipt_invalid");
   return receipt;
 }
 
-export async function getMemoryNoteEvidence(
-  id: string,
-): Promise<SavedMemoryNoteEvidence> {
-  return (
-    await client.get<SavedMemoryNoteEvidence>(
-      `/api/v1/memory-notes/${encodeURIComponent(id)}/evidence`,
-    )
-  ).data;
-}
-
-export async function processMemoryNote(
-  id: string,
-  traceId?: string,
-): Promise<MemoryNoteReceipt> {
-  const response = await client.post<MemoryNoteReceipt>(
-    `/api/v1/memory-notes/${encodeURIComponent(id)}/process`,
-    {},
-    // Starting processing is a write; carry the trace id so the ui.action /
-    // ui.result pair joins the kernel legs in one chain.
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const receipt = parseMemoryNoteReceipt(response.data);
-  if (receipt === null) throw new Error("memory_note_receipt_invalid");
-  return receipt;
-}
-
-export async function getMatters(): Promise<Matter[]> {
-  return (await client.get<Matter[]>("/api/v1/matters")).data;
-}
 export async function getHistoryFile(
   id: string,
 ): Promise<import("@one-memory/contracts").FileImportReceipt> {
@@ -308,82 +247,6 @@ export async function discardHistoryFile(
   });
 }
 
-export async function getMatterRuns(): Promise<MatterRun[]> {
-  return (await client.get<MatterRun[]>("/api/v1/matters/runs")).data;
-}
-export async function discoverMatters(traceId?: string): Promise<MatterRun> {
-  return (
-    await client.post<MatterRun>(
-      "/api/v1/matters/discover",
-      {},
-      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-    )
-  ).data;
-}
-export async function patchMatter(
-  id: string,
-  patch: MatterPatch,
-  traceId?: string,
-): Promise<Matter> {
-  return (
-    await client.patch<Matter>(
-      `/api/v1/matters/${encodeURIComponent(id)}`,
-      patch,
-      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-    )
-  ).data;
-}
-export async function getMatterEvidence(
-  id: string,
-  evidence: string,
-): Promise<MatterEvidence> {
-  return (
-    await client.get<MatterEvidence>(
-      `/api/v1/matters/${encodeURIComponent(id)}/evidence/${encodeURIComponent(evidence)}`,
-    )
-  ).data;
-}
-export async function getMatterContext(id: string): Promise<MatterContext> {
-  return (
-    await client.get<MatterContext>(
-      `/api/v1/matters/${encodeURIComponent(id)}/context`,
-    )
-  ).data;
-}
-export async function getMatterHistory(id: string): Promise<Matter[]> {
-  return (
-    await client.get<Matter[]>(
-      `/api/v1/matters/${encodeURIComponent(id)}/history`,
-    )
-  ).data;
-}
-export async function addMatterNote(
-  id: string,
-  text: string,
-  expected_version: number,
-  traceId?: string,
-): Promise<MatterEvidence> {
-  return (
-    await client.post<MatterEvidence>(
-      `/api/v1/matters/${encodeURIComponent(id)}/notes`,
-      { text, expected_version },
-      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-    )
-  ).data;
-}
-export async function refreshMatter(
-  id: string,
-  traceId?: string,
-): Promise<MatterRun> {
-  return (
-    await client.post<MatterRun>(
-      `/api/v1/matters/${encodeURIComponent(id)}/refresh`,
-      {},
-      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-    )
-  ).data;
-}
-
 const client = axios.create({
   baseURL: import.meta.env.VITE_CORE_URL ?? DEFAULT_CORE_URL,
   // The core shares a process with the ingest pipeline, and while that is
@@ -392,68 +255,6 @@ const client = axios.create({
   // library timed out on every attempt and read as empty.
   timeout: 30_000,
 });
-
-/** Reader process base URL, set by the desktop bridge when available.
- *
- * The Reader is a separate read-only process. When its port is known and the
- * process is healthy, read routes are served from it (lower latency, no GIL
- * contention with the Core's background work). Falls back to Core on any
- * failure within 1.5 seconds, and does not retry Reader for 30 seconds after.
- */
-let readerBaseUrl: string | null = null;
-let readerCircuitOpenUntil = 0;
-
-export function setReaderBaseUrl(url: string | null): void {
-  readerBaseUrl = url;
-}
-
-function readerAvailable(): boolean {
-  return readerBaseUrl !== null && Date.now() >= readerCircuitOpenUntil;
-}
-
-function openReaderCircuit(): void {
-  readerCircuitOpenUntil = Date.now() + 30_000;
-}
-
-const READER_TIMEOUT_MS = 1_500;
-
-const READER_PATHS = new Set([
-  "/api/v1/home-summary",
-  "/api/v1/memories",
-  "/api/v1/memory-library",
-  "/api/v1/conversations/search",
-  "/api/v1/memories/graph",
-]);
-
-const READER_POST_PATHS = new Set(["/api/v1/recall", "/api/v1/context/search"]);
-
-async function tryReader<T>(
-  method: "get" | "post",
-  url: string,
-  config: Record<string, unknown> | undefined,
-  fallback: () => Promise<T>,
-): Promise<T> {
-  if (
-    !readerAvailable() ||
-    !(READER_PATHS.has(url) || READER_POST_PATHS.has(url))
-  )
-    return fallback();
-  try {
-    const response = await axios.request<T>({
-      method,
-      url: `${readerBaseUrl}${url}`,
-      timeout: READER_TIMEOUT_MS,
-      ...(method === "post"
-        ? { data: config?.data ?? config?.body }
-        : { params: config?.params }),
-      headers: (config?.headers as Record<string, string>) ?? {},
-    });
-    return response.data;
-  } catch {
-    openReaderCircuit();
-    return fallback();
-  }
-}
 
 client.interceptors.request.use(async (config) => {
   // A traced interaction sets its own id so the ui-action line, this request
@@ -854,20 +655,8 @@ export async function deleteModelProfile(
 }
 
 export async function getHomeSummary(): Promise<HostHomeSummary> {
-  const authority = await getMemoryAuthority();
-  if (authority.authority === "sdk") {
-    const response = await client.get<HostHomeSummary>("/api/v2/home-summary");
-    return response.data;
-  }
-  return tryReader<HomeSummary>(
-    "get",
-    "/api/v1/home-summary",
-    undefined,
-    async () => {
-      const response = await client.get<HomeSummary>("/api/v1/home-summary");
-      return response.data;
-    },
-  );
+  const response = await client.get<HostHomeSummary>("/api/v2/home-summary");
+  return response.data;
 }
 
 export async function getLiveSyncHealth(): Promise<LiveSyncHealth[]> {
@@ -877,30 +666,22 @@ export async function getLiveSyncHealth(): Promise<LiveSyncHealth[]> {
   return response.data;
 }
 
-export async function getMemoryLibrary(
-  query: MemoryLibraryQuery = {},
-  signal?: AbortSignal,
-): Promise<MemoryLibraryPage> {
-  const response = await client.get<MemoryLibraryPage>(
-    "/api/v1/memory-library",
-    { params: query, signal },
-  );
-  return response.data;
-}
-
 export async function getSdkMemoryLibrary(
   {
     statuses = ["active"],
     source,
     query,
     offset = 0,
-    limit = 100,
+    limit = SDK_MEMORY_PAGE_SIZE,
+    windowId,
   }: {
     statuses?: SdkMemoryStatus[];
     source?: string;
     query?: string;
     offset?: number;
     limit?: number;
+    /** Keyword search: the window a previous page returned. */
+    windowId?: string | null;
   } = {},
   signal?: AbortSignal,
 ): Promise<SdkMemoryPage> {
@@ -910,7 +691,10 @@ export async function getSdkMemoryLibrary(
   });
   for (const status of statuses) params.append("statuses", status);
   if (source) params.set("source", source);
-  if (query?.trim()) params.set("query", query.trim());
+  if (query?.trim()) {
+    params.set("query", query.trim());
+    if (windowId) params.set("window_id", windowId);
+  }
   const response = await client.get<SdkMemoryPage>("/api/v2/memory-library", {
     params,
     signal,
@@ -918,33 +702,71 @@ export async function getSdkMemoryLibrary(
   return response.data;
 }
 
-export async function getMemoryAuthority(): Promise<MemoryAuthorityResponse> {
-  const response = await client.get<MemoryAuthorityResponse>(
-    "/api/v2/memory-authority",
-  );
-  return response.data;
+/** The namespace of an SDK memory, for get/update/delete. Chat memories need
+ * none; an experience or fact names its kind and working/coding variant. */
+export interface SdkMemoryNamespace {
+  kind?: SdkMemoryKind;
+  variant?: SdkMemoryVariant | null;
 }
 
-export async function getSdkMemory(memoryId: string): Promise<SdkMemoryRecord> {
-  const response = await client.get<SdkMemoryRecord>(
-    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
-  );
+function namespaceParams(
+  namespace: SdkMemoryNamespace | undefined,
+): Record<string, string> | undefined {
+  if (!namespace?.kind && !namespace?.variant) return undefined;
+  const params: Record<string, string> = {};
+  if (namespace.kind) params.kind = namespace.kind;
+  if (namespace.variant) params.variant = namespace.variant;
+  return params;
+}
+
+export async function getSdkMemory(
+  memoryId: string,
+  namespace?: SdkMemoryNamespace,
+): Promise<SdkMemoryRecord> {
+  const params = namespaceParams(namespace);
+  const path = `/api/v2/memories/${encodeURIComponent(memoryId)}`;
+  const response = params
+    ? await client.get<SdkMemoryRecord>(path, { params })
+    : await client.get<SdkMemoryRecord>(path);
   return response.data;
 }
 
 export async function updateSdkMemory(
   memoryId: string,
   content: string,
+  traceId?: string,
+  /** An experience's `content` is its solution; `task` replaces the task. */
+  edit?: SdkMemoryNamespace & { task?: string },
 ): Promise<SdkMemoryRecord> {
+  const body: Record<string, string> = { content };
+  if (edit?.kind) body.kind = edit.kind;
+  if (edit?.variant) body.variant = edit.variant;
+  if (edit?.task !== undefined && edit.kind === "experience")
+    body.task = edit.task;
   const response = await client.put<SdkMemoryRecord>(
     `/api/v2/memories/${encodeURIComponent(memoryId)}`,
-    { content },
+    body,
+    // A rewrite is a write; carry the trace id so the ui.action / ui.result
+    // pair joins the kernel legs in one chain.
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
   return response.data;
 }
 
-export async function deleteSdkMemory(memoryId: string): Promise<void> {
-  await client.delete(`/api/v2/memories/${encodeURIComponent(memoryId)}`);
+export async function deleteSdkMemory(
+  memoryId: string,
+  traceId?: string,
+  namespace?: SdkMemoryNamespace,
+): Promise<void> {
+  const params = namespaceParams(namespace);
+  const config = {
+    ...(traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : {}),
+    ...(params ? { params } : {}),
+  };
+  await client.delete(
+    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
+    Object.keys(config).length ? config : undefined,
+  );
 }
 
 export async function getSdkRaw({
@@ -984,41 +806,12 @@ export async function searchSdkRaw(
     : [];
 }
 
-export async function getMemories(query = ""): Promise<GovernedMemory[]> {
-  return tryReader<GovernedMemory[]>(
-    "get",
-    "/api/v1/memories",
-    { params: query ? { query } : undefined },
-    async () => {
-      const response = await client.get<GovernedMemory[]>("/api/v1/memories", {
-        params: query ? { query } : undefined,
-      });
-      return response.data;
-    },
-  );
-}
-
-export async function askMemories(
-  question: string,
-  scope = "all-apps",
-  authority: "legacy" | "sdk",
-): Promise<HostAskMemoryResponse> {
-  const response = await client.post<HostAskMemoryResponse>(
-    `/api/${authority === "sdk" ? "v2" : "v1"}/memories/ask`,
-    { question, scope },
-    { timeout: 120_000 },
-  );
-  return response.data;
-}
-
 export async function* askMemoriesStream(
   question: string,
   scope = "all-apps",
   signal?: AbortSignal,
   traceId?: string,
-  authority?: "legacy" | "sdk",
 ): AsyncGenerator<HostAskMemoryEvent> {
-  if (authority === undefined) throw new Error("memory_authority_unavailable");
   const desktopBridge =
     typeof window === "undefined" ? undefined : window.oneMemory;
   // Same rule as the axios interceptor: a present bridge is the only authority
@@ -1037,24 +830,20 @@ export async function* askMemoriesStream(
         // would not.
         import.meta.env.VITE_CORE_API_TOKEN
       : undefined;
-  const version = authority === "sdk" ? "v2" : "v1";
-  const response = await fetch(
-    `${baseUrl}/api/${version}/memories/ask/stream`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        // This path uses raw `fetch`, so it does not go through the axios
-        // interceptor that stamps every other call. Without the header here Core
-        // still logs its own request, but under a different id from the
-        // renderer's `ui.action`/`ui.result`, so the four lines never group.
-        ...(traceId ? { "X-One-Memory-Trace-Id": traceId } : {}),
-      },
-      body: JSON.stringify({ question, scope }),
-      signal,
+  const response = await fetch(`${baseUrl}/api/v2/memories/ask/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // This path uses raw `fetch`, so it does not go through the axios
+      // interceptor that stamps every other call. Without the header here Core
+      // still logs its own request, but under a different id from the
+      // renderer's `ui.action`/`ui.result`, so the four lines never group.
+      ...(traceId ? { "X-One-Memory-Trace-Id": traceId } : {}),
     },
-  );
+    body: JSON.stringify({ question, scope }),
+    signal,
+  });
   if (!response.ok || !response.body) {
     throw new Error(`ask_stream_failed_${response.status}`);
   }
@@ -1076,147 +865,20 @@ export async function* askMemoriesStream(
   }
 }
 
-export async function getRecentConversations(params?: {
-  limit?: number;
-  offset?: number;
-  sourceId?: string;
-  recentActivity?: boolean;
-}): Promise<RecentConversationsPage> {
-  const response = await client.get<RecentConversationsPage>(
-    "/api/v1/conversations",
-    {
-      params: {
-        limit: params?.limit ?? 30,
-        offset: params?.offset ?? 0,
-        ...(params?.sourceId ? { source_id: params.sourceId } : {}),
-        ...(params?.recentActivity ? { recent_activity: true } : {}),
-      },
-    },
-  );
-  return response.data;
-}
-
-export async function searchConversations(
-  query: string,
-  limit = 20,
-): Promise<ConversationSearchResponse> {
-  return tryReader<ConversationSearchResponse>(
-    "get",
-    "/api/v1/conversations/search",
-    { params: { query, limit } },
-    async () => {
-      const response = await client.get<ConversationSearchResponse>(
-        "/api/v1/conversations/search",
-        { params: { query, limit } },
-      );
-      return response.data;
-    },
-  );
-}
-
-export async function getConversation(
-  evidenceId: string,
-  params: { offset?: number; limit?: number } = {},
-): Promise<ConversationTranscript> {
-  const response = await client.get<ConversationTranscript>(
-    `/api/v1/conversations/${encodeURIComponent(evidenceId)}`,
-    { params },
-  );
-  return response.data;
-}
-
-export async function getConversationBrowser(params?: {
-  offset?: number;
-  limit?: number;
-  sourceId?: string;
-}): Promise<ConversationBrowserPage> {
-  const response = await client.get<ConversationBrowserPage>(
-    "/api/v1/conversation-browser",
-    {
-      params: {
-        offset: params?.offset ?? 0,
-        limit: params?.limit ?? 50,
-        ...(params?.sourceId ? { source_id: params.sourceId } : {}),
-      },
-    },
-  );
-  return response.data;
-}
-
-export async function getConversationMemories(
-  evidenceId: string,
-): Promise<ConversationMemories> {
-  const response = await client.get<ConversationMemories>(
-    `/api/v1/conversations/${encodeURIComponent(evidenceId)}/memories`,
-  );
-  return response.data;
-}
-
-export async function getMemory(memoryId: string): Promise<MemoryDetail> {
-  const response = await client.get<MemoryDetail>(
-    `/api/v1/memories/${encodeURIComponent(memoryId)}`,
-  );
-  return response.data;
-}
-
-/**
- * One map request at a time; callers asking while one is in flight share it.
- *
- * D91: on Kristin's machine, three overlapping graph requests all timed out
- * and dragged the memory list from 0.4 s to 4.3 s. The map is the slowest
- * read in the app and the least urgent, so it never runs twice at once.
- */
-let pendingMemoryGraph: Promise<MemoryGraphResponse> | null = null;
-
-/** The memory map on SDK authority: SDK memories plus the graph overlay. */
+/** The SDK map for one list page: the same source and window the list reads. */
 export async function getSdkMemoryGraph(
+  {
+    source,
+    offset = 0,
+    limit = 100,
+  }: { source?: string; offset?: number; limit?: number } = {},
   signal?: AbortSignal,
 ): Promise<MemoryGraphResponse> {
   const response = await client.get<MemoryGraphResponse>(
     "/api/v2/memories/graph",
-    { params: { limit: 300 }, signal },
-  );
-  return response.data;
-}
-
-export async function getMemoryGraphWith(
-  transport: { get: typeof client.get } = client,
-): Promise<MemoryGraphResponse> {
-  if (pendingMemoryGraph) return pendingMemoryGraph;
-  pendingMemoryGraph = transport
-    .get<MemoryGraphResponse>("/api/v1/memories/graph", {
-      params: { limit: 300 },
-    })
-    .then((response) => response.data)
-    .finally(() => {
-      pendingMemoryGraph = null;
-    });
-  return pendingMemoryGraph;
-}
-
-export async function getMemoryGraph(): Promise<MemoryGraphResponse> {
-  return tryReader<MemoryGraphResponse>(
-    "get",
-    "/api/v1/memories/graph",
-    { params: { limit: 300 } },
-    () => getMemoryGraphWith(),
-  );
-}
-
-/** Test seam: forget whatever request is in flight. */
-export function resetMemoryGraphCoalescingForTest(): void {
-  pendingMemoryGraph = null;
-}
-
-export async function digestMemoryGraph(
-  traceId?: string,
-): Promise<Record<string, unknown>> {
-  const response = await client.post<Record<string, unknown>>(
-    "/api/v1/memories/graph/digest",
-    undefined,
     {
-      timeout: 15 * 60_000,
-      ...(traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : {}),
+      params: { limit, offset, ...(source ? { source } : {}) },
+      signal,
     },
   );
   return response.data;
@@ -1350,9 +1012,8 @@ export async function setExtractionWindow(
     { window_preset: windowPreset },
     traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
   );
-  // The CLI validates this receipt (`ui-write-flows-extended.ts`
-  // `executeExtractionWindowSet` -> `ui_write_receipt_invalid`); the Web stored
-  // the raw body, so a malformed 200 became a saved preset.
+  // The receipt is validated before it is trusted; the Web used to store the
+  // raw body, so a malformed 200 became a saved preset.
   const receipt = parseExtractionSettingsReceipt(response.data, windowPreset);
   if (receipt === null) throw new Error("extraction_settings_receipt_invalid");
   return receipt;
@@ -1423,74 +1084,6 @@ export async function decideGraphWidth(
   const receipt = parseGraphWidthDecisionReceipt(response.data);
   if (receipt === null) throw new Error("graph_width_receipt_invalid");
   return receipt;
-}
-
-export async function mutateMemory(
-  memoryId: string,
-  action: "undo" | "delete",
-  revision: number,
-  requestId: string,
-  traceId?: string,
-): Promise<GovernedMemory> {
-  const request = buildMemoryActionRequest(
-    memoryId,
-    action,
-    revision,
-    requestId,
-  );
-  const response = await client.post<GovernedMemory>(
-    request.path,
-    request.body,
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const receipt = parseMemoryReceipt(response.data, {
-    memoryId,
-    expectedRevision: revision,
-    expectedStatus: action === "delete" ? "deleted" : "confirmed",
-  });
-  if (receipt === null) throw new Error("memory_action_receipt_invalid");
-  return receipt;
-}
-
-export async function correctMemory(
-  memoryId: string,
-  revision: number,
-  content: string,
-  scopes: string[] | undefined,
-  requestId: string,
-  traceId?: string,
-): Promise<GovernedMemory> {
-  const request = buildMemoryCorrectRequest(
-    memoryId,
-    revision,
-    content,
-    scopes,
-    requestId,
-  );
-  const response = await client.post<GovernedMemory>(
-    request.path,
-    request.body,
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  const receipt = parseMemoryReceipt(response.data, {
-    memoryId,
-    expectedRevision: revision,
-    expectedStatus: "confirmed",
-  });
-  if (receipt === null) throw new Error("memory_correct_receipt_invalid");
-  return receipt;
-}
-
-export async function syncMemoryIndex(
-  memoryId: string,
-  traceId?: string,
-): Promise<MemoryIndexSync> {
-  const response = await client.post<MemoryIndexSync>(
-    `/api/v1/memories/${encodeURIComponent(memoryId)}/index-sync`,
-    undefined,
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  return response.data;
 }
 
 export function apiErrorCode(reason: unknown): string | null {
@@ -1763,21 +1356,4 @@ function isModelCreationOperation(
         operation.profile_id.length > 0)) &&
     (operation.created_revision === null || operation.created_revision === 1)
   );
-}
-
-export async function createMemory(
-  draft: {
-    content: string;
-    scopes: string[];
-    evidence_ids: string[];
-    origin: MemoryOrigin;
-  },
-  requestId: string,
-): Promise<GovernedMemory> {
-  const request = buildMemoryCreateRequest(draft, requestId);
-  const response = await client.post<GovernedMemory>(
-    request.path,
-    request.body,
-  );
-  return response.data;
 }

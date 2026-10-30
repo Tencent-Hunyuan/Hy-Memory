@@ -217,21 +217,21 @@ describe("WorkBuddy plugin recall installer", () => {
         "utf8",
       ),
     );
+    // No recall command in this runtime: nothing speaks, capture still runs.
     expect(Object.keys(hooks.hooks).sort()).toEqual([
-      "SessionStart",
       "Stop",
       "UserPromptSubmit",
     ]);
     const core = "/opt/one-memory/core/one-memory";
-    expect(hooks.hooks.SessionStart[0].hooks[0].command).toBe(
-      failOpenHookCommand(core, "boundary", "context"),
-    );
-    expect(hooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe(
-      failOpenHookCommand(core, "capture workbuddy", "silent"),
-    );
-    expect(hooks.hooks.UserPromptSubmit[1].hooks[0].command).toBe(
-      failOpenHookCommand(core, "boundary", "context"),
-    );
+    expect(
+      (hooks.hooks.UserPromptSubmit as HookEntry[]).flatMap(
+        (entry) => entry.hooks,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        command: failOpenHookCommand(core, "capture workbuddy", "silent"),
+      }),
+    ]);
     expect(hooks.hooks.Stop[0].hooks[0].command).toBe(
       failOpenHookCommand(core, "capture workbuddy", "silent"),
     );
@@ -768,7 +768,7 @@ describe("WorkBuddy recall injection hooks", () => {
     expect(await missing(plugin.installRoot)).toBe(true);
   });
 
-  it("gives each context event exactly one hook that speaks, carrying both memory and notices", async () => {
+  it("gives each context event exactly one hook that speaks", async () => {
     const { layout, plugin } = await fixture({ populated: true });
     const runtime = await injectingRuntime();
 
@@ -793,9 +793,7 @@ describe("WorkBuddy recall injection hooks", () => {
       const speaking = speakingHooks(hooks.hooks[event], capture);
       expect(speaking, event).toHaveLength(1);
       expect(speaking[0].command).toContain("--inject workbuddy");
-      expect(speaking[0].command).toContain(
-        `ONE_MEMORY_BOUNDARY_COMMAND='\\''${core}'\\''`,
-      );
+      expect(speaking[0].command).not.toContain("BOUNDARY");
       expect(speaking[0].timeout).toBe(50);
     }
     // The host runs every hook on an event in parallel and blocks the send
@@ -813,8 +811,8 @@ describe("WorkBuddy recall injection hooks", () => {
     expect(
       (hooks.hooks.Stop as HookEntry[]).flatMap((entry) => entry.hooks),
     ).toEqual([expect.objectContaining({ command: capture })]);
-    // Every SessionStart source reaches it: the notice is due on all of them,
-    // recall only after a compaction, and that choice is the hook's to make.
+    // Every SessionStart source reaches it: recall only after a compaction,
+    // and that choice is the hook's to make.
     expect(
       hooks.hooks.SessionStart.every(
         (entry: { matcher?: string }) => entry.matcher === undefined,
@@ -892,7 +890,7 @@ describe("WorkBuddy recall injection hooks", () => {
     });
   });
 
-  it("keeps one speaking boundary hook, silent on failure, when the runtime ships no recall command", async () => {
+  it("speaks on no event when the runtime ships no recall command", async () => {
     const { layout, plugin } = await fixture({ populated: true });
     const runtime = await injectingRuntime();
     const { recallCliPath: _cli, ...older } = runtime;
@@ -910,12 +908,9 @@ describe("WorkBuddy recall injection hooks", () => {
       "silent",
       older.dataDir,
     );
-    for (const event of ["SessionStart", "UserPromptSubmit"]) {
-      const speaking = speakingHooks(hooks.hooks[event], capture);
-      expect(speaking, event).toHaveLength(1);
-      expect(speaking[0].command).toContain(" boundary");
-      expect(speaking[0].command).not.toContain('{"continue": true}');
-    }
+    expect(hooks.hooks.SessionStart).toBeUndefined();
+    expect(speakingHooks(hooks.hooks.UserPromptSubmit, capture)).toEqual([]);
+    expect(JSON.stringify(hooks)).not.toContain(" boundary");
   });
 
   it("moves an install with two speaking hooks per event onto the single one", async () => {

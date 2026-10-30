@@ -1,4 +1,7 @@
-import type { ContextItem, ContextSearchResponse } from "@one-memory/contracts";
+import type {
+  SdkContextItem,
+  SdkContextSearchResponse,
+} from "@one-memory/contracts";
 import { describe, expect, it } from "vitest";
 import { isContextResponseAuthorized } from "./context-protocol.js";
 import type { VerifiedHostIdentity } from "./host-grants.js";
@@ -17,58 +20,41 @@ function identity(
   } as VerifiedHostIdentity;
 }
 
-function response(items: ContextItem[]): ContextSearchResponse {
+function response(items: SdkContextItem[]): SdkContextSearchResponse {
   return {
-    schema_version: 1,
+    schema_version: 2,
     request_id: "22222222-2222-4222-8222-222222222222",
     state: "grounded",
-    paths: {
-      raw: {
-        status: "ok",
-        reason: null,
-        elapsed_ms: 1,
-        returned_count: items.length,
-        truncated: false,
-        truncated_by: [],
-      },
-      memory: {
-        status: "not_requested",
-        reason: null,
-        elapsed_ms: 0,
-        returned_count: 0,
-        truncated: false,
-        truncated_by: [],
-      },
-    },
     items,
     used_characters: 10,
     truncated: false,
     total_ms: 1,
-    adoption: "unknown",
   };
 }
 
-function raw(sourceId: string): ContextItem {
+function raw(sourceId: string): SdkContextItem {
   return {
     kind: "raw",
-    source_id: sourceId,
-    conversation_id: "conv-1",
-    anchor_evidence_id: "ev-1",
-    messages: [],
+    raw_id: "raw-1",
+    content: "c",
+    source: sourceId,
+    session_id: "conv-1",
+    memory_at: null,
+    score: 0.5,
     truncated: false,
   };
 }
 
-function memory(): ContextItem {
+function memory(): SdkContextItem {
   return {
     kind: "memory",
     memory_id: "m1",
-    revision: 1,
     content: "c",
-    memory_kind: "chat",
+    layer: "l2_fact",
+    status: "active",
+    source: null,
     updated_at: "2026-01-01T00:00:00Z",
-    evidence_ids: [],
-    matched_by: ["lexical"],
+    score: 0.5,
     truncated: false,
   };
 }

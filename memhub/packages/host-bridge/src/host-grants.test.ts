@@ -99,7 +99,7 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
     expect(issued.receipt).toMatchObject({
       hostId: pairing.hostId,
       status: "approved",
-      allowedTools: ["om_recall", "om_ask", "om_conversations", "om_matters"],
+      allowedTools: ["om_recall", "om_conversations", "om_diagnostic_trace"],
       allowedScopes: ["all-apps"],
     });
     expect(

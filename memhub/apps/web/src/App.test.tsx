@@ -13,11 +13,10 @@ const core = {
 it("lands on applications and preserves explicit memory deep links", () => {
   expect(viewFromUrl("")).toBe("sources");
   expect(viewFromUrl("?view=matters")).toBe("sources");
-  expect(viewFromUrl("?view=matters", true)).toBe("matters");
   expect(viewFromUrl("?view=sources")).toBe("sources");
   expect(viewFromUrl("?view=memory")).toBe("memory");
   expect(viewFromUrl("?view=unknown")).toBe("sources");
-  expect(viewFromUrl("?view=guide")).toBe("guide");
+  expect(viewFromUrl("?view=guide")).toBe("sources");
 });
 
 it("D96: an old call-history link lands on the home page while that page has no entry", () => {

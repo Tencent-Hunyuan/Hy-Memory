@@ -12,7 +12,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "filelock>=3.32.4",
     # Public SDK version validated against MemHub's permission and recall contracts.
-    "hy-memory==2.0.5",
+    "hy-memory==2.0.8",
     # chromadb arrives through the HY SDK; locked here so an unrelated upgrade
     # cannot move the SDK's store. Built-in embedding consumes numpy directly.
     "chromadb==1.5.9",

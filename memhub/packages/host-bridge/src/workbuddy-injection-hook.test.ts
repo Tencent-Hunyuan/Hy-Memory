@@ -37,8 +37,6 @@ function run(
   command: string,
   stdin: string,
   options: {
-    killWhen?: string;
-    closeStdout?: boolean;
     killAfterMs?: number;
     env?: NodeJS.ProcessEnv;
     /** As the host does on a timeout: the hook's own shell, nothing below it. */
@@ -57,19 +55,16 @@ function run(
     const child = spawn("/bin/sh", ["-c", command], {
       stdio: ["pipe", "pipe", "pipe"],
       env: options.env ?? process.env,
-      detached:
-        options.killWhen !== undefined || options.killAfterMs !== undefined,
+      detached: options.killAfterMs !== undefined,
     });
     let stdout = "";
     let stderr = "";
     let firstByteMs: number | null = null;
     let killed = false;
-    if (options.closeStdout) child.stdout.destroy();
-    else
-      child.stdout.on("data", (chunk) => {
-        firstByteMs ??= Date.now() - started;
-        stdout += chunk;
-      });
+    child.stdout.on("data", (chunk) => {
+      firstByteMs ??= Date.now() - started;
+      stdout += chunk;
+    });
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
@@ -89,15 +84,6 @@ function run(
       void eventually(killShellWhen).then(() => {
         try {
           process.kill(shell, "SIGKILL");
-        } catch {}
-      });
-    }
-    const killWhen = options.killWhen;
-    if (killWhen !== undefined && child.pid !== undefined) {
-      const group = child.pid;
-      void eventually(killWhen).then(() => {
-        try {
-          process.kill(-group, "SIGKILL");
         } catch {}
       });
     }
@@ -134,59 +120,30 @@ describe("WorkBuddy injection hook as the host runs it", () => {
     await writeFile(credentialFile, `${issued.secret}\n`, { mode: 0o600 });
     const core = createServer((request, response) => {
       void (async () => {
-        if (
-          request.method === "GET" &&
-          request.url === "/api/v2/memory-authority"
-        ) {
-          response.setHeader("Content-Type", "application/json");
-          response.end(
-            JSON.stringify({ authority: "legacy", migration_id: null }),
-          );
-          return;
-        }
         for await (const _chunk of request);
         response.setHeader("Content-Type", "application/json");
-        if (request.url === "/api/v1/context/search") {
+        if (request.url === "/api/v2/context/search") {
           response.end(
             JSON.stringify({
-              schema_version: 1,
+              schema_version: 2,
               request_id: "11111111-1111-4111-8111-111111111111",
               state: "grounded",
-              paths: {
-                raw: {
-                  status: "empty",
-                  reason: null,
-                  elapsed_ms: 1,
-                  returned_count: 0,
-                  truncated: false,
-                  truncated_by: [],
-                },
-                memory: {
-                  status: "ok",
-                  reason: null,
-                  elapsed_ms: 1,
-                  returned_count: 1,
-                  truncated: false,
-                  truncated_by: [],
-                },
-              },
               items: [
                 {
                   kind: "memory",
                   memory_id: "mem-1",
-                  revision: 1,
                   content: "用户喜欢深绿色的界面",
-                  memory_kind: "chat",
-                  evidence_ids: [],
-                  matched_by: ["lexical"],
+                  layer: "l2_fact",
+                  status: "active",
+                  source: "workbuddy",
                   updated_at: "2026-09-01T08:00:00Z",
+                  score: 0.9,
                   truncated: false,
                 },
               ],
               used_characters: 10,
               truncated: false,
               total_ms: 2,
-              adoption: "unknown",
             }),
           );
           return;
@@ -283,135 +240,21 @@ describe("WorkBuddy injection hook as the host runs it", () => {
     expect(stopped.stdout).toBe("");
     expect(stopped.ms).toBeLessThan(3_000);
   }, 120_000);
-
-  it("carries the boundary's notice, and exits inside its timeout when the boundary hangs", async () => {
-    const { hook, mode } = await noticeHook();
-    const input = noticeInput();
-
-    await writeFile(mode, "answer");
-    const answered = await run(hook.command, input);
-    expect(answered.code).toBe(0);
-    expect(
-      JSON.parse(answered.stdout).hookSpecificOutput.additionalContext,
-    ).toBe(
-      "<memhub_session_notice>\n来源 codex om-derived:abc\n</memhub_session_notice>",
-    );
-
-    await writeFile(mode, "hang");
-    const hung = await run(hook.command, input);
-    expect(hung.code).toBe(0);
-    expect(hung.stdout).toBe("");
-    expect(hung.ms).toBeLessThan(4_000);
-  }, 40_000);
 });
 
-// The boundary's 4 s budget runs from the entry's own start, which a loaded
-// machine can use up before the fake boundary runs.
-describe("a notice is confirmed only after it has been handed over", {
-  retry: 2,
-}, () => {
-  it("confirms exactly what it handed over, without making the host wait", async () => {
-    const { hook, mode, acks } = await noticeHook();
-    await writeFile(mode, "slow-ack");
-
-    const answered = await run(hook.command, noticeInput());
-
-    expect(answered.code).toBe(0);
-    expect(answered.stdout).toContain("om-derived:abc");
-    expect(answered.stdout).not.toContain(TOKEN);
-    // The confirmation takes 8 s on purpose, past the hook's own timeout;
-    // the hook must not wait for it.
-    expect(answered.ms).toBeLessThan(hook.timeout * 1000 - 500);
-    expect(await eventually(acks, 15_000)).toBe(`${TOKEN}\n`);
-  }, 30_000);
-
-  it("keeps this round's output when confirming fails", async () => {
-    const { hook, mode, acks } = await noticeHook();
-    await writeFile(mode, "ack-fails");
-
-    const answered = await run(hook.command, noticeInput());
-
-    expect(answered.code).toBe(0);
-    expect(
-      JSON.parse(answered.stdout).hookSpecificOutput.additionalContext,
-    ).toContain("om-derived:abc");
-    expect(await eventually(acks)).toBe("attempted\n");
-  }, 20_000);
-
-  it("does not confirm when the boundary hangs past its budget", async () => {
-    const { hook, mode, acks, peeked } = await noticeHook();
-    await writeFile(mode, "hang");
-
-    const hung = await run(hook.command, noticeInput());
-
-    expect(hung.stdout).toBe("");
-    expect(await readFile(peeked, "utf8")).toBe("peeked\n");
-    expect(await settled(acks)).toBeNull();
-  }, 20_000);
-
-  it("does not confirm when the hook is killed before it hands anything over", async () => {
-    const { hook, mode, acks, peeked } = await noticeHook();
-    await writeFile(mode, "slow-close");
-
-    const killed = await run(hook.command, noticeInput(), {
-      killWhen: peeked,
-    });
-
-    expect(killed.stdout).toBe("");
-    expect(await settled(acks, 4_000)).toBeNull();
-  }, 20_000);
-
-  it("does not confirm when writing the output fails", async () => {
-    const { core, mode, acks, peeked } = await noticeHook();
-    await writeFile(mode, "answer");
-
-    // The installed hook captures this entry's stdout in `$(...)`, which
-    // always accepts the write, so the entry is run here on its own.
-    const entry = [
-      "ONE_MEMORY_BROKER_DISCOVERY=/nonexistent/broker.json",
-      `ONE_MEMORY_BOUNDARY_COMMAND='${core}'`,
-      `'${process.execPath}'`,
-      `'${path.join(process.cwd(), "dist", "recall-cli.cjs")}'`,
-      "--inject workbuddy",
-    ].join(" ");
-    await run(entry, noticeInput(), { closeStdout: true });
-
-    // The peek did happen, so there was something to confirm.
-    expect(await readFile(peeked, "utf8")).toBe("peeked\n");
-    expect(await settled(acks)).toBeNull();
-  }, 20_000);
-});
-
-const TOKEN = "tok-handed-over";
-
-async function noticeHook() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "om-wb-notice-rt-"));
+async function installedHook() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "om-wb-hook-rt-"));
   roots.push(root);
   const core = path.join(root, "one-memory");
   const mode = path.join(root, "mode");
-  const acks = path.join(root, "acks");
-  const peeked = path.join(root, "peeked");
   const captured = path.join(root, "captured");
   const started = path.join(root, "capture-started");
-  const reply = JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "UserPromptSubmit",
-      additionalContext: "来源 codex om-derived:abc",
-    },
-    one_memory_ack: TOKEN,
-  });
   // One script, switched by a file, because the hook bakes the path in.
   await writeFile(
     core,
     [
       "#!/bin/sh",
       `m=$(cat '${mode}')`,
-      'if [ "$1 $2" = "boundary --ack" ]; then',
-      `  if [ "$m" = ack-fails ]; then echo attempted >> '${acks}'; exit 1; fi`,
-      '  if [ "$m" = slow-ack ]; then sleep 8; fi',
-      `  printf '%s\\n' "$3" >> '${acks}'`,
-      "  exit 0",
-      "fi",
       'if [ "$1 $2" = "capture workbuddy" ]; then',
       // One file, written whole: the capture's deadline, and that it started.
       `  printf '%s\\n' "$ONE_MEMORY_CAPTURE_DEADLINE_S" > '${started}.part' && mv '${started}.part' '${started}'`,
@@ -420,15 +263,7 @@ async function noticeHook() {
       `  cat > '${captured}.part' && mv '${captured}.part' '${captured}'`,
       "  exit 0",
       "fi",
-      '[ "$1 $2" = "boundary --peek" ] || exit 9',
-      "cat >/dev/null",
-      `printf '%s\\n' '${reply}'`,
-      `echo peeked > '${peeked}'`,
-      // A reply that never closes: it was read but must not be handed over.
-      'if [ "$m" = hang ]; then sleep 30; fi',
-      'if [ "$m" = slow-close ]; then sleep 3; fi',
-      // Holds the hook to its own budget, so the host's kill lands mid-run.
-      'if [ "$m" = capture-slow-hook ]; then sleep 30; fi',
+      "exit 9",
       "",
     ].join("\n"),
     { mode: 0o755 },
@@ -459,28 +294,44 @@ async function noticeHook() {
       (entry: { hooks: Array<{ command: string; timeout: number }> }) =>
         entry.hooks[0],
     ).find((entry: { command: string }) => entry.command.includes("--inject"));
-  // These cases preserve the legacy executable protocol itself. Production
-  // hooks use the resident broker, covered by recall-injection.test.ts.
   const prompt: Array<{ command: string; timeout: number }> =
     hooks.hooks.UserPromptSubmit.flatMap(
       (entry: { hooks: Array<{ command: string; timeout: number }> }) =>
         entry.hooks,
     );
-  for (const entry of [hook, ...prompt]) {
-    entry.command = entry.command.replace(
-      /ONE_MEMORY_BOUNDARY_VIA_BROKER=\S+/g,
-      "ONE_MEMORY_BOUNDARY_VIA_BROKER=0",
-    );
-  }
-  return { hook, prompt, core, mode, acks, peeked, captured, started };
+  return { root, hook, prompt, core, mode, captured, started };
 }
 
-function noticeInput() {
+function hookInput() {
   return JSON.stringify({
-    session_id: "sess-notice",
+    session_id: "sess-hook",
     hook_event_name: "UserPromptSubmit",
     prompt: "按钮用什么颜色",
   });
+}
+
+/** A broker that accepts the connection and never answers, so the hook is
+ * still waiting on it when the host's kill lands. */
+async function holdOnSilentBroker(root: string) {
+  const silent = createServer(() => {});
+  await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  closers.push(async () => {
+    silent.closeAllConnections();
+    await new Promise<void>((resolve) => silent.close(() => resolve()));
+  });
+  await writeFile(
+    path.join(root, "no-broker.json"),
+    JSON.stringify({
+      schema_version: 1,
+      service: "one-memory-recall-broker",
+      status: "running",
+      host: "127.0.0.1",
+      port: (silent.address() as AddressInfo).port,
+      instance_id: "silent-broker",
+      pid: process.pid,
+      updated_at: new Date().toISOString(),
+    }),
+  );
 }
 
 async function eventually(file: string, withinMs = 5_000) {
@@ -499,13 +350,13 @@ async function settled(file: string, afterMs = 2_500) {
 
 describe("the prompt is captured without a hook of its own", () => {
   it("does not hold up the send when capture hangs", async () => {
-    const { prompt, mode, started } = await noticeHook();
+    const { prompt, mode, started } = await installedHook();
     await writeFile(mode, "capture-hangs");
 
     // As the host runs them: every hook on the event at once.
     const results = await Promise.all(
       prompt.map((hook) =>
-        run(hook.command, noticeInput(), {
+        run(hook.command, hookInput(), {
           killAfterMs: hook.timeout * 1000 + 1000,
         }),
       ),
@@ -520,9 +371,9 @@ describe("the prompt is captured without a hook of its own", () => {
   }, 40_000);
 
   it("still hands capture the exact prompt the host sent", async () => {
-    const { prompt, mode, captured } = await noticeHook();
+    const { prompt, mode, captured } = await installedHook();
     await writeFile(mode, "answer");
-    const input = noticeInput();
+    const input = hookInput();
 
     await Promise.all(prompt.map((hook) => run(hook.command, input)));
 
@@ -530,18 +381,18 @@ describe("the prompt is captured without a hook of its own", () => {
   }, 30_000);
 
   it("gives capture a deadline of its own, since nothing is left to stop it", async () => {
-    const { hook, mode, started } = await noticeHook();
+    const { hook, mode, started } = await installedHook();
     await writeFile(mode, "answer");
 
-    await run(hook.command, noticeInput());
+    await run(hook.command, hookInput());
 
     expect(await eventually(started, 10_000)).toBe("30\n");
   }, 30_000);
 
   it("finishes capturing after the hook itself has exited", async () => {
-    const { hook, mode, captured } = await noticeHook();
+    const { hook, mode, captured } = await installedHook();
     await writeFile(mode, "capture-slow");
-    const input = noticeInput();
+    const input = hookInput();
 
     const result = await run(hook.command, input);
 
@@ -555,9 +406,16 @@ describe("the prompt is captured without a hook of its own", () => {
     // The kill has to land while the hook still runs. On a loaded machine the
     // hook can reach its own budget first; then the case did not happen.
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const { hook, mode, captured, started } = await noticeHook();
-      await writeFile(mode, "capture-slow-hook");
-      const input = noticeInput();
+      const { root, hook, mode, captured, started } = await installedHook();
+      await writeFile(mode, "capture-slow");
+      await holdOnSilentBroker(root);
+      // A history prompt with a turn id, so the hook does go to the broker.
+      const input = JSON.stringify({
+        session_id: "sess-hook",
+        turn_id: "turn-1",
+        hook_event_name: "UserPromptSubmit",
+        prompt: "继续上次的按钮颜色任务",
+      });
       const result = await run(hook.command, input, { killShellWhen: started });
       if (result.code !== null) continue;
       expect(await eventually(captured, 20_000)).toBe(input);
@@ -567,20 +425,24 @@ describe("the prompt is captured without a hook of its own", () => {
   }, 120_000);
 
   it("does not capture a session start, which carries no words", async () => {
-    const { hook, mode, captured, peeked } = await noticeHook();
+    const { root, hook, mode, captured } = await installedHook();
     await writeFile(mode, "answer");
+    // The hook logs only into a data directory that already exists.
+    await mkdir(path.join(root, "data"), { mode: 0o700 });
 
     await run(
       hook.command,
       JSON.stringify({
-        session_id: "sess-notice",
+        session_id: "sess-hook",
         hook_event_name: "SessionStart",
         source: "startup",
       }),
     );
 
-    // The same entry did run and reach Core.
-    expect(await readFile(peeked, "utf8")).toBe("peeked\n");
+    // The same entry did run: it logged the session start.
+    expect(
+      await eventually(path.join(root, "data", "logs", "recall-inject.jsonl")),
+    ).toContain('"event":"SessionStart"');
     expect(await settled(captured)).toBeNull();
   }, 20_000);
 });
@@ -603,7 +465,7 @@ describe("the injection hook's output is the entry's own", () => {
       `printf '%s\\n' '{"suppressOutput":true}'; sleep 2`,
     );
 
-    const result = await run(command, noticeInput());
+    const result = await run(command, hookInput());
 
     expect(result.stdout).toBe('{"suppressOutput":true}\n');
     expect(result.ms).toBeGreaterThanOrEqual(1_900);
@@ -617,7 +479,7 @@ describe("the injection hook's output is the entry's own", () => {
       "echo 'Error: boom' >&2; exit 1",
       "exec /nonexistent/node",
     ]) {
-      const result = await run(await runtime(body), noticeInput());
+      const result = await run(await runtime(body), hookInput());
       expect(result.code, body).toBe(0);
       expect(result.stdout, body).toBe("");
     }
@@ -628,12 +490,12 @@ describe("the injection hook's output is the entry's own", () => {
       "printf '%s\\n' '{\"suppressOutput\":true}'; printf '%s\\n' 'one-memory delivery failed: host_scope_denied' >&2",
     );
 
-    const quiet = await run(command, noticeInput());
+    const quiet = await run(command, hookInput());
     expect(quiet.code).toBe(0);
     expect(quiet.stdout).toBe('{"suppressOutput":true}\n');
     expect(quiet.stderr).toBe("");
 
-    const diagnosed = await run(command, noticeInput(), {
+    const diagnosed = await run(command, hookInput(), {
       env: { ...process.env, ONE_MEMORY_DEBUG_DELIVERY: "1" },
     });
     expect(diagnosed.code).toBe(0);

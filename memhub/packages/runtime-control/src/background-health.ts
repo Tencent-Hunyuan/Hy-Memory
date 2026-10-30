@@ -12,9 +12,6 @@ export interface BackgroundHealth {
   code: string;
   core: RuntimeStatus["state"] | "unknown";
   broker: RuntimeStatus["state"] | "not_checked";
-  /** Display-only: the Reader is a performance optimization. Its absence or
-   *  failure never degrades the Runtime's state — clients fall back to Core. */
-  reader?: "running" | "stopped" | "unknown";
   instanceId?: string;
 }
 
@@ -29,16 +26,6 @@ type BrokerInspector = (options: {
 /** Observe only. A healthy snapshot is not login consent or OS registration.
  * Never start/repair services, return tokens or follow an arbitrary host URL.
  */
-/** Reader state from the Runtime attachment; display-only, never degrades. */
-function readerState(
-  status: { readerPort?: number | null } | null | undefined,
-): "running" | "stopped" | "unknown" {
-  if (!status) return "unknown";
-  if (typeof status.readerPort === "number" && status.readerPort > 0)
-    return "running";
-  return "stopped";
-}
-
 export async function inspectBackgroundHealth(options: {
   dataDir: string;
   inspectRuntime?: RuntimeInspector;
@@ -62,7 +49,6 @@ export async function inspectBackgroundHealth(options: {
         code: "background_runtime_not_healthy",
         core: first.state,
         broker: "not_checked",
-        reader: readerState(first),
       };
     }
     if (!first.instanceId) {
@@ -71,7 +57,6 @@ export async function inspectBackgroundHealth(options: {
         code: "background_runtime_identity_missing",
         core: "untrusted",
         broker: "not_checked",
-        reader: readerState(first),
       };
     }
     // The outer Runtime captured a sidecar (Broker) fault. That is the exact
@@ -84,7 +69,6 @@ export async function inspectBackgroundHealth(options: {
         code: "background_broker_failed",
         core: "running",
         broker: "unhealthy",
-        reader: readerState(first),
       };
     }
     const broker = await inspectBroker({
@@ -102,7 +86,6 @@ export async function inspectBackgroundHealth(options: {
         code: "background_identity_changed",
         core: current.state,
         broker: "not_checked",
-        reader: readerState(current),
       };
     }
     if (broker.state === "running" && broker.instanceId !== first.instanceId) {
@@ -111,7 +94,6 @@ export async function inspectBackgroundHealth(options: {
         code: "background_broker_identity_mismatch",
         core: "running",
         broker: "untrusted",
-        reader: readerState(first),
       };
     }
     const state =
@@ -128,7 +110,6 @@ export async function inspectBackgroundHealth(options: {
           : "background_broker_not_healthy",
       core: "running",
       broker: broker.state,
-      reader: readerState(first),
       ...(state === "healthy" ? { instanceId: first.instanceId } : {}),
     };
   } catch {
@@ -137,7 +118,6 @@ export async function inspectBackgroundHealth(options: {
       code: "background_inspection_unavailable",
       core: "unknown",
       broker: "not_checked",
-      reader: "unknown",
     };
   }
 }

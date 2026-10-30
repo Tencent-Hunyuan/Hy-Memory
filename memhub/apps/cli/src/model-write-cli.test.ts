@@ -126,29 +126,12 @@ describe("models activate", () => {
     expect(runtime.inspectRuntimeStatus).not.toHaveBeenCalled();
   });
 
-  it("previews without contacting Core", async () => {
-    const result = await capturedRun(["models", "activate", PROFILE, "--json"]);
-    expect(result.code).toBe(0);
-    const document = JSON.parse(result.stdout);
-    expect(document.state).toBe("preview");
-    expect(document.plan.kind).toBe("model_profile_activate");
-    // Activation has no CAS body, so the plan must not pretend to carry one.
-    expect(document.plan).not.toHaveProperty("expected_revision");
-    expect(transport.post).not.toHaveBeenCalled();
-  });
-
-  it("posts the activate endpoint with --confirm and reports the profile", async () => {
+  it("posts the activate endpoint directly and reports the profile", async () => {
     transport.post.mockResolvedValue({
       status: 200,
       data: profileResponse(),
     });
-    const result = await capturedRun([
-      "models",
-      "activate",
-      PROFILE,
-      "--confirm",
-      "--json",
-    ]);
+    const result = await capturedRun(["models", "activate", PROFILE, "--json"]);
     expect(result.code).toBe(0);
     expect(transport.post).toHaveBeenCalledWith(
       `/api/v1/model-profiles/${PROFILE}/activate`,
@@ -196,31 +179,22 @@ describe("models activate", () => {
   });
 });
 
-describe("models edit", () => {
-  it("previews a patch from a config file without writing", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "om-model-edit-"));
-    const config = path.join(directory, "patch.json");
-    await writeFile(
-      config,
-      JSON.stringify({ expected_revision: 4, name: "Renamed" }),
-      { mode: 0o600 },
-    );
-    const result = await capturedRun([
-      "models",
-      "edit",
-      PROFILE,
-      "--config-file",
-      config,
-      "--json",
-    ]);
+describe("models remove", () => {
+  it("previews without --yes and changes nothing", async () => {
+    const result = await capturedRun(["models", "remove", PROFILE, "--json"]);
     expect(result.code).toBe(0);
-    const document = JSON.parse(result.stdout);
-    expect(document.state).toBe("preview");
-    expect(document.plan.patch).toEqual({ name: "Renamed" });
-    expect(transport.patch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      command: "models remove",
+      state: "preview",
+      target: PROFILE,
+      applied: false,
+    });
+    expect(runtime.inspectRuntimeStatus).not.toHaveBeenCalled();
   });
+});
 
-  it("sends the exact patch body with the CAS revision on confirm", async () => {
+describe("models edit", () => {
+  it("sends the exact patch body with the CAS revision directly", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "om-model-edit-"));
     const config = path.join(directory, "patch.json");
     await writeFile(
@@ -242,7 +216,6 @@ describe("models edit", () => {
       PROFILE,
       "--config-file",
       config,
-      "--confirm",
       "--json",
     ]);
     expect(result.code).toBe(0);

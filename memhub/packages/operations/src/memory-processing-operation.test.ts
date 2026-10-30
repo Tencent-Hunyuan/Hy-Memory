@@ -16,9 +16,8 @@ describe("extraction window receipt", () => {
     ).toEqual({ window_preset: "6m" });
   });
 
-  // The CLI rejects a receipt that does not match the plan
-  // (`ui-write-flows-extended.ts:executeExtractionWindowSet`); a receipt for a
-  // different preset means the response belongs to another write.
+  // A receipt for a different preset than the one requested means the
+  // response belongs to another write.
   it("rejects a preset that is not the one requested", () => {
     expect(
       parseExtractionSettingsReceipt({ window_preset: "all" }, "6m"),

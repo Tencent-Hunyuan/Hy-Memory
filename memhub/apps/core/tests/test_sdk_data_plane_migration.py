@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import io
 import json
+import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from one_memory import cli
 from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.database_access import close_main_databases, main_database
+from one_memory.hy_sdk_migration import repair_sdk_metadata_from_bundle
 from one_memory.hy_sdk_types import HySdkRawPage
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
@@ -34,6 +37,7 @@ from one_memory.sdk_migration_runner import (
     abandoned_legacy_work,
     commit_sdk_cutover,
     move_pending_dispatches,
+    prepare_legacy_work_for_cutover,
     prepare_legacy_write_queue_for_cutover,
     recover_abandoned_staging,
     resume_legacy_cleanup,
@@ -65,6 +69,271 @@ def _start(store, migration_id="m1"):
         backend_fingerprint="backend",
         backup_bundle_id="bundle-1",
     )
+
+
+def test_post_cutover_metadata_repair_restores_source_and_original_times(store):
+    data_dir = store.database_path.parent
+    migration_id = "sdk-authority-v2-source-repair"
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "UPDATE memory_authority_state SET authority='sdk',migration_id=? WHERE singleton=1",
+            (migration_id,),
+        )
+    legacy = (
+        data_dir
+        / "backups"
+        / f"{migration_id}-pre-cutover.sdk-bundle"
+        / "management"
+        / "one-memory.sqlite3"
+    )
+    legacy.parent.mkdir(parents=True)
+    with sqlite3.connect(legacy) as database:
+        database.executescript(
+            """
+            CREATE TABLE memory_task_outputs (body TEXT);
+            CREATE TABLE governed_memories (
+                memory_id TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE evidence (
+                evidence_id TEXT, source_id TEXT, created_at TEXT, imported_at TEXT
+            );
+            """
+        )
+        database.execute(
+            "INSERT INTO governed_memories VALUES (?,?,?)",
+            ("legacy-1", "2026-10-18T00:00:00+00:00", "2026-10-18T01:00:00+00:00"),
+        )
+        database.execute(
+            "INSERT INTO evidence VALUES (?,?,?,?)",
+            ("e1", "workbuddy", "2254-01-01T00:00:00+00:00", "2026-10-17T00:00:00+00:00"),
+        )
+        database.execute(
+            "INSERT INTO memory_task_outputs VALUES (?)",
+            (
+                json.dumps(
+                    {
+                        "memory_id": "legacy-1",
+                        "hy_memory_id": "sdk-1",
+                        "support_refs": [{"evidence_id": "e1"}],
+                    }
+                ),
+            ),
+        )
+
+    from one_memory.sdk_vector_reattach import open_offline_chroma
+
+    vector = data_dir / "hy-memory" / "governed-v2" / "vector"
+    collection = open_offline_chroma(vector).get_or_create_collection("memory")
+    collection.add(
+        ids=["sdk-1"],
+        documents=["remember"],
+        embeddings=[[0.1, 0.2]],
+        metadatas=[
+            {
+                "source": "default",
+                "gmt_created": 1,
+                "memory_at": 8_962_051_200,
+            }
+        ],
+    )
+    coding = data_dir / "hy-memory" / "governed-v2" / "coding_cv.sqlite3"
+    with sqlite3.connect(coding) as database:
+        # A store written by hy-memory 2.0.6, before the conversation time
+        # column: the repair must add it through the SDK and then fill it.
+        database.executescript(
+            """
+            CREATE TABLE coding_memory_meta (
+                experience_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default_agent', task TEXT NOT NULL,
+                search_keys TEXT NOT NULL DEFAULT '[]', solution TEXT NOT NULL,
+                boundary_envs TEXT NOT NULL DEFAULT '', workspace_id TEXT,
+                branch TEXT, session_id TEXT, files TEXT NOT NULL DEFAULT '[]',
+                source_fact_ids TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 0.7,
+                source TEXT NOT NULL DEFAULT 'default',
+                extraction_source TEXT NOT NULL DEFAULT 'auto_extract',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE working_fact (
+                fact_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default_agent', session_id TEXT,
+                workspace_id TEXT, branch TEXT, source TEXT NOT NULL DEFAULT 'default',
+                statement TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]',
+                subject TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '',
+                fact_link TEXT, derived_experience_ids TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'active',
+                fact_chain_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+            );
+            """
+        )
+        database.execute(
+            "INSERT INTO coding_memory_meta "
+            "(experience_id,user_id,agent_id,task,solution,source,created_at,updated_at) "
+            "VALUES ('sdk-1','local','scope','remember','remember','default','now','now')"
+        )
+
+    result = repair_sdk_metadata_from_bundle(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        now=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+    metadata = collection.get(ids=["sdk-1"], include=["metadatas"])["metadatas"][0]
+    assert result.vector_rows == 1
+    assert result.coding_rows == 1
+    assert metadata["source"] == "workbuddy"
+    assert datetime.fromtimestamp(metadata["memory_at"], tz=UTC) == datetime(
+        2026, 10, 17, tzinfo=UTC
+    )
+    assert datetime.fromtimestamp(metadata["gmt_created"], tz=UTC) == datetime(
+        2026, 10, 18, tzinfo=UTC
+    )
+    with sqlite3.connect(coding) as database:
+        source, memory_at, created_at = database.execute(
+            "SELECT source,memory_at,created_at FROM coding_memory_meta WHERE experience_id='sdk-1'"
+        ).fetchone()
+    assert source == "workbuddy"
+    assert datetime.fromtimestamp(memory_at, tz=UTC) == datetime(2026, 10, 17, tzinfo=UTC)
+    assert created_at.startswith("2026-10-18T00:00:00")
+
+    repeated = repair_sdk_metadata_from_bundle(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        now=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+    assert repeated == result
+
+
+def test_metadata_repair_reaches_memories_the_cutover_backfilled_under_legacy_ids(store):
+    """The backfill wrote governed memories with no source; their evidence links them."""
+    data_dir = store.database_path.parent
+    migration_id = "sdk-authority-v2-backfill"
+    with main_database(store.database_path).write() as database, database:
+        database.execute(
+            "UPDATE memory_authority_state SET authority='sdk',migration_id=? WHERE singleton=1",
+            (migration_id,),
+        )
+    # A v1 receipt from the earlier, narrower repair must not block this one.
+    (data_dir / f".sdk-metadata-repair-v1-{migration_id}.json").write_text("{}\n")
+    # The later bundle was taken after legacy tables were retired; the earlier
+    # cutover's bundle still carries them.
+    for bundle, populated in (("sdk-authority-v1-old", True), (migration_id, False)):
+        legacy = data_dir / "backups" / f"{bundle}-pre-cutover.sdk-bundle" / "management"
+        legacy.mkdir(parents=True)
+        with closing(sqlite3.connect(legacy / "one-memory.sqlite3")) as database, database:
+            database.executescript(
+                """
+                CREATE TABLE evidence (
+                    evidence_id TEXT, source_id TEXT, created_at TEXT, imported_at TEXT
+                );
+                """
+            )
+            if not populated:
+                continue
+            database.executescript(
+                """
+                CREATE TABLE governed_memories (
+                    memory_id TEXT, created_at TEXT, updated_at TEXT
+                );
+                CREATE TABLE governed_memory_evidence (
+                    memory_id TEXT, evidence_id TEXT, active INTEGER
+                );
+                """
+            )
+            database.execute(
+                "INSERT INTO governed_memories VALUES ('legacy-7','2026-09-02T00:00:00+00:00',NULL)"
+            )
+            database.execute("INSERT INTO governed_memory_evidence VALUES ('legacy-7','e7',1)")
+            database.execute(
+                "INSERT INTO evidence VALUES ('e7','workbuddy','2026-09-01T00:00:00+00:00',NULL)"
+            )
+
+    from one_memory.sdk_vector_reattach import open_offline_chroma
+
+    vector = data_dir / "hy-memory" / "governed-v2" / "vector"
+    client = open_offline_chroma(vector)
+    collection = client.get_or_create_collection("memory")
+    imported = int(datetime(2026, 10, 20, tzinfo=UTC).timestamp())
+    collection.add(
+        ids=["legacy-7", "unlinked"],
+        documents=["backfilled", "hash-dated"],
+        embeddings=[[0.1, 0.2], [0.2, 0.1]],
+        metadatas=[
+            {"source": "default", "gmt_created": imported, "memory_at": imported},
+            {"source": "cursor", "gmt_created": imported, "memory_at": 8_962_051_200},
+        ],
+    )
+    client.close()
+
+    result = repair_sdk_metadata_from_bundle(
+        data_dir=data_dir,
+        database_path=store.database_path,
+        now=datetime(2026, 10, 25, tzinfo=UTC),
+    )
+
+    client = open_offline_chroma(vector)
+    rows = client.get_collection("memory").get(ids=["legacy-7", "unlinked"], include=["metadatas"])
+    client.close()
+    metadata = dict(zip(rows["ids"], rows["metadatas"], strict=True))
+    assert result.vector_rows == 2
+    assert metadata["legacy-7"]["source"] == "workbuddy"
+    assert metadata["legacy-7"]["memory_at"] == int(datetime(2026, 9, 1, tzinfo=UTC).timestamp())
+    assert metadata["legacy-7"]["gmt_created"] == int(datetime(2026, 9, 2, tzinfo=UTC).timestamp())
+    assert metadata["unlinked"]["source"] == "cursor"
+    assert metadata["unlinked"]["memory_at"] == imported
+
+
+def test_metadata_repair_keeps_source_unknown_when_outputs_disagree(tmp_path):
+    """Two legacy memories folded into one SDK memory pool their evidence."""
+    from one_memory.hy_sdk_migration import _legacy_metadata
+
+    legacy = tmp_path / "one-memory.sqlite3"
+    with closing(sqlite3.connect(legacy)) as database, database:
+        database.executescript(
+            """
+            CREATE TABLE memory_task_outputs (body TEXT);
+            CREATE TABLE governed_memories (
+                memory_id TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE evidence (
+                evidence_id TEXT, source_id TEXT, created_at TEXT, imported_at TEXT
+            );
+            """
+        )
+        database.executemany(
+            "INSERT INTO governed_memories VALUES (?,?,?)",
+            [
+                ("legacy-1", "2026-10-18T00:00:00+00:00", None),
+                ("legacy-2", "2026-10-12T00:00:00+00:00", None),
+            ],
+        )
+        database.executemany(
+            "INSERT INTO evidence VALUES (?,?,?,NULL)",
+            [
+                ("e1", "workbuddy", "2026-10-17T00:00:00+00:00"),
+                ("e2", "cursor", "2026-10-11T00:00:00+00:00"),
+            ],
+        )
+        database.executemany(
+            "INSERT INTO memory_task_outputs VALUES (?)",
+            [
+                (
+                    json.dumps(
+                        {
+                            "memory_id": legacy_id,
+                            "hy_memory_id": "sdk-1",
+                            "support_refs": [{"evidence_id": evidence_id}],
+                        }
+                    ),
+                )
+                for legacy_id, evidence_id in (("legacy-1", "e1"), ("legacy-2", "e2"))
+            ],
+        )
+
+    repaired = _legacy_metadata(legacy, now=datetime(2026, 10, 25, tzinfo=UTC))["sdk-1"]
+
+    assert repaired.source is None
+    assert repaired.memory_at == int(datetime(2026, 10, 17, tzinfo=UTC).timestamp())
+    assert repaired.created_at == int(datetime(2026, 10, 12, tzinfo=UTC).timestamp())
 
 
 def _insert_evidence(store, evidence_id, *, conversation="session-1", role="user", seq=1):
@@ -289,13 +558,9 @@ def test_finished_jobs_without_input_do_not_stop_the_migration(store):
 
 
 def _chroma(home: Path):
-    import chromadb
-    from chromadb.config import Settings as ChromaSettings
+    from one_memory.sdk_vector_reattach import open_offline_chroma
 
-    return chromadb.PersistentClient(
-        path=str(home / "hy-memory" / "governed-v2" / "vector"),
-        settings=ChromaSettings(anonymized_telemetry=False),
-    )
+    return open_offline_chroma(home / "hy-memory" / "governed-v2" / "vector")
 
 
 def _fill(client, name: str, ids: list[str], *, text: str = "old") -> None:
@@ -340,6 +605,38 @@ def test_legacy_vectors_are_renamed_and_newer_writes_are_kept(tmp_path) -> None:
     chat = client.get_collection(f"{current}_4").get(ids=["both"], include=["documents"])
     assert chat["documents"] == ["newer both"]
     assert reattach_legacy_vectors(tmp_path, profile) == ()
+
+
+def test_the_readback_can_open_the_store_right_after_reattach(tmp_path, monkeypatch) -> None:
+    """The 1.0.4 upgrade failed its first launch at `verify.readback`.
+
+    Reattach opened Chroma with `anonymized_telemetry=False` and never closed
+    it. The SDK then opened the same directory in the same process with
+    default settings, and Chroma refused: "An instance of Chroma already
+    exists ... with different settings". The second launch only passed because
+    nothing was left to reattach.
+    """
+    import chromadb
+
+    from one_memory.hy_sdk_runtime import builtin_retrieval_snapshot, vector_collection_bases
+    from one_memory.sdk_vector_reattach import reattach_legacy_vectors
+
+    profile = builtin_retrieval_snapshot()
+    current, legacy = vector_collection_bases(profile)
+    seeded = _chroma(tmp_path)
+    _fill(seeded, f"{legacy[0]}_4", ["a", "b"])
+    seeded.close()
+    # The migration process has not configured the SDK environment yet.
+    monkeypatch.delenv("ANONYMIZED_TELEMETRY", raising=False)
+
+    assert len(reattach_legacy_vectors(tmp_path, profile)) == 1
+
+    # What the SDK does next, in the same process: no settings of its own.
+    sdk = chromadb.PersistentClient(path=str(tmp_path / "hy-memory" / "governed-v2" / "vector"))
+    try:
+        assert sdk.get_collection(f"{current}_4").count() == 2
+    finally:
+        sdk.close()
 
 
 def _confirmed(store, *memory_ids: str, kind: str = "chat") -> None:
@@ -427,6 +724,29 @@ def test_cutover_waits_until_the_new_runtime_reads_every_chat_memory(store, acti
     assert result.state == "cutover"
     assert result.readback is not None and result.readback.passed
     assert store.authority() is MemoryAuthority.SDK
+
+
+def test_sdk_migrate_repairs_metadata_after_cutover_and_writes_the_receipt(store, active_profile):
+    """76/76 memories showed source=default after an upgrade whose repair failed.
+
+    The repair now runs here, offline, right after the cutover commits; Core's
+    startup finds the receipt and does nothing.
+    """
+    _confirmed(store, "m1")
+    home = store.database_path.parent
+
+    result = run_startup_migration(
+        data_dir=home,
+        runtime_build="21",
+        sdk_version="2.0.5",
+        namespace="governed-v2",
+        open_client=_reading({"m1"}),
+    )
+
+    assert result.state == "cutover"
+    receipt = home / f".sdk-metadata-repair-v2-{result.migration_id}.json"
+    assert receipt.is_file()
+    assert json.loads(receipt.read_text())["migration_id"] == result.migration_id
 
 
 def test_retired_coding_experiences_do_not_block_but_an_empty_store_does(store, active_profile):
@@ -575,6 +895,116 @@ def test_legacy_work_that_may_have_reached_the_sdk_does_not_block_cutover(tmp_pa
         sdk_version="2.0.5",
     )
     assert store.authority() is MemoryAuthority.SDK
+
+
+def test_pre_upgrade_unknown_writes_are_settled_at_cutover_not_retried(store):
+    """A migrated 1.0.4 home kept 1000+ jobs unknown forever.
+
+    The legacy pipeline invoked them, so the SDK's write-outcome inquiry knows
+    none of them and the automatic reconcile could never settle one.
+    """
+    from one_memory.memory_server.durable_queue import (
+        CANCELLED,
+        PENDING,
+        RUNNING,
+        UNKNOWN,
+    )
+
+    queue = DurableWriteQueue(store.database_path)
+
+    def job(key: str, state: str, *, invoked: bool) -> str:
+        identifier = queue.submit(
+            WriteRequest(
+                internal_session_id="session-1",
+                source_id="cursor",
+                batch_identity=BatchIdentity(
+                    internal_session_id="session-1", first_round=1, last_round=1
+                ),
+                evidence_ids=["gone"],
+                idempotency_key=key,
+            )
+        ).job_id
+        with main_database(store.database_path).write() as database, database:
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,hy_invoked=?,"
+                "last_error='model_content_outcome_unknown' WHERE job_id=?",
+                (state, int(invoked), identifier),
+            )
+        return identifier
+
+    # Their Evidence is gone too, which must not block the cutover.
+    unknown = [job(f"unknown-{index}", UNKNOWN, invoked=True) for index in range(3)]
+    sent_running = job("sent-running", RUNNING, invoked=True)
+    finished = job("finished", "completed", invoked=True)
+
+    first = prepare_legacy_work_for_cutover(store.database_path)
+    assert first.abandoned == {"unknown_write_jobs": 4}
+    # Resumed after an interruption: nothing changes, the count is the same.
+    again = prepare_legacy_work_for_cutover(store.database_path)
+    assert again.as_document() == first.as_document()
+
+    with main_database(store.database_path).read() as database:
+        rows = dict(
+            (str(row[0]), (str(row[1]), str(row[2]), int(row[3])))
+            for row in database.execute(
+                "SELECT job_id,state,last_error,hy_invoked FROM memory_write_jobs"
+            )
+        )
+    for identifier in (*unknown, sent_running):
+        assert rows[identifier] == (CANCELLED, "abandoned_at_cutover", 1)
+    assert rows[finished][0] == "completed"
+    surviving = DurableWriteQueue(store.database_path, sdk_authority=True)
+    assert surviving.unknown_jobs() == ()
+    # Never requeued: they may already have written.
+    assert surviving.retry_unknown_confirmed(unknown[0]) == 0
+    assert surviving.readmit_parked() == 0
+    assert PENDING not in {state for state, _, _ in rows.values()}
+
+
+def test_retrying_unknown_writes_works_after_the_legacy_tables_are_dropped(store):
+    """The retry button raised `no such table: memory_tasks` after an upgrade."""
+    from one_memory.memory_server.durable_queue import PENDING, UNKNOWN
+    from one_memory.target_schema import drop_legacy_tables
+
+    queue = DurableWriteQueue(store.database_path)
+    identifier = queue.submit(
+        WriteRequest(
+            internal_session_id="session-1",
+            source_id="cursor",
+            batch_identity=BatchIdentity(
+                internal_session_id="session-1", first_round=1, last_round=1
+            ),
+            evidence_ids=["e1"],
+            idempotency_key="after-upgrade",
+        )
+    ).job_id
+    drop_legacy_tables(store.database_path)
+    assert legacy_tables_present(store.database_path) == ()
+    old = datetime(2000, 1, 1, tzinfo=UTC).isoformat()
+
+    def make_unknown(code: str, attempts: int) -> None:
+        with main_database(store.database_path).write() as database, database:
+            database.execute(
+                "UPDATE memory_write_jobs SET state=?,hy_invoked=1,last_error=?,"
+                "attempts=?,updated_at=? WHERE job_id=?",
+                (UNKNOWN, code, attempts, old, identifier),
+            )
+
+    for sdk_authority in (True, False):
+        surviving = DurableWriteQueue(store.database_path, sdk_authority=sdk_authority)
+        make_unknown("model_content_outcome_unknown", 1)
+        assert surviving.resolve_unknown_from_linked_output(identifier) is False
+        assert surviving.retry_unknown_confirmed(identifier) == 1
+        assert surviving.get("after-upgrade").state == PENDING
+
+        make_unknown("hy_memory_timeout", 1)
+        since = datetime.now(UTC)
+        assert surviving.retry_timed_out_unknown_after_reconcile(older_than=since) == 1
+        make_unknown("model_content_outcome_unknown", 1)
+        assert surviving.retry_first_unknown_after_reconcile(older_than=since) == 1
+        if sdk_authority:
+            # The SDK-authority queue never brings a dropped table back.
+            assert legacy_tables_present(store.database_path) == ()
 
 
 def _protective(home: Path) -> Path:
@@ -813,18 +1243,14 @@ def _app_settings(tmp_path) -> Settings:
 
 
 async def _authority(tmp_path) -> tuple[dict[str, object], str]:
+    """What a starting Core reads as authority, and the gate it then holds."""
     app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
-    async with (
-        app.router.lifespan_context(app),
-        AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-            headers={"Authorization": "Bearer authority-test"},
-        ) as client,
-    ):
-        response = await client.get("/api/v2/memory-authority")
-        assert response.status_code == 200
-        return response.json(), app.state.memory_authority.value
+    async with app.router.lifespan_context(app):
+        authority, migration_id = app.state.sdk_data_plane_migrations.authority_state()
+        return (
+            {"authority": authority.value, "migration_id": migration_id},
+            app.state.memory_authority.value,
+        )
 
 
 @pytest.mark.integration
@@ -887,10 +1313,24 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
             "source": "cursor",
         }
         for memory_id in ("a", "b")
+    ] + [
+        {
+            "memory_id": memory_id,
+            "content": f"backfilled {memory_id}",
+            "layer": "l2_fact",
+            "status": "active",
+            "user_id": "local",
+            "agent_id": "one-memory",
+            "session_id": "default_session",
+            "source": "default",
+        }
+        for memory_id in ("c", "d")
     ]
+    listed = []
 
     class Client:
-        def list_memories(self, **_kwargs):
+        def list_memories(self, **kwargs):
+            listed.append(kwargs)
             return {"vdb": {"memories": rows, "total": 7}}
 
     class Handle:
@@ -925,26 +1365,105 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
                 )
 
             app.state.sdk_memory_runtime.graph_snapshot = graph_snapshot
-            assert (await client.get("/api/v1/memories/graph")).status_code == 409
-            response = await client.get("/api/v2/memories/graph")
+            response = await client.get(
+                "/api/v2/memories/graph",
+                params={"source": "cursor", "offset": 100, "limit": 100},
+            )
             app.state.sdk_client_handle = original
             assert response.status_code == 200
             return response.json()
 
     graph = asyncio.run(scenario())
-    assert (graph["total_memories"], graph["projected_memories"]) == (7, 2)
+    assert listed[0]["include_sources"] == ["cursor"]
+    assert listed[0]["scene"] == "all"
+    assert listed[0]["statuses"] == ["active"]
+    assert (listed[0]["offset"], listed[0]["limit"]) == (100, 100)
+    assert (graph["total_memories"], graph["projected_memories"]) == (7, 4)
     assert {node["node_id"] for node in graph["nodes"]} == {
         "memory:a",
         "memory:b",
+        "memory:c",
+        "memory:d",
         "source:cursor",
         "hy:t1",
     }
+    # "default_session" is the SDK's filler, not a conversation.
+    assert [
+        (edge["source_node_id"], edge["target_node_id"])
+        for edge in graph["edges"]
+        if edge["relation"] == "same_conversation"
+    ] == [("memory:a", "memory:b")]
     assert {edge["relation"] for edge in graph["edges"]} == {
         "evidence_source",
         "same_conversation",
         "derived_from",
     }
     assert graph["hy_graph_available"] is True
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_sdk
+def test_sdk_memory_map_still_draws_memories_from_a_revoked_source(tmp_path) -> None:
+    # Revoking a source stops new reads from it; memories already distilled
+    # from it stay visible, so the map agrees with the list.
+    async def scenario():
+        app = create_app(_app_settings(tmp_path), secret_store=InMemorySecretStore())
+
+        class Client:
+            def list_memories(self, **_kwargs):
+                return {
+                    "vdb": {
+                        "memories": [
+                            {
+                                "memory_id": "kept",
+                                "content": "distilled before revocation",
+                                "layer": "l2_fact",
+                                "status": "active",
+                                "user_id": "local",
+                                "agent_id": "all-apps",
+                                "session_id": "s1",
+                                "source": "cursor",
+                            }
+                        ],
+                        "total": 1,
+                    }
+                }
+
+        class Handle:
+            async def client(self):
+                return Client()
+
+            async def close(self):
+                return None
+
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer authority-test"},
+            ) as client,
+        ):
+            app.state.sdk_client_handle = Handle()
+            database = app.state.settings.data_dir / "one-memory.sqlite3"
+            with sqlite3.connect(database) as db:
+                db.execute(
+                    "INSERT INTO source_grants "
+                    "(user_id,source_id,root_path,requested_path,root_identity,"
+                    "candidate_kind,granted_at,revoked_at,revision) VALUES "
+                    "('local','cursor','/fixture','/fixture','fixture','default',"
+                    "'2026-10-01T00:00:00Z','2026-10-02T00:00:00Z',1)"
+                )
+            response = await client.get(
+                "/api/v2/memories/graph",
+                params={"source": "cursor", "limit": 100},
+            )
+            assert response.status_code == 200
+            return response.json()
+
+    graph = asyncio.run(scenario())
+    assert (graph["total_memories"], graph["projected_memories"]) == (1, 1)
+    assert "memory:kept" in {node["node_id"] for node in graph["nodes"]}
 
 
 def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:

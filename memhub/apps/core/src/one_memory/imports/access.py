@@ -50,6 +50,10 @@ class AuthorizedSourceFile:
     size: int
     modified_ns: int
     changed_ns: int
+    # Source-specific change token (for example Cursor's WAL identity). It is
+    # cursor metadata only; modified_ns remains the real filesystem mtime used
+    # as a fallback conversation timestamp.
+    cursor_version: str | None = None
     root_identity: str | None = None
     requested_root: Path | None = None
     access_check: Callable[[], None] | None = field(default=None, repr=False, compare=False)

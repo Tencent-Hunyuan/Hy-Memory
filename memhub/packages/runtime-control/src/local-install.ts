@@ -367,13 +367,23 @@ async function inspectBuildNumberTransition(options: {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("install_current_unmanaged");
   }
-  const selected = options.allowSameBuildReplace
-    ? await verifyDistribution(
+  let selectedVerified = true;
+  let selected = await readManifest(target).catch(() => null);
+  if (options.allowSameBuildReplace) {
+    // The opt-in may replace a dirty tree, but only one whose build it can
+    // still read: without a manifest the downgrade check below has nothing to
+    // compare, and a newer runtime would be overwritten by an older one.
+    if (selected === null) throw new Error("distribution_manifest_invalid");
+    try {
+      selected = await verifyDistribution(
         target,
         options.incoming.platform,
         options.incoming.arch,
-      )
-    : await readManifest(target).catch(() => null);
+      );
+    } catch {
+      selectedVerified = false;
+    }
+  }
   if (selected === null) return { sameBuildReplace: false };
   // Pre-contract packages have no `build_number`. Comparing them against an
   // invented ordinal would either break the hourly chain or manufacture a
@@ -385,6 +395,9 @@ async function inspectBuildNumberTransition(options: {
   if (options.incoming.build_number > selected.build_number)
     return { sameBuildReplace: false };
   if (options.incoming.build_number === selected.build_number) {
+    if (!selectedVerified && options.allowSameBuildReplace) {
+      return { sameBuildReplace: true };
+    }
     // Same build: an idempotent reinstall is fine only if the bytes match. The
     // incoming source is verified, so compare it against the selected tree.
     try {
@@ -395,11 +408,8 @@ async function inspectBuildNumberTransition(options: {
       }
       if (
         !isReleaseCommit(selected.git_commit) ||
-        !isReleaseCommit(options.incoming.git_commit) ||
-        selected.git_commit === options.incoming.git_commit
+        !isReleaseCommit(options.incoming.git_commit)
       ) {
-        // Same commit with different bytes is not a new build: it is a
-        // non-reproducible or corrupted artifact and must stay rejected.
         throw new Error("installed_version_conflict");
       }
       return { sameBuildReplace: true };

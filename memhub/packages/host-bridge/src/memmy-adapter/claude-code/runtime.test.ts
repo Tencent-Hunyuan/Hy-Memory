@@ -88,6 +88,39 @@ describe("MH-C01 event contract", () => {
     expect(f.notifySourceChanged).not.toHaveBeenCalled();
   });
 
+  it("accepts a raw-mode recall and labels its hits as conversation excerpts", async () => {
+    const f = fixture();
+    f.recall.mockResolvedValueOnce({
+      ...hit,
+      mode: "raw",
+      fallback_reason: "no_memories",
+      hits: [
+        {
+          memory_id: "raw-1",
+          content: "We said Friday",
+          content_format: "raw",
+          kind: "raw",
+          source: "cursor",
+          session_id: "s-raw",
+          scopes: [],
+          evidence_ids: [],
+          updated_at: "2026-09-14T00:00:00Z",
+          score: 0.4,
+        },
+      ],
+      used_characters: 14,
+    });
+    const result = await f.adapter.handle({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "s1",
+      prompt: "previous decision",
+    });
+    expect(result.state).toBe("grounded");
+    const context = result.output.hookSpecificOutput?.additionalContext ?? "";
+    expect(context).toContain("raw-1");
+    expect(context).toContain("not confirmed memories");
+  });
+
   it("Stop sends no body, path, source, endpoint or token and repeated stops coalesce", async () => {
     const f = fixture();
     await f.adapter.handle({

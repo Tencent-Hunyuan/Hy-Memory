@@ -418,9 +418,9 @@ describe("A2 dual-mode init", () => {
   });
 
   // QA-CLI R3 F1: a stale CWD `init.one-memory-attempt` used to poison every
-  // later wizard run. The fence now lives under the isolated data dir and is
-  // keyed by the operation id.
-  it("ignores a stale CWD init fence and keeps its fence under the data dir", async () => {
+  // later wizard run. There are no plan files or attempt fences any more: the
+  // connect request id is the idempotency key Core keeps.
+  it("ignores a stale CWD init fence and writes no fence files", async () => {
     transport.get.mockImplementation(async (url: string) =>
       url === "/api/v1/sources"
         ? { status: 200, data: [candidate("codex", "Codex")] }
@@ -471,7 +471,7 @@ describe("A2 dual-mode init", () => {
     const dataEntries = await readdir(dataDir);
     expect(
       dataEntries.some((entry) => entry.startsWith(".cli-init-attempt-")),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("keeps selected Harnesses frozen without creating history jobs", async () => {
@@ -506,7 +506,7 @@ describe("A2 dual-mode init", () => {
   });
 });
 
-describe("A19 init --all-detected", () => {
+describe("A19 sources connect --all-detected (old spelling: init --all-detected)", () => {
   it("connects every found source in one batch call without prompting", async () => {
     transport.get.mockImplementation(async (url: string) =>
       url === "/api/v1/sources"
@@ -556,7 +556,7 @@ describe("A19 init --all-detected", () => {
     expect(prompter.asked).toBe(0);
     expect(code).toBe(0);
     const document = JSON.parse(streams.value());
-    expect(document.command).toBe("init");
+    expect(document.command).toBe("sources connect");
     expect(document.state).toBe("committed");
     expect(
       document.sources.map((row: { source_id: string }) => row.source_id),

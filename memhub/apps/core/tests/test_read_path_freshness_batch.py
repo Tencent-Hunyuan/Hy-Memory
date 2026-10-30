@@ -102,7 +102,7 @@ def test_the_read_does_not_scale_its_query_count_with_the_page(library):
     the citation subquery 0.08 s. The UDF runs several queries per memory —
     proofs, versions, active citations, evidence sizes — so the count grows
     with the page, and the cost grows again when the library is being written
-    to. That is what put both `/api/v1/memories` and the map over their five
+    to. That is what put both the legacy memory list and the map over their five
     second interrupt.
 
     The per-memory lookups can be read once for the whole page. Quadrupling

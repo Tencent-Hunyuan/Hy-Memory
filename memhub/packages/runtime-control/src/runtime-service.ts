@@ -1,12 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync, type Stats } from "node:fs";
 import {
   chmod,
   lstat,
   mkdir,
+  readdir,
   readFile,
   rename,
   rm,
-  rmdir,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -22,7 +24,6 @@ export interface ManagedRuntime {
    * the outer service receipt so a *separate* process (`status`) can report
    * `degraded` without sharing memory with the Runtime. */
   readonly sidecarState?: "running" | "failed" | "stopped";
-  readonly readerPort?: number | null;
   start(): Promise<unknown>;
   stop(): Promise<void>;
 }
@@ -36,6 +37,14 @@ export interface RuntimeServiceOptions {
   ): ManagedRuntime | Promise<ManagedRuntime>;
   pid?: number;
   processIsAlive?: (pid: number) => boolean;
+  /** Identity of the current boot (`kern.bootsessionuuid` on macOS,
+   * `/proc/sys/kernel/random/boot_id` on Linux, `null` when unknown).
+   * Injectable so tests can simulate a reboot without one. */
+  bootId?: () => string | null;
+  /** Wall-clock epoch (ms) the kernel reports for the current boot, or `null`
+   * when unknown. Consulted only for a legacy lock directory without
+   * owner.json; see removeUnownedLease. Injectable for tests. */
+  legacyBootTime?: () => number | null;
   diagnostics?: DiagnosticSink;
 }
 
@@ -83,16 +92,10 @@ export class RuntimeService {
         instanceId: connection.instanceId,
         coreBaseUrl: connection.coreBaseUrl,
       };
-      const readerPort =
-        this.options.createSupervisor.length > 0
-          ? (supervisor as { readerPort?: number | null }).readerPort
-          : undefined;
       await this.writeReceipt(
         "running",
         connection.instanceId,
         connection.coreBaseUrl,
-        undefined,
-        readerPort,
       );
       this.started = true;
       await this.options.diagnostics?.log({
@@ -193,29 +196,81 @@ export class RuntimeService {
     const lock = this.lockPath();
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await mkdir(lock, { mode: 0o700 });
-        const identity = await lstat(lock);
-        this.lease = { dev: identity.dev, ino: identity.ino };
-        try {
-          await privateWrite(
-            path.join(lock, "owner.json"),
-            JSON.stringify({
-              pid: this.pid(),
-              created_at: new Date().toISOString(),
-            }),
-          );
-        } catch (error) {
-          await this.releaseLease();
-          throw error;
-        }
-        return;
+        await this.publishLease(lock);
+        break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) {
+        if (!leaseTaken(error) || attempt > 0) {
           throw new Error("runtime_service_lock_unavailable", { cause: error });
         }
         await this.removeStaleLease(lock);
       }
     }
+    await this.sweepLeaseDebris();
+  }
+
+  /** Publish the lease in one step: the lock directory becomes visible with
+   * owner.json (pid, created_at, boot_id) already inside it, so a power cut
+   * can leave a staging directory behind but never a lock without an owner.
+   * The old mkdir -> write sequence had exactly that window (issue #184). */
+  private async publishLease(lock: string): Promise<void> {
+    const staging = `${lock}${STAGING_INFIX}${randomUUID()}`;
+    await mkdir(staging, { mode: 0o700 });
+    try {
+      await privateWrite(
+        path.join(staging, "owner.json"),
+        JSON.stringify({
+          pid: this.pid(),
+          created_at: new Date().toISOString(),
+          boot_id: this.currentBootId(),
+        }),
+      );
+      // POSIX rename() silently REPLACES an existing *empty* directory, so on
+      // its own it is not an exclusive create. A non-empty lock (every lease
+      // this version publishes) makes it fail with EEXIST/ENOTEMPTY. An empty
+      // lock can only come from an older version's two-step mkdir -> write:
+      // either power-cut debris, or a live acquire in flight. The latter must
+      // not be overwritten, and the former has to go through
+      // removeStaleLease's legacy rule rather than be replaced blindly, so an
+      // existing lock of any kind is reported as taken here. The residual race
+      // (an old binary mkdir-ing between this check and the rename) needs an
+      // old and a new Runtime starting on the same home within microseconds;
+      // this version never creates an empty lock, since releaseLease also
+      // removes it with a single rename.
+      if (await pathExists(lock)) throw leaseTakenError();
+      await rename(staging, lock);
+    } catch (error) {
+      await rm(staging, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+      throw error;
+    }
+    // rename() keeps the inode, so this is the published directory's identity;
+    // releaseLease compares it before touching the lock.
+    const identity = await lstat(lock);
+    this.lease = { dev: identity.dev, ino: identity.ino };
+  }
+
+  /** Remove staging and cleared-lease directories left behind by a crash.
+   * Runs only while this process holds the lease, so a staging directory is
+   * either debris or belongs to a competitor that has already lost (its
+   * rename cannot succeed over our non-empty lock). Best-effort. */
+  private async sweepLeaseDebris(): Promise<void> {
+    const base = path.basename(this.lockPath());
+    const names = await readdir(this.options.dataDir).catch((): string[] => []);
+    await Promise.all(
+      names
+        .filter(
+          (name) =>
+            name.startsWith(`${base}${STAGING_INFIX}`) ||
+            name.startsWith(`${base}${STALE_INFIX}`),
+        )
+        .map((name) =>
+          rm(path.join(this.options.dataDir, name), {
+            recursive: true,
+            force: true,
+          }).catch(() => undefined),
+        ),
+    );
   }
 
   private async removeStaleLease(lock: string): Promise<void> {
@@ -230,25 +285,81 @@ export class RuntimeService {
     ) {
       throw new Error("runtime_service_lock_unsafe");
     }
+    let raw: string;
+    try {
+      raw = await readFile(path.join(lock, "owner.json"), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        await this.removeUnownedLease(lock, info);
+        return;
+      }
+      throw new Error("runtime_service_lock_invalid", { cause: error });
+    }
     let owner: unknown;
     try {
-      owner = JSON.parse(await readFile(path.join(lock, "owner.json"), "utf8"));
+      owner = JSON.parse(raw);
     } catch {
       throw new Error("runtime_service_lock_invalid");
     }
-    const pid =
-      owner && typeof owner === "object"
-        ? (owner as { pid?: unknown }).pid
-        : undefined;
+    if (!owner || typeof owner !== "object" || Array.isArray(owner)) {
+      throw new Error("runtime_service_lock_invalid");
+    }
+    // A lease written during another boot cannot have a living owner: every
+    // process of that boot is gone, and a PID that answers the liveness probe
+    // now merely reused the number. Without this, a forced power-off left the
+    // lock behind, the reboot recycled the owner's PID, and launchd's
+    // KeepAlive restarted the wrapper into runtime_service_already_running
+    // without end (issue #184). The kernel's boot identity is compared, not
+    // the wall clock: the clock can jump forward while a lease is held (no
+    // RTC, VM resume, NTP or manual correction) and make a live lease look
+    // older than the boot. When either side is unknown (a lease from an older
+    // version, an unsupported platform) the PID probe below decides, as before.
+    const ownerBoot = (owner as { boot_id?: unknown }).boot_id;
+    const currentBoot = this.currentBootId();
+    if (
+      typeof ownerBoot === "string" &&
+      ownerBoot !== "" &&
+      currentBoot !== null &&
+      ownerBoot !== currentBoot
+    ) {
+      await this.clearLeaseDir(lock);
+      return;
+    }
+    const pid = (owner as { pid?: unknown }).pid;
     if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 1) {
       throw new Error("runtime_service_lock_invalid");
     }
     if ((this.options.processIsAlive ?? processIsAlive)(pid)) {
       throw new Error("runtime_service_already_running");
     }
-    const stale = `${lock}.stale.${randomUUID()}`;
+    await this.clearLeaseDir(lock);
+  }
+
+  /** A lock directory without owner.json. This version publishes owner.json
+   * together with the lock and releases it with one rename, so such a
+   * directory was written by an older version (mkdir -> write, where a power
+   * cut in between leaves it empty) or by hand. It names no PID and no boot,
+   * so the only usable evidence is "created before the current boot": clear
+   * it then, and otherwise keep the previous refusal
+   * (runtime_service_lock_invalid), including when the boot time is unknown.
+   *
+   * The kernel boot time and the directory mtime are both wall-clock values,
+   * which is why lease ownership itself no longer depends on them. Here a
+   * forward clock jump can only hurt if an older binary is live inside its
+   * mkdir -> write window at that very moment; a backward jump only keeps the
+   * old refusal. */
+  private async removeUnownedLease(lock: string, info: Stats): Promise<void> {
+    const bootTime = (this.options.legacyBootTime ?? currentBootTimeMs)();
+    if (bootTime === null || !(info.mtimeMs < bootTime)) {
+      throw new Error("runtime_service_lock_invalid");
+    }
+    await this.clearLeaseDir(lock);
+  }
+
+  private async clearLeaseDir(lock: string): Promise<void> {
+    const stale = `${lock}${STALE_INFIX}${randomUUID()}`;
     await rename(lock, stale);
-    await rm(stale, { recursive: true });
+    await rm(stale, { recursive: true, force: true });
   }
 
   private async releaseLease(): Promise<void> {
@@ -259,8 +370,19 @@ export class RuntimeService {
     const current = await lstat(lock).catch(() => null);
     if (!current || current.dev !== lease.dev || current.ino !== lease.ino)
       return;
-    await rm(path.join(lock, "owner.json"), { force: true });
-    await rmdir(lock).catch(() => undefined);
+    // Take the lock away with one rename so no observer ever sees it without
+    // owner.json: an owner-less lock is left to mean legacy debris.
+    const released = `${lock}${STALE_INFIX}${randomUUID()}`;
+    try {
+      await rename(lock, released);
+    } catch {
+      return;
+    }
+    await rm(released, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  private currentBootId(): string | null {
+    return (this.options.bootId ?? currentBootId)();
   }
 
   private async writeReceipt(
@@ -268,7 +390,6 @@ export class RuntimeService {
     instanceId: string,
     coreBaseUrl: string,
     sidecar?: "running" | "failed",
-    readerPort?: number | null,
   ): Promise<void> {
     const url = new URL(coreBaseUrl);
     if (url.hostname !== "127.0.0.1" || !url.port) {
@@ -284,7 +405,6 @@ export class RuntimeService {
           instance_id: instanceId,
           pid: this.pid(),
           core_port: Number(url.port),
-          ...(readerPort != null ? { reader_port: readerPort } : {}),
           ...(sidecar === undefined ? {} : { sidecar }),
           started_at: new Date().toISOString(),
         },
@@ -309,6 +429,91 @@ export class RuntimeService {
   private pid(): number {
     return this.options.pid ?? process.pid;
   }
+}
+
+const STAGING_INFIX = ".tmp-";
+const STALE_INFIX = ".stale.";
+
+function leaseTaken(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EEXIST" || code === "ENOTEMPTY";
+}
+
+function leaseTakenError(): NodeJS.ErrnoException {
+  return Object.assign(new Error("runtime_service_lock_exists"), {
+    code: "EEXIST",
+  });
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await lstat(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function sysctl(name: string): string {
+  return execFileSync("/usr/sbin/sysctl", ["-n", name], {
+    encoding: "utf8",
+    timeout: 1000,
+    maxBuffer: 4096,
+    killSignal: "SIGKILL",
+    shell: false,
+    stdio: ["ignore", "pipe", "ignore"],
+    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+  });
+}
+
+let cachedBootId: string | null | undefined;
+
+/** The kernel's identity for the current boot, cached per process (it cannot
+ * change while the process lives). `null` on unsupported platforms or when
+ * the source cannot be read; the lease logic then falls back to the PID
+ * probe. */
+function currentBootId(): string | null {
+  if (cachedBootId === undefined) cachedBootId = readBootId();
+  return cachedBootId;
+}
+
+function readBootId(): string | null {
+  try {
+    let raw: string;
+    if (process.platform === "darwin") raw = sysctl("kern.bootsessionuuid");
+    else if (process.platform === "linux")
+      raw = readFileSync("/proc/sys/kernel/random/boot_id", "utf8");
+    else return null;
+    const id = raw.trim();
+    return /^[0-9A-Za-z-]{8,64}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Wall-clock epoch (ms) the kernel reports for the current boot, or `null`.
+ * Used only for owner-less legacy lock directories. */
+function currentBootTimeMs(): number | null {
+  try {
+    if (process.platform === "darwin") {
+      const match = /\bsec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(
+        sysctl("kern.boottime"),
+      );
+      return match
+        ? Number(match[1]) * 1000 + Math.floor(Number(match[2]) / 1000)
+        : null;
+    }
+    if (process.platform === "linux") {
+      const match = /^btime\s+(\d+)\s*$/m.exec(
+        readFileSync("/proc/stat", "utf8"),
+      );
+      return match ? Number(match[1]) * 1000 : null;
+    }
+  } catch {
+    // Unknown boot time: the caller keeps refusing.
+  }
+  return null;
 }
 
 async function privateWrite(target: string, value: string): Promise<void> {

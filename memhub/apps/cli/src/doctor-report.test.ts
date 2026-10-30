@@ -134,11 +134,6 @@ function progress(): ProgressDocument {
     generation: {
       summary_state: { state: "ok" },
       summary: { waiting_for_model: 1, failed: 0 },
-      tasks_state: { state: "ok" },
-      tasks: [{ task_id: "t1", status: "waiting_for_model" }],
-      returned: 1,
-      validated: 1,
-      output_truncated: false,
     },
   };
 }

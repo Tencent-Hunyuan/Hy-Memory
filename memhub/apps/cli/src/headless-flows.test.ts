@@ -147,252 +147,150 @@ beforeEach(async () => {
   );
 });
 
-describe("headless source setup and import", () => {
-  it("creates a confirmation-bound plan without exposing the source path", async () => {
-    const result = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
+const CONNECT = ["sources", "connect", "codex", "--import", "--json"];
+
+function connectReceipt(
+  accepted: string[],
+  failed: Record<string, string>,
+  jobs: unknown[],
+) {
+  return async (_url: string, body: Record<string, unknown>) => ({
+    status: 200,
+    data: {
+      request_id: body.request_id,
+      accepted_source_ids: accepted,
+      failed_sources: failed,
+      jobs,
+    },
+  });
+}
+
+describe("sources connect --import", () => {
+  it("connects and imports in one direct request and returns the request id", async () => {
+    const result = await capturedRun(CONNECT);
     expect(result.code).toBe(0);
     const document = JSON.parse(result.stdout);
-    expect(document).toMatchObject({
-      state: "preview",
-      plan: {
-        kind: "source_import",
-        source_ids: ["codex"],
-        source_roots: { codex: "root-identity-1" },
-        full_rescan: false,
-        onboarding: true,
-      },
-    });
-    expect(document.plan.request_id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(document.plan.digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(result.stdout).not.toContain("SYNTHETIC_PRIVATE_PATH");
-    expect(transport.post).not.toHaveBeenCalled();
-  });
-
-  it("executes exactly the saved plan only after explicit confirmation", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const planFile = path.join(directory, "source-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
-    transport.post.mockImplementation(
-      async (_url: string, body: Record<string, unknown>) => ({
-        status: 200,
-        data: {
-          request_id: body.request_id,
-          accepted_source_ids: ["codex"],
-          failed_sources: {},
-          jobs: [importJob()],
-        },
-      }),
-    );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout).state).toBe("committed");
+    expect(document.state).toBe("committed");
+    expect(document.operation_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(transport.post).toHaveBeenCalledTimes(1);
     expect(transport.post).toHaveBeenCalledWith(
       "/api/v1/sources/connect",
       expect.objectContaining({
+        request_id: document.operation_id,
         source_ids: ["codex"],
         source_roots: { codex: "root-identity-1" },
+        confirm_environment_overrides: false,
         full_rescan: false,
+        onboarding: true,
         enable_sync: true,
       }),
       undefined,
     );
+    expect(result.stdout).not.toContain("SYNTHETIC_PRIVATE_PATH");
+  });
+
+  it("uses a caller-supplied --request-id as the idempotency key", async () => {
+    const requestId = "33333333-3333-4333-8333-333333333333";
+    const result = await capturedRun([...CONNECT, "--request-id", requestId]);
+    expect(result.code).toBe(0);
+    expect(transport.post.mock.calls[0][1]).toMatchObject({
+      request_id: requestId,
+    });
+    expect(
+      (await capturedRun([...CONNECT, "--request-id", "not-a-uuid"])).code,
+    ).toBe(2);
+    // A request id only means something for an import.
+    expect(
+      (
+        await capturedRun([
+          "sources",
+          "connect",
+          "codex",
+          "--request-id",
+          requestId,
+        ])
+      ).code,
+    ).toBe(2);
+  });
+
+  it("refuses an environment-override source without --confirm-overrides", async () => {
+    transport.get.mockImplementation(async (url: string) =>
+      url === "/api/v1/sources"
+        ? {
+            status: 200,
+            data: [{ ...SOURCE, candidate_kind: "environment_override" }],
+          }
+        : { status: 404, data: {} },
+    );
+    const refused = await capturedRun(CONNECT);
+    expect(refused.code).toBe(1);
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      state: "rejected",
+      code: "environment_override_confirmation_required",
+      receipt: { override_required_source_ids: ["codex"] },
+    });
+    expect(transport.post).not.toHaveBeenCalled();
+
+    const confirmed = await capturedRun([...CONNECT, "--confirm-overrides"]);
+    expect(confirmed.code).toBe(0);
+    expect(transport.post.mock.calls[0][1]).toMatchObject({
+      confirm_environment_overrides: true,
+    });
   });
 
   // C8 P2 (2026-09-29 H18r2): when every source was rejected, the receipt had
-  // `accepted_source_ids: []` and `failed_sources: {claude-code:
-  // "source_read_disabled"}`, yet the CLI still reported `committed` and exit 0.
-  // "Nothing was accepted" is not success. Mirrors the A19 exit-code contract.
-  it("reports all-rejected as rejected with a non-zero exit and the reason", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const planFile = path.join(directory, "reject-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
+  // `accepted_source_ids: []`, yet the CLI still reported `committed`.
+  it("reports all-rejected as rejected with a non-zero exit and the reason, in JSON and text", async () => {
     transport.post.mockImplementation(
-      async (_url: string, body: Record<string, unknown>) => ({
-        status: 200,
-        data: {
-          request_id: body.request_id,
-          accepted_source_ids: [],
-          failed_sources: { codex: "source_read_disabled" },
-          jobs: [],
-        },
-      }),
+      connectReceipt([], { codex: "source_read_disabled" }, []),
     );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(result.code).not.toBe(0);
+    const result = await capturedRun(CONNECT);
+    expect(result.code).toBe(1);
     const document = JSON.parse(result.stdout);
-    expect(document.state).toBe("rejected");
-    expect(document.receipt.failed_sources).toEqual({
-      codex: "source_read_disabled",
-    });
-  });
-
-  it("reports partial success with a non-zero exit and keeps the receipt", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const planFile = path.join(directory, "partial-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
-    transport.post.mockImplementation(
-      async (_url: string, body: Record<string, unknown>) => ({
-        status: 200,
-        data: {
-          request_id: body.request_id,
-          accepted_source_ids: ["codex"],
-          failed_sources: { cursor: "source_identity_changed" },
-          jobs: [importJob()],
-        },
-      }),
-    );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(result.code).not.toBe(0);
-    const document = JSON.parse(result.stdout);
-    expect(document.state).toBe("partial");
-    expect(document.receipt.accepted_source_ids).toEqual(["codex"]);
-    expect(document.receipt.failed_sources).toEqual({
-      cursor: "source_identity_changed",
-    });
-  });
-
-  // C8 H18r3 exact shape: the read-switch probe produced
-  // accepted=[] / failed_sources={workbuddy:"source_read_disabled"} / jobs=[]
-  // and the CLI reported committed + exit 0 with no text. Reproduced here with a
-  // `jobs: []` batch (not a single-source plan) and asserted in both JSON and
-  // text mode, because the package symptom was the *text* saying committed.
-  it("classifies an empty-jobs all-rejected batch as rejected in JSON and text", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const planFile = path.join(directory, "probe-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
-    transport.post.mockImplementation(
-      async (_url: string, body: Record<string, unknown>) => ({
-        status: 200,
-        data: {
-          request_id: body.request_id,
-          accepted_source_ids: [],
-          failed_sources: { codex: "source_read_disabled" },
-          jobs: [],
-        },
-      }),
-    );
-    const jsonResult = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(jsonResult.code).toBe(1);
-    const document = JSON.parse(jsonResult.stdout);
     expect(document.state).toBe("rejected");
     expect(document.code).toBe("source_import_all_rejected");
     expect(document.receipt.failed_sources).toEqual({
       codex: "source_read_disabled",
     });
-
-    // Text mode must name the failed source and must not claim success.
-    const textPlanFile = path.join(directory, "probe-plan-text.json");
-    await writeFile(textPlanFile, preview.stdout, { mode: 0o600 });
-    transport.post.mockImplementation(
-      async (_url: string, body: Record<string, unknown>) => ({
-        status: 200,
-        data: {
-          request_id: body.request_id,
-          accepted_source_ids: [],
-          failed_sources: { codex: "source_read_disabled" },
-          jobs: [],
-        },
-      }),
-    );
-    const textResult = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      textPlanFile,
-      "--confirm",
-    ]);
-    expect(textResult.code).toBe(1);
-    expect(textResult.stdout).toContain("codex");
-    expect(textResult.stdout).toContain("source_read_disabled");
-    expect(textResult.stdout).not.toContain("操作状态：committed");
+    const text = await capturedRun(CONNECT.slice(0, -1));
+    expect(text.code).toBe(1);
+    expect(text.stdout).toContain("source_read_disabled");
+    expect(text.stdout).not.toContain("操作状态：committed");
   });
 
-  it("recovers an unknown source write by request ID without replay", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const document = JSON.parse(preview.stdout);
-    const requestId = document.plan.request_id;
-    const planFile = path.join(directory, "source-plan.json");
-    await writeFile(planFile, preview.stdout);
+  it("reports partial success with a non-zero exit and keeps the receipt", async () => {
+    transport.post.mockImplementation(
+      connectReceipt(["codex"], { cursor: "source_identity_changed" }, [
+        importJob(),
+      ]),
+    );
+    const result = await capturedRun(CONNECT);
+    expect(result.code).toBe(1);
+    const document = JSON.parse(result.stdout);
+    expect(document.state).toBe("partial");
+    expect(document.receipt.accepted_source_ids).toEqual(["codex"]);
+  });
+
+  it("rejects a fresh all-busy receipt as source_import_all_busy", async () => {
+    transport.post.mockImplementation(
+      connectReceipt([], { codex: "source_import_busy" }, []),
+    );
+    const result = await capturedRun(CONNECT);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      state: "rejected",
+      code: "source_import_all_busy",
+    });
+  });
+
+  it("recovers an unknown write by request id without reposting", async () => {
+    const requestId = "44444444-4444-4444-8444-444444444444";
     transport.post.mockRejectedValue(new Error("socket closed"));
-    transport.get.mockImplementation(async (url: string) =>
-      url === `/api/v1/source-connections/${requestId}`
+    transport.get.mockImplementation(async (url: string) => {
+      if (url === "/api/v1/sources") {
+        return { status: 200, data: [SOURCE] };
+      }
+      return url === `/api/v1/source-connections/${requestId}`
         ? {
             status: 200,
             data: {
@@ -402,180 +300,41 @@ describe("headless source setup and import", () => {
               jobs: [importJob()],
             },
           }
-        : { status: 404, data: {} },
-    );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
+        : { status: 404, data: {} };
+    });
+    const result = await capturedRun([...CONNECT, "--request-id", requestId]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout).state).toBe("recovered");
     expect(transport.post).toHaveBeenCalledTimes(1);
-    expect(
-      (transport.get.mock.calls as [string][]).filter(
-        ([url]) => url === `/api/v1/source-connections/${requestId}`,
-      ),
-    ).toHaveLength(1);
   });
 
-  // A fresh request that is refused because another import is in flight is a
-  // refusal, not a recovered success. Only a matching-request-ID lookup with a
-  // terminal accepted receipt may become `recovered`.
-  it("rejects a fresh all-busy receipt as source_import_all_busy", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const planFile = path.join(directory, "busy-repeat-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
-    transport.post.mockImplementation(
-      async (_url: string, body: Record<string, unknown>) => ({
-        status: 200,
-        data: {
-          request_id: body.request_id,
-          accepted_source_ids: [],
-          failed_sources: { codex: "source_import_busy" },
-          jobs: [],
-        },
-      }),
-    );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    const out = JSON.parse(result.stdout);
-    expect(out.state).toBe("rejected");
-    expect(out.code).toBe("source_import_all_busy");
-    expect(out.receipt.failed_sources).toEqual({
-      codex: "source_import_busy",
-    });
-    expect(result.code).toBe(1);
-  });
-
-  it("does not recover a prior nonterminal receipt", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const requestId = JSON.parse(preview.stdout).plan.request_id as string;
-    const planFile = path.join(directory, "nonterminal-prior-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
+  it("does not recover a nonterminal or all-rejected receipt", async () => {
+    const requestId = "55555555-5555-4555-8555-555555555555";
     transport.post.mockRejectedValue(new Error("socket closed"));
-    transport.get.mockImplementation(async (url: string) =>
-      url === `/api/v1/source-connections/${requestId}`
-        ? {
-            status: 200,
-            data: {
-              request_id: requestId,
-              accepted_source_ids: [],
-              failed_sources: {},
-              jobs: [],
-            },
-          }
-        : { status: 404, data: {} },
-    );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    const out = JSON.parse(result.stdout);
-    expect(out.state).not.toBe("recovered");
-    expect(result.code).not.toBe(0);
-    expect(transport.post).toHaveBeenCalledTimes(1);
+    for (const failed of [{}, { codex: "source_read_disabled" }]) {
+      transport.get.mockImplementation(async (url: string) =>
+        url === "/api/v1/sources"
+          ? { status: 200, data: [SOURCE] }
+          : url === `/api/v1/source-connections/${requestId}`
+            ? {
+                status: 200,
+                data: {
+                  request_id: requestId,
+                  accepted_source_ids: [],
+                  failed_sources: failed,
+                  jobs: [],
+                },
+              }
+            : { status: 404, data: {} },
+      );
+      const result = await capturedRun([...CONNECT, "--request-id", requestId]);
+      expect(result.code).toBe(1);
+      expect(JSON.parse(result.stdout).state).not.toBe("recovered");
+    }
   });
 
-  it("does not report a recovered all-rejected receipt as success", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const document = JSON.parse(preview.stdout);
-    const requestId = document.plan.request_id;
-    const planFile = path.join(directory, "recovered-reject-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    vi.clearAllMocks();
-    runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-    runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
-    // POST result unknown (transport dropped)...
-    transport.post.mockRejectedValue(new Error("socket closed"));
-    // ...and the looked-up receipt says every source was refused.
-    transport.get.mockImplementation(async (url: string) =>
-      url === `/api/v1/source-connections/${requestId}`
-        ? {
-            status: 200,
-            data: {
-              request_id: requestId,
-              accepted_source_ids: [],
-              failed_sources: { codex: "source_read_disabled" },
-              jobs: [],
-            },
-          }
-        : { status: 404, data: {} },
-    );
-    const result = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(result.code).not.toBe(0);
-    const out = JSON.parse(result.stdout);
-    expect(out.state).toBe("rejected");
-    expect(out.receipt.failed_sources).toEqual({
-      codex: "source_read_disabled",
-    });
-  });
-
-  it("never reposts a plan once its durable attempt fence exists", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const document = JSON.parse(preview.stdout);
-    const requestId = document.plan.request_id;
-    const planFile = path.join(directory, "source-plan.json");
-    await writeFile(planFile, preview.stdout);
-    const argv = [
-      "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ];
-    expect((await capturedRun(argv)).code).toBe(0);
+  it("reads a receipt by request id", async () => {
+    const requestId = "66666666-6666-4666-8666-666666666666";
     transport.get.mockImplementation(async (url: string) =>
       url === `/api/v1/source-connections/${requestId}`
         ? {
@@ -589,74 +348,108 @@ describe("headless source setup and import", () => {
           }
         : { status: 404, data: {} },
     );
-    expect((await capturedRun(argv)).code).toBe(0);
-    expect(transport.post).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects missing confirmation or a tampered plan before POST", async () => {
-    const preview = await capturedRun([
-      "setup",
-      "plan",
-      "--source",
-      "codex",
-      "--json",
-    ]);
-    const validPlanFile = path.join(directory, "valid.json");
-    await writeFile(validPlanFile, preview.stdout);
-    const unconfirmed = await capturedRun([
-      "sources",
-      "import",
-      "--plan-file",
-      validPlanFile,
-      "--json",
-    ]);
-    expect(unconfirmed.code).toBe(2);
-    expect(transport.post).not.toHaveBeenCalled();
-
-    const document = JSON.parse(preview.stdout);
-    document.plan.source_roots.codex = "tampered-root";
-    const planFile = path.join(directory, "tampered.json");
-    await writeFile(planFile, JSON.stringify(document));
     const result = await capturedRun([
       "sources",
-      "import",
-      "--plan-file",
-      planFile,
-      "--confirm",
+      "receipt",
+      requestId,
       "--json",
     ]);
-    expect([1, 2]).toContain(result.code);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      state: "committed",
+      operation_id: requestId,
+    });
     expect(transport.post).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown source, a repeated source and both selections", async () => {
+    expect(
+      (await capturedRun(["sources", "connect", "nope", "--import"])).code,
+    ).toBe(1);
+    expect(transport.post).not.toHaveBeenCalled();
+    expect(
+      (await capturedRun(["sources", "connect", "codex", "codex"])).code,
+    ).toBe(2);
+    expect(
+      (await capturedRun(["sources", "connect", "codex", "--all-detected"]))
+        .code,
+    ).toBe(2);
+    expect((await capturedRun(["sources", "connect"])).code).toBe(2);
   });
 });
 
-describe("headless model profile creation", () => {
-  it("plans locally and refuses credentials embedded in config", async () => {
-    const configFile = path.join(directory, "model.json");
-    await writeFile(
-      configFile,
-      JSON.stringify({
-        name: "Synthetic",
-        provider_kind: "openai_compatible",
-        base_url: "https://example.invalid/v1",
-        model: "synthetic-model",
-      }),
+describe("sources connect without --import grants only", () => {
+  it("authorizes each source and keeps processing frozen", async () => {
+    transport.post.mockResolvedValue({
+      status: 200,
+      data: { source_id: "codex", root_id: "root-identity-1" },
+    });
+    const result = await capturedRun(["sources", "connect", "codex", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      command: "sources connect",
+      state: "committed",
+      import: false,
+      granted_source_ids: ["codex"],
+    });
+    expect(transport.post).toHaveBeenCalledTimes(1);
+    expect(transport.post).toHaveBeenCalledWith(
+      "/api/v1/sources/codex/authorize",
+      {
+        user_confirmed: true,
+        expected_root_id: "root-identity-1",
+        confirm_environment_override: false,
+      },
+      undefined,
     );
+  });
+
+  it("is what the old `init --source` spelling now runs", async () => {
+    transport.post.mockResolvedValue({ status: 200, data: {} });
+    const result = await capturedRun(["init", "--source", "codex", "--json"]);
+    expect(result.code).toBe(0);
+    expect(transport.post.mock.calls[0][0]).toBe(
+      "/api/v1/sources/codex/authorize",
+    );
+    // The old no-op flags are gone rather than silently ignored.
+    expect(
+      (await capturedRun(["init", "--source", "codex", "--full-rescan"])).code,
+    ).toBe(2);
+    expect(
+      (await capturedRun(["init", "--source", "codex", "--dry-run"])).code,
+    ).toBe(2);
+  });
+});
+
+describe("models add", () => {
+  it("creates directly and returns the operation id", async () => {
+    const configFile = await modelConfigFile();
     const result = await capturedRun([
       "models",
-      "plan",
+      "add",
       "--config-file",
       configFile,
       "--json",
     ]);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      state: "preview",
-      plan: { kind: "model_profile_create" },
+    const document = JSON.parse(result.stdout);
+    expect(document).toMatchObject({
+      state: "committed",
+      receipt: { profile_id: "profile-1" },
     });
-    expect(runtime.inspectRuntimeStatus).not.toHaveBeenCalled();
-    expect(transport.post).not.toHaveBeenCalled();
+    expect(document.operation_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(transport.post).toHaveBeenCalledWith(
+      "/api/v1/model-profiles",
+      expect.objectContaining({
+        name: "Synthetic",
+        creation_operation_id: document.operation_id,
+      }),
+      undefined,
+    );
+  });
 
+  it("refuses credentials embedded in the config file before contacting Core", async () => {
+    const configFile = path.join(directory, "model.json");
     await writeFile(
       configFile,
       JSON.stringify({
@@ -668,37 +461,31 @@ describe("headless model profile creation", () => {
     );
     const rejected = await capturedRun([
       "models",
-      "plan",
+      "add",
       "--config-file",
       configFile,
       "--json",
     ]);
     expect(rejected.code).toBe(1);
+    expect(JSON.parse(rejected.stdout).code).toBe("model_config_invalid");
     expect(rejected.stdout).not.toContain("SYNTHETIC_MUST_NOT_ENTER_PLAN");
+    expect(transport.post).not.toHaveBeenCalled();
   });
 
-  it("reads the API key from a bounded file and never returns it", async () => {
-    const planFile = await modelPlanFile();
+  it("reads the API key from a bounded owner-only file and never returns it", async () => {
+    const configFile = await modelConfigFile();
     const keyFile = path.join(directory, "key");
     await writeFile(keyFile, "SYNTHETIC_SECRET_KEY\n", { mode: 0o600 });
     const result = await capturedRun([
       "models",
-      "configure",
-      "--plan-file",
-      planFile,
+      "add",
+      "--config-file",
+      configFile,
       "--api-key-file",
       keyFile,
-      "--confirm",
       "--json",
     ]);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      state: "committed",
-      receipt: {
-        profile_id: "profile-1",
-        credential_state: "available",
-      },
-    });
     expect(result.stdout + result.stderr).not.toContain("SYNTHETIC_SECRET_KEY");
     expect(transport.post.mock.calls[0][1]).toMatchObject({
       api_key: "SYNTHETIC_SECRET_KEY",
@@ -706,17 +493,16 @@ describe("headless model profile creation", () => {
   });
 
   it("refuses an API-key file readable by group or others", async () => {
-    const planFile = await modelPlanFile();
+    const configFile = await modelConfigFile();
     const keyFile = path.join(directory, "loose-key");
     await writeFile(keyFile, "SYNTHETIC_LOOSE_KEY\n", { mode: 0o644 });
     const result = await capturedRun([
       "models",
-      "configure",
-      "--plan-file",
-      planFile,
+      "add",
+      "--config-file",
+      configFile,
       "--api-key-file",
       keyFile,
-      "--confirm",
       "--json",
     ]);
     expect(result.code).toBe(2);
@@ -724,44 +510,79 @@ describe("headless model profile creation", () => {
     expect(result.stdout + result.stderr).not.toContain("SYNTHETIC_LOOSE_KEY");
   });
 
-  it("recovers an unknown model create through its operation receipt", async () => {
-    const planFile = await modelPlanFile();
-    const plan = JSON.parse(
-      await import("node:fs/promises").then((fs) =>
-        fs.readFile(planFile, "utf8"),
-      ),
+  it("activates the new profile with --activate", async () => {
+    const configFile = await modelConfigFile();
+    transport.post.mockImplementation(async (url: string) =>
+      url === "/api/v1/model-profiles"
+        ? { status: 200, data: PROFILE }
+        : url === "/api/v1/model-profiles/profile-1/activate"
+          ? { status: 200, data: { ...PROFILE, is_active: true } }
+          : { status: 404, data: {} },
     );
-    const operationId = plan.plan.operation_id;
+    const result = await capturedRun([
+      "models",
+      "add",
+      "--config-file",
+      configFile,
+      "--activate",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).activation).toEqual({
+      state: "committed",
+    });
+    expect(transport.post.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/model-profiles",
+      "/api/v1/model-profiles/profile-1/activate",
+    ]);
+  });
+
+  it("recovers an unknown create through its operation receipt", async () => {
+    const configFile = await modelConfigFile();
     transport.post.mockRejectedValue(new Error("socket closed"));
-    transport.get.mockImplementation(async (url: string) =>
-      url === `/api/v1/model-profile-creations/${operationId}`
+    transport.get.mockImplementation(async (url: string) => {
+      const match = /^\/api\/v1\/model-profile-creations\/(.+)$/.exec(url);
+      return match
         ? {
             status: 200,
             data: {
-              operation_id: operationId,
+              operation_id: match[1],
               state: "committed",
               profile_id: "profile-1",
               created_revision: 1,
             },
           }
-        : { status: 404, data: {} },
-    );
+        : { status: 404, data: {} };
+    });
     const result = await capturedRun([
       "models",
-      "configure",
-      "--plan-file",
-      planFile,
-      "--confirm",
+      "add",
+      "--config-file",
+      configFile,
       "--json",
     ]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout).state).toBe("recovered");
     expect(transport.post).toHaveBeenCalledTimes(1);
-    expect(transport.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("no longer accepts the plan-file commands", async () => {
+    for (const argv of [
+      ["models", "plan", "--config-file", "/tmp/x"],
+      ["models", "configure", "--plan-file", "/tmp/x", "--confirm"],
+      ["models", "probe-plan", PROBE_PROFILE.profile_id],
+      ["models", "probe", "--plan-file", "/tmp/x", "--confirm"],
+      ["models", "probe-receipt", PROBE_PROFILE.profile_id],
+      ["setup", "plan", "--source", "codex"],
+      ["sources", "import", "--plan-file", "/tmp/x", "--confirm"],
+    ]) {
+      expect((await capturedRun(argv)).code).toBe(2);
+    }
+    expect(transport.post).not.toHaveBeenCalled();
   });
 });
 
-describe("recoverable model probe operations", () => {
+describe("models test and receipt", () => {
   it("lists and shows safe model configuration without endpoint leakage", async () => {
     transport.get.mockResolvedValue({
       status: 200,
@@ -787,109 +608,54 @@ describe("recoverable model probe operations", () => {
       ],
     });
     expect(listed.stdout).not.toContain("internal.example.invalid");
-
-    const shown = await capturedRun([
-      "models",
-      "show",
-      PROBE_PROFILE.profile_id,
-      "--json",
-    ]);
-    expect(shown.code).toBe(0);
-    expect(JSON.parse(shown.stdout).profile.profile_id).toBe(
-      PROBE_PROFILE.profile_id,
-    );
   });
 
-  it("preflights support, posts once, and reconciles repeated apply by GET", async () => {
-    transport.get.mockResolvedValue({
-      status: 200,
-      data: [PROBE_PROFILE],
+  it("submits a probe against the current revision and returns its operation id", async () => {
+    let operationId = "";
+    transport.get.mockImplementation(async (url: string) => {
+      if (url === "/api/v1/model-profiles") {
+        return { status: 200, data: [PROBE_PROFILE] };
+      }
+      const match = /^\/api\/v1\/model-probe-operations\/(.+)$/.exec(url);
+      if (match) {
+        operationId = match[1];
+        return { status: 200, data: probeNotFound(operationId) };
+      }
+      return { status: 404, data: {} };
     });
-    const preview = await capturedRun([
+    transport.post.mockImplementation(async () => ({
+      status: 200,
+      data: probePending(operationId),
+    }));
+    const result = await capturedRun([
       "models",
-      "probe-plan",
+      "test",
       PROBE_PROFILE.profile_id,
       "--json",
     ]);
-    expect(preview.code).toBe(0);
-    const previewDocument = JSON.parse(preview.stdout);
-    expect(previewDocument).toMatchObject({
-      state: "preview",
-      plan: {
-        kind: "model_profile_probe",
-        profile_id: PROBE_PROFILE.profile_id,
-        expected_profile_revision: 3,
-      },
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      state: "pending",
+      operation_id: operationId,
     });
-    const operationId = previewDocument.plan.operation_id;
-    const receipt = probeReceipt(operationId);
-    const planFile = path.join(directory, "probe-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    transport.get.mockImplementation(async (url: string) =>
-      url === `/api/v1/model-probe-operations/${operationId}`
-        ? {
-            status: 200,
-            data:
-              transport.post.mock.calls.length === 0
-                ? probeNotFound(operationId)
-                : receipt,
-          }
-        : { status: 404, data: {} },
-    );
-    transport.post.mockResolvedValue({ status: 200, data: receipt });
-
-    const first = await capturedRun([
-      "models",
-      "probe",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(first.code).toBe(0);
-    expect(JSON.parse(first.stdout).state).toBe("completed");
-
-    const second = await capturedRun([
-      "models",
-      "probe",
-      "--plan-file",
-      planFile,
-      "--confirm",
-      "--json",
-    ]);
-    expect(second.code).toBe(0);
-    expect(JSON.parse(second.stdout).state).toBe("completed");
     expect(transport.post).toHaveBeenCalledTimes(1);
     expect(transport.post).toHaveBeenCalledWith(
       `/api/v1/model-profiles/${PROBE_PROFILE.profile_id}/probe`,
-      {
-        operation_id: operationId,
-        expected_profile_revision: 3,
-      },
+      { operation_id: operationId, expected_profile_revision: 3 },
       undefined,
     );
   });
 
-  it("keeps the command disabled on a legacy Core and does not probe", async () => {
-    transport.get.mockResolvedValue({
-      status: 200,
-      data: [PROBE_PROFILE],
-    });
-    const preview = await capturedRun([
-      "models",
-      "probe-plan",
-      PROBE_PROFILE.profile_id,
-      "--json",
-    ]);
-    const planFile = path.join(directory, "unsupported-probe-plan.json");
-    await writeFile(planFile, preview.stdout, { mode: 0o600 });
-    transport.get.mockResolvedValue({ status: 404, data: {} });
+  it("does not probe on a Core without probe operations", async () => {
+    transport.get.mockImplementation(async (url: string) =>
+      url === "/api/v1/model-profiles"
+        ? { status: 200, data: [PROBE_PROFILE] }
+        : { status: 404, data: {} },
+    );
     const result = await capturedRun([
       "models",
-      "probe",
-      "--plan-file",
-      planFile,
-      "--confirm",
+      "test",
+      PROBE_PROFILE.profile_id,
       "--json",
     ]);
     expect(result.code).toBe(1);
@@ -899,9 +665,67 @@ describe("recoverable model probe operations", () => {
     });
     expect(transport.post).not.toHaveBeenCalled();
   });
+
+  it("reads a creation receipt first, then a probe receipt", async () => {
+    const creation = "77777777-7777-4777-8777-777777777777";
+    const probe = "88888888-8888-4888-8888-888888888888";
+    transport.get.mockImplementation(async (url: string) => {
+      if (url === `/api/v1/model-profile-creations/${creation}`) {
+        return {
+          status: 200,
+          data: {
+            operation_id: creation,
+            state: "committed",
+            profile_id: "profile-1",
+            created_revision: 1,
+          },
+        };
+      }
+      if (url === `/api/v1/model-profile-creations/${probe}`) {
+        return {
+          status: 200,
+          data: {
+            operation_id: probe,
+            state: "not_found",
+            profile_id: null,
+            created_revision: null,
+          },
+        };
+      }
+      if (url === `/api/v1/model-probe-operations/${probe}`) {
+        return { status: 200, data: probeReceipt(probe) };
+      }
+      return { status: 404, data: {} };
+    });
+    const created = await capturedRun([
+      "models",
+      "receipt",
+      creation,
+      "--json",
+    ]);
+    expect(created.code).toBe(0);
+    expect(JSON.parse(created.stdout)).toMatchObject({
+      operation: "model_profile_create",
+      state: "committed",
+    });
+    const probed = await capturedRun(["models", "receipt", probe, "--json"]);
+    expect(probed.code).toBe(0);
+    expect(JSON.parse(probed.stdout)).toMatchObject({
+      operation: "model_profile_probe",
+      state: "completed",
+    });
+    const missing = await capturedRun([
+      "models",
+      "receipt",
+      "99999999-9999-4999-8999-999999999999",
+      "--json",
+    ]);
+    expect(missing.code).toBe(1);
+    expect(JSON.parse(missing.stdout).state).toBe("not_found");
+  });
 });
 
-async function modelPlanFile(): Promise<string> {
+async function modelConfigFile(): Promise<string> {
   const configFile = path.join(directory, "model.json");
   await writeFile(
     configFile,
@@ -912,20 +736,20 @@ async function modelPlanFile(): Promise<string> {
       model: "synthetic-model",
     }),
   );
-  const preview = await capturedRun([
-    "models",
-    "plan",
-    "--config-file",
-    configFile,
-    "--json",
-  ]);
-  const planFile = path.join(directory, "model-plan.json");
-  await writeFile(planFile, preview.stdout, { mode: 0o600 });
-  vi.clearAllMocks();
-  runtime.inspectRuntimeStatus.mockResolvedValue(RUNNING);
-  runtime.discoverRuntimeAttachment.mockResolvedValue(ATTACHED);
-  transport.post.mockResolvedValue({ status: 200, data: PROFILE });
-  return planFile;
+  return configFile;
+}
+
+function probePending(operationId: string) {
+  return {
+    schema_version: 1,
+    operation_id: operationId,
+    profile_id: PROBE_PROFILE.profile_id,
+    expected_profile_revision: 3,
+    state: "pending",
+    result: null,
+    code: null,
+    stale: false,
+  };
 }
 
 function probeNotFound(operationId: string) {

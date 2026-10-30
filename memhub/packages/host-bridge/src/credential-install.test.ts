@@ -102,7 +102,7 @@ describe("credential file install serialization", () => {
           "keep-this-server",
         );
       }
-      expect(SKILL_VERSION).toBe(17);
+      expect(SKILL_VERSION).toBe(19);
       expect(renderSkillContent("mcp", runtime)).toBe(
         renderSkillContent("mcp", { ...runtime, credentialFile: undefined }),
       );

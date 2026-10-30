@@ -773,3 +773,131 @@ def test_cancel_during_callback_keeps_a_replayable_pending_marker(tmp_path) -> N
 
     assert evidence_store.count() == 1
     assert len(_pending_markers(evidence_store.database_path)) == 1
+
+
+def said(message_id: str, role: str, text: str) -> EvidenceInput:
+    writer = {"user": WrittenBy.PERSON, "assistant": WrittenBy.AGENT, "tool": WrittenBy.TOOL}
+    return evidence(message_id).model_copy(
+        update={"role": role, "written_by": writer[role], "verbatim": text}
+    )
+
+
+def _sdk_runner(tmp_path):
+    database = tmp_path / "one-memory.sqlite3"
+    bootstrap_fresh_management_schema(database)
+    job_store = ImportJobStore(database)
+    queue = DurableWriteQueue(database, sdk_authority=True)
+    runner = ImportRunner(
+        evidence_store=RetiredEvidenceStore(database),  # type: ignore[arg-type]
+        job_store=job_store,
+        sdk_queue=queue,
+        sdk_authority=lambda: True,
+    )
+    return database, job_store, queue, runner
+
+
+def _read(runner, job_store, parts, *, operation: str, first_line: int = 1):
+    events: list[ScanEvent] = [
+        ScannedEvidence(evidence=part, cursor=cursor(f"line:{first_line + index}"))
+        for index, part in enumerate(parts)
+    ]
+    last = f"line:{first_line + len(parts) - 1}"
+    events.append(ScanCursorTouch(cursor=cursor(last).model_copy(update={"read_to_end": True})))
+    job = job_store.create(user_id="local", source_id="fixture", operation=operation)
+    asyncio.run(runner.run(adapter=FixtureAdapter(events), job_id=job.job_id))
+
+
+def _jobs(database) -> list[tuple[str, list[str]]]:
+    import json
+
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            "SELECT state,payload_json FROM memory_write_jobs ORDER BY queue_seq"
+        ).fetchall()
+    return [
+        (state, [item["role"] for item in json.loads(payload)["input_records"]])
+        for state, payload in rows
+    ]
+
+
+def _turns(count: int, *, start: int = 0) -> list[EvidenceInput]:
+    return [
+        said(f"{role[0]}{index}", role, f"{role} {index}")
+        for index in range(start, start + count)
+        for role in ("user", "assistant")
+    ]
+
+
+def test_history_import_writes_five_turn_batches_and_flushes_the_rest_at_eof(tmp_path):
+    """A first import used to be one giant job per conversation."""
+    database, job_store, _queue, runner = _sdk_runner(tmp_path)
+
+    _read(runner, job_store, _turns(7), operation="history")
+
+    assert _jobs(database) == [
+        ("pending", ["user", "assistant"] * 5),
+        ("pending", ["user", "assistant"] * 2),
+    ]
+
+
+def test_live_polling_carries_an_open_turn_and_a_tool_only_increment(tmp_path):
+    """A transcript read mid-turn used to give tool-only jobs (16 unknown)."""
+    database, job_store, queue, runner = _sdk_runner(tmp_path)
+
+    _read(runner, job_store, _turns(2), operation="sync")
+    assert _jobs(database) == [("assembling", ["user", "assistant"] * 2)]
+
+    tools = [said("t1", "tool", "ls"), said("t2", "tool", "3 passed")]
+    _read(runner, job_store, tools, operation="sync", first_line=5)
+    assert _jobs(database) == [
+        ("assembling", ["user", "assistant", "user", "assistant", "tool", "tool"])
+    ]
+
+    # Ten quiet minutes: the open turn is complete and the short batch goes.
+    assert queue.flush_idle_assemblies(now=datetime.now(UTC) + timedelta(minutes=9)) == ()
+    flushed = queue.flush_idle_assemblies(now=datetime.now(UTC) + timedelta(minutes=11))
+    assert len(flushed) == 1
+    assert _jobs(database) == [
+        ("pending", ["user", "assistant", "user", "assistant", "tool", "tool"])
+    ]
+
+
+def test_live_polling_writes_five_complete_turns_and_keeps_the_open_one(tmp_path):
+    database, job_store, queue, runner = _sdk_runner(tmp_path)
+
+    _read(runner, job_store, _turns(5), operation="sync")
+    assert [state for state, _ in _jobs(database)] == ["assembling"]
+
+    _read(runner, job_store, [said("u5", "user", "user 5")], operation="sync", first_line=11)
+    assert _jobs(database) == [
+        ("assembling", ["user"]),
+        ("pending", ["user", "assistant"] * 5),
+    ]
+
+
+def test_a_reread_increment_creates_no_second_job(tmp_path):
+    database, job_store, queue, runner = _sdk_runner(tmp_path)
+
+    _read(runner, job_store, _turns(6), operation="sync")
+    _read(runner, job_store, _turns(6), operation="sync")
+    queue.flush_idle_assemblies(now=datetime.now(UTC) + timedelta(minutes=11))
+    _read(runner, job_store, _turns(6), operation="sync")
+    queue.flush_idle_assemblies(now=datetime.now(UTC) + timedelta(minutes=11))
+
+    assert _jobs(database) == [
+        ("pending", ["user", "assistant"] * 5),
+        ("pending", ["user", "assistant"]),
+    ]
+
+
+def test_history_records_with_no_user_message_are_dropped_at_eof(tmp_path):
+    database, job_store, _queue, runner = _sdk_runner(tmp_path)
+
+    _read(
+        runner,
+        job_store,
+        [said("t1", "tool", "ls"), said("a1", "assistant", "ok")],
+        operation="history",
+    )
+
+    assert _jobs(database) == []

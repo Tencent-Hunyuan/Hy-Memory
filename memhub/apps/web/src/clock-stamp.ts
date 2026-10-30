@@ -34,7 +34,10 @@ export function clockStamp(
     date.getDate() === now.getDate()
   )
     return translate(locale, "clock.today", { clock });
+  // Another year carries its year, as the memory list's day stamp does: a
+  // bare "01/13" for 2254-01-13 reads as this January.
   return new Intl.DateTimeFormat(locale, {
+    ...(date.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

@@ -41,7 +41,7 @@ export type ModelReportDocument =
   | {
       schema_version: 1;
       product: string;
-      state: "denied" | "unavailable" | "not_found" | "invalid";
+      state: "denied" | "unavailable" | "not_found" | "invalid" | "rejected";
       code: string;
     };
 
@@ -136,7 +136,7 @@ function project(profile: ModelProfile): SafeModelProfile {
 }
 
 function failure(
-  state: "denied" | "unavailable" | "not_found" | "invalid",
+  state: "denied" | "unavailable" | "not_found" | "invalid" | "rejected",
   code: string,
 ): ModelReportDocument {
   return { schema_version: 1, product: PRODUCT, state, code };

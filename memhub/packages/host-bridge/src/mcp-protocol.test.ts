@@ -4,7 +4,7 @@ import { processMcpLine } from "./mcp-protocol.js";
 import { McpSession } from "./mcp-session.js";
 
 describe("MemHub MCP protocol", () => {
-  it("negotiates MCP and exposes om_recall and om_ask", async () => {
+  it("negotiates MCP and exposes exactly recall, write and diagnostic trace", async () => {
     const session = new McpSession("/fixture/discovery.json");
     const initialized = JSON.parse(
       (await processMcpLine(
@@ -34,16 +34,10 @@ describe("MemHub MCP protocol", () => {
     expect(listed.result.tools[0].description).not.toContain("user-confirmed");
     expect(
       listed.result.tools.map((tool: { name: string }) => tool.name),
-    ).toEqual([
-      "MemHub_recall",
-      "MemHub_ask",
-      "MemHub_conversations",
-      "MemHub_matters",
-      "MemHub_context",
-      "MemHub_memory_write",
-      "MemHub_memory_write_status",
-      "MemHub_diagnostic_trace",
-    ]);
+    ).toEqual(["MemHub_recall", "MemHub_write", "MemHub_diagnostic_trace"]);
+    // The old context guidance is no longer part of the handshake.
+    expect(initialized.result.instructions).not.toContain("MemHub_context");
+    expect(initialized.result.instructions).not.toContain("MemHub_ask");
     // Hosts decide whether to ask the user for permission from these, not from
     // the description. Without them OpenClaw prompted for approval on every
     // recall, which turns a background read into an interruption.
@@ -51,6 +45,40 @@ describe("MemHub MCP protocol", () => {
       readOnlyHint: true,
       destructiveHint: false,
       openWorldHint: false,
+    });
+    const write = listed.result.tools[1];
+    expect(write.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+    });
+    expect(write.inputSchema.required).toEqual(["text"]);
+    expect(Object.keys(write.inputSchema.properties).sort()).toEqual([
+      "request_id",
+      "text",
+    ]);
+  });
+
+  it.each([
+    "MemHub_ask",
+    "MemHub_conversations",
+    "MemHub_context",
+    "MemHub_memory_write",
+    "MemHub_memory_write_status",
+    "om_ask",
+    "om_context",
+    "om_memory_write",
+  ])("rejects the removed tool %s as unknown", async (name) => {
+    const session = new McpSession("/fixture/discovery.json");
+    const response = await session.handle({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name, arguments: { query: "x", question: "x" } },
+    });
+    expect(response?.error).toEqual({
+      code: -32602,
+      message: `Unknown tool: ${name}`,
     });
   });
 
@@ -62,11 +90,6 @@ describe("MemHub MCP protocol", () => {
     }));
     const session = new McpSession(
       "/fixture/discovery.json",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
       undefined,
       undefined,
       undefined,

@@ -21,6 +21,8 @@ import {
   claudeCodeLayout,
   codexLayout,
   cursorLayout,
+  MCP_TOOLSET_KEY,
+  MCP_TOOLSET_VERSION,
   mcpConfigPath,
   piLayout,
   planRecallInstall,
@@ -30,6 +32,7 @@ import {
   workbuddyScatteredLayout,
   zcodeLayout,
 } from "@one-memory/host-bridge/installer";
+import type { DiagnosticInput } from "@one-memory/runtime-control";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeRecallInstall } from "../../../packages/host-bridge/src/recall-probe.js";
 import { skillFilePath } from "../../../packages/host-bridge/src/skill-drift.js";
@@ -1440,5 +1443,199 @@ describe("upgrading installs left by an earlier release", () => {
     expect(await readFile(required(skillFilePath(layout)), "utf8")).toBe(
       edited,
     );
+  });
+});
+
+describe("refreshing installed hosts after an upgrade", () => {
+  function recorder() {
+    const events: DiagnosticInput[] = [];
+    return {
+      events,
+      sink: {
+        log: async (event: DiagnosticInput) => {
+          events.push(event);
+        },
+      },
+    };
+  }
+
+  async function linkedWorkbuddy(context: Awaited<ReturnType<typeof fixture>>) {
+    const layout = workbuddyLayout(path.join(context.root, "workbuddy"));
+    const preview = await context.permissions.previewInstall(layout);
+    const result = await context.permissions.install(
+      layout,
+      preview.fingerprint,
+    );
+    await context.permissions.setPermission(
+      layout,
+      approval(required(result.permission.receipt)),
+    );
+    return layout;
+  }
+
+  /** Put back the skill an earlier release wrote, journaled as ours. */
+  async function ageSkill(layout: ReturnType<typeof workbuddyLayout>) {
+    const skillPath = required(skillFilePath(layout));
+    const aged = (await readFile(skillPath, "utf8"))
+      .replace(/skill-version=\d+/, "skill-version=15")
+      .replace("`MemHub_recall`", "`MemHub_ask`");
+    await writeFile(skillPath, aged);
+    const journal = JSON.parse(await readFile(layout.journalPath, "utf8"));
+    journal.installed_skill_hash = createHash("sha256")
+      .update(aged)
+      .digest("hex");
+    await writeFile(layout.journalPath, JSON.stringify(journal));
+    return aged;
+  }
+
+  it("rewrites an old skill on the first start of a build, and only once per build", async () => {
+    const context = await fixture();
+    const layout = await linkedWorkbuddy(context);
+    const current = await readFile(required(skillFilePath(layout)), "utf8");
+    await ageSkill(layout);
+    const { events, sink } = recorder();
+
+    const first = await context.permissions.refreshInstalledHosts([layout], {
+      build: "34",
+      diagnostics: sink,
+    });
+    expect(first).toMatchObject({
+      state: "refreshed",
+      synced: ["workbuddy"],
+      failed: [],
+    });
+    expect(await readFile(required(skillFilePath(layout)), "utf8")).toBe(
+      current,
+    );
+
+    // Same build again: one file read, nothing rewritten, even if stale.
+    const aged = await ageSkill(layout);
+    expect(
+      await context.permissions.refreshInstalledHosts([layout], {
+        build: "34",
+        diagnostics: sink,
+      }),
+    ).toMatchObject({ state: "already_refreshed", synced: [] });
+    expect(await readFile(required(skillFilePath(layout)), "utf8")).toBe(aged);
+
+    // The next build refreshes again.
+    expect(
+      await context.permissions.refreshInstalledHosts([layout], {
+        build: "35",
+      }),
+    ).toMatchObject({ state: "refreshed", synced: ["workbuddy"] });
+    expect(await readFile(required(skillFilePath(layout)), "utf8")).toBe(
+      current,
+    );
+
+    // Diagnostics carry host ids and counts only, never file content.
+    expect(events.map((event) => event.event)).toEqual([
+      "host_refresh.host_updated",
+      "host_refresh.completed",
+      "host_refresh.skipped",
+    ]);
+    expect(events[0].details).toEqual({ source_id: "workbuddy" });
+    expect(events[1].details).toEqual({
+      count: 1,
+      updated_count: 1,
+      error_count: 0,
+    });
+    expect(JSON.stringify(events)).not.toContain("MemHub_");
+    expect(JSON.stringify(events)).not.toContain(context.root);
+  });
+
+  it("leaves a skill the user edited untouched", async () => {
+    const context = await fixture();
+    const layout = await linkedWorkbuddy(context);
+    const edited = `${await ageSkill(layout)}\nUser addition\n`;
+    await writeFile(required(skillFilePath(layout)), edited);
+
+    expect(
+      await context.permissions.refreshInstalledHosts([layout], {
+        build: "34",
+      }),
+    ).toMatchObject({ state: "refreshed", synced: [], failed: [] });
+    expect(await readFile(required(skillFilePath(layout)), "utf8")).toBe(
+      edited,
+    );
+  });
+
+  it("rewrites an MCP entry without the tool set stamp, in the plugin manifest too", async () => {
+    const context = await fixture();
+    const layout = await linkedWorkbuddy(context);
+    const plugin = required(layout.plugin);
+    const manifests = [
+      path.join(plugin.installRoot, ".codebuddy-plugin", "plugin.json"),
+      path.join(
+        plugin.marketplaceRoot,
+        "plugins",
+        plugin.pluginName,
+        ".codebuddy-plugin",
+        "plugin.json",
+      ),
+    ];
+    // What an earlier release wrote: the same entry with no stamp, journaled.
+    const journal = JSON.parse(await readFile(layout.journalPath, "utf8"));
+    for (const manifestPath of manifests) {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      expect(manifest.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+        MCP_TOOLSET_VERSION,
+      );
+      delete manifest.mcpServers["one-memory"].env[MCP_TOOLSET_KEY];
+      const text = `${JSON.stringify(manifest, null, 2)}\n`;
+      await writeFile(manifestPath, text);
+      const entry = journal.plugin_files.find(
+        (file: { path: string }) => file.path === manifestPath,
+      );
+      entry.hash = createHash("sha256").update(text).digest("hex");
+      journal.installed_server_hash = createHash("sha256")
+        .update(JSON.stringify(manifest.mcpServers["one-memory"]))
+        .digest("hex");
+    }
+    await writeFile(layout.journalPath, JSON.stringify(journal));
+    const granted = await context.permissions.getPermission(layout);
+    expect(granted.state).toBe("approved");
+    expect(
+      (await readInstalledRecallCommand(layout))?.env[MCP_TOOLSET_KEY],
+    ).toBeUndefined();
+
+    expect(
+      await context.permissions.refreshInstalledHosts([layout], {
+        build: "34",
+      }),
+    ).toMatchObject({ synced: ["workbuddy"], failed: [] });
+    for (const manifestPath of manifests) {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      expect(manifest.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+        MCP_TOOLSET_VERSION,
+      );
+    }
+    // Rewriting our own entry keeps the user's authorization.
+    expect(await context.permissions.getPermission(layout)).toEqual(granted);
+  });
+
+  it("rewrites a config-file MCP entry without the stamp", async () => {
+    const context = await fixture();
+    await install(context);
+    const configPath = mcpConfigPath(context.layout);
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    delete config.mcpServers["one-memory"].env[MCP_TOOLSET_KEY];
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    const journal = JSON.parse(
+      await readFile(context.layout.journalPath, "utf8"),
+    );
+    journal.installed_server_hash = createHash("sha256")
+      .update(JSON.stringify(config.mcpServers["one-memory"]))
+      .digest("hex");
+    await writeFile(context.layout.journalPath, JSON.stringify(journal));
+
+    expect(
+      await context.permissions.refreshInstalledHosts([context.layout]),
+    ).toMatchObject({ state: "refreshed", synced: ["cursor"], failed: [] });
+    const refreshed = JSON.parse(await readFile(configPath, "utf8"));
+    expect(refreshed.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+      MCP_TOOLSET_VERSION,
+    );
+    expect(refreshed.mcpServers.neighbor).toEqual({ command: "keep" });
   });
 });

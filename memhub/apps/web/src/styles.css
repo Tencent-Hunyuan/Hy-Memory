@@ -2711,56 +2711,6 @@ button.onboarding-skip {
   font-size: 11px;
 }
 
-.wb-matters {
-  padding: 12px 0;
-  border-right: 0.5px solid var(--bd);
-  background: var(--panel);
-}
-
-.wb-matter {
-  display: block;
-  width: 100%;
-  min-height: 0;
-  padding: 7px 13px;
-  border: 0;
-  border-left: 2px solid transparent;
-  border-radius: 0;
-  color: var(--tx);
-  background: transparent;
-  font-size: 13px;
-  font-weight: 400;
-  text-align: left;
-}
-
-.wb-matter:hover:not(:disabled) {
-  border-left-color: transparent;
-  background: var(--hover);
-}
-
-.wb-matter.on {
-  border-left-color: var(--tx);
-  background: var(--card);
-  font-weight: 500;
-}
-
-.wb-matter small {
-  display: block;
-  margin-top: 1px;
-  color: var(--tx3);
-  font-size: 11px;
-}
-
-.wb-matter-memories {
-  margin: 0 0 6px;
-  padding: 0;
-  list-style: none;
-}
-
-/* The gap the clamped button can no longer carry itself. */
-.wb-matter-memories > li {
-  padding-bottom: 5px;
-}
-
 .wb-memory {
   display: -webkit-box;
   overflow: hidden;
@@ -3199,14 +3149,6 @@ button.onboarding-skip {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .wb-matters {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 0.5px solid var(--bd);
-  }
-
   .wb-column-label {
     display: none;
   }
@@ -3328,22 +3270,22 @@ button.onboarding-skip {
   border-style: dashed;
   color: var(--tx2);
 }
-.memory-note-trigger,
-.memory-note-heading,
-.memory-note-actions,
-.memory-note-consent {
+.memory-add-trigger,
+.memory-add-heading,
+.memory-add-actions,
+.memory-add-consent {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.memory-note-heading {
+.memory-add-heading {
   justify-content: space-between;
 }
-.memory-note-sheet {
+.memory-add-sheet {
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
 }
-.memory-note-sheet textarea {
+.memory-add-sheet textarea {
   width: 100%;
   min-height: 128px;
   resize: vertical;
@@ -3354,19 +3296,19 @@ button.onboarding-skip {
   border: 1px solid var(--bd2);
   border-radius: 6px;
 }
-.memory-note-label {
+.memory-add-label {
   display: block;
   margin: 12px 0 6px;
 }
-.memory-note-model {
+.memory-add-model {
   color: var(--tx2);
   font-size: 12px;
 }
-.memory-note-consent {
+.memory-add-consent {
   align-items: flex-start;
   font-size: 13px;
 }
-.memory-note-consent input {
+.memory-add-consent input {
   width: 16px;
   height: 16px;
   min-height: 16px;
@@ -3375,18 +3317,18 @@ button.onboarding-skip {
   margin-top: 4px;
   accent-color: var(--ac);
 }
-.memory-note-sheet {
+.memory-add-sheet {
   color: var(--tx);
   background: rgba(248, 250, 252, 0.96);
 }
-.memory-note-consent {
+.memory-add-consent {
   line-height: 1.7;
 }
-.memory-note-trigger {
+.memory-add-trigger {
   justify-self: end;
   white-space: nowrap;
 }
-.memory-note-toast {
+.memory-add-toast {
   position: fixed;
   z-index: 40;
   left: 50%;
@@ -3415,33 +3357,33 @@ button.onboarding-skip {
     justify-self: start;
   }
 }
-.memory-note-recent {
+.memory-add-recent {
   border-top: 1px solid var(--bd);
   margin-top: 20px;
   padding-top: 12px;
 }
-.memory-note-recent h3 {
+.memory-add-recent h3 {
   font-size: 14px;
 }
-.memory-note-recent ul {
+.memory-add-recent ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.memory-note-recent li {
+.memory-add-recent li {
   padding: 10px 0;
   border-bottom: 1px solid var(--bd);
 }
-.memory-note-recent p {
+.memory-add-recent p {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   margin: 0 0 6px;
   font-size: 13px;
 }
-.memory-note-recent small {
+.memory-add-recent small {
   color: var(--tx2);
 }
-.memory-note-actions {
+.memory-add-actions {
   flex-wrap: wrap;
 }
 
@@ -3558,9 +3500,7 @@ button.onboarding-skip {
 }
 @supports not (backdrop-filter: blur(1px)) {
   .app-rail,
-  .consent-sheet,
-  .matter-topbar,
-  .matter-context-modal {
+  .consent-sheet {
     background: var(--panel);
   }
 }

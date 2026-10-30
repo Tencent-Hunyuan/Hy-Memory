@@ -41,6 +41,20 @@ class MigrationProgress:
     phase: str
 
 
+def _ledger_log(database_path: Path, event: str, migration_id: str, **details: object) -> None:
+    """Every ledger transition goes to `sdk-migration.log`; never raises."""
+    from one_memory.sdk_migration_log import write_migration_log
+
+    write_migration_log(
+        database_path.parent,
+        writer="core-sdk-migrate",
+        event=event,
+        outcome="succeeded",
+        migration_id=migration_id,
+        details=details,
+    )
+
+
 class SdkDataPlaneMigrationStore:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
@@ -151,7 +165,16 @@ class SdkDataPlaneMigrationStore:
             elif backup_bundle_id and existing["backup_bundle_id"] != backup_bundle_id:
                 raise DataPlaneMigrationError("sdk_data_plane_migration_bundle_conflict")
             connection.execute("COMMIT")
-        return self.progress(migration_id)
+        progress = self.progress(migration_id)
+        _ledger_log(
+            self.database_path,
+            "ledger.started",
+            migration_id,
+            created=existing is None,
+            state=progress.state,
+            phase=progress.phase,
+        )
+        return progress
 
     def set_phase(self, migration_id: str, *, phase: str, state: str = "running") -> None:
         with main_database(self.database_path).write(autocommit=True) as connection:
@@ -164,6 +187,7 @@ class SdkDataPlaneMigrationStore:
             if cursor.rowcount != 1:
                 raise DataPlaneMigrationError("sdk_data_plane_migration_not_mutable")
             connection.execute("COMMIT")
+        _ledger_log(self.database_path, "ledger.phase_set", migration_id, phase=phase, state=state)
 
     def progress(self, migration_id: str) -> MigrationProgress:
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
@@ -257,6 +281,7 @@ class SdkDataPlaneMigrationStore:
                 (migration_id, now),
             )
             connection.execute("COMMIT")
+        _ledger_log(self.database_path, "ledger.authority_committed", migration_id, authority="sdk")
         marker = self.cutover()
         if marker is None:
             raise DataPlaneMigrationError("sdk_data_plane_cutover_missing")

@@ -1,122 +1,56 @@
-// A6: the rules behind the six product commands.
+// The rules behind the commands that attach to the Runtime directly.
 //
-// The parsers are where the contract actually lives — "needs --yes to change
-// anything" and "no write without evidence" are decisions, not formatting — so
-// they are tested directly rather than only through the CLI.
+// The parsers are where the contract actually lives — "only irreversible
+// operations ask for --yes" and "unknown flags are rejected" are decisions,
+// not formatting — so they are tested directly rather than only through the
+// CLI.
 
 import { describe, expect, it } from "vitest";
 
 import { parseOpenAIMessages } from "./core-client.js";
 import {
-  asPlanDocument,
-  describe as describePlan,
-  parseProductCommand,
+  parseBackupCommand,
+  parseScanCommand,
+  parseScanRootsCommand,
   parseTaskCommand,
   parseWriteCommand,
   restoreConfirmationMatches,
 } from "./product-flows.js";
 
-describe("mutating commands are two-phase", () => {
-  it("plans without --yes", () => {
-    const parsed = parseProductCommand("scan", ["--root", "/tmp/a"]);
-    expect(parsed?.confirmed).toBe(false);
-  });
-
-  it("confirms with --yes", () => {
-    const parsed = parseProductCommand("scan", ["--root", "/tmp/a", "--yes"]);
-    expect(parsed?.confirmed).toBe(true);
-  });
-
-  it("says what it would do", () => {
-    const parsed = parseProductCommand("scan", ["--root", "/tmp/a"]);
-    // `?.plan!` would let a null parse pass silently; assert the parse first.
-    if (parsed === null) {
-      throw new Error("scan with a root must parse");
-    }
-    expect(describePlan(parsed.plan)).toContain("scan: /tmp/a");
-  });
-
-  it("marks a plan as not applied", () => {
-    // Assert the parse itself: `?.` let a null result satisfy this test for as
-    // long as `backup create` was unparseable.
-    const parsed = parseProductCommand("backup", [
-      "create",
-      "--target",
-      "/tmp/b",
-    ]);
-    if (parsed === null) {
-      throw new Error("backup create must parse");
-    }
-    expect(parsed.plan.verb).toBe("create");
-    expect(asPlanDocument(parsed.plan).applied).toBe(false);
-  });
-
-  it("parses the verb for every command that takes one", () => {
-    // `path add` / `path remove` / `backup create` were rejected outright
-    // before the verb was skipped in parsing.
+describe("scan-roots", () => {
+  it("reads the root, source and recursive flag off add", () => {
     expect(
-      parseProductCommand("path", ["add", "--root", "/tmp/x"])?.plan.action,
-    ).toBe("add scan root");
-    expect(
-      parseProductCommand("path", ["remove", "--root", "/tmp/x"])?.plan.action,
-    ).toBe("remove scan root");
-    expect(
-      parseProductCommand("backup", ["restore", "--source", "/tmp/b"])?.plan
-        .action,
-    ).toBe("restore backup");
+      parseScanRootsCommand([
+        "add",
+        "--root",
+        "/tmp/x",
+        "--source",
+        "codex",
+        "--no-recursive",
+      ]),
+    ).toEqual({
+      kind: "add",
+      root: "/tmp/x",
+      source: "codex",
+      recursive: false,
+    });
+    expect(parseScanRootsCommand(["add", "--root", "/tmp/x"])).toEqual({
+      kind: "add",
+      root: "/tmp/x",
+      recursive: true,
+    });
   });
 
-  it("defaults a scan to all registered roots", () => {
-    const parsed = parseProductCommand("scan", []);
-    expect(parsed?.plan.target).toBe("all registered roots");
-  });
-});
-
-describe("unknown flags are rejected", () => {
-  it("rejects a typo'd flag rather than ignoring it", () => {
-    // A silently ignored --yes would turn a real apply into a plan, and the
-    // user would believe the change had been made.
-    expect(parseProductCommand("scan", ["--yesx"])).toBeNull();
-    expect(parseProductCommand("scan", ["--root"])).toBeNull();
-    expect(parseProductCommand("scan", ["--root", "--yes"])).toBeNull();
-  });
-
-  it("rejects an unknown verb for backup", () => {
+  it("distinguishes remove from add and refuses add-only flags on remove", () => {
+    expect(parseScanRootsCommand(["remove", "--root", "/tmp/x"])).toEqual({
+      kind: "remove",
+      root: "/tmp/x",
+    });
     expect(
-      parseProductCommand("backup", ["make", "--target", "/tmp/b"]),
+      parseScanRootsCommand(["remove", "--root", "/tmp/x", "--no-recursive"]),
     ).toBeNull();
-  });
-
-  // `path` and `scan` share one parser. Before this guard, an unknown verb was
-  // silently treated as `path add` or a default `scan`, so `--yes` executed a
-  // different operation than the one the caller named.
-  it("rejects an unknown verb for path without turning it into add", () => {
     expect(
-      parseProductCommand("path", ["frobnicate", "--root", "/tmp/x", "--yes"]),
-    ).toBeNull();
-  });
-
-  it("rejects an unknown verb for scan without turning it into all", () => {
-    expect(
-      parseProductCommand("scan", ["frobnicate", "--all", "--yes"]),
-    ).toBeNull();
-    expect(parseProductCommand("scan", ["frobnicate", "--yes"])).toBeNull();
-  });
-
-  it("still accepts the documented verbless scan", () => {
-    expect(parseProductCommand("scan", ["--all", "--yes"])?.plan.all).toBe(
-      true,
-    );
-    expect(
-      parseProductCommand("scan", ["--source", "codex"])?.plan.sourceId,
-    ).toBe("codex");
-  });
-
-  it("rejects flags that the named verb does not consume", () => {
-    // These were accepted and then silently dropped. An operator who typed
-    // `path remove --source codex` would believe the source filter applied.
-    expect(
-      parseProductCommand("path", [
+      parseScanRootsCommand([
         "remove",
         "--root",
         "/tmp/x",
@@ -124,137 +58,103 @@ describe("unknown flags are rejected", () => {
         "codex",
       ]),
     ).toBeNull();
+  });
+
+  it("is direct, but keeps accepting a legacy --yes", () => {
+    expect(parseScanRootsCommand(["add", "--root", "/tmp/x", "--yes"])).toEqual(
+      { kind: "add", root: "/tmp/x", recursive: true },
+    );
+  });
+
+  it("rejects unknown verbs, typos and repeated flags", () => {
+    expect(parseScanRootsCommand(["create", "--root", "/tmp/x"])).toBeNull();
+    expect(parseScanRootsCommand(["add", "--rot", "/tmp/x"])).toBeNull();
+    expect(parseScanRootsCommand(["add"])).toBeNull();
     expect(
-      parseProductCommand("path", [
-        "remove",
-        "--root",
-        "/tmp/x",
-        "--no-recursive",
-      ]),
+      parseScanRootsCommand(["add", "--root", "/a", "--root", "/b"]),
     ).toBeNull();
     expect(
-      parseProductCommand("path", ["add", "--root", "/tmp/x", "--full"]),
+      parseScanRootsCommand(["add", "--root", "/a", "--yes", "--yes"]),
+    ).toBeNull();
+  });
+});
+
+describe("scan", () => {
+  it("needs a source: there is no endpoint that scans a bare path", () => {
+    expect(parseScanCommand(["--source", "codex"])).toEqual({
+      kind: "source",
+      sourceId: "codex",
+    });
+    expect(parseScanCommand([])).toBeNull();
+    expect(parseScanCommand(["--root", "/tmp/a"])).toBeNull();
+  });
+
+  it("no longer accepts --full, which was never sent to Core", () => {
+    expect(parseScanCommand(["--source", "codex", "--full"])).toBeNull();
+  });
+
+  it("keeps --all as a hidden alias and a legacy --yes", () => {
+    expect(parseScanCommand(["--all", "--yes"])).toEqual({ kind: "all" });
+    expect(parseScanCommand(["--all", "--source", "codex"])).toBeNull();
+    expect(parseScanCommand(["--source", "codex", "--yes"])).toEqual({
+      kind: "source",
+      sourceId: "codex",
+    });
+  });
+
+  it("rejects a verb, a bad source id and repeated flags", () => {
+    expect(parseScanCommand(["all"])).toBeNull();
+    expect(parseScanCommand(["--source", "Bad Id"])).toBeNull();
+    expect(
+      parseScanCommand(["--source", "codex", "--source", "cursor"]),
     ).toBeNull();
     expect(
-      parseProductCommand("backup", [
-        "create",
-        "--target",
-        "/tmp/b",
-        "--source",
-        "/tmp/s",
-      ]),
+      parseScanCommand(["--source", "codex", "--json", "--json"]),
     ).toBeNull();
+  });
+});
+
+describe("backup", () => {
+  it("creates directly and requires a target", () => {
+    expect(parseBackupCommand(["create", "--target", "/tmp/b"])).toEqual({
+      verb: "create",
+      target: "/tmp/b",
+    });
+    expect(parseBackupCommand(["create"])).toBeNull();
     expect(
-      parseProductCommand("backup", [
-        "restore",
-        "--source",
-        "/tmp/s",
-        "--target",
-        "/tmp/t",
-      ]),
+      parseBackupCommand(["create", "--target", "/tmp/b", "--source", "/x"]),
     ).toBeNull();
   });
 
-  // A later value silently won before this guard. For `scan --source` that
-  // means one extra shell/make variable can change which source is scanned
-  // while the operator believes both were applied.
-  it("rejects repeated value-bearing flags instead of letting the last one win", () => {
+  it("restores only with --yes and requires a source", () => {
+    expect(parseBackupCommand(["restore", "--source", "/tmp/b"])).toEqual({
+      verb: "restore",
+      source: "/tmp/b",
+      confirmed: false,
+    });
     expect(
-      parseProductCommand("scan", ["--source", "codex", "--source", "cursor"]),
-    ).toBeNull();
-    expect(
-      parseProductCommand("path", [
-        "add",
-        "--root",
-        "/tmp/a",
-        "--root",
-        "/tmp/b",
-      ]),
-    ).toBeNull();
-    expect(
-      parseProductCommand("backup", [
-        "create",
-        "--target",
-        "/tmp/a",
-        "--target",
-        "/tmp/b",
-      ]),
-    ).toBeNull();
+      parseBackupCommand(["restore", "--source", "/tmp/b", "--yes"]),
+    ).toMatchObject({ confirmed: true });
+    expect(parseBackupCommand(["restore", "--yes"])).toBeNull();
   });
 
-  it("rejects repeated boolean flags instead of treating them as idempotent", () => {
-    expect(parseProductCommand("scan", ["--all", "--all", "--yes"])).toBeNull();
-    expect(
-      parseProductCommand("scan", ["--full", "--full", "--yes"]),
-    ).toBeNull();
-    expect(
-      parseProductCommand("path", [
-        "add",
-        "--root",
-        "/tmp/a",
-        "--no-recursive",
-        "--no-recursive",
-      ]),
-    ).toBeNull();
-    expect(
-      parseProductCommand("backup", [
-        "create",
-        "--target",
-        "/tmp/a",
-        "--yes",
-        "--yes",
-      ]),
-    ).toBeNull();
-  });
-
-  it("rejects a repeated global --json spelling", () => {
-    expect(
-      parseProductCommand("scan", ["--root", "/tmp/a", "--json", "--json"]),
-    ).toBeNull();
-    expect(
-      parseProductCommand("backup", [
-        "create",
-        "--target",
-        "/tmp/a",
-        "--json",
-        "--json",
-      ]),
-    ).toBeNull();
-  });
-
-  it("requires a source when restoring", () => {
-    expect(
-      parseProductCommand("backup", ["restore", "--target", "/tmp/b"]),
-    ).toBeNull();
-  });
-
-  it("parses the explicit restore confirmation path", () => {
-    const parsed = parseProductCommand("backup", [
+  it("accepts the legacy --confirm <path> and checks it lexically", () => {
+    const parsed = parseBackupCommand([
       "restore",
       "--source",
-      "/tmp/backups/a.sqlite3",
+      "/tmp/b",
       "--yes",
       "--confirm",
-      "/tmp/backups/a.sqlite3",
+      "/tmp/b",
     ]);
-    expect(parsed).not.toBeNull();
-    expect(parsed?.confirmPath).toBe("/tmp/backups/a.sqlite3");
-    expect(
-      restoreConfirmationMatches("/tmp/backups/a.sqlite3", parsed?.confirmPath),
-    ).toBe(true);
-    expect(
-      restoreConfirmationMatches("/tmp/backups/a.sqlite3", undefined),
-    ).toBe(false);
-    expect(
-      restoreConfirmationMatches(
-        "/tmp/backups/a.sqlite3",
-        "/tmp/backups/../backups/a.sqlite3",
-      ),
-    ).toBe(false);
+    expect(parsed).toMatchObject({ confirmPath: "/tmp/b" });
+    expect(restoreConfirmationMatches("/tmp/b", "/tmp/b")).toBe(true);
+    expect(restoreConfirmationMatches("/tmp/b", undefined)).toBe(true);
+    expect(restoreConfirmationMatches("/tmp/b", "/tmp/./b")).toBe(false);
   });
 
-  it("requires a target when creating a backup", () => {
-    expect(parseProductCommand("backup", ["create"])).toBeNull();
+  it("rejects an unknown verb", () => {
+    expect(parseBackupCommand(["delete", "--target", "/tmp/b"])).toBeNull();
   });
 });
 
@@ -305,11 +205,19 @@ describe("write", () => {
     ).toBeNull();
   });
 
-  it("parses status under write", () => {
+  it("parses status under write, positional or --id", () => {
     expect(parseWriteCommand(["status", "--id", "request-1"])).toEqual({
       kind: "status",
       id: "request-1",
     });
+    expect(parseWriteCommand(["status", "request-1"])).toEqual({
+      kind: "status",
+      id: "request-1",
+    });
+  });
+
+  it("rejects a repeated --session instead of letting the last one win", () => {
+    expect(parseWriteCommand([...base, "--session", "s2"])).toBeNull();
   });
 
   it("marks --live as priority live", () => {
@@ -364,55 +272,5 @@ describe("task", () => {
 
   it("rejects a repeated --json", () => {
     expect(parseTaskCommand(["--id", "req-1", "--json", "--json"])).toBeNull();
-  });
-});
-
-describe("path add and remove carry what the endpoint needs", () => {
-  it("reads the source and recursive flag off the path add", () => {
-    const parsed = parseProductCommand("path", [
-      "add",
-      "--root",
-      "/tmp/scanme",
-      "--source",
-      "codex",
-      "--no-recursive",
-    ]);
-    // `?.plan!` let a null parse pass silently, so assert the parse itself.
-    if (parsed === null) {
-      throw new Error("path add must parse");
-    }
-    expect(parsed.plan.action).toBe("add scan root");
-    expect(parsed.plan.target).toBe("/tmp/scanme");
-    expect(parsed.plan.detail).toContain("source=codex");
-    expect(parsed.plan.detail).toContain("recursive=false");
-  });
-
-  it("distinguishes remove from add", () => {
-    const parsed = parseProductCommand("path", [
-      "remove",
-      "--root",
-      "/tmp/scanme",
-    ]);
-    if (parsed === null) {
-      throw new Error("path remove must parse");
-    }
-    // The action is the discriminator at apply time: add and remove share a
-    // `--root`, so a mis-set action would register the directory it meant to delete.
-    expect(parsed.plan.action).toBe("remove scan root");
-  });
-
-  it("does not silently drop --yes", () => {
-    const parsed = parseProductCommand("path", [
-      "add",
-      "--root",
-      "/tmp/a",
-      "--yes",
-    ]);
-    expect(parsed?.confirmed).toBe(true);
-    // Without this, a typo'd `--yes` would fall through to a plan and the user
-    // would believe the change had been made.
-
-    const without = parseProductCommand("path", ["add", "--root", "/tmp/a"]);
-    expect(without?.confirmed).toBe(false);
   });
 });

@@ -10,11 +10,7 @@ import time
 from contextlib import closing
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from pydantic import SecretStr
 
-from one_memory.api import create_app
-from one_memory.config import Settings
 from one_memory.context_memory import read_memory_context
 from one_memory.context_models import ContextSearchRequest
 from one_memory.imports.grants import SourceGrantStore
@@ -30,8 +26,6 @@ from one_memory.memory_governance import (
     MemoryMutationRequestConflictError,
     MemoryStatus,
 )
-from one_memory.memory_library import read_memory_library
-from one_memory.memory_mutation_receipts import read_memory_mutation_receipt
 from one_memory.recall import GovernedRecallTarget, RecallRequest, RecallState
 from tests.person_door import as_person
 
@@ -267,7 +261,6 @@ def test_a_superseded_memory_leaves_every_current_read_path(tmp_path) -> None:
         )
         return {
             "listed": {m.memory_id for m in store.list(user_id="local")},
-            "library": {m.memory_id for m in read_memory_library(database).items},
             "recall": {hit.memory_id for hit in recall.hits},
             "semantic": {hit.memory_id for hit in semantic.hits},
             "matching": {
@@ -286,7 +279,7 @@ def test_a_superseded_memory_leaves_every_current_read_path(tmp_path) -> None:
 
     after = current_ids()
     assert all(old.memory_id not in ids for ids in after.values()), after
-    assert all(new.memory_id in after[path] for path in ("listed", "library", "recall")), after
+    assert all(new.memory_id in after[path] for path in ("listed", "recall")), after
     assert GovernedRecallTarget(store).recall(RecallRequest(query="权限评审")).state is (
         RecallState.GROUNDED
     )
@@ -295,9 +288,6 @@ def test_a_superseded_memory_leaves_every_current_read_path(tmp_path) -> None:
     assert [m.memory_id for m in store.list(user_id="local", status=MemoryStatus.SUPERSEDED)] == [
         old.memory_id
     ]
-    library = read_memory_library(database, status=MemoryStatus.SUPERSEDED)
-    assert [m.memory_id for m in library.items] == [old.memory_id]
-    assert library.items[0].superseded_by == (new.memory_id,)
 
 
 async def _async(value):
@@ -411,122 +401,6 @@ def test_the_link_is_stored_additively_without_rewriting_existing_rows(tmp_path)
         assert db.execute(
             "SELECT name FROM sqlite_master WHERE name='governed_memory_supersessions'"
         ).fetchone()
-
-
-def test_an_earlier_receipt_stays_readable_after_its_memory_is_superseded(tmp_path) -> None:
-    database, store, old, new = _pair(tmp_path)
-    old = as_person(store).set_scopes(
-        old.memory_id,
-        user_id="local",
-        request_id="scope-old",
-        expected_revision=old.revision,
-        scopes=("all-apps", "cursor"),
-    )
-    before = read_memory_mutation_receipt(database, request_id="scope-old")
-    assert before.state == "committed" and before.result_status == "confirmed"
-
-    _supersede(store, old, new.memory_id)
-
-    after = read_memory_mutation_receipt(database, request_id="scope-old")
-    assert after == before
-    assert set(type(after).model_fields) == {
-        "schema_version",
-        "request_id",
-        "state",
-        "operation",
-        "memory_id",
-        "result_revision",
-        "result_status",
-        "memory_state",
-        "migrated_from",
-    }
-
-
-def test_the_api_shows_the_chain_refuses_edits_and_still_deletes_through_hy(tmp_path) -> None:
-    async def scenario() -> None:
-        app = create_app(
-            Settings(
-                data_dir=tmp_path / "data",
-                source_home=tmp_path,
-                api_token=SecretStr("local-token"),
-            )
-        )
-        async with (
-            app.router.lifespan_context(app),
-            AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                headers={
-                    "Authorization": "Bearer local-token",
-                    "Origin": "http://127.0.0.1:5173",
-                },
-            ) as client,
-        ):
-            store = app.state.memory_governance_store
-            evidence_id = _evidence(app.state.evidence_store.database_path)
-            door = app.state.person_writes
-            old = _confirmed(door, evidence_id, OLD, "old")
-            new = _confirmed(door, evidence_id, NEW, "new")
-            listed = await client.get("/api/v1/memories")
-            assert {m["memory_id"] for m in listed.json()} == {"old", "new"}
-            replaced = _supersede(store, old, new.memory_id)
-
-            listed = await client.get("/api/v1/memories")
-            assert [m["memory_id"] for m in listed.json()] == ["new"]
-            library = await client.get("/api/v1/memory-library")
-            assert [m["memory_id"] for m in library.json()["items"]] == ["new"]
-            only_old = await client.get("/api/v1/memory-library", params={"status": "superseded"})
-            assert [m["memory_id"] for m in only_old.json()["items"]] == ["old"]
-            detail = (await client.get("/api/v1/memories/old")).json()["memory"]
-            assert detail["status"] == "superseded"
-            assert detail["superseded_by"] == ["new"]
-            assert detail["supersedes"] == []
-            head = (await client.get("/api/v1/memories/new")).json()["memory"]
-            assert head["supersedes"] == ["old"] and head["superseded_by"] == []
-            recalled = await client.post(
-                "/api/v1/recall", json={"query": "权限评审", "scope": "all-apps"}
-            )
-            assert [hit["memory_id"] for hit in recalled.json()["hits"]] == ["new"]
-
-            for action in ("undo",):
-                refused = await client.post(
-                    f"/api/v1/memories/old/actions/{action}",
-                    json={"request_id": f"{action}-x", "expected_revision": replaced.revision},
-                )
-                assert (refused.status_code, refused.json()["detail"]) == (
-                    409,
-                    "memory_superseded",
-                )
-            refused = await client.post(
-                "/api/v1/memories/old/correct",
-                json={
-                    "request_id": "correct-x",
-                    "expected_revision": replaced.revision,
-                    "content": "改一下",
-                },
-            )
-            assert (refused.status_code, refused.json()["detail"]) == (409, "memory_superseded")
-
-            cascaded: list[str] = []
-
-            async def finish_deletion(memory_id: str) -> None:
-                cascaded.append(memory_id)
-
-            app.state.sdk_memory_runtime.finish_deletion = finish_deletion
-            deleted = await client.post(
-                "/api/v1/memories/old/actions/delete",
-                json={"request_id": "delete-x", "expected_revision": replaced.revision},
-            )
-            assert deleted.status_code == 200 and deleted.json()["status"] == "deleted"
-            assert cascaded == ["old"]
-            cleanup = await client.get("/api/v1/memories/old/deletion")
-            assert cleanup.json()["status"] == "completed"
-
-            spec = app.openapi()["components"]["schemas"]
-            assert "superseded" in spec["MemoryStatus"]["enum"]
-            assert {"supersedes", "superseded_by"} <= set(spec["GovernedMemory"]["properties"])
-
-    asyncio.run(scenario())
 
 
 def test_supersession_integrity_reports_a_cycle_and_stays_quiet_when_healthy(tmp_path) -> None:

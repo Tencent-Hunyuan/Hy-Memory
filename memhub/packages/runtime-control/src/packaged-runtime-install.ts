@@ -123,9 +123,9 @@ export async function installPackagedRuntime(options: {
    *
    * Off by default, which preserves `installed_version_conflict`. Desktop turns
    * it on: the bundle it carries has passed notarization, so its payload is
-   * already trusted, and the same build number is re-released whenever a
-   * release is rebuilt from a new commit. Refusing that case leaves an affected
-   * machine with an app that exits on every launch, which is a worse outcome
+   * already trusted. It may need to replace a rebuilt release or repair a
+   * selected tree polluted by an interrupted copy. Refusing either case leaves
+   * an affected machine with an app that exits on every launch, which is worse
    * than replacing the runtime. The superseded tree is kept, not edited. */
   replaceSameBuild?: boolean;
   gitCommit?: string;
@@ -307,11 +307,36 @@ async function reuseSelectedSameBuild(options: {
   ) {
     throw new Error("install_current_unmanaged");
   }
-  const selectedManifest = await verifyInstalledDistribution(
-    selected,
-    options.platform,
-    options.arch,
-  );
+  let selectedManifest: DistributionManifest;
+  try {
+    selectedManifest = await verifyInstalledDistribution(
+      selected,
+      options.platform,
+      options.arch,
+    );
+  } catch (error) {
+    if (!options.replaceSameBuild) throw error;
+    // A notarized App bundle is the repair source. A dirty selected tree must
+    // reach the normal staged install path instead of failing before the
+    // same-build replacement policy can run.
+    const declared = await readFile(
+      path.join(selected, "manifest.json"),
+      "utf8",
+    )
+      .then((value) => JSON.parse(value) as DistributionManifest)
+      .catch(() => null);
+    // Without a readable build the downgrade check cannot run; fail closed
+    // rather than let an older bundle replace a newer runtime.
+    if (declared === null) throw new Error("distribution_manifest_invalid");
+    if (
+      declared.build_number !== undefined &&
+      options.buildNumber !== undefined &&
+      declared.build_number > options.buildNumber
+    ) {
+      throw new Error("distribution_downgrade_refused");
+    }
+    return null;
+  }
   if (selectedManifest.build_number !== options.buildNumber) return null;
   // The bundle's own payload, read in place. It has to agree with the selected
   // tree file for file; there is no cheaper signal that is also exact, and a

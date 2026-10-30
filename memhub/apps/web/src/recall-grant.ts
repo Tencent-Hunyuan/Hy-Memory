@@ -23,19 +23,20 @@ export interface GrantSelection {
 
 /** Every tool the sheet can offer this installation.
  *
- * `om_matters` is only in the list when a receipt already carried it: the tool
- * is reachable through an older grant, and dropping it here would silently
- * remove a permission nobody asked to remove.
+ * `om_ask` and `om_matters` are only in the list when a receipt already
+ * carried them: their MCP tools are gone, but an older grant can still name
+ * them, and dropping them here would silently change a permission nobody
+ * asked to change.
  */
 export function selectableTools(
   existing: readonly RecallPermissionTool[] = [],
 ): RecallPermissionTool[] {
   const tools: RecallPermissionTool[] = [
     "om_recall",
-    "om_ask",
     "om_conversations",
     "om_diagnostic_trace",
   ];
+  if (existing.includes("om_ask")) tools.push("om_ask");
   if (existing.includes("om_matters")) tools.push("om_matters");
   return tools;
 }

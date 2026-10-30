@@ -226,6 +226,7 @@ describe("host runtime attestation", () => {
     "repairInstalledCommand",
     "repairInstalledCommands",
     "syncStaleInstalls",
+    "refreshInstalledHosts",
     "previewInstall",
     "install",
     "setPermission",
@@ -668,35 +669,6 @@ describe("Runtime CLI configuration", () => {
       nodeCommand: "/opt/one-memory/node",
       webDirectory: "/opt/one-memory/web",
     });
-  });
-
-  it("leaves the Reader off unless the launcher enables it", () => {
-    expect(
-      resolveRuntimeCliConfig({
-        ONE_MEMORY_DATA_DIR: "/tmp/one-memory-data",
-      }).readerEnabled,
-    ).toBeUndefined();
-    expect(
-      resolveRuntimeCliConfig({
-        ONE_MEMORY_DATA_DIR: "/tmp/one-memory-data",
-        ONE_MEMORY_READER_ENABLED: "1",
-      }).readerEnabled,
-    ).toBe(true);
-  });
-
-  it("keeps the Reader off on Windows even when it is requested", () => {
-    const platform = vi.spyOn(process, "platform", "get");
-    platform.mockReturnValue("win32");
-    try {
-      expect(
-        resolveRuntimeCliConfig({
-          ONE_MEMORY_DATA_DIR: "/tmp/one-memory-data",
-          ONE_MEMORY_READER_ENABLED: "1",
-        }).readerEnabled,
-      ).toBeUndefined();
-    } finally {
-      platform.mockRestore();
-    }
   });
 
   it("derives the packaged layout beside the Runtime entry", () => {

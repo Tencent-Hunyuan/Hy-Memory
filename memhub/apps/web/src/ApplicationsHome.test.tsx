@@ -65,21 +65,15 @@ it("localizes the whole home live without repeating reads or changing imported t
   expect(summary).toHaveBeenCalledTimes(calls);
 });
 
-const {
-  summary,
-  processing,
-  sedimentation,
-  history,
-  liveSync,
-  recentConversations,
-} = vi.hoisted(() => ({
-  summary: vi.fn(),
-  processing: vi.fn(),
-  sedimentation: vi.fn(),
-  history: vi.fn(),
-  liveSync: vi.fn(),
-  recentConversations: vi.fn(),
-}));
+const { summary, processing, sedimentation, history, liveSync } = vi.hoisted(
+  () => ({
+    summary: vi.fn(),
+    processing: vi.fn(),
+    sedimentation: vi.fn(),
+    history: vi.fn(),
+    liveSync: vi.fn(),
+  }),
+);
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
   getCallHistory: history,
@@ -89,7 +83,6 @@ vi.mock("./api", () => ({
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
   getSedimentation: sedimentation,
-  getRecentConversations: recentConversations,
   getSources: vi.fn().mockResolvedValue([]),
 }));
 const sources = Array.from(
@@ -134,12 +127,6 @@ beforeEach(() => {
     imports_unaffected: true,
   });
   liveSync.mockReset().mockResolvedValue([]);
-  recentConversations.mockReset().mockResolvedValue({
-    items: [],
-    total: 0,
-    offset: 0,
-    limit: 1,
-  });
   window.oneMemory = {
     restartBackground: vi.fn().mockResolvedValue({ state: "restarted" }),
     getRecallHosts: vi.fn().mockResolvedValue([
@@ -185,7 +172,7 @@ it.each([
     expect(sedimentation).toHaveBeenCalledOnce();
   },
 );
-it("localizes failure and empty states without leaking errors", async () => {
+it("localizes startup recovery and empty states without leaking errors", async () => {
   summary.mockRejectedValue(new Error("synthetic_private_error"));
   Object.assign(window.oneMemory ?? {}, {
     getLanguagePreference: vi
@@ -204,47 +191,18 @@ it("localizes failure and empty states without leaking errors", async () => {
     </LanguageProvider>,
   );
   expect(
-    await screen.findByText("No se puede leer el estado de las memorias"),
+    await screen.findByText(
+      "El servicio se está iniciando; se actualizará automáticamente",
+    ),
   ).toBeTruthy();
+  expect(screen.getByText("0")).toBeTruthy();
   expect(screen.getByText("Aún no hay aplicaciones para mostrar")).toBeTruthy();
   expect(
-    screen.getByRole("button", { name: "Reintentar lectura" }),
-  ).toBeTruthy();
+    screen.queryByRole("button", { name: "Reintentar lectura" }),
+  ).toBeNull();
   expect(document.body.textContent).not.toContain("synthetic_private_error");
 });
-it("hides a debug-frame dialogue excerpt from 最近更新 and falls back to memory", async () => {
-  recentConversations.mockResolvedValue({
-    items: [
-      {
-        evidence_id: "ev-1",
-        conversation_id: "c1",
-        source_id: "app-1",
-        role: "user",
-        written_by: "user",
-        created_at: "2026-10-12T06:06:00Z",
-        imported_at: "2026-10-12T06:06:00Z",
-        time_basis: "conversation",
-        excerpt: '[write_stdout] {"chars":"{\\"session_id\\":93099}',
-        truncated: false,
-      },
-    ],
-    total: 1,
-    offset: 0,
-    limit: 1,
-  });
-  render(
-    <ApplicationsHome
-      imports={imports}
-      onManage={() => {}}
-      onMemories={() => {}}
-      onSettings={() => {}}
-    />,
-  );
-  await screen.findByText("实际治理记忆");
-  expect(screen.queryByText(/write_stdout/)).toBeNull();
-});
-
-it("shows latest recorded call separately from newly generated memory and opens its history", async () => {
+it("shows latest recorded call separately without exposing recent-update detail entries", async () => {
   history.mockResolvedValue({
     available: true,
     recording_error: false,
@@ -278,12 +236,11 @@ it("shows latest recorded call separately from newly generated memory and opens 
   await screen.findByText("Codex 查到 3 条相关内容");
   expect(document.querySelector(".r6-home-call-direction")).toBeTruthy();
   expect(screen.queryByText("实际治理记忆")).toBeNull();
-  expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
+  expect(screen.getByText(/Codex · 今天 .+ · 查询成功/)).toBeTruthy();
   fireEvent.click(screen.getByRole("tab", { name: "最近更新" }));
   expect(screen.getByText("实际治理记忆")).toBeTruthy();
-  const memoryActions = screen.getAllByRole("button", { name: "查看记忆" });
-  fireEvent.click(memoryActions[memoryActions.length - 1]);
-  expect(onMemories).toHaveBeenCalledWith("m1");
+  expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+  expect(onMemories).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("tab", { name: "最近调用" }));
   expect(history).toHaveBeenCalledWith({ limit: 20, offset: 0 });
   if (CALL_HISTORY_ENTRY_VISIBLE) {
@@ -292,10 +249,55 @@ it("shows latest recorded call separately from newly generated memory and opens 
   } else {
     // D96: the recent call still shows on the home page; only the way into
     // the call-history page is hidden.
-    expect(screen.getByText(/今天 .+ · 查询成功/)).toBeTruthy();
+    expect(screen.getByText(/Codex · 今天 .+ · 查询成功/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "查看记录" })).toBeNull();
     expect(onCalls).not.toHaveBeenCalled();
   }
+});
+it("skips direct diagnostics and shows the latest attributed application call", async () => {
+  history.mockResolvedValue({
+    available: true,
+    recording_error: false,
+    items: [
+      {
+        event_id: "direct-diagnostic",
+        host_id: null,
+        state: "grounded",
+        occurred_at: new Date().toISOString(),
+        memory_count: 1,
+        raw_count: 0,
+        references: [],
+      },
+      {
+        event_id: "workbuddy-call",
+        host_id: "workbuddy",
+        state: "grounded",
+        occurred_at: new Date(Date.now() - 60_000).toISOString(),
+        memory_count: 5,
+        raw_count: 0,
+        references: [],
+      },
+    ],
+  });
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+      onCalls={() => {}}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("tab", { name: "最近调用" }));
+  expect(await screen.findByText("WorkBuddy 查到 5 条相关内容")).toBeTruthy();
+  expect(screen.queryByText(/直接调用/)).toBeNull();
+  expect(screen.getByText(/WorkBuddy · 今天 .+ · 查询成功/)).toBeTruthy();
+  const direction = document.querySelector(".r6-home-call-direction");
+  expect(direction?.querySelector("img")?.getAttribute("src")).toContain(
+    "/r6/workbuddy.png",
+  );
+  expect(direction?.querySelector(".r6-app-initial")).toBeNull();
 });
 it("shows only the host for memory hits whose references have no source", async () => {
   history.mockResolvedValue({
@@ -766,7 +768,7 @@ it("keeps authoritative home and processing data when only the source snapshot b
   expect(screen.getAllByText("整理中")).toHaveLength(2);
   expect(screen.queryByText("状态待核对")).toBeNull();
 });
-it("does not turn a failed home summary into zero or expose a private error", async () => {
+it("keeps a neutral zero while the first home summary read recovers", async () => {
   summary.mockRejectedValue(new Error("private offline detail"));
   render(
     <ApplicationsHome
@@ -776,9 +778,116 @@ it("does not turn a failed home summary into zero or expose a private error", as
       onSettings={() => {}}
     />,
   );
-  await waitFor(() => expect(screen.getByText("暂无法读取")).toBeTruthy());
-  expect(screen.queryByText("0")).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+  );
+  expect(screen.getByText("0")).toBeTruthy();
+  expect(screen.getByText("正在准备记忆概览")).toBeTruthy();
+  expect(screen.queryByText(/暂时?无法读取|读取失败/)).toBeNull();
   expect(document.body.textContent).not.toContain("private offline detail");
+});
+it("offers a calm retry after repeated home summary failures", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    summary.mockRejectedValue(new Error("private offline detail"));
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("记忆概览还没准备好")).toBeTruthy();
+    expect(
+      screen.getByText("后台恢复后会自动更新，也可以重新读取。"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新读取" })).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("counts repeated stale summaries and recovers on the next confirmed read", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stale = {
+      memory_count: 0,
+      latest: null,
+      observed_at: "2026-09-19T00:00:00Z",
+      stale: true,
+    };
+    summary
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({
+        memory_count: 4,
+        latest: null,
+        observed_at: "2026-09-19T00:01:00Z",
+      });
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText("后台正在启动，稍后自动更新")).toBeTruthy(),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("记忆概览还没准备好")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(await screen.findByText("4")).toBeTruthy();
+    expect(screen.queryByText("记忆概览还没准备好")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+it("labels a retained count as previous data after repeated stale reads", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const stale = {
+      memory_count: 0,
+      latest: null,
+      observed_at: "2026-09-19T00:00:00Z",
+      stale: true,
+    };
+    summary
+      .mockResolvedValueOnce({
+        memory_count: 601,
+        latest: null,
+        observed_at: "2026-09-19T00:00:00Z",
+      })
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue({
+        memory_count: 4,
+        latest: null,
+        observed_at: "2026-09-19T00:01:00Z",
+      });
+    render(
+      <ApplicationsHome
+        imports={imports}
+        onManage={() => {}}
+        onMemories={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    expect(await screen.findByText("601")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(screen.getByText("601")).toBeTruthy();
+    expect(screen.getByText("正在显示上次数据，稍后自动更新")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await screen.findByText("4")).toBeTruthy();
+    expect(screen.queryByText("正在显示上次数据，稍后自动更新")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 it("never calls a recall event a success when only stored memories are available", async () => {
   render(
@@ -879,9 +988,37 @@ it.each([null, "", "not-a-date"])(
       />,
     );
     await screen.findByText("实际治理记忆");
-    expect(screen.getByText(/时间未知.*版本 2/)).toBeTruthy();
+    expect(screen.getByText("时间未知 · App 0")).toBeTruthy();
   },
 );
+
+it("shows only time and source for an SDK recent update", async () => {
+  summary.mockResolvedValue({
+    memory_count: 1,
+    latest: {
+      memory_id: "sdk-memory-1",
+      content: "SDK 原生记忆",
+      layer: "l2_fact",
+      source: "app-0",
+      gmt_created: 1_761_000_000,
+    },
+    observed_at: "2026-09-20T09:00:00Z",
+  });
+
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+
+  await screen.findByText("SDK 原生记忆");
+  expect(screen.getByText(/^\d{2}:\d{2} · App 0$/)).toBeTruthy();
+  expect(document.body.textContent).not.toContain("SDK l2_fact");
+  expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+});
 
 it("does not treat an available adapter as an installed application", async () => {
   render(
@@ -1173,7 +1310,7 @@ it("keeps the conversation-sync checking copy before the first home read", () =>
   expect(screen.queryByText(/个应用已开启/)).toBeNull();
 });
 
-it("does not claim there are no memories while the first summary read is pending", async () => {
+it("shows a provisional zero while the first summary read is pending", async () => {
   summary.mockImplementation(() => new Promise(() => {}));
   history.mockResolvedValue({
     available: true,
@@ -1189,7 +1326,9 @@ it("does not claim there are no memories while the first summary read is pending
       onSettings={() => {}}
     />,
   );
-  await screen.findByText("正在读取动态");
+  await screen.findByText("正在准备记忆概览");
+  expect(screen.getByText("0")).toBeTruthy();
+  expect(screen.getByText("正在核对本机记忆…")).toBeTruthy();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
 });
 
@@ -1253,49 +1392,6 @@ it("does not show zero connected apps while cold-start insertion is still applyi
   await screen.findByText("601");
   expect(screen.getByText("正在核对中")).toBeTruthy();
   expect(screen.queryByText("0 个应用已接入")).toBeNull();
-});
-
-it("shows a newly imported conversation ahead of an older memory", async () => {
-  recentConversations.mockResolvedValue({
-    items: [
-      {
-        evidence_id: "e-live",
-        conversation_id: "c1",
-        source_id: "app-0",
-        role: "user",
-        written_by: "person",
-        created_at: "2026-01-01T00:00:00Z",
-        imported_at: "2026-09-23T06:47:00Z",
-        excerpt: "刚从 Cursor 同步进来的原话",
-        truncated: false,
-      },
-    ],
-    total: 1,
-    offset: 0,
-    limit: 1,
-  });
-  const onConversations = vi.fn();
-  render(
-    <ApplicationsHome
-      imports={imports}
-      onManage={() => {}}
-      onMemories={() => {}}
-      onConversations={onConversations}
-      onSettings={() => {}}
-    />,
-  );
-  expect(await screen.findByText("刚从 Cursor 同步进来的原话")).toBeTruthy();
-  expect(screen.getAllByText("最近更新").length).toBeGreaterThan(0);
-  expect(screen.queryByText("对话")).toBeNull();
-  expect(screen.queryByText("记忆")).toBeNull();
-  expect(screen.queryByText(/原始对话/)).toBeNull();
-  // 查看会话入口已按产品要求从“最近更新”屏蔽（2026-10-12）。
-  expect(screen.queryByRole("button", { name: "查看会话" })).toBeNull();
-  expect(onConversations).not.toHaveBeenCalled();
-  expect(recentConversations).toHaveBeenCalledWith({
-    limit: 1,
-    recentActivity: true,
-  });
 });
 
 function homeWithHosts(getRecallHosts: ReturnType<typeof vi.fn>) {

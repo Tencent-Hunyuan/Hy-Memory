@@ -8,6 +8,7 @@ import {
   RuntimeDiscoveryError,
   type RuntimeIdentity,
 } from "./discovery.js";
+import { readSdkMigrationBlock } from "./sdk-migration-log.js";
 
 export type RuntimeStatusState =
   | "running"
@@ -27,8 +28,6 @@ export interface RuntimeStatus {
    * separately because an alive Runtime with a failed Broker must be reported
    * as `degraded`, not `healthy`. */
   sidecar?: "running" | "failed" | "stopped";
-  /** Reader process port, when one is running. Display-only. */
-  readerPort?: number | null;
 }
 
 /** Core/Runtime attachment status, not OS registration or Broker health.
@@ -50,6 +49,9 @@ export async function inspectRuntimeStatus(options: {
       requireServiceReceipt: options.requireServiceReceipt,
     });
     if (attachment) return running(attachment);
+    // An unfinished upgrade is why nothing is serving; say so instead of a
+    // generic "not running" or "core exited".
+    const blocked = await readSdkMigrationBlock(options.dataDir);
     // `discoverRuntimeAttachment` returns null both when nothing is running and
     // when the Core child this service owns has died. Those are not the same
     // thing: a login-start service whose Core exited is still installed, still
@@ -63,9 +65,12 @@ export async function inspectRuntimeStatus(options: {
         processIsAlive: processAlive,
       }))
     ) {
-      return { state: "degraded", code: "runtime_core_exited" };
+      return {
+        state: "degraded",
+        code: blocked?.code ?? "runtime_core_exited",
+      };
     }
-    return { state: "stopped", code: "runtime_not_running" };
+    return { state: "stopped", code: blocked?.code ?? "runtime_not_running" };
   } catch (error) {
     if (error instanceof RuntimeDiscoveryError) {
       return {
@@ -131,9 +136,6 @@ function running(attachment: RuntimeAttachment): RuntimeStatus {
     ...(attachment.sidecarState === null
       ? {}
       : { sidecar: attachment.sidecarState }),
-    ...(attachment.readerPort === null || attachment.readerPort === undefined
-      ? {}
-      : { readerPort: attachment.readerPort }),
   };
 }
 

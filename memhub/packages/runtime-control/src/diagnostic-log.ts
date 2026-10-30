@@ -134,7 +134,6 @@ const EXPORTED_NUMBER_DETAIL_KEYS = new Set([
   "status_code",
   "result_count",
   "invalid_lines",
-  "reader_port",
   "open_file_count",
   "memory_bytes",
   "thread_count",

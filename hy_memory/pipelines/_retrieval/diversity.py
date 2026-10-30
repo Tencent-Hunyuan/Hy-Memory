@@ -160,6 +160,28 @@ def near_dup_demote(
     return out
 
 
+# MMR 只在调用方请求的 top-k（search 的 limit）小于这个值时自动启用。
+# mmr_select 的贪心是 O(k^2 * pool) 次 Jaccard，k 大时代价陡增，而大 k 本身已
+# 足够容纳多样性，收益很小。权重仍由 MEMORY_HYBRID_V2_MMR_LAMBDA 控制。
+MMR_MAX_TOP_K = 20
+
+
+def mmr_applies(top_k: int, lambda_: float) -> bool:
+    """本次检索是否走 MMR：λ 在有效区间内，且 top_k < MMR_MAX_TOP_K。"""
+    return 0.0 < float(lambda_) < 0.999 and int(top_k) < MMR_MAX_TOP_K
+
+
+def near_dup_applies(top_k: int) -> bool:
+    """本次检索是否走近重复降权：与 MMR 同一个 top-k 门槛。
+
+    near_dup_demote 让每个候选和此前所有"非重复"候选两两算 Jaccard，候选
+    互不相似时是 O(pool^2)；池子随 limit 放大（约 max(3*limit, 30) + 关键词
+    命中），limit 达到 MMR_MAX_TOP_K 时代价同样陡增。大 k 的调用方（如记忆
+    面板翻页）要的是全部相关项，相似项也应照常出现，降权没有收益。
+    """
+    return int(top_k) < MMR_MAX_TOP_K
+
+
 def mmr_select(
     hits: Sequence[Dict[str, Any]],
     limit: int,

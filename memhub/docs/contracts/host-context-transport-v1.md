@@ -7,12 +7,13 @@ inventing revisions, Evidence IDs, paths, or adoption state.
 
 ## Transport
 
-- `om_context` sends an authenticated Broker `/context` request to
+- The Broker `/context` route (used by host hooks and `recall-cli --context`;
+  no longer an MCP tool) sends an authenticated request to
   `POST /api/v1/context/search`.
 - Request validation covers `query`, `kinds`, `raw_source_ids`, `limit`,
   `character_budget`, and `timeout_ms`. Caller-supplied identity, arbitrary
   scopes, and workspace fields are rejected.
-- Existing `om_recall` and `om_conversations` rights are composed rather than
+- Existing `om_recall` and `om_conversations` grants are composed rather than
   replaced by a universal context grant. At least one requested lane must be
   authorized.
 - Raw access requires `all-apps` plus source grants. Memory access requires an

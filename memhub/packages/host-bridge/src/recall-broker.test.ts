@@ -199,7 +199,7 @@ describe("RecallBroker", () => {
     expect(exception?.details).not.toHaveProperty("message");
     expect(exception?.details).not.toHaveProperty("stack_origin");
   });
-  it.each(["recall", "ask"])(
+  it.each(["recall"])(
     "answers %s without waiting for a slow diagnostic write",
     async (endpoint) => {
       const events: string[] = [];
@@ -207,11 +207,14 @@ describe("RecallBroker", () => {
         response.setHeader("Content-Type", "application/json");
         response.end(
           JSON.stringify(
-            request.url === "/api/v2/memory-authority"
-              ? { authority: "legacy", migration_id: null }
-              : request.url === "/api/v1/memories/ask"
-                ? { answer: "empty", memories: [], mode: "empty" }
-                : { state: "empty" },
+            request.url === "/api/v2/memories/ask"
+              ? {
+                  schema_version: 2,
+                  answer: "empty",
+                  memories: [],
+                  mode: "empty",
+                }
+              : { state: "empty" },
           ),
         );
       });
@@ -247,7 +250,7 @@ describe("RecallBroker", () => {
       expect(events[0]).toBe(`${endpoint}.started`);
     },
   );
-  it.each(["recall", "ask"])(
+  it.each(["recall"])(
     "answers %s when the diagnostic writer throws synchronously",
     async (endpoint) => {
       const rejections: unknown[] = [];
@@ -260,11 +263,14 @@ describe("RecallBroker", () => {
         response.setHeader("Content-Type", "application/json");
         response.end(
           JSON.stringify(
-            request.url === "/api/v2/memory-authority"
-              ? { authority: "legacy", migration_id: null }
-              : request.url === "/api/v1/memories/ask"
-                ? { answer: "empty", memories: [], mode: "empty" }
-                : { state: "empty" },
+            request.url === "/api/v2/memories/ask"
+              ? {
+                  schema_version: 2,
+                  answer: "empty",
+                  memories: [],
+                  mode: "empty",
+                }
+              : { state: "empty" },
           ),
         );
       });
@@ -300,18 +306,11 @@ describe("RecallBroker", () => {
       expect(rejections).toEqual([]);
     },
   );
-  it.each(["recall", "ask"])(
+  it.each(["recall"])(
     "preserves %s scope denial instead of claiming Core is offline",
     async (endpoint) => {
       const diagnostics: Array<Record<string, unknown>> = [];
-      const core = createServer((request, response) => {
-        if (request.url === "/api/v2/memory-authority") {
-          response.setHeader("Content-Type", "application/json");
-          response.end(
-            JSON.stringify({ authority: "legacy", migration_id: null }),
-          );
-          return;
-        }
+      const core = createServer((_request, response) => {
         response.statusCode = 403;
         response.setHeader("Content-Type", "application/json");
         response.end(

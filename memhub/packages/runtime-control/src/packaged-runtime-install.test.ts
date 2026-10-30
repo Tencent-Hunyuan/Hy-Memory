@@ -422,7 +422,7 @@ describe("installPackagedRuntime", () => {
     ).toBe("rebuilt-body");
   });
 
-  it("refuses same-commit different bytes even when the bundle opts in", async () => {
+  it("repairs same-commit drift when the trusted bundle opts in", async () => {
     const { root, resources, executable, installRoot } = await fixture();
     const { selected } = await installFormalCurrent({
       root,
@@ -434,18 +434,43 @@ describe("installPackagedRuntime", () => {
     await writeFile(path.join(selected, "web", "index.html"), "unexpected");
     await rewriteManifestDigest(selected, "web/index.html");
 
-    await expect(
-      installPackagedRuntime({
-        resourcesPath: resources,
-        executablePath: executable,
-        installRoot,
-        platform: "darwin",
-        arch: "arm64",
-        buildNumber: 3757,
-        gitCommit: "a".repeat(40),
-        replaceSameBuild: true,
-      }),
-    ).rejects.toThrow("installed_version_conflict");
+    const receipt = await installPackagedRuntime({
+      resourcesPath: resources,
+      executablePath: executable,
+      installRoot,
+      platform: "darwin",
+      arch: "arm64",
+      buildNumber: 3757,
+      gitCommit: "a".repeat(40),
+      replaceSameBuild: true,
+    });
+    expect(receipt.reused_current).toBe(false);
+    expect(receipt.version_directory).not.toBe(selected);
+  });
+
+  it("repairs an extra file left in the selected runtime tree", async () => {
+    const { root, resources, executable, installRoot } = await fixture();
+    const { selected } = await installFormalCurrent({
+      root,
+      resources,
+      executable,
+      installRoot,
+      gitCommit: "a".repeat(40),
+    });
+    await writeFile(path.join(selected, "left-by-ditto"), "dirty");
+
+    const receipt = await installPackagedRuntime({
+      resourcesPath: resources,
+      executablePath: executable,
+      installRoot,
+      platform: "darwin",
+      arch: "arm64",
+      buildNumber: 3757,
+      gitCommit: "a".repeat(40),
+      replaceSameBuild: true,
+    });
+    expect(receipt.reused_current).toBe(false);
+    expect(receipt.version_directory).not.toBe(selected);
   });
 
   it.each(["missing"])(
@@ -482,6 +507,31 @@ describe("installPackagedRuntime", () => {
       ).rejects.toThrow("installed_version_conflict");
     },
   );
+
+  it("refuses to repair a selected tree whose manifest is unreadable", async () => {
+    const { root, resources, executable, installRoot } = await fixture();
+    const { selected } = await installFormalCurrent({
+      root,
+      resources,
+      executable,
+      installRoot,
+      buildNumber: 3758,
+    });
+    await writeFile(path.join(selected, "manifest.json"), "{");
+
+    await expect(
+      installPackagedRuntime({
+        resourcesPath: resources,
+        executablePath: executable,
+        installRoot,
+        platform: "darwin",
+        arch: "arm64",
+        buildNumber: 3757,
+        gitCommit: "a".repeat(40),
+        replaceSameBuild: true,
+      }),
+    ).rejects.toThrow("distribution_manifest_invalid");
+  });
 
   it("preserves downgrade refusal when selected current is newer", async () => {
     const { root, resources, executable, installRoot } = await fixture();

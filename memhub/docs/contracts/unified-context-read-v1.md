@@ -7,8 +7,9 @@ revision or Evidence fields.
 
 ## V1 compatibility surface
 
-- `POST /api/v1/context/search`; the host tool `om_context` consumes it.
-  Existing recall/conversations tools retain their permission and response shape.
+- `POST /api/v1/context/search`; the Broker `/context` route consumes it (host
+  hooks and `recall-cli --context`; the MCP `om_context` tool is gone). The
+  `om_recall` and `om_conversations` grants keep their permission meaning.
 - Pydantic source of truth: `context_models.py`. Request has query, kinds,
   **raw_source_ids**, total limit, character_budget and timeout_ms. The renamed
   source filter deliberately affects raw only, never silently filters memories.

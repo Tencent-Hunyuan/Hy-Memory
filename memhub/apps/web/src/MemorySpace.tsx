@@ -13,8 +13,6 @@ import type {
 import { isMessageKey } from "@one-memory/i18n";
 import {
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   LayoutList,
   MessageCircle,
   Network,
@@ -22,7 +20,6 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
-  type RefObject,
   type SyntheticEvent,
   useCallback,
   useEffect,
@@ -30,30 +27,20 @@ import {
   useState,
 } from "react";
 import {
+  addMemory,
   apiErrorCode,
   askMemoriesStream,
-  correctMemory,
   deleteSdkMemory,
-  digestMemoryGraph,
-  getMemories,
-  getMemory,
-  getMemoryAuthority,
-  getMemoryGraph,
   getMemoryProcessing,
   getModelProfiles,
   getSdkMemory,
   getSdkMemoryGraph,
   getSdkMemoryLibrary,
   manualExtract,
-  mutateMemory,
   retryUnknownMemoryProcessing,
-  saveMemoryNote,
   setExtractionWindow,
-  syncMemoryIndex,
   updateSdkMemory,
 } from "./api";
-import { ConversationSearch } from "./ConversationSearch";
-import { clockStamp } from "./clock-stamp";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
 import { useGuiLanguage } from "./gui-language";
 import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
@@ -62,23 +49,22 @@ import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
-import { sdkDetail, sdkLibraryPage, sdkMapMemory } from "./sdk-memory-map";
-import { sourceNameOr } from "./source-label";
+import {
+  SDK_MEMORY_PAGE_SIZE,
+  sdkDetail,
+  sdkEditableText,
+  sdkLibraryPage,
+  sdkNamespace,
+} from "./sdk-memory-map";
+import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 import { traceUiAction } from "./ui-trace";
-import { useMemoryLibrary } from "./use-memory-library";
 import { isDefiniteRefusal, writeTraceStatus } from "./write-outcome";
 import "./r6-memory.css";
-import { indexSyncPresentation } from "./index-sync-notice";
-import {
-  MemoryNoteComposer,
-  type PendingMemoryNote,
-} from "./MemoryNoteComposer";
+import { MemoryAddComposer, type PendingMemoryAdd } from "./MemoryAddComposer";
 import type { MemoryArrival } from "./memory-arrival-state";
 import {
   blockReasonLabel,
-  extractionStateLabel,
   extractionWindowPresetLabel,
-  memoryHistoryActionLabel,
   modelBlock,
   splitBlockedStages,
   taskKindLabel,
@@ -88,16 +74,6 @@ type MemoryMode = "map" | "ask" | "library" | "history";
 type Translate = ReturnType<typeof useGuiLanguage>["t"];
 type TranslateCount = ReturnType<typeof useGuiLanguage>["tn"];
 type AskMemory = GovernedMemory | SdkAskMemory;
-type MemoryStatusFilter = "confirmed" | "deleted" | "superseded";
-type BulkAction = "delete";
-type BulkTarget = {
-  memoryId: string;
-  revision: number;
-  action: BulkAction;
-  intent: string;
-  requestId: string;
-};
-type BulkFailure = BulkTarget & { error: string };
 const NO_SOURCES: SourceResponse[] = [];
 
 export function MemorySpace({
@@ -112,8 +88,6 @@ export function MemorySpace({
   simplified = false,
   focusMemoryId = null,
   onFocusMemoryConsumed,
-  focusDialogue = false,
-  onFocusDialogueConsumed,
 }: {
   /** Needed to name an app in the evidence column and to draw the skeleton
    * graph before any memory exists. Owned by `App`, which already polls it. */
@@ -129,71 +103,26 @@ export function MemorySpace({
   simplified?: boolean;
   focusMemoryId?: string | null;
   onFocusMemoryConsumed?(): void;
-  focusDialogue?: boolean;
-  onFocusDialogueConsumed?(): void;
 }) {
   const { locale, t, tn } = useGuiLanguage();
-  const translation = useRef(t);
-  translation.current = t;
   const memoryText = (text: string) => {
     const key = `memory:${text}`;
     return isMessageKey(key) ? t(key) : text;
   };
-  const [memories, setMemories] = useState<GovernedMemory[]>([]);
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
-  const [detailFreshness, setDetailFreshness] = useState<{
-    id: string;
-    state: "checking" | "verified" | "failed" | "changed";
-    revision?: number;
-  } | null>(null);
-  const detailReadBlocked =
-    simplified &&
-    !!detail &&
-    detailFreshness?.id === detail.memory.memory_id &&
-    (detailFreshness.state === "checking" ||
-      detailFreshness.state === "failed");
-  const detailWriteBlocked = useRef(detailReadBlocked);
-  detailWriteBlocked.current = detailReadBlocked;
   const [detailLoad, setDetailLoad] = useState<{
     memoryId: string;
     status: "loading" | "failed";
     error?: string;
   } | null>(null);
   const [query, setQuery] = useState("");
-  const [askScope, setAskScope] = useState<"all-apps" | "*">("all-apps");
   const [mode, setMode] = useState<MemoryMode>("map");
-  const [memoryAuthority, setMemoryAuthority] = useState<
-    "unknown" | "legacy" | "sdk"
-  >("unknown");
   const [managementOpen, setManagementOpen] = useState(false);
   const displayedMode = simplified
     ? managementOpen
       ? "library"
       : "map"
     : mode;
-  useEffect(() => {
-    if ((!active && !preload) || typeof getMemoryAuthority !== "function")
-      return;
-    let current = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // The app opens before Core is ready, so the first ask usually fails.
-    // Without a retry the authority stayed unknown and nothing ever loaded.
-    const ask = (delay: number) => {
-      void getMemoryAuthority()
-        .then((result) => {
-          if (current) setMemoryAuthority(result.authority);
-        })
-        .catch(() => {
-          if (!current) return;
-          timer = setTimeout(() => ask(Math.min(delay * 2, 10_000)), delay);
-        });
-    };
-    ask(500);
-    return () => {
-      current = false;
-      if (timer !== undefined) clearTimeout(timer);
-    };
-  }, [active, preload]);
   useEffect(() => {
     const openManagement = () => {
       if (simplified) setManagementOpen((value) => !value);
@@ -204,6 +133,8 @@ export function MemorySpace({
   }, [simplified]);
   const viewActive = useRef(active);
   viewActive.current = active;
+  const stale = useRef(sourceSnapshotStale);
+  stale.current = sourceSnapshotStale;
   const shouldPoll = !simplified || active || preload;
   function blockInactiveInteraction(event: SyntheticEvent) {
     // An inactive surface swallows every event. The old carve-out that let a
@@ -213,9 +144,6 @@ export function MemorySpace({
       event.stopPropagation();
     }
   }
-  const [statusFilter, setStatusFilter] =
-    useState<MemoryStatusFilter>("confirmed");
-  const [submittedQuery, setSubmittedQuery] = useState("");
   const sourceKey = JSON.stringify(
     sources.map((source) => [
       source.source_id,
@@ -224,77 +152,12 @@ export function MemorySpace({
     ]),
   );
   const management = simplified && displayedMode === "library";
-  const [mapQuery, setMapQuery] = useState("");
-  const [mapSource, setMapSource] = useState("");
-  const mapLibrary = useMemoryLibrary({
-    enabled:
-      memoryAuthority === "legacy" &&
-      simplified &&
-      (active || preload) &&
-      !management,
-    stale: sourceSnapshotStale,
-    sourceKey,
-    query: mapQuery,
-    status: "confirmed",
-    source: mapSource || undefined,
-    activeOnly: true,
-  });
-  // The count above is the count of the current filter, not of every memory.
-  // Naming the filter is what keeps "已沉淀 3 条" from reading as "only three
-  // exist" while a search or a source selection is on.
-  // Named after the filter the page answers, never after the filter in the
-  // inputs: while a new read is open the numbers are still the previous
-  // filter's, and naming the new one would caption the wrong numbers.
-  const settledFilterLabel = [
-    mapLibrary.settledSource
-      ? `${t("memory:来源")} ${sourceNameOr(sources, mapLibrary.settledSource, mapLibrary.settledSource)}`
-      : "",
-    mapLibrary.settledQuery.trim()
-      ? t("memory:关键词“{query}”", {
-          query: mapLibrary.settledQuery.trim(),
-        })
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const knownMapTotal = useRef(0);
-  if (
-    simplified &&
-    !mapQuery &&
-    !mapSource &&
-    mapLibrary.page &&
-    !mapLibrary.failed
-  ) {
-    knownMapTotal.current = mapLibrary.page.total;
-  }
-  const library = useMemoryLibrary({
-    enabled: memoryAuthority === "legacy" && management && active,
-    stale: sourceSnapshotStale,
-    sourceKey,
-    query: submittedQuery,
-    status: statusFilter,
-  });
-  const libraryGuard = useRef({
-    writable: library.writable,
-    scope: library.scope,
-    active,
-    stale: sourceSnapshotStale,
-  });
-  libraryGuard.current = {
-    writable: library.writable,
-    scope: library.scope,
-    active,
-    stale: sourceSnapshotStale,
-  };
   useEffect(() => {
     viewActive.current = active;
-    libraryGuard.current.active = active;
     return () => {
       viewActive.current = false;
-      libraryGuard.current.active = false;
     };
   }, [active]);
-  const [graph, setGraph] = useState<MemoryGraphResponse | null>(null);
   const [answer, setAnswer] = useState<HostAskMemoryResponse | null>(null);
   const [streaming, setStreaming] = useState<{
     text: string;
@@ -303,33 +166,56 @@ export function MemorySpace({
   // The SDK library is no longer where a memory opens from the map; the id is
   // kept so the panel still has a focus target for its own tests.
   const [sdkFocusedMemoryId] = useState<string | null>(null);
-  // The map on SDK authority. Legacy reads (library page, governed graph)
-  // are refused there, so it draws SDK memories and the v2 graph instead.
-  const [sdkMap, setSdkMap] = useState<{
-    memories: GovernedMemory[];
-    graph: MemoryGraphResponse;
+  // The graph covers the active source scope (up to its visual cap), while the
+  // list pages through that scope. Keep source+query with the value so a
+  // filter change cannot paint the previous filter's graph during the new read.
+  const [sdkGraph, setSdkGraph] = useState<{
+    scope: string;
+    status: "ready" | "failed";
+    value: MemoryGraphResponse | null;
   } | null>(null);
-  const [sdkMapFailed, setSdkMapFailed] = useState(false);
-  // A write on SDK authority has no governed refresh to ride on; bumping this
-  // re-reads the SDK page and graph after an edit or a delete.
+  // Bumping this re-reads the page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
   const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
-  // The map's left list pages through the SDK library the same way it pages
-  // through the governed one: the list is always one page, and the count above
-  // it is the library's total, not the page's length.
   const [sdkLibrary, setSdkLibrary] = useState<{
     page: MemoryLibraryPage | null;
     loading: boolean;
     failed: boolean;
-  }>({ page: null, loading: false, failed: false });
+    /** The filter the shown page was read with, for the count above it. */
+    settledSource: string;
+    settledQuery: string;
+  }>({
+    page: null,
+    loading: false,
+    failed: false,
+    settledSource: "",
+    settledQuery: "",
+  });
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
   const [sdkLibrarySource, setSdkLibrarySource] = useState("");
   const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
-  const sdkMapVisible =
-    memoryAuthority === "sdk" &&
-    simplified &&
-    active &&
-    displayedMode === "map";
+  const sdkRequestedScope = JSON.stringify([
+    sdkLibraryQuery.trim(),
+    sdkLibrarySource,
+  ]);
+  const sdkGraphSettled = sdkGraph?.scope === sdkRequestedScope;
+  const visibleSdkGraph =
+    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "ready"
+      ? sdkGraph.value
+      : null;
+  const sdkGraphFailed =
+    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "failed";
+  // A keyword search pages through one server-side result window. The id is
+  // kept for the query and source it was searched with; a new query or
+  // source starts without one, so the server searches afresh.
+  const sdkSearchWindow = useRef<{ key: string; id: string | null }>({
+    key: "",
+    id: null,
+  });
+  // The page the list shows, for the namespace of a memory being opened.
+  const sdkPageRef = useRef<MemoryLibraryPage | null>(null);
+  sdkPageRef.current = sdkLibrary.page;
+  const sdkMapVisible = simplified && active && displayedMode === "map";
   useEffect(() => {
     if (!sdkMapVisible) return;
     // A write bumps the revision; reading it here re-runs the read at once
@@ -337,91 +223,111 @@ export function MemorySpace({
     void sdkMapRevision;
     let cancelled = false;
     let controller: AbortController | null = null;
-    const read = async () => {
+    const source = sdkLibrarySource || undefined;
+    const query = sdkLibraryQuery.trim() || undefined;
+    const windowKey = JSON.stringify([query ?? "", source ?? ""]);
+    if (sdkSearchWindow.current.key !== windowKey)
+      sdkSearchWindow.current = { key: windowKey, id: null };
+    const read = async (first: boolean) => {
       controller?.abort();
       const request = new AbortController();
       controller = request;
+      if (first) setSdkLibrary((current) => ({ ...current, loading: true }));
       try {
         const [page, graph] = await Promise.all([
           getSdkMemoryLibrary(
-            { statuses: ["active"], offset: 0, limit: 300 },
+            {
+              statuses: ["active"],
+              source,
+              query,
+              offset: sdkLibraryOffset,
+              limit: SDK_MEMORY_PAGE_SIZE,
+              windowId: query ? sdkSearchWindow.current.id : null,
+            },
             request.signal,
           ),
-          getSdkMemoryGraph(request.signal),
+          // The overlay is decoration: the list stands without it. It reads
+          // the full active/source-filtered scene up to the API's visual cap.
+          // Reading only the first list-page prefix made "All applications"
+          // look identical to Cursor whenever newer Cursor memories occupied
+          // that prefix.
+          query
+            ? Promise.resolve({
+                status: "ready" as const,
+                value: null,
+              })
+            : getSdkMemoryGraph(
+                {
+                  source,
+                  offset: 0,
+                  limit: 300,
+                },
+                request.signal,
+              ).then(
+                (value) => ({ status: "ready" as const, value }),
+                () => ({ status: "failed" as const, value: null }),
+              ),
         ]);
         if (cancelled) return;
-        setSdkMap({ memories: page.memories.map(sdkMapMemory), graph });
-        setSdkMapFailed(false);
-      } catch {
-        if (!cancelled && !request.signal.aborted) setSdkMapFailed(true);
-      }
-    };
-    void read();
-    const timer = setInterval(() => void read(), 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-      controller?.abort();
-    };
-  }, [sdkMapVisible, sdkMapRevision]);
-  useEffect(() => {
-    if (memoryAuthority !== "sdk" || !simplified || !active) return;
-    if (displayedMode !== "map") return;
-    void sdkMapRevision;
-    let cancelled = false;
-    const controller = new AbortController();
-    setSdkLibrary((current) => ({ ...current, loading: true }));
-    void getSdkMemoryLibrary(
-      {
-        statuses: ["active"],
-        source: sdkLibrarySource || undefined,
-        query: sdkLibraryQuery || undefined,
-        offset: sdkLibraryOffset,
-        limit: 100,
-      },
-      controller.signal,
-    )
-      .then((page) => {
-        if (cancelled) return;
+        if (sdkSearchWindow.current.key === windowKey)
+          sdkSearchWindow.current = {
+            key: windowKey,
+            id: page.window_id ?? null,
+          };
+        // The window expired: the server searched again and answered page 1.
+        if (page.window_reset && sdkLibraryOffset !== 0) setSdkLibraryOffset(0);
         setSdkLibrary({
           page: sdkLibraryPage(page),
           loading: false,
           failed: false,
+          settledSource: sdkLibrarySource,
+          settledQuery: sdkLibraryQuery,
         });
-      })
-      .catch(() => {
-        if (cancelled || controller.signal.aborted) return;
+        setSdkGraph({ scope: windowKey, ...graph });
+      } catch {
+        if (cancelled || request.signal.aborted) return;
         setSdkLibrary((current) => ({
           ...current,
           loading: false,
           failed: true,
         }));
-      });
+      }
+    };
+    void read(true);
+    const timer = setInterval(() => void read(false), 30_000);
     return () => {
       cancelled = true;
-      controller.abort();
+      clearInterval(timer);
+      controller?.abort();
     };
   }, [
-    memoryAuthority,
-    simplified,
-    active,
-    displayedMode,
+    sdkMapVisible,
+    sdkMapRevision,
     sdkLibraryOffset,
     sdkLibraryQuery,
     sdkLibrarySource,
-    sdkMapRevision,
   ]);
+  const sdkFilterLabel = [
+    sdkLibrary.settledSource
+      ? `${t("memory:来源")} ${
+          sdkLibrary.settledSource === UNATTRIBUTED_SOURCE_ID
+            ? t("memory:未识别来源")
+            : sourceNameOr(
+                sources,
+                sdkLibrary.settledSource,
+                sdkLibrary.settledSource,
+              )
+        }`
+      : "",
+    sdkLibrary.settledQuery.trim()
+      ? t("memory:关键词“{query}”", {
+          query: sdkLibrary.settledQuery.trim(),
+        })
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const [draft, setDraft] = useState("");
-  const [selection, setSelection] = useState<Set<string>>(new Set());
-  const bulkInFlight = useRef(false);
-  const [bulkFailures, setBulkFailures] = useState(
-    new Map<string, BulkFailure>(),
-  );
-  const [bulkResult, setBulkResult] = useState<{
-    action: BulkAction | null;
-    succeeded: number;
-    failed: number;
-  } | null>(null);
   const [deleteCount, setDeleteCount] = useState(0);
   const deleteAnswer = useRef<((answer: boolean) => void) | null>(null);
   function confirmDelete(count: number) {
@@ -432,55 +338,26 @@ export function MemorySpace({
   }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
-  /** A refresh behind an already-drawn list, not the first load. */
-  const [refreshing, setRefreshing] = useState(false);
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
-  const [pendingNote, setPendingNote] = useState<PendingMemoryNote | null>(
-    null,
-  );
-  const [arrivalSetup, setArrivalSetup] = useState<
-    "checking" | "model-required" | "ready" | "unavailable"
-  >("checking");
+  const [pendingAdd, setPendingAdd] = useState<PendingMemoryAdd | null>(null);
   const [checkingSetup, setCheckingSetup] = useState(false);
-  const liveLoading = useRef(false);
-  liveLoading.current =
-    importJobs.some((job) => ["pending", "running"].includes(job.status)) ||
-    !!(processing?.running || processing?.pending);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Source authority changes invalidate an in-flight setup snapshot.
   useEffect(() => {
     if (!active && (simplified || !onArrivalChange)) return;
     if (sourceSnapshotStale) {
-      setArrivalSetup("unavailable");
       setCheckingSetup(false);
       return;
     }
     let stopped = false;
     let request = 0;
-    setArrivalSetup("checking");
     async function inspectSetup() {
       const version = ++request;
       setCheckingSetup(true);
-      const profiles = await Promise.allSettled([getModelProfiles()]);
+      await Promise.allSettled([getModelProfiles()]);
       if (stopped || version !== request) return;
       setCheckingSetup(false);
-      if (profiles[0].status !== "fulfilled") {
-        setArrivalSetup("unavailable");
-        return;
-      }
-      const activeProfiles = profiles[0].value.filter((item) => item.is_active);
-      const profile = activeProfiles.length === 1 ? activeProfiles[0] : null;
-      if (activeProfiles.length > 1) {
-        setArrivalSetup("unavailable");
-        return;
-      }
-      if (!profile) {
-        setArrivalSetup("model-required");
-        return;
-      }
-      setArrivalSetup("ready");
     }
     void inspectSetup();
     const stop = subscribePoll({
@@ -494,12 +371,6 @@ export function MemorySpace({
       stop();
     };
   }, [active, onArrivalChange, simplified, sourceKey, sourceSnapshotStale]);
-  // Whether the library has ever been read. An empty list means "you have
-  // none"; not having read it yet means we do not know, and saying the first
-  // when we mean the second is how 483 memories came to look like zero.
-  const [loaded, setLoaded] = useState(false);
-  const loadedRef = useRef(loaded);
-  loadedRef.current = loaded;
   /** Focus targets for the mode tablist's roving arrow-key navigation. */
   const modeTabs = useRef<
     Partial<
@@ -510,6 +381,8 @@ export function MemorySpace({
   const isImporting = importJobs.some((job) =>
     ["pending", "running"].includes(job.status),
   );
+  // The memory count is not read here: the map reads its own page, and this
+  // summary only ever reported a count for the governed library.
   const memoryArrival: MemoryArrival = {
     importing: isImporting && !sourceSnapshotStale,
     importedMessages: importedSources.reduce(
@@ -521,24 +394,10 @@ export function MemorySpace({
       0,
     ),
     refreshing: checkingSetup,
-    memoryCount: loaded ? memories.length : undefined,
+    memoryCount: undefined,
     blockedStages: processing?.blocked_stages,
     backlogPending: processing?.backlog_pending,
-    phase: sourceSnapshotStale
-      ? "unavailable"
-      : !loaded
-        ? "checking"
-        : arrivalSetup !== "ready"
-          ? arrivalSetup
-          : !processing
-            ? "checking"
-            : processing.running > 0
-              ? "processing"
-              : processing.failed > 0
-                ? "failed"
-                : isImporting
-                  ? "importing"
-                  : "idle",
+    phase: sourceSnapshotStale ? "unavailable" : "checking",
   };
   const arrivalStateKey = JSON.stringify(memoryArrival);
   useEffect(() => {
@@ -575,255 +434,19 @@ export function MemorySpace({
   }, [active, onArrivalChange]);
   const requestIds = useRef(new Map<string, string>());
   const detailEpoch = useRef(0);
-  const detailRef = useRef(detail);
-  detailRef.current = detail;
   const answerEpoch = useRef(0);
   const answerMemories = useRef<AskMemory[]>([]);
-  const dataEpoch = useRef(0);
-  const invalidateAnswers = useCallback((items: GovernedMemory[]) => {
-    if (
-      !answerMemories.current.some((memory) => {
-        if (!("revision" in memory)) return false;
-        const current = items.find(
-          (item) => item.memory_id === memory.memory_id,
-        );
-        return (
-          !current ||
-          current.revision !== memory.revision ||
-          current.status !== memory.status
-        );
-      })
-    )
-      return;
-    answerEpoch.current++;
-    answerMemories.current = [];
-    setAnswer(null);
-    setStreaming(null);
-  }, []);
   const closeDetail = useCallback(() => {
     detailEpoch.current++;
     setDetail(null);
     setDetailLoad(null);
-    setDetailFreshness(null);
   }, []);
-
-  const selectedDetailId = detail?.memory.memory_id;
-  const detailContext = useRef({ sourceKey, displayedMode });
-  detailContext.current = { sourceKey, displayedMode };
-  useEffect(() => {
-    if (
-      !simplified ||
-      !active ||
-      sourceSnapshotStale ||
-      !selectedDetailId ||
-      busy
-    )
-      return;
-    let stopped = false;
-    let inFlight = false;
-    async function verifySelected() {
-      if (stopped || inFlight || document.hidden) return;
-      const selected = detailRef.current;
-      if (!selected || selected.memory.memory_id !== selectedDetailId) return;
-      const epoch = detailEpoch.current;
-      inFlight = true;
-      setDetailFreshness({ id: selectedDetailId, state: "checking" });
-      const valid = () =>
-        !stopped &&
-        viewActive.current &&
-        !libraryGuard.current.stale &&
-        detailContext.current.sourceKey === sourceKey &&
-        detailContext.current.displayedMode === displayedMode &&
-        epoch === detailEpoch.current &&
-        detailRef.current?.memory.memory_id === selectedDetailId &&
-        detailRef.current.memory.revision === selected.memory.revision;
-      try {
-        const latest = await getMemory(selectedDetailId);
-        if (!valid()) return;
-        if (latest.memory.memory_id !== selectedDetailId)
-          throw new Error("detail_identity_mismatch");
-        if (
-          (latest.memory.status === "deleted" &&
-            selected.memory.status !== "deleted") ||
-          (latest.memory.deleted_at && !selected.memory.deleted_at)
-        ) {
-          closeDetail();
-          setError(
-            translation.current(
-              "memory:所选记忆已不可读取，请重新读取记忆库。",
-            ),
-          );
-          return;
-        }
-        // Refresh the read-only projection even when the memory revision did
-        // not move. Index sync lives outside the memory revision: Core can
-        // fail or complete a retry without changing the governed content, and
-        // the inspector must show that authoritative state. The edit draft and
-        // CAS base are left untouched here.
-        setDetail((current) =>
-          current?.memory.memory_id === selectedDetailId
-            ? {
-                ...current,
-                index_sync: latest.index_sync,
-                evidence: latest.evidence,
-                history: latest.history,
-              }
-            : current,
-        );
-        // Keep the editing base and draft: silently rebasing would defeat CAS.
-        setDetailFreshness({
-          id: selectedDetailId,
-          state:
-            latest.memory.revision !== selected.memory.revision
-              ? "changed"
-              : "verified",
-          revision: latest.memory.revision,
-        });
-      } catch (reason) {
-        if (!valid()) return;
-        const status =
-          reason &&
-          typeof reason === "object" &&
-          "response" in reason &&
-          reason.response &&
-          typeof reason.response === "object" &&
-          "status" in reason.response
-            ? reason.response.status
-            : null;
-        const code = apiErrorCode(reason);
-        if (
-          status === 403 ||
-          status === 404 ||
-          code === "memory_source_revoked" ||
-          code === "memory_not_found" ||
-          code === "memory_deleted"
-        ) {
-          closeDetail();
-          setError(
-            translation.current(
-              "memory:所选记忆已不可读取，请重新读取记忆库。",
-            ),
-          );
-        } else setDetailFreshness({ id: selectedDetailId, state: "failed" });
-      } finally {
-        inFlight = false;
-      }
-    }
-    void verifySelected();
-    const stopPoll = subscribePoll({
-      key: "memory-detail",
-      intervalMs: 10_000,
-      run: verifySelected,
-    });
-    const foreground = () => {
-      void verifySelected();
-    };
-    window.addEventListener("focus", foreground);
-    document.addEventListener("visibilitychange", foreground);
-    return () => {
-      stopped = true;
-      stopPoll();
-      window.removeEventListener("focus", foreground);
-      document.removeEventListener("visibilitychange", foreground);
-    };
-  }, [
-    simplified,
-    active,
-    sourceSnapshotStale,
-    selectedDetailId,
-    sourceKey,
-    displayedMode,
-    busy,
-    closeDetail,
-  ]);
-
-  // 记忆图谱只读一次很慢（实测同一份数据 1.4s–85s，会拖死渲染进程），
-  // 所以绝不放在编辑/确认的等待链路上：改动后延迟合并拉一次，失败了也不影响列表。
-  const graphEpoch = useRef(0);
-  const graphTimer = useRef<number | undefined>(undefined);
-  const scheduleGraphRefresh = useCallback(() => {
-    window.clearTimeout(graphTimer.current);
-    const epoch = ++graphEpoch.current;
-    graphTimer.current = window.setTimeout(() => {
-      if (simplified && !viewActive.current) return;
-      getMemoryGraph().then(
-        (value) => {
-          if (epoch !== graphEpoch.current) return;
-          setGraph((old) =>
-            JSON.stringify(old) === JSON.stringify(value) ? old : value,
-          );
-        },
-        () => {
-          /* Keep the last drawn map. Recoverable graph reads retry silently. */
-        },
-      );
-    }, 1500);
-  }, [simplified]);
-  useEffect(
-    () => () => {
-      window.clearTimeout(graphTimer.current);
-      graphEpoch.current++;
-    },
-    [],
-  );
-
-  const refresh = useCallback(
-    async (search = "") => {
-      if (memoryAuthority !== "legacy") return;
-      if (simplified && !viewActive.current) return;
-      if (simplified) {
-        library.invalidate();
-        await library.refresh();
-        await mapLibrary.refresh();
-      }
-      if (simplified && !viewActive.current) return;
-      const epoch = ++dataEpoch.current;
-      const result = await getMemories(simplified ? "" : search);
-      if (epoch !== dataEpoch.current) return;
-      invalidateAnswers(result);
-      setMemories((old) =>
-        JSON.stringify(old) === JSON.stringify(result) ? old : result,
-      );
-      scheduleGraphRefresh();
-    },
-    [
-      invalidateAnswers,
-      scheduleGraphRefresh,
-      simplified,
-      library.invalidate,
-      library.refresh,
-      mapLibrary.refresh,
-      memoryAuthority,
-    ],
-  );
-
-  useEffect(() => {
-    if (simplified && !library.page) return;
-    const visibleIds = new Set(
-      (simplified ? (library.page?.items ?? []) : memories)
-        .filter((item) => item.status === statusFilter)
-        .map((item) => item.memory_id),
-    );
-    setSelection((current) => {
-      const next = new Set([...current].filter((id) => visibleIds.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [memories, statusFilter, simplified, library.page]);
-
-  const selectionPageKey = useRef(library.key);
-  useEffect(() => {
-    if (!simplified || selectionPageKey.current === library.key) return;
-    selectionPageKey.current = library.key;
-    setSelection(new Set());
-  }, [simplified, library.key]);
 
   const previousSourceKey = useRef(sourceKey);
   useEffect(() => {
     void sourceSnapshotStale;
     if (simplified && previousSourceKey.current !== sourceKey) {
       closeDetail();
-      setSelection(new Set());
-      setBulkFailures(new Map());
       deleteAnswer.current?.(false);
       deleteAnswer.current = null;
       setDeleteCount(0);
@@ -832,187 +455,39 @@ export function MemorySpace({
   }, [simplified, sourceSnapshotStale, sourceKey, closeDetail]);
 
   useEffect(() => {
-    if (!simplified || !active || management || sourceSnapshotStale) return;
-    const stop = subscribePoll({
-      key: "map-library",
-      intervalMs: 10_000,
-      run: () => mapLibrary.refresh().catch(() => {}),
-    });
-    return stop;
-  }, [simplified, active, management, sourceSnapshotStale, mapLibrary.refresh]);
-
-  useEffect(() => {
     if (!shouldPoll) return;
     let cancelled = false;
-
-    /** Load each panel on its own, and keep trying until the library arrives.
-     *
-     * This ran once, and all three together: one request failing threw away
-     * the other two, and nothing ever asked again. The app starts before the
-     * core is ready, so the first attempt normally fails — and the library
-     * then stayed empty for the rest of the session while the header kept
-     * updating from its own poll, so 483 memories looked exactly like none.
-     */
-    async function load() {
-      if (memoryAuthority === "unknown") return false;
-      if (memoryAuthority === "sdk") {
-        setMemories([]);
-        setGraph(null);
-        setReadError(null);
-        return true;
-      }
-      const epoch = ++dataEpoch.current;
-      const projectionEpoch = ++graphEpoch.current;
-      // The library can arrive before the graph; render it immediately.
-      // Overlapping map requests are the failure mode D91 is about, and they
-      // are prevented in `getMemoryGraph` itself: callers asking while a read
-      // is in flight share it. Keeping the map attached to the list refresh
-      // also keeps the tests that prove a failed map never disturbs the list.
-      const projection = getMemoryGraph().then(
-        (value) => {
-          if (cancelled || projectionEpoch !== graphEpoch.current) return;
-          setGraph((old) =>
-            JSON.stringify(old) === JSON.stringify(value) ? old : value,
-          );
-        },
-        () => {
-          /* Keep the last drawn map. Recoverable graph reads retry silently. */
-        },
-      );
-      const [items] = await Promise.allSettled([getMemories()]);
-      if (cancelled || epoch !== dataEpoch.current) return false;
-      if (items.status === "fulfilled") {
-        setMemories((old) =>
-          JSON.stringify(old) === JSON.stringify(items.value)
-            ? old
-            : items.value,
-        );
-        setLoaded(true);
-      }
-      if (items.status === "fulfilled") invalidateAnswers(items.value);
-      if (items.status === "fulfilled" && detailRef.current && !simplified) {
-        const current = items.value.find(
-          (m) => m.memory_id === detailRef.current?.memory.memory_id,
-        );
-        if (
-          (!current && !simplified) ||
-          (!simplified &&
-            current &&
-            current.revision !== detailRef.current.memory.revision) ||
-          (current && current.status !== detailRef.current.memory.status)
-        ) {
-          detailEpoch.current++;
-          setDetail(null);
-        }
-      }
-      // The graph is a view of the library, so the library is what decides
-      // whether this screen has anything to show.
-      if (items.status === "rejected") {
-        setReadError(message(items.reason, translation.current));
-        return false;
-      }
-      setReadError(null);
-      void projection;
-      return true;
-    }
-
     /** Consume the shared processing read rather than issuing its own. Both
      * this subscriber and the background arrival poll read the same endpoint,
      * so one `fetch` per tick is the whole point of sharing the key. */
     const consumeProcessing = (value: unknown) => {
       if (!cancelled) setProcessing(value as MemoryProcessingSummary);
     };
-
-    let attempt = 0;
-    let loading = false;
-    let retry: number | undefined;
-    // D91: the hint only appears when a refresh is actually slow or failed.
-    // Showing it on every tick turned a quiet background refresh into a
-    // permanent badge on a screen that is otherwise still.
-    let refreshingTimer: number | undefined;
-    async function attemptLoad() {
-      if (cancelled || loading) return;
-      loading = true;
-      if (loadedRef.current) {
-        refreshingTimer = window.setTimeout(() => {
-          if (!cancelled) setRefreshing(true);
-        }, 2_000);
-      }
-      const success = await load();
-      loading = false;
-      window.clearTimeout(refreshingTimer);
-      if (!cancelled) {
-        // A failed refresh keeps the list on screen, so it says why the list
-        // may be behind. A quick successful one never flashes the hint.
-        setRefreshing(!success && loadedRef.current);
-      }
-      if (cancelled || success) return;
-      attempt += 1;
-      // Backs off to five seconds and stays there: the core being slow to
-      // start is the common case, and giving up is what caused this.
-      retry = window.setTimeout(
-        attemptLoad,
-        Math.min(500 * 2 ** attempt, 5_000),
-      );
-    }
-
-    void attemptLoad();
     // `subscribePoll` only schedules ticks; the first read still has to happen
     // on mount. Do it once through the shared fetch so mount does not double-read
     // with the background arrival subscriber.
     void getMemoryProcessing()
       .then(consumeProcessing)
       .catch(() => {});
-    // Two surfaces, two timers. The processing poll shares one read with the
-    // background arrival poll on the same key (3s wins over 12s); the library
-    // read is its own surface and keeps its backoff.
+    // The processing poll shares one read with the background arrival poll on
+    // the same key (3s wins over 12s).
     const stopProcessing = subscribePoll({
       key: "processing",
       intervalMs: 3_000,
       fetch: getMemoryProcessing,
       onValue: consumeProcessing,
     });
-    const stopLibrary = subscribePoll({
-      key: "memory-library",
-      // The list is cheap and is what the reader is looking at, so it keeps
-      // its ten second cadence. The map rides along, but `getMemoryGraph`
-      // coalesces, so a read still in flight is shared rather than added to
-      // — three overlapping ones are what timed out and dragged the list
-      // from 0.4 s to 4.3 s (D91).
-      intervalMs: 10_000,
-      run: attemptLoad,
-    });
     return () => {
       cancelled = true;
       stopProcessing();
-      stopLibrary();
-      window.clearTimeout(refreshingTimer);
       detailEpoch.current++;
       answerEpoch.current++;
-      dataEpoch.current++;
-      graphEpoch.current++;
-      window.clearTimeout(graphTimer.current);
       deleteAnswer.current?.(false);
       deleteAnswer.current = null;
-      if (retry !== undefined) window.clearTimeout(retry);
     };
-  }, [invalidateAnswers, shouldPoll, simplified, memoryAuthority]);
+  }, [shouldPoll]);
 
-  /* Land on the workbench, including on day one.
-   *
-   * This used to redirect to the history tab whenever no profile was active,
-   * because the map, the questions and the library were all views of
-   * memories and a fresh install has none — three empty panels in a row.
-   *
-   * The workbench removed that premise. Before a single memory exists it
-   * still draws the sources that have conversations imported, still lists the
-   * matters, and still says what is holding extraction up. So the redirect is
-   * now a detour around a problem that is no longer there, and it costs the
-   * user the one screen that explains what this app is for. */
-
-  async function ask(question: string, scope = askScope) {
-    if (memoryAuthority === "unknown")
-      throw new Error("memory_authority_unavailable");
+  async function ask(question: string, scope = "all-apps") {
     const epoch = ++answerEpoch.current;
     answerMemories.current = [];
     setAnswer(null);
@@ -1038,7 +513,6 @@ export function MemorySpace({
         scope,
         undefined,
         trace.traceId,
-        memoryAuthority,
       )) {
         if (epoch !== answerEpoch.current) return;
         if (event.type === "recall") {
@@ -1089,24 +563,14 @@ export function MemorySpace({
     }
   }
 
-  function openAskMemory(memory: AskMemory) {
-    if ("revision" in memory) {
-      open(memory.memory_id);
-      return;
-    }
-    // An SDK answer cites SDK memories; they open in the inspector like any
-    // other rather than switching the reader to a second list.
-    void open(memory.memory_id);
-  }
-
   async function saveAnswer(draft: { content: string }) {
     // HY decides what becomes a memory; the reader choosing to keep the
     // answer is what makes it their words for HY to read.
-    // Saving an answer writes a memory note, so it needs the same ui.action /
-    // ui.result pair as the composer's note save.
+    // Saving an answer adds a memory, so it needs the same ui.action /
+    // ui.result pair as the composer's save.
     const trace = traceUiAction("memory", "submit");
     try {
-      await saveMemoryNote(
+      await addMemory(
         {
           request_id: crypto.randomUUID(),
           text: draft.content,
@@ -1118,45 +582,33 @@ export function MemorySpace({
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
         reason: isDefiniteRefusal(reason)
-          ? "answer_note_save_failed"
-          : "answer_note_save_result_unknown",
+          ? "answer_memory_add_failed"
+          : "answer_memory_add_result_unknown",
       });
       throw reason;
     }
-    await refresh(query);
-  }
-
-  function toggleSelection(memoryId: string) {
-    if (busy || bulkInFlight.current || (management && !library.writable))
-      return;
-    setSelection((current) => {
-      const next = new Set(current);
-      if (!next.delete(memoryId)) next.add(memoryId);
-      return next;
-    });
   }
 
   async function open(memoryId: string) {
-    if (simplified && (!viewActive.current || libraryGuard.current.stale))
-      return;
+    if (simplified && (!viewActive.current || stale.current)) return;
     const epoch = ++detailEpoch.current;
     setError(null);
     setDetail(null);
-    setDetailFreshness(null);
     setDetailLoad({ memoryId, status: "loading" });
     try {
-      // Governed detail is refused on SDK authority, so the inspector reads the
-      // same memory through v2 and renders it in place. Staying here keeps the
-      // map's list, graph and detail where the design put them.
-      const result =
-        memoryAuthority === "sdk"
-          ? sdkDetail(await getSdkMemory(memoryId))
-          : await getMemory(memoryId);
+      // The inspector reads the memory through v2 and renders it in place.
+      // Staying here keeps the map's list, graph and detail where the design
+      // put them.
+      const record = await getSdkMemory(
+        memoryId,
+        sdkNamespace(sdkPageRef.current?.sdk_memory_refs?.[memoryId]),
+      );
+      const result = sdkDetail(record);
       if (epoch !== detailEpoch.current || result.memory.memory_id !== memoryId)
         return;
       setDetail(result);
       setDetailLoad(null);
-      setDraft(result.memory.content);
+      setDraft(sdkEditableText(record));
     } catch (reason) {
       if (epoch === detailEpoch.current) {
         setError(message(reason, t));
@@ -1179,338 +631,28 @@ export function MemorySpace({
     consumeFocus.current?.();
   }, [focusMemoryId, active]);
 
-  async function action(actionName: "undo" | "delete") {
-    if (!detail || detailReadBlocked || (management && !library.writable))
-      return;
-    const scope = libraryGuard.current.scope;
+  async function remove() {
+    if (!detail) return;
     const epoch = detailEpoch.current;
-    if (actionName === "delete" && !(await confirmDelete(1))) {
-      return;
-    }
-    if (
-      (simplified &&
-        (!viewActive.current ||
-          detailWriteBlocked.current ||
-          epoch !== detailEpoch.current)) ||
-      (management &&
-        (!libraryGuard.current.writable ||
-          scope !== libraryGuard.current.scope))
-    )
+    if (!(await confirmDelete(1))) return;
+    if (simplified && (!viewActive.current || epoch !== detailEpoch.current))
       return;
     setBusy(true);
     setError(null);
-    if (memoryAuthority === "sdk") {
-      // An SDK memory is removed outright: there is no revision to undo.
-      if (actionName !== "delete") {
-        setBusy(false);
-        return;
-      }
-      const trace = traceUiAction("memory", "confirm");
-      try {
-        await deleteSdkMemory(detail.memory.memory_id);
-        trace.done("succeeded");
-        closeDetail();
-        bumpSdkMap();
-      } catch (reason) {
-        trace.done(writeTraceStatus(reason), {
-          reason: "memory_action_failed",
-        });
-        setError(message(reason, t));
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    const intent = `${detail.memory.memory_id}:${actionName}:${detail.memory.revision}`;
-    const requestId = requestIdFor(requestIds.current, intent);
+    // An SDK memory is removed outright: there is no revision to undo.
     const trace = traceUiAction("memory", "confirm");
-    let committed = false;
     try {
-      const updated = await mutateMemory(
+      await deleteSdkMemory(
         detail.memory.memory_id,
-        actionName,
-        detail.memory.revision,
-        requestId,
         trace.traceId,
+        sdkNamespace(detail.sdk_ref),
       );
       trace.done("succeeded");
-      committed = true;
-      acceptMutation(updated);
-      requestIds.current.delete(intent);
-      await refresh(query);
-      if (detailRef.current?.memory.memory_id === updated.memory_id) {
-        if (updated.status === "deleted") closeDetail();
-        else await open(updated.memory_id);
-      }
-    } catch (reason) {
-      trace.done(writeTraceStatus(reason), {
-        reason: isDefiniteRefusal(reason)
-          ? "memory_action_failed"
-          : "memory_action_result_unknown",
-      });
-      setError(
-        committed
-          ? t(
-              "memory:修改已保存，但读取最新列表失败。已停止使用旧回答，请重新读取。",
-            )
-          : message(reason, t),
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function acceptMutation(updated: GovernedMemory) {
-    if (simplified) library.invalidate();
-    // Reads started before this commit must not restore its previous revision.
-    dataEpoch.current++;
-    graphEpoch.current++;
-    invalidateAnswers(
-      answerMemories.current
-        .filter((item): item is GovernedMemory => "revision" in item)
-        .map((item) => (item.memory_id === updated.memory_id ? updated : item)),
-    );
-    setMemories((current) =>
-      current.map((item) =>
-        item.memory_id === updated.memory_id &&
-        item.revision <= updated.revision
-          ? updated
-          : item,
-      ),
-    );
-    if (
-      detailRef.current?.memory.memory_id === updated.memory_id &&
-      updated.status === "deleted"
-    )
       closeDetail();
-  }
-
-  /** Run one governance action across a selection, one request each.
-   *
-   * There is no batch endpoint, and this does not invent one: each memory
-   * carries its own revision, and the revision check is what stops a stale
-   * list from acting on a memory that changed underneath it. A batch call
-   * would have to either carry all the revisions anyway or drop the check.
-   *
-   * A retry keeps the failed request's action, revision and id, independently
-   * of subsequent selection changes or edits to the detail draft.
-   */
-  function bulkAction(actionName: BulkAction) {
-    if (busy || bulkInFlight.current || (management && !library.writable))
-      return;
-    const targets = selectedTargets.map((target) => {
-      const intent = `${target.memory_id}:${actionName}:${target.revision}`;
-      const previous = bulkFailures.get(target.memory_id);
-      return {
-        memoryId: target.memory_id,
-        revision: target.revision,
-        action: actionName,
-        intent,
-        requestId:
-          previous?.intent === intent
-            ? previous.requestId
-            : requestIdFor(requestIds.current, intent),
-      };
-    });
-    void runBulk(targets);
-  }
-
-  async function runBulk(targets: BulkTarget[]) {
-    if (
-      busy ||
-      bulkInFlight.current ||
-      !targets.length ||
-      (management && !library.writable)
-    )
-      return;
-    const scope = libraryGuard.current.scope;
-    bulkInFlight.current = true;
-    setBusy(true);
-    try {
-      const deleteTargets = targets.filter(
-        (target) => target.action === "delete",
-      );
-      if (deleteTargets.length && !(await confirmDelete(deleteTargets.length)))
-        return;
-      setError(null);
-      setBulkResult(null);
-      let succeeded = 0;
-      let failed = 0;
-      for (const target of targets) {
-        if (
-          management &&
-          (!libraryGuard.current.active ||
-            libraryGuard.current.stale ||
-            scope !== libraryGuard.current.scope)
-        )
-          break;
-        // A bulk action still issues one kernel request per memory, and a trace
-        // id maps to exactly one request. Tracing only the batch would leave
-        // every mutation's kernel legs attached to no ui.action, so each item
-        // gets its own short chain.
-        const trace = traceUiAction("memory", "confirm");
-        try {
-          const updated = await mutateMemory(
-            target.memoryId,
-            target.action,
-            target.revision,
-            target.requestId,
-            trace.traceId,
-          );
-          // The kernel write landed; close the chain before any local UI work,
-          // so a later state-update throw cannot relabel a landed write.
-          trace.done("succeeded");
-          acceptMutation(updated);
-          // Also stop a pre-commit ask whose recall event has not arrived yet.
-          answerEpoch.current++;
-          answerMemories.current = [];
-          setAnswer(null);
-          setStreaming(null);
-          requestIds.current.delete(target.intent);
-          succeeded++;
-          setBulkFailures((current) => {
-            const next = new Map(current);
-            next.delete(target.memoryId);
-            return next;
-          });
-          setSelection((current) => {
-            const next = new Set(current);
-            next.delete(target.memoryId);
-            return next;
-          });
-        } catch (reason) {
-          trace.done(writeTraceStatus(reason), {
-            reason: isDefiniteRefusal(reason)
-              ? "bulk_memory_action_failed"
-              : "bulk_memory_action_result_unknown",
-          });
-          failed++;
-          setBulkFailures((current) =>
-            new Map(current).set(target.memoryId, {
-              ...target,
-              error:
-                apiErrorCode(reason) === null
-                  ? t("memory:未收到操作结果，请重试。")
-                  : message(reason, t),
-            }),
-          );
-          setSelection((current) => new Set(current).add(target.memoryId));
-        }
-      }
-      setBulkResult({
-        action: targets.every((target) => target.action === targets[0].action)
-          ? targets[0].action
-          : null,
-        succeeded,
-        failed,
-      });
-      try {
-        await refresh(query);
-      } catch {
-        setError(
-          simplified
-            ? t("memory:批量处理结果已保留，但列表刷新失败，请重新读取记忆库。")
-            : t(
-                "memory:批量处理结果已保留，但列表刷新失败，稍后会自动重新读取。",
-              ),
-        );
-      }
-    } finally {
-      bulkInFlight.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!detail || detailReadBlocked || (management && !library.writable))
-      return;
-    setBusy(true);
-    setError(null);
-    if (memoryAuthority === "sdk") {
-      // A rewrite replaces the SDK row instead of adding a revision, so there
-      // is no revision to send and nothing to reconcile afterwards.
-      const trace = traceUiAction("memory", "submit");
-      try {
-        const saved = await updateSdkMemory(detail.memory.memory_id, draft);
-        trace.done("succeeded");
-        setDetail(sdkDetail(saved));
-        setDraft(saved.content);
-        bumpSdkMap();
-      } catch (reason) {
-        trace.done(writeTraceStatus(reason), {
-          reason: isDefiniteRefusal(reason)
-            ? "memory_correct_failed"
-            : "memory_correct_result_unknown",
-        });
-        setError(message(reason, t));
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    const intent = `${detail.memory.memory_id}:correct:${detail.memory.revision}`;
-    const requestId = requestIdFor(requestIds.current, intent);
-    const trace = traceUiAction("memory", "submit");
-    let committed = false;
-    try {
-      const updated = await correctMemory(
-        detail.memory.memory_id,
-        detail.memory.revision,
-        draft,
-        detail.memory.scopes,
-        requestId,
-        trace.traceId,
-      );
-      trace.done("succeeded");
-      committed = true;
-      acceptMutation(updated);
-      requestIds.current.delete(intent);
-      await refresh(query);
-      await open(detail.memory.memory_id);
+      bumpSdkMap();
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
-        reason: isDefiniteRefusal(reason)
-          ? "memory_correct_failed"
-          : "memory_correct_result_unknown",
-      });
-      setError(
-        committed
-          ? t(
-              "memory:纠正已保存，但读取最新列表失败。已停止使用旧回答，请重新读取。",
-            )
-          : message(reason, t),
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function syncIndex() {
-    if (!detail || detailReadBlocked || (management && !library.writable))
-      return;
-    setBusy(true);
-    setError(null);
-    const trace = traceUiAction("memory", "retry");
-    try {
-      const result = await syncMemoryIndex(
-        detail.memory.memory_id,
-        trace.traceId,
-      );
-      if (result.status === "synced") trace.done("succeeded");
-      else
-        trace.done("failed", {
-          reason: "memory_index_sync_failed",
-        });
-      // Reopened rather than patched from the reply: a retry that failed
-      // again comes back as a pending record with a 200, so the line below
-      // has to be redrawn from the memory's state either way.
-      await open(detail.memory.memory_id);
-    } catch (reason) {
-      trace.done(writeTraceStatus(reason), {
-        reason: isDefiniteRefusal(reason)
-          ? "memory_index_sync_failed"
-          : "memory_index_sync_result_unknown",
+        reason: "memory_action_failed",
       });
       setError(message(reason, t));
     } finally {
@@ -1518,19 +660,30 @@ export function MemorySpace({
     }
   }
 
-  async function buildRelations() {
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detail) return;
     setBusy(true);
     setError(null);
+    // A rewrite replaces the SDK row instead of adding a revision, so there
+    // is no revision to send and nothing to reconcile afterwards.
     const trace = traceUiAction("memory", "submit");
     try {
-      await digestMemoryGraph(trace.traceId);
+      const saved = await updateSdkMemory(
+        detail.memory.memory_id,
+        draft,
+        trace.traceId,
+        sdkNamespace(detail.sdk_ref),
+      );
       trace.done("succeeded");
-      await refresh();
+      setDetail(sdkDetail(saved));
+      setDraft(sdkEditableText(saved));
+      bumpSdkMap();
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
         reason: isDefiniteRefusal(reason)
-          ? "memory_graph_digest_failed"
-          : "memory_graph_digest_result_unknown",
+          ? "memory_correct_failed"
+          : "memory_correct_result_unknown",
       });
       setError(message(reason, t));
     } finally {
@@ -1567,17 +720,6 @@ export function MemorySpace({
     }
   }
 
-  const libraryMemories = simplified
-    ? (library.page?.items ?? [])
-    : memories.filter((memory) => memory.status === statusFilter);
-  const selectedTargets = libraryMemories.filter((memory) =>
-    selection.has(memory.memory_id),
-  );
-  const selectedCount = selectedTargets.length;
-  const visibleFailures = libraryMemories.flatMap((memory) => {
-    const failure = bulkFailures.get(memory.memory_id);
-    return failure ? [failure] : [];
-  });
   // What the reader owes attention, and what the pipeline is already handling
   // on its own. The second half is counted, never listed: an internal guard
   // that clears itself on the next pass is not something to act on. See
@@ -1620,58 +762,34 @@ export function MemorySpace({
             {simplified ? t("memory:记忆") : t("memory:记忆空间")}
           </h1>
           <span className="memory-loaded-count">
-            {memoryAuthority === "sdk" && simplified && !management
-              ? sdkMapFailed && !sdkMap
-                ? t("memory:记忆读取失败")
-                : sdkMap
-                  ? tn(
-                      "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                      sdkMap.graph.total_memories,
-                      {
-                        filter: "",
-                        shown: new Intl.NumberFormat(locale).format(
-                          sdkLibrary.page?.items.length ??
-                            sdkMap.memories.length,
-                        ),
-                      },
-                    )
+            {simplified && !management
+              ? sdkLibrary.page
+                ? tn(
+                    "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                    sdkLibrary.page.total,
+                    {
+                      filter: sdkFilterLabel
+                        ? t("memory:（{filter}）", { filter: sdkFilterLabel })
+                        : "",
+                      shown: new Intl.NumberFormat(locale).format(
+                        sdkLibrary.page.items.length,
+                      ),
+                    },
+                  )
+                : // The list below says a failed read once, with its retry.
+                  sdkLibrary.failed
+                  ? null
                   : t("memory:正在读取…")
-              : memoryAuthority === "sdk"
-                ? null
-                : simplified && !management
-                  ? mapLibrary.failed
-                    ? t("memory:记忆读取失败")
-                    : mapLibrary.stale
-                      ? t("memory:正在导入历史会话，记忆将陆续出现")
-                      : mapLibrary.page
-                        ? tn(
-                            "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                            mapLibrary.page.total,
-                            {
-                              filter: settledFilterLabel
-                                ? t("memory:（{filter}）", {
-                                    filter: settledFilterLabel,
-                                  })
-                                : "",
-                              shown: new Intl.NumberFormat(locale).format(
-                                mapLibrary.page.items.length,
-                              ),
-                            },
-                          )
-                        : t("memory:正在读取…")
-                  : loaded
-                    ? tn(
-                        "memory:已加载 {count} 条记忆",
-                        memories.filter((m) => m.status !== "deleted").length,
-                      )
-                    : t("memory:正在读取…")}
+              : null}
           </span>
         </div>
-        <MemoryNoteComposer
+        <MemoryAddComposer
           suspended={!active}
-          onPendingChange={setPendingNote}
+          onPendingChange={setPendingAdd}
           onSaved={() => {
-            void refresh(query).catch((reason) => setError(message(reason, t)));
+            // A finished addition is a new memory: re-read the page now rather
+            // than leave it for the next poll.
+            bumpSdkMap();
           }}
           onOpenMemory={(id) => {
             if (!simplified) setMode("library");
@@ -1847,20 +965,16 @@ export function MemorySpace({
 
       <ModelPrompt
         processing={processing}
-        hasMemories={
-          simplified
-            ? knownMapTotal.current > 0 || (mapLibrary.page?.total ?? 0) > 0
-            : memories.length > 0
-        }
+        hasMemories={(sdkLibrary.page?.total ?? 0) > 0}
         onConfigureModel={onConfigureModel}
       />
-      {simplified && pendingNote ? (
-        <p className="memory-pending-note" role="status">
+      {simplified && pendingAdd ? (
+        <p className="memory-pending-add" role="status">
           <span>
-            {t("memory:原话已保存，正在等待整理：")}
-            {pendingNote.text}
+            {t("memory:正在等待整理：")}
+            {pendingAdd.text}
           </span>
-          {pendingNote.state === "waiting_for_model" ? (
+          {pendingAdd.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
               {t("memory:配置整理模型")}
             </button>
@@ -1868,17 +982,6 @@ export function MemorySpace({
         </p>
       ) : null}
 
-      {readError && (
-        <details className="memory-feedback-details">
-          <summary>{t("memory:查看读取详情")}</summary>
-          <p>{readError}</p>
-        </details>
-      )}
-      {refreshing ? (
-        <p className="memory-refreshing" role="status">
-          {t("memory:正在更新…")}
-        </p>
-      ) : null}
       {error ? (
         <p className="error-banner" role="alert">
           {error}
@@ -1890,47 +993,21 @@ export function MemorySpace({
           id="memory-mode-panel-history"
           hidden={displayedMode !== "history"}
         >
-          {memoryAuthority === "sdk" ? (
-            <SdkRawHistory />
-          ) : memoryAuthority === "legacy" ? (
-            <ConversationSearch
-              onOpenMemory={(memoryId) => {
-                setMode("library");
-                void open(memoryId);
-              }}
-            />
-          ) : (
-            <p role="status">{t("memory:正在核对来源…")}</p>
-          )}
+          <SdkRawHistory />
         </div>
       )}
 
       <form
         className="memory-query-bar"
         data-tour-id="memory-query-bar"
-        hidden={displayedMode !== "ask" && displayedMode !== "library"}
+        hidden={displayedMode !== "ask"}
         onSubmit={async (event) => {
           event.preventDefault();
-          if (management) {
-            if (busy || bulkInFlight.current) return;
-            setSelection(new Set());
-            if (submittedQuery === query && library.offset === 0)
-              void library.refresh().catch(() => {});
-            else {
-              setSubmittedQuery(query);
-              library.go(0);
-            }
-            return;
-          }
-          if (busy || bulkInFlight.current || !query.trim()) return;
+          if (busy || !query.trim()) return;
           setError(null);
           setBusy(true);
           try {
-            if (displayedMode === "ask") {
-              await ask(query.trim());
-            } else {
-              await refresh(query);
-            }
+            await ask(query.trim());
           } catch (reason) {
             setError(message(reason, t));
           } finally {
@@ -1938,66 +1015,20 @@ export function MemorySpace({
           }
         }}
       >
-        <label htmlFor="memory-query">
-          {displayedMode === "ask"
-            ? t("memory:向已确认记忆提问")
-            : t("memory:搜索记忆库")}
-        </label>
+        <label htmlFor="memory-query">{t("memory:向已确认记忆提问")}</label>
         <div>
-          {displayedMode === "ask" ? (
-            <select
-              aria-label={t("memory:问答记忆范围")}
-              value={askScope}
-              onChange={(event) =>
-                setAskScope(event.target.value as "all-apps" | "*")
-              }
-            >
-              <option value="all-apps">{t("memory:只问个人画像")}</option>
-              <option value="*">{t("memory:问全部记忆（含项目）")}</option>
-            </select>
-          ) : null}
           <input
             id="memory-query"
             name="memory-query"
             autoComplete="off"
             value={query}
             disabled={busy}
-            maxLength={management ? 512 : undefined}
-            placeholder={
-              displayedMode === "ask"
-                ? t("memory:例如：我对真实数据有什么要求？")
-                : t("memory:搜索偏好、决定或经历")
-            }
-            onChange={(event) => {
-              if (bulkInFlight.current) return;
-              setQuery(event.target.value);
-              if (displayedMode === "library") setSelection(new Set());
-            }}
+            placeholder={t("memory:例如：我对真实数据有什么要求？")}
+            onChange={(event) => setQuery(event.target.value)}
           />
-          <button
-            type="submit"
-            disabled={busy || (!management && !query.trim())}
-          >
-            {busy
-              ? t("memory:处理中…")
-              : displayedMode === "ask"
-                ? t("memory:根据记忆回答")
-                : t("memory:搜索")}
+          <button type="submit" disabled={busy || !query.trim()}>
+            {busy ? t("memory:处理中…") : t("memory:根据记忆回答")}
           </button>
-          {management && (query || submittedQuery) ? (
-            <R6Button
-              variant="quiet"
-              disabled={busy}
-              onClick={() => {
-                setQuery("");
-                setSubmittedQuery("");
-                library.go(0);
-                setSelection(new Set());
-              }}
-            >
-              {t("memory:清除搜索")}
-            </R6Button>
-          ) : null}
         </div>
       </form>
 
@@ -2005,98 +1036,55 @@ export function MemorySpace({
       <MemoryMap
         id="memory-mode-panel-map"
         simplified={simplified}
-        focusDialogue={focusDialogue}
-        onFocusDialogueConsumed={onFocusDialogueConsumed}
         libraryView={
-          simplified && memoryAuthority === "sdk"
+          simplified
             ? {
                 query: sdkLibraryQuery,
                 source: sdkLibrarySource,
                 page: sdkLibrary.page,
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
+                graphLoading: !sdkGraphSettled,
+                graphFailed: sdkGraphFailed,
                 stale: false,
+                settledSource: sdkLibrary.settledSource,
+                settledQuery: sdkLibrary.settledQuery,
+                requestedOffset: sdkLibraryOffset,
+                unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,
                 onSource: setSdkLibrarySource,
                 resetPage: () => setSdkLibraryOffset(0),
                 onPage: (offset) => setSdkLibraryOffset(offset),
                 onRetry: bumpSdkMap,
               }
-            : simplified
-              ? {
-                  query: mapQuery,
-                  source: mapSource,
-                  page: mapLibrary.page,
-                  loading: mapLibrary.loading,
-                  failed: mapLibrary.failed,
-                  stale: sourceSnapshotStale,
-                  onQuery: setMapQuery,
-                  onSource: setMapSource,
-                  resetPage: () => mapLibrary.go(0),
-                  onPage: mapLibrary.go,
-                  onRetry: () => {
-                    void mapLibrary.refresh().catch(() => {});
-                  },
-                }
-              : undefined
+            : undefined
         }
-        onMutationComplete={(id) => {
-          void refresh(query)
-            .then(() => open(id))
-            .catch((reason) => setError(message(reason, t)));
-        }}
         hidden={!active || displayedMode !== "map"}
-        memories={
-          memoryAuthority === "sdk"
-            ? (sdkMap?.memories ?? [])
-            : simplified
-              ? (mapLibrary.page?.items ?? [])
-              : memories
-        }
-        graph={
-          memoryAuthority === "sdk"
-            ? (sdkMap?.graph ?? null)
-            : simplified && sourceSnapshotStale
-              ? null
-              : graph
-        }
+        memories={sdkLibrary.page?.items ?? []}
+        graph={visibleSdkGraph}
         sources={sources}
         processing={processing}
         arrival={memoryArrival}
         onViewHistory={simplified ? onConnect : () => setMode("history")}
-        loaded={
-          memoryAuthority === "sdk"
-            ? sdkMap !== null
-            : simplified
-              ? mapLibrary.page !== null
-              : loaded
-        }
+        loaded={sdkLibrary.page !== null}
         detail={detail}
         detailLoad={detailLoad}
         overlayBlocked={
           !active ||
           deleteCount > 0 ||
-          (memoryAuthority === "sdk"
-            ? sdkMap === null
-            : simplified && (!mapLibrary.page || sourceSnapshotStale))
+          // Only the paged map waits for its page; the three-column surface
+          // never reads one.
+          (simplified && sdkLibrary.page === null)
         }
         draft={draft}
-        busy={busy || detailReadBlocked}
+        busy={busy}
         answer={answer}
         streaming={streaming}
         onDraft={setDraft}
-        onOpenMemory={(memoryId) => {
-          const recalled = answerMemories.current.find(
-            (memory) => memory.memory_id === memoryId,
-          );
-          if (recalled) openAskMemory(recalled);
-          else void open(memoryId);
-        }}
+        onOpenMemory={(memoryId) => void open(memoryId)}
         onCloseDetail={closeDetail}
         onSave={save}
-        onAction={(name) => void action(name)}
-        onSyncIndex={() => void syncIndex()}
-        onBuildRelations={() => void buildRelations()}
+        onDelete={() => void remove()}
         requestIds={requestIds}
         onAsk={(fullQuestion) => {
           setError(null);
@@ -2145,7 +1133,10 @@ export function MemorySpace({
             <ol>
               {(answer ?? streaming)?.memories.map((memory) => (
                 <li key={memory.memory_id}>
-                  <button type="button" onClick={() => openAskMemory(memory)}>
+                  <button
+                    type="button"
+                    onClick={() => void open(memory.memory_id)}
+                  >
                     {memory.content}
                   </button>
                 </li>
@@ -2163,13 +1154,10 @@ export function MemorySpace({
           detail={detail}
           busy={busy}
           draft={draft}
-          requestIds={requestIds}
           onDraft={setDraft}
           onClose={closeDetail}
           onSave={save}
-          onAction={action}
-          onSyncIndex={syncIndex}
-          onConfigureModel={onConfigureModel}
+          onDelete={remove}
           onOpen={open}
         />
       </div>
@@ -2179,269 +1167,10 @@ export function MemorySpace({
         className="memory-library-layout"
         hidden={displayedMode !== "library"}
       >
-        {memoryAuthority === "sdk" ? (
-          <SdkMemoryLibrary
-            active={active}
-            focusedMemoryId={sdkFocusedMemoryId}
-          />
-        ) : (
-          <>
-            <div>
-              <nav
-                className="memory-status-tabs"
-                data-tour-id="memory-status-tabs"
-                aria-label={t("memory:记忆治理状态")}
-              >
-                {(
-                  [
-                    ["confirmed", t("memory:已可用")],
-                    ["superseded", t("memory:已被取代")],
-                    ["deleted", t("memory:已删除")],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    disabled={busy}
-                    aria-current={statusFilter === value ? "page" : undefined}
-                    onClick={() => {
-                      if (bulkInFlight.current) return;
-                      setStatusFilter(value);
-                      setSelection(new Set());
-                      if (!simplified) setDetail(null);
-                    }}
-                  >
-                    {label}{" "}
-                    {!simplified &&
-                      new Intl.NumberFormat(locale).format(
-                        memories.filter((memory) => memory.status === value)
-                          .length,
-                      )}
-                  </button>
-                ))}
-              </nav>
-              {management && (
-                <>
-                  {library.page ? (
-                    <nav aria-label={t("memory:记忆库分页")}>
-                      <span aria-live="polite">
-                        {tn("memory:共 {count} 条", library.page.total)}
-                      </span>{" "}
-                      <span>
-                        {t("memory:第 {page} 页", {
-                          page: new Intl.NumberFormat(locale).format(
-                            Math.floor(
-                              library.page.offset / library.page.limit,
-                            ) + 1,
-                          ),
-                        })}
-                      </span>
-                      <R6Button
-                        variant="quiet"
-                        title={t("memory:上一页")}
-                        aria-label={t("memory:上一页")}
-                        disabled={busy || library.page.offset === 0}
-                        onClick={() => {
-                          if (library.page) {
-                            setSelection(new Set());
-                            library.go(
-                              library.page.offset - library.page.limit,
-                            );
-                          }
-                        }}
-                      >
-                        <ChevronLeft size={18} aria-hidden="true" />
-                      </R6Button>
-                      <R6Button
-                        variant="quiet"
-                        title={t("memory:下一页")}
-                        aria-label={t("memory:下一页")}
-                        disabled={
-                          busy ||
-                          library.page.offset + library.page.limit >=
-                            library.page.total
-                        }
-                        onClick={() => {
-                          if (library.page) {
-                            setSelection(new Set());
-                            library.go(
-                              library.page.offset + library.page.limit,
-                            );
-                          }
-                        }}
-                      >
-                        <ChevronRight size={18} aria-hidden="true" />
-                      </R6Button>
-                    </nav>
-                  ) : null}
-                  {sourceSnapshotStale ? (
-                    <p role="status">
-                      {t("memory:来源状态待核对，记忆库暂不可读取。")}
-                    </p>
-                  ) : library.stale ? (
-                    <p role="status">
-                      {t(
-                        "memory:正在导入历史会话，记忆库暂时只显示一部分；导入完成后会自动补全，不需要重试。",
-                      )}
-                    </p>
-                  ) : library.failed ? (
-                    <div role="alert">
-                      <p>{t("memory:记忆库读取失败，请重试。")}</p>
-                      <R6Button
-                        onClick={() => {
-                          void library.refresh().catch(() => {});
-                        }}
-                      >
-                        {t("memory:重新读取记忆库")}
-                      </R6Button>
-                    </div>
-                  ) : library.loading ? (
-                    <p role="status">{t("memory:正在读取记忆库…")}</p>
-                  ) : null}
-                </>
-              )}
-              {bulkResult ? (
-                <p role="status" aria-label={t("memory:批量操作结果")}>
-                  {tn("memory:已{action} {count} 条", bulkResult.succeeded, {
-                    action: bulkResult.action
-                      ? bulkActionLabel(bulkResult.action, t)
-                      : t("memory:处理（操作）"),
-                  })}
-                  {bulkResult.failed
-                    ? tn("memory:，{count} 条未完成", bulkResult.failed)
-                    : ""}
-                </p>
-              ) : null}
-              {visibleFailures.length ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void runBulk(visibleFailures)}
-                >
-                  {tn("memory:重试失败的 {count} 条", visibleFailures.length)}
-                </button>
-              ) : null}
-              {selectedCount ? (
-                <fieldset
-                  className="memory-bulk-bar"
-                  aria-label={t("memory:批量操作")}
-                >
-                  <span>{tn("memory:已选 {count} 条", selectedCount)}</span>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={busy}
-                    onClick={() => void bulkAction("delete")}
-                  >
-                    {tn("memory:删除所选 {count} 条", selectedCount)}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      if (!bulkInFlight.current) setSelection(new Set());
-                    }}
-                  >
-                    {t("memory:取消选择")}
-                  </button>
-                </fieldset>
-              ) : null}
-              {libraryMemories.length ? (
-                <ul className="memory-ledger">
-                  {libraryMemories.map((memory) => {
-                    const failure = bulkFailures.get(memory.memory_id);
-                    return (
-                      <li key={memory.memory_id}>
-                        <input
-                          type="checkbox"
-                          disabled={busy}
-                          aria-label={t("memory:选择：{content}", {
-                            content: memory.content,
-                          })}
-                          checked={selection.has(memory.memory_id)}
-                          onChange={() => toggleSelection(memory.memory_id)}
-                        />
-                        <button
-                          type="button"
-                          className={`memory-ledger-row memory-${memory.status}`}
-                          aria-current={
-                            detail?.memory.memory_id === memory.memory_id
-                              ? "true"
-                              : undefined
-                          }
-                          onClick={() => open(memory.memory_id)}
-                        >
-                          <span>{memory.content}</span>
-                          <small>
-                            {kindLabel(memory.kind, t)} ·{" "}
-                            {statusLabel(memory.status, t)} ·{" "}
-                            {tn(
-                              "memory:{count} 条原话",
-                              memory.evidence_ids.length,
-                            )}
-                          </small>
-                        </button>
-                        {failure ? (
-                          <fieldset
-                            className="memory-bulk-failure"
-                            aria-label={t("memory:处理失败：{content}", {
-                              content: memory.content,
-                            })}
-                          >
-                            <p>
-                              {t("memory:未能{action}：{error}", {
-                                action: bulkActionLabel(failure.action, t),
-                                error: failure.error,
-                              })}
-                            </p>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void runBulk([failure])}
-                            >
-                              {t("memory:重试{action}", {
-                                action: bulkActionLabel(failure.action, t),
-                              })}
-                            </button>
-                          </fieldset>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : management && !library.page ? null : !loaded &&
-                !management ? (
-                // Not the same as having none, and it used to read as if it
-                // were.
-                <p className="memory-status-empty">
-                  {t("memory:正在读取记忆库…")}
-                </p>
-              ) : (
-                <p className="memory-status-empty">
-                  {t("memory:没有{status}的记忆。", {
-                    status: statusLabel(statusFilter, t),
-                  })}
-                </p>
-              )}
-            </div>
-            <MemoryInspector
-              detail={detail}
-              busy={
-                busy || detailReadBlocked || (management && !library.writable)
-              }
-              draft={draft}
-              requestIds={requestIds}
-              onDraft={setDraft}
-              onClose={() => setDetail(null)}
-              onSave={save}
-              onAction={action}
-              onSyncIndex={syncIndex}
-              onConfigureModel={onConfigureModel}
-              onOpen={open}
-            />
-          </>
-        )}
+        <SdkMemoryLibrary
+          active={active}
+          focusedMemoryId={sdkFocusedMemoryId}
+        />
       </div>
     </section>
   );
@@ -2507,28 +1236,22 @@ function MemoryInspector({
   detail,
   busy,
   draft,
-  requestIds,
   onDraft,
   onClose,
   onSave,
-  onAction,
-  onSyncIndex,
-  onConfigureModel,
+  onDelete,
   onOpen,
 }: {
   detail: MemoryDetail | null;
   busy: boolean;
   draft: string;
-  requestIds: RefObject<Map<string, string>>;
   onDraft(value: string): void;
   onClose(): void;
   onSave(event: FormEvent<HTMLFormElement>): Promise<void>;
-  onAction(action: "undo" | "delete"): Promise<void>;
-  onSyncIndex(): Promise<void>;
-  onConfigureModel(): void;
+  onDelete(): Promise<void>;
   onOpen(memoryId: string): Promise<void>;
 }) {
-  const { locale, t } = useGuiLanguage();
+  const { t } = useGuiLanguage();
   if (!detail) {
     return (
       <aside
@@ -2556,8 +1279,7 @@ function MemoryInspector({
       </button>
       <p className="status-label">
         {kindLabel(detail.memory.kind, t)} ·{" "}
-        {statusLabel(detail.memory.status, t)} · r
-        {new Intl.NumberFormat(locale).format(detail.memory.revision)}
+        {statusLabel(detail.memory.status, t)}
       </p>
       <p className="map-origin">{localizedMemoryProvenance(detail, t)}</p>
       {detail.memory.superseded_by?.length ||
@@ -2585,18 +1307,6 @@ function MemoryInspector({
           ))}
         </p>
       ) : null}
-      {detail.index_sync?.status === "pending" ? (
-        // Said plainly, because the consequence is not in the word "index":
-        // the memory here reads correctly and search does not, and nobody
-        // would guess that from a sync badge.
-        <IndexSyncNotice
-          sync={detail.index_sync}
-          busy={busy}
-          onRetry={onSyncIndex}
-          onConfigureModel={onConfigureModel}
-          onRefresh={() => void open(detail.memory.memory_id)}
-        />
-      ) : null}
       {detail.memory.status === "confirmed" ? (
         <form onSubmit={onSave}>
           <label>
@@ -2606,10 +1316,7 @@ function MemoryInspector({
               autoComplete="off"
               required
               value={draft}
-              onChange={(event) => {
-                requestIds.current?.clear();
-                onDraft(event.target.value);
-              }}
+              onChange={(event) => onDraft(event.target.value)}
             />
           </label>
           <button type="submit" disabled={busy}>
@@ -2618,64 +1325,17 @@ function MemoryInspector({
         </form>
       ) : null}
       <div className="source-actions">
-        {detail.history.length > 1 &&
-        detail.memory.status !== "deleted" &&
-        detail.memory.status !== "superseded" ? (
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy}
-            onClick={() => onAction("undo")}
-          >
-            {t("memory:撤销上次修改")}
-          </button>
-        ) : null}
         {detail.memory.status !== "deleted" ? (
           <button
             type="button"
             className="quiet"
             disabled={busy}
-            onClick={() => onAction("delete")}
+            onClick={() => void onDelete()}
           >
             {t("memory:删除")}
           </button>
         ) : null}
       </div>
-      <h3>{t("memory:来源原文")}</h3>
-      {detail.evidence.map((item) => (
-        <blockquote key={item.evidence_id}>
-          {item.available ? (
-            <>
-              {item.extraction_state &&
-              item.extraction_state !== "extracted" ? (
-                <small>
-                  {t(
-                    `memory:${extractionStateLabel(item.extraction_state)}` as Parameters<
-                      typeof t
-                    >[0],
-                  )}
-                </small>
-              ) : null}
-              {item.verbatim}
-            </>
-          ) : (
-            t("memory:来源原文已不可读取")
-          )}
-        </blockquote>
-      ))}
-      <h3>{t("memory:修改历史")}</h3>
-      <ol>
-        {detail.history.map((item) => (
-          <li key={item.revision}>
-            r{new Intl.NumberFormat(locale).format(item.revision)} ·{" "}
-            {t(
-              `memory:${memoryHistoryActionLabel(item.action)}` as Parameters<
-                typeof t
-              >[0],
-            )}
-          </li>
-        ))}
-      </ol>
     </aside>
   );
 }
@@ -2708,81 +1368,6 @@ function message(reason: unknown, t: Translate): string {
   return t("memory.operationFailed", { code });
 }
 
-function IndexSyncNotice({
-  sync,
-  busy,
-  onRetry,
-  onConfigureModel,
-  onRefresh,
-}: {
-  sync: NonNullable<MemoryDetail["index_sync"]>;
-  busy: boolean;
-  onRetry(): void;
-  onConfigureModel(): void;
-  onRefresh(): void;
-}) {
-  const { locale, t } = useGuiLanguage();
-  const { attemptedLine, explanation, action } = indexSyncPresentation(
-    sync,
-    clockStamp(sync.updated_at, locale),
-    locale,
-  );
-
-  return (
-    <p className="notice" role="status">
-      {t("memory:搜索里还是改之前那句话。")}
-      {explanation} <small>{attemptedLine}</small>
-      {action === "retry" ? (
-        <>
-          {" "}
-          <button
-            type="button"
-            className="quiet"
-            disabled={busy}
-            onClick={onRetry}
-          >
-            {t("memory:重试同步")}
-          </button>
-        </>
-      ) : null}
-      {action === "configure" ? (
-        <>
-          {" "}
-          <button
-            type="button"
-            className="quiet"
-            disabled={busy}
-            onClick={onConfigureModel}
-          >
-            {t("memory:配置整理模型")}
-          </button>
-        </>
-      ) : null}
-      {action === "refresh" ? (
-        <>
-          {" "}
-          <button
-            type="button"
-            className="quiet"
-            disabled={busy}
-            onClick={onRefresh}
-          >
-            {t("memory:刷新核对")}
-          </button>
-        </>
-      ) : null}
-    </p>
-  );
-}
-
-function requestIdFor(requests: Map<string, string>, intent: string): string {
-  const existing = requests.get(intent);
-  if (existing) return existing;
-  const requestId = crypto.randomUUID();
-  requests.set(intent, requestId);
-  return requestId;
-}
-
 function kindLabel(kind: string, t: Translate) {
   const labels: Record<string, Parameters<Translate>[0]> = {
     chat: "memory:对话",
@@ -2792,11 +1377,6 @@ function kindLabel(kind: string, t: Translate) {
     intention: "memory:意图",
   };
   return labels[kind] ? t(labels[kind]) : kind;
-}
-
-function bulkActionLabel(action: BulkAction, t: Translate): string {
-  const labels = { delete: "memory:删除（操作）" } as const;
-  return t(labels[action]);
 }
 
 function statusLabel(status: string, t: Translate) {

@@ -9,6 +9,7 @@ import {
   discoverRuntimeAttachment,
   RuntimeDiscoveryError,
 } from "./discovery.js";
+import { readSdkMigrationBlock } from "./sdk-migration-log.js";
 
 export interface RuntimeLaunch {
   command: string;
@@ -111,6 +112,7 @@ export async function waitForRuntimeProcess(
 ): Promise<void> {
   const attempts = options.attempts ?? 120;
   const delayMs = options.delayMs ?? 250;
+  const waitStarted = Date.now();
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const attachment = await discoverRuntimeAttachment({
@@ -130,8 +132,18 @@ export async function waitForRuntimeProcess(
         throw error;
       }
     }
+    // The service refused to spawn Core because its migration was deferred
+    // during this wait: it will never become ready, so say why now instead of
+    // after the whole budget. An older note may predate a retry that is still
+    // running, so it only counts once the wait has timed out.
+    const refused = await readSdkMigrationBlock(options.dataDir);
+    if (refused !== null && Date.parse(refused.at) >= waitStarted) {
+      throw new Error(refused.code);
+    }
     await delay(delayMs);
   }
+  const blocked = await readSdkMigrationBlock(options.dataDir);
+  if (blocked !== null) throw new Error(blocked.code);
   throw new Error("Timed out waiting for managed MemHub Runtime");
 }
 

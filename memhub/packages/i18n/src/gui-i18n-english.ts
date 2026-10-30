@@ -1305,7 +1305,12 @@ const baseEnglishMessages = {
   "apps.back": "Back to home",
   "apps.overview": "Memory overview",
   "apps.memories": "Saved memories",
-  "apps.readingCount": "Loading memory count…",
+  "apps.readingCount": "Checking local memories…",
+  "apps.startingRetry":
+    "The background service is starting; this will update automatically",
+  "apps.countWillUpdate": "The memory count will update automatically",
+  "apps.showingPrevious":
+    "Showing the previous data; this will update automatically",
   "apps.unreadable": "Unavailable",
   "apps.unit": "items",
   "apps.scope": "Used within app permissions",
@@ -1314,9 +1319,12 @@ const baseEnglishMessages = {
   "apps.paused": "Paused",
   "apps.stoppedNew": "No new memories are being created",
   "apps.checkingProcessing": "Checking processing status",
+  "apps.checkingStatus": "Checking",
   "apps.unchecked": "Needs review",
   "apps.organizingNew": "Processing new conversations",
   "apps.recentUpdate": "Recent update",
+  "apps.checkingRecent": "Checking",
+  "apps.recentWillUpdate": "The latest update will appear automatically",
   "apps.notGenerated": "Not created yet",
   "apps.saved": "Memory saved",
   "apps.separate": "History and memories are processed separately",
@@ -1324,16 +1332,16 @@ const baseEnglishMessages = {
   "apps.activityUnavailable": "Activity unavailable",
   "apps.firstBatch": "First memories",
   "apps.callsUnavailable": "Could not read call history",
-  "apps.memoryUnavailable": "Could not read memory status",
+  "apps.memoryUnavailable": "The memory overview is not ready yet",
   "apps.importing": "Importing conversations before creating memories",
   "apps.firstRunning": "Creating the first memories",
   "apps.firstQueued": "Preparing the first memories",
-  "apps.readingActivity": "Loading activity",
+  "apps.readingActivity": "Preparing memory overview",
   "apps.emptyMemories": "No memories created yet",
   "apps.callReadFailure":
     "You can still view saved memories. Retrying will not make a new call.",
   "apps.memoryReadFailure":
-    "A failed read does not mean there are no memories.",
+    "This will update when the service recovers. You can also retry now.",
   "apps.savingConversations":
     "Conversations are still being saved in the background.",
   "apps.waitingMemories": "History is saved. New memories will appear here.",
@@ -1571,6 +1579,10 @@ const baseEnglishMessages = {
   "memory:全部记忆": "All memories",
   "memory:来源待核对": "Source needs review",
   "memory:所选来源待核对": "Selected source needs review",
+  "memory:未识别来源": "Unidentified source",
+  "memory:这个来源下还没有记忆": "No memories from this source yet",
+  "memory:只在最相关的 {count} 条记忆里查找关键词":
+    "Keywords are matched only among the {count} most relevant memories",
   "memory:未知来源": "Unknown source",
   "memory:记忆读取失败": "Could not load memories",
   "memory:正在读取…": "Loading…",
@@ -1609,6 +1621,7 @@ const baseEnglishMessages = {
     "Newly imported original text, not yet memories",
   "memory:来源归属": "Source connections",
   "memory:可在沉淀记忆后查看视图": "Create memories to view the graph",
+  "memory:正在读取记忆地图…": "Loading memory map…",
   "memory:查看选中来源原文": "View selected source text",
   "memory:查看选中记忆原文": "View selected memory text",
   "memory:查看原文": "View original conversation",
@@ -1676,6 +1689,8 @@ const baseEnglishMessages = {
   "memory:重试": "Retry",
   "memory:删除": "Delete",
   "memory:对话": "Conversation",
+  "memory:工作": "Work",
+  "memory:编码": "Coding",
   "memory:保存修改": "Save changes",
   "memory:对应记忆": "Related memory",
   "memory:查看记忆": "View memories",
@@ -1718,22 +1733,19 @@ const baseEnglishMessages = {
   "memory:原话已保存，等待可用模型":
     "Original saved; waiting for an available model",
   "memory:原话已保存，等待整理": "Original saved; waiting for processing",
+  "memory:正在等待整理": "Awaiting processing",
   "memory:正在整理": "Processing",
   "memory:原话已保存，整理未完成": "Original saved; processing incomplete",
   "memory:整理已完成": "Processing complete",
   "memory:原话已保存，未提取出可用记忆":
     "Original saved; no usable memory extracted",
-  "memory:最近添加的内容读取失败。": "Could not read recently added notes.",
+  "memory:最近添加的内容读取失败。": "Could not read recently added memories.",
   "memory:整理状态暂时不可用，原话已保存。":
     "Processing status is temporarily unavailable; the original is saved.",
   "memory:已保存，正在后台沉淀记忆":
     "Saved; creating memories in the background",
   "memory:未能确认保存结果，输入已保留。重试不会重复添加。":
     "Could not confirm the save result. Your text is retained; retrying will not add a duplicate.",
-  "memory:整理未能开始，原话仍已保存。":
-    "Processing could not start; the original is still saved.",
-  "memory:整理结果尚未确认，原话仍已保存。请刷新后核对。":
-    "Processing is not yet confirmed; the original is saved. Refresh to check.",
   "memory:模型服务要求检查余额或付款状态，原话仍已保存。":
     "The model service requires a balance or payment check; the original remains saved.",
   "memory:这台设备打不开 3D 视图，已显示关联列表。":
@@ -1771,6 +1783,7 @@ const baseEnglishMessages = {
     " · Import count is still updating; refresh to check",
   "memory:对话于 {day}": "Conversation on {day}",
   "memory:导入于 {day}": "Imported on {day}",
+  "memory:写入于 {day}": "Written on {day}",
   "memory:已开始处理所选对话": "Processing selected conversations",
   "memory:处理请求已受理": "Processing request received",
   "memory:模型连接已通过。首批记忆生成后，会逐步出现在记忆列表里。":
@@ -1806,8 +1819,7 @@ const baseEnglishMessages = {
     "{count} memories created{filter} · Showing {shown}",
   "memory:（{filter}）": " ({filter})",
   "memory:第 {page} 页": "Page {page}",
-  "memory:原话已保存，正在等待整理：":
-    "Original text saved, awaiting processing: ",
+  "memory:正在等待整理：": "Awaiting processing: ",
   "memory:记忆未在生成": "Memories are not being created",
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Memories are not being created: {reason} ({count} pending)",

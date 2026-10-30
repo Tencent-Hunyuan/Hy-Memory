@@ -21,18 +21,21 @@ const TOKEN = "probe-token-not-a-real-credential";
 
 const MEMORY = {
   memory_id: "probe-1",
-  user_id: "local",
-  kind: "chat",
-  status: "confirmed",
   content: "部署脚本要先跑 verify_merge_plan。",
-  scopes: ["all-apps"],
-  evidence_ids: ["probe-e1"],
-  origin: "extracted",
+  layer: "l2_fact",
+  status: "active",
+  is_latest: true,
+  supersedes: [],
+  superseded_by: [],
   tags: [],
-  revision: 2,
-  created_at: "2026-09-19T00:00:00Z",
-  updated_at: "2026-09-19T00:00:00Z",
-  deleted_at: null,
+  owner: null,
+  source_raw_ids: ["probe-raw-1"],
+  user_id: "local",
+  agent_id: "codex",
+  session_id: "probe-session",
+  source: "codex",
+  memory_at: 1758240000,
+  gmt_created: 1758240000,
 };
 
 const ROUTES = new Map([
@@ -125,26 +128,6 @@ const ROUTES = new Map([
     ],
   ],
   [
-    "/api/v1/memory-tasks",
-    [
-      {
-        task_id: "probe-task",
-        request_id: "probe-request",
-        user_id: "local",
-        kind: "extract",
-        input_ref: "probe",
-        status: "waiting_for_model",
-        profile_id: "probe-profile",
-        profile_revision: 1,
-        profile_snapshot: {},
-        attempts: 0,
-        last_error_code: "model_missing",
-        created_at: "2026-09-19T00:00:00Z",
-        updated_at: "2026-09-19T00:00:01Z",
-      },
-    ],
-  ],
-  [
     "/api/v1/model-profiles",
     [
       {
@@ -159,28 +142,20 @@ const ROUTES = new Map([
       },
     ],
   ],
-  ["/api/v1/home-summary", { memory_count: 1, latest: null, observed_at: "T" }],
   [
-    "/api/v1/memory-library",
-    { total: 1, offset: 0, limit: 100, items: [MEMORY] },
-  ],
-  [
-    "/api/v1/memories/probe-1",
+    "/api/v2/home-summary",
     {
-      memory: MEMORY,
-      evidence: [
-        {
-          evidence_id: "probe-e1",
-          available: true,
-          source_id: "codex",
-          written_by: "user",
-          created_at: "2026-09-19T00:00:00Z",
-          verbatim: "部署前先跑 verify_merge_plan，别靠读 diff 猜冲突。",
-        },
-      ],
-      history: [{ memory_id: "probe-1", revision: 2, action: "confirm" }],
+      schema_version: 2,
+      memory_count: 1,
+      latest: MEMORY,
+      observed_at: "2026-09-19T00:00:01Z",
     },
   ],
+  [
+    "/api/v2/memory-library",
+    { memories: [MEMORY], total: 1, offset: 0, limit: 100 },
+  ],
+  ["/api/v2/memories/probe-1", MEMORY],
 ]);
 
 const seen = [];

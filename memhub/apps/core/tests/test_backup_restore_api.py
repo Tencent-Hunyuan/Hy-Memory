@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
@@ -44,6 +45,8 @@ def _database(path, *, value: str) -> None:
     asyncio.run(SqliteMigrationStore(path).record(Migration(34, "synthetic", lambda _: None)))
 
 
+# A serving Core refuses a legacy home outright, so this one starts on SDK.
+@pytest.mark.fresh_sdk
 def test_restore_endpoint_refuses_when_runtime_owns_the_core(tmp_path) -> None:
     monkeypatch_app = create_app(_settings(tmp_path), manage_runtime=True)
 

@@ -8,7 +8,7 @@ from one_memory.external_memory_access import require_external_endpoint
 
 
 def request(
-    tools, scopes=("all-apps", "source:cursor"), method="POST", path="/api/v1/context/search"
+    tools, scopes=("all-apps", "source:cursor"), method="POST", path="/api/v2/context/search"
 ):
     headers = {
         "x-one-memory-read-context": "external",
@@ -44,9 +44,13 @@ def test_other_capabilities_do_not_enable_composite_read(tools):
 @pytest.mark.parametrize(
     "method,path",
     [
-        ("GET", "/api/v1/context/search"),
+        ("GET", "/api/v2/context/search"),
+        ("POST", "/api/v1/context/search"),
         ("POST", "/api/v1/memory-library"),
+        ("GET", "/api/v1/conversations/search"),
         ("GET", "/api/v1/conversations/evidence-id"),
+        ("POST", "/api/v1/memories/ask"),
+        ("POST", "/api/v1/boundary/peek"),
     ],
 )
 def test_composite_read_does_not_open_other_routes(method, path):
@@ -59,15 +63,3 @@ def test_composite_read_does_not_open_other_routes(method, path):
 def test_legacy_recall_still_requires_its_own_tool():
     with pytest.raises(HTTPException):
         require_external_endpoint(request(["om_conversations"], path="/api/v1/recall"))
-
-
-def test_legacy_raw_route_still_requires_raw_source_authority():
-    with pytest.raises(HTTPException):
-        require_external_endpoint(
-            request(
-                ["om_conversations"],
-                scopes=("all-apps",),
-                method="GET",
-                path="/api/v1/conversations/search",
-            )
-        )

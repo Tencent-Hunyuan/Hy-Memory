@@ -1,12 +1,11 @@
 import type {
-  ConversationTranscript,
   SourceImportReceipt as Receipt,
   SourceResponse,
 } from "@one-memory/contracts";
 import type { GuiLocale } from "@one-memory/i18n";
-import { FileText, RefreshCw, X } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getConversation, getSourceImportReceipt } from "./api";
+import { getSourceImportReceipt } from "./api";
 import { memoryText, useMemoryLanguage } from "./memory-language";
 
 export function SourceImportReceipt({ source }: { source: SourceResponse }) {
@@ -21,30 +20,19 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [opened, setOpened] = useState(false);
-  const [transcript, setTranscript] = useState<ConversationTranscript | null>(
-    null,
-  );
-  const [reading, setReading] = useState(false);
-  const [readError, setReadError] = useState("");
   const generation = useRef(0);
-  const conversationGeneration = useRef(0);
   useEffect(
     () => () => {
       generation.current++;
-      conversationGeneration.current++;
     },
     [],
   );
 
   async function load() {
     const current = ++generation.current;
-    conversationGeneration.current++;
     setReceipt(null);
-    setTranscript(null);
-    setReadError("");
     setError("");
     setLoading(true);
-    setReading(false);
     try {
       const result = await getSourceImportReceipt(source.source_id);
       if (generation.current !== current) return;
@@ -59,30 +47,6 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
     }
   }
 
-  async function read(evidenceId: string) {
-    const current = ++conversationGeneration.current;
-    setTranscript(null);
-    setReadError("");
-    setReading(true);
-    try {
-      const result = await getConversation(evidenceId);
-      if (conversationGeneration.current !== current) return;
-      if (
-        result.source_id !== source.source_id ||
-        !result.messages.some((item) => item.evidence_id === evidenceId)
-      )
-        throw new Error("conversation mismatch");
-      setTranscript(result);
-    } catch {
-      if (conversationGeneration.current === current) {
-        setReceipt(null);
-        setReadError("这段原文暂不可读，可能已被撤回授权。请刷新回执。");
-      }
-    } finally {
-      if (conversationGeneration.current === current) setReading(false);
-    }
-  }
-
   return (
     <details
       className="source-import-receipt"
@@ -92,11 +56,8 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
         if (next) void load();
         else {
           generation.current++;
-          conversationGeneration.current++;
           setReceipt(null);
-          setTranscript(null);
           setLoading(false);
-          setReading(false);
         }
       }}
     >
@@ -191,14 +152,6 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
                           {text(author(example.written_by))} ·{" "}
                           {time(example.created_at, locale)}
                         </span>
-                        <button
-                          type="button"
-                          className="quiet"
-                          onClick={() => void read(example.evidence_id)}
-                        >
-                          <FileText size={14} aria-hidden="true" />
-                          {text("查看完整对话")}
-                        </button>
                       </header>
                       <p className="source-receipt-quote">{example.excerpt}</p>
                       {example.truncated && (
@@ -213,41 +166,6 @@ function ReceiptBody({ source }: { source: SourceResponse }) {
                 <p>{text("这个来源还没有保存原文。")}</p>
               )}
             </>
-          )}
-          {reading && <p role="status">{text("正在读取完整对话…")}</p>}
-          {readError && <p role="alert">{text(readError)}</p>}
-          {transcript && (
-            <section
-              className="source-receipt-conversation"
-              aria-label={text("完整对话")}
-            >
-              <header>
-                <h3>{text("完整对话")}</h3>
-                <button
-                  type="button"
-                  className="quiet"
-                  title={text("关闭完整对话")}
-                  aria-label={text("关闭完整对话")}
-                  onClick={() => {
-                    conversationGeneration.current++;
-                    setTranscript(null);
-                  }}
-                >
-                  <X size={15} />
-                </button>
-              </header>
-              <ol>
-                {transcript.messages.map((message) => (
-                  <li key={message.evidence_id}>
-                    <small>
-                      {text(author(message.written_by))} ·{" "}
-                      {time(message.created_at, locale)}
-                    </small>
-                    <p>{message.verbatim}</p>
-                  </li>
-                ))}
-              </ol>
-            </section>
           )}
         </div>
       )}

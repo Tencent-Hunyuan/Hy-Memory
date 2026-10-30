@@ -16,8 +16,6 @@ export interface RuntimeAttachment {
    * `degraded`, never `healthy`. Null/absent when the receipt predates the
    * field (an older Runtime), which is treated as "unknown", not "healthy". */
   sidecarState?: "running" | "failed" | "stopped" | null;
-  /** Reader process port from the receipt. `null` when no Reader is running. */
-  readerPort?: number | null;
   health: RuntimeIdentity;
 }
 
@@ -65,7 +63,6 @@ interface RuntimeServiceReceipt {
   status: "starting" | "running" | "stopping";
   corePort: number | null;
   sidecarState: "running" | "failed" | "stopped" | null;
-  readerPort: number | null;
 }
 
 /** The Core port a *running* managed Runtime published, or null when there is
@@ -146,7 +143,6 @@ export async function discoverRuntimeAttachment(
     port: receipt.port,
     servicePid: service?.pid ?? null,
     sidecarState: service?.sidecarState ?? null,
-    readerPort: service?.readerPort ?? null,
     health: Object.freeze({ ...health }),
   });
 }
@@ -170,6 +166,8 @@ async function readRuntimeServiceReceipt(
   if (!value || typeof value !== "object") {
     throw new RuntimeDiscoveryError("runtime_service_receipt_invalid");
   }
+  // Unknown keys are ignored: a receipt written by an older Runtime may still
+  // carry `reader_port`, which no longer means anything.
   const item = value as Record<string, unknown>;
   if (
     item.schema_version !== 1 ||
@@ -188,11 +186,7 @@ async function readRuntimeServiceReceipt(
     (item.sidecar !== undefined &&
       item.sidecar !== "running" &&
       item.sidecar !== "failed" &&
-      item.sidecar !== "stopped") ||
-    (item.reader_port !== undefined &&
-      (typeof item.reader_port !== "number" ||
-        !Number.isInteger(item.reader_port) ||
-        item.reader_port < 0))
+      item.sidecar !== "stopped")
   ) {
     throw new RuntimeDiscoveryError("runtime_service_receipt_invalid");
   }
@@ -205,7 +199,6 @@ async function readRuntimeServiceReceipt(
       item.sidecar === undefined
         ? null
         : (item.sidecar as RuntimeServiceReceipt["sidecarState"]),
-    readerPort: typeof item.reader_port === "number" ? item.reader_port : null,
   };
 }
 

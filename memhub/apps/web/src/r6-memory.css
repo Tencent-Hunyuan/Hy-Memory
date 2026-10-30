@@ -22,7 +22,7 @@
   font-size: 13px;
   color: #637786;
 }
-.r6-memory .memory-pending-note {
+.r6-memory .memory-pending-add {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -36,11 +36,11 @@
   font-size: 13px;
   line-height: 22px;
 }
-.r6-memory .memory-pending-note span {
+.r6-memory .memory-pending-add span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.r6-memory .memory-pending-note button {
+.r6-memory .memory-pending-add button {
   flex: none;
   min-height: 36px;
   padding: 0 14px;
@@ -51,7 +51,7 @@
   font: inherit;
   cursor: pointer;
 }
-.r6-memory .memory-note-trigger {
+.r6-memory .memory-add-trigger {
   margin-left: auto;
   min-height: 44px;
   border-radius: 8px;
@@ -59,7 +59,7 @@
   justify-content: center;
   gap: 0;
 }
-.r6-memory .memory-note-trigger > svg {
+.r6-memory .memory-add-trigger > svg {
   display: none;
 }
 .r6-memory .core-memory-map {
@@ -267,7 +267,7 @@
   .r6-memory .map-library {
     padding: 16px 10px;
   }
-  .r6-memory .memory-note-trigger {
+  .r6-memory .memory-add-trigger {
     margin-left: 0;
   }
 }

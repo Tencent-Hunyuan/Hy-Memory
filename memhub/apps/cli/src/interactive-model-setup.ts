@@ -4,18 +4,11 @@ import type {
   CoreDeleteOperations,
   CoreOperations,
 } from "./core-operations.js";
-import {
-  executeModelProfile,
-  type FlowDocument,
-  planModelProfile,
-} from "./headless-flows.js";
+import { createModelProfile, type FlowDocument } from "./headless-flows.js";
 import { approvalFingerprint, listHosts, readHost } from "./host-flow.js";
 import { parseSelection, type WizardPrompter } from "./init-wizard.js";
-import { executeModelProbe, planModelProbe } from "./model-probe-flow.js";
-import {
-  executeModelProfileActivate,
-  planModelProfileActivate,
-} from "./model-write-flows.js";
+import { startModelProbe } from "./model-probe-flow.js";
+import { activateModelProfile } from "./model-write-flows.js";
 
 type ProviderPreset = {
   id: string;
@@ -359,30 +352,26 @@ export async function runInteractiveModelSetup(
           );
         })
       : new Map<string, string>();
-    const planned = planModelProfile({
-      name: preset.label,
-      provider_kind: preset.provider_kind,
-      base_url: baseUrl,
-      model,
-      embedding_provider_kind: "local_onnx",
-      embedding_model: "bge-small-zh-v1.5",
-      embedding_dimensions: 512,
-      timeout_seconds: 90,
-      max_concurrency: 4,
-      disable_thinking: true,
-    });
-    if (
-      planned.state !== "preview" ||
-      planned.plan.kind !== "model_profile_create"
-    ) {
-      return { state: "failed", code: "model_config_invalid" };
-    }
-    const created = await executeModelProfile(
-      planned.plan,
+    const created = await createModelProfile(
+      {
+        name: preset.label,
+        provider_kind: preset.provider_kind,
+        base_url: baseUrl,
+        model,
+        embedding_provider_kind: "local_onnx",
+        embedding_model: "bge-small-zh-v1.5",
+        embedding_dimensions: 512,
+        timeout_seconds: 90,
+        max_concurrency: 4,
+        disable_thinking: true,
+      },
       apiKey,
       clients.reader,
       clients.operations,
     );
+    if (created.state === "invalid") {
+      return { state: "failed", code: "model_config_invalid" };
+    }
     const profile = receiptProfile(created);
     if (profile === null) {
       prompter.write("模型配置未保存。");
@@ -391,18 +380,11 @@ export async function runInteractiveModelSetup(
     }
 
     try {
-      const probePlan = await planModelProbe(
+      const probed = await startModelProbe(
         clients.reader,
+        clients.operations,
         profile.profile_id,
       );
-      const probed =
-        probePlan.state === "preview"
-          ? await executeModelProbe(
-              probePlan.plan,
-              clients.reader,
-              clients.operations,
-            )
-          : probePlan;
       if (!probePassed(probed)) {
         await clients.operations.delete(
           `/api/v1/model-profiles/${encodeURIComponent(profile.profile_id)}`,
@@ -421,17 +403,8 @@ export async function runInteractiveModelSetup(
       throw error;
     }
 
-    const activation = planModelProfileActivate({
-      profileId: profile.profile_id,
-    });
-    if (
-      activation.state !== "preview" ||
-      activation.plan.kind !== "model_profile_activate"
-    ) {
-      return { state: "failed", code: "model_activate_plan_invalid" };
-    }
-    const activated = await executeModelProfileActivate(
-      activation.plan,
+    const activated = await activateModelProfile(
+      profile.profile_id,
       clients.operations,
     );
     if (activated.state !== "committed") {

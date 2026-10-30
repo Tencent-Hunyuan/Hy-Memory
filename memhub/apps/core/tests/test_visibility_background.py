@@ -62,6 +62,8 @@ def test_the_switch_on_starts_it(library, monkeypatch):
     async def scenario() -> None:
         app = _app(library)
         async with app.router.lifespan_context(app):
+            # Started by the recovery that runs after readiness.
+            await app.state.recovery_task
             assert app.state.memory_visibility_task is not None
 
     asyncio.run(scenario())

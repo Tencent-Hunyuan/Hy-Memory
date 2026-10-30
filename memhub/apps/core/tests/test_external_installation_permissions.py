@@ -7,7 +7,6 @@ from pydantic import SecretStr
 
 from one_memory.api import create_app
 from one_memory.config import Settings
-from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
 
 
 def headers(*, scopes=("all-apps",), tools=("om_recall",)):
@@ -51,12 +50,14 @@ def test_external_marker_is_not_an_installation_grant(tmp_path):
             )
             assert approved.status_code == 200
             denied_tool = await client.post(
-                "/api/v1/memories/ask", json={"question": "history"}, headers=headers()
+                "/api/v2/memories/ask", json={"question": "history"}, headers=headers()
             )
             assert denied_tool.status_code == 403
-            no_raw = await client.get(
-                "/api/v1/conversations/search",
-                params={"query": "history"},
+            # om_conversations reaches Core only as the v2 raw lane, and only
+            # with a source grant: all-apps alone opens no raw source.
+            no_raw = await client.post(
+                "/api/v2/context/search",
+                json={"query": "history", "kinds": ["raw"]},
                 headers=headers(tools=("om_conversations",)),
             )
             assert no_raw.status_code == 403
@@ -97,50 +98,5 @@ def test_external_diagnostic_trace_uses_its_own_read_only_tool(tmp_path):
                 headers=headers(tools=("om_recall",)),
             )
             assert denied.status_code == 403
-
-    asyncio.run(scenario())
-
-
-def test_raw_source_grants_filter_before_limit_and_private_body_loading(tmp_path):
-    async def scenario():
-        app = create_app(
-            Settings(
-                data_dir=tmp_path,
-                source_home=tmp_path,
-                api_token=SecretStr("test"),
-                automatic_memory_processing=False,
-                live_sync_enabled=False,
-            ),
-            source_catalog={},
-        )
-        async with (
-            app.router.lifespan_context(app),
-            AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                headers={"Authorization": "Bearer test"},
-            ) as client,
-        ):
-            for source in ("allowed", "denied"):
-                app.state.evidence_store.put(
-                    EvidenceInput(
-                        source_id=source,
-                        conversation_id="one",
-                        message_id="one",
-                        role="user",
-                        written_by=WrittenBy.PERSON,
-                        verbatim="needle " + source,
-                        origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
-                    )
-                )
-            result = await client.get(
-                "/api/v1/conversations/search",
-                params={"query": "needle", "limit": 1},
-                headers=headers(scopes=("all-apps", "source:allowed"), tools=("om_conversations",)),
-            )
-            assert result.status_code == 200
-            assert result.json()["imported_messages"] == 1
-            assert [hit["source_id"] for hit in result.json()["hits"]] == ["allowed"]
-            assert "needle denied" not in result.text
 
     asyncio.run(scenario())

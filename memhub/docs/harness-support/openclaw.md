@@ -28,7 +28,7 @@ OpenClaw 当前是“底层 MCP installer 已实现，但正式产品全链路 F
 ```text
 OpenClaw 读取 openclaw.json
 → 启动 mcp.servers.one-memory
-→ OpenClaw 模型在需要时主动调用 om_recall / om_context / om_conversations
+→ OpenClaw 模型在需要时主动调用 MemHub_recall / MemHub_write / MemHub_diagnostic_trace
 → MemHub mcp.cjs 通过本机 Broker 调用 Core
 ```
 

@@ -127,6 +127,28 @@ def test_the_manual_source_is_admitted_by_grant_without_a_toggle(tmp_path) -> No
     assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
 
 
+def test_the_manual_source_is_allowed_without_a_grant_row_until_revoked(tmp_path) -> None:
+    """The SDK add path writes no grant row, and intake admits the record.
+
+    Claim must answer the same: a missing row is allowed, an explicit
+    revocation is not.
+    """
+    receipt: list[object] = [None]
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config_store=ConfigStore(tmp_path),
+            model_profile_store=SimpleNamespace(active_identity=lambda: ("profile", 1)),
+            source_grant_store=SimpleNamespace(receipt=lambda **_kwargs: receipt[0]),
+        )
+    )
+
+    assert _source_writes_on(app, "one-memory-manual") is True
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is True
+    receipt[0] = SimpleNamespace(revoked_at="2026-10-27")
+    assert _source_writes_on(app, "one-memory-manual") is False
+    assert _sedimentation_claim_enabled(app, "one-memory-manual") is False
+
+
 def test_claim_gate_waits_without_polling_when_no_model_is_active(tmp_path) -> None:
     config = ConfigStore(tmp_path)
     app = SimpleNamespace(

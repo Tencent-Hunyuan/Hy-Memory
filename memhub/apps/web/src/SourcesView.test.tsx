@@ -500,7 +500,7 @@ describe("SourcesView", () => {
     expect(setRecallPermission).toHaveBeenCalledExactlyOnceWith("claude-code", {
       installationId: "24361b44-5a15-4f87-ad09-05571dc281c3",
       expectedRevision: 1,
-      allowedTools: ["om_recall", "om_ask", "om_diagnostic_trace"],
+      allowedTools: ["om_recall", "om_diagnostic_trace"],
       allowedScopes: ["all-apps"],
       userConfirmed: true,
     });

@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import type { RecallRuntime } from "./recall-installer.js";
 import {
   DISCOVERY_KEY,
+  MCP_TOOLSET_KEY,
+  MCP_TOOLSET_VERSION,
   OWNER_KEY,
   OWNER_VALUE,
   renderConnectionMaterial,
@@ -60,6 +62,7 @@ describe("mcp install snippet", () => {
     const env = parsed.mcpServers[SERVER_NAME].env;
     expect(env[DISCOVERY_KEY]).toBe(runtime().discoveryPath);
     expect(env[OWNER_KEY]).toBe(OWNER_VALUE);
+    expect(env[MCP_TOOLSET_KEY]).toBe(MCP_TOOLSET_VERSION);
     expect(env.ELECTRON_RUN_AS_NODE).toBe("1");
   });
 
@@ -136,6 +139,23 @@ describe("custom Harness pairing Skill", () => {
       "<ABSOLUTE_PRIVATE_CREDENTIAL_FILE_FOR_custom-1234>",
     );
     expect(skill).not.toContain("omhg_v1_");
+    // After pairing, the model learns the three-tool surface from the Skill
+    // too: not every Harness reads the MCP initialize instructions.
+    expect(skill).toContain("## Using MemHub after connecting");
+    for (const tool of [
+      "MemHub_recall",
+      "MemHub_write",
+      "MemHub_diagnostic_trace",
+    ])
+      expect(skill).toContain(`\`${tool}\``);
+    expect(skill).toContain('mode: "raw"');
+    for (const removed of [
+      "MemHub_ask",
+      "MemHub_context",
+      "MemHub_conversations",
+      "MemHub_memory_write",
+    ])
+      expect(skill).not.toContain(removed);
   });
 
   it("treats a user-provided Harness name as display data", () => {
@@ -157,9 +177,10 @@ describe("public contract document", () => {
     // reports it to us. Same class of problem R-33 treated for skill text,
     // and treated the same way: one source, checked by a test.
     const doc = await fs.readFile(CONTRACT_DOC, "utf8");
-    for (const key of [DISCOVERY_KEY, OWNER_KEY]) {
+    for (const key of [DISCOVERY_KEY, OWNER_KEY, MCP_TOOLSET_KEY]) {
       expect(doc).toContain(key);
     }
+    expect(doc).toContain(`"${MCP_TOOLSET_KEY}": "${MCP_TOOLSET_VERSION}"`);
     expect(doc).toContain(OWNER_VALUE);
     expect(doc).toContain(SERVER_NAME);
   });

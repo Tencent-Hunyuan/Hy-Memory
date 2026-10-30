@@ -79,6 +79,11 @@ ALLOWED = {
         "normal WAL-aware read-only view",
         calls=2,
     ),
+    ("sdk_migration_log.py", "migration_rows"): Allowed(
+        "a read-only snapshot of migration attempts for the migration log, taken "
+        "before the access layer exists (Core refusing a legacy home, sdk-migrate)",
+        opened_with="?mode=ro",
+    ),
     ("library_upgrade.py", "_backup_problem"): Allowed(
         "the finished upgrade backup, checked read-only before migration relies on it",
         opened_with="?mode=ro&immutable=1",
@@ -91,6 +96,15 @@ ALLOWED = {
         "the pre-cutover bundle's copy of the legacy database, read-only, to list "
         "the memory ids a migrated home must still read back",
         opened_with="?mode=ro",
+    ),
+    ("hy_sdk_migration.py", "_legacy_pools"): Allowed(
+        "each pre-cutover bundle's copy of the legacy database, read-only, to "
+        "recover the source and times historical cutovers dropped",
+        opened_with="?mode=ro",
+    ),
+    ("hy_sdk_migration.py", "_repair_coding"): Allowed(
+        "the SDK's own Coding/Working stores, not the main database: the one-time "
+        "metadata repair writes them at startup, before the SDK client opens"
     ),
     ("sdk_vector_reattach.py", "_stored_names"): Allowed(
         "Chroma's own chroma.sqlite3, read-only, to list collection names before "

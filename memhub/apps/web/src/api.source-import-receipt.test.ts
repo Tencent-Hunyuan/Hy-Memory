@@ -22,8 +22,7 @@ import {
   getImportJob,
   getImportJobs,
   getLiveSyncHealth,
-  getMemoryNoteOperation,
-  getMemoryNotes,
+  getMemoryAddStatus,
   getModelCreationOperation,
   getModelProfiles,
   getSourceImportReceipt,
@@ -258,11 +257,13 @@ describe("source import receipt transport validation", () => {
     );
   });
 });
-describe("memory-note list transport validation", () => {
-  it("accepts a list of valid note receipts", async () => {
-    const note = {
+describe("memory-add status transport validation", () => {
+  const requestId = "22222222-2222-4222-8222-222222222222";
+
+  it("reads a valid receipt from the additions status route", async () => {
+    const receipt = {
       evidence_id: "11111111-1111-4111-8111-111111111111",
-      text: "user note",
+      text: "user memory",
       scope: "all-apps",
       created_at: "2026-09-13T00:00:00Z",
       state: "pending",
@@ -270,22 +271,26 @@ describe("memory-note list transport validation", () => {
       memory_ids: [],
       error: null,
     };
-    fake.get.mockResolvedValue({ data: [note] });
-    await expect(getMemoryNotes()).resolves.toEqual([note]);
-  });
-
-  it("rejects a malformed note before the composer can crash on it", async () => {
-    fake.get.mockResolvedValue({ data: [null] });
-    await expect(getMemoryNotes()).rejects.toThrow(
-      "memory_note_receipt_invalid",
+    fake.get.mockResolvedValue({ data: receipt });
+    await expect(getMemoryAddStatus(requestId)).resolves.toEqual(receipt);
+    expect(fake.get).toHaveBeenLastCalledWith(
+      `/api/v2/memories/additions/${requestId}`,
     );
   });
 
-  it("rejects a malformed operation receipt before it reaches the composer", async () => {
+  it("rejects a malformed status receipt before it reaches the composer", async () => {
     fake.get.mockResolvedValue({ data: { state: "pending" } });
-    await expect(getMemoryNoteOperation("operation-1")).rejects.toThrow(
-      "memory_note_receipt_invalid",
+    await expect(getMemoryAddStatus(requestId)).rejects.toThrow(
+      "memory_add_receipt_invalid",
     );
+  });
+
+  it("refuses a non-UUID request id without a request", async () => {
+    fake.get.mockClear();
+    await expect(getMemoryAddStatus("operation-1")).rejects.toThrow(
+      "request_id_invalid",
+    );
+    expect(fake.get).not.toHaveBeenCalled();
   });
 });
 

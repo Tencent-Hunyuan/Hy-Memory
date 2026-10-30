@@ -8,11 +8,9 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SourceImportReceipt } from "./SourceImportReceipt";
 
-const getReceipt = vi.fn(),
-  getConversation = vi.fn();
+const getReceipt = vi.fn();
 vi.mock("./api", () => ({
   getSourceImportReceipt: (...args: unknown[]) => getReceipt(...args),
-  getConversation: (...args: unknown[]) => getConversation(...args),
 }));
 const source = {
   source_id: "cursor",
@@ -44,33 +42,10 @@ const receipt: Receipt = {
 beforeEach(() => {
   vi.resetAllMocks();
   getReceipt.mockResolvedValue(receipt);
-  getConversation.mockResolvedValue({
-    source_id: "cursor",
-    conversation_id: "c1",
-    messages: [
-      {
-        evidence_id: "e1",
-        role: "user",
-        written_by: "person",
-        created_at: null,
-        verbatim: "完整原文预算<5，不能>5。",
-      },
-    ],
-  });
 });
 afterEach(cleanup);
 
 describe("source import receipt", () => {
-  it("clears saved excerpts if opening the original conversation is denied", async () => {
-    const user = userEvent.setup();
-    render(<SourceImportReceipt source={source} />);
-    await user.click(screen.getByText("查看已读内容"));
-    await screen.findByText("预算<5，不能>5。");
-    getConversation.mockRejectedValue(new Error("revoked"));
-    await user.click(screen.getByRole("button", { name: "查看完整对话" }));
-    await screen.findByRole("alert");
-    expect(screen.queryByText("预算<5，不能>5。")).toBeNull();
-  });
   it("reads only after opening and shows measured authors and unknown message times", async () => {
     const user = userEvent.setup();
     render(<SourceImportReceipt source={source} />);
@@ -89,18 +64,14 @@ describe("source import receipt", () => {
     expect(screen.getByText("用户 · 时间未知")).toBeTruthy();
     expect(screen.getByText(/仅展示前 600/)).toBeTruthy();
   });
-  it("opens full source conversation explicitly with authors preserved", async () => {
+  it("offers no full-conversation read: the SDK data plane has no by-id raw read", async () => {
     const user = userEvent.setup();
     render(<SourceImportReceipt source={source} />);
     await user.click(screen.getByText("查看已读内容"));
-    await user.click(
-      await screen.findByRole("button", { name: "查看完整对话" }),
-    );
-    expect(await screen.findByText("完整原文预算<5，不能>5。")).toBeTruthy();
-    expect(getConversation).toHaveBeenCalledWith("e1");
-    await user.click(screen.getByRole("button", { name: "关闭完整对话" }));
-    expect(screen.queryByText("完整原文预算<5，不能>5。")).toBeNull();
+    await screen.findByText("预算<5，不能>5。");
+    expect(screen.queryByRole("button", { name: "查看完整对话" })).toBeNull();
   });
+
   it("drops a previous success while refresh is pending and on failure", async () => {
     const user = userEvent.setup();
     render(<SourceImportReceipt source={source} />);
@@ -133,29 +104,7 @@ describe("source import receipt", () => {
     expect(screen.queryByText("查看已读内容")).toBeNull();
     expect(screen.queryByText("预算<5，不能>5。")).toBeNull();
   });
-  it("does not reopen a conversation after the disclosure is closed", async () => {
-    let resolve: (value: unknown) => void = () => undefined;
-    getConversation.mockImplementation(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    );
-    const user = userEvent.setup();
-    render(<SourceImportReceipt source={source} />);
-    await user.click(screen.getByText("查看已读内容"));
-    await user.click(
-      await screen.findByRole("button", { name: "查看完整对话" }),
-    );
-    await user.click(screen.getByText("查看已读内容"));
-    await act(async () =>
-      resolve({
-        source_id: "cursor",
-        messages: [{ evidence_id: "e1", verbatim: "late original" }],
-      }),
-    );
-    expect(screen.queryByText("late original")).toBeNull();
-  });
+
   it("rejects source-mismatched responses", async () => {
     getReceipt.mockResolvedValue({ ...receipt, source_id: "another-source" });
     const user = userEvent.setup();

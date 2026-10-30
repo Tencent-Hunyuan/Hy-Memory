@@ -42,7 +42,6 @@ describe("selectableTools", () => {
   it("offers every default tool a new installation can be granted", () => {
     expect(selectableTools()).toEqual([
       "om_recall",
-      "om_ask",
       "om_conversations",
       "om_diagnostic_trace",
     ]);
@@ -51,6 +50,11 @@ describe("selectableTools", () => {
   it("keeps matters only when an earlier grant already had it", () => {
     expect(selectableTools(["om_matters"])).toContain("om_matters");
     expect(selectableTools(["om_recall"])).not.toContain("om_matters");
+  });
+
+  it("keeps ask only when an earlier grant already had it", () => {
+    expect(selectableTools(["om_ask"])).toContain("om_ask");
+    expect(selectableTools(["om_recall"])).not.toContain("om_ask");
   });
 });
 
@@ -101,7 +105,6 @@ describe("fullGrantSelection", () => {
     });
     expect(selection.allowedTools).toEqual([
       "om_recall",
-      "om_ask",
       "om_conversations",
       "om_diagnostic_trace",
     ]);
@@ -116,7 +119,6 @@ describe("fullGrantSelection", () => {
     const selection = fullGrantSelection({ sources: [] });
     expect(selection.allowedTools).toEqual([
       "om_recall",
-      "om_ask",
       "om_diagnostic_trace",
     ]);
     expect(selection.allowedScopes).toEqual(["all-apps"]);

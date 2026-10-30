@@ -536,7 +536,7 @@ export function HistoryImport({
               }
             }}
           >
-            <header className="memory-note-heading">
+            <header className="memory-add-heading">
               <h2 id="history-import-title">导入历史包</h2>
               <button
                 type="button"

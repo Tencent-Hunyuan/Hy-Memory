@@ -72,6 +72,13 @@ export type PreparedServiceInstall = {
   mode: "direct" | "bootstrap-existing" | "restart" | "replace";
   previous?: ManagedSnapshot;
   previouslyEnabled: boolean;
+  /**
+   * Re-bootstrap the previous (possibly older) LaunchAgent when the new one
+   * fails to bootstrap. `install` turns this off once the home has been handed
+   * to this version's SDK migration: an older Runtime has no migration gate and
+   * would serve a home that is not on SDK authority.
+   */
+  restorePreviousOnFailure?: boolean;
 };
 
 const defaultDependencies: ServiceLifecycleDependencies = {
@@ -191,7 +198,8 @@ export async function applyPreparedServiceInstall(
     if (!previous) throw new Error("runtime_service_upgrade_state_invalid");
     await verifyPreparedRegistration(prepared, dependencies);
     const domain = launchdDomain(options.uid);
-    let replacementFailure: "upgrade" | "rollback" | null = null;
+    let replacementFailure: "upgrade" | "rollback" | "not-restored" | null =
+      null;
     const replaceCommand: ServiceCommandRunner = async (command) => {
       if (command[0] !== "launchctl" || command[1] !== "bootstrap") {
         await dependencies.runCommand(command);
@@ -208,6 +216,10 @@ export async function applyPreparedServiceInstall(
         await dependencies.runCommand(command);
       } catch {
         replacementFailure = "upgrade";
+        if (prepared.restorePreviousOnFailure === false) {
+          replacementFailure = "not-restored";
+          throw new Error("runtime_service_replacement_failed");
+        }
         try {
           await dependencies.verifyRegistrationSnapshot(previous);
           await dependencies.runCommand([
@@ -233,6 +245,9 @@ export async function applyPreparedServiceInstall(
       }
       if (replacementFailure === "upgrade") {
         throw new Error("runtime_service_managed_upgrade_failed");
+      }
+      if (replacementFailure === "not-restored") {
+        throw new Error("runtime_service_replacement_failed");
       }
       throw error;
     }

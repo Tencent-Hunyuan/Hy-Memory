@@ -11,6 +11,10 @@ import {
   discoverRuntimeAttachment,
   RuntimeDiscoveryError,
 } from "./discovery.js";
+import {
+  recordSdkMigrationBlock,
+  writeSdkMigrationLog,
+} from "./sdk-migration-log.js";
 
 export interface CoreLaunch {
   command: string;
@@ -22,11 +26,6 @@ export interface CoreSupervisorOptions {
   launch: CoreLaunch;
   dataDir: string;
   port?: number;
-  /** When true, a read-only Reader child is started after Core becomes healthy.
-   *  The Reader gets a dynamic port which is published in the Runtime receipt
-   *  as `reader_port`. Default: false (no Reader). */
-  readerEnabled?: boolean;
-  readerPort?: number | null;
   instanceId?: string;
   apiToken?: string;
   webDirectory?: string;
@@ -73,6 +72,9 @@ export const CORE_READINESS_DEFAULTS = Object.freeze({
   delayMs: 200,
   readinessBudgetMs: 60_000,
 });
+
+/** Core's exit status when it refuses a home that is not on SDK authority. */
+export const SDK_MIGRATION_REQUIRED_EXIT = 78;
 
 /** Map package/build identity onto the env names the Core records. Only the
  *  fields that are actually known are emitted, so a source run without a build
@@ -262,8 +264,6 @@ export class CoreSupervisor {
   private restartStreak = 0;
   private restartCircuitOpen = false;
   private lastProbeError: string | null = null;
-  private readerChild: ChildProcess | null = null;
-  private activeReaderPort: number | null = null;
 
   constructor(options: CoreSupervisorOptions) {
     this.ownedInstanceId = options.instanceId ?? randomUUID();
@@ -301,10 +301,6 @@ export class CoreSupervisor {
     return this.activePort;
   }
 
-  get readerPort(): number | null {
-    return this.activeReaderPort;
-  }
-
   async start(): Promise<HealthResponse> {
     if (this.child || this.attached) {
       throw new Error("MemHub Core supervisor already started");
@@ -332,17 +328,11 @@ export class CoreSupervisor {
         instance_id: this.activeInstanceId,
         details: { spawned: false },
       });
-      if (this.options.readerEnabled) {
-        await this.startReader();
-      }
       return attached;
     }
     this.useOwnedIdentity();
     try {
       const health = await this.attempt();
-      if (this.options.readerEnabled) {
-        await this.startReader();
-      }
       return health;
     } catch (error) {
       // A standalone Runtime may have won the race after our initial
@@ -352,9 +342,6 @@ export class CoreSupervisor {
       try {
         raced = await this.attachExisting();
         if (raced !== null) {
-          if (this.options.readerEnabled) {
-            await this.startReader();
-          }
           return raced;
         }
       } catch (attachError) {
@@ -397,9 +384,6 @@ export class CoreSupervisor {
       this.spawnError = null;
       try {
         const health = await this.attempt();
-        if (this.options.readerEnabled) {
-          await this.startReader();
-        }
         return health;
       } catch (retryError) {
         await this.logStartFailure(retryError);
@@ -582,9 +566,15 @@ export class CoreSupervisor {
       attempt += 1
     ) {
       if (this.exited) {
+        // Core refuses to serve a home that is not on SDK authority with this
+        // exit status; it is a stable code the callers show, not a crash.
+        const refusedLegacy =
+          !this.spawnError && this.exitCode === SDK_MIGRATION_REQUIRED_EXIT;
         const failure = this.spawnError
           ? `MemHub Core could not start: ${this.spawnError.message}`
-          : `MemHub Core exited before becoming ready (${describeExit(this.exitCode, this.exitSignal)})`;
+          : refusedLegacy
+            ? "sdk_migration_required"
+            : `MemHub Core exited before becoming ready (${describeExit(this.exitCode, this.exitSignal)})`;
         await this.options.diagnostics?.log({
           level: "error",
           component: "runtime.core",
@@ -593,7 +583,9 @@ export class CoreSupervisor {
           instance_id: this.activeInstanceId,
           error_code: this.spawnError
             ? "core_spawn_failed"
-            : "core_exited_before_ready",
+            : refusedLegacy
+              ? "sdk_migration_required"
+              : "core_exited_before_ready",
           error_type: this.spawnError?.name ?? "Error",
           details: {
             ...(this.exitCode === null ? {} : { exit_code: this.exitCode }),
@@ -606,6 +598,22 @@ export class CoreSupervisor {
           },
         });
         this.startFailureLogged = true;
+        if (refusedLegacy) {
+          // Core wrote its own `core.refused_legacy` line; this one ties it to
+          // the spawn, and the block note makes `status`/`doctor` name it.
+          await writeSdkMigrationLog(this.options.dataDir, {
+            writer: "runtime-service",
+            event: "core.refused_legacy",
+            outcome: "refused",
+            code: "sdk_migration_required",
+            details: { exit_code: SDK_MIGRATION_REQUIRED_EXIT },
+          });
+          await recordSdkMigrationBlock(
+            this.options.dataDir,
+            "sdk_migration_required",
+            "runtime-service",
+          );
+        }
         await this.stop();
         if (this.spawnError) {
           throw new Error(failure, { cause: this.spawnError });
@@ -709,9 +717,6 @@ export class CoreSupervisor {
           await delay(delayMs);
           if (this.stopping) return;
           try {
-            // The old Reader pointed at the Core that just died. Stop it so
-            // the relaunched Core gets a Reader with the current token/port.
-            await this.stopReader();
             // Keep the configured port stable across relaunches. The packaged
             // renderer and discovery receipts point at this port, so moving to
             // an ephemeral port would make a recovered Core unreachable.
@@ -722,9 +727,6 @@ export class CoreSupervisor {
             this.exited = false;
             this.spawnError = null;
             const health = await this.attempt();
-            if (this.options.readerEnabled) {
-              await this.startReader();
-            }
             await this.options.diagnostics?.log({
               level: "info",
               component: "runtime.core",
@@ -786,7 +788,6 @@ export class CoreSupervisor {
 
   async stop(): Promise<void> {
     this.stopping = true;
-    await this.stopReader();
     const child = this.child;
     const exitPromise = this.exitPromise;
     if (!child) {
@@ -815,81 +816,5 @@ export class CoreSupervisor {
     this.attached = false;
     this.coreSessionId = null;
     this.useOwnedIdentity();
-  }
-
-  private async startReader(): Promise<void> {
-    if (this.readerChild) return;
-    const spawnProcess =
-      this.options.spawnProcess ??
-      ((command: string, args: readonly string[], opts: SpawnOptions) =>
-        spawn(command, args, opts));
-    // The Core CLI only accepts `serve --reader`. A bare `--reader` makes the
-    // child print usage and exit 2, so the Reader never actually started.
-    const args = [...this.options.launch.args, "serve", "--reader"];
-    const environment: NodeJS.ProcessEnv = {
-      ...process.env,
-      // The Reader opens the same database the Core is using. Spreading
-      // process.env alone can hand it a different directory than the one the
-      // supervisor resolved (an isolated install keeps the database under a
-      // scoped path), and then it exits with reader_database_missing.
-      ONE_MEMORY_DATA_DIR: this.options.dataDir,
-      ONE_MEMORY_CORE_PORT: String(this.activePort),
-      ONE_MEMORY_CORE_API_TOKEN: this.activeApiToken,
-      ONE_MEMORY_READER_PORT: "0",
-    };
-    const child = spawnProcess(this.options.launch.command, args, {
-      stdio: "pipe",
-      env: environment,
-      cwd: this.options.launch.cwd,
-    });
-    this.readerChild = child;
-    // A Reader exits when its Core goes away. Clear the handle so the restart
-    // path can spawn a fresh one instead of returning early forever.
-    child.on("exit", () => {
-      if (this.readerChild === child) {
-        this.readerChild = null;
-        this.activeReaderPort = null;
-      }
-    });
-    // Wait briefly for the reader to publish its port on stderr.
-    this.activeReaderPort = await new Promise<number | null>((resolve) => {
-      let settled = false;
-      const finish = (value: number | null) => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      child.on("error", () => finish(null));
-      child.on("exit", () => finish(null));
-      let readerBuffer = "";
-      if (child.stderr) {
-        child.stderr.on("data", (chunk: string) => {
-          readerBuffer += chunk;
-          const match = /reader_port:(\d+)/.exec(readerBuffer);
-          if (match) finish(Number(match[1]));
-        });
-      }
-      setTimeout(() => finish(null), 10_000).unref();
-    });
-    await this.options.diagnostics?.log({
-      level: "info",
-      component: "runtime.core",
-      event: "reader.started",
-      outcome: "succeeded",
-      instance_id: this.activeInstanceId,
-      details: { reader_port: this.activeReaderPort },
-    });
-  }
-
-  private async stopReader(): Promise<void> {
-    const child = this.readerChild;
-    this.readerChild = null;
-    this.activeReaderPort = null;
-    if (!child) return;
-    child.kill("SIGTERM");
-    await new Promise<void>((resolve) => {
-      child.on("exit", resolve);
-      setTimeout(resolve, 3_000).unref();
-    });
   }
 }

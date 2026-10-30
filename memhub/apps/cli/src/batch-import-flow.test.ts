@@ -119,6 +119,7 @@ describe("A19 batch execution", () => {
       readerFor([]),
       operations,
       planned.notFound,
+      { confirmOverrides: false },
     );
     // Exactly one request for two sources — the batch endpoint, per contract.
     expect(post).toHaveBeenCalledTimes(1);
@@ -165,6 +166,7 @@ describe("A19 batch execution", () => {
       readerFor([]),
       operations,
       planned.notFound,
+      { confirmOverrides: false },
     );
     expect(document.state).toBe("partial");
     const byId = Object.fromEntries(
@@ -206,6 +208,7 @@ describe("A19 batch execution", () => {
       readerFor([]),
       operations,
       [],
+      { confirmOverrides: false },
     );
     expect(document.sources.every((row) => row.status === "failed")).toBe(true);
     expect(
@@ -249,6 +252,7 @@ describe("A19 batch execution", () => {
       readerFor([]),
       operations,
       [],
+      { confirmOverrides: false },
     );
     const busy = document.sources.find((row) => row.source_id === "cursor");
     expect(document.state).toBe("partial");
@@ -288,11 +292,91 @@ describe("A19 batch execution", () => {
       readerFor([]),
       operations,
       planned.notFound,
+      { confirmOverrides: false },
     );
     const notFoundRow = document.sources.find(
       (row) => row.source_id === "cursor",
     );
     expect(notFoundRow?.status).toBe("not_found");
     expect(document.not_found_source_ids).toContain("cursor");
+  });
+});
+
+describe("environment-override sources need --confirm-overrides", () => {
+  it("leaves them out and names them unless confirmed", async () => {
+    const planned = await planBatchImport(
+      readerFor([
+        found("codex"),
+        found("dsh", {
+          candidate_kind: "environment_override",
+          requires_override_confirmation: true,
+        }),
+      ]),
+    );
+    if (planned.state !== "preview") throw new Error("expected preview");
+    const post = vi.fn(
+      async (_path: string, body: Record<string, unknown>) => ({
+        state: "committed" as const,
+        data: {
+          request_id: body.request_id,
+          accepted_source_ids: body.source_ids,
+          failed_sources: {},
+          jobs: [],
+        },
+      }),
+    );
+    const operations = { post } as unknown as CoreOperations;
+    const skipped = await executeBatchImport(
+      planned.candidates,
+      readerFor([]),
+      operations,
+      planned.notFound,
+      { confirmOverrides: false },
+    );
+    expect(post.mock.calls[0]![1]).toMatchObject({
+      source_ids: ["codex"],
+      confirm_environment_overrides: false,
+    });
+    expect(skipped.override_required_source_ids).toEqual(["dsh"]);
+    expect(renderBatchScanText(skipped)).toContain("--confirm-overrides");
+
+    const confirmed = await executeBatchImport(
+      planned.candidates,
+      readerFor([]),
+      operations,
+      planned.notFound,
+      { confirmOverrides: true },
+    );
+    expect(post.mock.calls[1]![1]).toMatchObject({
+      source_ids: ["codex", "dsh"],
+      confirm_environment_overrides: true,
+    });
+    expect(confirmed.override_required_source_ids).toBeUndefined();
+  });
+
+  it("refuses without a request when every detected source needs confirmation", async () => {
+    const planned = await planBatchImport(
+      readerFor([
+        found("dsh", {
+          candidate_kind: "environment_override",
+          requires_override_confirmation: true,
+        }),
+      ]),
+    );
+    if (planned.state !== "preview") throw new Error("expected preview");
+    const post = vi.fn();
+    const document = await executeBatchImport(
+      planned.candidates,
+      readerFor([]),
+      { post } as unknown as CoreOperations,
+      planned.notFound,
+      { confirmOverrides: false },
+    );
+    expect(post).not.toHaveBeenCalled();
+    expect(document).toMatchObject({
+      state: "rejected",
+      code: "environment_override_confirmation_required",
+    });
+    expect(batchScanExitCode(document)).toBe(1);
   });
 });

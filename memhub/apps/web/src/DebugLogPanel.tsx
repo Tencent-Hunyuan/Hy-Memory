@@ -50,7 +50,6 @@ const SERVICE_LABELS: Record<DebugLogEntry["service"], string> = {
   core: "Core",
   "host-bridge": "Host Bridge",
   cli: "CLI",
-  "hy-memory": "HY Memory",
 };
 
 export function DebugLogPanel() {

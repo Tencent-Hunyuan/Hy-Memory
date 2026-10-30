@@ -23,6 +23,21 @@ from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
 _BATCH = 500
 
 
+def open_offline_chroma(directory: Path) -> Any:
+    """A Chroma client on the SDK's vector store, configured as the SDK opens it.
+
+    Chroma refuses a second client on a directory whose shared instance was
+    created with different settings, so offline code must not pass its own.
+    Telemetry is turned off the way the Runtime turns it off, by environment.
+    """
+    import os
+
+    import chromadb
+
+    os.environ["ANONYMIZED_TELEMETRY"] = "False"
+    return chromadb.PersistentClient(path=str(directory))
+
+
 @dataclass(frozen=True)
 class ReattachedCollection:
     legacy: str
@@ -97,45 +112,46 @@ def reattach_legacy_vectors(
     pairs = legacy_vector_collections(data_dir, profile)
     if not pairs:
         return ()
-    import chromadb
-    from chromadb.config import Settings
-
-    client = chromadb.PersistentClient(
-        path=str(_vector_directory(data_dir)),
-        settings=Settings(anonymized_telemetry=False),
-    )
-    existing = set(_stored_names(data_dir))
-    done: list[ReattachedCollection] = []
-    for legacy_name, current_name in pairs:
-        legacy = client.get_collection(legacy_name)
-        legacy_count = legacy.count()
-        merged = 0
-        if current_name in existing:
-            current = client.get_collection(current_name)
-            legacy_ids = set(_ids(legacy))
-            current_ids: set[str] = set()
-            for batch in _records(current):
-                legacy.upsert(**batch)
-                current_ids.update(batch["ids"])
-            merged = len(current_ids)
-            if legacy.count() != len(legacy_ids | current_ids):
-                raise DataPlaneMigrationError("sdk_migration_vector_merge_incomplete")
-            client.delete_collection(current_name)
-        legacy.modify(name=current_name)
-        final = client.get_collection(current_name).count()
-        if final < legacy_count:
-            raise DataPlaneMigrationError("sdk_migration_vector_reattach_incomplete")
-        existing.discard(legacy_name)
-        existing.add(current_name)
-        done.append(
-            ReattachedCollection(
-                legacy=legacy_name,
-                current=current_name,
-                legacy_count=legacy_count,
-                merged_count=merged,
-                final_count=final,
+    client = open_offline_chroma(_vector_directory(data_dir))
+    # Closed, not left to the process: Chroma keeps one shared instance per
+    # directory, and the readback that follows opens the same directory
+    # through the SDK. A leaked instance failed that open on every 1.0.4 home
+    # with legacy vectors, so the first launch after upgrade always failed.
+    try:
+        existing = set(_stored_names(data_dir))
+        done: list[ReattachedCollection] = []
+        for legacy_name, current_name in pairs:
+            legacy = client.get_collection(legacy_name)
+            legacy_count = legacy.count()
+            merged = 0
+            if current_name in existing:
+                current = client.get_collection(current_name)
+                legacy_ids = set(_ids(legacy))
+                current_ids: set[str] = set()
+                for batch in _records(current):
+                    legacy.upsert(**batch)
+                    current_ids.update(batch["ids"])
+                merged = len(current_ids)
+                if legacy.count() != len(legacy_ids | current_ids):
+                    raise DataPlaneMigrationError("sdk_migration_vector_merge_incomplete")
+                client.delete_collection(current_name)
+            legacy.modify(name=current_name)
+            final = client.get_collection(current_name).count()
+            if final < legacy_count:
+                raise DataPlaneMigrationError("sdk_migration_vector_reattach_incomplete")
+            existing.discard(legacy_name)
+            existing.add(current_name)
+            done.append(
+                ReattachedCollection(
+                    legacy=legacy_name,
+                    current=current_name,
+                    legacy_count=legacy_count,
+                    merged_count=merged,
+                    final_count=final,
+                )
             )
-        )
+    finally:
+        client.close()
     return tuple(done)
 
 

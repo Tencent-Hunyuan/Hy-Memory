@@ -15,6 +15,8 @@
 3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进入 **SDK raw**。
 4. SDK raw 只保留滚动三天；一条 raw 对应一个完整 turn，只含真人 user 与
    assistant，tool 不持久化。提取后的高层 memory 不受该窗口影响。
+5. `source_raw_ids` 是 SDK 内部溯源关系，不是产品 Evidence 合同；记忆详情不提供
+   “原始依据”或按 raw ID 展开原文的入口。
 
 生产入口通过共享 Runtime 租约取得公开 `HyMemoryClient`；MemHub 只在调用前执行
 模型配置、密钥和 harness/model 门禁，不维护第二套 memory 正文权威。
@@ -169,6 +171,20 @@ result = client.add_extracted(
 
 该入口仍走 SDK reconcile/持久化；MemHub 只做管理面门禁与可选
 `memory_id` 记录。
+
+应用的「添加记忆」、MCP `MemHub_write`（经 broker `POST /memories` 以本机可信身份转发）
+共用同一个本机 HTTP 合同，直接新增一条记忆：
+
+```text
+POST /api/v2/memories                         {request_id, text, scope: "all-apps"}
+GET  /api/v2/memories/additions/{request_id}  # 该次新增的状态
+```
+
+两者返回同一回执（`evidence_id`、`text`、`scope`、`created_at`、`state`、`task_id`、
+`memory_ids`、`error`）。同一 `request_id` 重放返回原回执；内容不同返回 409
+`memory_add_conflict`，未知 `request_id` 返回 404 `memory_add_not_found`。新增走持久
+写入队列的优先通道，最终调用 `add_extracted` + reconcile。带外部读取信封的请求
+一律拒绝（403 `external_endpoint_denied`）。
 
 ## Search：搜索记忆
 

@@ -89,6 +89,7 @@ one-memory capture opencode
 ## 权限、重复打开与关闭
 
 - 默认 Tools：`om_recall`、`om_conversations`、`om_diagnostic_trace`。
+- MCP 只暴露三个工具：`MemHub_recall`、`MemHub_write`、`MemHub_diagnostic_trace`。`om_conversations` 不再是 MCP 工具，只授权原文通道（`/context` 与召回的原文回退）；`MemHub_write` 不受授权控制，只要求已认证的安装。
 - 默认 Scopes：`all-apps`、`source:opencode`。
 - 已安装且 `approved`：不重装，只修复命令并 Probe。
 - 关闭：先撤权，再恢复或删除 `mcp.one-memory`、Capture Plugin 和 Journal。

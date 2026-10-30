@@ -58,6 +58,12 @@ export const currentChineseMessages = {
   "sdk.memory.content": "记忆内容",
   "sdk.memory.save": "保存修改",
   "sdk.memory.delete": "删除记忆",
+  "sdk.memory.scene.chat": "对话",
+  "sdk.memory.scene.working": "工作",
+  "sdk.memory.scene.coding": "编码",
+  "sdk.memory.task": "任务",
+  "sdk.memory.solution": "做法",
+  "sdk.memory.page": "第 {page} / {pages} 页",
 
   "sdk.raw.title": "SDK 原始对话",
   "sdk.raw.searchLabel": "搜索原始对话",
@@ -83,6 +89,7 @@ export const currentChineseMessages = {
   "selectedMemory.status.archived": "已归档",
   "selectedMemory.status.unknown": "状态待核对",
   "selectedMemory.sourceUnknown": "来源待核对",
+  "selectedMemory.sourceUnattributed": "未识别来源",
   "selectedMemory.discardDraft": "放弃尚未保存的修改？",
   "selectedMemory.newVersionReadFailed": "暂时无法读取新版本，草稿已保留。",
   "selectedMemory.updateRejected":
@@ -101,6 +108,7 @@ export const currentChineseMessages = {
   "selectedMemory.version": "第 {revision} 版",
   "selectedMemory.sourceLine": "来源 {source} · {time}",
   "selectedMemory.timestamps": "对话时间 {conversation} · 沉淀时间 {created}",
+  "selectedMemory.writeTime": "写入时间 {created}",
   "selectedMemory.edit": "编辑",
   "selectedMemory.evidence": "原始依据",
   "selectedMemory.evidenceLine": "{author} · 原对话 {time}：",
@@ -196,6 +204,12 @@ export const currentEnglishMessages: Record<
   "sdk.memory.content": "Memory content",
   "sdk.memory.save": "Save changes",
   "sdk.memory.delete": "Delete memory",
+  "sdk.memory.scene.chat": "Chat",
+  "sdk.memory.scene.working": "Work",
+  "sdk.memory.scene.coding": "Coding",
+  "sdk.memory.task": "Task",
+  "sdk.memory.solution": "Solution",
+  "sdk.memory.page": "Page {page} of {pages}",
 
   "sdk.raw.title": "SDK original conversations",
   "sdk.raw.searchLabel": "Search original conversations",
@@ -222,6 +236,7 @@ export const currentEnglishMessages: Record<
   "selectedMemory.status.archived": "Archived",
   "selectedMemory.status.unknown": "Status needs review",
   "selectedMemory.sourceUnknown": "Source needs review",
+  "selectedMemory.sourceUnattributed": "Unidentified source",
   "selectedMemory.discardDraft": "Discard unsaved changes?",
   "selectedMemory.newVersionReadFailed":
     "Could not load the new version. Your draft is retained.",
@@ -244,6 +259,7 @@ export const currentEnglishMessages: Record<
   "selectedMemory.sourceLine": "Source {source} · {time}",
   "selectedMemory.timestamps":
     "Conversation time {conversation} · Created {created}",
+  "selectedMemory.writeTime": "Written {created}",
   "selectedMemory.edit": "Edit",
   "selectedMemory.evidence": "Original evidence",
   "selectedMemory.evidenceLine": "{author} · Original conversation {time}:",
@@ -347,6 +363,12 @@ export const currentSpanishMessages: Record<
   "sdk.memory.content": "Contenido de la memoria",
   "sdk.memory.save": "Guardar cambios",
   "sdk.memory.delete": "Eliminar memoria",
+  "sdk.memory.scene.chat": "Chat",
+  "sdk.memory.scene.working": "Trabajo",
+  "sdk.memory.scene.coding": "Programación",
+  "sdk.memory.task": "Tarea",
+  "sdk.memory.solution": "Solución",
+  "sdk.memory.page": "Página {page} de {pages}",
 
   "sdk.raw.title": "Conversaciones originales del SDK",
   "sdk.raw.searchLabel": "Buscar conversaciones originales",
@@ -375,6 +397,7 @@ export const currentSpanishMessages: Record<
   "selectedMemory.status.archived": "Archivada",
   "selectedMemory.status.unknown": "Estado pendiente de comprobar",
   "selectedMemory.sourceUnknown": "Origen sin verificar",
+  "selectedMemory.sourceUnattributed": "Origen no identificado",
   "selectedMemory.discardDraft": "¿Descartar los cambios sin guardar?",
   "selectedMemory.newVersionReadFailed":
     "No se pudo leer la nueva versión. Tu borrador se conserva.",
@@ -397,6 +420,7 @@ export const currentSpanishMessages: Record<
   "selectedMemory.sourceLine": "Origen {source} · {time}",
   "selectedMemory.timestamps":
     "Conversación {conversation} · Guardada {created}",
+  "selectedMemory.writeTime": "Escrita {created}",
   "selectedMemory.edit": "Editar",
   "selectedMemory.evidence": "Evidencia original",
   "selectedMemory.evidenceLine": "{author} · Conversación original {time}:",

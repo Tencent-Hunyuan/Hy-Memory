@@ -192,8 +192,6 @@ export interface InjectionHookRuntime {
   discoveryPath: string;
   credentialFile?: string;
   dataDir?: string;
-  /** Core binary whose `boundary` reply the hook folds into its own output. */
-  boundaryCommand?: string;
   /** Core binary handed the prompt on UserPromptSubmit, so capture needs no
    * hook of its own. */
   captureCommand?: string;
@@ -268,30 +266,6 @@ function captureHook(
   };
 }
 
-/** Only when the runtime ships no recall command; otherwise the injection
- * hook runs the boundary itself. */
-function boundaryHook(
-  cliCommand?: string,
-  dataDir?: string,
-): {
-  hooks: Array<{ type: "command"; command: string; timeout: number }>;
-} {
-  return {
-    hooks: [
-      {
-        type: "command",
-        command: failOpenHookCommand(
-          hostCli(cliCommand),
-          "boundary",
-          "context",
-          dataDir,
-        ),
-        timeout: 10,
-      },
-    ],
-  };
-}
-
 /** Run the recall command's injection mode the way the MCP entry is run.
  *
  * Same runtime, same `ELECTRON_RUN_AS_NODE`, same discovery and credential
@@ -300,13 +274,11 @@ function boundaryHook(
  * back into the turn as text, because the host keeps raw stdout.
  *
  * The entry writes straight to the hook's stdout. It prints one complete
- * reply or nothing, so there is nothing to hold back and reprint, and its
- * notice is confirmed only once the reply is in the host's pipe.
+ * reply or nothing, so there is nothing to hold back and reprint.
  */
 export function injectionHookCommand(runtime: InjectionHookRuntime): string {
   const environment = [
     'ELECTRON_RUN_AS_NODE="1"',
-    'ONE_MEMORY_BOUNDARY_VIA_BROKER="1"',
     `ONE_MEMORY_BROKER_DISCOVERY=${quoteCaptureCommand(runtime.discoveryPath)}`,
     ...(runtime.credentialFile
       ? [
@@ -315,11 +287,6 @@ export function injectionHookCommand(runtime: InjectionHookRuntime): string {
       : []),
     ...(runtime.dataDir
       ? [`ONE_MEMORY_DATA_DIR=${quoteCaptureCommand(runtime.dataDir)}`]
-      : []),
-    ...(runtime.boundaryCommand
-      ? [
-          `ONE_MEMORY_BOUNDARY_COMMAND=${quoteCaptureCommand(runtime.boundaryCommand)}`,
-        ]
       : []),
     ...(runtime.captureCommand
       ? [
@@ -355,9 +322,8 @@ function injectionHook(runtime: InjectionHookRuntime): {
  * One hook per event speaks. WorkBuddy shallow-merges the `hookSpecificOutput`
  * of every hook on an event, later ones overwriting earlier ones, so two of
  * ours each carrying `additionalContext` would lose one of them. The
- * injection hook therefore runs the boundary itself and puts the recalled
- * memory and the cross-session notice into a single reply. It runs on every
- * SessionStart: the notice is due on all of them, recall only after compaction.
+ * injection hook runs on SessionStart too, where it recalls only after a
+ * compaction.
  *
  * The host runs every hook on an event at once and blocks the send when any
  * outlives its timeout, so UserPromptSubmit capture is handed to the same
@@ -366,20 +332,21 @@ function injectionHook(runtime: InjectionHookRuntime): {
 export function pluginHooksFile(
   contents: Pick<PluginContents, "cliCommand" | "dataDir" | "injection">,
 ): string {
-  const context = contents.injection
-    ? injectionHook({
-        ...contents.injection,
-        boundaryCommand: hostCli(contents.cliCommand),
-        captureCommand: hostCli(contents.cliCommand),
-      })
-    : boundaryHook(contents.cliCommand, contents.dataDir);
+  const capture = captureHook(contents.cliCommand, contents.dataDir);
+  if (!contents.injection) {
+    return json({
+      hooks: { UserPromptSubmit: [capture], Stop: [capture] },
+    });
+  }
+  const context = injectionHook({
+    ...contents.injection,
+    captureCommand: hostCli(contents.cliCommand),
+  });
   return json({
     hooks: {
       SessionStart: [context],
-      UserPromptSubmit: contents.injection
-        ? [context]
-        : [captureHook(contents.cliCommand, contents.dataDir), context],
-      Stop: [captureHook(contents.cliCommand, contents.dataDir)],
+      UserPromptSubmit: [context],
+      Stop: [capture],
     },
   });
 }

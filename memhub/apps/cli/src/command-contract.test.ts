@@ -69,7 +69,6 @@ const COMMANDS = [
   "doctor",
   "logs",
   "init",
-  "setup",
   "sources",
   "sync",
   "progress",
@@ -77,10 +76,7 @@ const COMMANDS = [
   "models",
   "memories",
   "profile",
-  // C6 App BLOCK (25f4ecf): UI write operations that had no CLI equivalent.
-  "calls",
-  "notes",
-  "graph",
+  "graph-width",
   "host",
   "recall",
   "service-plan",
@@ -93,17 +89,18 @@ const COMMANDS = [
   "onboarding",
   "help",
   "version",
-  // A6 product commands. Appended, not inserted: the catalog is a stable
-  // contract, so existing names must not shift position.
-  "path",
+  "scan-roots",
   "adapter",
   "scan",
   "write",
-  "task",
   "backup",
-  // `ui` is declared but blocked on a Core session contract; it is listed so
-  // `help` documents it and the blocked shape is machine-readable.
   "ui",
+] as const;
+
+/** Old names that still run and still answer `--help`, but are not listed. */
+const HIDDEN_ALIASES = [
+  ["path", "scan-roots"],
+  ["task", "write"],
 ] as const;
 
 describe("CLI-22 shared output contract", () => {
@@ -145,6 +142,56 @@ describe("CLI-22 shared output contract", () => {
         expect(viaFlag.stderr()).toBe("");
       },
     );
+
+    it.each(HIDDEN_ALIASES)(
+      "documents the hidden alias %s as %s and keeps it out of the listing",
+      async (alias, target) => {
+        const streams = captureStreams();
+        try {
+          expect(await run(["help", alias], {})).toBe(0);
+          expect(await run([alias, "--help"], {})).toBe(0);
+        } finally {
+          streams.restore();
+        }
+        expect(streams.stdout()).toContain(`${PRODUCT} ${target}`);
+        const listing = captureStreams();
+        try {
+          expect(await run(["help", "--json"], {})).toBe(0);
+        } finally {
+          listing.restore();
+        }
+        const names = JSON.parse(listing.stdout()).commands.map(
+          (entry: { name: string }) => entry.name,
+        );
+        expect(names).not.toContain(alias);
+      },
+    );
+
+    it("lists no removed command", async () => {
+      const streams = captureStreams();
+      try {
+        expect(await run(["help", "--json"], {})).toBe(0);
+      } finally {
+        streams.restore();
+      }
+      const catalog = streams.stdout();
+      for (const removed of [
+        '"name":"setup"',
+        '"name":"notes"',
+        '"name":"calls"',
+        '"name":"graph"',
+        "--plan-file",
+        "probe-plan",
+        "probe-receipt",
+        "models configure",
+        "sources import",
+        "--full-rescan",
+        "--dry-run",
+        "--full]",
+      ]) {
+        expect(catalog).not.toContain(removed);
+      }
+    });
 
     it("never executes the documented command", async () => {
       for (const command of COMMANDS) {
@@ -201,27 +248,63 @@ describe("CLI-22 shared output contract", () => {
       expect(payload.commands).toBeUndefined();
     });
 
-    it("documents the destructive restore confirmation explicitly", async () => {
+    it("documents the one --yes convention for destructive commands", async () => {
+      const general = captureStreams();
+      try {
+        expect(await run(["help"], {})).toBe(0);
+      } finally {
+        general.restore();
+      }
+      expect(general.stdout()).toContain("确认约定");
+      for (const [command, usage] of [
+        [
+          "backup",
+          "memhub backup restore --source <path> [--yes --confirm <path>]",
+        ],
+        ["memories", "memhub memories delete <memory-id>"],
+        ["models", "memhub models remove <profile-id> [--yes]"],
+        [
+          "delete-data",
+          "memhub delete-data [--data-dir <path>] [--yes --confirm <path>]",
+        ],
+        ["graph-width", "[--yes]"],
+      ] as const) {
+        const streams = captureStreams();
+        try {
+          expect(await run(["help", command], {})).toBe(0);
+        } finally {
+          streams.restore();
+        }
+        expect(streams.stdout()).toContain(usage);
+        // Only the two commands with no way back repeat the target path.
+        if (command !== "backup" && command !== "delete-data") {
+          expect(streams.stdout()).not.toContain("--confirm <path>");
+        }
+      }
+    });
+
+    it("says backup does not include the memories themselves", async () => {
       const streams = captureStreams();
       try {
         expect(await run(["help", "backup"], {})).toBe(0);
       } finally {
         streams.restore();
       }
-      expect(streams.stdout()).toContain(
-        "memhub backup restore --source <path> --yes --confirm <path>",
-      );
-      expect(streams.stdout()).toContain("逐字重复 --source");
+      expect(streams.stdout()).toContain("不包含记忆本身");
     });
 
-    it("does not attach restore's confirmation flag to path", async () => {
-      const streams = captureStreams();
-      try {
-        expect(await run(["help", "path"], {})).toBe(0);
-      } finally {
-        streams.restore();
+    it("does not promise a rollback after the migration started", async () => {
+      for (const command of ["install", "upgrade"]) {
+        const streams = captureStreams();
+        try {
+          expect(await run(["help", command], {})).toBe(0);
+        } finally {
+          streams.restore();
+        }
+        expect(streams.stdout()).toContain("迁移开始后失败保留新版本");
+        expect(streams.stdout()).not.toContain("失败时恢复旧版本");
+        expect(streams.stdout()).not.toContain("失败时回滚");
       }
-      expect(streams.stdout()).not.toContain("--confirm <path>");
     });
   });
 
@@ -545,22 +628,23 @@ describe("documented commands", () => {
     models: [
       "list",
       "show",
-      "plan",
-      "configure",
+      "add",
+      "test",
       "receipt",
-      "probe-plan",
-      "probe",
-      "probe-receipt",
+      "edit",
+      "activate",
       "remove",
     ],
     // Source processing is one Freeze/Thaw switch under `sync`; the obsolete
     // independent read/write `sources access` command must not return here.
-    sources: ["list", "import", "receipt"],
+    sources: ["list", "connect", "receipt"],
     jobs: ["list", "show", "start", "<pause|resume|cancel>"],
     // `sync <pause|resume>` is documented as one alternation, so it is
     // checked as an entry rather than as two literal subcommands.
     sync: ["status", "<pause|resume>"],
-    memories: ["list", "show", "update", "delete"],
+    memories: ["list", "show", "add", "add-status", "update", "delete"],
+    "scan-roots": ["list", "add", "remove"],
+    write: ["submit", "status"],
     host: ["list", "status", "install", "uninstall", "sync"],
   };
 

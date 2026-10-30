@@ -18,43 +18,24 @@ afterEach(() => {
   contextThroughBroker.mockReset();
 });
 
-const lane = {
-  status: "empty",
-  reason: null,
-  elapsed_ms: 0,
-  returned_count: 0,
-  truncated: false,
-  truncated_by: [],
-};
-
 const empty = {
-  schema_version: 1,
+  schema_version: 2 as const,
   request_id: "fixture-request",
   state: "empty" as const,
-  paths: { raw: lane, memory: lane },
   items: [] as const,
   used_characters: 0,
   truncated: false,
   total_ms: 1,
-  adoption: "unknown" as const,
 };
 
 const raw = {
   kind: "raw" as const,
-  source_id: "codex",
-  conversation_id: "fixture-conversation",
-  anchor_evidence_id: "e1",
-  messages: [
-    {
-      evidence_id: "e1",
-      revision: 1,
-      role: "user" as const,
-      written_by: "person",
-      created_at: null,
-      text: "original",
-      truncated: false,
-    },
-  ],
+  raw_id: "e1",
+  content: "original",
+  source: "codex",
+  session_id: "fixture-conversation",
+  memory_at: null,
+  score: 0.5,
   truncated: false,
 };
 
@@ -99,10 +80,6 @@ describe("om_context CLI receipts", () => {
     contextThroughBroker.mockResolvedValue({
       ...empty,
       state: "grounded",
-      paths: {
-        raw: { ...lane, status: "ok", returned_count: 1 },
-        memory: lane,
-      },
       items: [raw],
       used_characters: 8,
     });
@@ -113,7 +90,7 @@ describe("om_context CLI receipts", () => {
     expect(result.stdout).toContain("成功使用 MemHub 回忆到相关记忆。");
     expect(result.stdout).not.toContain("获取部分相关记忆");
     expect(result.stdout).toContain("e1");
-    expect(result.stdout).toContain("adoption: unknown");
+    expect(result.stdout).not.toContain("adoption");
   });
 
   it("keeps an ordinary empty distinct from success, partial, and outage", async () => {
@@ -133,16 +110,6 @@ describe("om_context CLI receipts", () => {
     contextThroughBroker.mockResolvedValue({
       ...empty,
       state: "partial",
-      paths: {
-        raw: {
-          ...lane,
-          status: "ok",
-          returned_count: 1,
-          truncated: true,
-          truncated_by: ["character_budget"],
-        },
-        memory: lane,
-      },
       items: [raw],
       truncated: true,
       used_characters: 8,
@@ -157,41 +124,11 @@ describe("om_context CLI receipts", () => {
     expect(result.stdout).toContain("e1");
   });
 
-  it("explains a semantic timeout", async () => {
-    contextThroughBroker.mockResolvedValue({
-      ...empty,
-      state: "partial",
-      paths: {
-        raw: { ...lane, status: "ok", returned_count: 1 },
-        memory: {
-          ...lane,
-          status: "degraded",
-          reason: "timeout_budget",
-        },
-      },
-      items: [raw],
-    });
-
-    const result = await runContextCli(["original"], env);
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain(
-      "记忆语义查询这次超时，已先返回当前能查到的内容；稍后会自动恢复。",
-    );
-  });
-
   it("does not call a zero-hit partial empty or successful", async () => {
     contextThroughBroker.mockResolvedValue({
       ...empty,
       state: "partial",
-      paths: {
-        raw: { ...lane, status: "degraded", reason: "timeout_budget" },
-        memory: {
-          ...lane,
-          status: "not_authorized",
-          reason: "permission_required",
-        },
-      },
+      truncated: true,
     });
 
     const result = await runContextCli(["original"], env);

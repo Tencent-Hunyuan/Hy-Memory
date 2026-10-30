@@ -4,10 +4,61 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+## MemHub 1.0.5 — 2026-10-28
+
+Build 36, on `hy-memory==2.0.8`. Linux x64/arm64 Runtime and macOS arm64
+App and Runtime. Upgrading from 1.0.4 migrates the existing library to SDK
+authority on first launch.
+
+- MemHub turns off the HY pipeline log and trace at every diagnostic level
+  (hy-memory 2.0.8 `MEMORY_PIPELINE_LOG_ENABLED=false`,
+  `MEMORY_PIPELINE_TRACE_ENABLED=false`), so the per-step JSONL files under
+  `hy-memory/governed-v2/logs/` and the `pipeline_logs` rows stop growing.
+  The Debug panel no longer shows the HY pipeline section. Existing files are
+  left in place.
+- HY SDK text logs are written once, to `hy_memory.log`. They are no longer
+  copied to `service.log` and `service-error.log` through the SDK's
+  stdout/stderr streams. SDK warnings and errors also go to `core.log`, so the
+  Debug panel still shows them. A live switch of the diagnostic level now also
+  changes the level of `hy_memory.log`.
+
+- MemHub shows when working and coding experiences were talked about. After
+  the SDK upgrade every one of them read "时间未知" (time unknown) because the
+  SDK never stored their conversation time; hy-memory 2.0.7 stores it and
+  Core now passes it through the memory list, detail, search and home
+  summary. An experience stored before 2.0.7 shows its write time, labelled
+  "写入于" / "写入时间", instead of "时间未知". Metadata repair also writes
+  the conversation time it recovers from the migration bundle into the SDK's
+  coding/working stores when they already have the column.
+- The SDK migration no longer fails its first run on a home with legacy
+  vectors: reattaching them left a Chroma instance open with its own settings,
+  and the readback that followed could not open the same store
+  ("An instance of Chroma already exists ... with different settings").
+- MemHub "添加记忆" (add a memory) no longer waits behind unprocessed history.
+  Notes are claimed ahead of the event-time window that keeps history strictly
+  old to new; they still run one at a time and in order within their session.
+- The SDK memory page now reads its list, count, source and time labels and
+  graph from one page response for one source filter, so rows, totals and the
+  map no longer disagree. Memories with no recorded source are shown and
+  filterable as "unidentified source"; library search keeps only memories
+  that contain the words within the SDK's relevance window.
+- Metadata repair v2 follows `governed_memory_evidence` across every
+  pre-cutover bundle, which restores the source of memories the cutover
+  backfilled without one, and moves impossible future conversation times back
+  to the write time.
 - Reused the existing three-column memory map for SDK-authority list/detail
   views and removed the retired "original evidence" surface. SDK-native status,
   source, conversation time and creation time now render without fabricated
   revisions; source and text filters are applied by the paged Core endpoint.
+- SDK memory search now calls the SDK search contract instead of listing the
+  entire library in Core. Corrupt empty records are skipped and diagnosed
+  without mutating data or failing a page, and post-cutover metadata repair
+  restores source and original times from the verified migration bundle.
+- Kept Cursor's WAL change token separate from the file mtime so a hash can no
+  longer appear as a conversation date centuries in the future.
+- A trusted packaged Runtime now repairs a dirty same-build installation by
+  staging a clean replacement, and `runtime_service_not_ready` is rendered as
+  user-facing startup guidance instead of an internal code.
 - Fixed legacy-to-SDK startup migration to adopt native Coding Experience and
   Working Fact IDs instead of importing them as Chat layers. Raw migration now
   rebuilds bounded user/assistant turns from the latest three days, excludes
@@ -42,6 +93,98 @@ Hy Memory and MemHub are versioned and released independently.
   parked pre-invocation work, and drop only the obsolete
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
+
+## Hy Memory 2.0.8 — 2026-10-28
+
+- Published
+  [`hy-memory==2.0.8`](https://pypi.org/project/hy-memory/2.0.8/).
+- New `MEMORY_PIPELINE_LOG_ENABLED` (default `true`) turns the pipeline JSONL
+  log (`{MEMORY_LOG_DIR}/<subdir>/<date>.log`) off. With `false` no JSONL
+  file or directory is written. When `MEMORY_PIPELINE_TRACE_ENABLED` is also
+  `false`, `store_pipeline_log` becomes a no-op that returns `True` at once:
+  no timing, redaction, background task or database write. The init log line
+  now states whether the JSONL log is on or off.
+- Conversation and memory text no longer appears in INFO or WARNING logs. The
+  `[add]` input, search queries and rewrites, coding experience tasks, fact
+  statements and subjects, reconcile op details, extracted info, embedding
+  inputs and unparsable model output moved to DEBUG. INFO lines keep ids,
+  counts and character lengths; parse-failure warnings remain but report only
+  the length of the output, e.g. `failed to parse output (812 chars)`. The
+  `[embed]` INFO line now carries `request.input_chars` instead of
+  `request.input`. The `JSON_PARSE_FAILED` error message from extraction no
+  longer embeds the model output either.
+
+## Hy Memory 2.0.7 — 2026-10-28
+
+- Published
+  [`hy-memory==2.0.7`](https://pypi.org/project/hy-memory/2.0.7/).
+- Coding and working experiences and facts now keep their conversation time.
+  `add(..., memory_at=...)` reached only the chat path before; the
+  productivity path dropped it, so every experience had only its write time
+  and MemHub showed them as "时间未知" (time unknown). `coding_memory_meta`
+  and `working_fact` gain a nullable `memory_at` column (epoch seconds) in
+  both the working and coding stores; existing databases get it on open, and
+  their old rows stay `None`. Without `memory_at` a write uses the time the
+  request arrived, as chat does. When an experience is updated by a later
+  conversation it keeps the later of the two times.
+- `list_memories` (`scene="coding"`, `"working"` and `"all"`), `get` and
+  `search` return `memory_at` for experiences and facts in the same field and
+  format as chat (epoch seconds, `None` when unknown). Experience search
+  results now also carry `created_at`.
+
+## Hy Memory 2.0.6 — 2026-10-27
+
+- Published
+  [`hy-memory==2.0.6`](https://pypi.org/project/hy-memory/2.0.6/).
+- `search(..., rerank=False)` skips every reranking stage for that one
+  call (the local cross-encoder, the memory-graph rerank, and the BM25 rerank of
+  working/coding facts), so results come back in retrieval-score order. The
+  flag travels on the read request, so concurrent searches do not affect each
+  other. The default (`True`) keeps current behavior; `/api/v1/search` accepts
+  it too.
+- MMR diversity selection now runs only when the requested `limit` is
+  below 20 (`MMR_MAX_TOP_K`) and is skipped for larger limits, where its
+  quadratic token-overlap pass is slow and gains little. Previously it ran for
+  every limit. `MEMORY_HYBRID_V2_MMR_LAMBDA` still sets the weight.
+  Near-duplicate demotion follows the same gate: it compares each candidate
+  with every earlier non-duplicate, which is quadratic in a pool that grows
+  with `limit`, and large result pages should show similar items anyway.
+- `search(scene="all")` searches chat, working and coding at the same time
+  and merges them with Reciprocal Rank Fusion (k=60) over each scene's own
+  ranking, so no scene is crowded out by the other scenes' score scales. Each
+  result says which scene and kind it came from. A scene that fails or is turned
+  off is reported in `errors` and does not fail the search. Source filters apply
+  to all three.
+- `list_memories(scene="all")` lists chat, working and coding memories
+  together, newest update first, with `limit`/`offset` paging over the merged
+  order and `total` summing all three. `scene="coding"` and `"working"` now
+  honor `include_sources` / `exclude_sources`, and `total` counts only the
+  filtered memories.
+- `update()` and `delete()` now work on working/coding experiences and
+  facts, not just chat memories. They take the same optional `kind` / `variant`
+  as `get()`, and an ID found in more than one place raises
+  `AmbiguousMemoryIdError` instead of guessing. Updating an experience replaces
+  its solution and keeps its task, unless a new `task=` is also passed; updating
+  a fact replaces its statement. Deleting removes the stored row and its vectors.
+- `list_memories(scene="chat" | "coding" | "working")` lists one kind of
+  memory. `coding` and `working` list that scene's whole store, newest update
+  first (`workspace_id` still narrows it), and `total` is now the real count
+  rather than the page size. The new `memory_stats()` returns the count and the
+  latest created/updated time for each scene and their total, without reading
+  any memory text. Previously coding and working memories could not be listed
+  or counted without a workspace, so a library of 45 memories listed 22.
+- Reconcile keeps time order. Both reconcile prompts now state that only
+  `memory_at` decides which memory is newer, that an older memory must never
+  supersede or overwrite a newer one, and that an unknown time is not newer;
+  the Chinese prompt now lists `memory_at` among the new-memory fields. The
+  reconciler also enforces this in code: a SUPERSEDE or UPDATE aimed at a memory
+  with a later `memory_at` becomes an ADD, so the newer memory stays current.
+- The HTTP server returns 409 `ambiguous_memory_id` and 400 for a bad
+  `kind`/`variant` instead of 500, passes `kind`/`variant` (and `task` on PUT)
+  to get/update/delete, and no longer reads a PUT/DELETE query string as part
+  of the memory id.
+- `memory_stats()` reads working/coding times, which are stored as naive UTC,
+  as UTC rather than local time.
 
 ## Hy Memory 2.0.5 — 2026-10-22
 

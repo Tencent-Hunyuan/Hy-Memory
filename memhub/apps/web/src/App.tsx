@@ -1,7 +1,6 @@
 import type { HealthResponse, OnboardingState } from "@one-memory/contracts";
 import {
   ArrowLeft,
-  BookOpen,
   Layers3,
   Network,
   PanelsTopLeft,
@@ -26,11 +25,9 @@ import { useApplicationsLanguage } from "./applications-language";
 import { CallHistory } from "./CallHistory";
 import { DebugLogPanel } from "./DebugLogPanel";
 import { DesktopFrame } from "./DesktopFrame";
-import { FirstUseGuide } from "./FirstUseGuide";
 import { useGuiLanguage } from "./gui-language";
 import { HealthPanel } from "./HealthPanel";
 import { ImportProgressStrip } from "./ImportProgressStrip";
-import { MatterWorkspace } from "./MatterWorkspace";
 import { MemorySpace } from "./MemorySpace";
 import type { MemoryArrival } from "./memory-arrival-state";
 import { OnboardingFlow } from "./OnboardingFlow";
@@ -39,20 +36,12 @@ import { R6Settings } from "./R6Settings";
 import { prefetchDataRuntime } from "./runtime-state";
 import "./styles.css";
 import "./core-visual.css";
-import "./first-use.css";
 import "./r6-shell.css";
 import "./r6-memory.css";
 import "./selected-memory.css";
 import { useImportSources } from "./use-import-sources";
 
-type View =
-  | "matters"
-  | "memory"
-  | "sources"
-  | "health"
-  | "settings"
-  | "guide"
-  | "calls";
+type View = "memory" | "sources" | "health" | "settings" | "calls";
 export const PRIMARY_VIEWS = ["sources", "memory"] as const;
 const rendererStartedAt = Date.now();
 
@@ -80,7 +69,6 @@ function AppContent() {
     MemoryArrival | undefined
   >();
   const [focusMemoryId, setFocusMemoryId] = useState<string | null>(null);
-  const [focusDialogue, setFocusDialogue] = useState(false);
   const imports = useImportSources({
     automaticSync:
       onboarding?.status === "completed" &&
@@ -276,14 +264,6 @@ function AppContent() {
           <span>MemHub</span>
         </div>
         <div className="rail-primary">
-          {import.meta.env.VITE_ENABLE_MATTERS === "true" && (
-            <RailButton
-              active={displayedView === "matters"}
-              label="事项"
-              icon={<BookOpen size={18} />}
-              onClick={() => navigate("matters")}
-            />
-          )}
           {PRIMARY_VIEWS.map((destination) => (
             <RailButton
               key={destination}
@@ -332,27 +312,22 @@ function AppContent() {
         {/* First run hands the user in here while the import is still going.
          * Without this the work would be invisible from every screen except
          * the one they were no longer required to sit on. */}
-        {displayedView !== "matters" &&
-          displayedView !== "memory" &&
-          displayedView !== "sources" && (
-            <ImportProgressStrip
-              userFacing
-              jobs={imports.jobs}
-              sources={imports.sources}
-              backfilling={imports.health?.memory_backfill === "running"}
-              onOpenSources={() => navigate("sources")}
-              sourceSnapshot={imports.sourceSnapshot}
-              onRefresh={imports.refresh}
-              arrival={memoryArrival}
-              onConfigureModel={() => navigate("settings")}
-              onJobAction={imports.changeJob}
-              showSourceLink={displayedView !== "settings"}
-              showProgressDetails={displayedView !== "settings"}
-            />
-          )}
-        {displayedView === "matters" ? (
-          <MatterWorkspace onOpenSources={() => navigate("sources")} />
-        ) : null}
+        {displayedView !== "memory" && displayedView !== "sources" && (
+          <ImportProgressStrip
+            userFacing
+            jobs={imports.jobs}
+            sources={imports.sources}
+            backfilling={imports.health?.memory_backfill === "running"}
+            onOpenSources={() => navigate("sources")}
+            sourceSnapshot={imports.sourceSnapshot}
+            onRefresh={imports.refresh}
+            arrival={memoryArrival}
+            onConfigureModel={() => navigate("settings")}
+            onJobAction={imports.changeJob}
+            showSourceLink={displayedView !== "settings"}
+            showProgressDetails={displayedView !== "settings"}
+          />
+        )}
         {(visited.has("memory") || displayedView === "memory") && (
           <div
             className="memory-workspace-host"
@@ -367,8 +342,6 @@ function AppContent() {
               sourceSnapshotStale={imports.sourceSnapshot?.stale === true}
               focusMemoryId={focusMemoryId}
               onFocusMemoryConsumed={() => setFocusMemoryId(null)}
-              focusDialogue={focusDialogue}
-              onFocusDialogueConsumed={() => setFocusDialogue(false)}
               onConnect={() => navigate("sources")}
               onConfigureModel={() => navigate("settings")}
               onArrivalChange={setMemoryArrival}
@@ -401,13 +374,7 @@ function AppContent() {
                     if (sourceId) setDetailSourceId(sourceId);
                   }}
                   onMemories={(memoryId) => {
-                    setFocusDialogue(false);
                     if (memoryId) setFocusMemoryId(memoryId);
-                    navigate("memory");
-                  }}
-                  onConversations={() => {
-                    setFocusMemoryId(null);
-                    setFocusDialogue(true);
                     navigate("memory");
                   }}
                   onCalls={() => navigate("calls")}
@@ -423,13 +390,6 @@ function AppContent() {
               setFocusMemoryId(id);
               navigate("memory");
             }}
-          />
-        ) : null}
-        {displayedView === "guide" ? (
-          <FirstUseGuide
-            sources={imports.sources}
-            onSources={() => navigate("sources")}
-            onClose={() => navigate("memory")}
           />
         ) : null}
         {displayedView === "health" ? (
@@ -464,14 +424,9 @@ function AppContent() {
   );
 }
 
-export function viewFromUrl(
-  search: string,
-  mattersEnabled = import.meta.env.VITE_ENABLE_MATTERS === "true",
-): View {
+export function viewFromUrl(search: string): View {
   const value = new URLSearchParams(search).get("view");
-  if (value === "matters" && mattersEnabled) return "matters";
   return value === "sources" ||
-    value === "guide" ||
     value === "health" ||
     value === "settings" ||
     // D96: the call-history page has no way in for now; a stale link lands home.

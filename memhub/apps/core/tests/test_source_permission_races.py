@@ -295,6 +295,8 @@ def test_startup_reconciles_enabled_source_from_config(tmp_path, monkeypatch):
             secret_store=InMemorySecretStore(),
         )
         async with restored.router.lifespan_context(restored):
+            # The reconcile runs after readiness, in recovery.
+            await restored.state.recovery_task
             history = [
                 job
                 for job in restored.state.import_job_store.list_jobs()

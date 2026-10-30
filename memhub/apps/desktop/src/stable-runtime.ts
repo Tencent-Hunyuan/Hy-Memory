@@ -141,12 +141,19 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "sdk_migration_response_invalid",
   "sdk_migration_status_unavailable",
   "sdk_migration_incomplete",
+  "runtime_service_not_ready",
 ]);
+
+/** Every migration code is a stable token Core or the orchestrator chose;
+ * keeping it (instead of collapsing to `desktop_start_failed`) is what lets a
+ * report be matched to the line in `sdk-migration.log`. */
+const MIGRATION_CODE = /^sdk_(?:migration|data_plane)_[a-z0-9_]{1,80}$/;
 
 export function stableRuntimeErrorCode(error: unknown): string {
   if (
     error instanceof Error &&
-    SAFE_STABLE_RUNTIME_ERROR_CODES.has(error.message)
+    (SAFE_STABLE_RUNTIME_ERROR_CODES.has(error.message) ||
+      MIGRATION_CODE.test(error.message))
   ) {
     return error.message;
   }
@@ -230,6 +237,8 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "升级过程返回了无法识别的内容，已停止。原有记忆数据不会丢失；请重新启动重试，如果仍然失败，请把这个提示反馈给我们。",
   sdk_migration_incomplete:
     "记忆数据格式升级没有完成，MemHub 暂时无法打开。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
+  runtime_service_not_ready:
+    "记忆服务仍在首次启动，请稍候后重试。你的记忆数据不会受到影响。",
   desktop_start_failed:
     "MemHub 启动失败。请重新启动；如果仍然打不开，请重新安装，你的记忆数据不会受到影响。",
 };

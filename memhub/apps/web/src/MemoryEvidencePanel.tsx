@@ -15,11 +15,14 @@ export function MemoryEvidencePanel({
   onClose,
   children,
   suspended = false,
+  scrollResetKey,
 }: {
   open: boolean;
   onClose(): void;
   children: ReactNode;
   suspended?: boolean;
+  /** A different detail starts at the top instead of inheriting old scroll. */
+  scrollResetKey?: string | null;
 }) {
   const { text } = useMemoryLanguage();
   const compact = useMediaPreference("(max-width: 1100px)");
@@ -37,8 +40,20 @@ export function MemoryEvidencePanel({
     reduceMotion,
     reduceTransparency,
   });
+  const priorScrollOwner = useRef({ key: scrollResetKey, suspended });
   const present = !compact || open || phase !== "closed";
   const modal = compact && present && !suspended;
+
+  useLayoutEffect(() => {
+    const previous = priorScrollOwner.current;
+    priorScrollOwner.current = { key: scrollResetKey, suspended };
+    if (
+      !suspended &&
+      (previous.key !== scrollResetKey || previous.suspended) &&
+      panel.current
+    )
+      panel.current.scrollTop = 0;
+  }, [scrollResetKey, suspended]);
 
   useLayoutEffect(() => {
     const element = panel.current;

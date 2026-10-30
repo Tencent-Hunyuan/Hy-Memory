@@ -963,7 +963,7 @@ class _SdkPublicClient:
     def add_extracted(self, contents, **kwargs):
         self.events.append("add_extracted")
         self.calls.append(("add_extracted", contents, kwargs))
-        return {"success": True, "memory_ids": ["memory-note"]}
+        return {"success": True, "memory_ids": ["memory-added"]}
 
     def get_write_outcome(self, request_id):
         self.calls.append(("get_write_outcome", request_id, {}))
@@ -988,7 +988,7 @@ def _sdk_evidence(
     text: str = "hello",
     memory_content: bool = False,
     source: str = "cursor",
-    manual_note: bool = False,
+    manual_addition: bool = False,
     created_at: datetime | None = None,
 ):
     from one_memory.imports.models import (
@@ -1002,7 +1002,7 @@ def _sdk_evidence(
 
     origin = (
         OriginMetadata(raw_meta={"input_mode": "direct_memory_note"})
-        if manual_note
+        if manual_addition
         else OriginMetadata()
     )
     return materialize_write_input(
@@ -1089,14 +1089,14 @@ def test_sdk_write_processor_calls_add_once_with_public_scope_and_receipt() -> N
     (
         _sdk_evidence("memory", text="remember this", memory_content=True),
         _sdk_evidence(
-            "note",
-            text="save this note",
+            "addition",
+            text="save this memory",
             source="one-memory-manual",
-            manual_note=True,
+            manual_addition=True,
         ),
     ),
 )
-def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_notes(record) -> None:
+def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_additions(record) -> None:
     from one_memory.sdk_write_processor import SdkWriteProcessor, SdkWriteReceipt
 
     client = _SdkPublicClient()
@@ -1112,10 +1112,240 @@ def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_notes(rec
             before_hy_invocation=before,
         )
 
-    assert asyncio.run(run()) == SdkWriteReceipt(memory_ids=("memory-note",))
+    assert asyncio.run(run()) == SdkWriteReceipt(memory_ids=("memory-added",))
     assert client.events == ["before", "add_extracted"]
     assert client.calls[0][1] == [record.verbatim]
     assert len(client.calls) == 1
+
+
+def test_a_batch_with_no_user_or_assistant_message_is_nothing_to_remember(tmp_path) -> None:
+    """Tool-only input came back 400 "content or messages is required" (16 unknown).
+
+    The SDK strips tool records on the chat path. Such a batch completes with
+    no memories; the SDK is never called and nothing is recorded unknown.
+    """
+    from one_memory.imports.models import WrittenBy
+    from one_memory.sdk_write_processor import SdkWriteProcessor
+
+    client = _SdkPublicClient()
+    processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
+    tools = tuple(
+        _sdk_evidence(f"tool-{index}", text="3 passed").model_copy(
+            update={"role": "tool", "written_by": WrittenBy.TOOL}
+        )
+        for index in range(2)
+    )
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(
+        WriteRequest(
+            internal_session_id="sess-tools",
+            source_id="cursor",
+            batch_identity=BatchIdentity(
+                internal_session_id="sess-tools", first_round=1, last_round=1
+            ),
+            evidence_ids=[item.evidence_id for item in tools],
+            input_records=tools,
+            idempotency_key="tools-only",
+        )
+    )
+    _claim_through_drain(queue, record.job_id)
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=processor,
+            evidence=_EvidenceStore(set()),
+        )
+    )
+
+    assert client.calls == []
+    assert client.events == []
+    [row] = _rows(path)
+    assert (row["state"], row["hy_invoked"], row["sdk_memory_ids_json"]) == (COMPLETED, 0, "[]")
+
+
+def test_the_drain_tick_writes_a_quiet_live_conversation(tmp_path, monkeypatch) -> None:
+    """The 10-minute idle flush runs on the drain's maintenance timer."""
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    flushed: list[str] = []
+    monkeypatch.setattr(queue, "flush_idle_assemblies", lambda: flushed.append("flush") or ())
+    drain = DurableWriteDrain(queue, execute=_never_execute, reap_interval=timedelta(0))
+
+    async def tick() -> None:
+        task = asyncio.create_task(drain.run_forever())
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if flushed:
+                break
+        drain.stop()
+        await task
+
+    asyncio.run(tick())
+    assert flushed
+
+
+class _SwitchableProfiles:
+    """Active profile identity that a test can change mid-write."""
+
+    def __init__(self) -> None:
+        self.identity = ("profile-a", 1)
+
+    def active_identity(self):
+        return self.identity
+
+    def snapshot(self, profile_id, revision):
+        return type(
+            "Snapshot", (), {"profile_id": profile_id, "revision": revision, "has_api_key": False}
+        )()
+
+    def resolve_snapshot_secret(self, *_args):
+        return None
+
+
+class _TrackedHandle:
+    def __init__(self, profile, **_kwargs) -> None:
+        self.profile_id = profile.profile_id
+        self.closed = False
+
+    async def client(self):
+        return self
+
+    async def close(self):
+        self.closed = True
+
+
+def _coordinator(monkeypatch, opened: list[_TrackedHandle]):
+    from one_memory import sdk_write_processor
+
+    def handle(profile, **kwargs):
+        value = _TrackedHandle(profile, **kwargs)
+        opened.append(value)
+        return value
+
+    monkeypatch.setattr(sdk_write_processor, "SdkClientHandle", handle)
+    profiles = _SwitchableProfiles()
+    coordinator = sdk_write_processor.SdkWriteCoordinator(
+        profiles=profiles,  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=None,
+        transport_factory=lambda _profile: None,
+        sedimentation_enabled=lambda: True,
+    )
+    return coordinator, profiles
+
+
+def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeypatch) -> None:
+    """Build 35 lost a clean install's first write as unknown (AttributeError).
+
+    Saving a model profile changed the active identity while the write ran on
+    the old profile's client. The next coordinator call closed that client at
+    once: the SDK cleared its stores and the SharedRuntime closed mid-`add`.
+    """
+    from one_memory import sdk_write_processor
+
+    opened: list[_TrackedHandle] = []
+    coordinator, profiles = _coordinator(monkeypatch, opened)
+    seen: list[tuple[str, bool]] = []
+    writing = asyncio.Event()
+
+    async def process(self, records, *, request_id, before_hy_invocation):
+        client = await self._client_handle.client()
+        await before_hy_invocation()
+        seen.append((client.profile_id, client.closed))
+        if client.profile_id == "profile-a":
+            await writing.wait()
+        # Still open while its own write runs.
+        seen.append((client.profile_id, client.closed))
+        return sdk_write_processor.SdkWriteReceipt()
+
+    monkeypatch.setattr(sdk_write_processor.SdkWriteProcessor, "process_sdk_job", process)
+
+    async def noop():
+        return None
+
+    async def scenario():
+        first = asyncio.create_task(
+            coordinator.process_sdk_job((), request_id="a", before_hy_invocation=noop)
+        )
+        while not seen:
+            await asyncio.sleep(0)
+        profiles.identity = ("profile-b", 2)
+        # A second job and an inquiry under the new profile.
+        await coordinator.process_sdk_job((), request_id="b", before_hy_invocation=noop)
+        assert [handle.closed for handle in opened] == [False, False]
+        writing.set()
+        await first
+        old, new = opened
+        # Retired after its last use, and new work used the new profile.
+        assert old.closed is True and new.closed is False
+        await coordinator.close()
+        assert new.closed is True
+
+    asyncio.run(scenario())
+    assert seen == [
+        ("profile-a", False),
+        ("profile-b", False),
+        ("profile-b", False),
+        ("profile-a", False),
+    ]
+
+
+def test_an_unused_stale_handle_still_closes_at_once(monkeypatch) -> None:
+    opened: list[_TrackedHandle] = []
+    coordinator, profiles = _coordinator(monkeypatch, opened)
+
+    async def scenario():
+        async with coordinator.use_client() as client:
+            assert client.profile_id == "profile-a"
+        assert opened[0].closed is False
+        profiles.identity = ("profile-b", 2)
+        async with coordinator.use_client() as client:
+            assert client.profile_id == "profile-b"
+            assert opened[0].closed is True
+        assert opened[1].closed is False
+        await coordinator.close()
+        assert opened[1].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_a_client_that_fails_to_construct_parks_the_job_instead_of_unknown(tmp_path) -> None:
+    """Nothing was sent when the client could not be built, so it retries on its own."""
+    from one_memory.sdk_write_processor import SdkWriteProcessor
+
+    class _BrokenHandle:
+        async def client(self):
+            raise AttributeError("'RustBindingsAPI' object has no attribute 'bindings'")
+
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+
+    class _Supervisor:
+        async def process_sdk_job(self, _records, **kwargs):
+            return await SdkWriteProcessor(_BrokenHandle()).process_sdk_job(  # type: ignore[arg-type]
+                (_sdk_evidence("e1"),), **kwargs
+            )
+
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Supervisor(),
+            evidence=_EvidenceStore({"e1"}),
+        )
+    )
+
+    [row] = _rows(path)
+    assert (row["state"], row["hy_invoked"]) == (WAITING_FOR_MODEL, 0)
+    assert row["last_error"] == "hy_memory_client_unavailable"
+    later = datetime.now(UTC) + timedelta(minutes=5)
+    assert queue.readmit_model_waiters(now=later) == 1
+    assert _state(path, record.job_id) == PENDING
 
 
 def test_sdk_unknown_outcome_inquiry_uses_only_public_receipt() -> None:
@@ -1628,6 +1858,46 @@ def test_a_raw_provider_message_is_never_stored_as_the_error(tmp_path) -> None:
     assert "secret diary" not in stored
     assert "http" not in stored
     assert stored == "RuntimeError"
+
+
+def test_a_failed_job_logs_where_it_failed_but_never_the_message(tmp_path, caplog) -> None:
+    """`error_code=AttributeError` alone named no location; frames, never the message."""
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    _claim_through_drain(queue, record.job_id)
+
+    def closed_store(client):
+        return client.private_store_name.write
+
+    class _Failing:
+        async def process_sdk_job(self, _records, **kwargs):
+            await kwargs["before_hy_invocation"]()
+            try:
+                closed_store(type("Client", (), {"private_store_name": None})())
+            except AttributeError as error:
+                raise RuntimeError("quoting 'my secret diary'") from error
+
+    with caplog.at_level(logging.ERROR, logger="one_memory.memory_server.durable_queue"):
+        asyncio.run(
+            execute_job(
+                record.job_id,
+                queue=queue,
+                supervisor=_Failing(),
+                evidence=_EvidenceStore({"e1"}),
+            )
+        )
+
+    [line] = [
+        message.getMessage()
+        for message in caplog.records
+        if "durable_write_job_failed" in message.getMessage()
+    ]
+    assert f"job_id={record.job_id} error_code=RuntimeError chain=RuntimeError@" in line
+    assert ";AttributeError@" in line
+    assert "test_memory_server_durable_queue.py:" in line and ":closed_store" in line
+    assert "secret diary" not in line
+    assert "private_store_name" not in line
 
 
 def test_a_machine_error_code_is_preserved(tmp_path) -> None:
@@ -5330,3 +5600,70 @@ def test_equal_event_time_uses_queue_sequence_inside_one_session(tmp_path) -> No
         owner="equal-owner",
     )
     assert drain.claim(limit=10) == (second.job_id,)
+
+
+def test_a_hand_added_memory_is_claimed_ahead_of_unprocessed_history(tmp_path) -> None:
+    """A hand-added memory ("添加记忆") waited behind every unprocessed history job.
+
+    History is claimed through a ten-minute event-time window, oldest first. A
+    note is stamped "now", so with a backlog it sat at the far end of the
+    timeline and ran only after the whole history was digested.
+    """
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    old = datetime(2025, 1, 1, tzinfo=UTC)
+    history = [
+        queue.submit(
+            _request(
+                key=f"history-{index}",
+                evidence=(f"h{index}",),
+                source="cursor",
+                session=f"cursor-{index}",
+                event_at=old + timedelta(hours=index),
+            )
+        )
+        for index in range(3)
+    ]
+    note = queue.submit(
+        _request(
+            key="note",
+            evidence=("n1",),
+            source="one-memory-manual",
+            session="note:1",
+            event_at=datetime.now(UTC),
+        )
+    )
+    drain = DurableWriteDrain(queue, execute=_never_execute)
+
+    assert drain.claim(limit=1) == (note.job_id,)
+    # History keeps its own order through the window.
+    assert drain.claim(limit=1) == (history[0].job_id,)
+
+
+def test_hand_added_memories_still_run_one_at_a_time_in_order(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    now = datetime.now(UTC)
+    first = queue.submit(
+        _request(
+            key="note-1",
+            evidence=("n1",),
+            source="one-memory-manual",
+            session="note:1",
+            event_at=now,
+        )
+    )
+    second = queue.submit(
+        _request(
+            key="note-2",
+            evidence=("n2",),
+            source="one-memory-manual",
+            session="note:2",
+            event_at=now + timedelta(seconds=1),
+        )
+    )
+    drain = DurableWriteDrain(queue, execute=_never_execute)
+
+    assert drain.claim(limit=5) == (first.job_id,)
+    # Its source is busy: the next note waits for the running one, not for history.
+    assert drain.claim(limit=5) == ()
+    assert queue.get("note-2").state == PENDING
+    assert second.job_id

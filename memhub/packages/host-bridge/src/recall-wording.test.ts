@@ -1,8 +1,4 @@
-import type {
-  AskMemoryResponse,
-  ConversationSearchResponse,
-  RecallReceipt,
-} from "@one-memory/contracts";
+import type { RecallReceipt } from "@one-memory/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { recallForHost } from "./host-facing.js";
@@ -33,12 +29,7 @@ async function request(session: McpSession, method: string, params?: unknown) {
   );
 }
 
-const toolNames = [
-  "MemHub_recall",
-  "MemHub_ask",
-  "MemHub_conversations",
-  "MemHub_matters",
-] as const;
+const toolNames = ["MemHub_recall"] as const;
 
 const materials = [
   {
@@ -149,7 +140,7 @@ describe.each(materials)("S1.3 INT-04/05: $name", ({ render }) => {
 
 describe("generated Skill and fallback material", () => {
   it("versions both Skill channels and preserves their distinct invocation paths", () => {
-    expect(SKILL_VERSION).toBe(17);
+    expect(SKILL_VERSION).toBe(19);
     for (const channel of ["mcp", "cli"] as const) {
       const skill = renderSkillContent(channel, runtime);
       expect(skill).toContain(`skill-version=${SKILL_VERSION}`);
@@ -157,10 +148,16 @@ describe("generated Skill and fallback material", () => {
     }
     const mcp = renderSkillContent("mcp", runtime);
     expect(mcp).toContain("you must call `MemHub_recall` before answering");
-    expect(mcp).toContain("`MemHub_ask`");
-    expect(mcp).toContain("`MemHub_conversations`");
-    expect(mcp).toContain("`no_matches`");
-    expect(mcp).toContain("`nothing_imported`");
+    expect(mcp).toContain("`MemHub_write`");
+    expect(mcp).toContain("`MemHub_diagnostic_trace`");
+    for (const removed of [
+      "MemHub_ask",
+      "MemHub_conversations",
+      "MemHub_context",
+      "MemHub_memory_write",
+    ])
+      expect(mcp).not.toContain(removed);
+    expect(mcp).not.toContain("empty_reason");
 
     const cli = renderSkillContent("cli", runtime).replace(/\s+/g, " ");
     expect(cli).toContain("you must run it before answering");
@@ -180,26 +177,18 @@ describe("generated Skill and fallback material", () => {
       "For `MemHub_recall`, pass a concise query in the `query` property, not `question`",
     );
     expect(mcp).toContain(
-      "For `MemHub_ask`, pass the question in the `question` property, not `query`",
+      "Pass one concise conclusion in the `text` property, in plain words",
     );
-    expect(mcp).toContain(
-      "For `MemHub_conversations`, pass a short query in the `query` property",
-    );
+    expect(mcp).toContain("retry with the same `request_id`");
   });
 
-  it.each(["MemHub_ask", "MemHub_conversations"])(
-    "offers %s only when exposed and authorized, without removing it",
-    (tool) => {
-      const mcp = renderSkillContent("mcp", runtime).replace(/\s+/g, " ");
-      expect(mcp).toContain(
-        `use \`${tool}\` only if it is exposed by this host and authorized for the requested scope`,
-      );
-      expect(mcp).not.toContain("you usually need both");
-      expect(mcp).not.toContain(
-        "instead of synthesizing from `om_recall` hits yourself",
-      );
-    },
-  );
+  it("tells the model raw-mode recall hits are excerpts, not memories", () => {
+    const mcp = renderSkillContent("mcp", runtime).replace(/\s+/g, " ");
+    expect(mcp).toContain("If the result has `mode` `raw`");
+    expect(mcp).toContain(
+      "Treat those hits as raw conversation excerpts, not confirmed memories",
+    );
+  });
 
   it.each(["mcp", "cli"] as const)(
     "%s guidance preserves errors without retry or permission escalation",
@@ -216,31 +205,21 @@ describe("generated Skill and fallback material", () => {
     },
   );
 
-  it("allows successful authorized recall with an explicit raw/ask limitation", () => {
-    const text = renderSkillContent("mcp", runtime).replace(/\s+/g, " ");
-    expect(text).toContain(
-      "A denied raw-conversation request does not invalidate successful authorized recall",
-    );
-    expect(text).toContain(
-      "You may answer from successful authorized `MemHub_recall` results while stating the limitation",
-    );
-    expect(text).toContain(
-      "Do not claim to have read raw conversations or received an `MemHub_ask` answer when those calls were unavailable or denied",
-    );
-  });
-
-  it("keeps the copyable prompt's argument and permission guidance aligned", () => {
+  it("keeps the copyable prompt's three-tool guidance aligned", () => {
     const prompt = renderConnectionMaterial(runtime).prompt;
-    expect(prompt).toContain(
-      "MemHub_recall 使用 query 属性，MemHub_ask 使用 question 属性",
-    );
-    expect(prompt).toContain(
-      "MemHub_conversations 和 MemHub_ask 仅在宿主已暴露且当前范围已授权时使用",
-    );
-    expect(prompt).toContain("原文读取被拒不应触发重试、换工具绕行或扩大权限");
-    expect(prompt).toContain(
-      "可以使用已成功返回且获授权的召回记忆，并明确说明原文或问答不可用的限制",
-    );
+    expect(prompt).toContain("MemHub_recall 查询记忆（使用 query 属性）");
+    expect(prompt).toContain("MemHub_write 写入一条记忆（使用 text 属性");
+    expect(prompt).toContain("MemHub_diagnostic_trace");
+    expect(prompt).toContain("mode 为 raw 时");
+    expect(prompt).toContain("不是已确认的记忆");
+    expect(prompt).toContain("用同一个 request_id 重试");
+    expect(prompt).toContain("被拒后不重试、不换工具或传输方式绕行");
+    for (const removed of [
+      "MemHub_ask",
+      "MemHub_conversations",
+      "MemHub_context",
+    ])
+      expect(prompt).not.toContain(removed);
   });
 
   it.each([true, false])(
@@ -272,7 +251,6 @@ describe("generated Skill and fallback material", () => {
       expect(material.prompt).toContain("不能把写入配置当作连接成功");
       expect(material.prompt).toContain("已完成MemHub的记忆查询。");
       expect(material.prompt).toContain("成功使用 MemHub 回忆到相关记忆。");
-      expect(material.prompt).toContain("原文有结果就要用，即使记忆一路为空");
       expect(material.prompt).toContain(
         "已从 MemHub 获取部分相关记忆，以下将补充这些信息继续。",
       );
@@ -313,39 +291,24 @@ describe("generated Skill and fallback material", () => {
       version: "0.0.0",
     });
     const listed = await request(session, "tools/list");
-    const titles = [
-      "MemHub recall",
-      "MemHub ask",
-      "MemHub conversation",
-      "MemHub matters",
-    ];
     expect(
-      listed.result.tools
-        .filter(
-          (tool: { name: string }) =>
-            tool.name !== "MemHub_context" &&
-            tool.name !== "MemHub_memory_write" &&
-            tool.name !== "MemHub_memory_write_status" &&
-            tool.name !== "MemHub_diagnostic_trace",
-        )
-        .map((tool: { name: string; title: string; annotations: unknown }) => ({
+      listed.result.tools.map(
+        (tool: { name: string; title: string; annotations: unknown }) => ({
           name: tool.name,
           title: tool.title,
-          annotations: tool.annotations,
-        })),
-    ).toEqual(
-      toolNames.map((name, index) => ({
-        name,
-        title: titles[index],
-        annotations: {
-          title: titles[index],
-          readOnlyHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
-          openWorldHint: false,
-        },
-      })),
-    );
+          readOnlyHint: (tool.annotations as { readOnlyHint: boolean })
+            .readOnlyHint,
+        }),
+      ),
+    ).toEqual([
+      { name: "MemHub_recall", title: "MemHub recall", readOnlyHint: true },
+      { name: "MemHub_write", title: "MemHub write", readOnlyHint: false },
+      {
+        name: "MemHub_diagnostic_trace",
+        title: "MemHub diagnostic trace",
+        readOnlyHint: true,
+      },
+    ]);
   });
 });
 
@@ -357,26 +320,8 @@ const emptyRecall: RecallReceipt = {
   used_characters: 0,
   truncated: false,
 };
-const emptyAsk: AskMemoryResponse = {
-  answer: "现有记忆不足以回答这个问题。",
-  memories: [],
-  mode: "empty",
-};
-const noMatches: ConversationSearchResponse = {
-  hits: [],
-  empty_reason: "no_matches",
-  imported_messages: 7,
-};
-
 const emptyCalls = [
   { name: "om_recall", args: { query: "fixture query" }, payload: emptyRecall },
-  { name: "om_ask", args: { question: "fixture query" }, payload: emptyAsk },
-  {
-    name: "om_conversations",
-    args: { query: "fixture query" },
-    payload: noMatches,
-  },
-  { name: "om_matters", args: { query: "fixture query" }, payload: [] },
 ];
 
 describe.each(emptyCalls)(
@@ -384,19 +329,12 @@ describe.each(emptyCalls)(
   ({ name, args, payload }) => {
     it("passes an empty result through without inventing adoption or citations", async () => {
       const read = vi.fn().mockResolvedValue(payload);
-      const session = new McpSession(
-        runtime.discoveryPath,
-        read,
-        undefined,
-        read,
-        read,
-        read,
-      );
+      const session = new McpSession(runtime.discoveryPath, read);
       const response = await request(session, "tools/call", {
         name,
         arguments: args,
       });
-      const expected = name === "om_matters" ? { contexts: payload } : payload;
+      const expected = payload;
       expect(read).toHaveBeenCalledExactlyOnceWith(runtime.discoveryPath, args);
       expect(response.result).toEqual({
         content: [{ type: "text", text: JSON.stringify(expected) }],
@@ -410,14 +348,7 @@ describe.each(emptyCalls)(
       "MemHub access denied for the requested scope",
     ])("keeps %s distinct from a successful empty result", async (message) => {
       const read = vi.fn().mockRejectedValue(new Error(message));
-      const session = new McpSession(
-        runtime.discoveryPath,
-        read,
-        undefined,
-        read,
-        read,
-        read,
-      );
+      const session = new McpSession(runtime.discoveryPath, read);
       const response = await request(session, "tools/call", {
         name,
         arguments: args,
@@ -477,25 +408,41 @@ it.each(["grounded", "empty"] as const)(
   },
 );
 
-it("preserves an explicit nothing_imported reason without inferring it from no matches", async () => {
-  const payload: ConversationSearchResponse = {
-    hits: [],
-    empty_reason: "nothing_imported",
-    imported_messages: 0,
+it("passes a raw-mode recall through with its mode and fallback reason", async () => {
+  const content = "我们把发布日改到周四。";
+  const payload: RecallReceipt = {
+    ...emptyRecall,
+    state: "grounded",
+    mode: "raw",
+    fallback_reason: "model_unavailable",
+    hits: [
+      {
+        memory_id: "raw-fixture-1",
+        content,
+        content_format: "raw",
+        kind: "raw",
+        source: "cursor",
+        session_id: "session-fixture",
+        scopes: [],
+        evidence_ids: [],
+        updated_at: "2026-09-13T00:00:00Z",
+        score: 0.8,
+      },
+    ],
+    used_characters: [...content].length,
   };
   const read = vi.fn().mockResolvedValue(payload);
-  const session = new McpSession(
-    runtime.discoveryPath,
-    undefined,
-    undefined,
-    undefined,
-    read,
+  const response = await request(
+    new McpSession(runtime.discoveryPath, read),
+    "tools/call",
+    { name: "MemHub_recall", arguments: { query: "fixture query" } },
   );
-  const response = await request(session, "tools/call", {
-    name: "om_conversations",
-    arguments: { query: "fixture query" },
+  expect(response.result.structuredContent).toEqual(recallForHost(payload));
+  expect(response.result.structuredContent).toMatchObject({
+    mode: "raw",
+    fallback_reason: "model_unavailable",
+    hits: [{ kind: "raw", source: "cursor", content }],
   });
-  expect(response.result.structuredContent).toEqual(payload);
 });
 
 it("returns nonempty fixture hits and source IDs without claiming the answer adopted them", async () => {

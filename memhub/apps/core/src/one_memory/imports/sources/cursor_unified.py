@@ -533,8 +533,8 @@ def _with_write_ahead_log(database: AuthorizedSourceFile) -> AuthorizedSourceFil
     version = hashlib.blake2b(
         f"{database.modified_ns}:{journal.st_mtime_ns}:{journal.st_size}:{journal.st_ino}".encode(),
         digest_size=8,
-    ).digest()
-    return replace(database, modified_ns=int.from_bytes(version, "big") & ((1 << 63) - 1))
+    ).hexdigest()
+    return replace(database, cursor_version=version)
 
 
 def _live_baseline(listing: _CursorListing) -> dict[str, SourceCursor]:

@@ -47,6 +47,19 @@ class ContextSearchRequest(BaseModel):
         return self
 
 
+class SdkContextSearchRequest(ContextSearchRequest):
+    """`POST /api/v2/context/search`: the three SDK recall lanes are set apart.
+
+    `limit` is the normal lane's top-k and the cap on returned items;
+    `schema_limit` and `intention_limit` are the SDK's schema (L6) and
+    proactive intention (L7) lanes. A caller's values are passed through.
+    """
+
+    limit: int = Field(default=10, ge=1, le=20, strict=True)
+    schema_limit: int = Field(default=3, ge=0, le=20, strict=True)
+    intention_limit: int = Field(default=1, ge=0, le=20, strict=True)
+
+
 class ContextMessage(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

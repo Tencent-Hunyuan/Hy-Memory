@@ -234,9 +234,14 @@ describe("Core ownership", () => {
   it("attaches when a standalone Core wins the race with the first spawn", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "core-attach-race-"));
     let probes = 0;
+    // The winner has finished publishing its receipt and token by the time
+    // our child loses the lock. Writing them from inside the spawn raced the
+    // readiness loop: on a slow runner the token was not there yet, the
+    // re-read rejected the receipt, and the test saw a false conflict.
+    let winner: Promise<void> = Promise.resolve();
     const spawnProcess = vi.fn(() => {
       const child = fakeChild();
-      void writeRuntime(dataDir, {
+      winner = writeRuntime(dataDir, {
         schema_version: 1,
         service: "one-memory-core",
         instance_id: "cli-race-winner",
@@ -245,7 +250,9 @@ describe("Core ownership", () => {
         host: "127.0.0.1",
         port: 9236,
         started_at: "2026-09-19T01:00:00Z",
-      }).then(() => child.emit("exit", 1, null));
+      }).then(() => {
+        child.emit("exit", 1, null);
+      });
       return child;
     });
     const supervisor = new CoreSupervisor({
@@ -256,6 +263,10 @@ describe("Core ownership", () => {
       spawnProcess,
       probeHealth: async (port, token) => {
         probes += 1;
+        // Our own child never answers: it lost the race. Waiting here for the
+        // winner's files keeps the readiness loop from concluding before the
+        // winner exists, which is the order this test is about.
+        await winner;
         if (port !== 9236 || token !== "attached-secret")
           throw new Error("not attached yet");
         return {

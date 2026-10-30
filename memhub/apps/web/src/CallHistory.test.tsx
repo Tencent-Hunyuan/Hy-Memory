@@ -34,10 +34,6 @@ const { getHistory, clearEvents, clearAllEvents, getReferences } = vi.hoisted(
     getReferences: vi.fn(),
   }),
 );
-const getConversation = vi.hoisted(() => vi.fn());
-vi.mock("./api", () => ({
-  getConversation,
-}));
 vi.mock("./call-history-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./call-history-client")>()),
   getCallHistory: getHistory,
@@ -124,11 +120,6 @@ beforeEach(() => {
   getHistory.mockReset().mockResolvedValue(page());
   clearEvents.mockReset().mockResolvedValue(undefined);
   clearAllEvents.mockReset().mockResolvedValue(undefined);
-  getConversation.mockReset().mockResolvedValue({
-    conversation_id: "c1",
-    source_id: "source-1",
-    messages: [{ verbatim: "current permitted original" }],
-  });
   getReferences.mockReset().mockImplementation(async (call: CallEvent) =>
     call.references.map((reference) => ({
       ...reference,
@@ -841,28 +832,20 @@ it("resolves titles only on detail selection and shows explicit loading without 
   expect(screen.getByText("记忆 · permission-checked-memory")).toBeTruthy();
   expect(screen.getByText("source-1")).toBeTruthy();
   expect(screen.queryByRole("link")).toBeNull();
-  expect(screen.getByRole("button", { name: "查看原文" })).toBeTruthy();
+  // A raw reference has no by-id read on the SDK data plane; only a memory opens.
+  expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
   expect(screen.getByRole("button", { name: "查看记忆" })).toBeTruthy();
   expect(storage).not.toHaveBeenCalled();
   expect(call.references[0]).not.toHaveProperty("title");
 });
 
-it("opens currently permitted memory or evidence and hides withdrawn titles", async () => {
+it("opens a currently permitted memory and hides withdrawn titles", async () => {
   const onOpenMemory = vi.fn();
-  const onOpenEvidence = vi.fn();
   getReferences.mockResolvedValueOnce(resolved(event(), "permission-checked"));
-  render(
-    <CallHistory
-      onBack={vi.fn()}
-      onOpenMemory={onOpenMemory}
-      onOpenEvidence={onOpenEvidence}
-    />,
-  );
+  render(<CallHistory onBack={vi.fn()} onOpenMemory={onOpenMemory} />);
   fireEvent.click(await loaded());
   await screen.findByText("原文 · permission-checked-raw");
-  fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
   fireEvent.click(screen.getByRole("button", { name: "查看记忆" }));
-  expect(onOpenEvidence).toHaveBeenCalledExactlyOnceWith("raw-1");
   expect(onOpenMemory).toHaveBeenCalledExactlyOnceWith("memory-1");
   getReferences.mockResolvedValueOnce([
     {

@@ -1,4 +1,8 @@
-import type { SdkMemoryRecord, SdkMemoryStatus } from "@one-memory/contracts";
+import type {
+  SdkMemoryRecord,
+  SdkMemoryScene,
+  SdkMemoryStatus,
+} from "@one-memory/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   deleteSdkMemory,
@@ -8,6 +12,18 @@ import {
 } from "./api";
 import { useGuiLanguage } from "./gui-language";
 import { R6Button } from "./R6Controls";
+import {
+  SDK_MEMORY_PAGE_SIZE,
+  sdkEditableText,
+  sdkMemoryRef,
+  sdkNamespace,
+} from "./sdk-memory-map";
+
+const SCENE_LABELS = {
+  chat: "sdk.memory.scene.chat",
+  working: "sdk.memory.scene.working",
+  coding: "sdk.memory.scene.coding",
+} as const satisfies Record<SdkMemoryScene, string>;
 
 export function SdkMemoryLibrary({
   active,
@@ -27,9 +43,11 @@ export function SdkMemoryLibrary({
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<SdkMemoryRecord | null>(null);
   const [draft, setDraft] = useState("");
+  // Experiences only: the task, edited next to the solution in `draft`.
+  const [taskDraft, setTaskDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const limit = 100;
+  const limit = SDK_MEMORY_PAGE_SIZE;
 
   const refresh = useCallback(async () => {
     if (!active) return;
@@ -56,19 +74,31 @@ export function SdkMemoryLibrary({
     void refresh();
   }, [refresh]);
 
-  const open = useCallback(async (memoryId: string) => {
-    setBusy(true);
-    setError("");
-    try {
-      const memory = await getSdkMemory(memoryId);
-      setSelected(memory);
-      setDraft(memory.content);
-    } catch {
-      setError(translation.current("sdk.memory.detailLoadFailed"));
-    } finally {
-      setBusy(false);
-    }
+  const select = useCallback((memory: SdkMemoryRecord) => {
+    setSelected(memory);
+    setDraft(sdkEditableText(memory));
+    setTaskDraft(memory.task ?? "");
   }, []);
+
+  const open = useCallback(
+    async (memoryId: string, listed?: SdkMemoryRecord) => {
+      setBusy(true);
+      setError("");
+      try {
+        select(
+          await getSdkMemory(
+            memoryId,
+            listed ? sdkNamespace(sdkMemoryRef(listed)) : undefined,
+          ),
+        );
+      } catch {
+        setError(translation.current("sdk.memory.detailLoadFailed"));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [select],
+  );
 
   useEffect(() => {
     if (active && focusedMemoryId) void open(focusedMemoryId);
@@ -79,8 +109,20 @@ export function SdkMemoryLibrary({
     setBusy(true);
     setError("");
     try {
-      const memory = await updateSdkMemory(selected.memory_id, draft);
-      setSelected(memory);
+      const namespace = sdkNamespace(sdkMemoryRef(selected));
+      const task =
+        selected.kind === "experience" &&
+        taskDraft.trim() &&
+        taskDraft !== (selected.task ?? "")
+          ? taskDraft
+          : undefined;
+      const memory = await updateSdkMemory(
+        selected.memory_id,
+        draft,
+        undefined,
+        namespace && { ...namespace, ...(task ? { task } : {}) },
+      );
+      select(memory);
       await refresh();
       onChanged?.();
     } catch {
@@ -95,7 +137,11 @@ export function SdkMemoryLibrary({
     setBusy(true);
     setError("");
     try {
-      await deleteSdkMemory(selected.memory_id);
+      await deleteSdkMemory(
+        selected.memory_id,
+        undefined,
+        sdkNamespace(sdkMemoryRef(selected)),
+      );
       setSelected(null);
       await refresh();
       onChanged?.();
@@ -136,13 +182,22 @@ export function SdkMemoryLibrary({
         <p role="status">{t("sdk.memory.loading")}</p>
       ) : null}
       <ul>
-        {rows.map((memory) => (
-          <li key={memory.memory_id}>
-            <button type="button" onClick={() => void open(memory.memory_id)}>
-              {memory.content}
-            </button>
-          </li>
-        ))}
+        {rows.map((memory) => {
+          const ref = sdkMemoryRef(memory);
+          return (
+            <li key={`${ref.scene}:${ref.kind}:${memory.memory_id}`}>
+              <span className="sdk-memory-scene" data-scene={ref.scene}>
+                {t(SCENE_LABELS[ref.scene])}
+              </span>
+              <button
+                type="button"
+                onClick={() => void open(memory.memory_id, memory)}
+              >
+                {memory.content}
+              </button>
+            </li>
+          );
+        })}
       </ul>
       <nav aria-label={t("sdk.memory.pagination")}>
         <R6Button
@@ -152,6 +207,12 @@ export function SdkMemoryLibrary({
         >
           {t("sdk.memory.previous")}
         </R6Button>
+        <span>
+          {t("sdk.memory.page", {
+            page: total === 0 ? 0 : Math.floor(offset / limit) + 1,
+            pages: Math.ceil(total / limit),
+          })}
+        </span>
         <R6Button
           variant="quiet"
           disabled={busy || offset + limit >= total}
@@ -162,11 +223,25 @@ export function SdkMemoryLibrary({
       </nav>
       {selected ? (
         <aside aria-label={t("sdk.memory.detail")}>
-          <p>{selected.layer}</p>
+          <p>
+            {t(SCENE_LABELS[sdkMemoryRef(selected).scene])} · {selected.layer}
+          </p>
           {selected.status === "active" ? (
             <>
+              {selected.kind === "experience" ? (
+                <textarea
+                  aria-label={t("sdk.memory.task")}
+                  value={taskDraft}
+                  disabled={busy}
+                  onChange={(event) => setTaskDraft(event.target.value)}
+                />
+              ) : null}
               <textarea
-                aria-label={t("sdk.memory.content")}
+                aria-label={
+                  selected.kind === "experience"
+                    ? t("sdk.memory.solution")
+                    : t("sdk.memory.content")
+                }
                 value={draft}
                 disabled={busy}
                 onChange={(event) => setDraft(event.target.value)}

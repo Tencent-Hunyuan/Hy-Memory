@@ -2516,7 +2516,8 @@ def _parse_operations_json(text: str) -> Optional[List[Dict[str, Any]]]:
             return result
         return None
     except json.JSONDecodeError:
-        logger.warning(f"[S2-agent] JSON parse failed: {json_str[:200]}")
+        logger.warning(f"[S2-agent] JSON parse failed ({len(json_str)} chars)")
+        logger.debug(f"[S2-agent] unparsable output: {json_str[:200]!r}")
         return None
 
 

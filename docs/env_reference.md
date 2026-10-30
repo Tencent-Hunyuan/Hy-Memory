@@ -191,6 +191,7 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 | `MEMORY_LOG_FORMAT` | `text` | `text` / `json` |
 | `MEMORY_LOG_DIR` | — | 统一日志根目录 |
 | `MEMORY_TRACE_LOG_DIR` | — | JSONL 日志目录的兼容旧名；优先使用 `MEMORY_LOG_DIR` |
+| `MEMORY_PIPELINE_LOG_ENABLED` | `true` | 是否写 pipeline JSONL 日志（`{MEMORY_LOG_DIR}/<subdir>/<date>.log`）；`false` 完全不写 |
 | `MEMORY_PIPELINE_TRACE_ENABLED` | `true` | 是否写入 cache 的 pipeline trace 表 |
 | `MEMORY_MEMORY_OPERATIONS_ENABLED` | `false` | 是否写入 memory operation 审计记录 |
 | `MEMORY_HISTORY_ENABLE` | `true` | 是否启用历史记录 |

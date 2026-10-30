@@ -120,10 +120,10 @@ def test_manual_import_reports_segment_then_follows_normal_authorize_and_dedup(t
             assert connected.status_code == 200 and connected.json()["failed_sources"] == {}
             job = await app.state.import_supervisor.wait(connected.json()["jobs"][0]["job_id"])
             assert job.stored == 2 and job.errors == 0
-            found = (
-                await client.get("/api/v1/conversations/search", params={"query": "保留来源"})
-            ).json()
-            assert found["hits"][0]["created_at"] is None
+            found = app.state.evidence_store.search_conversations(
+                "保留来源", user_id="local", limit=5
+            )
+            assert found[0].created_at is None
             again = await client.post(
                 "/api/v1/import-jobs", json={"source_id": receipt["source_id"]}
             )

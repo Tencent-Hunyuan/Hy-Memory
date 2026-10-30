@@ -22,12 +22,9 @@ import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  askThroughBroker,
   type BrokerClientOptions,
-  mattersThroughBroker,
   readHostCredentialFile,
   recallThroughBroker,
-  searchConversationsThroughBroker,
 } from "./broker-client.js";
 import { HostGrantStore, type HostReadTool } from "./host-grants.js";
 import { RecallBroker } from "./recall-broker.js";
@@ -37,19 +34,15 @@ const closers: Array<() => Promise<void>> = [];
 const workspace = `workspace:v1:${"a".repeat(64)}`;
 const otherWorkspace = `workspace:v1:${"b".repeat(64)}`;
 const coreToken = "isolated-core-only-token";
-const endpoints = ["recall", "ask", "conversations", "matters"] as const;
+// MemHub_ask and MemHub_conversations are gone; recall is the one
+// grant-governed read route left on this transport besides /context.
+const endpoints = ["recall"] as const;
 type Endpoint = (typeof endpoints)[number];
 const tools: Record<Endpoint, HostReadTool> = {
   recall: "om_recall",
-  ask: "om_ask",
-  conversations: "om_conversations",
-  matters: "om_matters",
 };
 const paths: Record<Endpoint, string> = {
   recall: "/api/v1/recall",
-  ask: "/api/v1/memories/ask",
-  conversations: "/api/v1/conversations/search?query=fixture&limit=20",
-  matters: "/api/v1/matters/context/search",
 };
 interface CoreCall {
   url: string | undefined;
@@ -65,8 +58,8 @@ afterEach(async () => {
   );
 });
 
-function body(endpoint: Endpoint): Record<string, unknown> {
-  return endpoint === "ask" ? { question: "fixture" } : { query: "fixture" };
+function body(_endpoint: Endpoint): Record<string, unknown> {
+  return { query: "fixture" };
 }
 
 function deferred() {
@@ -79,12 +72,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function corePayload(url: string | undefined): unknown {
-  if (url === paths.ask)
-    return { answer: "fixture-answer", memories: [], mode: "empty" };
-  if (url === paths.matters) return [];
-  if (url?.startsWith("/api/v1/conversations"))
-    return { conversations: [], total: 0 };
+function corePayload(_url: string | undefined): unknown {
   return {
     state: "grounded",
     query: "fixture",
@@ -95,10 +83,8 @@ function corePayload(url: string | undefined): unknown {
   };
 }
 
-function markedPayload(url: string | undefined, marker: string): unknown {
-  return url === paths.ask
-    ? { answer: marker, memories: [], mode: "empty" }
-    : { content: marker };
+function markedPayload(_url: string | undefined, marker: string): unknown {
+  return { content: marker };
 }
 
 async function fixture(
@@ -125,16 +111,6 @@ async function fixture(
   const calls: CoreCall[] = [];
   const core = createServer((request, response) => {
     void (async () => {
-      if (
-        request.method === "GET" &&
-        request.url === "/api/v2/memory-authority"
-      ) {
-        response.setHeader("Content-Type", "application/json");
-        response.end(
-          JSON.stringify({ authority: "legacy", migration_id: null }),
-        );
-        return;
-      }
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const raw = Buffer.concat(chunks).toString("utf8");
@@ -211,16 +187,6 @@ function clientCall(
   switch (endpoint) {
     case "recall":
       return recallThroughBroker(discoveryPath, { query: "fixture" }, options);
-    case "ask":
-      return askThroughBroker(discoveryPath, { question: "fixture" }, options);
-    case "conversations":
-      return searchConversationsThroughBroker(
-        discoveryPath,
-        { query: "fixture" },
-        options,
-      );
-    case "matters":
-      return mattersThroughBroker(discoveryPath, { query: "fixture" }, options);
   }
 }
 
@@ -307,7 +273,7 @@ describe.skipIf(process.platform === "win32")(
     );
 
     it.each(endpoints)(
-      "checks the specific %s tool grant including explicit matters",
+      "checks the specific %s tool grant",
       async (endpoint) => {
         const allowedTool = endpoint === "recall" ? "om_ask" : "om_recall";
         const context = await fixture({ allowedTools: [allowedTool] });
@@ -398,7 +364,7 @@ describe.skipIf(process.platform === "win32")(
       expect(context.calls).toHaveLength(2);
     });
 
-    it.each(["recall", "ask"] as const)(
+    it.each(endpoints)(
       "denies invalid %s scopes and forwards only approved grants for workspace expansion",
       async (endpoint) => {
         const context = await fixture({ allowedScopes: [workspace] });
@@ -432,13 +398,27 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it.each(["conversations", "matters"] as const)(
-      "requires an explicit all-apps grant for default %s without granting raw content itself",
-      async (endpoint) => {
-        const context = await fixture({ allowedScopes: [workspace] });
-        expect(
-          (await context.post(endpoint, context.issued.secret)).status,
-        ).toBe(403);
+    it.each([
+      ["POST", "/ask"],
+      ["POST", "/conversations"],
+      ["POST", "/memory-writes"],
+      ["GET", "/memory-writes/req-1"],
+    ] as const)(
+      "no longer serves the removed %s %s route",
+      async (method, route) => {
+        const context = await fixture();
+        const response = await axios.request({
+          method,
+          url: `${context.baseUrl}${route}`,
+          data: method === "POST" ? { query: "fixture" } : undefined,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${context.issued.secret}`,
+          },
+          proxy: false,
+          validateStatus: () => true,
+        });
+        expect(response.status).toBe(404);
         expect(context.calls).toHaveLength(0);
       },
     );
@@ -495,7 +475,7 @@ describe.skipIf(process.platform === "win32")(
             response.end(JSON.stringify(markedPayload(call.url, "old-result")));
           },
         });
-        const pending = context.post("ask", context.issued.secret);
+        const pending = context.post("recall", context.issued.secret);
         try {
           await entered.promise;
           const input = {
@@ -612,7 +592,7 @@ describe.skipIf(process.platform === "win32")(
           "sensitive redirect diagnostic",
         );
       }
-      expect(context.calls).toHaveLength(4);
+      expect(context.calls).toHaveLength(endpoints.length);
       expect(received).toHaveLength(1);
     });
 
@@ -902,7 +882,7 @@ describe.skipIf(process.platform === "win32")(
         );
         reader.on("line", (line) => {
           responses.push(JSON.parse(line));
-          if (responses.length === 4) finished.resolve();
+          if (responses.length === endpoints.length) finished.resolve();
         });
         try {
           for (const [index, endpoint] of endpoints.entries())
@@ -916,7 +896,9 @@ describe.skipIf(process.platform === "win32")(
                 true,
             ).toBe(state !== "present");
           }
-          expect(context.calls).toHaveLength(state === "present" ? 4 : 0);
+          expect(context.calls).toHaveLength(
+            state === "present" ? endpoints.length : 0,
+          );
           expect(JSON.stringify(responses)).not.toContain(
             context.issued.secret,
           );

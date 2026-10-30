@@ -23,39 +23,26 @@ function accountHomeDirectory(): string | undefined {
 async function main(): Promise<number> {
   const arguments_ = process.argv.slice(2);
   const command = arguments_[0];
-  const action = arguments_[1];
   // A preview (`--yes` absent) must not create or write any diagnostic file:
   // the contract is that it only emits a plan. Diagnostics for these commands
   // are initialized only once the caller has confirmed the mutation.
-  const confirmed = arguments_.includes("--yes")
-    ? true
-    : arguments_.includes("--confirm");
+  const confirmed = arguments_.includes("--yes");
   const installLike = [
     "install",
     "upgrade",
     "service-install",
     "service-uninstall",
   ].includes(command ?? "");
-  const planFileApply =
-    (command === "sources" && action === "import") ||
-    (command === "models" && (action === "configure" || action === "probe")) ||
-    (command === "processing" && action === "apply") ||
-    (command === "memories" && action === "apply");
-  const isPreview = (installLike || planFileApply) && !confirmed;
-  const mutating =
-    [
-      "start",
-      "stop",
-      "restart",
-      "install",
-      "upgrade",
-      "service-install",
-      "service-uninstall",
-    ].includes(command ?? "") ||
-    (command === "sources" && action === "import") ||
-    (command === "models" && ["configure", "probe"].includes(action ?? "")) ||
-    (command === "processing" && action === "apply") ||
-    (command === "memories" && action === "apply");
+  const isPreview = installLike && !confirmed;
+  const mutating = [
+    "start",
+    "stop",
+    "restart",
+    "install",
+    "upgrade",
+    "service-install",
+    "service-uninstall",
+  ].includes(command ?? "");
   let diagnostics: DiagnosticLogger | null = null;
   if (mutating && !isPreview) {
     try {

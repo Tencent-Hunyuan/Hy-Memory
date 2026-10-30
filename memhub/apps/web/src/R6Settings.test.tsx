@@ -27,7 +27,8 @@ it("changes settings copy live without rereading profiles or changing permission
     }),
   ).toBeNull();
   const reads = vi.mocked(getModelProfiles).mock.calls.length;
-  await user.selectOptions(screen.getByRole("combobox"), "zh-CN");
+  await user.click(screen.getByRole("combobox"));
+  await user.click(screen.getByRole("option", { name: "Chino simplificado" }));
   expect(await screen.findByRole("heading", { name: "记忆模型" })).toBeTruthy();
   expect(vi.mocked(getModelProfiles).mock.calls).toHaveLength(reads);
 });
@@ -66,7 +67,9 @@ vi.mock("./ModelSettings", async () => {
   };
 });
 vi.mock("./ConnectionFallback", () => ({
-  ConnectionFallback: () => null,
+  ConnectionFallback: ({ defaultExpanded }: { defaultExpanded?: boolean }) => (
+    <p data-testid="connection-default">{String(defaultExpanded)}</p>
+  ),
 }));
 vi.mock("./runtime-state", () => ({
   refreshLoginPreference: vi.fn(),
@@ -95,7 +98,11 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
   expect(screen.getByRole("combobox")).toBeTruthy();
+  await user.click(screen.getByRole("combobox"));
   expect(screen.getAllByRole("option")).toHaveLength(4);
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "连接其他应用" }));
+  expect(screen.getByTestId("connection-default").textContent).toBe("true");
   await user.click(screen.getByRole("button", { name: "帮助与诊断" }));
   expect(screen.getByRole("heading", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "导出日志" })).toBeTruthy();

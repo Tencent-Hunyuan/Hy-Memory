@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { renderStatusText, type StatusDocument } from "./status-report.js";
+import { composeDoctorReport, renderDoctorText } from "./doctor-report.js";
+import {
+  composeStatusReport,
+  renderStatusText,
+  type StatusDocument,
+} from "./status-report.js";
 
 describe("status default output", () => {
   it("formats blocked task objects recursively instead of printing object coercions", () => {
@@ -33,5 +38,42 @@ describe("status default output", () => {
     expect(text).not.toMatch(
       /provider_kind|has_api_key|credential_state|observed_at/,
     );
+  });
+});
+
+describe("status and doctor on an unfinished upgrade migration", () => {
+  it("names the migration log and the issues page", async () => {
+    const report = await composeStatusReport({
+      dataDir: "/tmp/isolated/.one-memory",
+      runtime: { state: "stopped", code: "sdk_migration_required" },
+      background: null,
+      reader: null,
+    });
+
+    expect(report.runtime.log_file).toBe(
+      "/tmp/isolated/.one-memory/logs/sdk-migration.log",
+    );
+    expect(report.runtime.issues_url).toBe(
+      "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    );
+    const text = renderStatusText(report, "MemHub");
+    expect(text).toContain("sdk_migration_required");
+    expect(text).toContain("/tmp/isolated/.one-memory/logs/sdk-migration.log");
+
+    const doctor = renderDoctorText(composeDoctorReport(report, null));
+    expect(doctor).toContain(
+      "/tmp/isolated/.one-memory/logs/sdk-migration.log",
+    );
+    expect(doctor).not.toContain("帮助与诊断");
+  });
+
+  it("adds no log path for an ordinary stopped runtime", async () => {
+    const report = await composeStatusReport({
+      dataDir: "/tmp/isolated/.one-memory",
+      runtime: { state: "stopped", code: "runtime_not_running" },
+      background: null,
+      reader: null,
+    });
+    expect(report.runtime.log_file).toBeUndefined();
   });
 });

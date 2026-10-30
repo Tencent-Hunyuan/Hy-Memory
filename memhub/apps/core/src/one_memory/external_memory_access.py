@@ -23,13 +23,9 @@ _ENVELOPE_HEADERS = frozenset(
 )
 _BROKER_ROUTES = {
     ("POST", "/api/v1/recall"): "om_recall",
-    ("POST", "/api/v1/memories/ask"): "om_ask",
     ("POST", "/api/v2/memories/ask"): "om_ask",
     ("POST", "/api/v2/memories/ask/stream"): "om_ask",
-    ("GET", "/api/v1/conversations/search"): "om_conversations",
     ("POST", "/api/v1/diagnostics/trace"): "om_diagnostic_trace",
-    ("POST", "/api/v1/boundary/peek"): "om_recall",
-    ("POST", "/api/v1/boundary/ack"): "om_recall",
 }
 _CONCRETE_CALL_EVENT_DELIVERY = re.compile(
     r"/api/v1/call-events/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
@@ -128,11 +124,9 @@ def require_external_endpoint(request: Request) -> None:
     access = external_access(request.headers)
     if access is None:
         return
-    if request.method == "POST" and request.url.path in {
-        "/api/v1/context/search",
-        "/api/v2/context/search",
-    }:
-        # The route resolves each requested lane against its original grant.
+    if request.method == "POST" and request.url.path == "/api/v2/context/search":
+        # om_conversations reaches Core only here, as the raw lane; the route
+        # resolves each requested lane against its original grant.
         # Passing this envelope gate does not authorize either lane by itself.
         if access.tools.isdisjoint({"om_recall", "om_conversations"}):
             raise HTTPException(403, "external_recall_scope_denied")
@@ -146,7 +140,3 @@ def require_external_endpoint(request: Request) -> None:
         raise HTTPException(403, "external_endpoint_denied")
     if tool not in access.tools:
         raise HTTPException(403, "external_recall_scope_denied")
-    if tool == "om_conversations":
-        access.require(tool, frozenset({"all-apps"}))
-        if not any(scope.startswith("source:") for scope in access.scopes):
-            raise HTTPException(403, "external_source_permission_required")

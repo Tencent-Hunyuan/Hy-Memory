@@ -54,6 +54,12 @@ describe("clockStamp", () => {
     expect(clockStamp(value, "es")).toContain("19");
   });
 
+  it("names the year of a date in another year", () => {
+    expect(clockStamp("2254-01-13T13:54:00Z", "zh-CN")).toContain("2254");
+    expect(clockStamp("2025-12-31T12:00:00Z", "es")).toContain("2025");
+    expect(clockStamp("2026-08-03T15:07:00Z", "zh-CN")).not.toContain("2026");
+  });
+
   it("formats another date with month and day, without a today word", () => {
     const value = "2026-08-03T15:07:00Z";
     const es = clockStamp(value, "es");

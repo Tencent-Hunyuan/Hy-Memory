@@ -1,11 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import type { CoreOperations } from "./core-operations.js";
 import { validateModelProfiles } from "./core-responses.js";
 import { PRODUCT } from "./version.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const DIGEST = /^[0-9a-f]{64}$/;
 const RECEIPT_KEYS = new Set([
   "schema_version",
   "operation_id",
@@ -59,23 +58,7 @@ const CODES = new Set([
   "embedding_unavailable",
 ]);
 
-interface ModelProbePlanBody {
-  schema_version: 1;
-  kind: "model_profile_probe";
-  operation_id: string;
-  profile_id: string;
-  expected_profile_revision: number;
-}
-
-export type ModelProbePlan = ModelProbePlanBody & { digest: string };
-
 export type ModelProbeFlowDocument =
-  | {
-      schema_version: 1;
-      product: string;
-      state: "preview";
-      plan: ModelProbePlan;
-    }
   | {
       schema_version: 1;
       product: string;
@@ -91,11 +74,25 @@ export type ModelProbeFlowDocument =
       code: string;
     };
 
-export async function planModelProbe(
+/**
+ * Start one capability probe of a model profile (one real model request).
+ *
+ * Reads the profile's current revision so Core can refuse a probe of a
+ * profile that changed meanwhile, checks that this Core tracks probe
+ * operations (an old Core would start an untracked request), then submits it.
+ * The probe runs asynchronously: the answer is usually `pending`, and
+ * `models receipt <operation-id>` reads the result.
+ */
+export async function startModelProbe(
   reader: CoreReader,
+  operations: CoreOperations,
   profileId: string,
+  operationId: string = randomUUID(),
 ): Promise<ModelProbeFlowDocument> {
   if (!UUID.test(profileId)) return failure("invalid", "invalid_profile_id");
+  if (!UUID.test(operationId)) {
+    return failure("invalid", "invalid_probe_operation_id");
+  }
   const outcome = await reader<unknown>("/api/v1/model-profiles");
   if (outcome.state !== "ok") return fromReadFailure(outcome);
   const profiles = validateModelProfiles(outcome.data);
@@ -105,71 +102,46 @@ export async function planModelProbe(
   );
   if (matches.length !== 1)
     return failure("not_found", "model_profile_not_found");
-  const profile = matches[0];
-  if (!Number.isSafeInteger(profile.revision) || profile.revision < 1) {
+  const revision = matches[0].revision;
+  if (!Number.isSafeInteger(revision) || revision < 1) {
     return failure("invalid", "model_profile_revision_invalid");
   }
-  const plan = withDigest({
-    schema_version: 1 as const,
-    kind: "model_profile_probe" as const,
-    operation_id: randomUUID(),
-    profile_id: profileId,
-    expected_profile_revision: profile.revision,
-  });
-  return { schema_version: 1, product: PRODUCT, state: "preview", plan };
-}
-
-export async function executeModelProbe(
-  value: unknown,
-  reader: CoreReader,
-  operations: CoreOperations,
-): Promise<ModelProbeFlowDocument> {
-  const plan = validatePlan(value);
-  if (!plan) return failure("invalid", "model_probe_plan_invalid");
 
   // A 404 or a legacy/malformed body is not support. Some old Core versions
   // ignore the operation body and start an untracked external model request.
-  const support = await reader<unknown>(operationPath(plan.operation_id));
+  const support = await reader<unknown>(operationPath(operationId));
   if (support.state !== "ok") {
     return failure(
       "disabled",
       "model_probe_operations_unsupported",
-      plan.operation_id,
+      operationId,
     );
   }
-  const supportReceipt = validateReceipt(support.data, plan.operation_id);
+  const supportReceipt = validateReceipt(support.data, operationId);
   if (supportReceipt?.state !== "not_found") {
     return failure(
       "disabled",
       "model_probe_operations_unsupported",
-      plan.operation_id,
+      operationId,
     );
   }
 
-  const outcome = await operations.post<unknown>(
-    `/api/v1/model-profiles/${plan.profile_id}/probe`,
-    {
-      operation_id: plan.operation_id,
-      expected_profile_revision: plan.expected_profile_revision,
-    },
+  const posted = await operations.post<unknown>(
+    `/api/v1/model-profiles/${profileId}/probe`,
+    { operation_id: operationId, expected_profile_revision: revision },
   );
-  if (outcome.state === "rejected") {
-    return failure("rejected", outcome.code, plan.operation_id);
+  if (posted.state === "rejected") {
+    return failure("rejected", posted.code, operationId);
   }
-  if (outcome.state === "committed") {
-    return receiptDocument(
-      outcome.data,
-      plan.operation_id,
-      plan.profile_id,
-      plan.expected_profile_revision,
-    );
+  if (posted.state === "committed") {
+    return receiptDocument(posted.data, operationId, profileId, revision);
   }
-  const reconciled = await readModelProbeReceipt(reader, plan.operation_id);
+  const reconciled = await readModelProbeReceipt(reader, operationId);
   return reconciled.state === "not_found"
     ? failure(
         "unknown",
         "model_probe_receipt_not_found_after_attempt",
-        plan.operation_id,
+        operationId,
       )
     : reconciled;
 }
@@ -190,32 +162,24 @@ export async function readModelProbeReceipt(
   return receiptDocument(outcome.data, operationId);
 }
 
-export function inspectModelProbePlan(value: unknown): ModelProbePlan | null {
-  return validatePlan(value);
-}
-
 export function modelProbeExitCode(document: ModelProbeFlowDocument): number {
-  return ["preview", "completed"].includes(document.state) ? 0 : 1;
+  // `pending` is a submitted probe still running: the submit succeeded.
+  return ["completed", "pending"].includes(document.state) ? 0 : 1;
 }
 
 export function renderModelProbeText(document: ModelProbeFlowDocument): string {
-  if (document.state === "preview") {
-    return [
-      "预览：模型能力探测",
-      `模型配置：${document.plan.profile_id}`,
-      `预期版本：${document.plan.expected_profile_revision}`,
-      `操作 ID：${document.plan.operation_id}`,
-      `确认摘要：${document.plan.digest}`,
-      "未发起模型请求。请保存 --json 输出，再用 models probe --plan-file <path> --confirm。",
-      "",
-    ].join("\n");
-  }
-  return [
+  const lines = [
     `探测状态：${document.state}`,
     `操作 ID：${document.operation_id ?? "无"}`,
     "code" in document ? `代码：${document.code}` : "已返回有界操作回执。",
-    "",
-  ].join("\n");
+  ];
+  if (document.state === "pending" && document.operation_id) {
+    lines.push(
+      `探测在后台进行；用 memhub models receipt ${document.operation_id} 查看结果。`,
+    );
+  }
+  lines.push("");
+  return lines.join("\n");
 }
 
 function receiptDocument(
@@ -247,31 +211,6 @@ function receiptDocument(
     operation_id: operationId,
     receipt,
   };
-}
-
-function validatePlan(value: unknown): ModelProbePlan | null {
-  const plan = record(value);
-  if (
-    plan?.schema_version !== 1 ||
-    plan.kind !== "model_profile_probe" ||
-    typeof plan.operation_id !== "string" ||
-    !UUID.test(plan.operation_id) ||
-    typeof plan.profile_id !== "string" ||
-    !UUID.test(plan.profile_id) ||
-    !positiveInteger(plan.expected_profile_revision) ||
-    typeof plan.digest !== "string" ||
-    !DIGEST.test(plan.digest)
-  ) {
-    return null;
-  }
-  const expected = withDigest({
-    schema_version: 1 as const,
-    kind: "model_profile_probe" as const,
-    operation_id: plan.operation_id,
-    profile_id: plan.profile_id,
-    expected_profile_revision: plan.expected_profile_revision,
-  });
-  return expected.digest === plan.digest ? expected : null;
 }
 
 function validateReceipt(
@@ -407,27 +346,6 @@ function failure(
     ...(operationId ? { operation_id: operationId } : {}),
     code,
   };
-}
-
-function withDigest<T extends object>(body: T): T & { digest: string } {
-  return {
-    ...body,
-    digest: createHash("sha256").update(canonical(body)).digest("hex"),
-  };
-}
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
-      )
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function record(value: unknown): Record<string, unknown> | null {

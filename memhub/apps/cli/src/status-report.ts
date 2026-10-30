@@ -1,5 +1,4 @@
 import type {
-  HomeSummary,
   LiveSyncHealth,
   MemoryProcessingSummary,
   ModelProfile,
@@ -9,8 +8,10 @@ import type {
   BackgroundHealth,
   RuntimeStatus,
 } from "@one-memory/runtime-control";
+import { sdkMigrationLogPath } from "@one-memory/runtime-control";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import {
+  type SdkHomeSummary,
   validateHomeSummary,
   validateLiveSync,
   validateModelProfiles,
@@ -18,6 +19,9 @@ import {
   validateSources,
 } from "./core-responses.js";
 import { PRODUCT } from "./version.js";
+
+const MIGRATION_ISSUES_URL =
+  "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new";
 
 export type SectionState =
   | "ok"
@@ -42,6 +46,9 @@ export interface StatusDocument {
     host?: string;
     port?: number;
     version?: string;
+    /** Set only when an unfinished upgrade migration is why nothing serves. */
+    log_file?: string;
+    issues_url?: string;
   };
   bridge: {
     state: BackgroundHealth["state"] | "not_checked";
@@ -102,7 +109,7 @@ export async function composeStatusReport(options: {
       reader<unknown>("/api/v1/live-sync"),
       reader<unknown>("/api/v1/memory-processing"),
       reader<unknown>("/api/v1/model-profiles"),
-      reader<unknown>("/api/v1/home-summary"),
+      reader<unknown>("/api/v2/home-summary"),
     ]);
     sections.sources = section(sources, validateSources, describeSources);
     sections.sync = section(sync, validateLiveSync, describeSync);
@@ -153,6 +160,12 @@ export async function composeStatusReport(options: {
       host: options.runtime.host,
       port: options.runtime.port,
       version: options.runtime.version,
+      ...(options.runtime.code.startsWith("sdk_migration_")
+        ? {
+            log_file: sdkMigrationLogPath(options.dataDir),
+            issues_url: MIGRATION_ISSUES_URL,
+          }
+        : {}),
     },
     bridge,
     sections,
@@ -177,6 +190,13 @@ export function renderStatusText(
 ): string {
   const lines = [
     `${heading}：${runtimeLine(report)}`,
+    ...(report.runtime.log_file
+      ? [
+          `升级迁移没有完成（错误码：${report.runtime.code}），MemHub 不会启动。`,
+          `请把迁移日志附在 GitHub 反馈里发给我们：${report.runtime.log_file}`,
+          `反馈地址：${report.runtime.issues_url}`,
+        ]
+      : []),
     `资料空间：${report.data_dir}`,
     `应用连接：${BRIDGE_LABELS[report.bridge.state]}`,
   ];
@@ -347,7 +367,7 @@ function describeModel(profiles: ModelProfile[]): Record<string, unknown> {
   };
 }
 
-function describeMemories(summary: HomeSummary): Record<string, unknown> {
+function describeMemories(summary: SdkHomeSummary): Record<string, unknown> {
   return {
     memory_count: summary.memory_count,
   };

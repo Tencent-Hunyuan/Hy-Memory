@@ -23,6 +23,8 @@ export function projectPagedSourceMap(
   graph: MemoryGraphResponse | null,
   page: MemoryLibraryPage | null,
   sources: SourceResponse[],
+  /** Names for source ids that are not in the catalog (e.g. 未识别来源). */
+  labels: Record<string, string> = {},
 ): MemoryGraphResponse {
   const nodes = new Map<string, MemoryGraphNode>();
   const edges = new Map<string, MemoryGraphEdge>();
@@ -93,7 +95,7 @@ export function projectPagedSourceMap(
         node_type: "source",
         memory_id: null,
         source_id: id,
-        label: catalog.get(id)?.display_name || id,
+        label: catalog.get(id)?.display_name || labels[id] || id,
         kind: null,
         status: null,
         confidence: null,

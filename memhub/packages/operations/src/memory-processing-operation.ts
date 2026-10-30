@@ -1,10 +1,9 @@
 /** Memory-processing writes: extraction window, graph width, manual extract.
  *
  * These three are the same class of gap as the model-profile and
- * continuous-policy receipts: the CLI refuses to trust a 2xx body
- * (`ui-write-flows-extended.ts` `executeExtractionWindowSet` /
- * `executeGraphWidthDecide` / `executeManualExtract`), reporting
- * `ui_write_receipt_invalid` instead of a committed write. The Web returned
+ * continuous-policy receipts: a 2xx body is not trusted until it parses
+ * (the CLI's `graph-width-flow.ts` reports `graph_width_receipt_invalid`
+ * instead of a committed write). The Web returned
  * `response.data` straight into component state.
  *
  * The graph-width case is the one that can lie: `GraphWidthPrompt` treats an

@@ -217,6 +217,6 @@ def test_one_processing_switch_starts_history_and_future_scans_then_freezes(tmp_
             assert app.state.source_grant_store.authorized_root(
                 user_id="local", source_id="claude-code"
             )
-            assert (await client.get("/api/v1/memory-tasks")).json() == []
+            assert app.state.memory_task_store.list() == []
 
     asyncio.run(scenario())

@@ -1136,20 +1136,31 @@ class ModelProfileStore:
         )
 
 
+def disable_thinking_params(
+    profile: ModelProfile | ModelProfileSnapshot,
+) -> dict[str, object]:
+    """Provider-specific thinking-off params, empty unless the profile opts in.
+
+    The one mapping for every request Core builds itself and for the SDK's
+    `llm.extra_body`, so a model that thinks on one path thinks on none.
+    """
+    if not profile.disable_thinking:
+        return {}
+    if profile.provider_kind is ProviderKind.OPENAI_COMPATIBLE:
+        if urlparse(profile.base_url or "").hostname == "api.deepseek.com":
+            return {"thinking": {"type": "disabled"}}
+        return {"reasoning_effort": "none"}
+    if profile.provider_kind is ProviderKind.OLLAMA:
+        return {"think": False}
+    return {}
+
+
 def attach_disable_thinking(
     profile: ModelProfile | ModelProfileSnapshot,
     payload: dict[str, object],
 ) -> dict[str, object]:
     """Attach provider-specific thinking-off params when the profile opts in."""
-    if not profile.disable_thinking:
-        return payload
-    if profile.provider_kind is ProviderKind.OPENAI_COMPATIBLE:
-        if urlparse(profile.base_url or "").hostname == "api.deepseek.com":
-            payload["thinking"] = {"type": "disabled"}
-        else:
-            payload["reasoning_effort"] = "none"
-    elif profile.provider_kind is ProviderKind.OLLAMA:
-        payload["think"] = False
+    payload.update(disable_thinking_params(profile))
     return payload
 
 

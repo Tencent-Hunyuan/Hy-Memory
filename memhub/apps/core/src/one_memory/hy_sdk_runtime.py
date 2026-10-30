@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from hy_memory import (  # type: ignore[import-untyped]
+    AmbiguousMemoryIdError as AmbiguousMemoryIdError,  # re-export for api.py
+)
+from hy_memory import (
     HyMemoryClient,
     MemoryConfig,
     SharedRuntime,
@@ -33,7 +36,12 @@ from one_memory.hy_graph_admin import (
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.local_embedding import LocalEmbedder
-from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind
+from one_memory.log_file import confine_hy_sdk_logging
+from one_memory.model_profiles import (
+    ModelProfileSnapshot,
+    ProviderKind,
+    disable_thinking_params,
+)
 
 _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
@@ -48,6 +56,26 @@ class _RuntimeEntry:
 
 
 _RUNTIMES: dict[Path, _RuntimeEntry] = {}
+
+# Homes whose SDK-owned local stores are held offline for maintenance, and
+# the client constructions in flight per home. Chroma keeps one process-wide
+# System per path with no lock around create, lookup and release, so a
+# second client that opens or closes beside the SDK's pulls the System out
+# from under it (KeyError on the next lookup). Maintenance therefore runs
+# only while no SDK client exists for that home, and new clients wait.
+_STORE_GATE = threading.Condition()
+_OFFLINE_STORES: set[Path] = set()
+_OPENING: dict[Path, int] = {}
+
+# One client constructs at a time per home, its first-time store setup
+# included. The constructor opens Chroma's `PersistentClient`, and two first
+# opens on one directory race over that same unlocked System cache. On a
+# clean install the write drain's client and a UI read client started in the
+# same second; neither reached `VectorStore ready`, and the first write job
+# was lost as unknown. Taken inside `acquire_client`, after the offline gate
+# and never while `_STORE_GATE` is held, so it cannot deadlock with
+# `hold_stores_offline`, which refuses while `_OPENING` counts a client.
+_CONSTRUCTING: dict[Path, threading.Lock] = {}
 
 
 class LocalOnnxEmbeddingService:
@@ -241,14 +269,22 @@ def build_sdk_config(
         embedding_provider, embedding_endpoint, embedding_model, dimensions
     )
 
+    llm: dict[str, Any] = {
+        "provider": "openai",
+        "model": profile.model,
+        "api_key": generation_key,
+        "base_url": generation_endpoint,
+    }
+    # The SDK sends `extra_body` on every chat call, chat and coding/working
+    # alike. Without it DeepSeek spent the whole agent_max_tokens on thinking
+    # and answered finish_reason=length with no content.
+    thinking_off = disable_thinking_params(profile)
+    if thinking_off:
+        llm["extra_body"] = thinking_off
+
     return MemoryConfig.from_dict(
         {
-            "llm": {
-                "provider": "openai",
-                "model": profile.model,
-                "api_key": generation_key,
-                "base_url": generation_endpoint,
-            },
+            "llm": llm,
             "embedder": {
                 "provider": "openai",
                 "model": (
@@ -292,7 +328,60 @@ def acquire_client(
     data_dir: Path,
     http_transport_factory: Callable[[], Any] | None = None,
 ) -> ClientLease:
-    """Construct a public SDK client and return its explicit runtime lease."""
+    """Construct a public SDK client and return its explicit runtime lease.
+
+    Waits while `hold_stores_offline` holds this home's stores.
+    """
+    key = data_dir.resolve()
+    with _STORE_GATE:
+        while key in _OFFLINE_STORES:
+            _STORE_GATE.wait()
+        _OPENING[key] = _OPENING.get(key, 0) + 1
+    try:
+        return _acquire_client(
+            profile,
+            api_key=api_key,
+            data_dir=data_dir,
+            http_transport_factory=http_transport_factory,
+        )
+    finally:
+        with _STORE_GATE:
+            _OPENING[key] -= 1
+            if not _OPENING[key]:
+                del _OPENING[key]
+            _STORE_GATE.notify_all()
+
+
+def hold_stores_offline(data_dir: Path) -> bool:
+    """Hold this home's SDK stores for offline maintenance; False if a client is open.
+
+    While held, `acquire_client` for the home waits. Every SDK client in Core
+    is built there, so nothing reads or writes Chroma beside the maintenance.
+    `release_stores` ends the hold; it is idempotent.
+    """
+    key = data_dir.resolve()
+    with _STORE_GATE:
+        with _RUNTIME_LOCK:
+            open_runtime = key in _RUNTIMES
+        if key in _OFFLINE_STORES or _OPENING.get(key) or open_runtime:
+            return False
+        _OFFLINE_STORES.add(key)
+        return True
+
+
+def release_stores(data_dir: Path) -> None:
+    with _STORE_GATE:
+        _OFFLINE_STORES.discard(data_dir.resolve())
+        _STORE_GATE.notify_all()
+
+
+def _acquire_client(
+    profile: ModelProfileSnapshot,
+    *,
+    api_key: str | None,
+    data_dir: Path,
+    http_transport_factory: Callable[[], Any] | None,
+) -> ClientLease:
     config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir)
     config.http_transport_factory = http_transport_factory
     mismatch = inspect_graph_width_mismatch(config)
@@ -303,16 +392,23 @@ def acquire_client(
     embedding_service: LocalOnnxEmbeddingService | None = None
     if (profile.embedding_provider_kind or profile.provider_kind) is ProviderKind.LOCAL_ONNX:
         embedding_service = LocalOnnxEmbeddingService()
+    with _STORE_GATE:
+        constructing = _CONSTRUCTING.setdefault(key, threading.Lock())
     try:
-        client = HyMemoryClient(
-            config=config,
-            mode="ultra" if graph_store_enabled() else "pro",
-            runtime=runtime,
-            embedding_service=embedding_service,
-        )
+        with constructing:
+            client = HyMemoryClient(
+                config=config,
+                mode="ultra" if graph_store_enabled() else "pro",
+                runtime=runtime,
+                embedding_service=embedding_service,
+            )
     except BaseException:
         _release_runtime(key)
         raise
+    finally:
+        # The constructor's first step configures HY's text log (once per
+        # process), so by here it exists whether or not construction succeeded.
+        confine_hy_sdk_logging()
     return ClientLease(client, key)
 
 

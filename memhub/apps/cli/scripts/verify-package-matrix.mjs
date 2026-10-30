@@ -30,9 +30,7 @@ const REQUIRED_COMMAND_SURFACE = [
   "sync",
   "memories",
   "profile",
-  "calls",
-  "notes",
-  "graph",
+  "graph-width",
   "models",
   "host",
   "doctor",
@@ -50,19 +48,17 @@ const REQUIRED_COMMAND_SURFACE = [
   "uninstall",
   "delete-data",
   "recall",
-  "setup",
   "scan",
   "progress",
   "jobs",
-  "path",
+  "scan-roots",
   "adapter",
   "write",
-  "task",
   "serve",
 ];
 
 const REQUIRED_MARKERS = [
-  "backup_restore_confirmation_required",
+  "backup_restore_confirmation_mismatch",
   "backup_restore_runtime_state_unknown",
   "backup_restore_maintenance_identity_invalid",
   "runtime_service_activation_unverified",
@@ -79,16 +75,18 @@ const REQUIRED_MARKERS = [
  * exact literal the catalog usage string contains.
  */
 const REQUIRED_SUBCOMMANDS = [
-  { command: "calls", marker: "memhub calls clear" },
-  { command: "notes", marker: "memhub notes add" },
-  { command: "notes", marker: "memhub notes process" },
+  { command: "memories", marker: "memhub memories add" },
+  { command: "memories", marker: "memhub memories add-status" },
   { command: "memories", marker: "memhub memories update" },
   { command: "memories", marker: "memhub memories delete" },
   { command: "write", marker: "memhub write submit" },
   { command: "write", marker: "memhub write status" },
-  { command: "graph", marker: "memhub graph width" },
+  { command: "graph-width", marker: "memhub graph-width --decision" },
+  { command: "models", marker: "memhub models add" },
+  { command: "models", marker: "memhub models test" },
   { command: "models", marker: "memhub models edit" },
   { command: "models", marker: "memhub models activate" },
+  { command: "sources", marker: "memhub sources connect" },
   { command: "jobs", marker: "memhub jobs start" },
   { command: "jobs", marker: "memhub jobs <pause|resume|cancel>" },
 ];
@@ -100,57 +98,30 @@ const REQUIRED_SUBCOMMANDS = [
  * counterexamples on the packaged Runtime") had no machine-checkable probe.
  * These run without `--lifecycle`, so they are safe against any package.
  */
+const PROFILE_ID = "44444444-4444-4444-8444-444444444444";
 const STOPPED_DESTRUCTIVE_PROBES = [
+  { name: "memories_add", args: ["memories", "add", "synthetic memory"] },
   {
-    name: "calls_clear_preview",
-    args: ["calls", "clear", "--event", "11111111-1111-4111-8111-111111111111"],
-  },
-  {
-    name: "calls_clear_apply",
-    args: [
-      "calls",
-      "clear",
-      "--event",
-      "11111111-1111-4111-8111-111111111111",
-      "--confirm",
-    ],
-  },
-  {
-    name: "calls_clear_all_apply",
-    args: ["calls", "clear", "--all", "--confirm"],
-  },
-  {
-    name: "notes_process_apply",
-    args: [
-      "notes",
-      "process",
-      "33333333-3333-4333-8333-333333333333",
-      "--confirm",
-    ],
+    name: "memories_delete_apply",
+    args: ["memories", "delete", "m-1", "--yes"],
   },
   {
     name: "graph_width_apply",
-    args: ["graph", "width", "--decision", "keep_existing", "--confirm"],
+    args: ["graph-width", "--decision", "keep_existing"],
   },
   {
-    name: "models_activate_apply",
-    args: [
-      "models",
-      "activate",
-      "44444444-4444-4444-8444-444444444444",
-      "--confirm",
-    ],
+    name: "graph_width_rebuild_apply",
+    args: ["graph-width", "--decision", "rebuild_with_new", "--yes"],
+  },
+  { name: "models_activate_apply", args: ["models", "activate", PROFILE_ID] },
+  { name: "models_test", args: ["models", "test", PROFILE_ID] },
+  {
+    name: "models_remove_apply",
+    args: ["models", "remove", PROFILE_ID, "--yes"],
   },
   {
-    name: "models_edit_apply",
-    args: [
-      "models",
-      "edit",
-      "44444444-4444-4444-8444-444444444444",
-      "--config-file",
-      "/nonexistent/patch.json",
-      "--confirm",
-    ],
+    name: "sources_connect_import",
+    args: ["sources", "connect", "codex", "--import"],
   },
 ];
 

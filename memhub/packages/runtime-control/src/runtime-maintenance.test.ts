@@ -51,6 +51,20 @@ it("restores the prior enable marker when offline maintenance fails", async () =
   expect(events).toEqual(["disable", "stop", "migrate", "enable"]);
 });
 
+it("leaves the service off when the maintenance froze the home", async () => {
+  const { events, value } = dependencies(true);
+
+  await withRuntimeMaintenanceFence(
+    "/data",
+    async () => void events.push("migrate"),
+    { ...value, homeFrozen: async () => true },
+  );
+
+  // A failed migration froze the home: the service stays off until the next
+  // migration succeeds and turns it back on itself.
+  expect(events).toEqual(["disable", "stop", "migrate"]);
+});
+
 it("does not invent an enable marker for a manually stopped Runtime", async () => {
   const { events, value } = dependencies(false);
 

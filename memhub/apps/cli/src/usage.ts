@@ -13,7 +13,16 @@ const GLOBAL_OPTIONS: readonly CommandOption[] = [
     summary: "显示帮助；可与 --json 组合输出机器可读目录。",
   },
   { flag: "--version, -V", summary: "显示 CLI 版本。" },
-  { flag: "--json", summary: "以 JSON 输出到 stdout，供脚本与 Agent 消费。" },
+  {
+    flag: "--json",
+    summary:
+      "以 JSON 输出到 stdout，供脚本与 Agent 消费；结果与失败都在 stdout，只有参数错误写 stderr。",
+  },
+  {
+    flag: "--data-dir <path>",
+    summary:
+      "本次使用的 MemHub 数据目录（绝对路径）；默认 ONE_MEMORY_DATA_DIR > 安装回执 > ~/.one-memory。",
+  },
 ];
 
 export function renderGeneralHelp(): string {
@@ -33,6 +42,9 @@ export function renderGeneralHelp(): string {
       (exit) => `  ${exit.code}  ${pad(exit.name, 17)}${exit.summary}`,
     ),
     "",
+    "确认约定：只有不可逆操作（memories delete、models remove、delete-data、backup restore、graph-width --decision rebuild_with_new）需要 --yes；不加时只说明将要做什么，不做任何改动，exit 0。delete-data 与 backup restore 还要用 --confirm <path> 再写一遍目标路径。install/upgrade/uninstall/service-install/service-uninstall 不加 --yes 时只出计划。其它写命令直接执行。",
+    "异步操作返回 ID，用对应命令查进度：sources receipt、models receipt、memories add-status、write status。",
+    "目前仅支持 macOS 与 Linux 连接本机 Runtime。",
     "stdout 只输出数据，进度与诊断写入 stderr。",
     `运行 ${PRODUCT} help <command> 查看单个命令的参数。`,
     "",
@@ -55,6 +67,8 @@ export function renderCommandHelp(command: CommandDescriptor): string {
     );
   }
   lines.push(
+    "Global options: --json、--data-dir <path>（见 memhub help）。",
+    "",
     "Exit codes:",
     ...EXIT_CODES.filter((exit) => command.exit_codes.includes(exit.code)).map(
       (exit) => `  ${exit.code}  ${pad(exit.name, 17)}${exit.summary}`,

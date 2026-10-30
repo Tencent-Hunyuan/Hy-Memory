@@ -146,6 +146,10 @@ export const memoryChineseMessages = {
   "memory:全部记忆": "全部记忆",
   "memory:来源待核对": "来源待核对",
   "memory:所选来源待核对": "所选来源待核对",
+  "memory:未识别来源": "未识别来源",
+  "memory:这个来源下还没有记忆": "这个来源下还没有记忆",
+  "memory:只在最相关的 {count} 条记忆里查找关键词":
+    "只在最相关的 {count} 条记忆里查找关键词",
   "memory:未知来源": "未知来源",
   "memory:记忆读取失败": "记忆读取失败",
   "memory:正在读取…": "正在读取…",
@@ -183,6 +187,7 @@ export const memoryChineseMessages = {
   "memory:刚导入的原话，还不是沉淀后的记忆": "刚导入的原话，还不是沉淀后的记忆",
   "memory:来源归属": "来源归属",
   "memory:可在沉淀记忆后查看视图": "可在沉淀记忆后查看视图",
+  "memory:正在读取记忆地图…": "正在读取记忆地图…",
   "memory:查看选中来源原文": "查看选中来源原文",
   "memory:查看选中记忆原文": "查看选中记忆原文",
   "memory:查看原文": "查看原文",
@@ -247,6 +252,8 @@ export const memoryChineseMessages = {
   "memory:重试": "重试",
   "memory:删除": "删除",
   "memory:对话": "对话",
+  "memory:工作": "工作",
+  "memory:编码": "编码",
   "memory:保存修改": "保存修改",
   "memory:对应记忆": "对应记忆",
   "memory:查看记忆": "查看记忆",
@@ -284,6 +291,7 @@ export const memoryChineseMessages = {
   "memory:重新整理": "重新整理",
   "memory:原话已保存，等待可用模型": "原话已保存，等待可用模型",
   "memory:原话已保存，等待整理": "原话已保存，等待整理",
+  "memory:正在等待整理": "正在等待整理",
   "memory:正在整理": "正在整理",
   "memory:原话已保存，整理未完成": "原话已保存，整理未完成",
   "memory:整理已完成": "整理已完成",
@@ -293,9 +301,6 @@ export const memoryChineseMessages = {
   "memory:已保存，正在后台沉淀记忆": "已保存，正在后台沉淀记忆",
   "memory:未能确认保存结果，输入已保留。重试不会重复添加。":
     "未能确认保存结果，输入已保留。重试不会重复添加。",
-  "memory:整理未能开始，原话仍已保存。": "整理未能开始，原话仍已保存。",
-  "memory:整理结果尚未确认，原话仍已保存。请刷新后核对。":
-    "整理结果尚未确认，原话仍已保存。请刷新后核对。",
   "memory:模型服务要求检查余额或付款状态，原话仍已保存。":
     "模型服务要求检查余额或付款状态，原话仍已保存。",
   "memory:这台设备打不开 3D 视图，已显示关联列表。":
@@ -332,6 +337,7 @@ export const memoryChineseMessages = {
   "memory: · 导入数量仍在更新，可刷新核对": " · 导入数量仍在更新，可刷新核对",
   "memory:对话于 {day}": "对话于 {day}",
   "memory:导入于 {day}": "导入于 {day}",
+  "memory:写入于 {day}": "写入于 {day}",
   "memory:已开始处理所选对话": "已开始处理所选对话",
   "memory:处理请求已受理": "处理请求已受理",
   "memory:模型连接已通过。首批记忆生成后，会逐步出现在记忆列表里。":
@@ -366,7 +372,7 @@ export const memoryChineseMessages = {
     "已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
   "memory:（{filter}）": "（{filter}）",
   "memory:第 {page} 页": "第 {page} 页",
-  "memory:原话已保存，正在等待整理：": "原话已保存，正在等待整理：",
+  "memory:正在等待整理：": "正在等待整理：",
   "memory:记忆未在生成": "记忆未在生成",
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "还没有开始生成记忆：{reason}（{count} 条待处理）",
@@ -538,6 +544,10 @@ export const memorySpanishMessages: Record<
   "memory:全部记忆": "Todas las memorias",
   "memory:来源待核对": "Origen sin verificar",
   "memory:所选来源待核对": "Origen seleccionado sin verificar",
+  "memory:未识别来源": "Origen no identificado",
+  "memory:这个来源下还没有记忆": "Aún no hay recuerdos de este origen",
+  "memory:只在最相关的 {count} 条记忆里查找关键词":
+    "Las palabras clave solo se buscan entre los {count} recuerdos más relevantes",
   "memory:未知来源": "Origen desconocido",
   "memory:记忆读取失败": "Error al leer las memorias",
   "memory:正在读取…": "Leyendo…",
@@ -580,6 +590,7 @@ export const memorySpanishMessages: Record<
   "memory:来源归属": "Relación con el origen",
   "memory:可在沉淀记忆后查看视图":
     "La vista estará disponible cuando se generen memorias",
+  "memory:正在读取记忆地图…": "Leyendo el mapa de memorias…",
   "memory:查看选中来源原文": "Ver texto del origen seleccionado",
   "memory:查看选中记忆原文": "Ver texto de la memoria seleccionada",
   "memory:查看原文": "Ver texto original",
@@ -647,6 +658,8 @@ export const memorySpanishMessages: Record<
   "memory:重试": "Reintentar",
   "memory:删除": "Eliminar",
   "memory:对话": "Conversación",
+  "memory:工作": "Trabajo",
+  "memory:编码": "Programación",
   "memory:保存修改": "Guardar cambios",
   "memory:对应记忆": "Memoria correspondiente",
   "memory:查看记忆": "Ver memoria",
@@ -688,22 +701,20 @@ export const memorySpanishMessages: Record<
   "memory:重新整理": "Volver a procesar",
   "memory:原话已保存，等待可用模型": "Texto guardado; esperando un modelo",
   "memory:原话已保存，等待整理": "Texto guardado; pendiente de procesar",
+  "memory:正在等待整理": "Pendiente de procesar",
   "memory:正在整理": "Procesando",
   "memory:原话已保存，整理未完成": "Texto guardado; procesamiento incompleto",
   "memory:整理已完成": "Procesamiento completado",
   "memory:原话已保存，未提取出可用记忆":
     "Texto guardado; no se extrajeron memorias utilizables",
-  "memory:最近添加的内容读取失败。": "No se pudieron leer las notas recientes.",
+  "memory:最近添加的内容读取失败。":
+    "No se pudieron leer las memorias añadidas recientemente.",
   "memory:整理状态暂时不可用，原话已保存。":
     "Estado del procesamiento no disponible. El texto está guardado.",
   "memory:已保存，正在后台沉淀记忆":
     "Guardado; generando memorias en segundo plano",
   "memory:未能确认保存结果，输入已保留。重试不会重复添加。":
     "No se pudo confirmar el guardado. Tu texto se conserva; reintentar no lo duplicará.",
-  "memory:整理未能开始，原话仍已保存。":
-    "No se pudo iniciar el procesamiento. El texto sigue guardado.",
-  "memory:整理结果尚未确认，原话仍已保存。请刷新后核对。":
-    "El resultado no está confirmado. El texto sigue guardado; actualiza para verificarlo.",
   "memory:模型服务要求检查余额或付款状态，原话仍已保存。":
     "Revisa el saldo o los pagos del proveedor. El texto sigue guardado.",
   "memory:这台设备打不开 3D 视图，已显示关联列表。":
@@ -742,6 +753,7 @@ export const memorySpanishMessages: Record<
     " · La importación continúa; actualiza para verificar",
   "memory:对话于 {day}": "Conversación del {day}",
   "memory:导入于 {day}": "Importada el {day}",
+  "memory:写入于 {day}": "Escrita el {day}",
   "memory:已开始处理所选对话": "Procesamiento de conversaciones iniciado",
   "memory:处理请求已受理": "Solicitud de procesamiento aceptada",
   "memory:模型连接已通过。首批记忆生成后，会逐步出现在记忆列表里。":
@@ -778,8 +790,7 @@ export const memorySpanishMessages: Record<
     "{count} memoria guardada{filter} · {shown} visibles",
   "memory:（{filter}）": " ({filter})",
   "memory:第 {page} 页": "Página {page}",
-  "memory:原话已保存，正在等待整理：":
-    "Texto guardado; pendiente de procesar: ",
+  "memory:正在等待整理：": "Pendiente de procesar: ",
   "memory:记忆未在生成": "Generación de memorias detenida",
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Aún no se generan memorias: {reason} ({count} pendientes)",

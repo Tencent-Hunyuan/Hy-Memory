@@ -8,7 +8,6 @@ from test_onboarding_profile import _app, _client
 
 from one_memory.memory_qa import MemoryAnswerer
 from one_memory.model_probe import ModelProber
-from one_memory.secrets import SecretStoreUnavailableError
 
 
 def test_disabled_automatic_processing_does_not_digest_onboarding(tmp_path):
@@ -82,21 +81,3 @@ def test_model_probe_credential_lookup_is_off_loop(tmp_path, monkeypatch):
         transport=httpx.MockTransport(lambda request: httpx.Response(503)),
     )
     asyncio.run(prober.probe(profile.profile_id))
-
-
-def test_unavailable_credentials_keep_governed_graph_readable(tmp_path, monkeypatch):
-    async def scenario():
-        app = _app(tmp_path)
-        async with app.router.lifespan_context(app), _client(app) as client:
-
-            def denied(*args):
-                raise SecretStoreUnavailableError("private-system-error")
-
-            monkeypatch.setattr(app.state.model_profile_store, "active", denied)
-            response = await client.get("/api/v1/memories/graph")
-            assert response.status_code == 200
-            assert response.json()["hy_graph_available"] is False
-            assert "private-system-error" not in response.text
-            assert (await client.get("/api/v1/health")).status_code == 200
-
-    asyncio.run(scenario())

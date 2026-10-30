@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from one_memory import context_memory, home_summary, memory_library, source_read_access
+from one_memory import context_memory, source_read_access
 from one_memory.imports.grants import GRANT_SCHEMA
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_evidence_freshness import register_memory_freshness
@@ -18,15 +18,10 @@ def _source(module) -> str:
 
 
 def _predicates():
-    home = re.search(r'readable = """(.*?)"""', _source(home_summary), re.S).group(1)
-    library = _source(memory_library)
-    library_clauses = re.findall(r'clauses\.append\("""(NOT EXISTS.*?)"""\)', library, re.S)
     access = re.search(
         r"_MEMORY_READABLE = \"\"\"(.*?)\"\"\"", _source(source_read_access), re.S
     ).group(1)
     return {
-        "home": (home, ("local",)),
-        "library": ("m.user_id = ? AND " + " AND ".join(library_clauses), ("local",)),
         "context": (context_memory._READABLE, ()),
         "source_read_access": (access, ()),
     }
@@ -45,7 +40,7 @@ def db(tmp_path):
     conn.close()
 
 
-@pytest.mark.parametrize("name", ["home", "library", "context", "source_read_access"])
+@pytest.mark.parametrize("name", ["context", "source_read_access"])
 def test_citation_subqueries_use_the_memory_primary_key(db, name):
     predicate, args = _predicates()[name]
     statement = f"SELECT COUNT(*) FROM governed_memories m WHERE {predicate}"

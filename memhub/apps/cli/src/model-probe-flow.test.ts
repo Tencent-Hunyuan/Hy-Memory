@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { CoreReader } from "./core-client.js";
 import type { CoreOperations } from "./core-operations.js";
 import {
-  executeModelProbe,
-  planModelProbe,
+  modelProbeExitCode,
   readModelProbeReceipt,
+  startModelProbe,
 } from "./model-probe-flow.js";
 
 const PROFILE_ID = "22222222-2222-4222-8222-222222222222";
@@ -83,67 +83,101 @@ function completed(operationId: string) {
   };
 }
 
-describe("model probe operation flow", () => {
-  it("plans against the exact current profile revision", async () => {
-    const reader = vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] });
-    const document = await planModelProbe(reader as CoreReader, PROFILE_ID);
-    expect(document.state).toBe("preview");
-    if (document.state !== "preview") throw new Error("expected preview");
-    expect(document.plan).toMatchObject({
-      kind: "model_profile_probe",
-      profile_id: PROFILE_ID,
-      expected_profile_revision: 3,
-    });
-    expect(document.plan.operation_id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
-    expect(document.plan.digest).toMatch(/^[0-9a-f]{64}$/);
-  });
+const OPERATION_ID = "33333333-3333-4333-8333-333333333333";
 
-  it("proves operation support with schema-1 not_found before posting", async () => {
-    const planned = await planModelProbe(
-      vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] }) as CoreReader,
-      PROFILE_ID,
-    );
-    if (planned.state !== "preview") throw new Error("expected preview");
-    const operationId = planned.plan.operation_id;
-    const reader = vi
-      .fn()
-      .mockResolvedValueOnce({ state: "ok", data: notFound(operationId) });
+/** Reader that answers the profile list, then the queued operation reads. */
+function readerWith(...operationReads: unknown[]) {
+  const reader = vi.fn(async (path: string) => {
+    if (path === "/api/v1/model-profiles") {
+      return { state: "ok", data: [PROFILE] };
+    }
+    return operationReads.shift() ?? { state: "not_found", code: "http_404" };
+  });
+  return reader;
+}
+
+describe("model probe operation flow", () => {
+  it("probes the exact current profile revision once support is proven", async () => {
+    const reader = readerWith({ state: "ok", data: notFound(OPERATION_ID) });
     const post = vi
       .fn()
-      .mockResolvedValue({ state: "committed", data: completed(operationId) });
+      .mockResolvedValue({ state: "committed", data: completed(OPERATION_ID) });
 
-    const result = await executeModelProbe(
-      planned.plan,
-      reader as CoreReader,
+    const result = await startModelProbe(
+      reader as unknown as CoreReader,
       { post } as CoreOperations,
+      PROFILE_ID,
+      OPERATION_ID,
     );
 
     expect(result.state).toBe("completed");
     expect(reader).toHaveBeenCalledWith(
-      `/api/v1/model-probe-operations/${operationId}`,
+      `/api/v1/model-probe-operations/${OPERATION_ID}`,
     );
     expect(post).toHaveBeenCalledWith(
       `/api/v1/model-profiles/${PROFILE_ID}/probe`,
-      { operation_id: operationId, expected_profile_revision: 3 },
+      { operation_id: OPERATION_ID, expected_profile_revision: 3 },
     );
   });
 
-  it("does not post when the Core lacks the exact operation contract", async () => {
-    const planned = await planModelProbe(
-      vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] }) as CoreReader,
+  it("generates its own operation id and treats a pending probe as submitted", async () => {
+    const post = vi.fn(
+      async (_path: string, body: Record<string, unknown>) => ({
+        state: "committed",
+        data: {
+          ...notFound(String(body.operation_id)),
+          profile_id: PROFILE_ID,
+          expected_profile_revision: 3,
+          state: "pending",
+          stale: false,
+        },
+      }),
+    );
+    const reader = vi.fn(async (path: string) =>
+      path === "/api/v1/model-profiles"
+        ? { state: "ok", data: [PROFILE] }
+        : {
+            state: "ok",
+            data: notFound(path.split("/").at(-1) ?? ""),
+          },
+    );
+    const result = await startModelProbe(
+      reader as unknown as CoreReader,
+      { post } as unknown as CoreOperations,
       PROFILE_ID,
     );
-    if (planned.state !== "preview") throw new Error("expected preview");
+    expect(result.state).toBe("pending");
+    expect(result.operation_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(modelProbeExitCode(result)).toBe(0);
+  });
+
+  it("refuses an unknown profile without posting", async () => {
     const post = vi.fn();
-    const result = await executeModelProbe(
-      planned.plan,
-      vi.fn().mockResolvedValue({
+    const result = await startModelProbe(
+      readerWith() as unknown as CoreReader,
+      { post } as CoreOperations,
+      "44444444-4444-4444-8444-444444444444",
+      OPERATION_ID,
+    );
+    expect(result).toMatchObject({
+      state: "not_found",
+      code: "model_profile_not_found",
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("does not post when the Core lacks the exact operation contract", async () => {
+    const post = vi.fn();
+    const result = await startModelProbe(
+      readerWith({
         state: "not_found",
         code: "http_404",
-      }) as CoreReader,
+      }) as unknown as CoreReader,
       { post } as CoreOperations,
+      PROFILE_ID,
+      OPERATION_ID,
     );
     expect(result).toMatchObject({
       state: "disabled",
@@ -153,19 +187,15 @@ describe("model probe operation flow", () => {
   });
 
   it("does not post when a legacy Core returns a non-operation body", async () => {
-    const planned = await planModelProbe(
-      vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] }) as CoreReader,
-      PROFILE_ID,
-    );
-    if (planned.state !== "preview") throw new Error("expected preview");
     const post = vi.fn();
-    const result = await executeModelProbe(
-      planned.plan,
-      vi.fn().mockResolvedValue({
+    const result = await startModelProbe(
+      readerWith({
         state: "ok",
         data: { detail: "legacy_route_shape" },
-      }) as CoreReader,
+      }) as unknown as CoreReader,
       { post } as CoreOperations,
+      PROFILE_ID,
+      OPERATION_ID,
     );
     expect(result).toMatchObject({
       state: "disabled",
@@ -175,24 +205,19 @@ describe("model probe operation flow", () => {
   });
 
   it("reconciles an unknown POST by GET and never treats not_found as replay permission", async () => {
-    const planned = await planModelProbe(
-      vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] }) as CoreReader,
-      PROFILE_ID,
+    const reader = readerWith(
+      { state: "ok", data: notFound(OPERATION_ID) },
+      { state: "ok", data: notFound(OPERATION_ID) },
     );
-    if (planned.state !== "preview") throw new Error("expected preview");
-    const operationId = planned.plan.operation_id;
-    const reader = vi
-      .fn()
-      .mockResolvedValueOnce({ state: "ok", data: notFound(operationId) })
-      .mockResolvedValueOnce({ state: "ok", data: notFound(operationId) });
     const post = vi.fn().mockResolvedValue({
       state: "unknown",
       code: "transport_result_unknown",
     });
-    const result = await executeModelProbe(
-      planned.plan,
-      reader as CoreReader,
+    const result = await startModelProbe(
+      reader as unknown as CoreReader,
       { post } as CoreOperations,
+      PROFILE_ID,
+      OPERATION_ID,
     );
     expect(result).toMatchObject({
       state: "unknown",

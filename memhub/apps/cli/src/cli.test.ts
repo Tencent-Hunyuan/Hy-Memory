@@ -1,9 +1,18 @@
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   claimRuntimeServiceForApp,
+  clearSdkMigrationBlock,
   readRuntimeServiceOwner,
+  recordSdkMigrationBlock,
   resolveRuntimeCliConfig,
 } from "@one-memory/runtime-control";
 import { describe, expect, it, vi } from "vitest";
@@ -790,7 +799,7 @@ describe("public One Memory CLI", () => {
       }
     });
 
-    it("upgrade failure restarts the restored artifact with the same data identity", async () => {
+    it("upgrade restart failure keeps the new version and never restarts the old one", async () => {
       vi.clearAllMocks();
       runtimeMocks.planCliLink.mockResolvedValueOnce({
         schema_version: 1,
@@ -832,25 +841,27 @@ describe("public One Memory CLI", () => {
         command: "upgrade",
         code: "restart failed",
       });
-      expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
-      // The CLI manages the objective aliases the package does not own
-      // (`memhub` + `memhub-cli`); both are rolled back.
-      expect(aliasMocks.rollbackManagedCliLink).toHaveBeenCalledTimes(2);
-      expect(runtimeMocks.restartUserService).toHaveBeenCalledTimes(2);
-      for (const call of runtimeMocks.restartUserService.mock
-        .calls as unknown[][]) {
-        expect(call[0]).toMatchObject({
-          dataDir: "/tmp/custom data",
-          installRoot: "/tmp/install/current",
-        });
-      }
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        rolled_back: false,
+      });
+      // Product rule: the previous Runtime may predate the SDK migration gate,
+      // so it is never restored after the migration was handed the home.
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+      expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
+      expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
+      expect(
+        (runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0],
+      ).toMatchObject({
+        dataDir: "/tmp/custom data",
+        installRoot: "/tmp/install/current",
+      });
     });
 
     // O-22 (2026-09-29 C8 H17): `upgrade --yes` on a manifest-valid but
     // crash-looping version reported exit 0 and left `current` on the bad
     // version. A restart that merely returns is not proof the new Runtime came
     // up, so the CLI now verifies health and rolls back if it never does.
-    it("rolls back and fails when the upgraded Runtime never becomes healthy", async () => {
+    it("fails without rolling back when the upgraded Runtime never becomes healthy", async () => {
       vi.clearAllMocks();
       runtimeMocks.planCliLink.mockResolvedValueOnce({
         schema_version: 1,
@@ -890,9 +901,9 @@ describe("public One Memory CLI", () => {
         command: "upgrade",
         code: "upgrade_health_check_failed",
       });
-      // Rolled back to the previous version and restarted it.
-      expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
-      expect(runtimeMocks.restartUserService).toHaveBeenCalledTimes(2);
+      // Kept on the new version; the old Runtime is not restarted.
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+      expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
     });
 
     const upgradeArguments = [
@@ -918,6 +929,38 @@ describe("public One Memory CLI", () => {
       link_path: "/tmp/bin/one-memory",
       target_path: "/tmp/install/current/bin/one-memory",
     };
+
+    it("says the data was restored when a failed migration put it back", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      runtimeMocks.runSdkMigration.mockResolvedValueOnce({
+        state: "deferred",
+        code: "sdk_migration_memory_unreadable",
+        dataRestored: true,
+      } as never);
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      const failure = JSON.parse(streams.stderr());
+      expect(failure).toMatchObject({
+        code: "sdk_migration_memory_unreadable",
+        data_restored: true,
+        log_file: "/tmp/custom data/logs/sdk-migration.log",
+      });
+      expect(failure.message).toContain("记忆数据已恢复到升级前的状态。");
+      expect(failure.message).toContain(
+        "/tmp/custom data/logs/sdk-migration.log",
+      );
+    });
 
     it("migrates the home with the new Core before restarting the Runtime", async () => {
       vi.clearAllMocks();
@@ -948,7 +991,7 @@ describe("public One Memory CLI", () => {
       );
     });
 
-    it("rolls back to the previous version when the migration does not finish", async () => {
+    it("stays on the new version, not serving, when the migration does not finish", async () => {
       vi.clearAllMocks();
       runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
       runtimeMocks.runSdkMigration.mockResolvedValueOnce({
@@ -967,11 +1010,87 @@ describe("public One Memory CLI", () => {
         streams.restore();
       }
       expect(code!).toBe(1);
-      expect(JSON.parse(streams.stderr())).toMatchObject({
+      const failure = JSON.parse(streams.stderr());
+      expect(failure).toMatchObject({
         command: "upgrade",
         code: "sdk_migration_disk_space_insufficient",
+        // The one file support needs, and where to send it.
+        log_file: "/tmp/custom data/logs/sdk-migration.log",
+        issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
       });
+      expect(failure.message).toContain(
+        "/tmp/custom data/logs/sdk-migration.log",
+      );
+      expect(failure.message).toContain("GitHub");
+      expect(failure.message).not.toContain("回滚到上一版本");
+      expect(runtimeMocks.runSdkMigration).toHaveBeenCalledWith(
+        expect.objectContaining({ caller: "cli-upgrade" }),
+      );
+      // No rollback: the old Runtime has no migration gate. The new service is
+      // (re)started so its gate, not the old Runtime, holds the data dir.
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+      expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
+      expect(runtimeMocks.restartUserService).toHaveBeenCalledOnce();
+      expect(
+        (runtimeMocks.restartUserService.mock.calls as unknown[][])[0]?.[0],
+      ).toMatchObject({
+        installRoot: "/tmp/install/current",
+      });
+    });
+
+    it("stays on the new version when the migration itself throws", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      runtimeMocks.runSdkMigration.mockRejectedValueOnce(
+        new Error("sdk_migration_fence_failed"),
+      );
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        command: "upgrade",
+        code: "sdk_migration_fence_failed",
+        log_file: "/tmp/custom data/logs/sdk-migration.log",
+        issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+      });
+      expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+    });
+
+    it("still rolls back a failure before the migration touched the home", async () => {
+      vi.clearAllMocks();
+      runtimeMocks.planCliLink.mockResolvedValueOnce(presentCliLink);
+      aliasMocks.installManagedCliLink.mockRejectedValueOnce(
+        new Error("cli_link_failed"),
+      );
+      const streams = captureStreams();
+      let code: number;
+      try {
+        code = await run(
+          upgradeArguments,
+          {},
+          { waitForRuntimeReady: async () => true },
+        );
+      } finally {
+        streams.restore();
+      }
+      expect(code!).toBe(1);
+      expect(JSON.parse(streams.stderr())).toMatchObject({
+        command: "upgrade",
+        code: "cli_link_failed",
+      });
+      expect(runtimeMocks.runSdkMigration).not.toHaveBeenCalled();
       expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+      // The previous Runtime was never stopped; nothing is (re)started.
+      expect(runtimeMocks.restartUserService).not.toHaveBeenCalled();
     });
 
     it("keeps the new version when a migrated home is slow to come up", async () => {
@@ -1492,7 +1611,7 @@ describe("public One Memory CLI", () => {
     expect(JSON.parse(output.value()).apply).toBe(true);
   });
 
-  it("rolls back the distribution when service installation fails", async () => {
+  it("keeps the distribution when service installation fails after the migration ran", async () => {
     runtimeMocks.applyLocalInstall.mockResolvedValueOnce({
       schema_version: 1,
       source: "/tmp/distribution",
@@ -1533,13 +1652,14 @@ describe("public One Memory CLI", () => {
       command: "install",
       status: "error",
       code: "service failed",
+      rolled_back: false,
     });
-    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
-    expect(runtimeMocks.rollbackCliLink).toHaveBeenCalledOnce();
-    expect(aliasMocks.rollbackManagedCliLink).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+    expect(runtimeMocks.rollbackCliLink).not.toHaveBeenCalled();
+    expect(aliasMocks.rollbackManagedCliLink).not.toHaveBeenCalled();
   });
 
-  it("upgrades only an existing managed CLI and rolls back a failed restart", async () => {
+  it("upgrades only an existing managed CLI and keeps it after a failed restart", async () => {
     runtimeMocks.planCliLink.mockResolvedValueOnce({
       schema_version: 1,
       platform: "linux",
@@ -1579,7 +1699,7 @@ describe("public One Memory CLI", () => {
       status: "error",
       code: "restart failed",
     });
-    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
     expect(runtimeMocks.installCliLink).not.toHaveBeenCalled();
   });
 
@@ -1891,16 +2011,11 @@ describe("stopped Runtime is exit 3, not a usage error", () => {
     ["path", "list", "--json"],
     ["adapter", "list", "--json"],
     ["task", "--id", "nope", "--json"],
-    [
-      "write",
-      "submit",
-      "--session",
-      "s",
-      "--messages-file",
-      "/tmp/messages.json",
-      "--json",
-    ],
-    ["backup", "create", "--target", "/tmp/x", "--yes", "--json"],
+    ["write", "status", "nope", "--json"],
+    ["backup", "create", "--target", "/tmp/x", "--json"],
+    ["scan-roots", "add", "--root", "/tmp/x", "--json"],
+    ["scan", "--source", "codex", "--json"],
+    ["onboarding", "reset", "--json"],
   ])("%s ... --json exits 3 with runtime_not_running", async (...argv) => {
     const streams = captureStreams();
     let code: number;
@@ -1910,13 +2025,57 @@ describe("stopped Runtime is exit 3, not a usage error", () => {
       streams.restore();
     }
     expect(code!).toBe(3);
-    const document = JSON.parse(streams.stderr());
+    // A result, not an error: on stdout like every other --json document.
+    expect(streams.stderr()).toBe("");
+    const document = JSON.parse(streams.stdout());
     expect(document).toMatchObject({
       code: "runtime_not_running",
       exit_code: 3,
     });
     // Never the usage-error shape.
     expect(document.status).not.toBe("usage_error");
+  });
+
+  it("write submit validates its messages file before attaching, then exits 3", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "memhub-write-"));
+    const file = path.join(directory, "messages.json");
+    await import("node:fs/promises").then(({ writeFile }) =>
+      writeFile(file, JSON.stringify([{ role: "user", content: "hi" }])),
+    );
+    const streams = captureStreams();
+    let missing: number;
+    let code: number;
+    try {
+      missing = await run(
+        [
+          "write",
+          "submit",
+          "--session",
+          "s",
+          "--messages-file",
+          path.join(directory, "absent.json"),
+          "--json",
+        ],
+        {},
+      );
+      code = await run(
+        [
+          "write",
+          "submit",
+          "--session",
+          "s",
+          "--messages-file",
+          file,
+          "--json",
+        ],
+        {},
+      );
+    } finally {
+      streams.restore();
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(missing!).toBe(2);
+    expect(code!).toBe(3);
   });
 
   it.each(["pause", "resume"] as const)(
@@ -1999,6 +2158,189 @@ describe("lifecycle commands accept --json", () => {
       command: "restart",
       state: "restarted",
       code: "runtime_restarted",
+    });
+  });
+});
+
+// A Runtime service that refuses to serve an unmigrated home must be reported
+// as that, with the migration log and where to send it, not as a generic
+// "not ready within budget".
+describe("lifecycle commands report a migration block", () => {
+  async function blockedHome() {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "memhub-blocked-"));
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_disk_space_insufficient",
+      "runtime-service",
+    );
+    return dataDir;
+  }
+  // darwin: kickstart "restarts" but never becomes ready. Elsewhere: no
+  // service, so the direct spawn fails. Both must surface the block.
+  const blockedControls = () => ({
+    restartManagedRuntime: vi.fn(async () => "restarted" as const),
+    waitForRuntimeReady: vi.fn(async () => false),
+    stopRuntime: vi.fn(async () => "stopped" as const),
+    ensureRuntime: vi.fn(async () => {
+      throw new Error("Timed out waiting for MemHub Runtime");
+    }),
+  });
+
+  it("restart --json prints the block code, log file and issues URL", async () => {
+    const dataDir = await blockedHome();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["restart", "--json"],
+        { ONE_MEMORY_DATA_DIR: dataDir },
+        blockedControls(),
+      );
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).toBe(1);
+    const lines = output.value().trim().split("\n");
+    const document = JSON.parse(lines[lines.length - 1]!);
+    expect(document).toMatchObject({
+      command: "restart",
+      state: "blocked",
+      code: "sdk_migration_disk_space_insufficient",
+      log_file: path.join(dataDir, "logs", "sdk-migration.log"),
+      issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    });
+    expect(output.value()).not.toContain("runtime_not_ready_within_budget");
+  });
+
+  it("restart on a frozen home retries the migration in the foreground first", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "memhub-frozen-"));
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_memory_unreadable",
+      "desktop",
+      { frozen: { service_was_enabled: true }, data_restored: true },
+    );
+    const controls = {
+      ...blockedControls(),
+      migrateSdkData: vi.fn(async () => ({
+        state: "deferred" as const,
+        code: "sdk_migration_memory_unreadable",
+        dataRestored: true,
+      })),
+    };
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["restart", "--json"],
+        { ONE_MEMORY_DATA_DIR: dataDir },
+        controls,
+      );
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).toBe(1);
+    expect(controls.migrateSdkData).toHaveBeenCalledWith(
+      expect.objectContaining({ dataDir, caller: "cli-restart" }),
+    );
+    // Still frozen: the service is not started to retry on its own.
+    expect(controls.restartManagedRuntime).not.toHaveBeenCalled();
+    expect(controls.ensureRuntime).not.toHaveBeenCalled();
+    expect(JSON.parse(output.value())).toMatchObject({
+      command: "restart",
+      state: "blocked",
+      code: "sdk_migration_memory_unreadable",
+      data_restored: true,
+    });
+  });
+
+  it("restart on a frozen home restarts the Runtime once the retry succeeds", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "memhub-frozen-"));
+    await recordSdkMigrationBlock(
+      dataDir,
+      "sdk_migration_memory_unreadable",
+      "desktop",
+      { frozen: { service_was_enabled: false } },
+    );
+    const order: string[] = [];
+    const migrateSdkData = vi.fn(async () => {
+      order.push("migrate");
+      await clearSdkMigrationBlock(dataDir);
+      return { state: "cutover" as const };
+    });
+    const output = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        ["restart", "--json"],
+        { ONE_MEMORY_DATA_DIR: dataDir },
+        {
+          migrateSdkData,
+          waitForRuntimeReady: vi.fn(async () => true),
+          restartManagedRuntime: vi.fn(async () => {
+            order.push("restart");
+            return "restarted" as const;
+          }),
+          stopRuntime: vi.fn(async () => "stopped" as const),
+          ensureRuntime: vi.fn(async () => {
+            order.push("restart");
+            return { pid: 1 } as never;
+          }),
+        },
+      );
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).toBe(0);
+    expect(migrateSdkData).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: "cli-restart" }),
+    );
+    expect(order).toEqual(["migrate", "restart"]);
+  });
+
+  it("restart in text mode names the log file and GitHub issues", async () => {
+    const dataDir = await blockedHome();
+    const output = captureStdout();
+    try {
+      expect(
+        await run(
+          ["restart"],
+          { ONE_MEMORY_DATA_DIR: dataDir },
+          blockedControls(),
+        ),
+      ).toBe(1);
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(output.value()).toContain("sdk_migration_disk_space_insufficient");
+    expect(output.value()).toContain(
+      path.join(dataDir, "logs", "sdk-migration.log"),
+    );
+    expect(output.value()).toContain(
+      "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    );
+  });
+
+  it("ui --json reports the block instead of runtime_not_running", async () => {
+    const dataDir = await blockedHome();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(["ui", "--json"], { ONE_MEMORY_DATA_DIR: dataDir });
+    } finally {
+      output.restore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+    expect(code!).not.toBe(0);
+    expect(JSON.parse(output.value())).toMatchObject({
+      command: "ui",
+      state: "blocked",
+      code: "sdk_migration_disk_space_insufficient",
+      log_file: path.join(dataDir, "logs", "sdk-migration.log"),
     });
   });
 });
@@ -2112,7 +2454,7 @@ describe("install gates on Runtime readiness", () => {
     });
   }
 
-  it("fails and rolls back when the installed Runtime never becomes ready", async () => {
+  it("fails without rolling back when the installed Runtime never becomes ready", async () => {
     vi.clearAllMocks();
     stubInstallPlan();
     const streams = captureStreams();
@@ -2141,10 +2483,10 @@ describe("install gates on Runtime readiness", () => {
     }
     expect(code!).toBe(1);
     expect(streams.stderr()).toContain("install_runtime_not_ready");
-    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
     expect(
       lifecycleMocks.rollbackPreparedServiceInstall,
-    ).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
   });
 
   it("takes CLI ownership after a successful install over an App-owned Runtime", async () => {
@@ -2189,7 +2531,7 @@ describe("install gates on Runtime readiness", () => {
     }
   });
 
-  it("restores App ownership before relaunching the old Runtime after install failure", async () => {
+  it("never hands the home back to the App Runtime after the migration ran", async () => {
     vi.clearAllMocks();
     stubInstallPlan();
     const root = await mkdtemp(path.join(tmpdir(), "memhub-cli-owner-"));
@@ -2199,14 +2541,6 @@ describe("install gates on Runtime readiness", () => {
       appBundle: "/Applications/MemHub.app",
       appExecutable: "/Applications/MemHub.app/Contents/MacOS/MemHub",
     });
-    lifecycleMocks.rollbackPreparedServiceInstall.mockImplementationOnce(
-      async (_prepared: unknown, rollback: () => Promise<void>) => {
-        await rollback();
-        await expect(readRuntimeServiceOwner(dataDir)).resolves.toMatchObject({
-          owner: "app",
-        });
-      },
-    );
     const streams = captureStreams();
     try {
       expect(
@@ -2229,13 +2563,112 @@ describe("install gates on Runtime readiness", () => {
           { waitForRuntimeReady: async () => false },
         ),
       ).toBe(1);
+      // The App Runtime may predate the SDK migration gate: CLI keeps it.
       await expect(readRuntimeServiceOwner(dataDir)).resolves.toMatchObject({
-        owner: "app",
+        owner: "cli",
       });
+      expect(
+        lifecycleMocks.rollbackPreparedServiceInstall,
+      ).not.toHaveBeenCalled();
     } finally {
       streams.restore();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the install, not serving, when its migration is deferred", async () => {
+    vi.clearAllMocks();
+    stubInstallPlan();
+    runtimeMocks.runSdkMigration.mockResolvedValueOnce({
+      state: "deferred",
+      code: "sdk_migration_memory_unreadable",
+    });
+    const waitForRuntimeReady = vi.fn(async () => true);
+    const streams = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        [
+          "install",
+          "--source",
+          "/tmp/dist",
+          "--home",
+          "/tmp/home",
+          "--install-root",
+          "/tmp/install",
+          "--bin-dir",
+          "/tmp/bin",
+          "--data-dir",
+          "/tmp/data",
+          "--yes",
+        ],
+        {},
+        { waitForRuntimeReady },
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(code!).toBe(1);
+    const failure = JSON.parse(streams.stderr());
+    expect(failure).toMatchObject({
+      command: "install",
+      code: "sdk_migration_memory_unreadable",
+      log_file: "/tmp/data/logs/sdk-migration.log",
+      issues_url: "https://github.com/Tencent-Hunyuan/Hy-Memory/issues/new",
+    });
+    expect(failure.message).toContain("/tmp/data/logs/sdk-migration.log");
+    expect(runtimeMocks.runSdkMigration).toHaveBeenCalledWith(
+      expect.objectContaining({ caller: "cli-install" }),
+    );
+    // The new (gated) service owns the data dir; the previous registration is
+    // never re-bootstrapped and nothing is rolled back.
+    expect(lifecycleMocks.applyPreparedServiceInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ restorePreviousOnFailure: false }),
+    );
+    expect(runtimeMocks.rollbackLocalInstall).not.toHaveBeenCalled();
+    expect(
+      lifecycleMocks.rollbackPreparedServiceInstall,
+    ).not.toHaveBeenCalled();
+    expect(waitForRuntimeReady).not.toHaveBeenCalled();
+  });
+
+  it("still rolls back an install that failed before its migration ran", async () => {
+    vi.clearAllMocks();
+    stubInstallPlan();
+    runtimeMocks.installCliLink.mockRejectedValueOnce(
+      new Error("cli_link_failed"),
+    );
+    const streams = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        [
+          "install",
+          "--source",
+          "/tmp/dist",
+          "--home",
+          "/tmp/home",
+          "--install-root",
+          "/tmp/install",
+          "--bin-dir",
+          "/tmp/bin",
+          "--data-dir",
+          "/tmp/data",
+          "--yes",
+        ],
+        {},
+        { waitForRuntimeReady: async () => true },
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(code!).toBe(1);
+    expect(JSON.parse(streams.stderr())).toMatchObject({
+      command: "install",
+      code: "cli_link_failed",
+    });
+    expect(runtimeMocks.runSdkMigration).not.toHaveBeenCalled();
+    expect(runtimeMocks.rollbackLocalInstall).toHaveBeenCalledOnce();
   });
 
   it("succeeds when the installed Runtime becomes ready", async () => {
@@ -2317,7 +2750,8 @@ describe("ui wires the Core session contract without token leakage", () => {
     } finally {
       output.restore();
     }
-    expect(code!).toBe(4);
+    // A stopped Runtime is exit 3, like every other command.
+    expect(code!).toBe(3);
     const document = JSON.parse(output.value());
     expect(document).toMatchObject({
       schema_version: 1,
@@ -2346,6 +2780,120 @@ describe("ui wires the Core session contract without token leakage", () => {
 // refuse while the Runtime owns the data dir, stop+call Core from a
 // maintenance process, and never report success from a malformed response.
 describe("backup restore drives the Core managed-restore contract", () => {
+  it("previews without --yes, exits 0 and starts nothing", async () => {
+    const maintenance = vi.fn();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "restore", "--source", "/tmp/x", "--json"],
+        {},
+        { runMaintenanceRestore: maintenance },
+      );
+    } finally {
+      output.restore();
+    }
+    expect(code!).toBe(0);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(JSON.parse(output.value())).toMatchObject({
+      command: "backup restore",
+      state: "preview",
+      target: "/tmp/x",
+      applied: false,
+      next_step: "memhub backup restore --source /tmp/x --yes --confirm /tmp/x",
+    });
+  });
+
+  it("deletes data only when --confirm repeats the data directory", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "memhub-delete-home-"));
+    const dataDir = path.join(home, ".one-memory");
+    await mkdir(path.join(dataDir, "logs"), { recursive: true });
+    const deleteData = async (...extra: string[]) => {
+      const output = captureStdout();
+      try {
+        const code = await run(
+          ["delete-data", "--data-dir", dataDir, ...extra, "--json"],
+          { HOME: home },
+        );
+        return { code, document: JSON.parse(output.value()) };
+      } finally {
+        output.restore();
+      }
+    };
+    try {
+      const refused = await deleteData("--yes");
+      expect(refused.code).toBe(4);
+      expect(refused.document).toMatchObject({
+        state: "blocked",
+        code: "data_deletion_confirmation_required",
+      });
+      expect(await readdir(dataDir)).toEqual(["logs"]);
+
+      const deleted = await deleteData("--yes", "--confirm", dataDir);
+      expect(deleted.code).toBe(0);
+      expect(await readdir(dataDir).catch(() => [])).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses --yes without repeating the backup path", async () => {
+    const maintenance = vi.fn();
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "restore", "--source", "/tmp/x", "--yes", "--json"],
+        {},
+        { runMaintenanceRestore: maintenance },
+      );
+    } finally {
+      output.restore();
+    }
+    expect(code!).toBe(4);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(JSON.parse(output.value())).toMatchObject({
+      state: "rejected",
+      code: "backup_restore_confirmation_required",
+      next_step:
+        "恢复需要再写一遍备份路径：memhub backup restore --source /tmp/x --yes --confirm /tmp/x",
+    });
+  });
+
+  it("restores with --yes and the repeated backup path", async () => {
+    const maintenance = vi.fn(async () => ({
+      state: "restored" as const,
+      result: {
+        state: "restored" as const,
+        restoredBytes: 1,
+        previousBackupPath: "/tmp/pre.sqlite3",
+        sourceSchemaVersion: 34,
+      },
+    }));
+    const output = captureStdout();
+    let code: number;
+    try {
+      code = await run(
+        [
+          "backup",
+          "restore",
+          "--source",
+          "/tmp/x",
+          "--yes",
+          "--confirm",
+          "/tmp/x",
+          "--json",
+        ],
+        {},
+        { runMaintenanceRestore: maintenance },
+      );
+    } finally {
+      output.restore();
+    }
+    expect(code!).toBe(0);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects while the Runtime is running, with a distinct exit code", async () => {
     runtimeMocks.inspectRuntimeStatus.mockResolvedValueOnce({
       state: "running",
@@ -2462,7 +3010,7 @@ describe("backup restore drives the Core managed-restore contract", () => {
     });
   });
 
-  it("requires --confirm to repeat the exact source path", async () => {
+  it("refuses a legacy --confirm that does not repeat the source path", async () => {
     const maintenance = vi.fn();
     const output = captureStdout();
     let code: number;
@@ -2490,7 +3038,7 @@ describe("backup restore drives the Core managed-restore contract", () => {
       command: "backup",
       verb: "restore",
       state: "rejected",
-      code: "backup_restore_confirmation_required",
+      code: "backup_restore_confirmation_mismatch",
     });
   });
 
@@ -2642,7 +3190,7 @@ describe("init onboarding", () => {
 
   // Boolean flags were idempotent, but accepting them twice hid a duplicated
   // argv fragment that could also have duplicated a value-bearing flag.
-  it.each(["--import", "--full-rescan", "--confirm-overrides", "--dry-run"])(
+  it.each(["--import", "--confirm-overrides"])(
     "refuses a repeated init %s flag",
     async (flag) => {
       expect(await run(["init", "--source", "codex", flag, flag], {})).toBe(2);
@@ -2715,12 +3263,25 @@ describe("init onboarding", () => {
     },
   );
 
-  it("accepts --dry-run together with --import", async () => {
-    // Parsing must accept the pair; it stops at the Runtime check, which is
-    // not a usage failure.
-    expect(
-      await run(["init", "--source", "codex", "--import", "--dry-run"], {}),
-    ).not.toBe(2);
+  // `--dry-run` and `--full-rescan` never did anything (P0-2/P0-3): they are
+  // gone rather than accepted as no-ops.
+  it.each(["--dry-run", "--full-rescan"])(
+    "refuses the removed no-op %s flag",
+    async (flag) => {
+      expect(
+        await run(["init", "--source", "codex", "--import", flag], {}),
+      ).toBe(2);
+    },
+  );
+
+  it("still parses the old `init --source --import` spelling", async () => {
+    // It stops at the Runtime check (exit 3), which is not a usage failure.
+    const streams = captureStreams();
+    try {
+      expect(await run(["init", "--source", "codex", "--import"], {})).toBe(3);
+    } finally {
+      streams.restore();
+    }
   });
 });
 

@@ -12,7 +12,7 @@ test("installation docs disclose publication and lifecycle boundaries", async ()
     "utf8",
   );
 
-  assert.match(readme, /`hy-memory==2\.0\.5`/);
+  assert.match(readme, /`hy-memory==2\.0\.8`/);
   assert.match(readme, /`v1\.0\.5` 的发行目标是 Linux x64\/arm64 Runtime/);
   assert.match(readme, /Linux 制品由 GitHub Actions/);
   assert.match(readme, /macOS.*Developer ID 签名、公证/s);
@@ -25,7 +25,8 @@ test("installation docs disclose publication and lifecycle boundaries", async ()
   assert.match(installation, /Linux x64.*GitHub Actions/s);
   assert.match(installation, /Linux arm64.*GitHub Actions/s);
   assert.match(installation, /macOS arm64.*Developer ID/s);
-  assert.match(installation, /macOS x64.*Developer ID/s);
+  // v1.0.5 ships no Intel build; the table has to say so rather than omit it.
+  assert.match(installation, /\| macOS x64 \| 无 \|/);
   assert.match(installation, /release-manifest\.json/);
   assert.match(installation, /fake Release/);
   assert.match(installation, /--source/);

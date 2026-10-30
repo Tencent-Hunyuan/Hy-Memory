@@ -8,18 +8,19 @@ import axios from "axios";
  */
 const READ_ONLY_PATHS = [
   "/api/v1/call-events",
-  "/api/v1/home-summary",
   "/api/v1/import-jobs",
   "/api/v1/live-sync",
-  "/api/v1/memory-library",
   "/api/v1/memory-processing",
-  "/api/v1/memory-tasks",
   "/api/v1/model-profiles",
   "/api/v1/sources",
+  "/api/v2/home-summary",
   "/api/v2/memory-library",
   "/api/v2/user-profile",
 ] as const;
 const SDK_MEMORY_DETAIL = /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
+/** Status of one `POST /api/v2/memories` addition, by its request id. */
+const MEMORY_ADDITION =
+  /^\/api\/v2\/memories\/additions\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Contract (C0, H25): the one-time loopback code exchange for `memhub ui`.
  * It is a POST because it mints a short-lived code; the CLI sends the bearer
@@ -67,13 +68,10 @@ export function createUiSessionRequest(attachment: {
   };
 }
 
-const MEMORY_DETAIL = /^\/api\/v1\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
 const IMPORT_JOB =
   /^\/api\/v1\/import-jobs\/[A-Za-z0-9][\w.-]{0,127}(?:\/issues)?$/;
 const OPERATION_RECEIPT =
   /^\/api\/v1\/(?:source-connections|model-profile-creations|model-probe-operations)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const MEMORY_MUTATION_RECEIPT =
-  /^\/api\/v1\/memory-mutations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /**
  * Core registers these static routes before `/{memory_id}`, so a memory whose
  * id happens to be one of them would reach a different handler: `graph`
@@ -84,9 +82,15 @@ export const RESERVED_MEMORY_SEGMENTS = ["ask", "graph"] as const;
 /** A response larger than this is refused before it is buffered. */
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
+/** `rejected` is Core refusing the request itself (400/409/422: a bad filter,
+ * an ambiguous id). It is not "Core is busy" — only a transport failure or a
+ * 5xx is `unavailable`. */
 export type ReadOutcome<T> =
   | { state: "ok"; data: T }
-  | { state: "denied" | "unavailable" | "not_found"; code: string };
+  | {
+      state: "denied" | "unavailable" | "not_found" | "rejected";
+      code: string;
+    };
 
 export type CoreReader = <T>(
   path: string,
@@ -145,8 +149,25 @@ export function createCoreReader(attachment: {
     if (response.status === 404) {
       return { state: "not_found" as const, code: "http_404" };
     }
+    if ([400, 409, 422].includes(response.status)) {
+      return {
+        state: "rejected" as const,
+        code: detailCode(response.data, response.status),
+      };
+    }
     return { state: "unavailable" as const, code: `http_${response.status}` };
   };
+}
+
+/** Core's stable `detail` code when it sent one, else the bare status. */
+function detailCode(value: unknown, status: number): string {
+  const detail =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as { detail?: unknown }).detail
+      : undefined;
+  return typeof detail === "string" && /^[a-z0-9_.:-]{1,128}$/.test(detail)
+    ? detail
+    : `http_${status}`;
 }
 
 /**
@@ -173,7 +194,7 @@ export function createCoreContextQuery(attachment: {
     let response: { status: number; data: unknown };
     try {
       response = await client.post(
-        "/api/v1/context/search",
+        "/api/v2/context/search",
         body,
         options?.signal ? { signal: options.signal } : undefined,
       );
@@ -197,17 +218,18 @@ export function isReadOnlyPath(path: string): boolean {
   if ((READ_ONLY_PATHS as readonly string[]).includes(path)) return true;
   if (IMPORT_JOB.test(path)) return true;
   if (OPERATION_RECEIPT.test(path)) return true;
-  if (MEMORY_MUTATION_RECEIPT.test(path)) return true;
-  if (SDK_MEMORY_DETAIL.test(path)) return true;
-  if (!MEMORY_DETAIL.test(path)) return false;
-  const segment = path.slice("/api/v1/memories/".length);
+  if (MEMORY_ADDITION.test(path)) return true;
+  if (!SDK_MEMORY_DETAIL.test(path)) return false;
+  const segment = path.slice("/api/v2/memories/".length);
   return !(RESERVED_MEMORY_SEGMENTS as readonly string[]).includes(segment);
 }
 
 /** A write accepted by the unified Memory Server entry.
  *
- * `request_id` is what the caller keeps and queries later. Retrying is unsafe:
- * HY has no idempotency key, so a resubmit duplicates the memory.
+ * `request_id` is the idempotency key: Core keys the write on it, so a retry
+ * with the same id and the same messages is answered from the first write, and
+ * the same id with different messages is refused (409). A retry without the
+ * original id is a new write.
  */
 export interface MemoryWriteReceipt {
   request_id: string;
@@ -274,6 +296,11 @@ function baseUrlOf(attachment: RuntimeAttachmentLike): string {
   return `http://${attachment.host}:${attachment.port}`;
 }
 
+export type MemoryWriteOutcome =
+  | { state: "accepted"; receipt: MemoryWriteReceipt }
+  | { state: "rejected"; code: string; http_status: number }
+  | { state: "unknown"; code: string };
+
 export async function submitMemoryWrite(
   attachment: RuntimeAttachmentLike,
   request: {
@@ -284,28 +311,48 @@ export async function submitMemoryWrite(
     memory_at?: string;
     priority?: "live" | "normal";
   },
-): Promise<MemoryWriteReceipt> {
-  const response = await axios.post<MemoryWriteReceipt>(
-    `${baseUrlOf(attachment)}/api/v2/memory-writes`,
-    {
-      request_id: request.request_id,
-      session_id: request.session,
-      source_id: request.source,
-      messages: [...request.messages],
-      ...(request.memory_at === undefined
-        ? {}
-        : { memory_at: request.memory_at }),
-      ...(request.priority === undefined ? {} : { priority: request.priority }),
-    },
-    {
-      headers: { Authorization: `Bearer ${attachment.apiToken}` },
-      timeout: 15_000,
-      proxy: false,
-      maxRedirects: 0,
-      maxContentLength: MAX_RESPONSE_BYTES,
-    },
-  );
-  return response.data;
+): Promise<MemoryWriteOutcome> {
+  let response: { status: number; data: unknown };
+  try {
+    response = await axios.post<MemoryWriteReceipt>(
+      `${baseUrlOf(attachment)}/api/v2/memory-writes`,
+      {
+        request_id: request.request_id,
+        session_id: request.session,
+        source_id: request.source,
+        messages: [...request.messages],
+        ...(request.memory_at === undefined
+          ? {}
+          : { memory_at: request.memory_at }),
+        ...(request.priority === undefined
+          ? {}
+          : { priority: request.priority }),
+      },
+      {
+        headers: { Authorization: `Bearer ${attachment.apiToken}` },
+        timeout: 15_000,
+        proxy: false,
+        maxRedirects: 0,
+        maxContentLength: MAX_RESPONSE_BYTES,
+        validateStatus: () => true,
+      },
+    );
+  } catch {
+    // The request may or may not have reached Core; the same request id makes
+    // a retry safe.
+    return { state: "unknown", code: "transport_result_unknown" };
+  }
+  if (response.status >= 200 && response.status < 300) {
+    return { state: "accepted", receipt: response.data as MemoryWriteReceipt };
+  }
+  if (response.status >= 400 && response.status < 500) {
+    return {
+      state: "rejected",
+      code: detailCode(response.data, response.status),
+      http_status: response.status,
+    };
+  }
+  return { state: "unknown", code: `http_${response.status}_result_unknown` };
 }
 
 /** Ask Runtime to scan one source now, returning the import job it started.
@@ -502,48 +549,52 @@ export async function readScanRoots(
   }
 }
 
+/** A direct Core write whose refusal carries Core's stable code. */
+export type CoreWriteResult =
+  | { ok: true; data: unknown }
+  | { ok: false; code: string };
+
+async function coreWrite(
+  attachment: RuntimeAttachmentLike,
+  method: "post" | "delete",
+  pathname: string,
+  body: Record<string, unknown>,
+  timeout = 10_000,
+): Promise<CoreWriteResult> {
+  let response: { status: number; data: unknown };
+  try {
+    response = await axios.request({
+      method,
+      url: `${baseUrlOf(attachment)}${pathname}`,
+      data: body,
+      headers: { Authorization: `Bearer ${attachment.apiToken}` },
+      timeout,
+      proxy: false,
+      maxRedirects: 0,
+      maxContentLength: MAX_RESPONSE_BYTES,
+      validateStatus: () => true,
+    });
+  } catch {
+    return { ok: false, code: "transport_failed" };
+  }
+  if (response.status >= 200 && response.status < 300) {
+    return { ok: true, data: response.data };
+  }
+  return { ok: false, code: detailCode(response.data, response.status) };
+}
+
 export async function addScanRoot(
   attachment: RuntimeAttachmentLike,
   body: { root: string; source?: string; recursive?: boolean },
-): Promise<unknown | null> {
-  try {
-    const response = await axios.post<unknown>(
-      `${baseUrlOf(attachment)}/api/v1/scan-roots`,
-      body,
-      {
-        headers: { Authorization: `Bearer ${attachment.apiToken}` },
-        timeout: 10_000,
-        proxy: false,
-        maxRedirects: 0,
-        maxContentLength: MAX_RESPONSE_BYTES,
-      },
-    );
-    return response.data;
-  } catch (error) {
-    return { _error: error instanceof Error ? error.message : String(error) };
-  }
+): Promise<CoreWriteResult> {
+  return coreWrite(attachment, "post", "/api/v1/scan-roots", body);
 }
 
 export async function removeScanRoot(
   attachment: RuntimeAttachmentLike,
   body: { root: string },
-): Promise<unknown | null> {
-  try {
-    const response = await axios.delete<unknown>(
-      `${baseUrlOf(attachment)}/api/v1/scan-roots`,
-      {
-        headers: { Authorization: `Bearer ${attachment.apiToken}` },
-        data: body,
-        timeout: 10_000,
-        proxy: false,
-        maxRedirects: 0,
-        maxContentLength: MAX_RESPONSE_BYTES,
-      },
-    );
-    return response.data;
-  } catch (error) {
-    return { _error: error instanceof Error ? error.message : String(error) };
-  }
+): Promise<CoreWriteResult> {
+  return coreWrite(attachment, "delete", "/api/v1/scan-roots", body);
 }
 
 export async function readAdapters(
@@ -569,21 +620,12 @@ export async function readAdapters(
 export async function probeAdapter(
   attachment: RuntimeAttachmentLike,
   source: string,
-): Promise<unknown | null> {
-  try {
-    const response = await axios.post<unknown>(
-      `${baseUrlOf(attachment)}/api/v1/adapters/probe`,
-      { source },
-      {
-        headers: { Authorization: `Bearer ${attachment.apiToken}` },
-        timeout: 15_000,
-        proxy: false,
-        maxRedirects: 0,
-        maxContentLength: MAX_RESPONSE_BYTES,
-      },
-    );
-    return response.data;
-  } catch (error) {
-    return { _error: error instanceof Error ? error.message : String(error) };
-  }
+): Promise<CoreWriteResult> {
+  return coreWrite(
+    attachment,
+    "post",
+    "/api/v1/adapters/probe",
+    { source },
+    15_000,
+  );
 }

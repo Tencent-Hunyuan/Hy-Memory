@@ -401,6 +401,11 @@ class ReadRequest:
     intention_limit: int = 0           # Intention 路的 topk，默认 0 关闭
 
 
+    # 重排开关（按次生效）。False 时跳过全部重排阶段：本地 cross-encoder
+    # (recall.local_rerank_enabled) 与记忆关系图重排 (_apply_graph_rerank)，
+    # 结果按召回分排序。走请求对象而非环境变量，并发请求互不影响。
+    rerank: bool = True
+
     # 时间过滤
     created_after: Optional[float] = None  # Unix timestamp (float)，只返回 gmt_created >= 此值的记忆
 

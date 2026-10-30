@@ -8,8 +8,7 @@
  * copies drifting apart.
  */
 
-export * from "./memory-note-operation.js";
-export * from "./memory-operation.js";
+export * from "./memory-add-operation.js";
 export * from "./memory-processing-operation.js";
 export * from "./model-operation.js";
 export * from "./model-profile-operation.js";

@@ -7,7 +7,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
-import { getConversation } from "./api";
 import {
   CALL_HOSTS,
   type CallEvent,
@@ -47,11 +46,9 @@ function sourceLabel(id: string | null, notRecorded: string) {
 function CallReferences({
   event,
   onOpenMemory,
-  onOpenEvidence,
 }: {
   event: CallEvent;
   onOpenMemory?(id: string): void;
-  onOpenEvidence?(id: string): void;
 }) {
   const { t } = useGuiLanguage();
   const [result, setResult] = useState<{
@@ -59,16 +56,10 @@ function CallReferences({
     items: ResolvedCallReference[];
   } | null>(null);
   const [failure, setFailure] = useState<CallEvent | null>(null);
-  const [transcript, setTranscript] = useState<{
-    id: string;
-    status: "loading" | "ready" | "failed";
-    messages: { evidence_id: string; verbatim: string }[];
-  } | null>(null);
   useEffect(() => {
     let stopped = false;
     setResult(null);
     setFailure(null);
-    setTranscript(null);
     if (event.references.length) {
       void getCallReferences(event)
         .then((items) => {
@@ -126,69 +117,23 @@ function CallReferences({
                   </p>
                 )}
               </div>
-              {current?.available && current.reason === null && (
-                <R6Button
-                  variant="quiet"
-                  onClick={() => {
-                    if (reference.kind === "memory") {
-                      onOpenMemory?.(reference.id);
-                      return;
-                    }
-                    onOpenEvidence?.(reference.id);
-                    setTranscript({
-                      id: reference.id,
-                      status: "loading",
-                      messages: [],
-                    });
-                    void getConversation(reference.id)
-                      .then((value) => {
-                        setTranscript({
-                          id: reference.id,
-                          status: "ready",
-                          messages: value.messages.map((message) => ({
-                            evidence_id: message.evidence_id,
-                            verbatim: message.verbatim,
-                          })),
-                        });
-                      })
-                      .catch(() => {
-                        setTranscript({
-                          id: reference.id,
-                          status: "failed",
-                          messages: [],
-                        });
-                      });
-                  }}
-                >
-                  {t(
-                    reference.kind === "raw"
-                      ? "calls.openRaw"
-                      : "calls.openMemory",
-                  )}
-                </R6Button>
-              )}
+              {/* A raw reference has no by-id read on the SDK data plane,
+                  so only a memory reference opens. */}
+              {reference.kind === "memory" &&
+                current?.available &&
+                current.reason === null && (
+                  <R6Button
+                    variant="quiet"
+                    onClick={() => onOpenMemory?.(reference.id)}
+                  >
+                    {t("calls.openMemory")}
+                  </R6Button>
+                )}
             </li>
           ))}
         </ul>
       ) : (
         <p>{t("calls.noReferences")}</p>
-      )}
-      {transcript && (
-        <aside
-          aria-label={t("calls.rawBody")}
-          aria-busy={transcript.status === "loading"}
-        >
-          {transcript.status === "loading" && (
-            <p role="status">{t("calls.rawLoading")}</p>
-          )}
-          {transcript.status === "failed" && (
-            <p role="alert">{t("calls.rawFailed")}</p>
-          )}
-          {transcript.status === "ready" &&
-            transcript.messages.map((message) => (
-              <p key={message.evidence_id}>{message.verbatim}</p>
-            ))}
-        </aside>
       )}
     </section>
   );
@@ -253,11 +198,9 @@ function ClearConfirmation({
 export function CallHistory({
   onBack,
   onOpenMemory,
-  onOpenEvidence,
 }: {
   onBack(): void;
   onOpenMemory?(id: string): void;
-  onOpenEvidence?(id: string): void;
 }) {
   const { t, tnPlain, locale } = useGuiLanguage();
   const [request, setRequest] = useState({
@@ -542,11 +485,7 @@ export function CallHistory({
                     {callDeliveryLabel(selected, locale)}
                   </p>
                 )}
-                <CallReferences
-                  event={selected}
-                  onOpenMemory={onOpenMemory}
-                  onOpenEvidence={onOpenEvidence}
-                />
+                <CallReferences event={selected} onOpenMemory={onOpenMemory} />
                 {callReturnDeliveryLabel(selected, locale) && (
                   <p className="call-history-adoption">
                     {callReturnDeliveryLabel(selected, locale)}

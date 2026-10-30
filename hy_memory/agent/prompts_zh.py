@@ -743,6 +743,7 @@ RECONCILE_PROMPT_ZH = """你是一个记忆整合系统（Memory Reconciler）�
 
 * content
 * owner
+* memory_at（发生时间）
 * tags
 
 new memories 没有 ID。
@@ -791,6 +792,7 @@ new memories 没有 ID。
 * 无损合并
 * 保留所有有效信息
 * 不要产生重复 memory
+* 两者在某个值上不一致时，保留 memory_at 更晚的那个值；绝不用更早的 memory 覆盖更新的值
 
 ### 同一次事件的补充 vs 另一次发生
 
@@ -823,6 +825,7 @@ new memories 没有 ID。
 * 新 memory 与旧 memory 在同一维度冲突
 * 两者不能同时为真
 * 旧 memory 已不再代表当前状态
+* 新 memory 的 memory_at 不早于旧 memory 的 memory_at
 
 例如：
 
@@ -837,6 +840,7 @@ new memories 没有 ID。
 * wording 差异
 * 同义表达
 * 可共存偏好
+* 新 memory 的 memory_at 早于旧 memory：它是更早的状态，绝不能取代更新的状态（见「时间规则」）
 
 要求：
 
@@ -859,7 +863,7 @@ new memories 没有 ID。
 
 ### 把多条旧记忆折叠进同一条链
 
-如果**两条或更多**已有记忆描述的是**同一维度**，而新记忆是该维度上的最新变化，
+如果**两条或更多**已有记忆描述的是**同一维度**，而新记忆是该维度上的最新变化（它的 memory_at 晚于所有被折叠的记忆），
 你可以把它们折叠进同一条演化链。此时用 `memory_ids`（有序列表，**旧→新**）
 代替单个 `memory_id`：
 
@@ -951,13 +955,16 @@ SUPERSEDE 不需要复制旧内容，因为旧节点仍存在。
 
 ## 时间规则
 
-`memory_at: null`
+每条 memory（新的和已有的）都带 memory_at，表示它发生的时间。记忆**不一定按发生顺序写入**：
+历史可能晚导入，导入还没处理完时用户也可能手动添加记忆。所以一条 new memory 可能**比已有记忆更早**。
 
-表示时间未知。
-
-不要编造时间顺序。
-
-不要仅因为“看起来更新”就 supersede。
+* 新旧**只看 memory_at**。"New memories" 只表示"正在写入"，不表示"更近"。
+* 更早的 memory 绝不能取代更新的 memory：不能 SUPERSEDE 一条更新的记忆，也不能用 UPDATE 拿更早的值覆盖更新的值。
+* 如果 new memory 比与它冲突的已有记忆更早：保留已有记忆作为当前状态；把 new memory 以"过去状态"ADD
+  （用过去时，并带上时间，例如"2023 年用户住在上海"），没有新信息就不输出。
+* `memory_at: null` 表示时间未知。未知**不算更新**：不要用 memory_at 为 null 的 memory 去 SUPERSEDE 一条有时间的记忆。
+* 不要编造时间顺序。
+* 不要仅因为“看起来更新”就 supersede。
 
 ---
 

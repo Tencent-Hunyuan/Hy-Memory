@@ -38,16 +38,7 @@ describe("built MCP stdio server", () => {
       responses
         .find((item) => item.id === 2)
         .result.tools.map((tool: { name: string }) => tool.name),
-    ).toEqual([
-      "MemHub_recall",
-      "MemHub_ask",
-      "MemHub_conversations",
-      "MemHub_matters",
-      "MemHub_context",
-      "MemHub_memory_write",
-      "MemHub_memory_write_status",
-      "MemHub_diagnostic_trace",
-    ]);
+    ).toEqual(["MemHub_recall", "MemHub_write", "MemHub_diagnostic_trace"]);
     // Spawning Node and loading the bundle competes with whatever else the
     // machine is doing, so the budget has to cover a busy machine; the
     // collector's own timeout below is what reports a server that never

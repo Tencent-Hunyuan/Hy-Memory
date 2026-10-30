@@ -82,3 +82,38 @@ it("SYS-01: reduced motion skips animation and does not require animationend", (
   );
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+it("starts a new or resumed detail at the top without resetting the current detail", () => {
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const content = (scrollResetKey: string, suspended = false) => (
+    <MemoryEvidencePanel
+      open
+      suspended={suspended}
+      scrollResetKey={scrollResetKey}
+      onClose={() => {}}
+    >
+      <p>{scrollResetKey}</p>
+    </MemoryEvidencePanel>
+  );
+  const view = render(content("memory-a"));
+  const panel = view.container.querySelector<HTMLElement>(".map-inspector");
+  expect(panel).toBeTruthy();
+  if (!panel) return;
+
+  panel.scrollTop = 180;
+  view.rerender(content("memory-a"));
+  expect(panel.scrollTop).toBe(180);
+
+  view.rerender(content("memory-b"));
+  expect(panel.scrollTop).toBe(0);
+
+  panel.scrollTop = 120;
+  view.rerender(content("memory-b", true));
+  expect(panel.scrollTop).toBe(120);
+  view.rerender(content("memory-b"));
+  expect(panel.scrollTop).toBe(0);
+});

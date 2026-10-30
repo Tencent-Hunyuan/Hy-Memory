@@ -105,7 +105,7 @@ Host ID 是不可解释的标签：安装目录对它取摘要，不会把它拼
 
 来源管理页当前默认授权选择可能包含：
 
-- `om_recall`、`om_ask`、`om_conversations`、`om_diagnostic_trace`；
+- `om_recall`、`om_conversations`、`om_diagnostic_trace`（`om_ask` 已随 `MemHub_ask` 移除，旧授权仍可读取但不再授权任何工具）；
 - `all-apps`；
 - 所有已授权 Source 和 Workspace。
 

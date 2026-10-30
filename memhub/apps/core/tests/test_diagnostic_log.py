@@ -561,11 +561,11 @@ def test_database_error_records_safe_route_and_sqlite_code(tmp_path, monkeypatch
     error.sqlite_errorcode = sqlite3.SQLITE_BUSY
     error.sqlite_errorname = "SQLITE_BUSY"
     try:
-        record_database_error("core.api", error, route_path="/api/v1/context/search")
+        record_database_error("core.api", error, route_path="/api/v2/context/search")
     finally:
         reset_diagnostics()
     payload = json.loads(receipt.path.read_text().splitlines()[-1])
-    assert payload["details"]["route_path"] == "/api/v1/context/search"
+    assert payload["details"]["route_path"] == "/api/v2/context/search"
     assert payload["details"]["sqlite_errorcode"] == sqlite3.SQLITE_BUSY
     assert payload["details"]["sqlite_errorname"] == "SQLITE_BUSY"
 

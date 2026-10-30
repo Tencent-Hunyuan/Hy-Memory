@@ -1,258 +1,163 @@
-// A6: the product commands Runtime exposes on the CLI.
+// Parsers for the commands that attach to the Runtime directly:
+// `scan-roots` (alias `path`), `scan`, `backup`, `write`.
 //
-// These are the six commands the objective names: path, adapter, scan, write,
-// task, backup. Two rules run through all of them:
+// Rules shared by all of them:
 //
-// - **Mutating commands are two-phase.** Without `--yes` they print a plan and
-//   change nothing. This is the convention the existing install/service
-//   commands already follow, and it is why `scan` and `backup` default to a
-//   plan rather than quietly doing work.
-// - **Output is machine-readable.** `--json` emits one document on stdout so an
-//   agent can consume it; the human form is text. Never both, so a caller that
-//   parses stdout is not surprised by prose.
+// - **Only irreversible operations ask for `--yes`.** `backup restore`
+//   overwrites the database, so without `--yes` it previews and changes
+//   nothing. Registering a scan root, scanning a source, creating a backup and
+//   submitting a write are direct. A legacy `--yes` on a direct command is
+//   accepted and ignored so older scripts keep working.
+// - **Unknown or repeated flags are rejected**, never ignored: a dropped typo
+//   would silently change what the command does.
+// - **Output is machine-readable.** `--json` emits one document on stdout.
 //
 // The commands talk to the Runtime's HTTP API, not to the database and not to
-// HY. That is the A6 rule: CLI and Electron are clients of the same Runtime.
+// the SDK: CLI and desktop are clients of the same Runtime.
 
-/** What a mutating command would do, before it is allowed to do it. */
-export interface Plan {
-  readonly action: string;
-  readonly target: string;
-  readonly detail?: string;
-  /** Which form of the command this plan is for, when one name has several.
-   *
-   * `backup` has `create` and `restore`, and applying the wrong one is not a
-   * harmless mistake — so the verb travels with the plan the user confirmed.
-   */
-  readonly verb?: string;
-  /** The source the Runtime endpoint addresses, when the plan names one.
-   *
-   * Carried on the plan rather than re-parsed at apply time so the plan the
-   * user confirmed and the request actually sent cannot disagree.
-   */
-  readonly sourceId?: string;
-  /** `scan --all`: every source Runtime actually found, not a named one. */
-  readonly all?: boolean;
+export type ScanRootsCommand =
+  | {
+      readonly kind: "add";
+      readonly root: string;
+      readonly source?: string;
+      readonly recursive: boolean;
+    }
+  | { readonly kind: "remove"; readonly root: string };
+
+export type ScanCommand =
+  | { readonly kind: "source"; readonly sourceId: string }
+  /** Hidden alias of `sources connect --all-detected --import`. */
+  | { readonly kind: "all" };
+
+export type BackupCommand =
+  | { readonly verb: "create"; readonly target: string }
+  | {
+      readonly verb: "restore";
+      readonly source: string;
+      readonly confirmed: boolean;
+      /** Legacy `--confirm <path>`: accepted, and must repeat `--source`. */
+      readonly confirmPath?: string;
+    };
+
+interface ParsedFlags {
+  readonly values: Map<string, string>;
+  readonly switches: Set<string>;
 }
 
-export function planAddRoot(
-  root: string,
-  source: string | undefined,
-  recursive: boolean,
-): Plan {
-  return {
-    action: "add scan root",
-    target: root,
-    detail: `source=${source ?? "auto"} recursive=${recursive}`,
-  };
-}
-
-export function planRemoveRoot(root: string): Plan {
-  return { action: "remove scan root", target: root };
-}
-
-export function planScan(root: string | undefined, full: boolean): Plan {
-  return {
-    action: "scan",
-    target: root ?? "all registered roots",
-    detail: `full=${full}`,
-  };
-}
-
-export function planScanSource(sourceId: string, full: boolean): Plan {
-  return {
-    action: "scan",
-    target: `source ${sourceId}`,
-    detail: `full=${full}`,
-    sourceId,
-  };
-}
-
-export function planScanAll(full: boolean): Plan {
-  return {
-    action: "scan",
-    target: "all detected sources",
-    detail: `full=${full}`,
-    all: true,
-  };
-}
-
-export function planBackup(target: string): Plan {
-  return { action: "create backup", target, verb: "create" };
-}
-
-export function planRestore(source: string): Plan {
-  return { action: "restore backup", target: source, verb: "restore" };
-}
-
-export interface ProductCommand {
-  readonly plan: Plan;
-  readonly confirmed: boolean;
-  /** For destructive verbs with a named artifact, the exact value repeated by
-   * the user. `backup restore` requires this to match `--source`. */
-  readonly confirmPath?: string;
-}
-
-/** Parse a mutating product command.
- *
- * Unknown flags are rejected rather than ignored: a typo'd `--yes` that is
- * silently dropped would turn a real apply into a plan, and the user would
- * believe the change had been made.
- */
-export function parseProductCommand(
-  name: string,
+/** Read `--flag value` pairs and bare switches; null on anything unknown,
+ * repeated or missing its value. */
+function parseFlags(
   args: readonly string[],
-): ProductCommand | null {
-  let root: string | undefined;
-  let source: string | undefined;
-  let target: string | undefined;
-  let recursive = true;
-  let full = false;
-  let all = false;
-  let confirmed = false;
-  let confirmPath: string | undefined;
-  const seen = new Set<string>();
-  const seenValues = new Set<string>();
-
-  const flags = new Set([
-    "--root",
-    "--source",
-    "--target",
-    "--confirm",
-    "--no-recursive",
-    "--full",
-    "--all",
-    "--yes",
-    "--json",
-  ]);
-
-  // The first token is the verb for commands that have one (`path add`,
-  // `backup create`). It used to fall into the flag loop and be rejected as an
-  // unknown flag, which made every one of these commands permanently
-  // unparseable — `path add --root X` printed "参数无效" even though `help`
-  // documented it. The tests missed this because they asserted
-  // `parsed?.plan!` and null satisfies `?.` + `!`.
-  const verb = args[0];
-  const start = verb !== undefined && !verb.startsWith("--") ? 1 : 0;
-
-  for (let index = start; index < args.length; index += 1) {
+  valueFlags: readonly string[],
+  switchFlags: readonly string[],
+): ParsedFlags | null {
+  const values = new Map<string, string>();
+  const switches = new Set<string>();
+  for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (!flags.has(arg)) return null;
-    // A repeated flag is a malformed argv, not an idempotent spelling. The
-    // other command parsers already apply this rule to --json as well.
-    if (seen.has(arg)) return null;
-    seen.add(arg);
-    if (arg === "--yes") {
-      confirmed = true;
+    if (switchFlags.includes(arg)) {
+      if (switches.has(arg)) return null;
+      switches.add(arg);
       continue;
     }
-    if (arg === "--confirm") {
-      const value = args[index + 1];
-      if (value === undefined || value.startsWith("--")) return null;
-      if (confirmPath !== undefined) return null;
-      confirmPath = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--json") continue;
-    if (arg === "--no-recursive") {
-      recursive = false;
-      continue;
-    }
-    if (arg === "--full") {
-      full = true;
-      continue;
-    }
-    if (arg === "--all") {
-      all = true;
-      continue;
-    }
+    if (!valueFlags.includes(arg) || values.has(arg)) return null;
     const value = args[index + 1];
     if (value === undefined || value.startsWith("--")) return null;
-    if (seenValues.has(arg)) return null;
-    seenValues.add(arg);
+    values.set(arg, value);
     index += 1;
-    if (arg === "--root") root = value;
-    else if (arg === "--source") source = value;
-    else target = value;
   }
+  return { values, switches };
+}
 
-  if (name === "path") {
-    if (confirmPath !== undefined) return null;
-    if (target !== undefined) return null;
-    if (root === undefined) return null;
-    if (source === undefined && args.includes("--source")) return null;
-    if (seen.has("--full") || seen.has("--all")) return null;
-    if (args[0] !== "add" && args[0] !== "remove") return null;
-    if (
-      args[0] === "remove" &&
-      (seen.has("--source") || seen.has("--no-recursive"))
-    ) {
-      return null;
-    }
+const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,127}$/;
+
+/** `scan-roots add --root <path> [--source <id>] [--no-recursive]` and
+ * `scan-roots remove --root <path>` (`list` is answered separately). */
+export function parseScanRootsCommand(
+  args: readonly string[],
+): ScanRootsCommand | null {
+  const verb = args[0];
+  if (verb === "add") {
+    const flags = parseFlags(
+      args.slice(1),
+      ["--root", "--source"],
+      ["--no-recursive", "--yes", "--json"],
+    );
+    const root = flags?.values.get("--root");
+    if (!flags || root === undefined) return null;
+    const source = flags.values.get("--source");
+    if (source !== undefined && !SOURCE_ID.test(source)) return null;
     return {
-      plan:
-        args[0] === "add"
-          ? planAddRoot(root, source, recursive)
-          : planRemoveRoot(root),
-      confirmed,
+      kind: "add",
+      root,
+      ...(source === undefined ? {} : { source }),
+      recursive: !flags.switches.has("--no-recursive"),
     };
   }
-  if (name === "scan") {
-    if (confirmPath !== undefined) return null;
-    if (target !== undefined) return null;
-    if (seen.has("--no-recursive")) return null;
-    if (args[0] !== undefined && !args[0].startsWith("--")) return null;
-    // `--all` means "every source Runtime actually found", so naming one too
-    // would make the command mean two different things.
-    if (all && source !== undefined) return null;
-    if (all) return { plan: planScanAll(full), confirmed };
-    // A source is the thing the Runtime scan endpoint addresses. A bare root is
-    // still accepted for planning (it means "all registered roots") but cannot
-    // be applied, because there is no endpoint that scans a raw path — the CLI
-    // must not pretend it can.
-    if (source === undefined) return { plan: planScan(root, full), confirmed };
-    return { plan: planScanSource(source, full), confirmed };
+  if (verb === "remove") {
+    const flags = parseFlags(args.slice(1), ["--root"], ["--yes", "--json"]);
+    const root = flags?.values.get("--root");
+    return flags && root !== undefined ? { kind: "remove", root } : null;
   }
-  if (name === "backup") {
-    const verb = args[0];
-    if (verb !== "create" && verb !== "restore") return null;
-    if (seen.has("--full") || seen.has("--all") || seen.has("--no-recursive")) {
-      return null;
-    }
-    if (verb === "restore") {
-      if (source === undefined) return null;
-      if (target !== undefined) return null;
-      return {
-        plan: planRestore(source),
-        confirmed,
-        ...(confirmPath === undefined ? {} : { confirmPath }),
-      };
-    }
-    if (confirmPath !== undefined) return null;
-    if (source !== undefined) return null;
-    if (target === undefined) return null;
+  return null;
+}
+
+/** `scan --source <id>`. A scan names a source: the Runtime has no endpoint
+ * that scans a bare path, so a missing `--source` is a usage error rather
+ * than a preview of something that can never run. */
+export function parseScanCommand(args: readonly string[]): ScanCommand | null {
+  const flags = parseFlags(args, ["--source"], ["--all", "--yes", "--json"]);
+  if (!flags) return null;
+  const source = flags.values.get("--source");
+  if (flags.switches.has("--all")) {
+    return source === undefined ? { kind: "all" } : null;
+  }
+  return source !== undefined && SOURCE_ID.test(source)
+    ? { kind: "source", sourceId: source }
+    : null;
+}
+
+/** `backup create --target <path>` and
+ * `backup restore --source <path> [--yes]`. */
+export function parseBackupCommand(
+  args: readonly string[],
+): BackupCommand | null {
+  const verb = args[0];
+  if (verb === "create") {
+    const flags = parseFlags(args.slice(1), ["--target"], ["--yes", "--json"]);
+    const target = flags?.values.get("--target");
+    return flags && target !== undefined ? { verb: "create", target } : null;
+  }
+  if (verb === "restore") {
+    const flags = parseFlags(
+      args.slice(1),
+      ["--source", "--confirm"],
+      ["--yes", "--json"],
+    );
+    const source = flags?.values.get("--source");
+    if (!flags || source === undefined) return null;
+    const confirmPath = flags.values.get("--confirm");
     return {
-      plan: planBackup(target),
-      confirmed,
+      verb: "restore",
+      source,
+      confirmed: flags.switches.has("--yes"),
       ...(confirmPath === undefined ? {} : { confirmPath }),
     };
   }
   return null;
 }
 
-/** Whether `--confirm <path>` names the same restore source.
+/** Whether a legacy `--confirm <path>` names the same restore source.
  *
  * The comparison is lexical on purpose: the CLI must not resolve symlinks or
  * touch the filesystem before Core has validated the managed source. A
- * different string is a different confirmation, so a typo or a path escape
- * can never be applied as a side effect of `--yes`.
+ * different string is a different confirmation.
  */
 export function restoreConfirmationMatches(
   source: string,
   confirmPath: string | undefined,
 ): boolean {
-  return confirmPath === source;
+  return confirmPath === undefined || confirmPath === source;
 }
 
 export interface WriteSubmitCommand {
@@ -272,41 +177,33 @@ export interface WriteStatusCommand {
 
 export type WriteCommand = WriteSubmitCommand | WriteStatusCommand;
 
-/** Parse SDK-native `write submit|status`. */
+/** Parse `write submit ...` and `write status <request-id>` (or `--id`). */
 export function parseWriteCommand(
   args: readonly string[],
 ): WriteCommand | null {
   if (args.filter((item) => item === "--json").length > 1) return null;
   const meaningful = args.filter((item) => item !== "--json");
   if (meaningful[0] === "status") {
-    const status = parseTaskCommand(meaningful.slice(1));
+    const rest = meaningful.slice(1);
+    if (rest.length === 1 && !rest[0].startsWith("--")) {
+      return { kind: "status", id: rest[0] };
+    }
+    const status = parseTaskCommand(rest);
     return status === null ? null : { kind: "status", id: status.id };
   }
+  // `write --session ...` without `submit` stays accepted for older scripts.
   const input = meaningful[0] === "submit" ? meaningful.slice(1) : meaningful;
-  let session: string | undefined;
-  let source = "memhub-cli";
-  let messagesFile: string | undefined;
-  let requestId: string | undefined;
-  let memoryAt: string | undefined;
-  let priority: "live" | "normal" | undefined;
-
-  for (let index = 0; index < input.length; index += 1) {
-    const arg = input[index];
-    if (arg === "--live") {
-      priority = "live";
-      continue;
-    }
-    const value = input[index + 1];
-    if (value === undefined || value.startsWith("--")) return null;
-    index += 1;
-    if (arg === "--session") session = value;
-    else if (arg === "--source") source = value;
-    else if (arg === "--messages-file") messagesFile = value;
-    else if (arg === "--request-id") requestId = value;
-    else if (arg === "--memory-at") memoryAt = value;
-    else return null;
-  }
-
+  const flags = parseFlags(
+    input,
+    ["--session", "--source", "--messages-file", "--request-id", "--memory-at"],
+    ["--live"],
+  );
+  if (!flags) return null;
+  const session = flags.values.get("--session");
+  const source = flags.values.get("--source") ?? "memhub-cli";
+  const messagesFile = flags.values.get("--messages-file");
+  const requestId = flags.values.get("--request-id");
+  const memoryAt = flags.values.get("--memory-at");
   if (session === undefined || messagesFile === undefined || !source)
     return null;
   if (
@@ -323,39 +220,23 @@ export function parseWriteCommand(
     ...(requestId === undefined ? {} : { request_id: requestId }),
     ...(memoryAt === undefined ? {} : { memory_at: memoryAt }),
   };
-  return priority === undefined ? command : { ...command, priority };
+  return flags.switches.has("--live")
+    ? { ...command, priority: "live" }
+    : command;
 }
 
 export interface TaskCommand {
   readonly id: string;
 }
 
+/** `--id <request-id>`: the legacy `task` spelling of `write status`. */
 export function parseTaskCommand(args: readonly string[]): TaskCommand | null {
   if (args.filter((item) => item === "--json").length > 1) return null;
-  let id: string | undefined;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--json") continue;
-    if (arg !== "--id") return null;
-    const value = args[index + 1];
-    if (value === undefined || value.startsWith("--")) return null;
-    index += 1;
-    id = value;
-  }
+  const flags = parseFlags(
+    args.filter((item) => item !== "--json"),
+    ["--id"],
+    [],
+  );
+  const id = flags?.values.get("--id");
   return id === undefined ? null : { id };
-}
-
-/** The human form. Kept separate from the JSON form on purpose. */
-export function describe(plan: Plan): string {
-  const line = `${plan.action}: ${plan.target}`;
-  return plan.detail ? `${line} (${plan.detail})` : line;
-}
-
-/** The machine form: one document, nothing else on stdout. */
-export function asPlanDocument(plan: Plan): {
-  schema_version: 1;
-  plan: Plan;
-  applied: boolean;
-} {
-  return { schema_version: 1, plan, applied: false };
 }

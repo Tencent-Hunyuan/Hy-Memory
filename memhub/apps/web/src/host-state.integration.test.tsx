@@ -16,12 +16,11 @@ import { saveConnectionPreferences } from "./connection-preferences";
 import { resetConnectionReconcile } from "./connection-reconcile";
 import type { RecallHostStatus } from "./global";
 
-const { summary, processing, history, liveSync, recent } = vi.hoisted(() => ({
+const { summary, processing, history, liveSync } = vi.hoisted(() => ({
   summary: vi.fn(),
   processing: vi.fn(),
   history: vi.fn(),
   liveSync: vi.fn(),
-  recent: vi.fn(),
 }));
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
@@ -31,7 +30,6 @@ vi.mock("./api", () => ({
   getHomeSummary: summary,
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
-  getRecentConversations: recent,
   getSources: vi.fn().mockResolvedValue([]),
   getModelProfiles: vi.fn().mockResolvedValue([]),
   setSourceSync: vi.fn(),
@@ -150,7 +148,6 @@ beforeEach(() => {
   });
   processing.mockResolvedValue({ running: 0, pending: 0 });
   liveSync.mockResolvedValue([]);
-  recent.mockResolvedValue({ items: [], total: 0, offset: 0, limit: 1 });
   window.localStorage.clear();
   resetConnectionReconcile();
 });

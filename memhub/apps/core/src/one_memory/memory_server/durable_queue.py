@@ -24,10 +24,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from one_memory.background_work import in_the_background
+from one_memory.conversation_processing import TURN_IDLE_FLUSH_SECONDS, turn_batches
 from one_memory.database_access import main_database
 from one_memory.diagnostic_log import diagnostic_event
 from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
@@ -51,6 +52,7 @@ from one_memory.memory_tasks import (
 from one_memory.memory_tasks import (
     POLICY_STOPPED_CODES as _TASK_POLICY_STOPPED_CODES,
 )
+from one_memory.sdk_migration_log import error_chain_text
 from one_memory.service_levels import ServiceLevel, service_level_context
 
 logger = logging.getLogger(__name__)
@@ -240,14 +242,16 @@ PERMISSION_REQUIRED_CODES = frozenset(
 )
 
 #: Model-side codes the SDK write coordinator raises before it can lease a
-#: client (no active profile, missing credential, secure storage down). They prove
-#: nothing was sent, so the write parks instead of being lost. Transport codes
-#: that can arrive after a request was in flight stay `unknown`.
+#: client (no active profile, missing credential, secure storage down, or the
+#: client failed to construct). They prove nothing was sent, so the write
+#: parks instead of being lost. Transport codes that can arrive after a
+#: request was in flight stay `unknown`.
 MODEL_NOT_READY_CODES = frozenset(
     {
         "model_profile_not_active",
         "model_secret_unavailable",
         "secure_storage_unavailable",
+        "hy_memory_client_unavailable",
     }
 )
 
@@ -291,6 +295,23 @@ _VALID_JOB_STATES = frozenset(
 #: A row in one of these states can never be moved back to a live one.
 _TERMINAL_WRITE_STATES = frozenset({COMPLETED, FAILED, DEAD, CANCELLED})
 
+#: The legacy task rows a write job can be linked to. The SDK cutover drops
+#: them (`target_schema.LEGACY_TABLES_IN_DROP_ORDER`, inputs before tasks), so
+#: the job-only paths must not assume any of them.
+_LEGACY_TASK_LINK_TABLES = ("memory_tasks", "memory_task_inputs", "memory_write_job_evidence")
+
+
+def _legacy_task_links_present(connection: sqlite3.Connection) -> bool:
+    present = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?,?,?)",
+            _LEGACY_TASK_LINK_TABLES,
+        )
+    }
+    return present == set(_LEGACY_TASK_LINK_TABLES)
+
+
 #: Columns a current schema declares but an older `memory_write_jobs` may lack.
 #: `CREATE TABLE IF NOT EXISTS` is a no-op for an existing table, so without
 #: this an upgraded install would keep an older queue that every claim/lease
@@ -316,6 +337,12 @@ LEGACY_MEMORY_WRITE_JOB_COLUMNS = (
 
 _FIFO_BLOCKING_STATES = (PENDING, RUNNING, WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
 EVENT_TIME_WINDOW = timedelta(minutes=10)
+#: Sources whose jobs are a person adding a memory by hand ("添加记忆"), not
+#: history. History is digested strictly old to new through the event-time
+#: window; a note is stamped "now", so inside that window it waited behind the
+#: whole unprocessed history. These jobs are claimed ahead of the window,
+#: still one at a time per source and in order within their session.
+DIRECT_WRITE_SOURCES = frozenset({"one-memory-manual"})
 
 
 @dataclass(frozen=True)
@@ -888,16 +915,30 @@ class DurableWriteQueue:
         priority: str,
         connection: sqlite3.Connection,
     ) -> None:
-        """Append fresh-install input to an assembling queue row.
+        """Append input to its conversation's assembling queue row.
 
-        The row is not claimable until the scanner commits EOF and finalizes
-        it. No Evidence table is involved.
+        The row is not claimable. `finalize_sdk_file` turns what is complete
+        into write jobs (`turn_batches`) and keeps the rest here for the next
+        increment; `flush_idle_assemblies` writes a live row's rest once the
+        conversation has been quiet. `updated_at` moves only when a record is
+        new or revised, so a re-read does not keep a quiet conversation open.
+        No Evidence table is involved.
         """
         assembly_key = (
             f"assembly:{record.user_id}:{record.source_id}:"
             f"{hashlib.sha256(file_key.encode()).hexdigest()}:"
             f"{hashlib.sha256(record.conversation_id.encode()).hexdigest()}"
         )
+        session_key = internal_session_id_for(record.conversation_id, record.source_id)
+        written = connection.execute(
+            "SELECT 1 FROM memory_write_jobs AS job, json_each(job.evidence_ids_json) AS ref "
+            "WHERE job.session_key=? AND job.state!='assembling' AND ref.value=? LIMIT 1",
+            (session_key, record.evidence_id),
+        ).fetchone()
+        if written is not None:
+            # A re-read of a record a job already holds: staging it again
+            # would regroup it with later turns into a second job.
+            return
         row = connection.execute(
             "SELECT job_id,payload_json,priority FROM memory_write_jobs "
             "WHERE idempotency_key=? AND state='assembling'",
@@ -908,8 +949,20 @@ class DurableWriteQueue:
             payload = json.loads(str(row["payload_json"]))
             records = list(payload.get("input_records") or [])
         dumped = record.model_dump(mode="json")
-        if not any(item.get("evidence_id") == record.evidence_id for item in records):
+        index = next(
+            (
+                position
+                for position, item in enumerate(records)
+                if item.get("evidence_id") == record.evidence_id
+            ),
+            None,
+        )
+        changed = index is None or records[index] != dumped
+        if index is None:
             records.append(dumped)
+        elif changed:
+            # A revision replaces the carried copy in place.
+            records[index] = dumped
         now = datetime.now(UTC).isoformat()
         payload_json = json.dumps(
             {
@@ -920,15 +973,13 @@ class DurableWriteQueue:
             sort_keys=True,
         )
         if row is not None:
+            merged_priority = "live" if "live" in (row["priority"], priority) else "normal"
+            if not changed and merged_priority == row["priority"]:
+                return
             connection.execute(
-                "UPDATE memory_write_jobs SET payload_json=?,priority=?,updated_at=? "
-                "WHERE job_id=?",
-                (
-                    payload_json,
-                    "live" if row["priority"] == "live" or priority == "live" else "normal",
-                    now,
-                    str(row["job_id"]),
-                ),
+                "UPDATE memory_write_jobs SET payload_json=?,priority=?,"
+                "updated_at=CASE WHEN ? THEN ? ELSE updated_at END WHERE job_id=?",
+                (payload_json, merged_priority, int(changed), now, str(row["job_id"])),
             )
             return
         queue_seq = int(
@@ -946,7 +997,7 @@ class DurableWriteQueue:
             (
                 str(uuid4()),
                 queue_seq,
-                internal_session_id_for(record.conversation_id, record.source_id),
+                session_key,
                 record.source_id,
                 assembly_key,
                 assembly_key,
@@ -976,92 +1027,215 @@ class DurableWriteQueue:
         source_id: str,
         file_key: str,
         connection: sqlite3.Connection,
+        flush: bool = True,
     ) -> tuple[str, ...]:
+        """Write what one file's assembling rows hold that the turn rule completes.
+
+        `flush` (history at end of file) completes the last turn and writes a
+        short batch; without it (live polling) those stay in the row.
+        """
         rows = connection.execute(
             "SELECT * FROM memory_write_jobs WHERE state='assembling' "
             "AND source_key=? ORDER BY queue_seq",
             (source_id,),
         ).fetchall()
-        finalized = []
+        finalized: list[str] = []
         for row in rows:
             payload = json.loads(str(row["payload_json"]))
             if payload.get("file_key") != file_key:
                 continue
-            records = tuple(
-                EvidenceRecord.model_validate(item)
-                for item in payload.get("input_records") or []
-                if item.get("user_id") == user_id
+            finalized.extend(
+                self._write_assembled_turns(connection, row, user_id=user_id, flush=flush)
             )
-            if not records:
-                connection.execute(
-                    "DELETE FROM memory_write_jobs WHERE job_id=?",
-                    (str(row["job_id"]),),
+        return tuple(finalized)
+
+    def assemble_live_records(
+        self,
+        records: tuple[EvidenceRecord, ...],
+        *,
+        file_key: str,
+    ) -> tuple[str, ...]:
+        """Stage live records and write what is complete, in one transaction.
+
+        For live capture outside the import runner (host hooks): the same
+        assembling rows, turn rule and idle flush as live file polling.
+        """
+        if not records:
+            return ()
+        first = records[0]
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            for record in records:
+                self.stage_sdk_input(
+                    record, file_key=file_key, priority="live", connection=connection
                 )
-                continue
-            first = records[0]
-            session_id = internal_session_id_for(
-                first.conversation_id,
-                first.source_id,
-            )
-            material = ":".join(f"{item.evidence_id}:{item.content_hash}" for item in records)
-            request_id = f"turn:v2:{hashlib.sha256(material.encode()).hexdigest()}"
-            existing = connection.execute(
-                "SELECT job_id FROM memory_write_jobs WHERE idempotency_key=? AND job_id!=?",
-                (request_id, str(row["job_id"])),
-            ).fetchone()
-            if existing is not None:
-                connection.execute(
-                    "DELETE FROM memory_write_jobs WHERE job_id=?",
-                    (str(row["job_id"]),),
-                )
-                finalized.append(str(existing["job_id"]))
-                continue
-            request = WriteRequest(
-                internal_session_id=session_id,
+            return self.finalize_sdk_file(
+                user_id=first.user_id,
                 source_id=first.source_id,
-                batch_identity=BatchIdentity(
-                    internal_session_id=session_id,
-                    first_round=1,
-                    last_round=1,
-                ),
-                evidence_ids=[item.evidence_id for item in records],
-                input_records=records,
-                idempotency_key=request_id,
-                priority="live" if str(row["priority"]) == "live" else "normal",
-                event_at=max(
-                    (item.created_at for item in records if item.created_at),
-                    default=first.imported_at,
-                ),
-                time_quality="exact" if any(item.created_at for item in records) else "approximate",
+                file_key=file_key,
+                connection=connection,
+                flush=False,
             )
+
+    def flush_idle_assemblies(self, *, now: datetime | None = None) -> tuple[str, ...]:
+        """Write the rest of every live conversation quiet for 10 minutes.
+
+        Its last turn counts as complete and a batch short of 5 turns is
+        written. History rows are left alone: their end of file flushes them.
+        """
+        current = now or datetime.now(UTC)
+        cutoff = (current - timedelta(seconds=TURN_IDLE_FLUSH_SECONDS)).isoformat()
+        query = (
+            "SELECT * FROM memory_write_jobs WHERE state='assembling' AND priority='live' "
+            "AND updated_at<=? ORDER BY queue_seq"
+        )
+        # A read first: most ticks find nothing and must not take the writer.
+        with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            if connection.execute(query, (cutoff,)).fetchone() is None:
+                return ()
+        finalized: list[str] = []
+        with (
+            main_database(self.database_path).write(row_factory=sqlite3.Row) as connection,
+            connection,
+        ):
+            for row in connection.execute(query, (cutoff,)).fetchall():
+                finalized.extend(self._write_assembled_turns(connection, row, flush=True))
+        return tuple(finalized)
+
+    def _write_assembled_turns(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        *,
+        flush: bool,
+        user_id: str | None = None,
+    ) -> list[str]:
+        """Turn one assembling row's complete batches into jobs; keep the carry."""
+        payload = json.loads(str(row["payload_json"]))
+        records = tuple(
+            EvidenceRecord.model_validate(item)
+            for item in payload.get("input_records") or []
+            if user_id is None or item.get("user_id") == user_id
+        )
+        grouped = turn_batches(records, flush=flush)
+        priority: Literal["live", "normal"] = "live" if str(row["priority"]) == "live" else "normal"
+        job_ids = [
+            self._insert_turn_batch(connection, batch, priority=priority)
+            for batch in grouped.batches
+        ]
+        if not grouped.carry:
             connection.execute(
-                "UPDATE memory_write_jobs SET session_key=?,batch_id=?,"
-                "idempotency_key=?,payload_json=?,evidence_ids_json=?,state='pending',"
-                "event_at=?,time_quality=?,updated_at=? WHERE job_id=?",
+                "DELETE FROM memory_write_jobs WHERE job_id=?", (str(row["job_id"]),)
+            )
+        elif grouped.batches or len(grouped.carry) != len(records):
+            # `updated_at` stays: the idle clock counts new messages only.
+            connection.execute(
+                "UPDATE memory_write_jobs SET payload_json=? WHERE job_id=?",
                 (
-                    session_id,
-                    request.batch_identity.batch_id,
-                    request_id,
                     json.dumps(
-                        request.model_dump(
-                            mode="json",
-                            exclude={"event_at", "time_quality"},
-                        ),
+                        {
+                            **payload,
+                            "input_records": [
+                                record.model_dump(mode="json") for record in grouped.carry
+                            ],
+                        },
                         sort_keys=True,
                     ),
-                    json.dumps(list(request.evidence_ids)),
-                    (
-                        request.event_at.isoformat()
-                        if request.event_at
-                        else datetime.now(UTC).isoformat()
-                    ),
-                    request.time_quality,
-                    datetime.now(UTC).isoformat(),
                     str(row["job_id"]),
                 ),
             )
-            finalized.append(str(row["job_id"]))
-        return tuple(finalized)
+        return job_ids
+
+    def _insert_turn_batch(
+        self,
+        connection: sqlite3.Connection,
+        records: tuple[EvidenceRecord, ...],
+        *,
+        priority: Literal["live", "normal"],
+    ) -> str:
+        """One pending job for one batch of whole turns, keyed by its content.
+
+        Same records, same key: a re-read returns the job already written.
+        """
+        first = records[0]
+        session_id = internal_session_id_for(first.conversation_id, first.source_id)
+        material = ":".join(f"{item.evidence_id}:{item.content_hash}" for item in records)
+        request_id = f"turn:v2:{hashlib.sha256(material.encode()).hexdigest()}"
+        existing = connection.execute(
+            "SELECT job_id FROM memory_write_jobs WHERE idempotency_key=?",
+            (request_id,),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["job_id"])
+        request = WriteRequest(
+            internal_session_id=session_id,
+            source_id=first.source_id,
+            batch_identity=BatchIdentity(
+                internal_session_id=session_id,
+                first_round=1,
+                last_round=1,
+            ),
+            evidence_ids=[item.evidence_id for item in records],
+            input_records=records,
+            idempotency_key=request_id,
+            priority=priority,
+        )
+        # The batch's time is its first user message's, as for every other job.
+        event_at, time_quality = self._event_time_for_request(request)
+        now = datetime.now(UTC)
+        job_id = str(uuid4())
+        queue_seq = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(queue_seq),0)+1 FROM memory_write_jobs"
+            ).fetchone()[0]
+        )
+        event = event_at or now
+        if event.tzinfo is None:
+            event = event.replace(tzinfo=UTC)
+        connection.execute(
+            "INSERT INTO memory_write_jobs ("
+            "job_id,queue_seq,session_key,source_key,batch_id,idempotency_key,"
+            "payload_json,evidence_ids_json,state,priority,attempts,max_attempts,"
+            "lease_owner,lease_expires_at,hy_invoked,last_error,event_at,time_quality,"
+            "created_at,updated_at,sdk_raw_ids_json,sdk_memory_ids_json"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                job_id,
+                queue_seq,
+                session_id,
+                first.source_id,
+                request.batch_identity.batch_id,
+                request_id,
+                json.dumps(
+                    request.model_dump(mode="json", exclude={"event_at", "time_quality"}),
+                    sort_keys=True,
+                ),
+                json.dumps(list(request.evidence_ids)),
+                PENDING,
+                priority,
+                0,
+                3,
+                None,
+                None,
+                0,
+                None,
+                event.astimezone(UTC).isoformat(),
+                time_quality,
+                now.isoformat(),
+                now.isoformat(),
+                "[]",
+                "[]",
+            ),
+        )
+        if not self.sdk_authority:
+            # Legacy catch-up reads coverage from these references.
+            connection.executemany(
+                "INSERT INTO memory_write_job_evidence (job_id, evidence_id) VALUES (?,?)",
+                ((job_id, evidence_id) for evidence_id in request.evidence_ids),
+            )
+        return job_id
 
     def _freeze_request_inputs(self, request: WriteRequest) -> WriteRequest:
         if request.input_records or self.evidence is None:
@@ -1828,21 +2002,24 @@ class DurableWriteQueue:
                 or str(row["last_error"]) in NON_RETRYABLE_POST_WRITE_CODES
             ):
                 return 0
-            connection.execute(
-                """
-                UPDATE memory_tasks
-                SET status='pending', runner_token=NULL, attempts=0,
-                    last_error_code='model_content_manual_retry_requested', updated_at=?
-                WHERE status='unknown' AND task_id IN (
-                    SELECT inputs.task_id
-                    FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
-                    JOIN memory_write_job_evidence AS linked
-                      ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
-                    WHERE linked.job_id=?
+            # After the SDK cutover the legacy task tables are gone and the
+            # job is the only row to reset.
+            if not self.sdk_authority and _legacy_task_links_present(connection):
+                connection.execute(
+                    """
+                    UPDATE memory_tasks
+                    SET status='pending', runner_token=NULL, attempts=0,
+                        last_error_code='model_content_manual_retry_requested', updated_at=?
+                    WHERE status='unknown' AND task_id IN (
+                        SELECT inputs.task_id
+                        FROM memory_task_inputs AS inputs, json_each(inputs.refs_json) AS ref
+                        JOIN memory_write_job_evidence AS linked
+                          ON linked.evidence_id=json_extract(ref.value, '$.evidence_id')
+                        WHERE linked.job_id=?
+                    )
+                    """,
+                    (now, job_id),
                 )
-                """,
-                (now, job_id),
-            )
             changed = connection.execute(
                 """
                 UPDATE memory_write_jobs
@@ -1944,9 +2121,7 @@ class DurableWriteQueue:
                 f"WHERE state=? AND job_id IN ({placeholders})",
                 (PENDING, now, UNKNOWN, *job_ids),
             )
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
-            ).fetchone():
+            if _legacy_task_links_present(connection):
                 connection.execute(
                     f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
                     f"last_error_code='model_content_reconciled_absent_retry', updated_at=? "
@@ -2004,9 +2179,7 @@ class DurableWriteQueue:
                 f"WHERE state=? AND attempts=1 AND job_id IN ({placeholders})",
                 (PENDING, now, UNKNOWN, *job_ids),
             )
-            if connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_tasks'"
-            ).fetchone():
+            if _legacy_task_links_present(connection):
                 connection.execute(
                     f"UPDATE memory_tasks SET status=?, runner_token=NULL, "
                     f"last_error_code='model_content_unknown_auto_retry', updated_at=? "
@@ -2023,6 +2196,14 @@ class DurableWriteQueue:
     def resolve_unknown_from_linked_output(self, job_id: str) -> bool:
         """Close an unknown durable row when local governance output proves success."""
         with main_database(self.database_path).read(row_factory=sqlite3.Row) as connection:
+            if not (
+                _legacy_task_links_present(connection)
+                and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_task_outputs'"
+                ).fetchone()
+            ):
+                # No legacy governance output survives the SDK cutover.
+                return False
             row = connection.execute(
                 """
                 SELECT 1
@@ -2405,9 +2586,22 @@ async def execute_job(
         if code == "model_profile_not_active":
             logger.debug("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
         elif state in PARKED_STATES:
-            logger.info("durable_write_job_parked job_id=%s error_code=%s", job_id, code)
+            logger.info(
+                "durable_write_job_parked job_id=%s error_code=%s chain=%s",
+                job_id,
+                code,
+                error_chain_text(error),
+            )
         else:
-            logger.error("durable_write_job_failed job_id=%s error_code=%s", job_id, code)
+            # Where it failed, as `file:line:function` frames of the exception
+            # chain, never its message: `error_code=AttributeError` alone
+            # named no location.
+            logger.error(
+                "durable_write_job_failed job_id=%s error_code=%s chain=%s",
+                job_id,
+                code,
+                error_chain_text(error),
+            )
         return
     await in_the_background(
         queue.settle,
@@ -2494,6 +2688,9 @@ class DurableWriteDrain:
         #: a model outage clears on its own, and a queue that never goes idle
         #: must still re-admit the write once the wait has elapsed.
         self._last_model_readmit: datetime | None = None
+        #: A live conversation quiet for 10 minutes has its last turn and short
+        #: batch written (`flush_idle_assemblies`); checked on the same timer.
+        self._last_assembly_flush: datetime | None = None
         #: Idle polls do not need to hit the single writer every 50ms. A
         #: 1m Evidence table makes a miss expensive enough that the tail
         #: call-event write can be behind it; back off only while idle and
@@ -2601,6 +2798,39 @@ class DurableWriteDrain:
                 placeholders = ",".join("?" for _ in enabled_sources)
                 source_clause = f"AND candidate.source_key IN ({placeholders}) "
                 source_params = tuple(sorted(enabled_sources))
+            direct_sources = ",".join("?" for _ in DIRECT_WRITE_SOURCES)
+            # Same eligibility as the window claim below (free lease, no
+            # running job of its source, nothing earlier in its session), but
+            # not bound to the window: a note must not wait for history.
+            direct_rows = connection.execute(
+                "SELECT candidate.job_id,candidate.source_key "
+                "FROM memory_write_jobs AS candidate "
+                "WHERE candidate.state=? "
+                "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
+                + source_clause
+                + f"AND candidate.source_key IN ({direct_sources}) "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM memory_write_jobs AS held "
+                "WHERE held.source_key=candidate.source_key AND held.state=? "
+                "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM memory_write_jobs AS earlier "
+                "WHERE earlier.session_key=candidate.session_key "
+                f"AND earlier.state IN ({blocking}) "
+                "AND (earlier.event_at<candidate.event_at OR "
+                "(earlier.event_at=candidate.event_at "
+                "AND earlier.queue_seq<candidate.queue_seq))) "
+                "ORDER BY candidate.queue_seq",
+                (
+                    PENDING,
+                    now.isoformat(),
+                    *source_params,
+                    *sorted(DIRECT_WRITE_SOURCES),
+                    RUNNING,
+                    now.isoformat(),
+                    *_FIFO_BLOCKING_STATES,
+                ),
+            ).fetchall()
             window = connection.execute(
                 "SELECT window_anchor,window_end FROM memory_write_schedule_state WHERE singleton=1"
             ).fetchone()
@@ -2654,6 +2884,7 @@ class DurableWriteDrain:
                 if active is None:
                     connection.execute("DELETE FROM memory_write_schedule_state WHERE singleton=1")
                     window = None
+            anchor: Any = None
             if window is None:
                 anchor = connection.execute(
                     "SELECT candidate.event_at "
@@ -2682,8 +2913,10 @@ class DurableWriteDrain:
                         *_FIFO_BLOCKING_STATES,
                     ),
                 ).fetchone()
-                if anchor is None:
+                if anchor is None and not direct_rows:
                     return ()
+            has_window = window is not None or anchor is not None
+            if window is None and anchor is not None:
                 anchor_at = datetime.fromisoformat(str(anchor[0]))
                 if anchor_at.tzinfo is None:
                     anchor_at = anchor_at.replace(tzinfo=UTC)
@@ -2695,39 +2928,41 @@ class DurableWriteDrain:
                     "VALUES (1,?,?,?)",
                     (anchor_text, end_text, now.isoformat()),
                 )
-            rows = connection.execute(
-                "SELECT candidate.job_id,candidate.source_key "
-                "FROM memory_write_jobs AS candidate "
-                "WHERE candidate.state=? "
-                "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
-                + source_clause
-                + "AND candidate.event_at>=? AND candidate.event_at<? "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM memory_write_jobs AS held "
-                "WHERE held.source_key=candidate.source_key AND held.state=? "
-                "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM memory_write_jobs AS earlier "
-                "WHERE earlier.session_key=candidate.session_key "
-                f"AND earlier.state IN ({blocking}) "
-                "AND (earlier.event_at<candidate.event_at OR "
-                "(earlier.event_at=candidate.event_at "
-                "AND earlier.queue_seq<candidate.queue_seq))) "
-                "ORDER BY candidate.event_at,candidate.queue_seq",
-                (
-                    PENDING,
-                    now.isoformat(),
-                    *source_params,
-                    anchor_text,
-                    end_text,
-                    RUNNING,
-                    now.isoformat(),
-                    *_FIFO_BLOCKING_STATES,
-                ),
-            ).fetchall()
+            rows: list[Any] = []
+            if has_window:
+                rows = connection.execute(
+                    "SELECT candidate.job_id,candidate.source_key "
+                    "FROM memory_write_jobs AS candidate "
+                    "WHERE candidate.state=? "
+                    "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
+                    + source_clause
+                    + "AND candidate.event_at>=? AND candidate.event_at<? "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS held "
+                    "WHERE held.source_key=candidate.source_key AND held.state=? "
+                    "AND held.lease_owner IS NOT NULL AND held.lease_expires_at>=?) "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM memory_write_jobs AS earlier "
+                    "WHERE earlier.session_key=candidate.session_key "
+                    f"AND earlier.state IN ({blocking}) "
+                    "AND (earlier.event_at<candidate.event_at OR "
+                    "(earlier.event_at=candidate.event_at "
+                    "AND earlier.queue_seq<candidate.queue_seq))) "
+                    "ORDER BY candidate.event_at,candidate.queue_seq",
+                    (
+                        PENDING,
+                        now.isoformat(),
+                        *source_params,
+                        anchor_text,
+                        end_text,
+                        RUNNING,
+                        now.isoformat(),
+                        *_FIFO_BLOCKING_STATES,
+                    ),
+                ).fetchall()
             selected: list[str] = []
             selected_sources: set[str] = set()
-            for row in rows:
+            for row in (*direct_rows, *rows):
                 source_key = str(row["source_key"])
                 if source_key in selected_sources:
                     continue
@@ -2987,6 +3222,15 @@ class DurableWriteDrain:
                     await self._run_idle_maintenance(
                         self.queue.readmit_model_waiters,
                         operation_name="readmit_model_waiters",
+                    )
+                if (
+                    self._last_assembly_flush is None
+                    or tick_started - self._last_assembly_flush >= self._reap_interval
+                ):
+                    self._last_assembly_flush = tick_started
+                    await self._run_idle_maintenance(
+                        self.queue.flush_idle_assemblies,
+                        operation_name="flush_idle_assemblies",
                     )
                 if self.reconcile_unknown is not None and (
                     self._last_unknown_reconcile is None

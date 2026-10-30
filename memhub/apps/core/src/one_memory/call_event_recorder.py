@@ -15,7 +15,7 @@ from one_memory.call_event_store import (
     CallTool,
     HostId,
 )
-from one_memory.context_models import ContextSearchResponse, MemoryContextItem, RawContextItem
+from one_memory.context_models import SdkContextSearchResponse
 from one_memory.external_memory_access import ExternalMemoryAccess
 from one_memory.recall import RecallReceipt
 
@@ -42,75 +42,27 @@ def _host_id(access: ExternalMemoryAccess | None) -> HostId | None:
     return cast(HostId, host) if host in HOSTS else None
 
 
-def context_call_event(
-    result: ContextSearchResponse,
+def sdk_context_call_event(
+    result: SdkContextSearchResponse,
     access: ExternalMemoryAccess | None,
+    *,
+    memory_searched: bool,
+    timed_out: bool,
 ) -> CallEvent:
-    references: list[CallReference] = []
-    seen: set[tuple[str, str, int]] = set()
-    for item in result.items:
-        if isinstance(item, RawContextItem):
-            candidates = [
-                CallReference(
-                    kind="raw",
-                    id=message.evidence_id,
-                    revision=message.revision,
-                    source_id=item.source_id,
-                )
-                for message in item.messages
-            ]
-        elif isinstance(item, MemoryContextItem):
-            candidates = [
-                CallReference(
-                    kind="memory", id=item.memory_id, revision=item.revision, source_id=None
-                )
-            ]
-        else:
-            continue
-        for reference in candidates:
-            identity = (reference.kind, reference.id, reference.revision)
-            if identity not in seen:
-                seen.add(identity)
-                references.append(reference)
-    timed_out = any(
-        path.reason == "timeout_budget" for path in (result.paths.raw, result.paths.memory)
+    # SDK items carry no Evidence/Governance revision, and the reference
+    # resolver reads the legacy store, so the event records counts only.
+    raw_count = sum(item.kind == "raw" for item in result.items)
+    memory_count = sum(item.kind == "memory" for item in result.items)
+    state: CallState = "timed_out" if timed_out else result.state
+    return _metadata_event(
+        tool="om_recall" if memory_searched else "om_conversations",
+        state=state,
+        elapsed_ms=result.total_ms,
+        access=access,
+        raw_count=raw_count,
+        memory_count=memory_count,
+        event_id=UUID(result.request_id),
     )
-    state: CallState = (
-        "partial" if timed_out and references else "timed_out" if timed_out else result.state
-    )
-    return CallEvent.model_validate(
-        {
-            "event_id": UUID(result.request_id),
-            "occurred_at": datetime.now(UTC),
-            "host_id": _host_id(access),
-            "installation_id": UUID(access.installation_id) if access else None,
-            "tool": _context_tool(result),
-            "state": state,
-            "stage": "core_result",
-            "delivery": "unknown",
-            "adoption": "unknown",
-            "host_session_id": None,
-            "injection_elapsed_ms": None,
-            "elapsed_ms": result.total_ms,
-            "raw_count": sum(isinstance(item, RawContextItem) for item in result.items),
-            "memory_count": sum(isinstance(item, MemoryContextItem) for item in result.items),
-            "references": tuple(references),
-        }
-    )
-
-
-def record_context_result(
-    store: CallEventStore,
-    result: ContextSearchResponse,
-    access: ExternalMemoryAccess | None,
-) -> None:
-    store.record(context_call_event(result, access))
-
-
-def _context_tool(result: ContextSearchResponse) -> CallTool:
-    if result.paths.memory.status not in {"not_requested", "not_authorized"}:
-        return "om_recall"
-    return "om_conversations"
 
 
 def _metadata_event(
@@ -140,26 +92,6 @@ def _metadata_event(
         raw_count=raw_count,
         memory_count=memory_count,
         references=references,
-    )
-
-
-def conversation_call_event(
-    result: object,
-    access: ExternalMemoryAccess | None,
-    elapsed_ms: float,
-) -> CallEvent:
-    hits = tuple(getattr(result, "hits", ()) or ())
-    conversations = {
-        conversation_id
-        for hit in hits
-        if (conversation_id := getattr(hit, "conversation_id", None))
-    }
-    return _metadata_event(
-        tool="om_conversations",
-        state="grounded" if hits else "empty",
-        elapsed_ms=elapsed_ms,
-        access=access,
-        raw_count=min(len(conversations), 20),
     )
 
 
@@ -256,8 +188,9 @@ def record_legacy_result(
             host_session_id=None,
             injection_elapsed_ms=None,
             elapsed_ms=elapsed_ms,
-            raw_count=0,
-            memory_count=len(receipt.hits),
+            # A raw-fallback recall returned conversation excerpts, not memories.
+            raw_count=len(receipt.hits) if receipt.mode == "raw" else 0,
+            memory_count=0 if receipt.mode == "raw" else len(receipt.hits),
             references=(),
         )
     )

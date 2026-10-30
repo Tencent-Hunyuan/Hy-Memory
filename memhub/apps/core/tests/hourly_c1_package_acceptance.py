@@ -36,6 +36,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from subprocess import Popen
 
@@ -266,12 +267,20 @@ def _receipt(
 
 
 def _import_plan(cli: Path, env: dict[str, str], work: Path, *sources: str) -> dict:
-    args = ["init"]
-    for source in sources:
-        args.extend(["--source", source])
-    args.append("--json")
-    plan = _body(_run(cli, args, env).stdout)
+    # Grant only (processing stays frozen); the imports below connect again
+    # with --import.
+    plan = _body(_run(cli, ["sources", "connect", *sources, "--json"], env).stdout)
     return plan
+
+
+def _connect_plan(source: str) -> dict:
+    """The request a `sources connect --import` will carry.
+
+    There are no plan files any more: the CLI connects directly and the
+    request id is the idempotency key, so the probe mints it up front to read
+    the receipt afterwards.
+    """
+    return {"plan": {"request_id": str(uuid.uuid4()), "source_ids": [source]}}
 
 
 def _submit_plan(
@@ -282,9 +291,20 @@ def _submit_plan(
     name: str,
     wait_timeout: float = CONVERGENCE_TIMEOUT_SECONDS,
 ) -> dict:
-    path = work / f"{name}-inner.json"
-    path.write_text(json.dumps(plan.get("plan", {})), encoding="utf-8")
-    result = _run(cli, ["sources", "import", "--plan-file", str(path), "--confirm"], env)
+    body = plan.get("plan", {})
+    result = _run(
+        cli,
+        [
+            "sources",
+            "connect",
+            *body.get("source_ids", []),
+            "--import",
+            "--request-id",
+            str(body.get("request_id")),
+            "--json",
+        ],
+        env,
+    )
     return {
         "exit": result.returncode,
         "receipt": _receipt(cli, env, plan, wait_timeout=wait_timeout),
@@ -394,10 +414,21 @@ def _preserve_run_state(dest: Path, data: Path, receipt: dict, args) -> dict:
 
 def _busy_negative_arm(cli: Path, env: dict[str, str], work: Path, source: str) -> dict:
     """Prove a concurrent history request is refused without a second job."""
-    plan = _body(_run(cli, ["setup", "plan", "--source", source, "--json"], env).stdout)
-    path = work / "busy-inner.json"
-    path.write_text(json.dumps(plan.get("plan", {})), encoding="utf-8")
-    result = _run(cli, ["sources", "import", "--plan-file", str(path), "--confirm"], env)
+    plan = _connect_plan(source)
+    body = plan["plan"]
+    result = _run(
+        cli,
+        [
+            "sources",
+            "connect",
+            source,
+            "--import",
+            "--request-id",
+            body["request_id"],
+            "--json",
+        ],
+        env,
+    )
     return {
         "exit": result.returncode,
         "receipt": _receipt(cli, env, plan, wait_terminal=False),
@@ -408,7 +439,7 @@ def _run_busy_negative(
     cli: Path, env: dict[str, str], work: Path, source: str, timeout: float
 ) -> int:
     """A separate arm: make a real long-running job, then require busy/no-job."""
-    first_plan = _body(_run(cli, ["setup", "plan", "--source", source, "--json"], env).stdout)
+    first_plan = _connect_plan(source)
     first = _submit_plan(cli, env, work, first_plan, "busy-first", timeout)
     first_job = _nested(first, "receipt").get("jobs", [])
     if not first_job or first_job[0].get("status") not in {"running", "pending"}:
@@ -583,22 +614,16 @@ def main() -> int:
         if args.busy_negative:
             return _run_busy_negative(cli, env, work, args.source, args.wait_timeout)
 
-        # Authorize first, then use the same headless plan shape for every
-        # import. `init --json` is a discovery/authorization receipt and its
-        # nested shape differs from `setup plan`.
+        # Authorize first, then connect with --import for every import.
         _import_plan(cli, env, work, args.source)
-        first_plan = _body(
-            _run(cli, ["setup", "plan", "--source", args.source, "--json"], env).stdout
-        )
+        first_plan = _connect_plan(args.source)
         receipt["first"] = _submit_plan(cli, env, work, first_plan, "first", args.wait_timeout)
         if _nested(receipt, "first", "receipt").get("_probe_timeout"):
             receipt["state"] = "failed"
             receipt["reason"] = "convergence_timeout"
             return 1
 
-        second_plan = _body(
-            _run(cli, ["setup", "plan", "--source", args.source, "--json"], env).stdout
-        )
+        second_plan = _connect_plan(args.source)
         receipt["second"] = _submit_plan(cli, env, work, second_plan, "second", args.wait_timeout)
         if _nested(receipt, "second", "receipt").get("_probe_timeout"):
             receipt["state"] = "failed"
@@ -607,9 +632,7 @@ def main() -> int:
 
         with copied[0].open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(_append_record(args.source)) + "\n")
-        append_plan = _body(
-            _run(cli, ["setup", "plan", "--source", args.source, "--json"], env).stdout
-        )
+        append_plan = _connect_plan(args.source)
         receipt["append"] = _submit_plan(cli, env, work, append_plan, "append", args.wait_timeout)
         if _nested(receipt, "append", "receipt").get("_probe_timeout"):
             receipt["state"] = "failed"
@@ -631,9 +654,7 @@ def main() -> int:
             text=True,
         )
         receipt["restart"] = _wait_ready(cli, env, process)
-        restart_plan = _body(
-            _run(cli, ["setup", "plan", "--source", args.source, "--json"], env).stdout
-        )
+        restart_plan = _connect_plan(args.source)
         receipt["restart_import"] = _submit_plan(
             cli, env, work, restart_plan, "restart", args.wait_timeout
         )
@@ -642,18 +663,10 @@ def main() -> int:
             receipt["reason"] = "convergence_timeout"
             return 1
 
-        freeze_plan = _body(
-            _run(
-                cli,
-                ["sync", "pause", "--source", args.source, "--json"],
-                env,
-            ).stdout
-        )
-        freeze_file = work / "freeze-inner.json"
-        freeze_file.write_text(json.dumps(freeze_plan.get("plan", {})), encoding="utf-8")
+        # `sync pause` applies directly (there is no plan/apply pair).
         applied = _run(
             cli,
-            ["sync", "apply", "--plan-file", str(freeze_file), "--confirm"],
+            ["sync", "pause", "--source", args.source, "--json"],
             env,
         )
         listed = _body(_run(cli, ["sources", "list", "--json"], env).stdout)

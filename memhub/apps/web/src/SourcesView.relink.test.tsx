@@ -223,7 +223,6 @@ describe("existing connection belongs to a different profile", () => {
           expectedRevision: 4,
           allowedTools: [
             "om_recall",
-            "om_ask",
             "om_conversations",
             "om_diagnostic_trace",
           ],
@@ -289,12 +288,7 @@ describe("existing connection belongs to a different profile", () => {
     expect(api.setRecallPermission).toHaveBeenCalledExactlyOnceWith("cursor", {
       installationId: "new-installation",
       expectedRevision: 4,
-      allowedTools: [
-        "om_recall",
-        "om_ask",
-        "om_conversations",
-        "om_diagnostic_trace",
-      ],
+      allowedTools: ["om_recall", "om_conversations", "om_diagnostic_trace"],
       allowedScopes: ["all-apps", "source:cursor"],
       userConfirmed: true,
     });

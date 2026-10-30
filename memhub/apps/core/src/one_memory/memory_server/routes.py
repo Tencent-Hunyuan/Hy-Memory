@@ -1,7 +1,7 @@
 """A3-01: the HTTP entry to the unified write path.
 
-`POST /api/v1/memory-writes` accepts a write and returns a request id;
-`GET /api/v1/memory-writes/{id}` reports its outcome.
+`POST /api/v2/memory-writes` accepts OpenAI-style messages and returns a
+request id; `GET /api/v2/memory-writes/{id}` reports its outcome.
 
 Two rules shape this endpoint, both consequences of A0-03's measurement that HY
 has no idempotency key:
@@ -43,17 +43,6 @@ from one_memory.memory_server.durable_queue import (
 )
 from one_memory.memory_server.registry import WriteRegistry, WriteState
 from one_memory.memory_server.submit import WriteConflictError
-
-
-class MemoryWriteInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    internal_session_id: str = Field(min_length=1, max_length=128)
-    first_round: int = Field(ge=1)
-    last_round: int = Field(ge=1)
-    evidence_ids: list[str] = Field(min_length=1)
-    priority: Literal["live", "normal"] = "normal"
-    idempotency_key: str | None = Field(default=None, max_length=256)
 
 
 class MemoryWriteReceipt(BaseModel):
@@ -119,67 +108,6 @@ def _registry(
     if registry is None:
         raise HTTPException(503, "memory write registry unavailable")
     return cast(WriteRegistry | DurableWriteRegistry, registry)
-
-
-def router(dependencies: list[Any] | None = None) -> APIRouter:
-    instance = APIRouter(
-        prefix="/api/v1/memory-writes",
-        tags=["memory-writes"],
-        dependencies=dependencies or [],
-    )
-
-    @instance.post("", response_model=MemoryWriteReceipt, status_code=202)
-    def submit(payload: MemoryWriteInput, request: Request) -> MemoryWriteReceipt:
-        registry = _registry(request)
-        batch = BatchIdentity(
-            internal_session_id=payload.internal_session_id,
-            first_round=payload.first_round,
-            last_round=payload.last_round,
-        )
-        request_contract = WriteRequest(
-            internal_session_id=payload.internal_session_id,
-            batch_identity=batch,
-            evidence_ids=payload.evidence_ids,
-            idempotency_key=payload.idempotency_key or batch.batch_id,
-            priority=payload.priority,
-        )
-        try:
-            record, enqueued = registry.submit(request_contract)
-        except WriteConflictError as error:
-            raise HTTPException(409, str(error)) from error
-        except LookupError as error:
-            # Evidence-first: the write points at Evidence the business
-            # database does not hold. Rejecting it here is a caller error, not
-            # a server fault, and it must not create a queue row.
-            raise HTTPException(422, str(error)) from error
-        return MemoryWriteReceipt(
-            request_id=record.request_id,
-            state=record.state,
-            created_at=record.created_at,
-            updated_at=record.updated_at,
-            detail="" if enqueued else "already accepted; not enqueued again",
-        )
-
-    @instance.get("/{request_id}", response_model=MemoryWriteReceipt)
-    def status(request_id: str, request: Request) -> MemoryWriteReceipt:
-        registry = _registry(request, write=False)
-        try:
-            record = registry.get(request_id)
-        except DurableQueueSchemaUnavailableError as error:
-            raise HTTPException(503, str(error)) from error
-        if record is None:
-            raise HTTPException(404, "unknown request id")
-        return MemoryWriteReceipt(
-            request_id=record.request_id,
-            state=record.state,
-            created_at=record.created_at,
-            updated_at=record.updated_at,
-            detail=record.detail,
-            raw_ids=record.raw_ids,
-            memory_ids=record.memory_ids,
-        )
-
-    return instance
 
 
 def sdk_router(dependencies: list[Any] | None = None) -> APIRouter:

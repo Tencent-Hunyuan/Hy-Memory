@@ -60,6 +60,7 @@ TOML 编辑器只维护 `mcp_servers.one-memory` 和对应 `.env` 表，尽量�
 ## 权限
 
 - 默认 Tools：`om_recall`、`om_conversations`、`om_diagnostic_trace`。
+- MCP 只暴露三个工具：`MemHub_recall`、`MemHub_write`、`MemHub_diagnostic_trace`。`om_conversations` 不再是 MCP 工具，只授权原文通道（`/context` 与召回的原文回退）；`MemHub_write` 不受授权控制，只要求已认证的安装。
 - 默认 Scopes：`all-apps`、`source:codex`。
 - Credential Secret 位于 MemHub 私有目录；`config.toml` 只写文件路径。
 

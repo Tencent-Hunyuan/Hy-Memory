@@ -13,8 +13,13 @@ type MaterialBridge = {
   getConnectionMaterial(): Promise<ConnectionMaterial>;
 };
 
-export function ConnectionFallback() {
+export function ConnectionFallback({
+  defaultExpanded = false,
+}: {
+  defaultExpanded?: boolean;
+} = {}) {
   const { locale, t } = useGuiLanguage();
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [displayName, setDisplayName] = useState("");
   const [material, setMaterial] = useState<Material | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,7 +47,11 @@ export function ConnectionFallback() {
   }
 
   return (
-    <details className="connection-fallback">
+    <details
+      className="connection-fallback"
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
       <summary>{t("connectionFallback.title")}</summary>
       {materialBridge?.getConnectionMaterial ? (
         <ConnectionMaterialFallback

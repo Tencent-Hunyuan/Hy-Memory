@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS coding_memory_meta (
     confidence       REAL NOT NULL DEFAULT 0.7,
     source           TEXT NOT NULL DEFAULT 'default',
     extraction_source TEXT NOT NULL DEFAULT 'auto_extract',
+    memory_at        INTEGER,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -109,6 +110,7 @@ CREATE TABLE IF NOT EXISTS working_fact (
     derived_experience_ids TEXT NOT NULL DEFAULT '[]',
     status                 TEXT NOT NULL DEFAULT 'active',
     fact_chain_summary     TEXT NOT NULL DEFAULT '',
+    memory_at              INTEGER,
     created_at             TEXT NOT NULL
 );
 -- 反查前驱（谁的 fact_link 指向我）走这个索引，写演变总结时要顺着链往回走
@@ -164,6 +166,8 @@ _ADDED_COLUMNS = {
     "coding_memory_meta": {
         "source_fact_ids": "TEXT NOT NULL DEFAULT '[]'",
         "extraction_source": "TEXT NOT NULL DEFAULT 'auto_extract'",
+        # 对话时间，秒级 epoch（同 chat）。老库里的行是 NULL：那时没存过。
+        "memory_at": "INTEGER",
     },
     # 早期版本存过一列 fact_chain（机械累积的历代说法），已废弃：同样的信息顺着
     # fact_link 反查就有。老库里那一列留着不管，有默认值不影响插入。
@@ -177,6 +181,7 @@ _ADDED_COLUMNS = {
         "subject": "TEXT NOT NULL DEFAULT ''",
         "details": "TEXT NOT NULL DEFAULT ''",
         "source": "TEXT NOT NULL DEFAULT 'default'",
+        "memory_at": "INTEGER",
     },
 }
 
@@ -215,6 +220,21 @@ def _in_clause(column: str, values: Optional[List[str]]) -> Tuple[str, List[Any]
         return "", []
     placeholders = ",".join("?" for _ in values)
     return f"{column} IN ({placeholders})", list(values)
+
+
+def _source_where(
+    include_sources: Optional[List[str]], exclude_sources: Optional[List[str]],
+) -> Tuple[str, List[Any]]:
+    """Caller-source filter as SQL (``1`` when unfiltered); exclusion wins."""
+    clauses: List[str] = []
+    params: List[Any] = []
+    if include_sources:
+        clauses.append(f"source IN ({','.join('?' for _ in include_sources)})")
+        params.extend(include_sources)
+    if exclude_sources:
+        clauses.append(f"source NOT IN ({','.join('?' for _ in exclude_sources)})")
+        params.extend(exclude_sources)
+    return (" AND ".join(clauses) or "1"), params
 
 
 def _scope_matches(
@@ -275,6 +295,29 @@ def _parse_dt(s: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _from_epoch(value: Any) -> Optional[datetime]:
+    """memory_at 列（秒级 epoch）→ datetime；NULL 或坏值返回 None。"""
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value))
+    except Exception:
+        return None
+
+
+def _to_epoch(value: Optional[datetime]) -> Optional[int]:
+    return int(value.timestamp()) if isinstance(value, datetime) else None
+
+
+def _later(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
+    """两个对话时间取较晚的；一边缺就取另一边。"""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if _to_epoch(a) >= _to_epoch(b) else b
+
+
 def _row_to_memory(row: sqlite3.Row) -> CodingMemory:
     """SQLite row → CodingMemory"""
     return CodingMemory(
@@ -293,6 +336,7 @@ def _row_to_memory(row: sqlite3.Row) -> CodingMemory:
         confidence=row["confidence"],
         source=row["source"],
         extraction_source=row["extraction_source"],
+        memory_at=_from_epoch(row["memory_at"]),
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
     )
@@ -319,6 +363,7 @@ def _row_to_fact(row: sqlite3.Row) -> WorkingFact:
         # 老库刚 ADD COLUMN 时可能取不到这一列，用 keys() 兜一下
         fact_chain_summary=(row["fact_chain_summary"] or ""
                             if "fact_chain_summary" in row.keys() else ""),
+        memory_at=_from_epoch(row["memory_at"]),
         created_at=_parse_dt(row["created_at"]),
     )
 
@@ -560,7 +605,11 @@ class CodingMemoryStore:
         await self._upsert_vec_keys(memory)
         logger.info(
             f"[coding-store] inserted experience_id={memory.experience_id} "
-            f"task={memory.task!r} keys={1 + len(memory.search_keys)}"
+            f"keys={1 + len(memory.search_keys)}"
+        )
+        logger.debug(
+            f"[coding-store] inserted experience_id={memory.experience_id} "
+            f"task={memory.task!r}"
         )
 
     async def update(self, memory: CodingMemory) -> None:
@@ -582,6 +631,8 @@ class CodingMemoryStore:
         memory.updated_at = datetime.utcnow()
         if memory.created_at is None:
             memory.created_at = prev.created_at
+        # 合并后的经验讲的是两段对话，对话时间取较晚的那段
+        memory.memory_at = _later(prev.memory_at, memory.memory_at)
         await _run_in_pool(self._upsert_sql_sync, memory)
         # 删旧 VDB
         await self._delete_vec_keys_by_count(memory.experience_id, prev_key_count)
@@ -601,6 +652,86 @@ class CodingMemoryStore:
         await self._delete_vec_keys_by_count(experience_id, 1 + len(prev.search_keys))
         await _run_in_pool(self._delete_sql_sync, experience_id, user_id)
         logger.info(f"[coding-store] deleted experience_id={experience_id}")
+        return True
+
+    async def edit_experience(
+        self,
+        experience_id: str,
+        *,
+        user_id: Optional[str] = None,
+        task: Optional[str] = None,
+        solution: Optional[str] = None,
+        search_keys: Optional[List[str]] = None,
+    ) -> Optional[CodingMemory]:
+        """调用方手动改一条经验（client.update 用）。返回改后的经验；不存在返回 None。
+
+        与 update() 的区别：update 是写入链路的覆盖式重写，带写授权校验（同
+        agent/session/workspace 才能改）；这里是用户对已有条目的直接编辑，只动
+        给定的字段，其余原样保留，因此不做授权校验。
+
+        向量行只嵌 task + search_keys（solution 不进向量），所以只改 solution 时
+        不重嵌、不碰向量库；改了 task / search_keys 才删旧 key 行重写。
+        updated_at 总是刷新。
+        """
+        prev = await self.get_by_id(experience_id, user_id=user_id)
+        if prev is None:
+            return None
+        updated = deepcopy(prev)
+        if task is not None:
+            updated.task = task
+        if solution is not None:
+            updated.solution = solution
+        if search_keys is not None:
+            updated.search_keys = list(search_keys)
+        updated.updated_at = datetime.utcnow()
+        await _run_in_pool(self._upsert_sql_sync, updated)
+        if updated.task != prev.task or updated.search_keys != prev.search_keys:
+            await self._delete_vec_keys_by_count(experience_id, 1 + len(prev.search_keys))
+            await self._upsert_vec_keys(updated)
+        logger.info(f"[coding-store] edited experience_id={experience_id}")
+        return updated
+
+    async def edit_fact(
+        self,
+        fact_id: str,
+        *,
+        statement: str,
+        user_id: Optional[str] = None,
+    ) -> Optional[WorkingFact]:
+        """调用方手动改一条事实的 statement。返回改后的事实；不存在返回 None。
+
+        statement 是事实层的检索文本，所以 active 事实会重嵌并覆盖它那一行向量
+        （node_id 就是 fact_id，upsert 即覆盖）。superseded 事实的向量行早已撤掉，
+        这里不把它加回去，否则会让过期结论重新占召回名额。
+        """
+        prev = await self.get_fact(fact_id, user_id=user_id)
+        if prev is None:
+            return None
+        updated = deepcopy(prev)
+        updated.statement = statement
+        await _run_in_pool(self._upsert_fact_sql_sync, updated)
+        if updated.status == "active":
+            await self._upsert_fact_vec(updated)
+        logger.info(f"[coding-store] edited fact_id={fact_id}")
+        return updated
+
+    async def delete_fact(self, fact_id: str, user_id: Optional[str] = None) -> bool:
+        """物理删除一条事实（SQLite 行 + 事实向量行），返回是否真有删到。
+
+        别处留下的引用（经验的 source_fact_ids、后继事实的 fact_link）不清：
+        召回侧本来就按存在性过滤死链（get_many / get_facts 查不到自然掉队）。
+        """
+        prev = await self.get_fact(fact_id, user_id=user_id)
+        if prev is None:
+            logger.info(f"[coding-store] delete fact skipped (not found): {fact_id}")
+            return False
+        if self._fact_vec is not None:
+            try:
+                await self._fact_vec.delete(fact_id)
+            except Exception as e:
+                logger.debug(f"[coding-store] delete fact vec {fact_id} ignored: {e}")
+        await _run_in_pool(self._delete_fact_sql_sync, fact_id, prev.user_id)
+        logger.info(f"[coding-store] deleted fact_id={fact_id}")
         return True
 
     # ------------------------------------------------------------
@@ -687,28 +818,83 @@ class CodingMemoryStore:
         branch: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
     ) -> List["CodingMemory"]:
         """按 workspace_id（+可选 branch）纯过滤列出该 user 的完整 coding memory。
 
         作用域规则见 _scope_where（与 search 路径共用同一套）。无语义排序，按
-        updated_at 倒序（最近修改优先）。
+        updated_at 倒序（最近修改优先）。include_sources / exclude_sources 按
+        source 列在 SQL 里过滤（排除优先），所以 LIMIT/OFFSET 在过滤之后生效。
         """
         return await _run_in_pool(
-            self._list_by_workspace_sync, user_id, workspace_id, branch, limit, offset
+            self._list_by_workspace_sync, user_id, workspace_id, branch, limit, offset,
+            include_sources, exclude_sources,
         )
 
     def _list_by_workspace_sync(
         self, user_id: str, workspace_id: str, branch: Optional[str],
         limit: int, offset: int,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
     ) -> List["CodingMemory"]:
         scope_sql, scope_params = _scope_where(workspace_id, branch)
+        source_sql, source_params = _source_where(include_sources, exclude_sources)
         with self._lock:
             assert self._conn is not None
             sql = (f"SELECT * FROM coding_memory_meta WHERE user_id = ? AND {scope_sql} "
-                   f"ORDER BY updated_at DESC LIMIT ? OFFSET ?")
-            params: List[Any] = [user_id] + scope_params + [limit, offset]
+                   f"AND {source_sql} "
+                   f"ORDER BY updated_at DESC, experience_id ASC LIMIT ? OFFSET ?")
+            params: List[Any] = ([user_id] + scope_params + source_params
+                                 + [limit, offset])
             cur = self._conn.execute(sql, params)
             return [_row_to_memory(r) for r in cur.fetchall()]
+
+    async def stats(
+        self,
+        user_id: str,
+        workspace_id: Optional[str] = None,
+        branch: Optional[str] = None,
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """经验数、最新创建/修改时间、active 事实数。纯聚合，不读正文。
+
+        作用域与 list_by_workspace 相同：workspace_id 为空表示该 user 全部；
+        来源过滤同样与 list_by_workspace 一致，count 因此恒等于分页可翻到的总数。
+        """
+        return await _run_in_pool(
+            self._stats_sync, user_id, workspace_id, branch,
+            include_sources, exclude_sources,
+        )
+
+    def _stats_sync(
+        self, user_id: str, workspace_id: Optional[str], branch: Optional[str],
+        include_sources: Optional[List[str]] = None,
+        exclude_sources: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        scope_sql, scope_params = _scope_where(workspace_id, branch)
+        source_sql, source_params = _source_where(include_sources, exclude_sources)
+        with self._lock:
+            assert self._conn is not None
+            row = self._conn.execute(
+                f"SELECT COUNT(*) AS n, MAX(created_at) AS created, "
+                f"MAX(updated_at) AS updated FROM coding_memory_meta "
+                f"WHERE user_id = ? AND {scope_sql} AND {source_sql}",
+                [user_id] + scope_params + source_params,
+            ).fetchone()
+            facts = self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM working_fact "
+                f"WHERE user_id = ? AND status = 'active' AND {scope_sql} "
+                f"AND {source_sql}",
+                [user_id] + scope_params + source_params,
+            ).fetchone()
+        return {
+            "count": int(row["n"] or 0),
+            "latest_created_at": _parse_dt(row["created"]) if row["created"] else None,
+            "latest_updated_at": _parse_dt(row["updated"]) if row["updated"] else None,
+            "facts": int(facts["n"] or 0),
+        }
 
     # ------------------------------------------------------------
     # 召回
@@ -820,7 +1006,8 @@ class CodingMemoryStore:
             fact.created_at = datetime.utcnow()
         await _run_in_pool(self._upsert_fact_sql_sync, fact)
         await self._upsert_fact_vec(fact)
-        logger.info(
+        logger.info(f"[coding-store] inserted fact_id={fact.fact_id}")
+        logger.debug(
             f"[coding-store] inserted fact_id={fact.fact_id} "
             f"statement={fact.statement!r}"
         )
@@ -1049,8 +1236,8 @@ class CodingMemoryStore:
                     experience_id, user_id, agent_id, task, search_keys, solution,
                     boundary_envs, workspace_id, branch, session_id,
                     files, source_fact_ids, confidence, source, extraction_source,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    memory_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(experience_id) DO UPDATE SET
                     user_id         = excluded.user_id,
                     agent_id        = excluded.agent_id,
@@ -1066,6 +1253,7 @@ class CodingMemoryStore:
                     confidence      = excluded.confidence,
                     source          = excluded.source,
                     extraction_source = excluded.extraction_source,
+                    memory_at       = excluded.memory_at,
                     updated_at      = excluded.updated_at
                 """,
                 (
@@ -1076,6 +1264,7 @@ class CodingMemoryStore:
                     json.dumps(memory.files, ensure_ascii=False),
                     json.dumps(memory.source_fact_ids, ensure_ascii=False),
                     memory.confidence, memory.source, memory.extraction_source,
+                    _to_epoch(memory.memory_at),
                     (memory.created_at or datetime.utcnow()).isoformat(),
                     (memory.updated_at or datetime.utcnow()).isoformat(),
                 ),
@@ -1086,6 +1275,14 @@ class CodingMemoryStore:
             self._conn.execute(
                 "DELETE FROM coding_memory_meta WHERE experience_id = ? AND user_id = ?",
                 (experience_id, user_id),
+            )
+
+    def _delete_fact_sql_sync(self, fact_id: str, user_id: str) -> None:
+        with self._lock:
+            assert self._conn is not None
+            self._conn.execute(
+                "DELETE FROM working_fact WHERE fact_id = ? AND user_id = ?",
+                (fact_id, user_id),
             )
 
     def _get_by_id_sync(
@@ -1208,8 +1405,8 @@ class CodingMemoryStore:
                     fact_id, user_id, agent_id, session_id, workspace_id, branch,
                     source, statement, files, subject, details,
                     fact_link, derived_experience_ids,
-                    status, fact_chain_summary, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, fact_chain_summary, memory_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fact_id) DO UPDATE SET
                     user_id                = excluded.user_id,
                     agent_id               = excluded.agent_id,
@@ -1224,7 +1421,8 @@ class CodingMemoryStore:
                     fact_link              = excluded.fact_link,
                     derived_experience_ids = excluded.derived_experience_ids,
                     status                 = excluded.status,
-                    fact_chain_summary     = excluded.fact_chain_summary
+                    fact_chain_summary     = excluded.fact_chain_summary,
+                    memory_at              = excluded.memory_at
                 """,
                 (
                     fact.fact_id, fact.user_id, fact.agent_id,
@@ -1237,6 +1435,7 @@ class CodingMemoryStore:
                     json.dumps(fact.derived_experience_ids, ensure_ascii=False),
                     fact.status,
                     fact.fact_chain_summary or "",
+                    _to_epoch(fact.memory_at),
                     (fact.created_at or datetime.utcnow()).isoformat(),
                 ),
             )

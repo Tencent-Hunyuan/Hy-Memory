@@ -315,6 +315,40 @@ describe("macOS service lifecycle", () => {
     expect(deps.verifyRegistrationSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  it("does not re-bootstrap a previous registration that may serve a legacy home", async () => {
+    const f = fixture();
+    const oldPath = "/Users/example/Library/LaunchAgents/old-runtime.plist";
+    const runCommand = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("bootstrap failed"));
+    const deps = dependencies({
+      inspectRegistration: vi.fn(async () => ({
+        kind: "managed" as const,
+        plistPath: oldPath,
+        content: "old managed plist",
+      })),
+      runCommand,
+    });
+
+    const prepared = await prepareServiceInstall(f.layout, f.options, deps);
+    await expect(
+      applyPreparedServiceInstall(
+        { ...prepared, restorePreviousOnFailure: false },
+        deps,
+      ),
+    ).rejects.toThrow("runtime_service_replacement_failed");
+
+    // bootout + the failed bootstrap only; the old plist is not bootstrapped.
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand).not.toHaveBeenCalledWith([
+      "launchctl",
+      "bootstrap",
+      "gui/501",
+      oldPath,
+    ]);
+  });
+
   it("removes the replacement plist and restores the previous registration", async () => {
     const f = fixture();
     const oldPath = "/Users/example/Library/LaunchAgents/old-runtime.plist";

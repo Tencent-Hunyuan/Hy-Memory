@@ -11,10 +11,9 @@ import {
   type FirstImportReviewProps,
 } from "./FirstImportReview";
 
-const api = vi.hoisted(() => ({ receipt: vi.fn(), conversation: vi.fn() }));
+const api = vi.hoisted(() => ({ receipt: vi.fn() }));
 vi.mock("./api", () => ({
   getSourceImportReceipt: api.receipt,
-  getConversation: api.conversation,
 }));
 const source: SourceResponse = {
   source_id: "cursor",
@@ -115,26 +114,6 @@ function setup(change: Partial<FirstImportReviewProps> = {}) {
 beforeEach(() => {
   vi.resetAllMocks();
   api.receipt.mockResolvedValue(receipt);
-  api.conversation.mockResolvedValue({
-    source_id: "cursor",
-    conversation_id: "conversation",
-    messages: [
-      {
-        evidence_id: "person",
-        role: "user",
-        written_by: "person",
-        created_at: query.created_at,
-        verbatim: query.excerpt,
-      },
-      {
-        evidence_id: "agent",
-        role: "assistant",
-        written_by: "agent",
-        created_at: null,
-        verbatim: "助手在原始会话中的回复",
-      },
-    ],
-  });
 });
 afterEach(cleanup);
 
@@ -156,7 +135,6 @@ it("shows true job counts and the standing import note, never excerpts or percen
   expect(screen.queryByRole("progressbar")).toBeNull();
   expect(document.body.textContent).not.toContain("100%");
   expect(api.receipt).not.toHaveBeenCalled();
-  expect(api.conversation).not.toHaveBeenCalled();
 });
 it("explains that one large harness limits every first-import source to three days", () => {
   setup({
@@ -230,5 +208,4 @@ it("keeps the saved count when authority or freshness changes, without a convers
   expect(screen.getByText("已保存 20 条消息")).toBeTruthy();
   expect(screen.queryByText(query.excerpt)).toBeNull();
   expect(api.receipt).not.toHaveBeenCalled();
-  expect(api.conversation).not.toHaveBeenCalled();
 });

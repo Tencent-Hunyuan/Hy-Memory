@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 
@@ -201,10 +202,10 @@ def main() -> int:
             receipt["reason"] = "runtime_not_ready"
             return 2
 
-        _run(cli, ["init", "--source", "workbuddy", "--json"], env)
-        plan = _json(_run(cli, ["setup", "plan", "--source", "workbuddy", "--json"], env).stdout)
-        plan_file = work / "plan-inner.json"
-        plan_file.write_text(json.dumps(plan.get("plan", {})), encoding="utf-8")
+        _run(cli, ["sources", "connect", "workbuddy", "--json"], env)
+        # No plan files: the connect request id is the idempotency key, minted
+        # here so the receipt can be read while the import runs.
+        plan = {"plan": {"request_id": str(uuid.uuid4())}}
 
         idle_latencies = []
         idle_errors: list[int] = []
@@ -217,7 +218,15 @@ def main() -> int:
         started = time.perf_counter()
         imported = _run(
             cli,
-            ["sources", "import", "--plan-file", str(plan_file), "--confirm"],
+            [
+                "sources",
+                "connect",
+                "workbuddy",
+                "--import",
+                "--request-id",
+                plan["plan"]["request_id"],
+                "--json",
+            ],
             env,
         )
         during_latencies = []

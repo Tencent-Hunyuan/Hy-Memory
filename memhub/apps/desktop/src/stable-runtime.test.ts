@@ -313,6 +313,15 @@ describe("startup dialog body", () => {
     expect(detail).toContain("磁盘空间不足");
     expect(detail).not.toContain("sdk_migration_disk_space_insufficient");
   });
+
+  it("turns runtime_service_not_ready into a user-facing sentence", () => {
+    const error = new Error("runtime_service_not_ready");
+    expect(stableRuntimeErrorCode(error)).toBe("runtime_service_not_ready");
+    expect(stableRuntimeFailureDetail(error)).toContain("首次启动");
+    expect(stableRuntimeFailureDetail(error)).not.toContain(
+      "runtime_service_not_ready",
+    );
+  });
 });
 
 describe("packaged runtime build after an App upgrade", () => {

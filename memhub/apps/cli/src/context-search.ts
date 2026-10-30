@@ -3,31 +3,6 @@ import { PRODUCT } from "./version.js";
 
 export const CONTEXT_QUERY_MAX_CHARACTERS = 2_000;
 const CONTEXT_KINDS = ["raw", "memory"] as const;
-const PATH_STATES = [
-  "ok",
-  "empty",
-  "not_requested",
-  "not_authorized",
-  "unavailable",
-  "degraded",
-] as const;
-const PATH_REASONS = [
-  "not_requested",
-  "permission_required",
-  "source_revoked",
-  "read_unavailable",
-  "timeout_budget",
-  "evidence_changed",
-  "memory_changed",
-  "lexical_only",
-] as const;
-const LIMIT_REASONS = [
-  "count_budget",
-  "character_budget",
-  "timeout_budget",
-  "metadata_budget",
-] as const;
-
 export interface ContextSearchInput {
   query: string;
   kinds: Array<(typeof CONTEXT_KINDS)[number]>;
@@ -37,8 +12,9 @@ export interface ContextSearchInput {
   timeout_ms: number;
 }
 
+/** The CLI's JSON document mirrors Core's SDK-native context schema v2. */
 export interface ContextSearchDocument {
-  schema_version: 1;
+  schema_version: 2;
   product: string;
   state:
     | "grounded"
@@ -47,15 +23,14 @@ export interface ContextSearchDocument {
     | "unavailable"
     | "denied"
     | "not_found"
+    | "rejected"
     | "invalid";
   code?: string;
   request_id?: string;
-  paths?: Record<string, unknown>;
   items: Array<Record<string, unknown>>;
   used_characters?: number;
   truncated?: boolean;
   total_ms?: number;
-  adoption?: "unknown";
 }
 
 export async function searchContext(
@@ -67,7 +42,7 @@ export async function searchContext(
   const validated = validateContextResponse(outcome.data, input);
   return (
     validated ?? {
-      schema_version: 1,
+      schema_version: 2,
       product: PRODUCT,
       state: "invalid",
       code: "response_invalid",
@@ -123,6 +98,9 @@ export function renderContextText(document: ContextSearchDocument): string {
   if (document.state === "unavailable") return "暂时无法查记忆，请稍后重试。\n";
   if (document.state === "denied") return "当前应用没有查记忆权限。\n";
   if (document.state === "invalid") return "查记忆返回了无法识别的结果。\n";
+  if (document.state === "rejected") {
+    return `查记忆被拒绝（${document.code}），请检查参数。\n`;
+  }
   const lines = [
     document.state === "empty"
       ? "没有查到相关记忆。"
@@ -130,14 +108,14 @@ export function renderContextText(document: ContextSearchDocument): string {
         ? "查到以下内容，部分内容还在整理中："
         : "查到以下相关内容：",
   ];
+  // A raw hit is an excerpt of an original conversation, not a distilled
+  // memory; say which one each line is so it is not read as a conclusion.
   for (const item of document.items) {
-    if (item.kind === "memory") {
-      lines.push(`- ${String(item.content)}`);
-    } else {
-      for (const message of item.messages as Array<Record<string, unknown>>) {
-        lines.push(`- ${String(message.text)}`);
-      }
-    }
+    const label =
+      item.kind === "raw"
+        ? `[原始对话摘录 · ${String(item.source)}]`
+        : "[记忆]";
+    lines.push(`- ${label} ${String(item.content)}`);
   }
   if (document.truncated) lines.push("结果已按请求预算截断。");
   return `${lines.join("\n")}\n`;
@@ -149,84 +127,37 @@ function validateContextResponse(
 ): ContextSearchDocument | null {
   const response = record(value);
   if (
-    response?.schema_version !== 1 ||
+    response?.schema_version !== 2 ||
     !oneOf(response.state, ["grounded", "empty", "partial", "unavailable"]) ||
     !boundedText(response.request_id, 64) ||
-    !record(response.paths) ||
     !Array.isArray(response.items) ||
     response.items.length > request.limit ||
     !integer(response.used_characters, 0, request.character_budget) ||
     typeof response.truncated !== "boolean" ||
-    !number(response.total_ms, 0) ||
-    response.adoption !== "unknown"
+    !number(response.total_ms, 0)
   ) {
     return null;
   }
-  const paths = response.paths as Record<string, unknown>;
-  const rawPath = validatePath(paths.raw);
-  const memoryPath = validatePath(paths.memory);
-  if (!rawPath || !memoryPath) return null;
   const requested = new Set(request.kinds);
-  if (
-    (!requested.has("raw") && rawPath.status !== "not_requested") ||
-    (!requested.has("memory") && memoryPath.status !== "not_requested")
-  ) {
-    return null;
-  }
   const items: Array<Record<string, unknown>> = [];
   let characters = 0;
   for (const itemValue of response.items) {
     const item = validateItem(itemValue, request);
     if (!item || !requested.has(item.kind as "raw" | "memory")) return null;
     items.push(item);
-    characters +=
-      item.kind === "memory"
-        ? characterCount(item.content)
-        : (item.messages as Array<Record<string, unknown>>).reduce(
-            (sum, message) => sum + characterCount(message.text),
-            0,
-          );
+    characters += characterCount(item.content);
   }
   if (characters !== response.used_characters) return null;
   if (response.state === "empty" && items.length !== 0) return null;
   return {
-    schema_version: 1,
+    schema_version: 2,
     product: PRODUCT,
     state: response.state,
     request_id: response.request_id as string,
-    paths: { raw: rawPath, memory: memoryPath },
     items,
     used_characters: response.used_characters as number,
     truncated: response.truncated,
     total_ms: response.total_ms as number,
-    adoption: "unknown",
-  };
-}
-
-function validatePath(value: unknown): Record<string, unknown> | null {
-  const path = record(value);
-  if (
-    !path ||
-    !oneOf(path.status, PATH_STATES) ||
-    !number(path.elapsed_ms, 0) ||
-    !integer(path.returned_count, 0, 20) ||
-    typeof path.truncated !== "boolean" ||
-    !enumList(path.truncated_by, LIMIT_REASONS) ||
-    !(
-      path.reason === null ||
-      path.reason === undefined ||
-      oneOf(path.reason, PATH_REASONS)
-    )
-  ) {
-    return null;
-  }
-  return {
-    status: path.status,
-    reason: path.reason ?? null,
-    elapsed_ms: path.elapsed_ms,
-    returned_count: path.returned_count,
-    truncated: path.truncated,
-    truncated_by: path.truncated_by,
   };
 }
 
@@ -235,80 +166,57 @@ function validateItem(
   request: ContextSearchInput,
 ): Record<string, unknown> | null {
   const item = record(value);
-  if (!item || !oneOf(item.kind, CONTEXT_KINDS)) return null;
+  if (
+    !item ||
+    !oneOf(item.kind, CONTEXT_KINDS) ||
+    boundedText(item.content, 20_000, true) === null ||
+    !number(item.score, 0) ||
+    (item.score as number) > 1 ||
+    typeof item.truncated !== "boolean"
+  ) {
+    return null;
+  }
   if (item.kind === "memory") {
     if (
       !boundedText(item.memory_id, 512) ||
-      !integer(item.revision, 1) ||
-      boundedText(item.content, 20_000, true) === null ||
-      boundedText(item.memory_kind, 64, true) === null ||
-      !boundedText(item.updated_at, 64) ||
-      !textList(item.evidence_ids, 128, 512) ||
-      typeof item.truncated !== "boolean"
+      boundedText(item.layer, 64, true) === null ||
+      boundedText(item.status, 32, true) === null ||
+      !optionalText(item.source, 128) ||
+      !optionalText(item.updated_at, 64)
     ) {
       return null;
     }
     return {
       kind: "memory",
       memory_id: item.memory_id,
-      revision: item.revision,
       content: item.content,
-      memory_kind: item.memory_kind,
-      updated_at: item.updated_at,
-      evidence_ids: item.evidence_ids,
+      layer: item.layer,
+      status: item.status,
+      source: item.source ?? null,
+      updated_at: item.updated_at ?? null,
+      score: item.score,
       truncated: item.truncated,
     };
   }
   if (
-    !boundedText(item.source_id, 128) ||
+    !boundedText(item.raw_id, 512) ||
+    !boundedText(item.source, 128) ||
     (request.raw_source_ids !== undefined &&
-      !request.raw_source_ids.includes(item.source_id as string)) ||
-    !boundedText(item.conversation_id, 512) ||
-    !boundedText(item.anchor_evidence_id, 512) ||
-    !Array.isArray(item.messages) ||
-    item.messages.length < 1 ||
-    item.messages.length > 3 ||
-    typeof item.truncated !== "boolean"
+      !request.raw_source_ids.includes(item.source as string)) ||
+    !boundedText(item.session_id, 512) ||
+    !optionalText(item.memory_at, 64)
   ) {
     return null;
   }
-  const messages = item.messages.map(validateMessage);
-  if (messages.some((message) => message === null)) return null;
   return {
     kind: "raw",
-    source_id: item.source_id,
-    conversation_id: item.conversation_id,
-    anchor_evidence_id: item.anchor_evidence_id,
-    messages,
+    raw_id: item.raw_id,
+    content: item.content,
+    source: item.source,
+    session_id: item.session_id,
+    memory_at: item.memory_at ?? null,
+    score: item.score,
     truncated: item.truncated,
-  };
-}
-
-function validateMessage(value: unknown): Record<string, unknown> | null {
-  const message = record(value);
-  if (
-    !message ||
-    !boundedText(message.evidence_id, 512) ||
-    !integer(message.revision, 1) ||
-    boundedText(message.role, 32, true) === null ||
-    boundedText(message.written_by, 32, true) === null ||
-    !(
-      message.created_at === null ||
-      boundedText(message.created_at, 64) !== null
-    ) ||
-    boundedText(message.text, 20_000, true) === null ||
-    typeof message.truncated !== "boolean"
-  ) {
-    return null;
-  }
-  return {
-    evidence_id: message.evidence_id,
-    revision: message.revision,
-    role: message.role,
-    written_by: message.written_by,
-    created_at: message.created_at,
-    text: message.text,
-    truncated: message.truncated,
   };
 }
 
@@ -316,7 +224,7 @@ function failed(
   outcome: Exclude<ReadOutcome<unknown>, { state: "ok" }>,
 ): ContextSearchDocument {
   return {
-    schema_version: 1,
+    schema_version: 2,
     product: PRODUCT,
     state: outcome.state,
     code: outcome.code,
@@ -374,27 +282,10 @@ function oneOf<const T extends readonly string[]>(
   return typeof value === "string" && values.includes(value as T[number]);
 }
 
-function enumList(
-  value: unknown,
-  values: readonly string[],
-): value is string[] {
+function optionalText(value: unknown, maximum: number): boolean {
   return (
-    Array.isArray(value) &&
-    value.length <= 4 &&
-    new Set(value).size === value.length &&
-    value.every((item) => oneOf(item, values))
-  );
-}
-
-function textList(
-  value: unknown,
-  maximumItems: number,
-  maximumText: number,
-): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= maximumItems &&
-    new Set(value).size === value.length &&
-    value.every((item) => boundedText(item, maximumText) !== null)
+    value === null ||
+    value === undefined ||
+    boundedText(value, maximum) !== null
   );
 }

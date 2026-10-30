@@ -11,10 +11,9 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FirstImportReview } from "./FirstImportReview";
 
-const api = vi.hoisted(() => ({ receipt: vi.fn(), conversation: vi.fn() }));
+const api = vi.hoisted(() => ({ receipt: vi.fn() }));
 vi.mock("./api", () => ({
   getSourceImportReceipt: api.receipt,
-  getConversation: api.conversation,
 }));
 const source = (id: string): SourceResponse => ({
   source_id: id,
@@ -108,7 +107,6 @@ it("uses step2 frame and withholds unqualified pure-user feed from old receipts"
 
 it("does not render saved excerpts or a transcript while import is still running", () => {
   api.receipt.mockClear();
-  api.conversation.mockClear();
   render(
     <FirstImportReview
       sourceIds={["a"]}
@@ -121,7 +119,6 @@ it("does not render saved excerpts or a transcript while import is still running
   expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(api.receipt).not.toHaveBeenCalled();
-  expect(api.conversation).not.toHaveBeenCalled();
 });
 
 it("pauses only accepted history jobs, retains partial receipts and never touches sync or another source", async () => {
@@ -244,7 +241,6 @@ it("emits controlled connection drafts only and passes continuation without comp
   ).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "配置模型，沉淀记忆" }));
   expect(next).toHaveBeenCalledWith("settings");
-  expect(api.conversation).not.toHaveBeenCalled();
 });
 
 it("keeps profile-based Harness and paused OpenClaw out of the atomic one-click host batch", () => {
@@ -449,13 +445,11 @@ it.each(["stale", "revoked", "missing"])(
     expect(
       screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
     ).toBeTruthy();
-    expect(api.conversation).not.toHaveBeenCalled();
   },
 );
 
 it("does not open a transcript when the saved count changes", () => {
   api.receipt.mockClear();
-  api.conversation.mockClear();
   const view = render(
     <FirstImportReview
       sourceIds={["a"]}
@@ -476,5 +470,4 @@ it("does not open a transcript when the saved count changes", () => {
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
   expect(api.receipt).not.toHaveBeenCalled();
-  expect(api.conversation).not.toHaveBeenCalled();
 });

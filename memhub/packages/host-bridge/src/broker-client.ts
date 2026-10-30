@@ -2,14 +2,11 @@ import { constants, type Stats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import type {
-  AskMemoryRequest,
   ContextSearchRequest,
-  ConversationSearchResponse,
-  HostAskMemoryResponse,
-  HostContextSearchResponse,
-  MatterContext,
+  MemoryAddReceipt,
   RecallReceipt,
   RecallRequest,
+  SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import axios from "axios";
 import {
@@ -59,44 +56,6 @@ export async function diagnosticTraceThroughBroker(
   );
 }
 
-export interface BoundaryPeekResponse {
-  hookSpecificOutput?: {
-    hookEventName: string;
-    additionalContext: string;
-  };
-  one_memory_ack?: string;
-}
-
-export function boundaryPeekThroughBroker(
-  discoveryPath: string,
-  request: unknown,
-  timeout: number,
-  options?: BrokerClientOptions,
-): Promise<BoundaryPeekResponse> {
-  return postThroughBroker(
-    discoveryPath,
-    "boundary/peek",
-    request,
-    timeout,
-    options,
-  );
-}
-
-export function boundaryAckThroughBroker(
-  discoveryPath: string,
-  token: string,
-  timeout: number,
-  options?: BrokerClientOptions,
-): Promise<{ acknowledged: boolean }> {
-  return postThroughBroker(
-    discoveryPath,
-    "boundary/ack",
-    { token },
-    timeout,
-    options,
-  );
-}
-
 export type BrokerClientErrorCode =
   | "host_credential_unavailable"
   | "host_authorization_required"
@@ -108,6 +67,8 @@ export type BrokerClientErrorCode =
   | "context_unavailable"
   | "context_cancelled"
   | "context_timeout"
+  | "memory_add_conflict"
+  | "memory_add_invalid"
   | "broker_request_failed"
   | "broker_unavailable";
 
@@ -122,6 +83,9 @@ const CLIENT_MESSAGES: Record<BrokerClientErrorCode, string> = {
     "MemHub context response is invalid or incompatible.",
   context_unavailable:
     "MemHub is running, but context search is temporarily unavailable.",
+  memory_add_conflict:
+    "MemHub already holds a different memory under this request_id. Use a new request_id for new content.",
+  memory_add_invalid: "MemHub rejected this memory as invalid.",
   host_credential_unavailable:
     "MemHub host credential is unavailable. Re-link this installation in MemHub.",
   host_authorization_required:
@@ -261,70 +225,56 @@ export async function grantedToolsThroughBroker(
   }
 }
 
-export async function mattersThroughBroker(
-  discoveryPath: string,
-  request: { query: string },
-  options?: BrokerClientOptions,
-): Promise<MatterContext[]> {
-  return postThroughBroker(discoveryPath, "matters", request, 15_000, options);
-}
+/** Core caps a hand-added memory at 12,000 characters. */
+export const MEMORY_ADD_TEXT_MAX = 12_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A write accepted by the unified Memory Server entry.
- *
- * `request_id` is the durable handle a caller keeps: it can be queried later
- * with `memoryWriteStatusThroughBroker` instead of retrying the write. Retrying
- * is unsafe because HY has no idempotency key (A0-03).
- */
-export interface MemoryWriteReceipt {
+/** What a host sends to write one hand-added memory. Scope is not a field:
+ * the broker always files the memory as cross-app, as the app's 添加记忆 does. */
+export interface MemoryAddBrokerRequest {
   request_id: string;
-  state: string;
-  created_at: string;
-  updated_at: string;
-  detail?: string;
+  text: string;
 }
 
-/** A3-02: submit a write through the same durable entry every entry uses.
- *
- * The MCP tool is one of several doors (HTTP, scanner, hooks); all of them land
- * in the same queue. Nothing here calls HY directly.
- */
-export async function memoryWriteThroughBroker(
-  discoveryPath: string,
-  request: {
-    internal_session_id: string;
-    first_round: number;
-    last_round: number;
-    evidence_ids: string[];
-    priority?: "live" | "normal";
-    idempotency_key?: string;
-  },
-  options?: BrokerClientOptions,
-): Promise<MemoryWriteReceipt> {
-  return postThroughBroker(
-    discoveryPath,
-    "memory-writes",
-    request,
-    15_000,
-    options,
+export function isMemoryAddRequestId(value: unknown): value is string {
+  return typeof value === "string" && UUID.test(value);
+}
+
+export function isMemoryAddText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= MEMORY_ADD_TEXT_MAX &&
+    value.trim() !== ""
   );
 }
 
-/** Read back the outcome of an accepted write, or null when the id is unknown.
- *
- * Unknown must be distinguishable from failed: "never accepted" and "accepted
- * and failed" lead a caller to different actions.
- */
-export async function memoryWriteStatusThroughBroker(
-  discoveryPath: string,
-  requestId: string,
-  options?: BrokerClientOptions,
-): Promise<MemoryWriteReceipt | null> {
-  return getThroughBroker(
-    discoveryPath,
-    `memory-writes/${encodeURIComponent(requestId)}`,
-    10_000,
-    options,
+/** Exactly `{request_id, text}`; anything else is refused, not dropped. */
+export function isMemoryAddBrokerRequest(
+  value: unknown,
+): value is MemoryAddBrokerRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const body = value as Record<string, unknown>;
+  const keys = Object.keys(body);
+  return (
+    keys.length === 2 &&
+    keys.includes("request_id") &&
+    keys.includes("text") &&
+    isMemoryAddRequestId(body.request_id) &&
+    isMemoryAddText(body.text)
   );
+}
+
+/** Write one hand-added memory through the broker to Core's `POST /api/v2/memories`.
+ *
+ * The same entry the app's 添加记忆 uses. Reusing a request_id returns the
+ * original addition rather than saving a second one. */
+export async function memoryAddThroughBroker(
+  discoveryPath: string,
+  request: MemoryAddBrokerRequest,
+  options?: BrokerClientOptions,
+): Promise<MemoryAddReceipt> {
+  return postThroughBroker(discoveryPath, "memories", request, 15_000, options);
 }
 
 async function brokerBase(
@@ -382,7 +332,7 @@ export async function contextThroughBroker(
   discoveryPath: string,
   asked: ContextSearchRequest,
   options?: BrokerClientOptions,
-): Promise<HostContextSearchResponse> {
+): Promise<SdkContextSearchResponse> {
   if (!isContextSearchRequest(asked))
     throw new BrokerClientError("context_invalid_request");
   const request = {
@@ -430,33 +380,6 @@ export async function reportCallEventDeliveryThroughBroker(
   );
 }
 
-export async function askThroughBroker(
-  discoveryPath: string,
-  request: AskMemoryRequest,
-  options?: BrokerClientOptions,
-): Promise<HostAskMemoryResponse> {
-  return postThroughBroker(discoveryPath, "ask", request, 125_000, options);
-}
-
-/** Search the original conversations across every imported app.
- *
- * Separate from recall on purpose. Recall answers "what does MemHub know
- * about me"; this answers "what did I actually say over there", which is what
- * an agent needs to pick a piece of work back up. */
-export async function searchConversationsThroughBroker(
-  discoveryPath: string,
-  request: { query: string; limit?: number },
-  options?: BrokerClientOptions,
-): Promise<ConversationSearchResponse> {
-  return postThroughBroker(
-    discoveryPath,
-    "conversations",
-    request,
-    15_000,
-    options,
-  );
-}
-
 async function credentialHeaders(
   options: BrokerClientOptions,
 ): Promise<Record<string, string>> {
@@ -480,14 +403,9 @@ async function postThroughBroker<T>(
   discoveryPath: string,
   endpoint:
     | "recall"
-    | "ask"
-    | "conversations"
-    | "matters"
     | "context"
-    | "boundary/peek"
-    | "boundary/ack"
     | "call-events/delivery"
-    | "memory-writes"
+    | "memories"
     | "diagnostics/trace",
   request: unknown,
   timeout: number,
@@ -521,6 +439,15 @@ async function postThroughBroker<T>(
         throw new BrokerClientError("context_upgrade_required");
       if (endpoint === "context" && (error.response?.status ?? 0) >= 500)
         throw new BrokerClientError("context_unavailable");
+      // A reused request_id with different content is a conflict, not an
+      // outage: the caller must pick a new id for new content.
+      if (endpoint === "memories" && error.response?.status === 409)
+        throw new BrokerClientError("memory_add_conflict");
+      if (
+        endpoint === "memories" &&
+        [400, 422].includes(error.response?.status ?? 0)
+      )
+        throw new BrokerClientError("memory_add_invalid");
       if (error.response?.status === 401)
         throw new BrokerClientError("host_authorization_required");
       if (error.response?.status === 403) {
@@ -536,50 +463,6 @@ async function postThroughBroker<T>(
       }
       // Anything the broker actually answered means it is running, however
       // badly the request went. Only a failure to reach it says otherwise.
-      if (error.response) throw new BrokerClientError("broker_request_failed");
-    }
-    // Axios errors include Authorization in config/request: never retain cause.
-    throw new BrokerClientError("broker_unavailable");
-  }
-}
-
-/** Read one resource through the broker.
- *
- * A 404 is returned as `null` rather than thrown: for a write status, "never
- * accepted" is a legitimate answer the caller must be able to distinguish from
- * "accepted and failed", and from the broker being unreachable.
- */
-async function getThroughBroker<T>(
-  discoveryPath: string,
-  endpoint: string,
-  timeout: number,
-  options: BrokerClientOptions = {},
-): Promise<T | null> {
-  const headers = await abortable(credentialHeaders(options), options.signal);
-  try {
-    options.signal?.throwIfAborted();
-    const { baseUrl, instanceId } = await abortable(
-      brokerBase(discoveryPath),
-      options.signal,
-    );
-    options.signal?.throwIfAborted();
-    await assertBrokerIdentity(baseUrl, instanceId, options.signal);
-    options.signal?.throwIfAborted();
-    const response = await axios.get<T>(`${baseUrl}/${endpoint}`, {
-      headers,
-      timeout,
-      proxy: false,
-      maxRedirects: 0,
-      signal: options.signal,
-    });
-    return response.data;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      if (error.response?.status === 404) return null;
-      if (error.response?.status === 401)
-        throw new BrokerClientError("host_authorization_required");
-      if (error.response?.status === 403)
-        throw new BrokerClientError("host_authorization_required");
       if (error.response) throw new BrokerClientError("broker_request_failed");
     }
     // Axios errors include Authorization in config/request: never retain cause.

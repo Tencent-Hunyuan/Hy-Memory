@@ -134,10 +134,10 @@ def test_memory_content_normal_api_import_preserves_kind_and_dedup_revoke(tmp_pa
                 if s["source_id"] == receipt["source_id"]
             )
             assert source["sync_completeness"] == "one_time_snapshot"
-            found = (
-                await client.get("/api/v1/conversations/search", params={"query": "原始聊天"})
-            ).json()
-            evidence = app.state.evidence_store.get(found["hits"][0]["evidence_id"])
+            found = app.state.evidence_store.search_conversations(
+                "原始聊天", user_id="local", limit=5
+            )
+            evidence = app.state.evidence_store.get(found[0].evidence_id)
             assert evidence.content_kind is EvidenceContentKind.MEMORY_CONTENT
             assert evidence.written_by is WrittenBy.UNKNOWN and evidence.created_at is None
             assert evidence.verbatim == value["memories"][1]["content"]
@@ -145,7 +145,7 @@ def test_memory_content_normal_api_import_preserves_kind_and_dedup_revoke(tmp_pa
                 "/api/v1/import-jobs", json={"source_id": receipt["source_id"]}
             )
             assert (await app.state.import_supervisor.wait(again.json()["job_id"])).stored == 0
-            assert (await client.get("/api/v1/memories")).json() == []
+            assert app.state.memory_governance_store.list(user_id="local") == []
             await client.post(f"/api/v1/sources/{receipt['source_id']}/revoke")
             assert (
                 await client.get(f"/api/v1/sources/{receipt['source_id']}/import-receipt")

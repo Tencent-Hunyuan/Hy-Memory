@@ -86,8 +86,6 @@ vi.mock("./ApplicationsHome", () => ({
 }));
 vi.mock("./ImportProgressStrip", () => ({ ImportProgressStrip: () => null }));
 vi.mock("./HealthPanel", () => ({ HealthPanel: () => null }));
-vi.mock("./FirstUseGuide", () => ({ FirstUseGuide: () => null }));
-vi.mock("./MatterWorkspace", () => ({ MatterWorkspace: () => null }));
 
 beforeEach(() => {
   vi.clearAllMocks();

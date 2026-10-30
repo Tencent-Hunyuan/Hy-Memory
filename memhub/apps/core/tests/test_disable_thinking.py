@@ -8,6 +8,7 @@ import json
 import httpx
 from pydantic import SecretStr
 
+from one_memory.hy_sdk_runtime import build_sdk_config
 from one_memory.imports.models import (
     EvidenceInput,
     EvidenceOrigin,
@@ -17,6 +18,7 @@ from one_memory.imports.models import (
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_batch_extraction import MemoryBatchExtractor
 from one_memory.memory_qa import _answer_request
+from one_memory.model_probe import _structured_request
 from one_memory.model_profiles import (
     ModelProfileInput,
     ModelProfileStore,
@@ -243,3 +245,94 @@ def test_ollama_batch_sends_think_false_only_when_disabled(tmp_path) -> None:
     )
     assert payloads[0]["think"] is False
     assert "reasoning_effort" not in payloads[0]
+
+
+def _deepseek(store, secrets, *, disable_thinking: bool):
+    return store.create(
+        ModelProfileInput(
+            name=f"deepseek-{disable_thinking}",
+            provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-v4-flash",
+            api_key=SecretStr("sk-test"),
+            embedding_model="embedding-model",
+            embedding_provider_kind=ProviderKind.LOCAL_ONNX,
+            disable_thinking=disable_thinking,
+        ),
+        secrets,
+    )
+
+
+def test_sdk_config_turns_deepseek_thinking_off_like_the_probe(tmp_path) -> None:
+    """DeepSeek Flash spent the SDK's 2000 agent tokens thinking: EMPTY_RESPONSE.
+
+    The SDK sends `llm.extra_body` on every chat call (chat and the shared
+    coding/working provider), and the probe must ask the model the same way.
+    """
+    database = tmp_path / "one-memory.sqlite3"
+    secrets = InMemorySecretStore()
+    store = ModelProfileStore(database)
+    profile = _deepseek(store, secrets, disable_thinking=True)
+    snapshot = store.snapshot(profile.profile_id, profile.revision)
+
+    config = build_sdk_config(snapshot, api_key="sk-test", data_dir=tmp_path / "data")
+
+    assert config.llm.extra_body == {"thinking": {"type": "disabled"}}
+    _m, _u, _h, probe = _structured_request(profile, "sk-test")
+    assert probe["thinking"] == config.llm.extra_body["thinking"]
+    assert "reasoning_effort" not in probe
+
+
+def test_sdk_config_sends_no_thinking_fields_unless_the_profile_opts_in(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    secrets = InMemorySecretStore()
+    store = ModelProfileStore(database)
+    profile = _deepseek(store, secrets, disable_thinking=False)
+    snapshot = store.snapshot(profile.profile_id, profile.revision)
+
+    config = build_sdk_config(snapshot, api_key="sk-test", data_dir=tmp_path / "data")
+
+    assert not config.llm.extra_body
+
+
+def test_sdk_config_maps_other_providers_through_the_same_table(tmp_path) -> None:
+    database = tmp_path / "one-memory.sqlite3"
+    secrets = InMemorySecretStore()
+    store = ModelProfileStore(database)
+    openai = store.create(
+        ModelProfileInput(
+            name="openai",
+            provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="https://api.example.com/v1",
+            model="gpt-test",
+            api_key=SecretStr("sk-test"),
+            embedding_model="embedding-model",
+            embedding_provider_kind=ProviderKind.LOCAL_ONNX,
+        ),
+        secrets,
+    )
+    ollama = store.create(
+        ModelProfileInput(
+            name="ollama",
+            provider_kind=ProviderKind.OLLAMA,
+            base_url="http://127.0.0.1:11434",
+            model="qwen",
+            embedding_model="embedding-model",
+            embedding_provider_kind=ProviderKind.LOCAL_ONNX,
+        ),
+        secrets,
+    )
+
+    openai_config = build_sdk_config(
+        store.snapshot(openai.profile_id, openai.revision),
+        api_key="sk-test",
+        data_dir=tmp_path / "data",
+    )
+    ollama_config = build_sdk_config(
+        store.snapshot(ollama.profile_id, ollama.revision),
+        api_key=None,
+        data_dir=tmp_path / "data",
+    )
+
+    assert openai_config.llm.extra_body == {"reasoning_effort": "none"}
+    assert ollama_config.llm.extra_body == {"think": False}

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { ImportJob, ModelProfile } from "@one-memory/contracts";
 import {
   buildModelProfileCreateRequest,
@@ -26,45 +26,7 @@ const PROVIDERS = [
   "local_onnx",
 ] as const;
 
-interface SourceImportPlanBody {
-  schema_version: 1;
-  kind: "source_import";
-  request_id: string;
-  source_ids: string[];
-  source_roots: Record<string, string>;
-  source_candidate_revisions: Record<string, number>;
-  confirm_environment_overrides: boolean;
-  full_rescan: false;
-  onboarding: true;
-}
-
-export type SourceImportPlan = SourceImportPlanBody & { digest: string };
-
-interface ModelCreatePlanBody {
-  schema_version: 1;
-  kind: "model_profile_create";
-  operation_id: string;
-  config: Record<string, unknown>;
-}
-
-export type ModelCreatePlan = ModelCreatePlanBody & { digest: string };
-
-/** A removal only needs an id: there is no config to review, and inventing one
- * to fit the create shape would misrepresent what the command does.
- */
-export interface ModelRemovePlan {
-  schema_version: 1;
-  kind: "model_profile_remove";
-  target: string;
-}
-
 export type FlowDocument =
-  | {
-      schema_version: 1;
-      product: string;
-      state: "preview";
-      plan: SourceImportPlan | ModelCreatePlan | ModelRemovePlan;
-    }
   | {
       schema_version: 1;
       product: string;
@@ -133,10 +95,24 @@ function classifySourceImport(
   return committed(operationId, receipt);
 }
 
-export async function planSourceImport(
+/**
+ * Connect sources and import their history in one direct request.
+ *
+ * Reads the current candidates, refuses a source whose location comes from an
+ * environment override unless the caller confirmed overrides, and posts one
+ * `/sources/connect` (grant + history import + live sync). `requestId` is the
+ * idempotency key: re-running with the same id reads the first receipt.
+ */
+export async function connectSourcesWithImport(
   reader: CoreReader,
-  sourceIds: readonly string[],
+  operations: CoreOperations,
+  input: {
+    sourceIds: readonly string[];
+    confirmOverrides: boolean;
+    requestId?: string;
+  },
 ): Promise<FlowDocument> {
+  const sourceIds = input.sourceIds;
   if (
     sourceIds.length < 1 ||
     sourceIds.length > 32 ||
@@ -145,6 +121,8 @@ export async function planSourceImport(
   ) {
     return invalid("invalid_source_selection");
   }
+  const requestId = input.requestId ?? randomUUID();
+  if (!UUID.test(requestId)) return invalid("invalid_request_id");
   const outcome = await reader<unknown>("/api/v1/sources");
   if (outcome.state !== "ok") return fromReadFailure(outcome);
   const candidates = validateSourceConnectionCandidates(outcome.data);
@@ -156,69 +134,59 @@ export async function planSourceImport(
     return invalid("source_unavailable");
   }
   const items = selected.map(([candidate]) => candidate);
-  const body: SourceImportPlanBody = {
-    schema_version: 1,
-    kind: "source_import",
-    request_id: randomUUID(),
-    source_ids: [...sourceIds],
-    source_roots: Object.fromEntries(
-      items.map((item) => [item.source_id, item.candidate_root_id]),
-    ),
-    source_candidate_revisions: Object.fromEntries(
-      items.flatMap((item) =>
-        item.candidate_revision === undefined
-          ? []
-          : [[item.source_id, item.candidate_revision]],
-      ),
-    ),
-    confirm_environment_overrides: items.some(
-      (item) => item.requires_override_confirmation,
-    ),
-    full_rescan: false,
-    onboarding: true,
-  };
-  return preview(withDigest(body));
-}
-
-export async function executeSourceImport(
-  value: unknown,
-  reader: CoreReader,
-  operations: CoreOperations,
-): Promise<FlowDocument> {
-  const plan = validateSourcePlan(value);
-  if (!plan) return invalid("source_plan_invalid");
+  const needsOverride = items
+    .filter((item) => item.requires_override_confirmation)
+    .map((item) => item.source_id);
+  if (needsOverride.length > 0 && !input.confirmOverrides) {
+    return {
+      schema_version: 1,
+      product: PRODUCT,
+      state: "rejected",
+      operation_id: requestId,
+      code: "environment_override_confirmation_required",
+      receipt: { override_required_source_ids: needsOverride },
+    };
+  }
   // The shared builder owns the connect body's field set and coalescing, so
   // the CLI and the Web console send the same request by construction.
   let request: ReturnType<typeof buildSourceImportRequest>;
   try {
     request = buildSourceImportRequest({
-      sourceIds: plan.source_ids,
-      sourceRoots: plan.source_roots,
-      sourceCandidateRevisions: plan.source_candidate_revisions,
-      confirmEnvironmentOverrides: plan.confirm_environment_overrides,
-      fullRescan: plan.full_rescan,
-      onboarding: plan.onboarding,
+      sourceIds: [...sourceIds],
+      sourceRoots: Object.fromEntries(
+        items.map((item) => [item.source_id, item.candidate_root_id]),
+      ),
+      sourceCandidateRevisions: Object.fromEntries(
+        items.flatMap((item) =>
+          item.candidate_revision === undefined
+            ? []
+            : [[item.source_id, item.candidate_revision]],
+        ),
+      ),
+      confirmEnvironmentOverrides: needsOverride.length > 0,
+      fullRescan: false,
+      onboarding: true,
       enableSync: true,
-      requestId: plan.request_id,
+      requestId,
     });
   } catch (error) {
     if (error instanceof SourceImportInputError) {
-      return invalid("source_plan_invalid");
+      return invalid("invalid_source_selection");
     }
     throw error;
   }
   const result = await operations.post<unknown>(request.path, request.body);
   if (result.state === "rejected") {
-    return rejected(plan.request_id, result.code);
+    return rejected(requestId, result.code);
   }
   if (result.state === "committed") {
-    const receipt = validateSourceReceipt(result.data, plan.request_id);
-    if (!receipt) return unknown(plan.request_id, "source_receipt_invalid");
-    return classifySourceImport(plan.request_id, receipt);
+    const receipt = validateSourceReceipt(result.data, requestId);
+    if (!receipt) return unknown(requestId, "source_receipt_invalid");
+    return classifySourceImport(requestId, receipt);
   }
-  const recovered = await readSourceReceipt(reader, plan.request_id);
+  const recovered = await readSourceReceipt(reader, requestId);
   if (recovered.state === "unknown" || recovered.state === "not_found") {
-    return unknown(plan.request_id, result.code);
+    return unknown(requestId, result.code);
   }
   // A recovered receipt must be classified the same way as a fresh one: an
   // all-rejected or all-busy replay is still not success. Only a terminal
@@ -262,26 +230,23 @@ export async function readSourceReceipt(
   return committed(requestId, receipt);
 }
 
-export function planModelProfile(value: unknown): FlowDocument {
-  const config = validateModelConfig(value);
-  if (!config) return invalid("model_config_invalid");
-  const body: ModelCreatePlanBody = {
-    schema_version: 1,
-    kind: "model_profile_create",
-    operation_id: randomUUID(),
-    config,
-  };
-  return preview(withDigest(body));
-}
-
-export async function executeModelProfile(
+/**
+ * Create a model profile directly from a bounded config (never containing the
+ * key) plus an optional key read from a controlled file.
+ *
+ * `operationId` is Core's creation idempotency key; the receipt can be read
+ * later with `readModelReceipt`.
+ */
+export async function createModelProfile(
   value: unknown,
   apiKey: string | undefined,
   reader: CoreReader,
   operations: CoreOperations,
+  operationId: string = randomUUID(),
 ): Promise<FlowDocument> {
-  const plan = validateModelPlan(value);
-  if (!plan) return invalid("model_plan_invalid");
+  const config = validateModelConfig(value);
+  if (!config) return invalid("model_config_invalid");
+  if (!UUID.test(operationId)) return invalid("invalid_operation_id");
   // The shared create builder owns the body's allow-list, bounds and the
   // creation_operation_id/api_key handling, so the CLI and the Web console
   // send the same create request.
@@ -289,31 +254,31 @@ export async function executeModelProfile(
   try {
     request = buildModelProfileCreateRequest(
       {
-        ...(plan.config as Record<string, unknown>),
+        ...config,
         ...(apiKey === undefined ? {} : { api_key: apiKey }),
       } as Parameters<typeof buildModelProfileCreateRequest>[0],
-      plan.operation_id,
+      operationId,
     );
   } catch (error) {
     if (error instanceof ModelProfileInputError) {
-      return invalid("model_plan_invalid");
+      return invalid("model_config_invalid");
     }
     throw error;
   }
   const result = await operations.post<unknown>(request.path, request.body);
   if (result.state === "rejected") {
-    return rejected(plan.operation_id, result.code);
+    return rejected(operationId, result.code);
   }
   if (result.state === "committed") {
     const profile = validateModelProfile(result.data);
     return profile
-      ? committed(plan.operation_id, projectProfile(profile))
-      : unknown(plan.operation_id, "model_receipt_invalid");
+      ? committed(operationId, projectProfile(profile))
+      : unknown(operationId, "model_receipt_invalid");
   }
-  const recovered = await readModelReceipt(reader, plan.operation_id);
+  const recovered = await readModelReceipt(reader, operationId);
   return recovered.state === "committed"
     ? { ...recovered, state: "recovered" }
-    : unknown(plan.operation_id, result.code);
+    : unknown(operationId, result.code);
 }
 
 export async function readModelReceipt(
@@ -362,27 +327,6 @@ export function parseApiKey(bytes: Buffer | null): string | undefined {
 }
 
 export function renderFlowText(document: FlowDocument): string {
-  if (document.state === "preview") {
-    const plan = document.plan;
-    // A removal has no config digest or operation id to confirm: the target id
-    // *is* the thing being reviewed. Rendering fields it does not have would
-    // print "undefined".
-    if (plan.kind === "model_profile_remove") {
-      return [
-        `预览：${plan.kind}`,
-        `目标配置：${plan.target}`,
-        "未执行任何写操作。加 --confirm 才会真正删除。",
-        "",
-      ].join("\n");
-    }
-    return [
-      `预览：${plan.kind}`,
-      `操作 ID：${"request_id" in plan ? plan.request_id : plan.operation_id}`,
-      `确认摘要：${plan.digest}`,
-      "未执行任何写操作。请把 --json 输出保存为 plan 文件，再用对应命令加 --confirm。",
-      "",
-    ].join("\n");
-  }
   const lines = [
     `操作状态：${document.state}`,
     `操作 ID：${document.operation_id ?? "无"}`,
@@ -407,98 +351,20 @@ export function renderFlowText(document: FlowDocument): string {
     if (document.state === "partial" && Array.isArray(accepted)) {
       lines.push(`  已接入：${accepted.join("、")}`);
     }
+    const overrides = document.receipt.override_required_source_ids;
+    if (Array.isArray(overrides)) {
+      lines.push(
+        `  这些来源的目录来自环境变量覆盖，需要确认：${overrides.join("、")}`,
+        "  确认目录无误后加 --confirm-overrides 重新运行。",
+      );
+    }
   }
   lines.push("");
   return lines.join("\n");
 }
 
 export function flowExitCode(document: FlowDocument): number {
-  return ["preview", "committed", "recovered"].includes(document.state) ? 0 : 1;
-}
-
-export function inspectExecutionPlan(value: unknown): {
-  kind: "source_import" | "model_profile_create";
-  operationId: string;
-  digest: string;
-} | null {
-  const source = validateSourcePlan(value);
-  if (source) {
-    return {
-      kind: source.kind,
-      operationId: source.request_id,
-      digest: source.digest,
-    };
-  }
-  const model = validateModelPlan(value);
-  return model
-    ? {
-        kind: model.kind,
-        operationId: model.operation_id,
-        digest: model.digest,
-      }
-    : null;
-}
-
-function validateSourcePlan(value: unknown): SourceImportPlan | null {
-  const plan = record(value);
-  const requestId = asString(plan?.request_id);
-  if (
-    plan?.schema_version !== 1 ||
-    plan.kind !== "source_import" ||
-    !UUID.test(requestId) ||
-    !Array.isArray(plan.source_ids) ||
-    plan.source_ids.length < 1 ||
-    plan.source_ids.length > 32 ||
-    plan.source_ids.some(
-      (id) => typeof id !== "string" || !SOURCE_ID.test(id),
-    ) ||
-    new Set(plan.source_ids).size !== plan.source_ids.length ||
-    plan.full_rescan !== false ||
-    plan.onboarding !== true ||
-    typeof plan.confirm_environment_overrides !== "boolean" ||
-    typeof plan.digest !== "string"
-  ) {
-    return null;
-  }
-  const sourceIds = plan.source_ids as string[];
-  const roots = stringMap(plan.source_roots, sourceIds);
-  const revisions = numberMap(plan.source_candidate_revisions, sourceIds);
-  if (!roots || !revisions) return null;
-  const body: SourceImportPlanBody = {
-    schema_version: 1,
-    kind: "source_import",
-    request_id: requestId,
-    source_ids: [...sourceIds],
-    source_roots: roots,
-    source_candidate_revisions: revisions,
-    confirm_environment_overrides: plan.confirm_environment_overrides,
-    full_rescan: false,
-    onboarding: true,
-  };
-  const expected = withDigest(body);
-  return timingSafeText(expected.digest, plan.digest) ? expected : null;
-}
-
-function validateModelPlan(value: unknown): ModelCreatePlan | null {
-  const plan = record(value);
-  const operationId = asString(plan?.operation_id);
-  if (
-    plan?.schema_version !== 1 ||
-    plan.kind !== "model_profile_create" ||
-    !UUID.test(operationId) ||
-    typeof plan.digest !== "string"
-  ) {
-    return null;
-  }
-  const config = validateModelConfig(plan.config);
-  if (!config) return null;
-  const expected = withDigest<ModelCreatePlanBody>({
-    schema_version: 1,
-    kind: "model_profile_create",
-    operation_id: operationId,
-    config,
-  });
-  return timingSafeText(expected.digest, plan.digest) ? expected : null;
+  return ["committed", "recovered"].includes(document.state) ? 0 : 1;
 }
 
 function validateModelConfig(value: unknown): Record<string, unknown> | null {
@@ -644,37 +510,6 @@ function projectJob(job: ImportJob): Record<string, unknown> {
   };
 }
 
-function withDigest<T extends object>(body: T): T & { digest: string } {
-  return { ...body, digest: digest(body) };
-}
-
-function digest(value: unknown): string {
-  return createHash("sha256").update(canonical(value)).digest("hex");
-}
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
-      )
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function preview(plan: SourceImportPlan | ModelCreatePlan): FlowDocument {
-  return {
-    schema_version: 1,
-    product: PRODUCT,
-    state: "preview",
-    plan,
-  };
-}
-
 function committed(
   operationId: string,
   receipt: Record<string, unknown>,
@@ -766,44 +601,4 @@ function optionalInteger(
       (value as number) >= minimum &&
       (value as number) <= maximum)
   );
-}
-
-function stringMap(
-  value: unknown,
-  keys: readonly string[],
-): Record<string, string> | null {
-  const map = record(value);
-  if (
-    !map ||
-    Object.keys(map).length !== keys.length ||
-    keys.some((key) => !boundedText(map[key], 256))
-  ) {
-    return null;
-  }
-  return Object.fromEntries(keys.map((key) => [key, map[key] as string]));
-}
-
-function numberMap(
-  value: unknown,
-  allowedKeys: readonly string[],
-): Record<string, number> | null {
-  const map = record(value);
-  if (
-    !map ||
-    Object.entries(map).some(
-      ([key, revision]) =>
-        !allowedKeys.includes(key) ||
-        !Number.isSafeInteger(revision) ||
-        (revision as number) < 0,
-    )
-  ) {
-    return null;
-  }
-  return Object.fromEntries(
-    Object.entries(map).map(([key, revision]) => [key, revision as number]),
-  );
-}
-
-function timingSafeText(expected: string, actual: unknown): boolean {
-  return typeof actual === "string" && expected === actual;
 }

@@ -167,12 +167,7 @@ function setup(hosts: unknown[] = defaultHosts) {
 }
 
 const fullGrant = {
-  allowedTools: [
-    "om_recall",
-    "om_ask",
-    "om_conversations",
-    "om_diagnostic_trace",
-  ],
+  allowedTools: ["om_recall", "om_conversations", "om_diagnostic_trace"],
   allowedScopes: ["all-apps", "source:workbuddy"],
   userConfirmed: true,
 };

@@ -46,7 +46,7 @@ const changedMessage =
   "安装身份、授权版本或所选来源范围已变化，请关闭后重新打开并核对。不会把本次确认用于变化后的授权。";
 const toolNames: Record<RecallPermissionTool, string> = {
   om_recall: "检索记忆",
-  om_ask: "记忆问答（可选）",
+  om_ask: "记忆问答（已有授权）",
   om_conversations: "读取原始对话",
   om_matters: "事项（已有授权）",
   om_diagnostic_trace: "读取脱敏诊断记录",
@@ -892,7 +892,7 @@ function PermissionDialog({
                       {toolNames[tool]}
                       {tool === "om_ask" && (
                         <small>
-                          可能使用已配置的模型处理。本次只授予此应用的记忆读取范围。
+                          旧版授权项，记忆问答工具已移除；保留它不会授予新的能力。
                         </small>
                       )}
                     </span>

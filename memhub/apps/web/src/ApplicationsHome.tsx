@@ -2,19 +2,13 @@ import type {
   HostHomeSummary,
   LiveSyncHealth,
   MemoryProcessingSummary,
-  RecentConversationItem,
   SourceResponse,
 } from "@one-memory/contracts";
 import { type GuiLocale, isMessageKey } from "@one-memory/i18n";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import {
-  getHomeSummary,
-  getLiveSyncHealth,
-  getMemoryProcessing,
-  getRecentConversations,
-} from "./api";
+import { getHomeSummary, getLiveSyncHealth, getMemoryProcessing } from "./api";
 import { AppMark } from "./app-mark";
 import {
   type CallEvent,
@@ -62,14 +56,6 @@ type HomeViewState = {
  */
 export const CALL_HISTORY_ENTRY_VISIBLE = false;
 
-// 2026-10-12: Codex 侧曾把 MCP 调试帧（如 `[write_stdout] {"chars":…`）存成
-// 对话摘要，首页“最近更新”会原样露出机器文本。展示层拦掉这类帧，宁可退回
-// 显示记忆或空态，也不把协议帧当动态内容。
-const DEBUG_FRAME_PREFIX = /^\s*\[(?:write_stdout|write_stderr|read_request)\b/;
-function presentableDialogue(text: string): boolean {
-  return !DEBUG_FRAME_PREFIX.test(text);
-}
-
 const retainedViews = new WeakMap<object, HomeViewState>();
 
 type Translate = ReturnType<typeof useGuiLanguage>["t"];
@@ -97,13 +83,6 @@ function stamped(value: string, locale: GuiLocale, t: Translate, suffix = "") {
   return `${parts.today ? t("apps.today") : ""}${parts.clock}${suffix}`;
 }
 
-function memoryAction(action: string | undefined, t: Translate) {
-  if (action === "create") return t("apps.newMemory");
-  if (action === "correct" || action === "restore")
-    return t("apps.updatedMemory");
-  return t("apps.saved");
-}
-
 type ActivityChoice = "call" | "update";
 
 function sourceMatchesHost(sourceId: string, hostId: string | null) {
@@ -113,6 +92,10 @@ function sourceMatchesHost(sourceId: string, hostId: string | null) {
 
 function successfulCall(item: CallEvent) {
   return item.state === "grounded" || item.state === "empty";
+}
+
+function attributedSuccessfulCall(item: CallEvent) {
+  return item.host_id !== null && successfulCall(item);
 }
 
 function callAttention(events: CallEvent[]) {
@@ -189,8 +172,6 @@ export function ApplicationsHome({
   imports: ReturnType<typeof useImportSources>;
   onManage(sourceId?: string): void;
   onMemories(memoryId?: string): void;
-  /** 保留兼容旧调用方；“查看会话”入口已按产品要求下线。 */
-  onConversations?(): void;
   onSettings?(): void;
   onCalls?(): void;
   active?: boolean;
@@ -214,18 +195,13 @@ export function ApplicationsHome({
     null,
   );
   const [syncHealth, setSyncHealth] = useState<LiveSyncHealth[]>([]);
-  const [failed, setFailed] = useState(false);
+  const [summaryFailures, setSummaryFailures] = useState(0);
   const [recentCall, setRecentCall] = useState<CallEvent | null>(null);
   const [callEvents, setCallEvents] = useState<CallEvent[]>([]);
   const [callState, setCallState] = useState<
     "loading" | "ready" | "unavailable" | "disabled" | "incomplete"
   >("loading");
   const [callRevision, setCallRevision] = useState(0);
-  const [latestDialogue, setLatestDialogue] =
-    useState<RecentConversationItem | null>(null);
-  const [dialogueState, setDialogueState] = useState<
-    "loading" | "ready" | "unavailable"
-  >("loading");
   const [activityView, setActivityView] = useState<ActivityChoice | null>(null);
   const [restartingBackground, setRestartingBackground] = useState(false);
   useEffect(() => {
@@ -240,7 +216,10 @@ export function ApplicationsHome({
         const result = await getCallHistory({ limit: 20, offset: 0 });
         if (cancelled) return;
         setCallEvents(result.items);
-        setRecentCall(result.items.find(successfulCall) ?? null);
+        // The home card promises an application identity. Direct diagnostic
+        // calls have no host and remain available in call history, but cannot
+        // truthfully supply the icon and name required by this surface.
+        setRecentCall(result.items.find(attributedSuccessfulCall) ?? null);
         setCallState(
           !result.available
             ? "disabled"
@@ -566,32 +545,29 @@ export function ApplicationsHome({
     async function refresh() {
       if (busy || document.hidden) return;
       busy = true;
-      const [home, state, sync, recent] = await Promise.allSettled([
+      const [home, state, sync] = await Promise.allSettled([
         getHomeSummary(),
         getMemoryProcessing(),
         getLiveSyncHealth(),
-        getRecentConversations({ limit: 1, recentActivity: true }),
         refreshSedimentation(),
       ]);
       busy = false;
       if (stopped) return;
       if (home.status === "fulfilled") {
-        setFailed(false);
         // stale=true 表示这轮读取超时，数字不代表现状：保留上一次的概览，
-        // 等 10 秒后的下一轮轮询补上，绝不清零也不报错。
-        if (!("stale" in home.value) || !home.value.stale)
+        // 等 10 秒后的下一轮轮询补上。重复 stale 仍要进入可恢复状态，
+        // 不能永远停在“正在核对”。
+        if (!("stale" in home.value) || !home.value.stale) {
+          setSummaryFailures(0);
           setSummary(home.value);
+        } else {
+          setSummaryFailures((count) => count + 1);
+        }
       } else {
-        setFailed(true);
+        setSummaryFailures((count) => count + 1);
       }
       if (state.status === "fulfilled") setProcessing(state.value);
       if (sync.status === "fulfilled") setSyncHealth(sync.value);
-      if (recent.status === "fulfilled") {
-        setLatestDialogue(recent.value.items[0] ?? null);
-        setDialogueState("ready");
-      } else {
-        setDialogueState("unavailable");
-      }
     }
     void refresh();
     const stop = subscribePoll({
@@ -606,20 +582,13 @@ export function ApplicationsHome({
   }, [active, requestKey]);
   const visible = summary;
   const latest = visible?.latest;
-  const summaryUnavailable = failed;
+  const summaryUnavailable = visible === null && summaryFailures >= 2;
+  const summaryStale = visible !== null && summaryFailures >= 2;
   const hasCall =
     recentCall !== null &&
     (callState === "ready" || callState === "incomplete");
   const hasMemory = latest !== null && latest !== undefined;
-  const dialogueReady =
-    dialogueState === "ready" &&
-    latestDialogue !== null &&
-    presentableDialogue(latestDialogue.excerpt);
-  const updateKind: "memory" | "dialogue" | null = dialogueReady
-    ? "dialogue"
-    : hasMemory
-      ? "memory"
-      : null;
+  const updateKind: "memory" | null = hasMemory ? "memory" : null;
   const availableActivities: ActivityChoice[] = [
     ...(hasCall ? (["call"] as const) : []),
     ...(updateKind ? (["update"] as const) : []),
@@ -640,6 +609,9 @@ export function ApplicationsHome({
   const recentCallHost = imports.sources.find((source) =>
     sourceMatchesHost(source.source_id, recentCall?.host_id ?? null),
   );
+  const recentCallHostName = recentCall
+    ? (recentCallHost?.display_name ?? callHostName(recentCall.host_id, locale))
+    : null;
   const attention = callAttention(callEvents);
   const attentionHost = attention ? callHostName(attention.host, locale) : null;
   const activity = summaryUnavailable
@@ -675,7 +647,7 @@ export function ApplicationsHome({
       ? t("apps.running")
       : sedimentation?.enabled === false
         ? t("apps.paused")
-        : t("apps.unchecked");
+        : t("apps.checkingStatus");
   const stateDetail =
     sedimentation?.enabled === false
       ? t("apps.stoppedNew")
@@ -701,6 +673,11 @@ export function ApplicationsHome({
         : latest.source
           ? [latest.source]
           : [];
+  const latestSourceNames = latestSourceIds.map(
+    (id) =>
+      imports.sources.find((source) => source.source_id === id)?.display_name ??
+      id,
+  );
   const time = latestClock?.clock ?? (latest ? t("apps.unknownTime") : null);
   const checked = visible ? clockParts(visible.observed_at, locale) : null;
   // A failed read leaves the last health in place on purpose: clearing it would
@@ -849,42 +826,27 @@ export function ApplicationsHome({
               <h2>{t("apps.overview")}</h2>
             </header>
             <div className="r6-home-metrics">
-              <div>
+              <div role="status" aria-live="polite" aria-atomic="true">
                 <p>{t("apps.memories")}</p>
-                {/* The figure slot used to hold the word 读取中 while the first
-                  read was in flight, which is how "大数字不可见" (D51) shows up
-                  on a slow link: the biggest type on the page spends the first
-                  frame saying something that is not a number. A bar of the same
-                  height reserves the digits instead, and the wording moves to a
-                  live region so screen readers still hear it. 暂无法读取 stays a
-                  word, because that is a settled state rather than progress. */}
-                {!visible && !summaryUnavailable ? (
-                  <>
-                    <p className="r6-home-figure">
-                      <span
-                        className="r6-home-figure-pending"
-                        aria-hidden="true"
-                      />
-                    </p>
-                    <small role="status">{t("apps.readingCount")}</small>
-                  </>
-                ) : (
-                  <>
-                    <p className="r6-home-figure">
-                      <strong className={visible ? "" : "r6-home-word"}>
-                        {visible
-                          ? new Intl.NumberFormat(locale).format(
-                              visible.memory_count,
-                            )
-                          : t("apps.unreadable")}
-                      </strong>
-                      {visible && t("apps.unit") ? (
-                        <i>{t("apps.unit")}</i>
-                      ) : null}
-                    </p>
-                    <small>{t("apps.scope")}</small>
-                  </>
-                )}
+                <p className="r6-home-figure">
+                  <strong>
+                    {new Intl.NumberFormat(locale).format(
+                      visible?.memory_count ?? 0,
+                    )}
+                  </strong>
+                  {t("apps.unit") ? <i>{t("apps.unit")}</i> : null}
+                </p>
+                <small>
+                  {visible
+                    ? summaryStale
+                      ? t("apps.showingPrevious")
+                      : t("apps.scope")
+                    : summaryUnavailable
+                      ? t("apps.countWillUpdate")
+                      : summaryFailures
+                        ? t("apps.startingRetry")
+                        : t("apps.readingCount")}
+                </small>
               </div>
               <div>
                 <p>{t("apps.processing")}</p>
@@ -895,20 +857,22 @@ export function ApplicationsHome({
                 <p>{t("apps.recentUpdate")}</p>
                 <strong className={time ? "r6-home-time" : "r6-home-word"}>
                   {time ??
-                    (visible ? t("apps.notGenerated") : t("apps.unchecked"))}
+                    (visible
+                      ? t("apps.notGenerated")
+                      : t("apps.checkingRecent"))}
                 </strong>
                 <small>
                   {time
                     ? `${latestClock?.today ? `${t("apps.today")}· ` : ""}${t("apps.saved")}`
-                    : t("apps.separate")}
+                    : visible
+                      ? t("apps.separate")
+                      : t("apps.recentWillUpdate")}
                 </small>
               </div>
             </div>
             <div className="r6-home-activity">
               {availableActivities.length > 1 &&
-              (activity === "call" ||
-                activity === "memory" ||
-                activity === "dialogue") ? (
+              (activity === "call" || activity === "memory") ? (
                 <div className="r6-home-activity-tabs" role="tablist">
                   {(["update", "call"] as const).map((item) => (
                     <button
@@ -918,7 +882,7 @@ export function ApplicationsHome({
                       aria-selected={
                         item === "call"
                           ? activity === "call"
-                          : activity === "memory" || activity === "dialogue"
+                          : activity === "memory"
                       }
                       onClick={() => setActivityView(item)}
                     >
@@ -934,7 +898,7 @@ export function ApplicationsHome({
                     ? t("apps.activityUnavailable")
                     : activity === "call"
                       ? t("apps.recentCall")
-                      : activity === "dialogue" || activity === "memory"
+                      : activity === "memory"
                         ? t("apps.recentUpdate")
                         : t("apps.firstBatch")}
                 </p>
@@ -964,13 +928,6 @@ export function ApplicationsHome({
                     );
                     return source ? <SourceMark source={source} /> : null;
                   })()
-                ) : activity === "dialogue" && latestDialogue ? (
-                  (() => {
-                    const source = imports.sources.find(
-                      (item) => item.source_id === latestDialogue.source_id,
-                    );
-                    return source ? <SourceMark source={source} /> : null;
-                  })()
                 ) : null}
                 <section>
                   <h3>
@@ -981,23 +938,20 @@ export function ApplicationsHome({
                       : activity === "call" && recentCall
                         ? callDetailHeadline(
                             recentCall,
-                            recentCallHost?.display_name ??
-                              callHostName(recentCall.host_id, locale),
+                            recentCallHostName ?? undefined,
                             locale,
                           )
                         : activity === "memory" && latest
                           ? `${latest.content}${"truncated" in latest && latest.truncated ? "…" : ""}`
-                          : activity === "dialogue" && latestDialogue
-                            ? `${latestDialogue.excerpt}${latestDialogue.truncated ? "…" : ""}`
-                            : activity === "importing"
-                              ? t("apps.importing")
-                              : activity === "first-running"
-                                ? t("apps.firstRunning")
-                                : activity === "first-queued"
-                                  ? t("apps.firstQueued")
-                                  : activity === "loading"
-                                    ? t("apps.readingActivity")
-                                    : t("apps.emptyMemories")}
+                          : activity === "importing"
+                            ? t("apps.importing")
+                            : activity === "first-running"
+                              ? t("apps.firstRunning")
+                              : activity === "first-queued"
+                                ? t("apps.firstQueued")
+                                : activity === "loading"
+                                  ? t("apps.readingActivity")
+                                  : t("apps.emptyMemories")}
                   </h3>
                   <small>
                     {activity === "unavailable"
@@ -1005,21 +959,20 @@ export function ApplicationsHome({
                         ? t("apps.callReadFailure")
                         : t("apps.memoryReadFailure")
                       : activity === "call" && recentCall
-                        ? `${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
+                        ? `${recentCallHostName} · ${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
                         : activity === "memory" && latest
-                          ? "revision" in latest
-                            ? `${time} · ${memoryAction(latest.action, t)} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join(", ")} · ${t("apps.revision", { count: new Intl.NumberFormat(locale).format(latest.revision) })}`
-                            : `${time} · SDK ${latest.layer} · ${latestSourceIds.map((id) => imports.sources.find((s) => s.source_id === id)?.display_name ?? id).join("、")}`
-                          : activity === "dialogue" && latestDialogue
-                            ? `${clockParts(latestDialogue.created_at ?? latestDialogue.imported_at, locale)?.clock ?? t("apps.unknownTime")} ${latestDialogue.time_basis === "conversation" ? t("apps.conversationTime") : t("apps.importTime")} · ${imports.sources.find((source) => source.source_id === latestDialogue.source_id)?.display_name ?? latestDialogue.source_id}`
-                            : activity === "importing"
-                              ? t("apps.savingConversations")
+                          ? [time, latestSourceNames.join(", ")]
+                              .filter(Boolean)
+                              .join(" · ")
+                          : activity === "importing"
+                            ? t("apps.savingConversations")
+                            : activity === "loading"
+                              ? t("apps.recentWillUpdate")
                               : t("apps.waitingMemories")}
                   </small>
                 </section>
                 {(activity === "unavailable" ||
-                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE) ||
-                  activity === "memory") && (
+                  (activity === "call" && CALL_HISTORY_ENTRY_VISIBLE)) && (
                   <button
                     type="button"
                     className="r6-home-activity-link"

@@ -33,8 +33,27 @@ import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs, urlparse
+
+from .retrieval import AmbiguousMemoryIdError
 
 logger = logging.getLogger("hy_memory.server")
+
+
+def _namespace_args(values: Dict[str, Any]) -> Dict[str, Any]:
+    """kind / variant from a query string (lists) or a JSON body (scalars).
+
+    They disambiguate an id that exists in more than one namespace (chat,
+    experience, fact; working or coding). Absent means "resolve it".
+    """
+    args: Dict[str, Any] = {}
+    for key in ("kind", "variant"):
+        value = values.get(key)
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if value:
+            args[key] = str(value)
+    return args
 
 # Lazy-init global client
 _client = None
@@ -148,7 +167,6 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             if path == "/api/v1/metrics":
                 minutes = 5
                 if "?" in self.path:
-                    from urllib.parse import parse_qs, urlparse
                     qs = parse_qs(urlparse(self.path).query)
                     minutes = int(qs.get("minutes", ["5"])[0])
                 client = _get_client()
@@ -161,7 +179,8 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             if m:
                 memory_id = m.group(1)
                 client = _get_client()
-                result = client.get(memory_id)
+                query = parse_qs(urlparse(self.path).query)
+                result = client.get(memory_id, **_namespace_args(query))
                 if result is None:
                     _json_response(self, 404, {"error": "not_found", "memory_id": memory_id})
                 else:
@@ -170,6 +189,10 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
 
             _json_response(self, 404, {"error": "not_found", "path": path})
 
+        except AmbiguousMemoryIdError as e:
+            _json_response(self, 409, {"error": "ambiguous_memory_id", "detail": str(e)})
+        except ValueError as e:
+            _json_response(self, 400, {"error": str(e)})
         except Exception as e:
             logger.error(f"[server] GET {path} error: {e}", exc_info=True)
             _json_response(self, 500, {"error": str(e)})
@@ -213,7 +236,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             _json_response(self, 500, {"error": str(e)})
 
     def do_PUT(self):
-        path = self.path.rstrip("/")
+        path = self.path.split("?")[0].rstrip("/")
         body = _read_json_body(self)
         if body is None:
             _json_response(self, 400, {"error": "invalid JSON body"})
@@ -228,29 +251,43 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                     _json_response(self, 400, {"error": "content is required"})
                     return
                 client = _get_client()
-                result = client.update(memory_id, content)
+                result = client.update(
+                    memory_id,
+                    content,
+                    **_namespace_args(body),
+                    **({"task": body["task"]} if body.get("task") else {}),
+                )
                 _json_response(self, 200, result)
                 return
 
             _json_response(self, 404, {"error": "not_found", "path": path})
 
+        except AmbiguousMemoryIdError as e:
+            _json_response(self, 409, {"error": "ambiguous_memory_id", "detail": str(e)})
+        except ValueError as e:
+            _json_response(self, 400, {"error": str(e)})
         except Exception as e:
             logger.error(f"[server] PUT {path} error: {e}", exc_info=True)
             _json_response(self, 500, {"error": str(e)})
 
     def do_DELETE(self):
-        path = self.path.rstrip("/")
+        path = self.path.split("?")[0].rstrip("/")
         try:
             m = re.match(r"^/api/v1/memories/([^/]+)$", path)
             if m:
                 memory_id = m.group(1)
                 client = _get_client()
-                result = client.delete(memory_id)
+                query = parse_qs(urlparse(self.path).query)
+                result = client.delete(memory_id, **_namespace_args(query))
                 _json_response(self, 200, result)
                 return
 
             _json_response(self, 404, {"error": "not_found", "path": path})
 
+        except AmbiguousMemoryIdError as e:
+            _json_response(self, 409, {"error": "ambiguous_memory_id", "detail": str(e)})
+        except ValueError as e:
+            _json_response(self, 400, {"error": str(e)})
         except Exception as e:
             logger.error(f"[server] DELETE {path} error: {e}", exc_info=True)
             _json_response(self, 500, {"error": str(e)})
@@ -455,7 +492,8 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             if key in body:
                 kwargs[key] = body[key]
 
-        for key in ("limit", "min_score", "schema_min_score", "schema_limit", "reader"):
+        for key in ("limit", "min_score", "schema_min_score", "schema_limit", "reader",
+                    "rerank"):
             if key in body:
                 kwargs[key] = body[key]
 

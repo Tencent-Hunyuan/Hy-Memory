@@ -81,7 +81,11 @@ class RecallHit(BaseModel):
     score: float = Field(ge=0, le=1)
     #: HY already rendered memory time/evolution/capsule context into content.
     #: Hosts must not append their own governance timestamp in this case.
-    content_format: Literal["plain", "hy-sdk"] = "plain"
+    #: "raw" is an excerpt of an imported conversation, not a memory.
+    content_format: Literal["plain", "hy-sdk", "raw"] = "plain"
+    #: Raw excerpts only: the app and conversation the excerpt came from.
+    source: str | None = None
+    session_id: str | None = None
 
 
 class RecallReceipt(BaseModel):
@@ -103,6 +107,11 @@ class RecallReceipt(BaseModel):
     #: whether the answer is that nothing was found or that reading was not
     #: allowed.
     excluded_sources: tuple[str, ...] = ()
+    #: "raw" when recall searched the imported conversations instead of
+    #: memories, because no generation model is configured or no memory
+    #: exists yet (`fallback_reason`). Raw hits are excerpts, not memories.
+    mode: Literal["memory", "raw"] = "memory"
+    fallback_reason: Literal["model_unavailable", "no_memories"] | None = None
 
 
 class RecallTarget(Protocol):

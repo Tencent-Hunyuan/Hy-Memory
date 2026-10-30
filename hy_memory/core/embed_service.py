@@ -80,7 +80,7 @@ def _count_tokens(text: str) -> int:
     try:
         import tiktoken
 
-        return len(tiktoken.get_encoding("cl100k_base").encode(text))
+        return len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
     except Exception:
         return len(text) // _CHARS_PER_TOKEN_FALLBACK + 1
 
@@ -98,7 +98,8 @@ def _truncate_for_embedding(text: str, limit: int = _EMBED_MAX_TOKENS) -> str:
         import tiktoken
 
         enc = tiktoken.get_encoding("cl100k_base")
-        ids = enc.encode(text)
+        # Input is ordinary user text, not a tokenizer control-token stream.
+        ids = enc.encode(text, disallowed_special=())
         if len(ids) <= limit:
             return text
         dropped = len(ids) - limit
@@ -753,16 +754,22 @@ class EmbedService:
         """
         打一条 INFO 级 embedding 请求日志（含 request_id / provider / model / api / 入参 / 出参）。
 
-        出参只含 vector 维度，不含向量数值。request_id 同时写入 message，
+        出参只含 vector 维度，不含向量数值。入参的 input 是待向量化的原文
+        （对话 / 记忆 / 查询），INFO 只记每条的字符数（input_chars），原文仅在
+        DEBUG 单独输出。request_id 同时写入 message，
         并依赖 log formatter 的 %(request_id)s（setup_logging 后生效）。
         """
+        texts = request_payload.get("input")
+        info_request = {k: v for k, v in request_payload.items() if k != "input"}
+        if isinstance(texts, list):
+            info_request["input_chars"] = [len(str(t)) for t in texts]
         payload = {
             "request_id": get_request_id(),
             "status": status,
             "provider": self._embed_config.provider,
             "model": self._embed_config.model,
             "api": api_url,
-            "request": request_payload,
+            "request": info_request,
             "response": response_payload,
         }
         try:
@@ -770,6 +777,10 @@ class EmbedService:
         except Exception:
             body = str(payload)
         logger.info(f"[embed] {body}")
+        if texts is not None and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[embed] input: {json.dumps(texts, ensure_ascii=False, default=str)}"
+            )
 
     async def _embed_openai(
         self, texts: List[str]

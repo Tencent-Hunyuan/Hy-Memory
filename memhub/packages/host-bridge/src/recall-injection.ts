@@ -10,15 +10,6 @@
  * The hook always fails open inside its budget. A stopped app produces a
  * short service notice so the user knows why memory was not available;
  * timeouts and denied access still add no untrusted or misleading context.
- *
- * The same reply carries Core's cross-session notice. WorkBuddy keeps one
- * `additionalContext` per event, the last hook's, so the boundary is run from
- * here, beside recall, rather than as a second hook that would overwrite it.
- * Each part fails on its own; neither can take the other with it.
- *
- * The notice is only peeked. It is confirmed after this process has written
- * its stdout, so a notice lost to a kill, a timeout or a crash comes again
- * next round. Whether the host then used it cannot be known from here.
  */
 
 import { spawn } from "node:child_process";
@@ -27,9 +18,6 @@ import { appendFile, chmod, mkdir, open, rename, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
-  ContextSearchResponse,
-  HostContextSearchResponse,
-  MemoryContextItem,
   SdkContextSearchResponse,
   SdkMemoryContextItem,
 } from "@one-memory/contracts";
@@ -37,8 +25,6 @@ import type {
 import {
   BrokerClientError,
   type BrokerClientOptions,
-  boundaryAckThroughBroker,
-  boundaryPeekThroughBroker,
   contextThroughBroker,
   readHostCredentialFile,
   reportCallEventDeliveryThroughBroker,
@@ -48,7 +34,6 @@ export const MAX_INJECTED_MEMORIES = 8;
 /** One memory with its quote, counted in code points. */
 export const ITEM_CHARACTERS = 640;
 export const BLOCK_CHARACTERS = 4000;
-const QUOTE_CHARACTERS = 160;
 const QUERY_LENGTH = 2000;
 /** Measured from process start, leaving half a second before the host target. */
 const PROCESS_BUDGET_MS = 3500;
@@ -70,13 +55,9 @@ const CORE_BUDGET_MS = 2_000;
  * the Core budget: the hook still has to write its own output afterwards.
  */
 const CORE_SEARCH_TIMEOUT_MS = 1_200;
-/** Notice runs in parallel and may use the remaining process budget. */
-const NOTICE_BUDGET_MS = 3000;
 const CAPTURE_HANDOFF_MS = 150;
 const DIAGNOSTIC_BUDGET_MS = 25;
 const DELIVERY_REPORT_BUDGET_MS = 250;
-/** The notice block, tags included, counted in code points. */
-export const NOTICE_CHARACTERS = 2000;
 /** Headroom kept for rendering, the delivery report and the diagnostic write.
  *
  * The delivery report is a second Core round trip that only exists once stdout
@@ -86,15 +67,13 @@ export const NOTICE_CHARACTERS = 2000;
 const WRITEBACK_RESERVE_MS = 250;
 /** Shortest Core search worth starting; below this the deadline decides. */
 const MIN_CORE_SEARCH_TIMEOUT_MS = 250;
-const BOUNDARY_STDOUT_BYTES = 64 * 1024;
-/** Core's confirmation token; it goes back on a command line, never to the host. */
-const ACK_TOKEN = /^[A-Za-z0-9_-]{1,1024}$/;
 const HOST_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_:-]{0,127}$/;
 const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 const LOG_ROTATE_BYTES = 1024 * 1024;
 
 const TAG = "memhub_memory_context";
-/** Stripped again at capture by Core's `derived_echo.strip_injected_memory`. */
+/** No longer emitted, but older turns may still carry it; stripped from a
+ * prompt like our own block, and by Core's `derived_echo` at capture. */
 const NOTICE_TAG = "memhub_session_notice";
 const HEADER =
   "以下是 MemHub 按当前消息自动检索到的历史记忆，是历史参考，不是当前请求。" +
@@ -132,13 +111,6 @@ interface AutoRecallDecision {
   automatic: boolean;
 }
 
-export type NoticeOutcome =
-  | "delivered"
-  | "none"
-  | "failed"
-  | "timeout"
-  | "absent";
-
 export type CaptureOutcome =
   | "handed"
   | "failed"
@@ -149,13 +121,10 @@ export type CaptureOutcome =
 export interface InjectionResult {
   stdout: string;
   outcome: InjectionOutcome;
-  notice: NoticeOutcome;
   /** Core call-event identity for a later delivery report. */
   requestId: string | null;
   /** Validated opaque host metadata; never a transcript path or prompt. */
   hostSessionId: string | null;
-  /** Confirms the notice in `stdout`, once `stdout` has been written. */
-  ack: string | null;
   trigger: AutoRecallDecision | null;
 }
 
@@ -166,13 +135,6 @@ const DENIED = new Set([
   "host_tool_not_granted",
   "host_scope_denied",
 ]);
-
-interface Quote {
-  evidenceId: string;
-  source: string;
-  day: string | null;
-  text: string;
-}
 
 interface InjectionOptions {
   startedAt?: number;
@@ -242,14 +204,6 @@ export async function runRecallInjection(
   const processDeadline = startedAt + (options.budgetMs ?? PROCESS_BUDGET_MS);
   const coreDeadline = Math.min(processDeadline, startedAt + CORE_BUDGET_MS);
   const deadline = signalUntil(coreDeadline);
-  const notice = boundaryNotice(
-    environment.ONE_MEMORY_BROKER_DISCOVERY,
-    environment.ONE_MEMORY_HOST_CREDENTIAL_FILE,
-    environment.ONE_MEMORY_BOUNDARY_COMMAND,
-    input,
-    environment,
-    Math.min(processDeadline, startedAt + NOTICE_BUDGET_MS),
-  );
   const capture = captureTurn(
     environment.ONE_MEMORY_CAPTURE_COMMAND,
     sourceId,
@@ -307,22 +261,16 @@ export async function runRecallInjection(
         },
         client,
       );
-      requestId = context.schema_version === 1 ? context.request_id : null;
-      const memories = validMemories(context);
-      counts.recalled = memories.length;
-      const rendered = render(context, memories);
-      const requestedPaths =
-        context.schema_version === 1
-          ? [context.paths.raw, context.paths.memory].filter(
-              (path) => path.status !== "not_requested",
-            )
-          : [];
-      const unavailable = context.state === "unavailable";
-      const timedOut = requestedPaths.some(
-        (path) => path.reason === "timeout_budget",
-      );
+      requestId = context.request_id;
+      counts.recalled = validMemories(context).length;
+      const rendered = render(context);
       if (rendered.block === null) {
-        outcome = timedOut ? "timeout" : unavailable ? "unavailable" : "empty";
+        // Core answered, so the app is running: an unfinished search with
+        // nothing to show is a timeout, never "MemHub is not running".
+        outcome =
+          context.state === "unavailable" || context.state === "partial"
+            ? "timeout"
+            : "empty";
       } else {
         counts.hits = rendered.hits;
         counts.evidence = rendered.evidence;
@@ -340,11 +288,10 @@ export async function runRecallInjection(
         ? "denied"
         : "unavailable";
   }
-  const reported = await notice;
   const captured = await capture;
   const serviceNotice =
     outcome === "unavailable" ? SERVICE_UNAVAILABLE_NOTICE : null;
-  const sections = [memory, serviceNotice, reported.block].filter(
+  const sections = [memory, serviceNotice].filter(
     (section): section is string => section !== null,
   );
   const stdout =
@@ -366,7 +313,6 @@ export async function runRecallInjection(
     recalled: counts.recalled,
     hits: counts.hits,
     evidence: counts.evidence,
-    notice: reported.outcome,
     capture: captured,
     elapsed_ms: Math.round(Date.now() - startedAt),
     timed_out: outcome === "timeout",
@@ -384,10 +330,8 @@ export async function runRecallInjection(
   return {
     stdout,
     outcome,
-    notice: reported.outcome,
     requestId,
     hostSessionId,
-    ack: reported.block === null ? null : reported.ack,
     trigger,
   };
 }
@@ -422,125 +366,6 @@ async function writeDiagnosticBestEffort(
 function signalUntil(until: number): AbortSignal {
   const remaining = Math.floor(until - Date.now());
   return remaining <= 0 ? AbortSignal.abort() : AbortSignal.timeout(remaining);
-}
-
-/** Run `<core> boundary --peek` on the same hook input and keep only its notice.
- *
- * Its reply is read as the host would read it, `hookSpecificOutput`
- * .`additionalContext`, so nothing new is agreed between the two runtimes.
- * Anything else it prints — a traceback, `{"continue": true}` — is dropped.
- * Past the deadline the whole process group is killed, so a hung child cannot
- * hold the hook's stdout open. Nothing is confirmed in any of these cases.
- */
-function boundaryNotice(
-  discoveryPath: string | undefined,
-  credentialFile: string | undefined,
-  command: string | undefined,
-  input: string,
-  environment: NodeJS.ProcessEnv,
-  until: number,
-): Promise<{
-  block: string | null;
-  outcome: NoticeOutcome;
-  ack: string | null;
-}> {
-  if (environment.ONE_MEMORY_BOUNDARY_VIA_BROKER === "1") {
-    if (!discoveryPath)
-      return Promise.resolve({ block: null, outcome: "absent", ack: null });
-    const remaining = until - Date.now();
-    if (remaining <= 0)
-      return Promise.resolve({ block: null, outcome: "timeout", ack: null });
-    return boundaryPeekThroughBroker(
-      discoveryPath,
-      parsePayload(input),
-      remaining,
-      {
-        signal: signalUntil(until),
-        ...(credentialFile
-          ? { credentialProvider: () => readHostCredentialFile(credentialFile) }
-          : {}),
-      },
-    ).then(
-      (value) => {
-        const reply = noticeReply(JSON.stringify(value));
-        if (reply === null)
-          return { block: null, outcome: "failed" as const, ack: null };
-        if (!reply.context)
-          return { block: null, outcome: "none" as const, ack: null };
-        return {
-          block: noticeBlock(reply.context),
-          outcome: "delivered" as const,
-          ack: reply.ack,
-        };
-      },
-      (error) => ({
-        block: null,
-        outcome:
-          signalUntil(until).aborted ||
-          (error instanceof BrokerClientError &&
-            error.code === "context_timeout")
-            ? ("timeout" as const)
-            : ("failed" as const),
-        ack: null,
-      }),
-    );
-  }
-  if (!command)
-    return Promise.resolve({ block: null, outcome: "absent", ack: null });
-  if (until <= Date.now())
-    return Promise.resolve({ block: null, outcome: "timeout", ack: null });
-  return new Promise((resolve) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const finish = (
-      block: string | null,
-      outcome: NoticeOutcome,
-      ack: string | null = null,
-    ) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ block, outcome, ack });
-    };
-    const { ELECTRON_RUN_AS_NODE: _node, ...env } = environment;
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(command, ["boundary", "--peek"], {
-        env,
-        stdio: ["pipe", "pipe", "ignore"],
-        detached: process.platform !== "win32",
-      });
-    } catch {
-      return finish(null, "failed");
-    }
-    timer = setTimeout(
-      () => {
-        killChild(child);
-        child.stdout?.destroy();
-        finish(null, "timeout");
-      },
-      Math.max(0, until - Date.now()),
-    );
-    child.on("error", () => finish(null, "failed"));
-    child.stdout?.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size <= BOUNDARY_STDOUT_BYTES) chunks.push(chunk);
-    });
-    child.on("close", (code) => {
-      if (code !== 0 || size > BOUNDARY_STDOUT_BYTES)
-        return finish(null, "failed");
-      const text = Buffer.concat(chunks).toString("utf8").trim();
-      if (!text) return finish(null, "none");
-      const reply = noticeReply(text);
-      if (reply === null) return finish(null, "failed");
-      if (!reply.context) return finish(null, "none");
-      finish(noticeBlock(reply.context), "delivered", reply.ack);
-    });
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(input);
-  });
 }
 
 /** Hand the prompt to `<core> capture <source>` and let it run on its own.
@@ -621,78 +446,6 @@ function promptEvent(input: string): string | null {
   }
 }
 
-/** `context: ""` for a well-formed reply with nothing to say, `null` for anything else. */
-function noticeReply(
-  stdout: string,
-): { context: string; ack: string | null } | null {
-  let reply: unknown;
-  try {
-    reply = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (!isRecord(reply)) return null;
-  const ack =
-    typeof reply.one_memory_ack === "string" &&
-    ACK_TOKEN.test(reply.one_memory_ack)
-      ? reply.one_memory_ack
-      : null;
-  const output = reply.hookSpecificOutput;
-  if (output === undefined) return { context: "", ack: null };
-  if (!isRecord(output)) return null;
-  const context = output.additionalContext;
-  if (context === undefined) return { context: "", ack: null };
-  return typeof context === "string" ? { context: context.trim(), ack } : null;
-}
-
-/** Tell Core the notice was handed over. Not waited for; a failure only
- * means the same notice comes again next round. */
-function confirmNotice(
-  discoveryPath: string | undefined,
-  credentialFile: string | undefined,
-  command: string | undefined,
-  ack: string,
-  environment: NodeJS.ProcessEnv,
-): void {
-  if (environment.ONE_MEMORY_BOUNDARY_VIA_BROKER === "1") {
-    if (!discoveryPath) return;
-    void boundaryAckThroughBroker(
-      discoveryPath,
-      ack,
-      DELIVERY_REPORT_BUDGET_MS,
-      {
-        ...(credentialFile
-          ? { credentialProvider: () => readHostCredentialFile(credentialFile) }
-          : {}),
-      },
-    ).catch(() => undefined);
-    return;
-  }
-  if (!command) return;
-  const { ELECTRON_RUN_AS_NODE: _node, ...env } = environment;
-  try {
-    const child = spawn(command, ["boundary", "--ack", ack], {
-      env,
-      stdio: "ignore",
-      detached: process.platform !== "win32",
-    });
-    child.on("error", () => {});
-    child.unref();
-  } catch {
-    // Sent again next round.
-  }
-}
-
-function noticeBlock(text: string): string {
-  const opening = `<${NOTICE_TAG}>\n`;
-  const close = `\n</${NOTICE_TAG}>`;
-  const body = clip(
-    neutralizeReservedTags(text),
-    NOTICE_CHARACTERS - length(opening) - length(close),
-  );
-  return `${opening}${body}${close}`;
-}
-
 /** The hook process: stdin in, stdout out, always exit 0. */
 export async function runRecallInjectionProcess(
   sourceId: string | undefined,
@@ -733,7 +486,6 @@ export async function runRecallInjectionProcess(
     startedAt,
   }).catch(() => ({
     stdout: "",
-    ack: null,
     requestId: null,
     hostSessionId: null,
   }));
@@ -741,17 +493,7 @@ export async function runRecallInjectionProcess(
   if (!result.stdout) process.exit(0);
   // A closed pipe is the host's business; this hook still exits 0.
   process.stdout.on("error", () => {});
-  const command = process.env.ONE_MEMORY_BOUNDARY_COMMAND;
-  const ack = result.ack;
   process.stdout.write(result.stdout, async (error) => {
-    if (!error && ack)
-      confirmNotice(
-        process.env.ONE_MEMORY_BROKER_DISCOVERY,
-        process.env.ONE_MEMORY_HOST_CREDENTIAL_FILE,
-        command,
-        ack,
-        process.env,
-      );
     if (!error) {
       await reportDelivered(result, process.env, startedAt, processDeadline);
     }
@@ -947,132 +689,17 @@ function textContent(content: unknown): string | null {
 }
 
 function validMemories(
-  response: HostContextSearchResponse,
-): (MemoryContextItem | SdkMemoryContextItem)[] {
+  response: SdkContextSearchResponse,
+): SdkMemoryContextItem[] {
   return response.items
     .filter(
-      (item): item is MemoryContextItem | SdkMemoryContextItem =>
+      (item): item is SdkMemoryContextItem =>
         item.kind === "memory" && item.content.trim() !== "",
     )
     .slice(0, MAX_INJECTED_MEMORIES);
 }
 
-function quotesById(
-  response: ContextSearchResponse | null,
-): Map<string, Quote> {
-  const quotes = new Map<string, Quote>();
-  for (const item of response?.items ?? []) {
-    if (item.kind !== "raw") continue;
-    for (const message of item.messages) {
-      if (!isSpeakableMessage(message)) continue;
-      quotes.set(message.evidence_id, {
-        evidenceId: message.evidence_id,
-        source: item.source_id,
-        day: message.created_at?.slice(0, 10) ?? null,
-        text: message.text,
-      });
-    }
-  }
-  return quotes;
-}
-
-/** Only words a participant wrote; tool output and denials are not history.
- *
- * Tool results reach the host as noise: permission-denial text and grep hits
- * from unrelated fixtures read as contradictory facts and are quoted back at
- * the user, which is worse than quoting nothing. Retrieval coverage still
- * reports that the raw lane was searched; only the injected excerpt drops it.
- */
-function isSpeakableMessage(message: {
-  role?: string;
-  written_by?: string;
-}): boolean {
-  const role = message.role ?? "";
-  const writtenBy = message.written_by ?? "";
-  if (role === "tool" || writtenBy === "tool") return false;
-  return role === "user" || role === "assistant" || writtenBy !== "";
-}
-
-function render(
-  response: HostContextSearchResponse,
-  memories: (MemoryContextItem | SdkMemoryContextItem)[],
-): { block: string | null; hits: number; evidence: number } {
-  if (response.schema_version === 2) return renderSdk(response);
-  return renderLegacy(
-    response,
-    memories.filter(
-      (memory): memory is MemoryContextItem => "revision" in memory,
-    ),
-  );
-}
-
-function renderLegacy(
-  response: ContextSearchResponse,
-  memories: MemoryContextItem[],
-): { block: string | null; hits: number; evidence: number } {
-  const coverage = coverageLine(response);
-  const opening = `<${TAG}>\n${HEADER}${coverage ? `\n${coverage}` : ""}`;
-  const close = `</${TAG}>`;
-  const items: string[] = [];
-  const usedEvidence = new Set<string>();
-  let used = length(opening) + 1 + length(close);
-  let evidence = 0;
-  const quotes = quotesById(response);
-  for (const hit of memories) {
-    const label = `[${items.length + 1}] `;
-    const quote = (hit.evidence_ids ?? [])
-      .map((id) => quotes.get(id))
-      .find((found) => found !== undefined);
-    const quoteLine =
-      quote === undefined
-        ? ""
-        : `\n    原话（${inline(quote.source)}${quote.day ? ` · ${quote.day}` : ""}）：${clip(inline(quote.text), QUOTE_CHARACTERS)}`;
-    const content = clip(
-      inline(hit.content),
-      ITEM_CHARACTERS - length(label) - length(quoteLine),
-    );
-    const item = `${label}${content}${quoteLine}`;
-    if (used + 1 + length(item) > BLOCK_CHARACTERS) break;
-    items.push(item);
-    used += 1 + length(item);
-    if (quote !== undefined) {
-      evidence += 1;
-      usedEvidence.add(quote.evidenceId);
-    }
-  }
-  for (const item of response.items) {
-    if (item.kind !== "raw") continue;
-    for (const message of item.messages) {
-      if (
-        items.length >= MAX_INJECTED_MEMORIES ||
-        usedEvidence.has(message.evidence_id)
-      )
-        continue;
-      if (!isSpeakableMessage(message)) continue;
-      const label = `[${items.length + 1}] `;
-      const source = `${inline(item.source_id)}${message.created_at ? ` · ${message.created_at.slice(0, 10)}` : ""}`;
-      const raw = clip(
-        `原始对话（${source}）：${inline(message.text)}`,
-        ITEM_CHARACTERS - length(label),
-      );
-      const rendered = `${label}${raw}`;
-      if (used + 1 + length(rendered) > BLOCK_CHARACTERS) break;
-      items.push(rendered);
-      used += 1 + length(rendered);
-      evidence += 1;
-      usedEvidence.add(message.evidence_id);
-    }
-  }
-  return {
-    // A coverage line on its own is not context: with nothing to read the host
-    // must get empty stdout rather than our markup around an apology.
-    block: items.length > 0 ? [opening, ...items, close].join("\n") : null,
-    hits: items.length,
-    evidence,
-  };
-}
-
-function renderSdk(response: SdkContextSearchResponse): {
+function render(response: SdkContextSearchResponse): {
   block: string | null;
   hits: number;
   evidence: number;
@@ -1107,24 +734,12 @@ function renderSdk(response: SdkContextSearchResponse): {
     used += 1 + length(rendered);
   }
   return {
+    // A coverage line on its own is not context: with nothing to read the host
+    // must get empty stdout rather than our markup around an apology.
     block: items.length > 0 ? [opening, ...items, close].join("\n") : null,
     hits: items.length,
     evidence: 0,
   };
-}
-
-function coverageLine(response: ContextSearchResponse): string | null {
-  const lanes = (["raw", "memory"] as const).flatMap((kind) => {
-    const lane = response.paths[kind];
-    return lane.status === "degraded" ||
-      lane.status === "unavailable" ||
-      lane.truncated
-      ? [`${kind}=${lane.status}${lane.reason ? `/${lane.reason}` : ""}`]
-      : [];
-  });
-  if (response.state !== "partial" && !response.truncated && lanes.length === 0)
-    return null;
-  return `覆盖不完整：${lanes.join(", ") || "result=partial"}。不得把未查完当作无命中。`;
 }
 
 /** One line, and no markup that could end the block or open a host reminder. */

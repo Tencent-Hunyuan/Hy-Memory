@@ -65,6 +65,9 @@ export function renderDoctorText(document: DoctorDocument): string {
     model: "模型",
     pending_operations: "待处理操作",
   };
+  const migration = document.checks.find(
+    (check) => check.id === "core" && check.details?.log_file,
+  );
   return [
     `MemHub 检查：${doctorState(document.state)}`,
     ...document.checks.map(
@@ -73,7 +76,13 @@ export function renderDoctorText(document: DoctorDocument): string {
     ),
     ...(document.state === "healthy"
       ? []
-      : ["下一步：打开 MemHub 的“帮助与诊断”查看并处理异常。"]),
+      : migration
+        ? [
+            `升级迁移没有完成（错误码：${migration.code}），MemHub 不会启动。`,
+            `下一步：把迁移日志附在 GitHub 反馈里发给我们：${migration.details?.log_file}`,
+            `反馈地址：${migration.details?.issues_url}`,
+          ]
+        : ["下一步：打开 MemHub 的“帮助与诊断”查看并处理异常。"]),
     "",
   ].join("\n");
 }
@@ -107,6 +116,14 @@ function coreCheck(status: StatusDocument): DoctorCheck {
     id: "core",
     state: status.runtime.state === "stopped" ? "warn" : "fail",
     code: status.runtime.code,
+    ...(status.runtime.log_file
+      ? {
+          details: {
+            log_file: status.runtime.log_file,
+            issues_url: status.runtime.issues_url ?? "",
+          },
+        }
+      : {}),
   };
 }
 
@@ -200,8 +217,7 @@ function modelCheck(status: StatusDocument): DoctorCheck {
 function pendingCheck(progress: ProgressDocument | null): DoctorCheck {
   if (
     progress?.imports.state !== "ok" ||
-    progress.generation.summary_state.state !== "ok" ||
-    progress.generation.tasks_state.state !== "ok"
+    progress.generation.summary_state.state !== "ok"
   ) {
     return {
       id: "pending_operations",
@@ -212,27 +228,20 @@ function pendingCheck(progress: ProgressDocument | null): DoctorCheck {
   const jobAttention = progress.imports.jobs.filter((item) =>
     ["paused", "interrupted", "failed"].includes(text(item.status) ?? ""),
   ).length;
-  const taskAttention = progress.generation.tasks.filter((item) =>
-    ["waiting_for_model", "failed"].includes(text(item.status) ?? ""),
-  ).length;
   const summary = progress.generation.summary;
   const waiting = summary ? number(summary.waiting_for_model) : 0;
   const failed = summary ? number(summary.failed) : 0;
-  const attention = jobAttention + taskAttention + waiting + failed;
+  const attention = jobAttention + waiting + failed;
   return {
     id: "pending_operations",
     state: attention > 0 ? "warn" : "pass",
     code: attention > 0 ? "operations_need_attention" : "pending_operations_ok",
     details: {
       import_jobs_validated: progress.imports.validated,
-      generation_tasks_validated: progress.generation.validated,
       jobs_need_attention: jobAttention,
-      tasks_need_attention: taskAttention,
       waiting_for_model: waiting,
       failed,
-      output_truncated:
-        progress.imports.output_truncated ||
-        progress.generation.output_truncated,
+      output_truncated: progress.imports.output_truncated,
     },
   };
 }

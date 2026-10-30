@@ -230,37 +230,21 @@ it("filters raw Core INFO and DEBUG while preserving warnings and errors", async
   ).toBe(true);
 });
 
-it("shows HY pipeline metrics without exposing model content", async () => {
-  const dataDir = await mkdtemp(
-    path.join(os.tmpdir(), "om-debug-hy-pipeline-"),
-  );
+it("does not read HY's own log directory", async () => {
+  // MemHub turns the HY pipeline log off; files left by older builds and
+  // HY's text log stay on disk but are not part of the Debug panel.
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "om-debug-hy-logs-"));
   roots.push(dataDir);
-  const pipelineDir = path.join(
-    dataDir,
-    "hy-memory",
-    "governed-v2",
-    "logs",
-    "default",
-  );
-  await mkdir(pipelineDir, { recursive: true });
-  const target = path.join(pipelineDir, "2026-10-14.log");
-  await writeFile(target, "");
+  const hyLogs = path.join(dataDir, "hy-memory", "governed-v2", "logs");
+  await mkdir(path.join(hyLogs, "default"), { recursive: true });
   const cursor = await captureDebugLogCursor(dataDir);
-  await appendFile(
-    target,
-    `${JSON.stringify({
-      request_id: "request-safe-1",
-      user_id: "private-user",
-      agent_id: "private-agent",
-      session_id: "private-session",
-      step: "EXTRACT",
-      prompt: "private prompt",
-      content: "private response",
-      parsed: "private parsed output",
-      tokens: 42,
-      elapsed_ms: 123.5,
-      timestamp: "2026-10-14T10:01:00.000",
-    })}\n`,
+  await writeFile(
+    path.join(hyLogs, "default", "2026-10-14.log"),
+    `${JSON.stringify({ request_id: "old-pipeline", step: "EXTRACT" })}\n`,
+  );
+  await writeFile(
+    path.join(hyLogs, "hy_memory.log"),
+    "2026-10-14 10:01:00 [WARNING] [-] hy_memory.client: hy text log\n",
   );
 
   const snapshot = await readDebugLogSnapshot(
@@ -269,29 +253,11 @@ it("shows HY pipeline metrics without exposing model content", async () => {
     cursor,
   );
 
-  expect(snapshot.entries).toEqual([
-    expect.objectContaining({
-      service: "hy-memory",
-      component: "hy.pipeline",
-      event: "hy.pipeline.extract",
-      message: "EXTRACT · 42 tokens · 124 ms",
-      duration_ms: 123.5,
-      trace_id: "request-safe-1",
-      details: { phase: "EXTRACT", count: 42 },
-      source: "pipeline",
-    }),
-  ]);
-  const serialized = JSON.stringify(snapshot);
-  for (const secret of [
-    "private prompt",
-    "private response",
-    "private parsed output",
-    "private-user",
-    "private-agent",
-    "private-session",
-  ]) {
-    expect(serialized).not.toContain(secret);
-  }
+  expect(snapshot.entries).toEqual([]);
+  expect(cursor).toEqual({
+    diagnosticLogs: [],
+    serviceLogs: expect.any(Array),
+  });
 });
 
 it("logs a renderer ui-action with action, page, phase and the shared trace id", async () => {

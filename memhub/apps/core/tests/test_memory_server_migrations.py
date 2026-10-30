@@ -742,49 +742,6 @@ def test_change_outbox_ddl_mysql_and_sqlite_agree_on_columns() -> None:
     assert "event_id" in columns(mysql)
 
 
-@pytest.mark.parametrize(
-    ("getter", "table"),
-    [
-        ("session_leases_ddl", "session_leases"),
-        ("trusted_sessions_ddl", "trusted_sessions"),
-    ],
-)
-def test_migrated_ddl_has_one_source(getter: str, table: str) -> None:
-    """Each migrated module must use the migration's definition, not a copy.
-
-    Modules that ran on one engine held a single `_SCHEMA` constant. Migrated
-    ones hold both renderings and select at use time, so the check reads
-    whichever the module actually uses — the point is still that the text comes
-    from the migration and is not retyped inline.
-    """
-    import importlib
-
-    migrations = importlib.import_module("one_memory.memory_server.migrations")
-    render = getattr(migrations, getter)
-
-    module_name = {
-        "session_leases_ddl": "one_memory.session_lease",
-        "trusted_sessions_ddl": "one_memory.session_registry",
-    }[getter]
-    module = importlib.import_module(module_name)
-
-    if hasattr(module, "schema_for"):
-        sqlite_text = module.schema_for(False)
-        mysql_text = module.schema_for(True)
-    else:
-        sqlite_text = module._SCHEMA
-        mysql_text = None
-
-    assert sqlite_text == render("sqlite"), "module copies the DDL instead of using the migration"
-    assert table in sqlite_text
-    assert "ENGINE=InnoDB" not in sqlite_text
-    # A migrated module must also be able to render MySQL, or it will send
-    # SQLite DDL to MySQL when the engine switches.
-    if mysql_text is not None:
-        assert mysql_text == render("mysql")
-        assert table in mysql_text
-
-
 def test_import_jobs_ddl_is_split_before_execution() -> None:
     """MySQL takes one DDL per call, so a script must be split.
 

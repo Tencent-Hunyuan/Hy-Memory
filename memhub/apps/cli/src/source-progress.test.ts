@@ -130,18 +130,6 @@ const RESPONSES = new Map<string, { status: number; data: unknown }>([
     },
   ],
   [
-    "/api/v1/memory-tasks",
-    {
-      status: 200,
-      data: [
-        memoryTask("task-pending", "pending"),
-        memoryTask("task-running", "running"),
-        memoryTask("task-model", "waiting_for_model", "model_missing"),
-        memoryTask("task-failed", "failed", "provider_unavailable"),
-      ],
-    },
-  ],
-  [
     "/api/v1/import-jobs/job-running",
     { status: 200, data: importJob("job-running", "running") },
   ],
@@ -282,9 +270,9 @@ describe("CLI-19 progress and issue reads", () => {
       imported_messages: 20,
       totals_state: { state: "ok" },
     });
-    expect(
-      report.generation.tasks.map((task: { status: string }) => task.status),
-    ).toEqual(["pending", "running", "waiting_for_model", "failed"]);
+    // The retired per-task list is no longer read or reported.
+    expect(report.generation).not.toHaveProperty("tasks");
+    expect(requestedPaths()).not.toContain("/api/v1/memory-tasks");
     expect(streams.stdout()).not.toMatch(/percent|percentage|%/i);
   });
 
@@ -374,7 +362,7 @@ describe("CLI-19 progress and issue reads", () => {
     expect(streams.stdout()).not.toContain("SYNTHETIC_FOREIGN_ISSUE");
   });
 
-  it("bounds each task list and emits an explicit truncation receipt", async () => {
+  it("bounds the import job list and emits an explicit truncation receipt", async () => {
     const streams = captureStreams();
     try {
       expect(await run(["progress", "--limit", "1", "--json"], {})).toBe(1);
@@ -386,12 +374,6 @@ describe("CLI-19 progress and issue reads", () => {
     expect(report.imports).toMatchObject({
       returned: 1,
       validated: 3,
-      output_truncated: true,
-    });
-    expect(report.generation.tasks).toHaveLength(1);
-    expect(report.generation).toMatchObject({
-      returned: 1,
-      validated: 4,
       output_truncated: true,
     });
   });
@@ -428,7 +410,6 @@ describe("CLI-19 progress and issue reads", () => {
       "/api/v1/import-jobs",
       "/api/v1/sources",
       "/api/v1/memory-processing",
-      "/api/v1/memory-tasks",
     ]) {
       expect(requestedPaths().filter((item) => item === path)).toHaveLength(2);
     }
@@ -500,7 +481,7 @@ describe("CLI-19 progress and issue reads", () => {
   it("preserves denied, unavailable and malformed sections in one partial report", async () => {
     transport.get.mockImplementation(async (url: string) => {
       if (url === "/api/v1/import-jobs") return { status: 503, data: {} };
-      if (url === "/api/v1/memory-tasks") return { status: 403, data: {} };
+      if (url === "/api/v1/sources") return { status: 403, data: {} };
       if (url === "/api/v1/memory-processing") {
         return { status: 200, data: { pending: { secret: "nested" } } };
       }
@@ -521,7 +502,7 @@ describe("CLI-19 progress and issue reads", () => {
       state: "invalid",
       code: "response_invalid",
     });
-    expect(report.generation.tasks_state).toEqual({
+    expect(report.imports.totals_state).toEqual({
       state: "denied",
       code: "http_403",
     });
@@ -574,7 +555,6 @@ describe("CLI-19 progress and issue reads", () => {
           "/api/v1/live-sync",
           "/api/v1/import-jobs",
           "/api/v1/memory-processing",
-          "/api/v1/memory-tasks",
         ].some((allowed) => path === allowed || path.startsWith(`${allowed}/`)),
       ),
     ).toBe(true);
@@ -629,28 +609,6 @@ function importJob(
     merged: 0,
     skipped: 1,
     errors: status === "failed" ? 1 : 0,
-    created_at: "T1",
-    updated_at: "T2",
-  };
-}
-
-function memoryTask(
-  taskId: string,
-  status: string,
-  error: string | null = null,
-) {
-  return {
-    task_id: taskId,
-    request_id: `request-${taskId}`,
-    user_id: "local",
-    kind: "extract",
-    input_ref: "synthetic",
-    status,
-    profile_id: "profile-1",
-    profile_revision: 1,
-    profile_snapshot: {},
-    attempts: status === "failed" ? 2 : 0,
-    last_error_code: error,
     created_at: "T1",
     updated_at: "T2",
   };

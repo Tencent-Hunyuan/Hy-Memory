@@ -9,7 +9,6 @@ import {
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
-import { DIALOGUE_PANE_VISIBLE } from "./MemoryMap";
 import { MemorySpace } from "./MemorySpace";
 
 it("translates memory filters and detail affordances live without refetching", async () => {
@@ -22,14 +21,12 @@ it("translates memory filters and detail affordances live without refetching", a
     </LanguageProvider>,
   );
   await screen.findByRole("heading", { name: "Memorias", level: 1 });
-  await screen.findByText("已保存的记忆");
+  await screen.findAllByText("已保存的记忆");
   expect(
     screen.getByRole("textbox", { name: "Filtrar memorias del mapa" }),
   ).toBeTruthy();
-  expect(
-    screen.getByRole("button", { name: "Actualizar memorias" }),
-  ).toBeTruthy();
-  const calls = reads.mapLibrary.mock.calls.length;
+  expect(screen.getByRole("button", { name: "Buscar" })).toBeTruthy();
+  const calls = reads.sdkLibrary.mock.calls.length;
   act(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
     window.dispatchEvent(
@@ -37,26 +34,8 @@ it("translates memory filters and detail affordances live without refetching", a
     );
   });
   expect(screen.getByRole("heading", { name: "记忆", level: 1 })).toBeTruthy();
-  expect(reads.mapLibrary).toHaveBeenCalledTimes(calls);
-  localStorage.clear();
-});
-
-it("localiza la navegación de gobierno de la biblioteca", async () => {
-  setup();
-  delete window.oneMemory;
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
-  render(
-    <LanguageProvider>
-      <MemorySpace simplified />
-    </LanguageProvider>,
-  );
-  await screen.findByRole("heading", { name: "Memorias", level: 1 });
-  expect(
-    screen.getByRole("navigation", {
-      name: "Estado de las memorias",
-      hidden: true,
-    }),
-  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "搜索" })).toBeTruthy();
+  expect(reads.sdkLibrary).toHaveBeenCalledTimes(calls);
   localStorage.clear();
 });
 
@@ -91,39 +70,25 @@ it("localiza cola y estimación sin alterar las memorias", async () => {
 
 const { reads } = vi.hoisted(() => ({
   reads: {
-    memories: vi.fn(),
-    graph: vi.fn(),
+    sdkLibrary: vi.fn(),
+    sdkGraph: vi.fn(),
     processing: vi.fn(),
     profiles: vi.fn(),
-    library: vi.fn(),
-    mapLibrary: vi.fn(),
-    recent: vi.fn(),
-    conversation: vi.fn(),
   },
 }));
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  getMemoryAuthority: async () => ({
-    authority: "legacy",
-    migration_id: null,
-  }),
-  getMemories: reads.memories,
-  getMemoryGraph: reads.graph,
+  getSdkMemoryLibrary: reads.sdkLibrary,
+  getSdkMemoryGraph: reads.sdkGraph,
   getMemoryProcessing: reads.processing,
   getModelProfiles: reads.profiles,
-  getMemoryLibrary: (query: { active_only?: boolean }, signal?: AbortSignal) =>
-    query.active_only === true
-      ? reads.mapLibrary(query, signal)
-      : reads.library(query, signal),
-  getRecentConversations: reads.recent,
-  getConversation: reads.conversation,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
-vi.mock("./MemoryNoteComposer", () => ({
-  MemoryNoteComposer: ({
+vi.mock("./MemoryAddComposer", () => ({
+  MemoryAddComposer: ({
     onPendingChange,
   }: {
-    onPendingChange?(note: {
+    onPendingChange?(addition: {
       evidenceId: string;
       text: string;
       state: string;
@@ -133,7 +98,7 @@ vi.mock("./MemoryNoteComposer", () => ({
       type="button"
       onClick={() =>
         onPendingChange?.({
-          evidenceId: "note-1",
+          evidenceId: "addition-1",
           text: "项目周会统一安排在周三上午。",
           state: "waiting_for_model",
         })
@@ -182,21 +147,33 @@ it("translates the model-required prompt without configuring a model", async () 
 });
 
 function setup() {
-  const items = [
+  const memories = [
     {
       memory_id: "m1",
       content: "已保存的记忆",
-      status: "confirmed",
-      kind: "chat",
-      origin: "extracted",
+      layer: "l2_fact",
+      status: "active",
+      is_latest: true,
+      supersedes: [],
+      superseded_by: [],
       tags: [],
-      scopes: ["all-apps"],
-      evidence_ids: ["e1"],
-      revision: 1,
+      owner: null,
+      source_raw_ids: [],
+      user_id: "local",
+      agent_id: "all-apps",
+      session_id: "s1",
+      source: "cursor",
+      memory_at: null,
+      gmt_created: 1_761_000_000,
     },
   ];
-  reads.memories.mockResolvedValue(items);
-  reads.graph.mockResolvedValue({
+  reads.sdkLibrary.mockResolvedValue({
+    memories,
+    total: memories.length,
+    offset: 0,
+    limit: 100,
+  });
+  reads.sdkGraph.mockResolvedValue({
     nodes: [
       {
         node_id: "memory:m1",
@@ -208,6 +185,7 @@ function setup() {
     edges: [],
     total_memories: 1,
     projected_memories: 1,
+    hy_graph_available: false,
   });
   reads.processing.mockResolvedValue({
     running: 0,
@@ -216,80 +194,22 @@ function setup() {
     completed: 1,
   });
   reads.profiles.mockResolvedValue([]);
-  reads.library.mockResolvedValue({
-    items: [],
-    total: 0,
-    offset: 0,
-    limit: 100,
-  });
-  reads.mapLibrary.mockResolvedValue({
-    items,
-    total: items.length,
-    offset: 0,
-    limit: 100,
-  });
-  reads.recent.mockResolvedValue({
-    items: [
-      {
-        evidence_id: "e-live",
-        conversation_id: "c1",
-        source_id: "cursor",
-        role: "user",
-        written_by: "person",
-        created_at: null,
-        imported_at: "2026-09-23T06:47:00Z",
-        excerpt: "刚同步的原话",
-        truncated: false,
-      },
-    ],
-    total: 1,
-    offset: 0,
-    limit: 30,
-  });
-  reads.conversation.mockResolvedValue({
-    conversation_id: "c1",
-    source_id: "cursor",
-    messages: [
-      {
-        evidence_id: "e-live",
-        role: "user",
-        written_by: "person",
-        created_at: null,
-        verbatim: "刚同步的原话全文",
-      },
-    ],
-  });
 }
 
-it("keeps a saved note visible while it waits for model processing", async () => {
+it("keeps an added memory visible while it waits for model processing", async () => {
   setup();
   render(<MemorySpace simplified onConfigureModel={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "补充记忆" }));
   expect(
-    screen.getByText(/原话已保存，正在等待整理：项目周会统一安排在周三上午。/),
+    screen.getByText(/正在等待整理：项目周会统一安排在周三上午。/),
   ).toBeTruthy();
+  expect(screen.queryByText(/原话已保存/)).toBeNull();
   expect(screen.getByRole("button", { name: "配置整理模型" })).toBeTruthy();
   expect(screen.queryByText("还没有已生成的记忆")).toBeNull();
 });
-// D96: the memory page no longer has the raw-dialogue tab; runs again if it comes back.
-it.skipIf(!DIALOGUE_PANE_VISIBLE)(
-  "lists imported dialogue from the memory sidebar and opens the original",
-  async () => {
-    setup();
-    render(<MemorySpace simplified />);
-    await screen.findByText("已保存的记忆");
-    fireEvent.click(screen.getByRole("tab", { name: "原始对话" }));
-    expect(await screen.findByText("刚同步的原话")).toBeTruthy();
-    expect(await screen.findByText("刚同步的原话全文")).toBeTruthy();
-    expect(screen.getByText("刚导入的原话，还不是沉淀后的记忆")).toBeTruthy();
-    expect(screen.queryByTestId("graph-owner")).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "记忆" }));
-    expect(await screen.findByTestId("graph-owner")).toBeTruthy();
-  },
-);
 it("hides a recoverable graph read failure on the three-column surface", async () => {
   setup();
-  reads.graph.mockRejectedValue(new Error("graph offline"));
+  reads.sdkGraph.mockRejectedValue(new Error("graph offline"));
   render(<MemorySpace simplified />);
   // Two copies now: the library list, and the detail pane naming what the
   // conversation settled (OBS-14). Waiting on one copy used to be enough.
@@ -301,21 +221,29 @@ it("shows the three-column surface without four modes or a management button", a
   setup();
   render(<MemorySpace simplified />);
   await screen.findByTestId("graph-owner");
-  expect(reads.mapLibrary).toHaveBeenCalledWith(
-    { query: "", active_only: true, offset: 0, limit: 100 },
+  expect(reads.sdkLibrary).toHaveBeenCalledWith(
+    {
+      statuses: ["active"],
+      source: undefined,
+      query: undefined,
+      offset: 0,
+      limit: 20,
+      windowId: null,
+    },
     expect.any(AbortSignal),
   );
-  expect(reads.library).not.toHaveBeenCalled();
   expect(screen.queryByRole("tablist", { name: "记忆空间模式" })).toBeNull();
   expect(screen.queryByLabelText("向记忆提问")).toBeNull();
   expect(screen.queryByRole("button", { name: "管理记忆" })).toBeNull();
+  // The library is a search-free manager: the ask/search bar stays hidden.
   fireEvent(window, new Event("one-memory:manage"));
-  expect(screen.getByRole("navigation", { name: "记忆治理状态" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "搜索记忆库" })).toBeNull();
   await waitFor(() =>
-    expect(reads.library).toHaveBeenCalledWith(
-      { query: "", status: "confirmed", offset: 0, limit: 100 },
-      expect.any(AbortSignal),
-    ),
+    expect(reads.sdkLibrary).toHaveBeenCalledWith({
+      statuses: ["active"],
+      offset: 0,
+      limit: 20,
+    }),
   );
   fireEvent(window, new Event("one-memory:manage"));
   expect(await screen.findByTestId("graph-owner")).toBeTruthy();
@@ -328,7 +256,7 @@ it("stops all page polling and disposes graph while inactive, then resumes", asy
     await Promise.resolve();
     await Promise.resolve();
   });
-  expect(reads.memories).toHaveBeenCalled();
+  expect(reads.sdkLibrary).toHaveBeenCalled();
   expect(screen.getByTestId("graph-owner")).toBeTruthy();
   view.rerender(<MemorySpace simplified active={false} />);
   const counts = Object.values(reads).map((fn) => fn.mock.calls.length);
@@ -345,5 +273,5 @@ it("stops all page polling and disposes graph while inactive, then resumes", asy
     await Promise.resolve();
     await Promise.resolve();
   });
-  expect(reads.memories.mock.calls.length).toBeGreaterThan(counts[0]);
+  expect(reads.sdkLibrary.mock.calls.length).toBeGreaterThan(counts[0]);
 });

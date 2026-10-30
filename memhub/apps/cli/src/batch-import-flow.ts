@@ -1,4 +1,5 @@
-/** A19: one-shot scan/import of every *detected* source.
+/** A19: one-shot connect/import of every *detected* source
+ * (`sources connect --all-detected --import`).
  *
  * The engine already takes many sources in a single `POST /api/v1/sources/connect`
  * (`source_ids` is a 1..32 tuple) and answers per source. The CLI used to reject
@@ -37,13 +38,16 @@ export interface BatchSourceRow {
 export interface BatchScanDocument {
   schema_version: 1;
   product: string;
-  command: "scan" | "init";
+  command: "sources connect";
   state: "committed" | "partial" | "rejected" | "unknown" | "no_sources";
   request_id: string | null;
   accepted_source_ids: string[];
   sources: BatchSourceRow[];
   /** `location_state != found` rows are listed so the user can see what was skipped. */
   not_found_source_ids: string[];
+  /** Detected sources whose location comes from an environment override and
+   * that were left out because `--confirm-overrides` was not given. */
+  override_required_source_ids?: string[];
   code?: string;
 }
 
@@ -118,12 +122,39 @@ export async function planBatchImport(reader: CoreReader): Promise<
 
 /** Run the batch connect once and fold the per-source receipt into rows. */
 export async function executeBatchImport(
-  candidates: readonly SourceConnectionCandidate[],
+  detected: readonly SourceConnectionCandidate[],
   reader: CoreReader,
   operations: CoreOperations,
   notFound: readonly string[],
+  options: { confirmOverrides: boolean },
 ): Promise<BatchScanDocument> {
   const requestId = randomUUID();
+  // An environment-override location is a choice the user has to confirm:
+  // without `--confirm-overrides` those sources are left out and named.
+  const skipped = options.confirmOverrides
+    ? []
+    : detected
+        .filter((candidate) => candidate.requires_override_confirmation)
+        .map((candidate) => candidate.source_id);
+  const overrideFields =
+    skipped.length > 0 ? { override_required_source_ids: skipped } : {};
+  const candidates = detected.filter(
+    (candidate) => !skipped.includes(candidate.source_id),
+  );
+  if (candidates.length === 0) {
+    return {
+      schema_version: 1,
+      product: PRODUCT,
+      command: "sources connect",
+      state: "rejected",
+      request_id: null,
+      accepted_source_ids: [],
+      sources: [],
+      not_found_source_ids: [...notFound],
+      ...overrideFields,
+      code: "environment_override_confirmation_required",
+    };
+  }
   // Same shared builder as the single-source import and the Web console, so a
   // batch connect cannot drift from either.
   const request = buildSourceImportRequest({
@@ -141,9 +172,9 @@ export async function executeBatchImport(
           : [[candidate.source_id, candidate.candidate_revision]],
       ),
     ),
-    confirmEnvironmentOverrides: candidates.some(
-      (candidate) => candidate.requires_override_confirmation,
-    ),
+    confirmEnvironmentOverrides:
+      options.confirmOverrides &&
+      candidates.some((candidate) => candidate.requires_override_confirmation),
     fullRescan: false,
     onboarding: true,
     enableSync: true,
@@ -154,7 +185,7 @@ export async function executeBatchImport(
     return {
       schema_version: 1,
       product: PRODUCT,
-      command: "scan",
+      command: "sources connect",
       state: result.state,
       request_id: requestId,
       accepted_source_ids: [],
@@ -168,6 +199,7 @@ export async function executeBatchImport(
         failure_reason: result.code,
       })),
       not_found_source_ids: [...notFound],
+      ...overrideFields,
       code: result.code,
     };
   }
@@ -254,7 +286,7 @@ export async function executeBatchImport(
   return {
     schema_version: 1,
     product: PRODUCT,
-    command: "scan",
+    command: "sources connect",
     state:
       failedCount === 0
         ? "committed"
@@ -270,6 +302,7 @@ export async function executeBatchImport(
     accepted_source_ids: accepted,
     sources: rows,
     not_found_source_ids: [...notFound],
+    ...overrideFields,
   };
 }
 
@@ -301,5 +334,10 @@ export function renderBatchScanText(document: BatchScanDocument): string {
       : document.state === "partial"
         ? `部分完成：${document.accepted_source_ids.length} 个成功，其余见上方`
         : `未完成：${document.code ?? "unknown"}`;
-  return `${summary}\n${lines.join("\n")}\n`;
+  const overrides = document.override_required_source_ids ?? [];
+  const hint =
+    overrides.length > 0
+      ? `\n未接入（目录来自环境变量覆盖，需确认）：${overrides.join("、")}\n确认目录无误后加 --confirm-overrides 重新运行。`
+      : "";
+  return `${summary}\n${lines.join("\n")}${hint}\n`;
 }

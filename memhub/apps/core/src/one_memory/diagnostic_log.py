@@ -804,7 +804,7 @@ def record_database_error(
     sqlite_code = getattr(error, "sqlite_errorcode", None)
     sqlite_name = getattr(error, "sqlite_errorname", None)
     details: dict[str, object] = {"phase": safe_component, "count": count}
-    if route_path is not None and route_path.startswith("/api/v1/"):
+    if route_path is not None and route_path.startswith(("/api/v1/", "/api/v2/")):
         details["route_path"] = route_path
     if isinstance(sqlite_code, int):
         details["sqlite_errorcode"] = sqlite_code

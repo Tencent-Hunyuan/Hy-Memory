@@ -99,6 +99,47 @@ describe("recall cli", () => {
     expect(result.stdout).not.toContain("更新于 2026-08-08");
   });
 
+  it("labels a raw-mode result as original conversation excerpts, not confirmed memories", async () => {
+    recallThroughBroker.mockResolvedValue({
+      state: "grounded",
+      query: "发布日",
+      scope: "all-apps",
+      mode: "raw",
+      fallback_reason: "model_unavailable",
+      hits: [
+        {
+          memory_id: "raw-1",
+          content: "我们把发布日改到周四。",
+          content_format: "raw",
+          kind: "raw",
+          source: "cursor",
+          session_id: "s1",
+          scopes: [],
+          evidence_ids: [],
+          updated_at: "2026-09-13T00:00:00Z",
+          score: 0.5,
+        },
+      ],
+      used_characters: 11,
+      truncated: false,
+    });
+
+    const result = await runRecallCli(
+      ["发布日"],
+      await discovery("running"),
+      "/Users/someone",
+      "/Users/someone",
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("1 条原始对话片段");
+    expect(result.stdout).toContain("尚未配置生成模型");
+    expect(result.stdout).not.toContain("条已确认记忆");
+    expect(result.stdout).toContain("1. 我们把发布日改到周四。");
+    expect(result.stdout).toContain("原始对话 · cursor · 2026-09-13");
+    expect(result.stdout).toContain("不代表已确认的记忆");
+  });
+
   it("takes an unquoted sentence as one query", async () => {
     recallThroughBroker.mockResolvedValue({
       state: "empty",

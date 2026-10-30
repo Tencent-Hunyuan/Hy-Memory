@@ -55,37 +55,3 @@ def test_browser_origin_is_checked_in_addition_to_token() -> None:
         )
         == 200
     )
-
-
-async def internal_request(
-    path: str,
-    *,
-    token: str | None,
-    method: str = "GET",
-) -> int:
-    settings = Settings(api_token=SecretStr("test-token"))
-    app = create_app(settings)
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as client:
-        response = await client.request(method, path, headers=headers, json={})
-    return response.status_code
-
-
-def test_reader_internal_endpoints_require_local_token() -> None:
-    for path in (
-        "/internal/semantic-ids?query=anything",
-        "/internal/graph-snapshot",
-    ):
-        assert asyncio.run(internal_request(path, token=None)) == 401
-        assert asyncio.run(internal_request(path, token="test-token")) == 200
-
-    assert asyncio.run(internal_request("/internal/call-event", token=None, method="POST")) == 401
-    assert (
-        asyncio.run(internal_request("/internal/call-event", token="test-token", method="POST"))
-        == 200
-    )

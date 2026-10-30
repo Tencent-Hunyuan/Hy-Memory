@@ -96,7 +96,7 @@ def test_receipt_counts_saved_records_without_inventing_dates_or_other_sources(t
             assert excerpt["truncated"] and len(excerpt["excerpt"]) == 600
             assert excerpt["created_at"] is None
             assert "<5" in excerpt["excerpt"] and ">5" in excerpt["excerpt"]
-            assert (await client.get("/api/v1/memories")).json() == []
+            assert app.state.memory_governance_store.list(user_id="local") == []
             assert (await client.get("/api/v1/model-profiles")).json() == []
             (await client.post("/api/v1/sources/claude-code/revoke")).raise_for_status()
             denied = await client.get(endpoint)

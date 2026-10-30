@@ -102,6 +102,10 @@ export function uiSessionFailure(code: string): { code: string } {
 
 export function uiExitCode(result: UiResult): number {
   if (result.state === "opened") return 0;
+  // A stopped Runtime is the same exit 3 every other command reports.
+  if (result.state === "blocked" && result.code === "runtime_not_running") {
+    return 3;
+  }
   if (result.state === "blocked") return 4;
   return 1;
 }

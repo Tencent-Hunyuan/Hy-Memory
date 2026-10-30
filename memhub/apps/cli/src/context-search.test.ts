@@ -43,61 +43,35 @@ const ATTACHED = {
 };
 
 const RESPONSE = {
-  schema_version: 1,
+  schema_version: 2,
   request_id: "context-request-1",
   state: "grounded",
-  paths: {
-    raw: {
-      status: "ok",
-      reason: null,
-      elapsed_ms: 2,
-      returned_count: 1,
-      truncated: false,
-      truncated_by: [],
-    },
-    memory: {
-      status: "ok",
-      reason: null,
-      elapsed_ms: 3,
-      returned_count: 1,
-      truncated: false,
-      truncated_by: [],
-    },
-  },
   items: [
     {
       kind: "raw",
-      source_id: "codex",
-      conversation_id: "conversation-1",
-      anchor_evidence_id: "evidence-1",
-      messages: [
-        {
-          evidence_id: "evidence-1",
-          revision: 1,
-          role: "user",
-          written_by: "user",
-          created_at: "2026-09-19T00:00:00Z",
-          text: "Synthetic raw citation.",
-          truncated: false,
-        },
-      ],
+      raw_id: "raw-1",
+      content: "Synthetic raw citation.",
+      source: "codex",
+      session_id: "session-1",
+      memory_at: "2026-09-19T00:00:00Z",
+      score: 0.8,
       truncated: false,
     },
     {
       kind: "memory",
       memory_id: "memory-1",
-      revision: 2,
-      content: "Synthetic governed memory.",
-      memory_kind: "working",
+      content: "Synthetic SDK memory.",
+      layer: "l2_fact",
+      status: "active",
+      source: "codex",
       updated_at: "2026-09-19T00:00:01Z",
-      evidence_ids: ["evidence-1"],
+      score: 0.7,
       truncated: false,
     },
   ],
-  used_characters: 49,
+  used_characters: 44,
   truncated: false,
   total_ms: 5,
-  adoption: "unknown",
 };
 
 beforeEach(() => {
@@ -115,42 +89,17 @@ beforeEach(() => {
 });
 
 describe("unified context search", () => {
-  it("accepts an empty tool message in a valid partial context response", async () => {
+  it("accepts an empty raw item in a valid partial context response", async () => {
     transport.post.mockResolvedValue({
       status: 200,
       data: {
         ...RESPONSE,
         state: "partial",
-        paths: {
-          raw: {
-            ...RESPONSE.paths.raw,
-            status: "degraded",
-            reason: "lexical_only",
-            returned_count: 1,
-          },
-          memory: {
-            ...RESPONSE.paths.memory,
-            status: "empty",
-            returned_count: 0,
-          },
-        },
         items: [
           {
-            kind: "raw",
-            source_id: "workbuddy",
-            conversation_id: "conversation-1",
-            anchor_evidence_id: "evidence-1",
-            messages: [
-              {
-                evidence_id: "evidence-1",
-                revision: 1,
-                role: "tool",
-                written_by: "tool",
-                created_at: "2026-10-05T20:48:12Z",
-                text: "",
-                truncated: true,
-              },
-            ],
+            ...RESPONSE.items[0],
+            source: "workbuddy",
+            content: "",
             truncated: true,
           },
         ],
@@ -165,8 +114,9 @@ describe("unified context search", () => {
       streams.restore();
     }
     expect(JSON.parse(streams.stdout())).toMatchObject({
+      schema_version: 2,
       state: "partial",
-      items: [{ kind: "raw", messages: [{ text: "" }] }],
+      items: [{ kind: "raw", content: "" }],
     });
   });
 
@@ -178,12 +128,26 @@ describe("unified context search", () => {
       streams.restore();
     }
     const output = streams.stdout();
-    expect(output).toContain("Synthetic governed memory.");
+    expect(output).toContain("Synthetic SDK memory.");
     expect(output).toContain("Synthetic raw citation.");
-    expect(output).not.toMatch(/^- raw |memory-1|evidence-1|采用状态/m);
+    expect(output).not.toMatch(/^- raw |memory-1|raw-1|采用状态/m);
   });
 
-  it("queries the current read-only context endpoint and preserves citations", async () => {
+  it("labels raw hits as original-conversation excerpts, not memories", async () => {
+    const streams = captureStreams();
+    try {
+      expect(await run(["recall", "synthetic question"])).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const output = streams.stdout();
+    expect(output).toContain(
+      "- [原始对话摘录 · codex] Synthetic raw citation.",
+    );
+    expect(output).toContain("- [记忆] Synthetic SDK memory.");
+  });
+
+  it("queries the SDK context endpoint directly and preserves item ids", async () => {
     const streams = captureStreams();
     try {
       expect(
@@ -209,7 +173,7 @@ describe("unified context search", () => {
       streams.restore();
     }
     expect(transport.post).toHaveBeenCalledWith(
-      "/api/v1/context/search",
+      "/api/v2/context/search",
       {
         query: "synthetic question",
         kinds: ["raw", "memory"],
@@ -222,12 +186,18 @@ describe("unified context search", () => {
     );
     const output = JSON.parse(streams.stdout());
     expect(output).toMatchObject({
+      schema_version: 2,
       state: "grounded",
       request_id: "context-request-1",
-      adoption: "unknown",
     });
-    expect(output.items[0].messages[0].evidence_id).toBe("evidence-1");
-    expect(output.items[1].evidence_ids).toEqual(["evidence-1"]);
+    expect(output).not.toHaveProperty("paths");
+    expect(output.items[0]).toMatchObject({ kind: "raw", raw_id: "raw-1" });
+    expect(output.items[1]).toMatchObject({
+      kind: "memory",
+      memory_id: "memory-1",
+      layer: "l2_fact",
+    });
+    // No authority pre-query: released Core always serves the SDK data plane.
     expect(transport.get).not.toHaveBeenCalled();
     expect(transport.put).not.toHaveBeenCalled();
     expect(transport.patch).not.toHaveBeenCalled();
@@ -242,19 +212,8 @@ describe("unified context search", () => {
       status: 200,
       data: {
         ...RESPONSE,
-        paths: {
-          ...RESPONSE.paths,
-          raw: {
-            status: "not_requested",
-            reason: "not_requested",
-            elapsed_ms: 0,
-            returned_count: 0,
-            truncated: false,
-            truncated_by: [],
-          },
-        },
         items: [RESPONSE.items[1]],
-        used_characters: 26,
+        used_characters: 21,
       },
     });
     const streams = captureStreams();
@@ -394,29 +353,7 @@ describe("unified context search", () => {
       status: 200,
       data: {
         ...RESPONSE,
-        paths: {
-          ...RESPONSE.paths,
-          memory: {
-            ...RESPONSE.paths.memory,
-            status: "empty",
-            returned_count: 0,
-          },
-        },
-        items: [
-          {
-            ...(RESPONSE.items[0] as Record<string, unknown>),
-            messages: [
-              {
-                ...(
-                  RESPONSE.items[0] as {
-                    messages: Array<Record<string, unknown>>;
-                  }
-                ).messages[0],
-                text,
-              },
-            ],
-          },
-        ],
+        items: [{ ...RESPONSE.items[0], content: text }],
         used_characters: 10,
       },
     });
@@ -429,7 +366,7 @@ describe("unified context search", () => {
     expect(JSON.parse(streams.stdout())).toMatchObject({
       state: "grounded",
       used_characters: 10,
-      items: [{ kind: "raw", messages: [{ text }] }],
+      items: [{ kind: "raw", content: text }],
     });
   });
 
@@ -441,29 +378,7 @@ describe("unified context search", () => {
       status: 200,
       data: {
         ...RESPONSE,
-        paths: {
-          ...RESPONSE.paths,
-          memory: {
-            ...RESPONSE.paths.memory,
-            status: "empty",
-            returned_count: 0,
-          },
-        },
-        items: [
-          {
-            ...(RESPONSE.items[0] as Record<string, unknown>),
-            messages: [
-              {
-                ...(
-                  RESPONSE.items[0] as {
-                    messages: Array<Record<string, unknown>>;
-                  }
-                ).messages[0],
-                text,
-              },
-            ],
-          },
-        ],
+        items: [{ ...RESPONSE.items[0], content: text }],
         used_characters: 12,
       },
     });
@@ -474,6 +389,40 @@ describe("unified context search", () => {
       streams.restore();
     }
     expect(JSON.parse(streams.stdout())).toMatchObject({
+      state: "invalid",
+      code: "response_invalid",
+    });
+  });
+
+  it.each([
+    [
+      "a raw item from a source that was not asked for",
+      ["--source", "codex"],
+      { ...RESPONSE.items[0], source: "cursor" },
+    ],
+    [
+      "a raw item when only memory was asked for",
+      ["--kind", "memory"],
+      RESPONSE.items[0],
+    ],
+    ["a score outside 0..1", [], { ...RESPONSE.items[1], score: 1.5 }],
+  ])("rejects %s as an invalid response", async (_label, flags, item) => {
+    transport.post.mockResolvedValue({
+      status: 200,
+      data: {
+        ...RESPONSE,
+        items: [item],
+        used_characters: Array.from(String(item.content)).length,
+      },
+    });
+    const streams = captureStreams();
+    try {
+      expect(await run(["recall", "query", ...flags, "--json"])).toBe(1);
+    } finally {
+      streams.restore();
+    }
+    expect(JSON.parse(streams.stdout())).toMatchObject({
+      schema_version: 2,
       state: "invalid",
       code: "response_invalid",
     });

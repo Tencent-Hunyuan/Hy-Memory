@@ -692,9 +692,10 @@ class CrossDomainSweeper:
                 )
 
             logger.info(
-                f"[sweeper] Created L6 core {core_id[:12]}: '{core_content[:60]}' "
+                f"[sweeper] Created L6 core {core_id[:12]} "
                 f"from {len(cluster_ids)} basics, evidence_inherited={len(inherited_evidence_ids)}"
             )
+            logger.debug(f"[sweeper] L6 core {core_id[:12]} content={core_content[:60]!r}")
             return 1, 0, [core_id]
 
         except Exception as e:

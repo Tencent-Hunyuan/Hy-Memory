@@ -21,8 +21,8 @@ function source(file: string): string {
 describe("ui trace write coverage", () => {
   it("passes a trace id on every traced memory write", () => {
     const api = source("api.ts");
-    // The remaining legacy memory write functions accept a trace id and forward it.
-    for (const fn of ["mutateMemory", "correctMemory"]) {
+    // The memory write functions accept a trace id and forward it.
+    for (const fn of ["updateSdkMemory", "deleteSdkMemory"]) {
       const start = api.indexOf(`export async function ${fn}(`);
       expect(start, `${fn} not found`).toBeGreaterThan(-1);
       const body = api.slice(start, api.indexOf("\n}", start));
@@ -38,18 +38,13 @@ describe("ui trace write coverage", () => {
     expect(source("SourcesView.tsx")).toMatch(
       /imports\.setSync\(source, enabled, trace\.traceId\)/,
     );
-    // MemorySpace passes the id on both remaining governance writes.
+    // MemorySpace passes the id on both memory writes.
     const memory = source("MemorySpace.tsx");
-    expect(memory).toMatch(/mutateMemory\([\s\S]{0,160}trace\.traceId/);
-    expect(memory).toMatch(/correctMemory\([\s\S]{0,200}trace\.traceId/);
-    // SelectedMemoryDetail traces its correction, delete and undo.
-    const detail = source("SelectedMemoryDetail.tsx");
-    expect(detail).toMatch(/correctMemory\([\s\S]{0,200}trace\.traceId/);
-    expect(detail).toContain('traceUiAction("memory", "confirm")');
-    expect(detail).toContain('traceUiAction("memory", "retry")');
+    expect(memory).toMatch(/updateSdkMemory\([\s\S]{0,160}trace\.traceId/);
+    expect(memory).toMatch(/deleteSdkMemory\([\s\S]{0,160}trace\.traceId/);
     // The composer's save is the native four-level sample.
-    expect(source("MemoryNoteComposer.tsx")).toMatch(
-      /saveMemoryNote\([\s\S]{0,200}trace\.traceId/,
+    expect(source("MemoryAddComposer.tsx")).toMatch(
+      /addMemory\([\s\S]{0,200}trace\.traceId/,
     );
   });
 
@@ -124,34 +119,6 @@ describe("ui trace write coverage", () => {
     expect(onboarding).not.toMatch(/setSourceSync\(/);
   });
 
-  it("traces matter discovery, refresh, patch and note writes", () => {
-    // The matters workspace is gated by VITE_ENABLE_MATTERS, but when enabled
-    // its buttons are real POST/PATCH operations under `/api/v1/matters`.
-    // Leaving them untraced produces kernel-only orphan chains. The shared
-    // action wrapper opens exactly one pair per user action.
-    const view = source("MatterWorkspace.tsx");
-    expect(view).toMatch(/traceUiAction\("matters", "submit"\)/);
-    expect(view).toMatch(/discoverMatters\(traceId\)/);
-    expect(view).toMatch(/refreshMatter\(matter\.matter_id, traceId\)/);
-    expect(view).toMatch(/patchMatter\([\s\S]{0,320}?traceId\s*[),]/);
-    expect(view).toMatch(/addMatterNote\([\s\S]{0,240}?traceId\s*[),]/);
-    const api = source("api.ts");
-    for (const fn of [
-      "discoverMatters",
-      "patchMatter",
-      "addMatterNote",
-      "refreshMatter",
-    ]) {
-      const start = api.indexOf(`export async function ${fn}(`);
-      expect(start, `${fn} not found`).toBeGreaterThan(-1);
-      const body = api.slice(start, start + 500);
-      expect(body, `${fn} must accept traceId`).toContain("traceId?: string");
-      expect(body, `${fn} must send the trace header`).toContain(
-        "X-One-Memory-Trace-Id",
-      );
-    }
-  });
-
   it("traces every remembered-preference sync write", () => {
     // The remembered-preference reconciler runs outside a click handler: the
     // app applies saved sync selections on entry and during onboarding. Each
@@ -186,21 +153,14 @@ describe("ui trace write coverage", () => {
     }
   });
 
-  it("traces the index-sync, graph-digest, extraction and manual-extract writes", () => {
-    // These four are non-GET writes on the memory surface that previously ran
+  it("traces the extraction and manual-extract writes", () => {
+    // These are non-GET writes on the memory surface that previously ran
     // with no trace at all.
     const memory = source("MemorySpace.tsx");
-    expect(memory).toMatch(/syncMemoryIndex\([\s\S]{0,80}trace\.traceId/);
-    expect(memory).toMatch(/digestMemoryGraph\(trace\.traceId\)/);
     expect(memory).toMatch(/setExtractionWindow\([\s\S]{0,80}trace\.traceId/);
     expect(memory).toMatch(/manualExtract\(\[\], trace\.traceId\)/);
     const api = source("api.ts");
-    for (const fn of [
-      "syncMemoryIndex",
-      "digestMemoryGraph",
-      "setExtractionWindow",
-      "manualExtract",
-    ]) {
+    for (const fn of ["setExtractionWindow", "manualExtract"]) {
       const start = api.indexOf(`export async function ${fn}(`);
       expect(start, `${fn} not found`).toBeGreaterThan(-1);
       const body = api.slice(start, start + 600);
@@ -209,19 +169,6 @@ describe("ui trace write coverage", () => {
         "X-One-Memory-Trace-Id",
       );
     }
-  });
-
-  it("does not close an index-sync trace as succeeded when Core returns pending", () => {
-    const memory = source("MemorySpace.tsx");
-    const start = memory.indexOf("async function syncIndex()");
-    expect(start).toBeGreaterThan(-1);
-    const body = memory.slice(
-      start,
-      memory.indexOf("\n  async function", start + 1),
-    );
-    expect(body).toMatch(
-      /if \(result\.status === "synced"\) trace\.done\("succeeded"\);\s*else\s+trace\.done\("failed"/,
-    );
   });
 
   it("traces the destructive call-history clears", () => {
@@ -264,7 +211,7 @@ describe("ui trace write coverage", () => {
     const view = source("MemorySpace.tsx");
     expect(view).toMatch(/traceUiAction\("memory", "submit"\)/);
     expect(view).toMatch(
-      /askMemoriesStream\(\s*question,\s*scope,\s*undefined,\s*trace\.traceId,\s*memoryAuthority,?\s*\)/,
+      /askMemoriesStream\(\s*question,\s*scope,\s*undefined,\s*trace\.traceId,?\s*\)/,
     );
     const api = source("api.ts");
     const start = api.indexOf("export async function* askMemoriesStream(");
@@ -278,16 +225,11 @@ describe("ui trace write coverage", () => {
     );
   });
 
-  it("traces the answer note save and the bulk memory mutations", () => {
-    // `saveAnswer` writes a memory note, and each bulk item issues its own
-    // mutateMemory request; both must form four-line chains. A bulk action is
-    // one gesture but N kernel calls, so per-item traces are the correct shape.
+  it("traces the answer memory add", () => {
+    // `saveAnswer` adds a memory, so it must form a four-line chain.
     const view = source("MemorySpace.tsx");
     expect(view).toMatch(
-      /saveMemoryNote\(\s*\{[\s\S]{0,240}?scope: "all-apps",\s*\},?\s*trace\.traceId,?\s*\)/,
-    );
-    expect(view).toMatch(
-      /mutateMemory\(\s*target\.memoryId,[\s\S]{0,200}?trace\.traceId,\s*\)/,
+      /addMemory\(\s*\{[\s\S]{0,240}?scope: "all-apps",\s*\},?\s*trace\.traceId,?\s*\)/,
     );
   });
 
@@ -329,19 +271,14 @@ describe("ui trace write coverage", () => {
     expect(body).toContain("X-One-Memory-Trace-Id");
   });
 
-  it("traces the memory-note process write", () => {
-    // "重新整理" starts note processing: a non-GET write that had no trace.
-    const composer = source("MemoryNoteComposer.tsx");
-    expect(composer).toMatch(/traceUiAction\("memory", "retry"\)/);
-    expect(composer).toMatch(
-      /processMemoryNote\(note\.evidence_id, trace\.traceId\)/,
-    );
+  it("has no separate memory-add process write", () => {
+    // Processing an addition is not a client write: activating a model
+    // readmits parked work. The composer must not grow a retry route again.
+    const composer = source("MemoryAddComposer.tsx");
+    expect(composer).not.toMatch(/traceUiAction\("memory", "retry"\)/);
     const api = source("api.ts");
-    const start = api.indexOf("export async function processMemoryNote(");
-    expect(start).toBeGreaterThan(-1);
-    const body = api.slice(start, start + 600);
-    expect(body).toContain("traceId?: string");
-    expect(body).toContain("X-One-Memory-Trace-Id");
+    expect(api).not.toContain("/process`");
+    expect(api).not.toContain("memory-notes");
   });
 
   it("traces every model-profile write through the hook's single choke point", () => {

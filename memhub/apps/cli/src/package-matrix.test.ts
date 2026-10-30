@@ -104,7 +104,7 @@ describe("package matrix harness", () => {
     });
   });
 
-  it("fails closed on every destructive UI-write command without a Runtime", {
+  it("fails closed on every write command without a Runtime", {
     timeout: 120_000,
   }, async () => {
     const runtimeDist = await mkdtemp(
@@ -140,7 +140,7 @@ describe("package matrix harness", () => {
     expect(document.state).toBe("verified");
     const results = document.commands.stopped_destructive.results;
     // Every destructive command fails closed while Runtime is stopped.
-    expect(Object.keys(results)).toHaveLength(7);
+    expect(Object.keys(results)).toHaveLength(8);
     for (const [name, result] of Object.entries(results)) {
       expect(result, `${name} did not fail closed`).toEqual({
         exit: 3,
@@ -164,7 +164,7 @@ describe("package matrix harness", () => {
     const shim = [
       "#!/usr/bin/env node",
       "const a=process.argv.slice(2);",
-      "if(['calls','notes','graph','models','memories'].includes(a[0])){",
+      "if(['graph-width','models','memories','sources'].includes(a[0])){",
       '  process.stdout.write(\'{"schema_version":1,"product":"memhub","state":"committed","operation_id":"x","receipt":{}}\\n\');',
       "  process.exit(0);",
       "}",
@@ -190,7 +190,7 @@ describe("package matrix harness", () => {
     expect(failure?.state).toBe("failed");
     expect(
       failure?.failures.filter((item) => item.includes("did not fail closed")),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
   });
 
   it("can require an expected bundle SHA and reports bundle metadata", {
@@ -291,9 +291,7 @@ describe("package matrix harness", () => {
       "sync",
       "memories",
       "profile",
-      "calls",
-      "notes",
-      "graph",
+      "graph-width",
       "models",
       "host",
       "doctor",
@@ -311,14 +309,12 @@ describe("package matrix harness", () => {
       "uninstall",
       "delete-data",
       "recall",
-      "setup",
       "scan",
       "progress",
       "jobs",
-      "path",
+      "scan-roots",
       "adapter",
       "write",
-      "task",
       "serve",
     ];
     const catalog = {

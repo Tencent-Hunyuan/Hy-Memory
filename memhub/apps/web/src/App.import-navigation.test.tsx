@@ -113,9 +113,7 @@ vi.mock("./R6Settings", () => ({
   ),
 }));
 vi.mock("./MemorySpace", () => ({ MemorySpace: () => null }));
-vi.mock("./MatterWorkspace", () => ({ MatterWorkspace: () => null }));
 vi.mock("./HealthPanel", () => ({ HealthPanel: () => null }));
-vi.mock("./FirstUseGuide", () => ({ FirstUseGuide: () => null }));
 vi.mock("./OnboardingFlow", () => ({ OnboardingFlow: () => null }));
 
 beforeEach(() => {
