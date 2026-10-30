@@ -961,15 +961,13 @@ class EmbedService:
                 # 判断是否可重试：HTTP 状态码 或 显式异常类型 或 消息关键字。
                 # 状态码优先——它是三者里唯一不受 message 措辞影响的判据。
                 _status = getattr(e, "status_code", None)
-                _retryable = (
-                    (isinstance(_status, int)
-                     and (_status >= 500 or _status in _RETRYABLE_STATUS))
-                    or isinstance(e, _RETRYABLE)
-                    or any(
+                if isinstance(_status, int):
+                    _retryable = _status >= 500 or _status in _RETRYABLE_STATUS
+                else:
+                    _retryable = isinstance(e, _RETRYABLE) or any(
                         kw in _err_msg.lower()
                         for kw in ("timeout", "timed out", "connection", "read operation")
                     )
-                )
                 meta = {
                     "error": _err_name,
                     "error_msg": _err_msg[:300],
