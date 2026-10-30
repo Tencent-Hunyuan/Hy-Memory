@@ -1,3 +1,4 @@
+import re
 from pathlib import PurePosixPath
 
 from pydantic import JsonValue
@@ -37,6 +38,19 @@ DEEPSEEK_HARNESS_DESCRIPTOR = SourceDescriptor(
     ),
 )
 
+#: One session is one file, and the name carries the format generation it was
+#: written in: `session.jsonl[.zstd]` for the first format, then
+#: `session.v3.jsonl.zstd` and `session.v4.jsonl.zstd`. The version segment is
+#: part of the published on-disk contract, so discovery must accept it — the
+#: earlier exact-name match imported none of the versioned files.
+SESSION_FILE = re.compile(r"^session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$")
+
+#: Session generations this parser has been verified against: the first format
+#: (header `version: 0`), v3 and v4. Discovery is intentionally wider than
+#: parsing: a future generation is found by pattern and then skipped from its
+#: header, so it is reported as unsupported instead of silently vanishing.
+SUPPORTED_SESSION_VERSIONS = frozenset({0, 3, 4})
+
 
 def create_deepseek_harness_adapter(
     grant: AuthorizedSourceRoot,
@@ -49,9 +63,7 @@ def create_deepseek_harness_adapter(
         grant=grant,
         parser=parse_deepseek_harness_record,
         source_version=source_version,
-        file_predicate=lambda source_file: (
-            source_file.relative_path.name in {"session.jsonl", "session.jsonl.zstd"}
-        ),
+        file_predicate=lambda source_file: bool(SESSION_FILE.match(source_file.relative_path.name)),
         suffixes=frozenset({".jsonl", ".zstd"}),
         header_selector=_is_session_header,
     )
@@ -60,12 +72,31 @@ def create_deepseek_harness_adapter(
 def _is_session_header(record: dict[str, JsonValue]) -> bool:
     """Harness writes the session's `cwd` once, in the first line only.
 
-    Verified against a session this machine produced: the header is
-    `{"type":"session","version":0,"id":...,"cwd":"/private/tmp/dsh-verify"}`
-    and no later record repeats it. Read per-record, `cwd` is therefore always
-    absent and every turn imports with no workspace.
+    Verified against sessions this machine produced: the header is
+    `{"type":"session","version":0|4,"id":...,"cwd":...}` and no later record
+    repeats it. Read per-record, `cwd` is therefore always absent and every turn
+    imports with no workspace.
     """
     return record.get("type") == "session"
+
+
+def _supported_session(header: dict[str, JsonValue] | None) -> bool:
+    """Whether the session's declared format generation is one we can read.
+
+    A missing header, or a header without `version`, is the first format — the
+    earliest files this adapter already read. Any declared version outside
+    `SUPPORTED_SESSION_VERSIONS` is refused rather than interpreted with today's
+    field rules: a future format may change field semantics, and importing it
+    wrongly is harder to undo than not importing it yet.
+    """
+    if header is None:
+        return True
+    version = header.get("version")
+    if version is None:
+        return True
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version in SUPPORTED_SESSION_VERSIONS
 
 
 def parse_deepseek_harness_record(
@@ -80,6 +111,11 @@ def parse_deepseek_harness_record(
     )
     event_type = record.get("type")
     data = as_record(record.get("data"))
+    if not _supported_session(context.header):
+        return ParsedSkip(
+            reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA,
+            conversation_id=conversation_id,
+        )
     if event_type == "session":
         return ParsedSkip(reason_code=ScanIssueCode.UNKNOWN_RECORD)
     if data is None:
@@ -148,11 +184,18 @@ def _tool_message(
     """`tool/call` carries name and arguments; `tool/result` a user-role message.
 
     The same call also appears as a `tool-call` block in `assistant/message`;
-    only the event is read, so it is stored once.
+    only the event is read, so it is stored once. The first format and v3 wrap
+    the result in `tool-result` blocks; v4 writes plain `text` blocks, so both
+    shapes are read through the same clipping and credential-scrubbing path.
     """
     message = as_record(data.get("message"))
     if record.get("type") == "tool/result" and message is not None:
         text = tool_blocks_evidence(message.get("content"), block_types=frozenset({"tool-result"}))
+        if text is None:
+            text = tool_blocks_evidence(
+                [{"type": "tool-result", "content": message.get("content")}],
+                block_types=frozenset({"tool-result"}),
+            )
         message_id = first_string(message.get("id"), data.get("callId"))
     else:
         text = tool_evidence_text(data)
