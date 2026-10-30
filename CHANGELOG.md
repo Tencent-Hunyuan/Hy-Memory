@@ -4,6 +4,17 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub's `deepseek-harness` source imports session files whose names carry the
+  format generation: `session.v3.jsonl.zstd` and `session.v4.jsonl.zstd` are now
+  discovered alongside the original `session.jsonl[.zstd]`. Discovery accepts
+  any `session[.vN].jsonl[.zstd]` name and the header's `version` decides
+  whether the session is parsed (v0/v3/v4) or skipped as `unsupported_schema`,
+  so a future format is reported instead of silently importing zero sessions.
+  v4 tool results, which are written as plain `text` blocks rather than
+  `tool-result` blocks, are read through the same clipping and credential
+  scrubbing path. Previously every versioned session was invisible: the import
+  job completed with `discovered 0` while the files sat on disk.
+
 ## MemHub 1.0.5 — 2026-10-28
 
 Build 36, on `hy-memory==2.0.8`. Linux x64/arm64 Runtime and macOS arm64
