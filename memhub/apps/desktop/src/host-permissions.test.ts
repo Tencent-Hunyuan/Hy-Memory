@@ -1564,6 +1564,8 @@ describe("refreshing installed hosts after an upgrade", () => {
     const context = await fixture();
     const layout = await linkedWorkbuddy(context);
     const plugin = required(layout.plugin);
+    if (!("marketplaceRoot" in plugin))
+      throw new Error("WorkBuddy installs as a WorkBuddy-shaped plugin");
     const manifests = [
       path.join(plugin.installRoot, ".codebuddy-plugin", "plugin.json"),
       path.join(

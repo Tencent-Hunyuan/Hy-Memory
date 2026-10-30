@@ -66,7 +66,7 @@ ZCode 的配置文件钩子必须 `hooks.enabled: true` 才运行，而这个开
 
 ## 权限、重复打开与关闭
 
-- 默认 Tools：`om_recall`、`om_conversations`、`om_diagnostic_trace`。
+- 默认 Tools（授权项，非 MCP 工具名）：`om_recall`、`om_conversations`、`om_diagnostic_trace`。
 - 默认 Scopes：`all-apps`、`source:zcode`。
 - 已安装且 `approved`：只修复命令并 Probe。
 - 权限不完整：重新安装、签发新 Credential 并授权（本构建版本固定 1.0.0，重装落同一版本目录，整棵 `cache/one-memory/` 随卸载回收）。
