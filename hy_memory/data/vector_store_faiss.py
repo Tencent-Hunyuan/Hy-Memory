@@ -142,6 +142,9 @@ class FaissVectorStore(VectorStoreBase):
         def _upsert():
             with self._lock:
                 vec = self._normalize(node.embedding)
+                # FAISS can reject the vector (for example, wrong dimensions).
+                # Keep the old mapping and next index intact until it accepts it.
+                self._index.add(vec)
 
                 if point_id in self._data:
                     # 更新: FAISS 不支持原地更新，记录新索引位置
@@ -152,7 +155,6 @@ class FaissVectorStore(VectorStoreBase):
 
                 idx = self._next_idx
                 self._next_idx += 1
-                self._index.add(vec)
                 self._idx_to_id[idx] = point_id
                 self._data[point_id] = {
                     "payload": payload,
@@ -181,13 +183,18 @@ class FaissVectorStore(VectorStoreBase):
 
         def _upsert_batch():
             with self._lock:
-                ids = []
-                vecs = []
+                prepared = []
                 for node in valid_nodes:
                     point_id = self._node_id_to_point_id(node.node_id)
                     payload = self._node_to_payload(node)
                     vec = self._normalize(node.embedding)
+                    prepared.append((node.node_id, point_id, payload, vec))
 
+                # Prepare and append the complete batch before publishing any
+                # payloads. Both vstack and FAISS may reject incompatible shapes.
+                batch = np.vstack([entry[3] for entry in prepared])
+                self._index.add(batch)
+                for _, point_id, payload, _ in prepared:
                     if point_id in self._data:
                         old_idx = self._data[point_id]["idx"]
                         if old_idx in self._idx_to_id:
@@ -200,15 +207,8 @@ class FaissVectorStore(VectorStoreBase):
                         "payload": payload,
                         "idx": idx,
                     }
-                    ids.append(node.node_id)
-                    vecs.append(vec)
-
-                if vecs:
-                    batch = np.vstack(vecs)
-                    self._index.add(batch)
-                    self._persist()
-
-                return ids
+                self._persist()
+                return [entry[0] for entry in prepared]
 
         return await _run_in_vdb_pool(_upsert_batch)
 
@@ -221,14 +221,14 @@ class FaissVectorStore(VectorStoreBase):
                     if point_id not in self._data:
                         return False
 
+                    vec = self._normalize(embedding)
+                    self._index.add(vec)
                     old_idx = self._data[point_id]["idx"]
                     if old_idx in self._idx_to_id:
                         del self._idx_to_id[old_idx]
 
-                    vec = self._normalize(embedding)
                     idx = self._next_idx
                     self._next_idx += 1
-                    self._index.add(vec)
                     self._idx_to_id[idx] = point_id
                     self._data[point_id]["idx"] = idx
                     self._persist()
@@ -251,21 +251,21 @@ class FaissVectorStore(VectorStoreBase):
                 with self._lock:
                     if point_id not in self._data:
                         return False
-                    # 1) payload 字段
-                    for k, v in updates.items():
-                        self._data[point_id]["payload"][k] = v
-                    # 2) 向量：重新 add（FaissFlat 不支持原地改，沿用 update_embedding 思路）
+                    # Accept the vector before changing either the payload or
+                    # its mapping, so a rejected edit leaves the old node intact.
                     if new_embedding is not None:
+                        vec = self._normalize(new_embedding)
+                        self._index.add(vec)
                         old_idx = self._data[point_id]["idx"]
                         if old_idx in self._idx_to_id:
                             del self._idx_to_id[old_idx]
-                        vec = self._normalize(new_embedding)
                         idx = self._next_idx
                         self._next_idx += 1
-                        self._index.add(vec)
                         self._idx_to_id[idx] = point_id
                         self._data[point_id]["idx"] = idx
                         self._data[point_id]["embedding"] = list(new_embedding)
+                    for k, v in updates.items():
+                        self._data[point_id]["payload"][k] = v
                     self._persist()
                     return True
             result = await _run_in_vdb_pool(_update)
