@@ -180,7 +180,7 @@ describe("ZCode recall installer", () => {
     expect(commands("UserPromptSubmit")).toHaveLength(1);
   });
 
-  it("degrades to a Stop-only hook file when the runtime ships no recall command", async () => {
+  it("keeps capturing the prompt when the runtime ships no recall command", async () => {
     const { layout, plugin } = await fixture();
 
     await applyRecallInstall(await planRecallInstall(layout, runtime()));
@@ -191,7 +191,16 @@ describe("ZCode recall installer", () => {
         "utf8",
       ),
     );
-    expect(Object.keys(hooks.hooks)).toEqual(["Stop"]);
+    const commands = (event: string) =>
+      hooks.hooks[event].flatMap(
+        (group: { hooks: Array<{ command: string }> }) =>
+          group.hooks.map((hook) => hook.command),
+      );
+    expect(Object.keys(hooks.hooks)).toEqual(["UserPromptSubmit", "Stop"]);
+    expect(commands("UserPromptSubmit")).toHaveLength(1);
+    expect(commands("UserPromptSubmit").join(" ")).toContain("capture zcode");
+    expect(commands("UserPromptSubmit").join(" ")).not.toContain("--inject");
+    expect(commands("Stop").join(" ")).toContain("capture zcode");
   });
 
   it("creates the registry files a fresh host never wrote, and takes them back", async () => {

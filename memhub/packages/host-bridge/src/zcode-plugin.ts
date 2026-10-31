@@ -276,11 +276,12 @@ function serialize(document: InstalledDocument, raw: string | null): string {
  * the client's own diagnosing guide documents, and the one a live 3.16.2
  * session was verified to fire on all three events.
  *
- * One hook per event speaks: the injection entry recalls with the prompt's
- * words, answers `additionalContext`, and hands the prompt to capture without
- * waiting — which is why there is no separate UserPromptSubmit capture hook.
- * Absent when the runtime ships no recall command; the Stop capture hook is
- * still installed, so capture degrades alone.
+ * One hook per event speaks. With a recall command, the injection entry
+ * recalls with the prompt's words, answers `additionalContext`, and hands the
+ * prompt to capture without waiting — which is why there is no separate
+ * UserPromptSubmit capture hook. Without one, the capture command takes that
+ * slot itself, so the user's prompt is still captured; Stop always captures
+ * the assistant side.
  */
 export function zcodePluginHooksFile(
   contents: Pick<ZcodePluginContents, "captureCommand" | "injectionCommand">,
@@ -291,7 +292,9 @@ export function zcodePluginHooksFile(
   return json({
     hooks: {
       ...(contents.injectionCommand === null
-        ? {}
+        ? {
+            UserPromptSubmit: entry(contents.captureCommand, 5000),
+          }
         : {
             SessionStart: entry(contents.injectionCommand, 8000),
             UserPromptSubmit: entry(contents.injectionCommand, 8000),

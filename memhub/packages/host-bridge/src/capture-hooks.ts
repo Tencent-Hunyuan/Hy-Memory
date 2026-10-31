@@ -7,9 +7,10 @@
  * WorkBuddy's command lives in its plugin tree. Hermes and OpenClaw deliver
  * the turn through a single memory-provider slot; those are not written here,
  * because taking the slot replaces whatever plugin is already there. ZCode
- * also ships its hooks inside its plugin tree, and its UserPromptSubmit is the
- * recall injection entry (which hands the prompt to capture itself), so only
- * Stop carries a capture command there.
+ * also ships its hooks inside its plugin tree. Its UserPromptSubmit is the
+ * recall injection entry when the runtime has one (that entry hands the prompt
+ * to capture itself); without one, capture takes the UserPromptSubmit slot, so
+ * the prompt is still recorded.
  */
 
 import path from "node:path";
