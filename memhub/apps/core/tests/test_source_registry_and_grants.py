@@ -42,6 +42,9 @@ def test_catalog_resolves_defaults_and_marks_environment_overrides(tmp_path) -> 
         "deepseek-harness",
         "opencode",
         "openclaw",
+        # Twelfth: the ZCode install is its home directory, so the candidate
+        # is the root rather than a sessions folder inside it.
+        "zcode",
     }
     assert catalog["qwenwork"].candidate.path == tmp_path / "home/.qwenworkcn/projects"
     assert catalog["qwen-code"].candidate.path == tmp_path / "home/.qwen/projects"
@@ -54,11 +57,13 @@ def test_catalog_resolves_defaults_and_marks_environment_overrides(tmp_path) -> 
 
 
 def test_recall_hosts_that_can_append_join_the_live_sync_poller() -> None:
-    """Hermes, DeepSeek Harness, OpenCode and OpenClaw already append.
+    """Hermes, DeepSeek Harness, OpenCode, OpenClaw and ZCode already append.
 
     The poller is the same one the first-tier hosts use. Leaving live sync off
     was a declaration, not a missing reader. Qwen Work stays off: it has no
-    recall installer, so it is not in this tier.
+    recall installer, so it is not in this tier. ZCode joined when its rollout
+    parser landed: the scanner reads the transcripts the capture hooks were
+    already writing beside.
     """
 
     catalog = build_source_catalog(home=Path("/nonexistent-home"))
@@ -67,6 +72,7 @@ def test_recall_hosts_that_can_append_join_the_live_sync_poller() -> None:
         "deepseek-harness": VerificationLevel.REAL_REPLAYED,
         "opencode": VerificationLevel.FIXTURE_ONLY,
         "openclaw": VerificationLevel.FIXTURE_ONLY,
+        "zcode": VerificationLevel.FIXTURE_ONLY,
     }
     for source_id, verification in expected.items():
         capabilities = catalog[source_id].capabilities
@@ -139,7 +145,7 @@ def test_declarations_with_no_reader_are_named_rather_than_mistaken_for_behaviou
         )
     }
 
-    # Four sources declare they can observe edits. Nothing consults the flag,
+    # Five sources declare they can observe edits. Nothing consults the flag,
     # and memories derived from superseded evidence are not retracted (D-16).
     assert readers("can_observe_edits", defined_in=("imports/adapters.py",)) == set()
 
@@ -422,7 +428,7 @@ def test_exports_are_snapshots_without_changing_native_source_capabilities(tmp_p
         assert source.descriptor.capabilities.sync_completeness.value == "one_time_snapshot"
         assert not source.descriptor.capabilities.can_append
     native = {key: value for key, value in catalog.items() if key not in exports}
-    assert len(native) == 11
+    assert len(native) == 12
     assert all(
         source.descriptor.capabilities.sync_completeness.value == "additions_only"
         for source in native.values()

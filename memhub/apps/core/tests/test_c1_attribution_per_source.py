@@ -125,6 +125,20 @@ def _person_and_agent(source: str) -> list[dict]:
                 },
             },
         ]
+    if source == "zcode":
+        # One rollout call: the request closes on the prompt, the response
+        # carries the answer — both turns of the exchange in one record.
+        return [
+            {
+                "requestId": f"{source}-1",
+                "sessionId": f"{source}-session",
+                "querySource": "main_turn",
+                "startedAt": "2026-09-28T10:00:00+08:00",
+                "completedAt": "2026-09-28T10:00:01+08:00",
+                "request": {"messages": [{"role": "user", "content": "person words"}]},
+                "response": {"finishReason": "stop", "text": "agent words", "toolCalls": []},
+            }
+        ]
     return [
         {
             "type": "user",
@@ -148,6 +162,8 @@ def _jsonl_path(root: Path, source: str) -> Path:
         return root / "chats" / f"{'0' * 32}.jsonl"
     if source == "deepseek-harness":
         return root / "attribution" / "session.jsonl"
+    if source == "zcode":
+        return root / "cli" / "rollout" / "model-io-attribution.jsonl"
     return root / "project" / "rollout-attribution.jsonl"
 
 

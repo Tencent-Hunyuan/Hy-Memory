@@ -30,6 +30,7 @@ HOSTS = frozenset(
         "hermes",
         "pi",
         "deepseek-harness",
+        "zcode",
     }
 )
 

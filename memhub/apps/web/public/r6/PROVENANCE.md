@@ -9,6 +9,8 @@ and marks remain the property of their respective owners.
 - `deepseek.svg`, `hermes.svg`, `openclaw.svg`, `opencode.svg`, `pi.svg`,
   `qwen.svg`: application-identification artwork retained for compatibility
   with the supported source list.
+- `zcode.png`: exported from the installed ZCode application's own icon
+  resource and rescaled to the shared 90px identification size.
 
 Use is nominative and limited to identifying compatible products. This record
 does not grant trademark rights or assert that third-party marks are licensed

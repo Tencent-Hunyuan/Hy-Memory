@@ -1142,7 +1142,8 @@ async function fixture(options: { populated?: boolean } = {}) {
   }
   const layout = workbuddyLayout(hostDir);
   const plugin = layout.plugin;
-  if (plugin === undefined) throw new Error("WorkBuddy installs as a plugin");
+  if (plugin === undefined || !("marketplaceRoot" in plugin))
+    throw new Error("WorkBuddy installs as a WorkBuddy-shaped plugin");
   return { layout, hostDir, plugin };
 }
 

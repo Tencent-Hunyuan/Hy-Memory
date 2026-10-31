@@ -13,6 +13,7 @@ const APP_ICON_BY_ID: ReadonlyArray<readonly [string, string]> = [
   ["deepseek", "deepseek"],
   ["qwen", "qwen"],
   ["pi", "pi"],
+  ["zcode", "zcode"],
 ];
 
 export function appIconName(id: string): string | null {

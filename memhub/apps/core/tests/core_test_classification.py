@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 304
-EXPECTED_TEST_FILES_SHA256 = "b28f022b9688c96ca563c59de63e95d344d2f01ba3b6020b422bf4dfb27520d6"
+EXPECTED_TEST_FILE_COUNT = 305
+EXPECTED_TEST_FILES_SHA256 = "43a9bc21c933f14710a21495e1d80f6cb43971fa281b2ab19fbc596291184775"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.

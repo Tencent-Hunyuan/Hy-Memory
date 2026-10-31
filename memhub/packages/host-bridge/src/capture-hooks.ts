@@ -6,7 +6,11 @@
  *
  * WorkBuddy's command lives in its plugin tree. Hermes and OpenClaw deliver
  * the turn through a single memory-provider slot; those are not written here,
- * because taking the slot replaces whatever plugin is already there.
+ * because taking the slot replaces whatever plugin is already there. ZCode
+ * also ships its hooks inside its plugin tree. Its UserPromptSubmit is the
+ * recall injection entry when the runtime has one (that entry hands the prompt
+ * to capture itself); without one, capture takes the UserPromptSubmit slot, so
+ * the prompt is still recorded.
  */
 
 import path from "node:path";
@@ -127,6 +131,8 @@ export async function planCaptureFiles(
       },
     ];
   }
+  // ZCode's hooks ship inside its plugin tree, planned with the rest of it
+  // (recall-installer's plannedPluginFiles); it has no config-file hooks.
   return [];
 }
 
@@ -138,6 +144,10 @@ export function captureFilePath(layout: RecallHostLayout): string | null {
     return path.join(root, "extensions", "one-memory-capture.js");
   if (layout.hostId === "opencode")
     return path.join(root, "plugin", "one-memory-capture.js");
+  // ZCode ships its hooks inside the plugin tree, planned with the rest of
+  // it (recall-installer's plannedPluginFiles).
+  if (layout.hostId === "zcode" && layout.plugin)
+    return path.join(layout.plugin.installRoot, "hooks", "hooks.json");
   return null;
 }
 
@@ -175,7 +185,11 @@ export async function inspectCapture(
     return { ours: false, findings: [{ path: filePath, where: UNREADABLE }] };
   }
   if (raw === null) return { ours: false, findings: [] };
-  if (!(layout.hostId in COMMAND_HOSTS)) return { ours: true, findings: [] };
+  // Hosts whose capture file we own outright: the file existing at all is
+  // ours, including ZCode, whose hooks live inside its plugin tree.
+  if (!(layout.hostId in COMMAND_HOSTS)) {
+    return { ours: true, findings: [] };
+  }
   let document: unknown;
   try {
     document = JSON.parse(raw);
@@ -220,8 +234,10 @@ function hookCommands(
   document: unknown,
 ): Array<{ where: string; command: string }> {
   if (!document || typeof document !== "object") return [];
-  const hooks = (document as { hooks?: unknown }).hooks;
-  if (!hooks || typeof hooks !== "object") return [];
+  const container = (document as { hooks?: unknown }).hooks;
+  if (!container || typeof container !== "object" || Array.isArray(container)) {
+    return [];
+  }
   const commands: Array<{ where: string; command: string }> = [];
   const visit = (entry: unknown, where: string): void => {
     if (!entry || typeof entry !== "object") return;
@@ -232,7 +248,7 @@ function hookCommands(
       for (const [index, hook] of record.hooks.entries())
         visit(hook, `${where}.hooks[${index}]`);
   };
-  for (const [event, entries] of Object.entries(hooks))
+  for (const [event, entries] of Object.entries(container))
     if (Array.isArray(entries))
       for (const [index, entry] of entries.entries())
         visit(entry, `hooks.${event}[${index}]`);
@@ -505,4 +521,40 @@ export default async function oneMemoryCapture() {
   };
 }
 `;
+}
+
+/** The recall injection entry ZCode's UserPromptSubmit and SessionStart run.
+ *
+ * Same shape as the WorkBuddy plugin's hook (codebuddy-plugin.ts); built
+ * here because the ZCode plugin tree writes it into a hooks file of its own
+ * rather than the user's config. The entry recalls with the prompt's
+ * words and answers `additionalContext`; it also hands the prompt to
+ * `<core> capture zcode` without waiting, which is why ZCode gets no separate
+ * UserPromptSubmit capture hook — one hook per event speaks, and this is that
+ * one. Absent when the runtime ships no recall command; a Stop capture hook
+ * is still installed, so capture degrades alone.
+ */
+export function zcodeInjectionCommand(
+  runtime: RecallRuntime,
+  recallCliPath: string,
+): string {
+  const environment = [
+    'ELECTRON_RUN_AS_NODE="1"',
+    `ONE_MEMORY_BROKER_DISCOVERY=${quoteCaptureCommand(runtime.discoveryPath)}`,
+    ...(runtime.credentialFile === undefined
+      ? []
+      : [
+          `ONE_MEMORY_HOST_CREDENTIAL_FILE=${quoteCaptureCommand(runtime.credentialFile)}`,
+        ]),
+    ...(runtime.dataDir === undefined
+      ? []
+      : [`ONE_MEMORY_DATA_DIR=${quoteCaptureCommand(runtime.dataDir)}`]),
+    `ONE_MEMORY_CAPTURE_COMMAND=${quoteCaptureCommand(resolveCaptureCommand(runtime))}`,
+  ].join(" ");
+  const invocation = `${environment} ${quoteCaptureCommand(runtime.runtimeCommand)} ${quoteCaptureCommand(recallCliPath)} --inject zcode`;
+  // stderr is silent unless the operator explicitly asks for delivery
+  // diagnosis; a failure prints nothing, because ZCode keeps raw stdout and
+  // would read an error reply back into the turn as text.
+  const script = `if [ "\${ONE_MEMORY_DEBUG_DELIVERY:-}" = "1" ]; then ${invocation}; else ${invocation} 2>/dev/null; fi; exit 0`;
+  return `sh -c ${quoteCaptureCommand(script)}`;
 }

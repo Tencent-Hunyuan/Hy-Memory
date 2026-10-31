@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants, type Dirent, type Stats } from "node:fs";
 import {
   access,
-  chmod,
   type FileHandle,
   lstat,
   mkdir,
@@ -30,6 +29,7 @@ import {
   strippedCaptureIsEmpty,
   UNPARSEABLE_HOOKS,
   UNREADABLE,
+  zcodeInjectionCommand,
 } from "./capture-hooks.js";
 
 export type { RemovalFinding } from "./capture-hooks.js";
@@ -39,7 +39,6 @@ import {
   isManagedRegistryEntry,
   marketplaceTree,
   type PluginContents,
-  type PluginRegistry,
   pluginHooksFile,
   pluginRegistries,
   pluginTree,
@@ -71,7 +70,6 @@ import {
   renderTomlServer,
   serializeTomlDocument,
   serverBlockIndices,
-  type TomlDocument,
 } from "./toml-mcp.js";
 import {
   putYamlMemoryProvider,
@@ -82,6 +80,20 @@ import {
   restoreYamlMemoryProvider,
   type YamlMemoryProvider,
 } from "./yaml-mcp.js";
+import {
+  isManagedZcodeInstalledRecord,
+  putZcodeInstalledRecord,
+  readZcodeInstalledRecord,
+  removeZcodeInstalledRecord,
+  type ZcodePluginContents,
+  type ZcodePluginTarget,
+  zcodeEnabledRegistry,
+  zcodeInstalledHoldsOnlyOurs,
+  zcodeInstalledWithoutOurs,
+  zcodePluginHooksFile,
+  zcodePluginId,
+  zcodePluginTree,
+} from "./zcode-plugin.js";
 
 export {
   PROBE_QUERY,
@@ -234,6 +246,7 @@ export interface RecallHostLayout {
     | "dsh"
     | "opencode"
     | "openclaw"
+    | "zcode-plugin"
     | "codebuddy-plugin"
     | "none";
   /** Set for a host installed as a self-contained plugin rather than as an
@@ -241,7 +254,7 @@ export interface RecallHostLayout {
    *
    * Mutually exclusive with `configPath`: a plugin carries its own MCP entry
    * and its own skill, so there is nothing left to merge into. */
-  plugin?: CodebuddyPluginTarget;
+  plugin?: CodebuddyPluginTarget | ZcodePluginTarget;
   /** An install of ours in a shape this host no longer uses.
    *
    * WorkBuddy is the case this exists for: recall used to be merged into
@@ -405,6 +418,13 @@ export interface RecallInstallPlan {
     skill: string | null;
     memoryProvider: string | null;
   };
+  /** Minted once when the plan is built and carried on it, so the timestamped
+   * registry record a plugin host writes is the same bytes in the preview and
+   * in the apply. A caller that re-plans between preview and approval (the
+   * desktop's install path) must reuse the previewed plan rather than compare
+   * fingerprints across two plans: on a machine with no prior record, two
+   * plans differ in exactly these fields. */
+  pluginRecordStamp?: string;
   actions: Array<
     | "create-mcp"
     | "merge-mcp"
@@ -670,6 +690,49 @@ export function qwenCodeLayout(qwenDir: string): RecallHostLayout {
   };
 }
 
+/** ZCode loads recall as a `.zcode-plugin`, not as loose config.
+ *
+ * The host runs config-file hooks only behind the global `hooks.enabled`
+ * switch, which governs every hook the user has and is not ours to flip
+ * (PR #64 review, point 2). A plugin sidesteps the switch entirely: its hooks
+ * load from the plugin, verified on a live 3.16.2 client along with the rest
+ * of the shape below — hooks firing, the MCP server connecting, and the skill
+ * listing, all from the cache copy alone, with a registry record and an
+ * enable flag as the only touches outside it.
+ *
+ * Unlike WorkBuddy's plugin layout, this one supersedes nothing: the earlier
+ * config-file shape never shipped, so there are no machines to migrate and
+ * no `supersedes` here.
+ */
+export function zcodeLayout(zcodeDir: string): RecallHostLayout {
+  const root = path.resolve(zcodeDir);
+  const plugins = path.join(root, "cli", "plugins");
+  const marketplaceName = "one-memory";
+  const pluginName = LEGACY_RECALL_SKILL_NAME;
+  const version = "1.0.0";
+  const cacheRoot = path.join(plugins, "cache", marketplaceName);
+  return {
+    hostId: "zcode",
+    hostLabel: "ZCode",
+    configPath: null,
+    format: "zcode-plugin",
+    channel: "mcp",
+    skillPath: null,
+    plugin: {
+      marketplaceName,
+      pluginName,
+      skillName: RECALL_SKILL_NAME,
+      version,
+      cacheRoot,
+      installRoot: path.join(cacheRoot, pluginName, version),
+      installedPluginsPath: path.join(plugins, "installed_plugins.json"),
+      configPath: path.join(root, "cli", "config.json"),
+    },
+    journalPath: path.join(root, ".one-memory", "recall-plugin-install.json"),
+    containmentRoot: root,
+  };
+}
+
 /** OpenCode keeps its servers under `mcp` in `~/.config/opencode/opencode.json`.
  *
  * It has no Skill mechanism at all — no `skill` command, no skills directory —
@@ -849,7 +912,7 @@ export async function planRecallInstall(
     // `known_marketplaces.json` ours is keyed by marketplace, so naming the
     // plugin would send the user looking for a key that is not there.
     throw new Error(
-      `${layout.hostLabel} already has an entry at "${foreign.registry.keyPath.join(".")}" in ${path.basename(foreign.registry.path)} that MemHub did not write; no files were changed`,
+      `${layout.hostLabel} already has an entry at "${foreign.keyPath.join(".")}" in ${path.basename(foreign.registryPath)} that MemHub did not write; no files were changed`,
     );
   }
 
@@ -898,13 +961,14 @@ export async function planRecallInstall(
   }
   if (nativeProviderEnabled) actions.push("install-native-provider");
   const observedRegistries: RegistryPrevious[] = registries.map((entry) => ({
-    path: entry.registry.path,
+    path: entry.registryPath,
     existed: entry.raw !== null,
     value: entry.current === undefined ? null : JSON.stringify(entry.current),
     raw: entry.raw,
   }));
   return {
     layout,
+    pluginRecordStamp: new Date().toISOString(),
     runtime: normalized,
     boundary: await captureBoundary(layout.containmentRoot),
     paths,
@@ -912,9 +976,9 @@ export async function planRecallInstall(
       mcp: mcpRaw === null ? null : hash(mcpRaw),
       skill: skillRaw === null ? null : hash(skillRaw),
       registries: registries.map((entry) => ({
-        path: entry.registry.path,
+        path: entry.registryPath,
         hash: entry.raw === null ? null : hash(entry.raw),
-        keyPath: entry.registry.keyPath,
+        keyPath: entry.keyPath,
         managed: registryManagedDigest(entry.current),
       })),
     },
@@ -1024,8 +1088,10 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 /** One shared registry, the key that is ours, and what it holds right now. */
 interface RegistryState {
-  target: CodebuddyPluginTarget;
-  registry: PluginRegistry;
+  /** The file's path and our entry's name in it; the dialect-specific
+   * descriptors are bound inside the unified registry this state came from. */
+  registryPath: string;
+  keyPath: string[];
   raw: string | null;
   /** `undefined` when the key is absent, which is not the same as it holding
    * `null` — the first is a file we have never touched. */
@@ -1041,24 +1107,132 @@ interface RegistryState {
 }
 
 /** Empty for every host but a plugin-format one. */
+function isZcodePluginTarget(
+  plugin: CodebuddyPluginTarget | ZcodePluginTarget,
+): plugin is ZcodePluginTarget {
+  // Both dialects carry `installedPluginsPath`; the marketplace half is
+  // WorkBuddy's alone, so its presence picks the dialect.
+  return !("marketplaceRoot" in plugin);
+}
+
+/** The directories of a plugin install that are ours outright.
+ *
+ * WorkBuddy's has two (marketplace and cache); ZCode's has one (cache). */
+function pluginOwnedRoots(layout: RecallHostLayout): string[] {
+  const plugin = layout.plugin;
+  if (plugin === undefined) return [];
+  return isZcodePluginTarget(plugin)
+    ? [plugin.cacheRoot]
+    : [plugin.marketplaceRoot, plugin.cacheRoot];
+}
+
+/** One shared registry file this install owns a single entry in, whichever
+ * plugin dialect it belongs to.
+ *
+ * The WorkBuddy registries are key paths in object documents; ZCode's plugin
+ * registry is a record in an array keyed by `id`. The operations the install,
+ * journal, and uninstall flows need are the same five either way, so they are
+ * bound per registry here and the flows stay written once. */
+interface UnifiedRegistry {
+  path: string;
+  /** Names our entry in messages and journals (`plugins.<id>` for the array
+   * registry); not used to navigate the document — the bound functions are. */
+  keyPath: string[];
+  /** The entry of ours in `raw`, or `undefined` when absent. */
+  current(raw: string | null): unknown;
+  /** Whether a value proves an install of ours by what it points at. */
+  isManaged(value: unknown): boolean;
+  /** The file with our entry placed. */
+  put(raw: string | null): string;
+  /** The file as canonical JSON with our entry gone — the byte-exact rollback
+   * comparison input. */
+  withoutOurs(raw: string): string;
+  /** Whether our entry is all the file holds beyond its seed. */
+  holdsOnlyOurs(raw: string): boolean;
+  /** The file with our entry gone, or the recorded prior value back in. */
+  remove(raw: string, reinstate: unknown): string;
+  /** False for a bare enable flag: it identifies nothing, because the user
+   * could as easily have set it by hand. */
+  identifying: boolean;
+}
+
+function unifiedRegistries(
+  layout: RecallHostLayout,
+  /** Only the install path passes one: the record it writes carries this
+   * timestamp, and every reader of the registry does without. */
+  stamp?: string,
+): UnifiedRegistry[] {
+  if (layout.plugin === undefined) return [];
+  const label = layout.hostLabel;
+  if (isZcodePluginTarget(layout.plugin)) {
+    const target = layout.plugin;
+    const enabled = zcodeEnabledRegistry(target);
+    return [
+      {
+        path: target.installedPluginsPath,
+        keyPath: ["plugins", zcodePluginId(target)],
+        current: (raw) => readZcodeInstalledRecord(raw, target),
+        isManaged: (value) => isManagedZcodeInstalledRecord(target, value),
+        put: (raw) =>
+          putZcodeInstalledRecord(
+            raw,
+            target,
+            stamp ?? new Date().toISOString(),
+          ),
+        withoutOurs: (raw) => zcodeInstalledWithoutOurs(raw, target),
+        holdsOnlyOurs: (raw) => zcodeInstalledHoldsOnlyOurs(raw, target),
+        remove: (raw, reinstate) =>
+          removeZcodeInstalledRecord(raw, target, reinstate),
+        identifying: true,
+      },
+      {
+        path: enabled.path,
+        keyPath: enabled.keyPath,
+        current: (raw) => readRegistryEntry(raw, enabled, label),
+        // A bare boolean carries nothing of ours to own; either value is the
+        // user's to have set, and both are restored verbatim.
+        isManaged: (value) => typeof value === "boolean",
+        put: (raw) => putRegistryEntry(raw, enabled, label, true),
+        withoutOurs: (raw) => registryWithoutOurs(raw, enabled, label),
+        holdsOnlyOurs: (raw) => registryHoldsOnlyOurs(raw, enabled, label),
+        remove: (raw, reinstate) =>
+          removeRegistryEntry(raw, enabled, label, reinstate),
+        identifying: false,
+      },
+    ];
+  }
+  const target = layout.plugin;
+  return pluginRegistries(target).map((registry) => ({
+    path: registry.path,
+    keyPath: registry.keyPath,
+    current: (raw) => readRegistryEntry(raw, registry, label),
+    isManaged: (value) => isManagedRegistryEntry(target, registry, value),
+    put: (raw) =>
+      putRegistryEntry(raw, registry, label, registryEntry(target, registry)),
+    withoutOurs: (raw) => registryWithoutOurs(raw, registry, label),
+    holdsOnlyOurs: (raw) => registryHoldsOnlyOurs(raw, registry, label),
+    remove: (raw, reinstate) =>
+      removeRegistryEntry(raw, registry, label, reinstate),
+    identifying: registry.path !== target.settingsPath,
+  }));
+}
+
 async function readRegistries(
   layout: RecallHostLayout,
 ): Promise<RegistryState[]> {
-  if (layout.plugin === undefined) return [];
-  const target = layout.plugin;
+  const plugin = layout.plugin;
+  if (plugin === undefined) return [];
   return Promise.all(
-    pluginRegistries(target).map(async (registry) => {
+    unifiedRegistries(layout).map(async (registry) => {
       const raw = await readOptional(registry.path);
-      const current = readRegistryEntry(raw, registry, layout.hostLabel);
+      const current = registry.current(raw);
       return {
-        target,
-        registry,
+        registryPath: registry.path,
+        keyPath: registry.keyPath,
         raw,
         current,
-        managed:
-          current !== undefined &&
-          isManagedRegistryEntry(target, registry, current),
-        identifying: registry.path !== target.settingsPath,
+        managed: current !== undefined && registry.isManaged(current),
+        identifying: registry.identifying,
       };
     }),
   );
@@ -1111,21 +1285,27 @@ export async function applyRecallInstall(
   if (plan.paths.skill !== null) {
     await assertUnchanged(plan.paths.skill, plan.expected.skill);
   }
+  const unifiedForAssert = unifiedRegistries(plan.layout);
   for (const registry of plan.expected.registries) {
     // A shared registry is the host's file. An unrelated plugin writing to it
     // between plan and apply is not a change to anything of ours, and refusing
     // it is how an install became impossible to repeat on a machine where
-    // WorkBuddy was running. What has to hold is the value at our key.
-    if (registry.keyPath === undefined || registry.managed === undefined) {
+    // WorkBuddy was running. What has to hold is the value at our key — read
+    // through the registry's own dialect, so a record in an array (ZCode) is
+    // compared as the record it is rather than as an absent key.
+    const bound = unifiedForAssert.find((item) => item.path === registry.path);
+    if (
+      bound === undefined ||
+      registry.keyPath === undefined ||
+      registry.managed === undefined
+    ) {
       await assertUnchanged(registry.path, registry.hash);
       continue;
     }
-    await assertManagedUnchanged(
-      registry.path,
-      { path: registry.path, keyPath: registry.keyPath, seed: {} },
-      registry.managed,
-      plan.layout.hostLabel,
-    );
+    const raw = await readOptional(registry.path);
+    if (registryManagedDigest(bound.current(raw)) !== registry.managed) {
+      throw new Error(`Installer target changed after plan: ${registry.path}`);
+    }
   }
 
   const files = await plannedFiles(plan);
@@ -1247,33 +1427,32 @@ export async function applyRecallInstall(
       ...(plan.layout.plugin === undefined
         ? {}
         : {
-            plugin_registries: plan.previous.registries.map((previous) => {
-              const installed = files.registries.find(
-                (file) => file.path === previous.path,
-              );
-              if (installed === undefined) return previous;
-              const registry = pluginRegistries(
-                plan.layout.plugin as CodebuddyPluginTarget,
-              ).find((item) => item.path === previous.path);
-              // `installed_hash` is still written so a journal stays readable
-              // to the build that wrote it; `installed_managed` is what this
-              // build's uninstall trusts.
-              return {
-                ...previous,
-                installed_hash: hash(installed.after),
-                ...(registry === undefined
-                  ? {}
-                  : {
-                      installed_managed: registryManagedDigest(
-                        readRegistryEntry(
-                          installed.after,
-                          registry,
-                          plan.layout.hostLabel,
+            plugin_registries: (() => {
+              const unified = unifiedRegistries(plan.layout);
+              return plan.previous.registries.map((previous) => {
+                const installed = files.registries.find(
+                  (file) => file.path === previous.path,
+                );
+                if (installed === undefined) return previous;
+                const registry = unified.find(
+                  (item) => item.path === previous.path,
+                );
+                // `installed_hash` is still written so a journal stays readable
+                // to the build that wrote it; `installed_managed` is what this
+                // build's uninstall trusts.
+                return {
+                  ...previous,
+                  installed_hash: hash(installed.after),
+                  ...(registry === undefined
+                    ? {}
+                    : {
+                        installed_managed: registryManagedDigest(
+                          registry.current(installed.after),
                         ),
-                      ),
-                    }),
-              };
-            }),
+                      }),
+                };
+              });
+            })(),
             plugin_files: files.trees.flatMap((tree) =>
               tree.files.map((file) => ({
                 path: file.path,
@@ -1511,7 +1690,11 @@ export function expectedPluginHooks(
   layout: RecallHostLayout,
   runtime: RecallRuntime,
 ): string | null {
-  if (layout.plugin === undefined) return null;
+  const plugin = layout.plugin;
+  if (plugin === undefined) return null;
+  if (isZcodePluginTarget(plugin)) {
+    return zcodePluginHooksFile(zcodePluginHookContents(layout, runtime));
+  }
   return pluginHooksFile(
     pluginHookContents(normalizeRuntime(runtime, layout.channel)),
   );
@@ -1529,44 +1712,59 @@ export function expectedPluginHooks(
 async function plannedPluginFiles(
   plan: RecallInstallPlan,
 ): Promise<Pick<PlannedFiles, "registries" | "trees">> {
-  const target = plan.layout.plugin;
+  const plugin = plan.layout.plugin;
   if (
-    target === undefined ||
+    plugin === undefined ||
     plan.next.server === null ||
     plan.next.skill === null
   ) {
     return { registries: [], trees: [] };
   }
-  const contents: PluginContents = {
-    skill: plan.next.skill,
-    server: plan.next.server,
-    ...pluginHookContents(plan.runtime),
-  };
   const registries = await Promise.all(
-    pluginRegistries(target).map(async (registry) => {
-      const before = await readOptional(registry.path);
-      return {
-        path: registry.path,
-        owner: "host" as const,
-        existed: before !== null,
-        before,
-        after: putRegistryEntry(
+    unifiedRegistries(plan.layout, plan.pluginRecordStamp).map(
+      async (registry) => {
+        const before = await readOptional(registry.path);
+        return {
+          path: registry.path,
+          owner: "host" as const,
+          existed: before !== null,
           before,
-          registry,
-          plan.layout.hostLabel,
-          registryEntry(target, registry),
-        ),
-      };
-    }),
-  );
-  const trees = await Promise.all(
-    [
-      {
-        root: target.marketplaceRoot,
-        files: marketplaceTree(target, contents),
+          after: registry.put(before),
+        };
       },
-      { root: target.installRoot, files: pluginTree(target, contents) },
-    ].map(async ({ root, files }) => ({
+    ),
+  );
+  const treeRoots = isZcodePluginTarget(plugin)
+    ? [
+        {
+          root: plugin.installRoot,
+          files: zcodePluginTree(plugin, {
+            skill: plan.next.skill,
+            server: plan.next.server,
+            ...zcodePluginHookContents(plan.layout, plan.runtime),
+          }),
+        },
+      ]
+    : [
+        {
+          root: plugin.marketplaceRoot,
+          files: marketplaceTree(plugin, {
+            skill: plan.next.skill,
+            server: plan.next.server,
+            ...pluginHookContents(plan.runtime),
+          }),
+        },
+        {
+          root: plugin.installRoot,
+          files: pluginTree(plugin, {
+            skill: plan.next.skill,
+            server: plan.next.server,
+            ...pluginHookContents(plan.runtime),
+          }),
+        },
+      ];
+  const trees = await Promise.all(
+    treeRoots.map(async ({ root, files }) => ({
       root,
       existed: await exists(root),
       files: await Promise.all(
@@ -1653,6 +1851,24 @@ async function readTreeFiles(root: string): Promise<Map<string, string>> {
   };
   await visit(root);
   return files;
+}
+
+/** The parts of a ZCode plugin install its hook file is written from.
+ *
+ * Capture always ships; the injection entry ships only when the runtime has a
+ * recall command, and its absence is the one way the hooks degrade. */
+function zcodePluginHookContents(
+  layout: RecallHostLayout,
+  runtime: RecallRuntime,
+): Pick<ZcodePluginContents, "captureCommand" | "injectionCommand"> {
+  const normalized = normalizeRuntime(runtime, layout.channel);
+  return {
+    captureCommand: captureCommandFor(layout, normalized),
+    injectionCommand:
+      normalized.recallCliPath === undefined
+        ? null
+        : zcodeInjectionCommand(normalized, normalized.recallCliPath),
+  };
 }
 
 /** The lines an edit changes, with a little of the text around them.
@@ -2011,7 +2227,7 @@ export async function verifyRecallInstall(
     for (const entry of await readRegistries(layout)) {
       if (!entry.managed || (!entry.identifying && entry.current !== true)) {
         throw new Error(
-          `MemHub ${layout.hostLabel} plugin is not registered in ${path.basename(entry.registry.path)}`,
+          `MemHub ${layout.hostLabel} plugin is not registered in ${path.basename(entry.registryPath)}`,
         );
       }
     }
@@ -2209,16 +2425,10 @@ export async function planRecallUninstall(
       (journal.plugin_registries ?? []).map((entry) => [entry.path, entry]),
     );
     const reviews: RemovalFinding[] = [];
-    for (const registry of pluginRegistries(layout.plugin)) {
+    for (const registry of unifiedRegistries(layout)) {
       const raw = await readOptional(registry.path);
       const recorded = previous.get(registry.path);
-      const owned = resolveRegistryOwnership(
-        layout.plugin,
-        registry,
-        raw,
-        recorded,
-        layout.hostLabel,
-      );
+      const owned = resolveRegistryOwnership(registry, raw, recorded);
       if (owned.state === "review") {
         reviews.push(owned.finding);
         continue;
@@ -2228,17 +2438,12 @@ export async function planRecallUninstall(
         path: registry.path,
         owner: "host",
         before: raw,
-        after: managedRegistryRemoval(
-          registry,
-          raw,
-          recorded,
-          layout.hostLabel,
-        ),
+        after: managedRegistryRemoval(registry, raw, recorded),
       });
     }
     if (reviews.length)
       return { layout, files: [], removedRoots: [], review: reviews };
-    removedRoots.push(layout.plugin.marketplaceRoot, layout.plugin.cacheRoot);
+    removedRoots.push(...pluginOwnedRoots(layout));
   }
   const capture = await captureRemovalFiles(layout, journal);
   if (capture.review.length)
@@ -2264,14 +2469,12 @@ const REGISTRY_OWNERSHIP_UNKNOWN =
  * back by us.
  */
 function resolveRegistryOwnership(
-  target: CodebuddyPluginTarget,
-  registry: PluginRegistry,
+  registry: UnifiedRegistry,
   raw: string | null,
   recorded: RegistryPrevious | undefined,
-  label: string,
 ): { state: "ok" } | { state: "review"; finding: RemovalFinding } {
   if (raw === null) return { state: "ok" };
-  const current = readRegistryEntry(raw, registry, label);
+  const current = registry.current(raw);
   const digest = registryManagedDigest(current);
   // A v2 journal carries the digest directly, and that is the whole test.
   if (recorded !== undefined && recorded.installed_managed !== undefined) {
@@ -2288,8 +2491,7 @@ function resolveRegistryOwnership(
   // host's other edits are kept.
   if (recorded?.installed_hash !== undefined) {
     if (hash(raw) === recorded.installed_hash) return { state: "ok" };
-    if (isManagedRegistryEntry(target, registry, current))
-      return { state: "ok" };
+    if (registry.isManaged(current)) return { state: "ok" };
     return {
       state: "review",
       finding: { path: registry.path, where: MANAGED_VALUE_CHANGED },
@@ -2297,10 +2499,7 @@ function resolveRegistryOwnership(
   }
   // No record of this registry at all. Proven by what the value points at
   // rather than assumed; anything else needs a person.
-  if (
-    current !== undefined &&
-    isManagedRegistryEntry(target, registry, current)
-  )
+  if (current !== undefined && registry.isManaged(current))
     return { state: "ok" };
   return {
     state: "review",
@@ -2321,14 +2520,13 @@ function resolveRegistryOwnership(
  * now instead.
  */
 function managedRegistryRemoval(
-  registry: PluginRegistry,
+  registry: UnifiedRegistry,
   raw: string,
   recorded: RegistryPrevious | undefined,
-  label: string,
 ): string | null {
   if (recorded?.existed === false) {
-    if (registryHoldsOnlyOurs(raw, registry, label)) return null;
-    return removeRegistryEntry(raw, registry, label, undefined);
+    if (registry.holdsOnlyOurs(raw)) return null;
+    return registry.remove(raw, undefined);
   }
   const reinstate =
     recorded !== undefined && recorded.value !== null
@@ -2336,11 +2534,10 @@ function managedRegistryRemoval(
       : undefined;
   if (
     recorded?.raw != null &&
-    registryWithoutOurs(raw, registry, label) ===
-      registryWithoutOurs(recorded.raw, registry, label)
+    registry.withoutOurs(raw) === registry.withoutOurs(recorded.raw)
   )
     return recorded.raw;
-  return removeRegistryEntry(raw, registry, label, reinstate);
+  return registry.remove(raw, reinstate);
 }
 
 async function captureRemovalFiles(
@@ -2544,8 +2741,7 @@ export async function inspectRemnants(
       candidate.skillPath,
       candidate.legacySkillPath,
       candidate.nativeProviderRoot,
-      candidate.plugin?.marketplaceRoot,
-      candidate.plugin?.cacheRoot,
+      ...pluginOwnedRoots(candidate),
     ]) {
       if (!file) continue;
       try {
@@ -2571,14 +2767,12 @@ export async function inspectRemnants(
         if (state.identifying) present = true;
         else
           flags.push({
-            path: state.registry.path,
-            where: state.registry.keyPath.join("."),
+            path: state.registryPath,
+            where: state.keyPath.join("."),
           });
       }
     } catch {
-      for (const registry of candidate.plugin
-        ? pluginRegistries(candidate.plugin)
-        : [])
+      for (const registry of unifiedRegistries(candidate))
         findings.push({ path: registry.path, where: "无法读取或解析" });
     }
     const capture = await inspectCapture(
@@ -2680,15 +2874,17 @@ function readInstalledServer(
 
 /** Where in the document this host keeps its servers.
  *
- * Four JSON hosts, three answers, each read off the installed binary: Cursor,
+ * Five JSON hosts, three answers, each read off the installed binary: Cursor,
  * Claude Code, WorkBuddy and Qwen Code use a top-level `mcpServers`; OpenCode
- * uses `mcp`; OpenClaw nests one deeper under `mcp.servers`. Keeping this as a
- * path rather than a branch per host is what stops the next host from adding a
- * fourth copy of the merge and rollback logic.
+ * uses `mcp`; OpenClaw and ZCode nest one deeper under `mcp.servers`. Keeping
+ * this as a path rather than a branch per host is what stops the next host
+ * from adding a fourth copy of the merge and rollback logic.
  */
 function serverPath(layout: RecallHostLayout): string[] {
   if (layout.format === "opencode") return ["mcp"];
-  if (layout.format === "openclaw") return ["mcp", "servers"];
+  if (layout.format === "openclaw") {
+    return ["mcp", "servers"];
+  }
   return ["mcpServers"];
 }
 
@@ -3308,11 +3504,12 @@ function normalizeRuntime(
 function assertLayoutIsCoherent(layout: RecallHostLayout): void {
   const hasConfig = layout.configPath !== null;
   if (
-    (layout.format === "codebuddy-plugin") !==
+    (layout.format === "codebuddy-plugin" ||
+      layout.format === "zcode-plugin") !==
     (layout.plugin !== undefined)
   ) {
     throw new Error(
-      `${layout.hostLabel} layout must use format "codebuddy-plugin" exactly when it installs a plugin`,
+      `${layout.hostLabel} layout must use a plugin format exactly when it installs a plugin`,
     );
   }
   if (layout.plugin !== undefined) {
@@ -3645,8 +3842,6 @@ async function assertAncestryUnchanged(
   }
 }
 
-const CONTAINMENT_MODE = 0o600;
-
 /** Capture the canonical containment root and its identity. */
 /** A completed mutation, recorded so cleanup can undo exactly what happened.
  *
@@ -3868,12 +4063,20 @@ async function layoutManagedTargets(
   if (layout.plugin !== undefined) {
     const plugin = layout.plugin;
     targets.push(
-      { role: "plugin-marketplace", path: plugin.marketplaceRoot },
-      { role: "plugin-cache", path: plugin.cacheRoot },
       { role: "plugin-install", path: plugin.installRoot },
-      { role: "plugin-registry", path: plugin.knownMarketplacesPath },
-      { role: "plugin-registry", path: plugin.installedPluginsPath },
-      { role: "plugin-registry", path: plugin.settingsPath },
+      ...(isZcodePluginTarget(plugin)
+        ? ([
+            { role: "plugin-cache", path: plugin.cacheRoot },
+            { role: "plugin-registry", path: plugin.installedPluginsPath },
+            { role: "plugin-registry", path: plugin.configPath },
+          ] as const)
+        : ([
+            { role: "plugin-marketplace", path: plugin.marketplaceRoot },
+            { role: "plugin-cache", path: plugin.cacheRoot },
+            { role: "plugin-registry", path: plugin.knownMarketplacesPath },
+            { role: "plugin-registry", path: plugin.installedPluginsPath },
+            { role: "plugin-registry", path: plugin.settingsPath },
+          ] as const)),
     );
   }
   const capturePath = captureFilePath(layout);
@@ -4167,20 +4370,6 @@ async function assertUnchanged(
   }
 }
 
-/** Whether the value at our key still reads as it did at plan time. */
-async function assertManagedUnchanged(
-  targetPath: string,
-  registry: PluginRegistry,
-  expectedManaged: string | null,
-  label: string,
-): Promise<void> {
-  const raw = await readOptional(targetPath);
-  const current = readRegistryEntry(raw, registry, label);
-  if (registryManagedDigest(current) !== expectedManaged) {
-    throw new Error(`Installer target changed after plan: ${targetPath}`);
-  }
-}
-
 async function readOptional(targetPath: string): Promise<string | null> {
   try {
     return await readFile(targetPath, "utf8");
@@ -4378,9 +4567,13 @@ async function existingMode(targetPath: string): Promise<number> {
 async function readPluginServer(
   layout: RecallHostLayout,
 ): Promise<ManagedServer | null> {
-  if (layout.plugin === undefined) return null;
+  const plugin = layout.plugin;
+  if (plugin === undefined) return null;
+  const manifestDir = isZcodePluginTarget(plugin)
+    ? ".zcode-plugin"
+    : ".codebuddy-plugin";
   const raw = await readOptional(
-    path.join(layout.plugin.installRoot, ".codebuddy-plugin", "plugin.json"),
+    path.join(plugin.installRoot, manifestDir, "plugin.json"),
   );
   if (raw === null) return null;
   let manifest: unknown;
