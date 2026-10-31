@@ -365,6 +365,13 @@ EXTRACT_PROMPT_ZH = """## 最近 k 条消息
 * basic_info：**只装用户本人的画像**。
   仅当 NEW user messages 中**明确**陈述稳定画像字段（如 姓名、年龄、所在地、职业、雇主）时才填写。
   绝不推断、绝不编造。没有任何字段被明确陈述时输出 `{{}}`。
+  * **硬性规则**：只有用户在 `user` 回合里**明确说出**的字段才能填写。只在
+    assistant 回合出现的内容（包括 assistant 引用旧记忆，如"The user's name is X"
+    / "用户名是X"）一律不算。没有符合条件的字段时，必须输出 `"basic_info": {{}}`。
+  * **绝不**把字段名本身或占位符当值写入（"用户"、"The user"、"user"、"name"、
+    "姓名"、"N/A"、"unknown"、"未知"、"未提供"、"-"），宁可省略该字段。
+  * 负例：寒暄如 `[user]: 你好` / `[assistant]: 我可以帮你。`，或
+    `[user]: Reply with exactly: PONG` → `"basic_info": {{}}`。
   * `name` 的例外：用户自己那条消息上的 `name` 字段，或文首形如
     "用户名叫X" / "The user's name is X" 的那一行，都是 `name` 的权威来源
     ——即使用户本人从未开口自报姓名。
@@ -440,6 +447,13 @@ EXTRACT_PROMPT_ZH_NO_INTENTION = """## 最近 k 条消息
 * basic_info：**只装用户本人的画像**。
   仅当 NEW user messages 中**明确**陈述稳定画像字段（如 姓名、年龄、所在地、职业、雇主）时才填写。
   绝不推断、绝不编造。没有任何字段被明确陈述时输出 `{{}}`。
+  * **硬性规则**：只有用户在 `user` 回合里**明确说出**的字段才能填写。只在
+    assistant 回合出现的内容（包括 assistant 引用旧记忆，如"The user's name is X"
+    / "用户名是X"）一律不算。没有符合条件的字段时，必须输出 `"basic_info": {{}}`。
+  * **绝不**把字段名本身或占位符当值写入（"用户"、"The user"、"user"、"name"、
+    "姓名"、"N/A"、"unknown"、"未知"、"未提供"、"-"），宁可省略该字段。
+  * 负例：寒暄如 `[user]: 你好` / `[assistant]: 我可以帮你。`，或
+    `[user]: Reply with exactly: PONG` → `"basic_info": {{}}`。
   * `name` 的例外：用户自己那条消息上的 `name` 字段，或文首形如
     "用户名叫X" / "The user's name is X" 的那一行，都是 `name` 的权威来源
     ——即使用户本人从未开口自报姓名。
@@ -668,6 +682,23 @@ Memory Date：2025-09-02
 }
 ```
 职业和所在地是 **John 的**属性，所以进 `memory` 并以"John"作主体，**绝不能**落到 `basic_info` 的 `occupation` / `location` —— `basic_info` 专属于用户本人。只有 `name`（Tim，来自用户消息的 `name` 字段）才该放进去。注意输出语言随输入语言（此例为英文）。
+
+## 示例 11 —— 反例：寒暄没有 basic_info
+
+新消息：
+[{"role": "user", "content": "你好"},
+ {"role": "assistant", "content": "你好！我可以帮你。之前记得 The user's name is 用户."}]
+Memory Date：2025-09-03
+
+输出：
+```json
+{
+  "memory": [],
+  "intentions": [],
+  "basic_info": {}
+}
+```
+用户没有说任何关于自己的信息。assistant 那句不是 user 回合，"用户" 也是占位符而不是名字。必须输出 `{}`——**绝不能**输出 `{"name": "用户"}`。
 
 ---
 """

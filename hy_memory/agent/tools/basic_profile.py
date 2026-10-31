@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import unicodedata
 import uuid
 import weakref
 from dataclasses import dataclass
@@ -209,6 +211,147 @@ def _sanitize_kv(
 
 
 # ================================================================
+# 占位符守卫（P0-1）
+# ================================================================
+# 弱模型（如 qwen3.5-2b）在用户什么都没说时，会把 schema 字段说明里的词当值
+# 填进 basic_info：{"name": "用户"} / "The user" / "N/A"。每个占位符都会
+# supersede 掉真实值，演化链变成 费天翔 → Fei → 用户 → The user。
+# 规则：占位符永远不入库；读侧组装 KV 时占位符也不覆盖已有真实值。
+
+_PLACEHOLDER_VALUES = frozenset({
+    "用户", "该用户", "本用户", "用户本人",
+    "the user", "the user's", "user", "a user", "this user",
+    "n/a", "na", "none", "null", "nil", "unknown", "unspecified",
+    "not provided", "not specified", "not mentioned",
+    "未提供", "未知", "不详", "未说明", "未提及", "无",
+    "-", "?",
+})
+
+# 内置字段的中文标签：弱模型也会把字段说明的中文词当值。
+_FIELD_LABELS: Dict[str, tuple] = {
+    "name": ("姓名", "名字", "用户名", "用户姓名", "用户名字"),
+    "age": ("年龄", "用户年龄"),
+    "location": ("所在地", "地点", "城市", "用户所在地"),
+    "occupation": ("职业", "工作", "用户职业"),
+    "employer": ("雇主", "公司", "用户雇主"),
+}
+
+# 去掉标点/符号后再比较，让 "The user." / "用户。" / "N/A" 都命中。
+# "-" / "?" 本身就是纯标点，剥完为空串，同样判为占位符。
+_PUNCT_RE = re.compile(r"[\s\.,;:!?'\"`~()\[\]{}<>/\\|_\-\u3000-\u303f\uff00-\uff0f\uff1a-\uff20]+")
+
+
+def _placeholder_key(value: str) -> str:
+    s = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    s = s.replace("\u2019", "'")
+    s = _PUNCT_RE.sub(" ", s)
+    return " ".join(s.split())
+
+
+_PLACEHOLDER_KEYS = frozenset(_placeholder_key(v) for v in _PLACEHOLDER_VALUES)
+
+
+def is_placeholder_value(field_name: str, value: Any) -> bool:
+    """value 是否为占位符（空 / 用户 / The user / N/A / 字段名本身 等）。
+
+    大小写不敏感、首尾空白与标点不敏感。数字（如 age=30）永远不是占位符。
+    """
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return False
+    key = _placeholder_key(value)
+    if not key:
+        return True
+    if key in _PLACEHOLDER_KEYS:
+        return True
+    field_key = _placeholder_key(field_name)
+    if field_key and key in (field_key, field_key.replace("_", " ")):
+        return True
+    for label in _FIELD_LABELS.get(field_name, ()):
+        if key == _placeholder_key(label):
+            return True
+    return False
+
+
+def _drop_placeholders(kv: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in kv.items() if not is_placeholder_value(k, v)}
+
+
+# ================================================================
+# 来源守卫（P0-1）：basic_info 只认 user 回合
+# ================================================================
+# 抽取器偶尔把 assistant 回合里的内容（包括 assistant 引用的旧占位记忆
+# "The user's name is 用户."）当成用户画像再写一次。writer 把 user 回合原文
+# 交给 filter_basic_info_by_user_text()，值不在 user 原文里的字段一律丢弃。
+#
+# 匹配规则（大小写、空白不敏感，NFKC 归一）：
+# - 严格字段（name / age / location / employer）：值必须作为子串出现在 user
+#   原文里。"我叫费天翔" → name=费天翔 通过；"Fei Tianxiang" 与 "fei  tianxiang"
+#   通过；"杭州" 写成 "Hangzhou" 则丢弃（宁缺毋滥：身份字段错一次就会
+#   supersede 掉真实值）。
+# - 其余字段（occupation 及业务自定义字段）：允许模型轻度改写。只要值与 user
+#   原文的最长公共子串 ≥ 2 个字符且覆盖值长度的一半以上即通过，例如
+#   "AI 基础设施从业者" vs "做 AI 基础设施"（公共子串 "ai基础设施" 覆盖 6/9）。
+#   完全凭空的值（与 user 原文无公共片段）仍被丢弃。
+
+STRICT_SOURCE_FIELDS = frozenset({"name", "age", "location", "employer"})
+
+
+def _match_key(text: Any) -> str:
+    s = unicodedata.normalize("NFKC", str(text if text is not None else "")).lower()
+    s = s.replace("\u2019", "'")
+    return "".join(s.split())
+
+
+def _longest_common_substring(a: str, b: str) -> int:
+    if not a or not b:
+        return 0
+    best = 0
+    prev = [0] * (len(b) + 1)
+    for ca in a:
+        cur = [0] * (len(b) + 1)
+        for j, cb in enumerate(b, 1):
+            if ca == cb:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+        prev = cur
+    return best
+
+
+def value_in_user_text(field_name: str, value: Any, user_text: str) -> bool:
+    """value 是否出自 user 原文（规则见上方注释）。"""
+    v = _match_key(value)
+    t = _match_key(user_text)
+    if not v or not t:
+        return False
+    if v in t:
+        return True
+    if field_name in STRICT_SOURCE_FIELDS:
+        return False
+    common = _longest_common_substring(v, t)
+    return common >= 2 and common * 2 >= len(v)
+
+
+def filter_basic_info_by_user_text(
+    kv: Dict[str, Any],
+    user_text: Optional[str],
+) -> Dict[str, Any]:
+    """只保留值出现在 user 原文里的字段；user_text 为空时整份丢弃。"""
+    if not isinstance(kv, dict) or not kv:
+        return {}
+    if not (user_text or "").strip():
+        return {}
+    return {
+        k: v for k, v in kv.items()
+        if value_in_user_text(k, v, user_text or "")
+    }
+
+
+# ================================================================
 # 公共入口：upsert_basic_profile
 # ================================================================
 
@@ -287,6 +430,8 @@ async def _upsert_basic_profile_unlocked(
     # L0 Basic Info 从输入、唯一性到落盘都只属于 user_id。
 
     new_kv = _sanitize_kv(kv or {}, allowed_fields=allowed_fields)
+    # 单调性守卫：占位符永远不覆盖已有值，过滤后为空就不写新版本、不产生新链头。
+    new_kv = _drop_placeholders(new_kv)
     if not new_kv:
         return BasicProfileUpsertResult(
             success=True, changed=False, reason="no valid fields after sanitize"
@@ -512,6 +657,9 @@ def _assemble_full_kv_from_nodes(
             continue
         for k, v in kv.items():
             if allowed_set is not None and k not in allowed_set:
+                continue
+            # 历史上已落盘的占位符版本（如 name=用户）不覆盖更早的真实值。
+            if is_placeholder_value(k, v):
                 continue
             full_kv[k] = v
     return full_kv
