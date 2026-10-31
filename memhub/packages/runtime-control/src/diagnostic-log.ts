@@ -429,10 +429,18 @@ export async function readDiagnosticEvents(
     errorsOnly?: boolean;
     tail?: number;
   } = {},
-): Promise<{ events: DiagnosticEventV1[]; invalid_lines: number }> {
+): Promise<{
+  events: DiagnosticEventV1[];
+  invalid_lines: number;
+  unrecognized_lines: number;
+}> {
   const files = await diagnosticLogFiles(dataDir);
   let events: DiagnosticEventV1[] = [];
+  // Only a line that is not JSON at all is damage. A whole JSON line this
+  // reader does not accept (an older build's record, another schema) is left
+  // out and counted apart, so an upgrade does not read as a broken log.
   let invalidLines = 0;
+  let unrecognizedLines = 0;
   for (const file of files) {
     const content = await readRegularFileNoFollow(
       file,
@@ -440,11 +448,17 @@ export async function readDiagnosticEvents(
     );
     for (const line of content.split("\n")) {
       if (!line) continue;
+      let value: unknown;
       try {
-        const item = parseDiagnosticEvent(JSON.parse(line));
-        events.push(item);
+        value = JSON.parse(line);
       } catch {
         invalidLines += 1;
+        continue;
+      }
+      try {
+        events.push(parseDiagnosticEvent(value));
+      } catch {
+        unrecognizedLines += 1;
       }
     }
   }
@@ -480,7 +494,11 @@ export async function readDiagnosticEvents(
     return !(filter.errorsOnly && item.level !== "error");
   });
   const tail = Math.min(Math.max(filter.tail ?? 200, 1), 5_000);
-  return { events: events.slice(-tail), invalid_lines: invalidLines };
+  return {
+    events: events.slice(-tail),
+    invalid_lines: invalidLines,
+    unrecognized_lines: unrecognizedLines,
+  };
 }
 
 export async function exportDiagnosticBundle(options: {

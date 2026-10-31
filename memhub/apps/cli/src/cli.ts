@@ -957,9 +957,12 @@ async function runCommand(
                 state: "empty",
                 events: 0,
                 invalid_lines: report.invalid_lines,
+                unrecognized_lines: report.unrecognized_lines,
               })}\n`
           : renderLogText(report.events, report.invalid_lines),
       );
+      // Only lines that are not JSON are damage. Records an older build wrote
+      // are left out without a warning: after an upgrade they are expected.
       if (report.invalid_lines) {
         process.stderr.write(
           `${PRODUCT}: 跳过 ${report.invalid_lines} 行损坏的诊断记录。\n`,

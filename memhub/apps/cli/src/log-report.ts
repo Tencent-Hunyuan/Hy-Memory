@@ -107,7 +107,11 @@ export async function readLogReport(
   query: LogQuery,
 ): Promise<{
   events: DiagnosticEventV1[];
+  /** Lines that are not JSON: the only ones `memhub logs` calls damaged. */
   invalid_lines: number;
+  /** Whole JSON lines the reader leaves out, such as an older build's
+   * records. Nothing is wrong with them, so the text output says nothing. */
+  unrecognized_lines: number;
   failure?: "log_directory_unreadable";
 }> {
   // `readDiagnosticEvents` treats an unreadable logs path as "no events". That
@@ -119,6 +123,7 @@ export async function readLogReport(
     return {
       events: [],
       invalid_lines: 0,
+      unrecognized_lines: 0,
       failure: "log_directory_unreadable",
     };
   }
@@ -129,6 +134,7 @@ export async function readLogReport(
     return {
       events: [],
       invalid_lines: 0,
+      unrecognized_lines: 0,
       failure: "log_directory_unreadable",
     };
   }
