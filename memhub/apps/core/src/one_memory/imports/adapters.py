@@ -31,6 +31,16 @@ class ScanIssueCode(StrEnum):
     #: import it. Named for the reason, so a reader can tell a setting from
     #: a record the parser could not use.
     SUBAGENT_TRACE_DISABLED = "subagent_trace_disabled"
+    #: A host's own notice wearing the user's role — Hermes posts a finished
+    #: background process, and its gateway marks the post as not written by a
+    #: human. Nothing in it is the person's, so it never reaches extraction.
+    INJECTED_MACHINE_NOTICE = "injected_machine_notice"
+    #: The host could not transcribe a voice message and left a placeholder
+    #: naming the audio file. The person did speak, but the placeholder holds
+    #: only a path, which an extractor would otherwise read as a fact.
+    VOICE_PLACEHOLDER = "voice_placeholder"
+    #: A health check such as "Reply with exactly: PONG": no one's words.
+    PROBE = "probe"
     SOURCE_BUSY = "source_busy"
     UNSUPPORTED_SCHEMA = "unsupported_schema"
     BUDGET_EXCEEDED = "budget_exceeded"
