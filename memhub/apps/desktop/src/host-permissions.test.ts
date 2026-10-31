@@ -1473,6 +1473,32 @@ describe("refreshing installed hosts after an upgrade", () => {
     return layout;
   }
 
+  async function linkedZcode(context: Awaited<ReturnType<typeof fixture>>) {
+    const layout = zcodeLayout(path.join(context.root, "zcode"));
+    const plugin = required(layout.plugin);
+    if ("marketplaceRoot" in plugin)
+      throw new Error("ZCode installs as a ZCode-shaped plugin");
+    // What the host already has before our first install: its plugin
+    // registry directory and a config holding no enable flag of ours.
+    await mkdir(path.dirname(plugin.installedPluginsPath), {
+      recursive: true,
+    });
+    await writeFile(
+      plugin.configPath,
+      JSON.stringify({ plugins: { enabledPlugins: {} } }),
+    );
+    const preview = await context.permissions.previewInstall(layout);
+    const result = await context.permissions.install(
+      layout,
+      preview.fingerprint,
+    );
+    await context.permissions.setPermission(
+      layout,
+      approval(required(result.permission.receipt)),
+    );
+    return layout;
+  }
+
   /** Put back the skill an earlier release wrote, journaled as ours. */
   async function ageSkill(layout: ReturnType<typeof workbuddyLayout>) {
     const skillPath = required(skillFilePath(layout));
@@ -1639,5 +1665,54 @@ describe("refreshing installed hosts after an upgrade", () => {
       MCP_TOOLSET_VERSION,
     );
     expect(refreshed.mcpServers.neighbor).toEqual({ command: "keep" });
+  });
+
+  it("refreshes a ZCode plugin manifest whose MCP entry predates the tool set", async () => {
+    const context = await fixture();
+    const layout = await linkedZcode(context);
+    const plugin = required(layout.plugin);
+    if ("marketplaceRoot" in plugin)
+      throw new Error("ZCode installs as a ZCode-shaped plugin");
+    const manifestPath = path.join(
+      plugin.installRoot,
+      ".zcode-plugin",
+      "plugin.json",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    expect(manifest.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+      MCP_TOOLSET_VERSION,
+    );
+    // What 1.0.4 wrote: the same inline server without the stamp.
+    delete manifest.mcpServers["one-memory"].env[MCP_TOOLSET_KEY];
+    const text = `${JSON.stringify(manifest, null, 2)}\n`;
+    await writeFile(manifestPath, text);
+    const journal = JSON.parse(await readFile(layout.journalPath, "utf8"));
+    const entry = required(
+      journal.plugin_files.find(
+        (file: { path: string }) => file.path === manifestPath,
+      ),
+    );
+    entry.hash = createHash("sha256").update(text).digest("hex");
+    journal.installed_server_hash = createHash("sha256")
+      .update(JSON.stringify(manifest.mcpServers["one-memory"]))
+      .digest("hex");
+    await writeFile(layout.journalPath, JSON.stringify(journal));
+    const granted = await context.permissions.getPermission(layout);
+    expect(granted.state).toBe("approved");
+    expect(
+      (await readInstalledRecallCommand(layout))?.env[MCP_TOOLSET_KEY],
+    ).toBeUndefined();
+
+    expect(
+      await context.permissions.refreshInstalledHosts([layout], {
+        build: "34",
+      }),
+    ).toMatchObject({ state: "refreshed", synced: ["zcode"], failed: [] });
+    const refreshed = JSON.parse(await readFile(manifestPath, "utf8"));
+    expect(refreshed.mcpServers["one-memory"].env[MCP_TOOLSET_KEY]).toBe(
+      MCP_TOOLSET_VERSION,
+    );
+    // Rewriting our own plugin keeps the user's authorization.
+    expect(await context.permissions.getPermission(layout)).toEqual(granted);
   });
 });
