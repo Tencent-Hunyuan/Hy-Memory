@@ -7,9 +7,9 @@
  * WorkBuddy's command lives in its plugin tree. Hermes and OpenClaw deliver
  * the turn through a single memory-provider slot; those are not written here,
  * because taking the slot replaces whatever plugin is already there. ZCode
- * merges its hooks into the same config file as its MCP entry, and its
- * UserPromptSubmit is the recall injection entry (which hands the prompt to
- * capture itself), so only Stop carries a capture command there.
+ * also ships its hooks inside its plugin tree, and its UserPromptSubmit is the
+ * recall injection entry (which hands the prompt to capture itself), so only
+ * Stop carries a capture command there.
  */
 
 import path from "node:path";
@@ -539,7 +539,6 @@ export function zcodeInjectionCommand(
 ): string {
   const environment = [
     'ELECTRON_RUN_AS_NODE="1"',
-    'ONE_MEMORY_BOUNDARY_VIA_BROKER="1"',
     `ONE_MEMORY_BROKER_DISCOVERY=${quoteCaptureCommand(runtime.discoveryPath)}`,
     ...(runtime.credentialFile === undefined
       ? []
