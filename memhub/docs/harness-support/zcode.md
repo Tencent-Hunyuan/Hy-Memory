@@ -1,6 +1,6 @@
 # ZCode 一键插入支持
 
-更新日期：2026-10-24
+更新日期：2026-10-31
 
 ## 结论
 
@@ -68,7 +68,7 @@ ZCode 的配置文件钩子必须 `hooks.enabled: true` 才运行，而这个开
 
 - 默认 Tools（授权项，非 MCP 工具名）：`om_recall`、`om_conversations`、`om_diagnostic_trace`。
 - 默认 Scopes：`all-apps`、`source:zcode`。
-- 已安装且 `approved`：只修复命令并 Probe。
+- 已安装且 `approved`：修复命令并 Probe；应用升级后的首次启动还会刷新仍是我们的 Skill、钩子和插件文件（用户改过的文件留待详情页确认）。
 - 权限不完整：重新安装、签发新 Credential 并授权（本构建版本固定 1.0.0，重装落同一版本目录，整棵 `cache/one-memory/` 随卸载回收）。
 - 关闭：先撤权，再删除插件树、剥除注册行与启用键、移除 Journal。
 - 用户修改过插件文件（如编辑过的 Skill）时不强删。
