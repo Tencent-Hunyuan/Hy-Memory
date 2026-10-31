@@ -94,6 +94,35 @@ authority on first launch.
   `hy_node_permissions` proof table. Evidence, governed memories, model
   profiles, SDK stores, and source/host grants are preserved.
 
+## Hy Memory 2.0.9 — 2026-11-01
+
+- Placeholder values no longer overwrite the user's basic profile (L0). A
+  small extraction model filled `basic_info` with `{"name": "用户"}`,
+  `The user` or `N/A` when the user had said nothing about themselves, and
+  each placeholder superseded the real value, so the L0 chain read
+  费天翔 → Fei → 用户 → The user. Three defences:
+  - `upsert_basic_profile` drops placeholder values: empty, `用户`,
+    `the user`, `user`, `n/a`, `na`, `none`, `null`, `unknown`, `未提供`,
+    `未知`, `不详`, `-`, `?` and the field's own name, compared
+    case-insensitively with whitespace and punctuation stripped. When nothing
+    is left it writes no new version and no new L0 head. Placeholders already
+    stored in the chain no longer override earlier real values when the
+    profile is assembled, so `get_user_profile` of an affected user shows the
+    last real value again without any migration.
+  - The writer keeps a `basic_info` field only when its value appears in a
+    `user` message of the request (content or the message's `name`),
+    ignoring case and whitespace. Values the assistant said, including an
+    assistant quoting an old memory ("The user's name is 用户."), are
+    dropped. A request with messages but no `user` message writes no
+    `basic_info`. A plain-text `add` counts as the user's own text. `name`,
+    `age`, `location` and `employer` must appear verbatim; other fields such
+    as `occupation` may be lightly reworded by the model (the longest common
+    run with the user text must be at least 2 characters and cover half the
+    value), so "AI 基础设施从业者" from "做 AI 基础设施" is kept.
+  - The extraction prompts (zh and en) state the rule: only what the user
+    said in a `user` turn, never the field name or a placeholder, `{}`
+    otherwise, with a small-talk counter-example.
+
 ## Hy Memory 2.0.8 — 2026-10-28
 
 - Published
