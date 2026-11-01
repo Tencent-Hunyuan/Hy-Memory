@@ -306,7 +306,7 @@ def test_the_runner_names_the_step_and_sub_step_that_failed(tmp_path, monkeypatc
         ("step.finished", "preflight.profile_read"),
         ("step.finished", "preflight.resumable_identity"),
         ("step.finished", "preflight.legacy_ids_scan"),
-        ("step.finished", "preflight.model_profile_check"),
+        ("step.finished", "preflight.vector_space_check"),
         ("step.finished", "prepare.recover_abandoned_staging"),
         ("step.finished", "bundle.ensure"),
         ("step.finished", "bundle.restore_point"),

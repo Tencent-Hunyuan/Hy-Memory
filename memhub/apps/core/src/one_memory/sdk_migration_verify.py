@@ -14,7 +14,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +47,8 @@ class ReadbackReport:
     chat_readable: int
     productivity_expected: int
     productivity_readable: int
+    #: Confirmed in the mirror, gone from the SDK before this migration began.
+    chat_missing_before_migration: int = 0
 
     @property
     def passed(self) -> bool:
@@ -63,6 +65,7 @@ class ReadbackReport:
             "chat_readable": self.chat_readable,
             "productivity_expected": self.productivity_expected,
             "productivity_readable": self.productivity_readable,
+            "chat_missing_before_migration": self.chat_missing_before_migration,
             "passed": self.passed,
         }
 
@@ -113,6 +116,27 @@ def read_legacy_memory_ids(connection: sqlite3.Connection) -> LegacyMemoryIds:
         productivity=tuple(sorted(productivity)),
         users=tuple(sorted(users)),
     )
+
+
+def expected_memory_ids(
+    legacy: LegacyMemoryIds, stored: frozenset[str]
+) -> tuple[LegacyMemoryIds, int]:
+    """What the readback must find, and how many confirmed chats it need not.
+
+    A 1.0.4 library can hold confirmed rows whose SDK node the SDK had already
+    merged or deleted: no migration could read those back (658 confirmed, 657
+    in the store, and the whole upgrade failed). So chat is held to what the
+    store held before this run, and anything in there must still read back.
+
+    If none of the confirmed chats is in the store, that is not history: the
+    store is empty or is the wrong one. Nothing is excused then, so the
+    readback still fails on every id instead of checking nothing just before
+    the mirror is dropped.
+    """
+    chat = tuple(memory_id for memory_id in legacy.chat if memory_id in stored)
+    if not chat:
+        return legacy, 0
+    return replace(legacy, chat=chat), len(legacy.chat) - len(chat)
 
 
 def legacy_memory_ids_from(database_path: Path) -> LegacyMemoryIds:
@@ -179,14 +203,18 @@ def runtime_sdk_client(
     from one_memory.model_profiles import ModelProfileStore
     from one_memory.secrets import KeyringSecretStore, SecretStoreUnavailableError
 
-    try:
-        secret = ModelProfileStore(database_path).resolve_snapshot_secret(
-            profile.profile_id, profile.revision, KeyringSecretStore()
-        )
-    except SecretStoreUnavailableError:
-        raise DataPlaneMigrationError("sdk_migration_secure_storage_unavailable") from None
-    if profile.has_api_key and secret is None:
-        raise DataPlaneMigrationError("sdk_migration_model_secret_unavailable")
+    secret: str | None = None
+    # Without a key there is nothing to resolve, and the built-in retrieval
+    # snapshot has no stored version to look one up by.
+    if profile.has_api_key:
+        try:
+            secret = ModelProfileStore(database_path).resolve_snapshot_secret(
+                profile.profile_id, profile.revision, KeyringSecretStore()
+            )
+        except SecretStoreUnavailableError:
+            raise DataPlaneMigrationError("sdk_migration_secure_storage_unavailable") from None
+        if secret is None:
+            raise DataPlaneMigrationError("sdk_migration_model_secret_unavailable")
     lease = acquire_client(profile, api_key=secret, data_dir=data_dir)
     try:
         yield lease.client
@@ -194,7 +222,9 @@ def runtime_sdk_client(
         lease.close()
 
 
-def verify_readback(client: Any, legacy: LegacyMemoryIds) -> ReadbackReport:
+def verify_readback(
+    client: Any, legacy: LegacyMemoryIds, *, chat_missing_before_migration: int = 0
+) -> ReadbackReport:
     listed: set[str] = set()
     for user_id in legacy.users or ("local",):
         offset = 0
@@ -228,5 +258,6 @@ def verify_readback(client: Any, legacy: LegacyMemoryIds) -> ReadbackReport:
         chat_readable=sum(1 for memory_id in legacy.chat if readable(memory_id)),
         productivity_expected=len(legacy.productivity),
         productivity_readable=sum(1 for memory_id in legacy.productivity if readable(memory_id)),
+        chat_missing_before_migration=chat_missing_before_migration,
     )
 

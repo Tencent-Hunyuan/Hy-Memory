@@ -4155,6 +4155,8 @@ const SDK_MIGRATION_FAILURES: Record<string, string> = {
     "核对发现新版本还读不到你的全部记忆，没有切换数据源。",
   sdk_migration_model_profile_required:
     "迁移需要先有可用的模型配置，用来核对新版本能否读回记忆。请先用 memhub models setup 完成配置，再运行 memhub restart 重试。",
+  sdk_migration_vector_profile_missing:
+    "记忆的向量来自一个已删除的模型配置，当前配置读不回它们，所以没有迁移。请重新添加并启用那个模型配置，再运行 memhub restart 重试。",
 };
 
 const MIGRATION_ISSUES_URL =

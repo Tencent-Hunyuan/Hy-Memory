@@ -77,25 +77,33 @@ then:
 2. **prepare**: applies the management schema migrations, discards SDK staging
    left by builds through 19 (§5) and makes legacy queue work self-contained
    (§4);
-3. **vectors**: for the active embedding profile, renames every
+3. **vectors**: for the active embedding profile (the built-in model when no
+   profile is active), renames every
    `one_memory_<old hash>…` collection to the current `memhub_<hash>…` name
    through Chroma's public client. A current collection that already holds
    writes is merged in first (newer record wins on a shared id); counts are
    checked after each step;
 4. **verify**: opens the public SDK client exactly as the Runtime will and reads
    the legacy confirmed memory ids back (`list_memories`, then `get`). Every
-   chat memory must read back. Coding/Working may be fewer, because the SDK's
-   Coding reconciler deletes experiences it retires, but not zero when the
-   legacy mirror has some. Otherwise the run stops with
-   `sdk_migration_memory_unreadable` and the counts, before anything
-   irreversible; legacy authority and tables stay intact;
+   confirmed chat memory that was in the vector store before this run (any
+   collection, read before step 3) must read back. A confirmed chat the SDK had
+   already merged or deleted before the upgrade cannot, and is only counted
+   (`chat_missing_before_migration`); if none of them is in the store, none is
+   excused. Coding/Working may be fewer, because the SDK's Coding reconciler
+   deletes experiences it retires, but not zero when the legacy mirror has
+   some. Otherwise the run stops with `sdk_migration_memory_unreadable` and
+   the counts, before anything irreversible; legacy authority and tables stay
+   intact;
 5. **cutover**: re-verifies the bundle, repeats §4, commits SDK authority;
 6. **cleanup**: drops the legacy tables (including the `evidence_search`
    index) and runs `VACUUM` (skipped if the disk is too full).
 
-A home with legacy memories but no active model profile is not migrated
-(`sdk_migration_model_profile_required`): its collections can be neither named
-nor read back.
+A home with no active model profile has no generation model, but its vectors
+are the built-in embedding model's, the same space the Runtime reads with; it
+migrates through that space and no key is resolved. Only when its legacy
+memories have vectors solely under another embedding space (a profile since
+deleted) is it not migrated (`sdk_migration_vector_profile_missing`, in the
+preflight, before anything changes).
 
 A home already on SDK authority still reports `required` while legacy-named
 vector collections exist for its profile (build 20 homes). `sdk-migrate` then

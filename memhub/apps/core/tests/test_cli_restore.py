@@ -175,7 +175,13 @@ def test_sdk_migrate_reports_each_step_then_the_result(tmp_path, monkeypatch) ->
 
     assert code == 0, output.getvalue()
     lines = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert [line["step"] for line in lines[:-1]] == ["bundle", "prepare", "cutover", "cleanup"]
+    assert [line["step"] for line in lines[:-1]] == [
+        "bundle",
+        "prepare",
+        "vectors",
+        "cutover",
+        "cleanup",
+    ]
     assert lines[-1]["state"] == "cutover"
     assert lines[-1]["bundle_id"] == f"{lines[-1]['migration_id']}-pre-cutover"
     assert not (tmp_path / ".sdk-migration-capture-fence.json").exists()
