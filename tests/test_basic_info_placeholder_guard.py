@@ -2,9 +2,9 @@
 
 弱模型（qwen3.5-2b）在用户什么都没说时把 basic_info 填成 {"name": "用户"} /
 "The user" / "N/A"，每个占位符都 supersede 掉真实值，演化链变成
-费天翔 → Fei → 用户 → The user。三层防御：
-(a) upsert 单调性守卫；(b) writer 只认 user 回合；(c) prompt 硬约束。
-本文件锁住 (a)(b) 与 (c) 的 prompt 文案，覆盖改进建议第 10 节验收 1–4。
+费天翔 → Fei → 用户 → The user。防御：(a) upsert 占位符守卫 + 读侧愈合；
+(c) prompt 硬约束。验收 2（assistant 引用 "name is 用户"）由占位符守卫单独兜住。
+本文件覆盖改进建议第 10 节验收 1–4。
 """
 import asyncio
 from datetime import datetime, timedelta
@@ -15,14 +15,10 @@ from hy_memory.agent.extractor import EXTRACT_FEW_SHOT_EN
 from hy_memory.agent.prompts_zh import EXTRACT_FEW_SHOT_ZH
 from hy_memory.agent.tools.basic_profile import (
     _assemble_full_kv_from_nodes,
-    filter_basic_info_by_user_text,
     is_placeholder_value,
     upsert_basic_profile,
-    value_in_user_text,
 )
 from hy_memory.models.memory import MemoryLayer, MemoryNode, MemoryStatus
-from hy_memory.pipelines.base import ChatMessage, WriteRequest
-from hy_memory.pipelines.writer import MemoryWriter
 
 FIELDS = ["name", "age", "location", "occupation", "employer"]
 
@@ -57,33 +53,23 @@ def l0_versions(store):
     return [n for n in store.nodes if n.layer == MemoryLayer.L0_BASIC_INFO]
 
 
-def write_basic_info(store, request, llm_basic_info):
-    """模拟 writer 的 basic_info 段：来源守卫 → upsert。"""
-    user_text = MemoryWriter._basic_info_user_text(request)
-    kv = filter_basic_info_by_user_text(llm_basic_info, user_text)
-    if not kv:
+def write_basic_info(store, llm_basic_info):
+    """模拟 writer 的 basic_info 段：LLM 给出的非空 basic_info 直接 upsert。"""
+    if not llm_basic_info:
         return None
     return asyncio.run(upsert_basic_profile(
-        user_id=request.user_id, kv=kv, vector_store=store,
+        user_id="u1", kv=llm_basic_info, vector_store=store,
         embed_service=FakeEmbed(), allowed_fields=FIELDS,
     ))
-
-
-def req(*msgs, content=""):
-    return WriteRequest(
-        content=content,
-        messages=[ChatMessage(role=r, content=c) for r, c in msgs],
-        user_id="u1",
-    )
 
 
 # ── 验收 1：寒暄不产生新的 L0 版本 ──
 
 def test_small_talk_creates_no_l0_version():
+    # [user]: 你好 / [assistant]: 我可以帮你。弱模型输出 {"name": "用户"}
     store = FakeStore()
-    r = req(("user", "你好"), ("assistant", "我可以帮你。"))
-    write_basic_info(store, r, {"name": "用户"})
-    write_basic_info(store, r, {})
+    write_basic_info(store, {"name": "用户"})
+    write_basic_info(store, {})
     assert l0_versions(store) == []
 
 
@@ -91,46 +77,28 @@ def test_placeholder_only_upsert_writes_nothing():
     store = FakeStore()
     for kv in ({"name": "用户"}, {"name": "The user"}, {"name": "N/A"},
                {"location": "unknown", "occupation": "未提供"}, {"name": "name"}):
-        res = asyncio.run(upsert_basic_profile(
-            user_id="u1", kv=kv, vector_store=store,
-            embed_service=FakeEmbed(), allowed_fields=FIELDS,
-        ))
+        res = write_basic_info(store, kv)
         assert res.success and not res.changed
     assert l0_versions(store) == []
 
 
-# ── 验收 2：assistant 引用 "name is 用户" 不写入 ──
+# ── 验收 2：assistant 引用 "name is 用户" 不写入（仅靠占位符守卫）──
 
 def test_assistant_quoting_placeholder_does_not_write():
+    # [assistant]: 那条 The user's name is 用户. 更说明问题
     store = FakeStore()
-    r = req(
-        ("user", "你看那条记忆"),
-        ("assistant", "那条 The user's name is 用户. 更说明问题"),
-    )
-    write_basic_info(store, r, {"name": "用户"})
+    for kv in ({"name": "用户"}, {"name": "The user"}, {"name": "The user."}):
+        res = write_basic_info(store, kv)
+        assert res.success and not res.changed
     assert l0_versions(store) == []
-
-
-def test_value_only_in_assistant_turn_is_dropped():
-    r = req(("user", "帮我查下天气"), ("assistant", "好的，费天翔，杭州今天晴。"))
-    text = MemoryWriter._basic_info_user_text(r)
-    assert filter_basic_info_by_user_text(
-        {"name": "费天翔", "location": "杭州"}, text
-    ) == {}
-
-
-def test_no_user_messages_drops_basic_info():
-    r = req(("assistant", "我叫费天翔，常住杭州"))
-    assert MemoryWriter._basic_info_user_text(r) == ""
-    assert filter_basic_info_by_user_text({"name": "费天翔"}, "") == {}
 
 
 # ── 验收 3：用户自报姓名 ──
 
 def test_user_states_name():
+    # [user]: 我叫费天翔，常住杭州，做 AI 基础设施。
     store = FakeStore()
-    r = req(("user", "我叫费天翔，常住杭州，做 AI 基础设施。"))
-    res = write_basic_info(store, r, {
+    res = write_basic_info(store, {
         "name": "费天翔", "location": "杭州", "occupation": "AI 基础设施从业者",
     })
     assert res.success and res.created
@@ -139,42 +107,14 @@ def test_user_states_name():
     }
 
 
-def test_user_message_name_attribute_counts_as_user_text():
-    r = WriteRequest(
-        messages=[ChatMessage(role="user", name="Tim", content="What's up?")],
-        user_id="u1",
-    )
-    text = MemoryWriter._basic_info_user_text(r)
-    assert filter_basic_info_by_user_text({"name": "Tim"}, text) == {"name": "Tim"}
-
-
-def test_plain_text_add_is_user_text():
-    r = WriteRequest(content="I'm Fei Tianxiang, 35, living in Hangzhou.", user_id="u1")
-    text = MemoryWriter._basic_info_user_text(r)
-    assert filter_basic_info_by_user_text(
-        {"name": "fei  tianxiang", "age": 35, "location": "Hangzhou"}, text
-    ) == {"name": "fei  tianxiang", "age": 35, "location": "Hangzhou"}
-
-
-def test_strict_fields_require_containment_loose_fields_allow_rewording():
-    text = "我叫费天翔，常住杭州，做 AI 基础设施。"
-    assert value_in_user_text("name", "费天翔", text)
-    assert not value_in_user_text("location", "Hangzhou", text)
-    assert value_in_user_text("occupation", "AI 基础设施从业者", text)
-    assert not value_in_user_text("occupation", "软件工程师", text)
-
-
 # ── 验收 4：已有真实值不被后续占位符覆盖 ──
 
 def test_existing_name_not_overwritten_by_placeholder():
     store = FakeStore()
-    write_basic_info(store, req(("user", "我叫费天翔")), {"name": "费天翔"})
+    write_basic_info(store, {"name": "费天翔"})
     assert len(l0_versions(store)) == 1
     for kv in ({"name": "用户"}, {"name": "The user."}, {"name": "N/A"}):
-        res = asyncio.run(upsert_basic_profile(
-            user_id="u1", kv=kv, vector_store=store,
-            embed_service=FakeEmbed(), allowed_fields=FIELDS,
-        ))
+        res = write_basic_info(store, kv)
         assert not res.changed
     assert len(l0_versions(store)) == 1
     assert _assemble_full_kv_from_nodes(list(store.nodes)) == {"name": "费天翔"}
@@ -182,10 +122,7 @@ def test_existing_name_not_overwritten_by_placeholder():
 
 def test_mixed_kv_keeps_real_fields_and_drops_placeholders():
     store = FakeStore()
-    res = asyncio.run(upsert_basic_profile(
-        user_id="u1", kv={"name": "用户", "location": "杭州"}, vector_store=store,
-        embed_service=FakeEmbed(), allowed_fields=FIELDS,
-    ))
+    res = write_basic_info(store, {"name": "用户", "location": "杭州"})
     assert res.diff_kv == {"location": "杭州"}
 
 

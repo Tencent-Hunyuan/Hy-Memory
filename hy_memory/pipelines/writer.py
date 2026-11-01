@@ -41,10 +41,7 @@ from ..core.workload import (
 )
 from ..agent.mem_agent import MemAgent, ProcessMode
 from ..agent.reconciler import MemoryReconciler
-from ..agent.tools.basic_profile import (
-    filter_basic_info_by_user_text,
-    upsert_basic_profile,
-)
+from ..agent.tools.basic_profile import upsert_basic_profile
 from ..models.memory import MemoryNode, MemoryLayer, MemoryStatus, SourceType
 from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
@@ -3308,20 +3305,6 @@ class MemoryWriter(WritePipeline):
         tool_calls_raw = None  # v0.1.5.13+ 不再有真实 LLM tool_calls；保留字段做兼容
         tool_results_summary: List[Dict[str, Any]] = []
 
-        # 来源守卫：basic_info 只认 user 回合。值不在任何 user 消息里的字段
-        # （例如 assistant 引用旧占位记忆 "The user's name is 用户."）一律丢弃；
-        # 有 messages 但没有 user 消息时整份丢弃。纯文本 add（无 messages）的
-        # content 即调用方给出的用户原文，按 user 回合处理。
-        if isinstance(basic_info_raw, dict) and basic_info_raw:
-            _user_text = self._basic_info_user_text(request)
-            _kept = filter_basic_info_by_user_text(basic_info_raw, _user_text)
-            if len(_kept) != len(basic_info_raw):
-                logger.info(
-                    f"[write] basic_info dropped fields not stated in user turns: "
-                    f"{sorted(set(basic_info_raw) - set(_kept))}"
-                )
-            basic_info_raw = _kept
-
         if isinstance(basic_info_raw, dict) and basic_info_raw:
             try:
                 _bp_result = await upsert_basic_profile(
@@ -3596,27 +3579,6 @@ class MemoryWriter(WritePipeline):
             "llm_completion_tokens": getattr(_er, "completion_tokens", 0) or 0,
             "llm_total_tokens": getattr(_er, "tokens_used", 0) or 0,
         }
-
-    @staticmethod
-    def _basic_info_user_text(request) -> str:
-        """basic_info 来源校验用的 user 原文。
-
-        - 有 messages：只取 role=user 的 content 与 user 自带的 ``name``（name 是
-          basic_info.name 的权威来源）；没有 user 消息时返回空串（整份丢弃）。
-        - 无 messages（纯文本 add）：content 本身就是用户原文。
-        """
-        messages = getattr(request, "messages", None) or []
-        if not messages:
-            return str(getattr(request, "content", "") or "")
-        parts: List[str] = []
-        for m in messages:
-            if getattr(m, "role", None) != "user":
-                continue
-            name = getattr(m, "name", None)
-            if name:
-                parts.append(str(name))
-            parts.append(str(getattr(m, "content", "") or ""))
-        return "\n".join(parts)
 
     @staticmethod
     def _mark_agent_failure(
