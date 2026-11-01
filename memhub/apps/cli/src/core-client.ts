@@ -19,6 +19,7 @@ const READ_ONLY_PATHS = [
   "/api/v2/user-profile",
   "/api/v2/user-profile/versions",
   "/api/v1/settings/memory-mode",
+  "/api/v1/settings/memory-features",
   "/api/v2/evolve",
 ] as const;
 /** One evolve run's receipt (`memhub evolve --wait`). */

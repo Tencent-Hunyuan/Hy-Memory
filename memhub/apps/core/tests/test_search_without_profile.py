@@ -140,7 +140,9 @@ class _Recorder:
         self.opened: list[tuple[str, int | None, str | None]] = []
         self.closed: list[str] = []
 
-    def __call__(self, profile, *, api_key, data_dir, http_transport_factory=None, mode="pro"):
+    def __call__(
+        self, profile, *, api_key, data_dir, http_transport_factory=None, mode="pro", features=()
+    ):
         from one_memory.hy_sdk_runtime import build_sdk_config
 
         config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir)

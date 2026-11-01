@@ -29,6 +29,8 @@ const GRAPH_WIDTH_PATH = "/api/v1/graph-width";
 /** `memhub evolve` starts a run; `memhub settings mode <m> --yes` sets the mode. */
 const EVOLVE_PATH = "/api/v2/evolve";
 const MEMORY_MODE_PATH = "/api/v1/settings/memory-mode";
+/** `memhub settings features set|reset` sets the SDK features. */
+const MEMORY_FEATURES_PATH = "/api/v1/settings/memory-features";
 const ONBOARDING_COMPLETE_PATH = "/api/v1/onboarding/complete";
 const MAX_BYTES = 4 * 1024 * 1024;
 
@@ -138,6 +140,7 @@ export function createCoreOperations(attachment: {
     ) {
       if (
         path !== MEMORY_MODE_PATH &&
+        path !== MEMORY_FEATURES_PATH &&
         (!SDK_MEMORY_PATH.test(path) || path.includes("?"))
       ) {
         throw new Error("core_operation_path_not_allowed");

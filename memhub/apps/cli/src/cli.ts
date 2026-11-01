@@ -189,6 +189,13 @@ import {
   rollbackManagedCliLink,
 } from "./managed-cli-link.js";
 import {
+  type FeaturesDocument,
+  featuresExitCode,
+  parseFeaturesCommand,
+  renderFeaturesText,
+  runFeaturesCommand,
+} from "./memory-features-flow.js";
+import {
   type EvolveDocument,
   evolveExitCode,
   type ModeDocument,
@@ -2241,6 +2248,40 @@ async function runCommand(
             : `操作失败：${outcome.code}\n`,
     );
     return outcome.state === "committed" ? EXIT_OK : EXIT_FAILED;
+  }
+  if (
+    named === "settings" &&
+    arguments_.slice(1).find((value) => value !== "--json") === "features"
+  ) {
+    const parsed = parseFeaturesCommand(
+      arguments_
+        .slice(1)
+        .filter((value, index, all) => index !== all.indexOf("features")),
+    );
+    if (!parsed) return usage();
+    const connected = await connectRuntime(environment);
+    if (!connected.ok) {
+      const document: FeaturesDocument = {
+        schema_version: 1,
+        product: PRODUCT,
+        command: "settings features",
+        state: "unavailable",
+        code: connected.code,
+      };
+      emit(
+        asJson ? `${JSON.stringify(document)}\n` : renderFeaturesText(document),
+      );
+      return connected.exitCode;
+    }
+    const document = await runFeaturesCommand(
+      parsed,
+      connected.reader,
+      connected.operations,
+    );
+    emit(
+      asJson ? `${JSON.stringify(document)}\n` : renderFeaturesText(document),
+    );
+    return featuresExitCode(document);
   }
   if (named === "settings") {
     const parsed = parseSettingsCommand(arguments_.slice(1));

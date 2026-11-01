@@ -104,6 +104,7 @@ from one_memory.hy_sdk_runtime import (
     close_all_shared_runtimes,
     hold_stores_offline,
     release_stores,
+    sdk_feature_defaults,
     sdk_relevance_floor,
 )
 from one_memory.hy_sdk_types import (
@@ -191,6 +192,18 @@ from one_memory.memory_evolution import (
     GraphBuildState,
     MemoryGraphBackfill,
     UserEvolveState,
+)
+from one_memory.memory_features import (
+    FEATURES,
+    FeatureCost,
+    FeatureOverrides,
+    FeatureReason,
+    FeatureSide,
+    MemoryFeatureName,
+    MemoryFeatures,
+    effective_features,
+    feature_activity,
+    non_default_features,
 )
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
@@ -732,6 +745,52 @@ class PipelineStatus(BaseModel):
     #: Newest finished run across users, for a one-line status.
     last_evolve_at: datetime | None = None
     graph_build: GraphBuildState
+    #: The SDK features (`memory_features`) whose value differs from the SDK
+    #: default; empty while every feature is at its default.
+    features: dict[MemoryFeatureName, bool] = Field(default_factory=dict)
+
+
+class MemoryFeatureState(BaseModel):
+    """One feature in `GET /api/v1/settings/memory-features`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: MemoryFeatureName
+    #: What clients are built with: `configured`, else `default`.
+    enabled: bool
+    #: What a person set; null = not set, the SDK default applies.
+    configured: bool | None
+    #: The SDK default (its code default, or its own env var when set).
+    default: bool
+    #: Whether it acts in the current mode; `reason` says why not.
+    active: bool
+    reason: FeatureReason | None
+    side: FeatureSide
+    requires_mode: Literal["pro", "ultra"]
+    requires_feature: MemoryFeatureName | None
+    cost: FeatureCost
+    #: The `MemoryConfig` field it sets, and the SDK's own env var for it.
+    sdk_field: str
+    env: str
+    description: str
+
+
+class MemoryFeaturesState(BaseModel):
+    """`GET /api/v1/settings/memory-features`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: MemoryMode
+    features: tuple[MemoryFeatureState, ...]
+    #: Same as `pipeline.features`: the values that differ from the defaults.
+    non_default: dict[MemoryFeatureName, bool]
+
+
+class MemoryFeaturesChange(MemoryFeaturesState):
+    """`PUT /api/v1/settings/memory-features`: the new state and what changed."""
+
+    #: Features whose value changed; empty = nothing rebuilt.
+    changed: tuple[MemoryFeatureName, ...] = ()
 
 
 def memory_mode_effects(
@@ -1220,6 +1279,7 @@ def create_app(
                 ),
                 sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
                 memory_mode=lambda: _memory_mode(app),
+                memory_features=lambda: _memory_features(app),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -4297,6 +4357,58 @@ def create_app(
         )
 
     @app.get(
+        "/api/v1/settings/memory-features",
+        response_model=MemoryFeaturesState,
+        dependencies=strict,
+    )
+    def get_memory_features() -> MemoryFeaturesState:
+        """The SDK retrieval and extraction features: value, default, active in this mode."""
+        return _memory_features_state(app)
+
+    @app.put(
+        "/api/v1/settings/memory-features",
+        response_model=MemoryFeaturesChange,
+        dependencies=strict,
+    )
+    async def put_memory_features(request: MemoryFeatures) -> MemoryFeaturesChange:
+        """Turn SDK features on or off; one global setting, not per user.
+
+        A key sets that feature, null resets it to the SDK default, an absent
+        key is left as it is; an unknown key or a non-boolean is 422. A
+        change rebuilds the SDK clients like a mode change: a write in flight
+        finishes with the old features, the next job and search use the new
+        ones. Nothing stored is migrated and no collection is renamed. See
+        docs/contracts/memory-features-v1.md.
+        """
+        store = _config_store(app)
+        async with app.state.memory_mode_lock:
+            defaults = await asyncio.to_thread(sdk_feature_defaults)
+            previous = _memory_features(app)
+            updated = store.memory_features().merged(request)
+            if updated != store.memory_features():
+                await asyncio.to_thread(store.set_memory_features, updated)
+            current = _memory_features(app)
+            before = effective_features(previous, defaults)
+            after = effective_features(current, defaults)
+            changed = tuple(spec.name for spec in FEATURES if before[spec.name] != after[spec.name])
+            if current != previous:
+                # Even a reset to the default value rebuilds: the client then
+                # carries no override at all, byte for byte the default config.
+                await app.state.sdk_write_coordinator.retire_stale_handles()
+                # Reads rebuild on their next request (`ActiveProfileReadHandle`).
+                diagnostic_event(
+                    level="info",
+                    component="memory.features",
+                    event="memory_features.changed",
+                    outcome="succeeded",
+                    details={"changed": list(changed), "set": [name for name, _ in current]},
+                )
+        return MemoryFeaturesChange(
+            **_memory_features_state(app, defaults).model_dump(),
+            changed=changed,
+        )
+
+    @app.get(
         "/api/v1/settings/evolve-schedule",
         response_model=EvolveSchedule,
         dependencies=strict,
@@ -5648,13 +5760,14 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
     handle = cast(SdkClientHandle | None, app.state.sdk_client_handle)
     if handle is None:
         # Reads open the embedding space writes fill: the active profile's,
-        # the built-in one only when none is active (#242). A profile or a
-        # memory-mode change rebuilds the client.
+        # the built-in one only when none is active (#242). A profile, a
+        # memory-mode or a feature change rebuilds the client.
         handle = ActiveProfileReadHandle(
             profiles=_model_profile_store(app),
             secrets=_secret_store(app),
             data_dir=cast(Settings, app.state.settings).data_dir,
             memory_mode=lambda: _memory_mode(app),
+            features=lambda: _memory_features(app),
         )
         app.state.sdk_client_handle = handle
     return handle
@@ -5691,6 +5804,47 @@ def _evolve_overview(app: FastAPI) -> EvolveOverview:
     )
 
 
+def _memory_features(app: FastAPI) -> FeatureOverrides:
+    """The SDK features a person set, as the key every SDK client is built with."""
+    store = getattr(app.state, "config_store", None)
+    return store.memory_features().overrides() if store is not None else ()
+
+
+def _memory_features_state(
+    app: FastAPI, defaults: dict[str, bool] | None = None
+) -> MemoryFeaturesState:
+    defaults = sdk_feature_defaults() if defaults is None else defaults
+    overrides = _memory_features(app)
+    configured = dict(overrides)
+    effective = effective_features(overrides, defaults)
+    mode = _memory_mode(app)
+    features = []
+    for spec in FEATURES:
+        reason = feature_activity(spec.name, effective, mode)
+        features.append(
+            MemoryFeatureState(
+                name=spec.name,
+                enabled=effective[spec.name],
+                configured=configured.get(spec.name),
+                default=defaults[spec.name],
+                active=reason is None,
+                reason=reason,
+                side=spec.side,
+                requires_mode=spec.requires_mode,
+                requires_feature=spec.requires_feature,
+                cost=spec.cost,
+                sdk_field=spec.sdk_field,
+                env=spec.env,
+                description=spec.description,
+            )
+        )
+    return MemoryFeaturesState(
+        mode=mode,
+        features=tuple(features),
+        non_default=cast(dict[MemoryFeatureName, bool], non_default_features(overrides, defaults)),
+    )
+
+
 def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
     """R10's `pipeline`, or None before the evolve state exists (legacy tests)."""
     if getattr(app.state, "evolve_state_store", None) is None:
@@ -5707,6 +5861,10 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
         evolve=overview,
         last_evolve_at=max(finished, default=None),
         graph_build=state.graph_build,
+        features=cast(
+            dict[MemoryFeatureName, bool],
+            non_default_features(_memory_features(app), sdk_feature_defaults()),
+        ),
     )
 
 

@@ -13,6 +13,7 @@ from one_memory.hy_graph_admin import effective_memory_mode
 from one_memory.hy_sdk_runtime import SdkClientHandle, builtin_retrieval_snapshot
 from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.input_sanitization import sanitize_model_input
+from one_memory.memory_features import FeatureOverrides
 from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
@@ -146,8 +147,9 @@ class SdkWriteCoordinator:
     the SharedRuntime closed mid-`add`, the job failed with AttributeError
     after HY was invoked, and it was left `unknown`.
 
-    Handles are keyed by profile and memory mode, so a mode change retires
-    handles the same way. In lite no generation model is needed: without an
+    Handles are keyed by profile, memory mode and the SDK features
+    (`memory_features`), so a mode or feature change retires handles the same
+    way. In lite no generation model is needed: without an
     active profile the built-in local embedder writes raw turns.
 
     `exclusive_for_evolve(user_id)` keeps evolve and that user's writes
@@ -165,6 +167,7 @@ class SdkWriteCoordinator:
         transport_factory: Callable[[ModelProfileSnapshot], Callable[[], Any] | None],
         sedimentation_enabled: Callable[[], bool],
         memory_mode: Callable[[], str] = effective_memory_mode,
+        memory_features: Callable[[], FeatureOverrides] = lambda: (),
     ) -> None:
         self.profiles = profiles
         self.secrets = secrets
@@ -172,7 +175,8 @@ class SdkWriteCoordinator:
         self.transport_factory = transport_factory
         self.sedimentation_enabled = sedimentation_enabled
         self.memory_mode = memory_mode
-        self._handles: dict[tuple[str, int, str], SdkClientHandle] = {}
+        self.memory_features = memory_features
+        self._handles: dict[tuple[str, int, str, FeatureOverrides], SdkClientHandle] = {}
         #: Users evolve (or the graph backfill) is running for, the writes in
         #: flight per user, and one exclusive run per user at a time. Writes
         #: of one user still run side by side; only evolve waits for them.
@@ -217,21 +221,25 @@ class SdkWriteCoordinator:
             async with self._writes_idle:
                 self._writes_idle.notify_all()
 
-    async def retire_stale_modes(self) -> None:
-        """After a mode change: retire handles of other modes, closing the idle ones.
+    async def retire_stale_handles(self) -> None:
+        """After a mode or feature change: retire handles built otherwise.
 
-        A handle still writing is closed when its last use ends (#218), so a
-        write that started in the old mode finishes in it.
+        The idle ones close now. A handle still writing is closed when its
+        last use ends (#218), so a write that started in the old mode, or
+        with the old features, finishes in it.
         """
-        mode = self.memory_mode()
+        build = (self.memory_mode(), self.memory_features())
         async with self._lock:
-            stale = {key: handle for key, handle in self._handles.items() if key[2] != mode}
+            stale = {key: handle for key, handle in self._handles.items() if key[2:] != build}
             for key in stale:
                 del self._handles[key]
             self._retired.update(stale.values())
             unused = {value for value in self._retired if not self._uses.get(value)}
             self._retired -= unused
         await asyncio.gather(*(value.close() for value in unused))
+
+    #: The name #253 introduced; a mode change is one kind of rebuild.
+    retire_stale_modes = retire_stale_handles
 
     def evolving(self, user_id: str) -> bool:
         """Whether evolve holds this user, so their queued writes should wait."""
@@ -280,10 +288,11 @@ class SdkWriteCoordinator:
     async def _active_handle(self) -> AsyncIterator[SdkClientHandle]:
         """Use the active profile's handle; retire the others, closing the unused."""
         mode = self.memory_mode()
+        features = self.memory_features()
         profile_identity, profile, secret = await asyncio.to_thread(
             self._read_active_credentials, mode
         )
-        identity = (*profile_identity, mode)
+        identity = (*profile_identity, mode, features)
         async with self._lock:
             handle = self._handles.get(identity)
             if handle is None:
@@ -293,6 +302,7 @@ class SdkWriteCoordinator:
                     data_dir=self.data_dir,
                     http_transport_factory=self.transport_factory(profile),
                     mode=mode,
+                    features=features,
                 )
                 self._handles[identity] = handle
             self._retired.update(value for key, value in self._handles.items() if key != identity)

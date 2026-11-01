@@ -83,6 +83,8 @@ export interface PipelineSummary {
     }
   >;
   graph_build: string | null;
+  /** SDK features (`memory_features`) whose value differs from the default. */
+  features: Record<string, boolean>;
 }
 
 const MODES = new Set(["lite", "pro", "ultra"]);
@@ -127,6 +129,14 @@ export function describePipeline(value: unknown): PipelineSummary | null {
       };
     }
   }
+  const features: Record<string, boolean> = {};
+  if (item.features && typeof item.features === "object") {
+    for (const [name, value] of Object.entries(
+      item.features as Record<string, unknown>,
+    )) {
+      if (typeof value === "boolean") features[name] = value;
+    }
+  }
   const graph =
     item.graph_build && typeof item.graph_build === "object"
       ? (item.graph_build as Record<string, unknown>)
@@ -146,6 +156,7 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     evolve_running: Array.isArray(evolve.running) ? evolve.running.length : 0,
     evolve_users: users,
     graph_build: typeof graph.state === "string" ? graph.state : null,
+    features,
   };
 }
 
@@ -328,6 +339,14 @@ export function pipelineLine(pipeline: PipelineSummary): string {
     );
     if (pipeline.evolve_running > 0)
       parts.push(`，进行中 ${pipeline.evolve_running}`);
+  }
+  const changed = Object.entries(pipeline.features);
+  if (changed.length > 0) {
+    parts.push(
+      `；SDK 功能：${changed
+        .map(([name, value]) => `${name}=${value ? "开" : "关"}`)
+        .join("、")}`,
+    );
   }
   return parts.join("");
 }

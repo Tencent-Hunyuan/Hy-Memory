@@ -108,7 +108,7 @@ def test_the_read_handle_rebuilds_on_a_mode_or_profile_change(monkeypatch, tmp_p
     modes = ["pro"]
     made: list[_FakeHandle] = []
 
-    def handle_for(profile, *, api_key, data_dir, mode=None):
+    def handle_for(profile, *, api_key, data_dir, mode=None, features=()):
         handle = _FakeHandle(mode or "pro", profile.profile_id)
         made.append(handle)
         return handle

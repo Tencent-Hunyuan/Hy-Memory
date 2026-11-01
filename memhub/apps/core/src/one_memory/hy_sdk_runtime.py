@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import os
 import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
@@ -37,6 +37,12 @@ from one_memory.hy_graph_admin import (
 from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.local_embedding import LocalEmbedder
 from one_memory.log_file import confine_hy_sdk_logging
+from one_memory.memory_features import (
+    FEATURES,
+    FEATURES_BY_NAME,
+    FeatureOverrides,
+    feature_overrides,
+)
 from one_memory.model_profiles import (
     ModelProfileSnapshot,
     ProviderKind,
@@ -171,6 +177,7 @@ class SdkClientHandle:
         data_dir: Path,
         http_transport_factory: Callable[[], Any] | None = None,
         mode: str | None = None,
+        features: FeatureOverrides = (),
     ) -> None:
         self._profile = profile
         self._api_key = api_key
@@ -178,6 +185,8 @@ class SdkClientHandle:
         self._http_transport_factory = http_transport_factory
         #: The SDK mode this handle's client is built with, fixed for its life.
         self.mode = mode or effective_memory_mode()
+        #: The SDK features set on its config (`memory_features`), fixed likewise.
+        self.features = features
         self._lease: ClientLease | None = None
         self._lock = asyncio.Lock()
 
@@ -193,6 +202,7 @@ class SdkClientHandle:
                     data_dir=self._data_dir,
                     http_transport_factory=self._http_transport_factory,
                     mode=self.mode,
+                    features=self.features,
                 )
             return self._lease.client
 
@@ -259,13 +269,48 @@ def sdk_relevance_floor() -> float:
     return min(1.0, max(0.0, value))
 
 
+def sdk_feature_defaults() -> dict[str, bool]:
+    """Each `memory_features` feature's SDK default, as a fresh config has it.
+
+    That is the SDK's code default unless the process environment sets the
+    SDK's own variable (`FeatureSpec.env`), exactly what an unset feature
+    leaves on a client.
+    """
+    config = MemoryConfig()
+    return {
+        spec.name: bool(getattr(getattr(config, spec.section), spec.field)) for spec in FEATURES
+    }
+
+
+def apply_sdk_features(
+    config: MemoryConfig, features: Mapping[str, bool] | Iterable[tuple[str, bool]]
+) -> MemoryConfig:
+    """Set each feature a person chose on its `MemoryConfig` field.
+
+    Every exposed feature is a config field the SDK reads from the config at
+    call time, never from `os.environ`, so this is per client and
+    deterministic. Nothing here touches `vector_store`, so the collection
+    identity never depends on a feature.
+    """
+    values = dict(features.items() if isinstance(features, Mapping) else features)
+    for name, value in feature_overrides(values):
+        spec = FEATURES_BY_NAME[name]
+        setattr(getattr(config, spec.section), spec.field, value)
+    return config
+
+
 def build_sdk_config(
     profile: ModelProfileSnapshot,
     *,
     api_key: str | None,
     data_dir: Path,
+    features: Mapping[str, bool] | Iterable[tuple[str, bool]] = (),
 ) -> MemoryConfig:
-    """Map a model snapshot to SDK models, endpoints, backends, and local paths."""
+    """Map a model snapshot to SDK models, endpoints, backends, and local paths.
+
+    `features` (`memory_features`) are set on top; with none the config is
+    exactly what it was before the setting existed.
+    """
     generation_endpoint, generation_key = _generation_access(profile, api_key)
     embedding_provider = profile.embedding_provider_kind or profile.provider_kind
     embedding_service_is_local = embedding_provider is ProviderKind.LOCAL_ONNX
@@ -311,7 +356,7 @@ def build_sdk_config(
     if thinking_off:
         llm["extra_body"] = thinking_off
 
-    return MemoryConfig.from_dict(
+    config = MemoryConfig.from_dict(
         {
             "llm": llm,
             "embedder": {
@@ -348,6 +393,7 @@ def build_sdk_config(
             "coding": {"db_path": str(root / "coding.sqlite3")},
         }
     )
+    return apply_sdk_features(config, features)
 
 
 def acquire_client(
@@ -357,11 +403,14 @@ def acquire_client(
     data_dir: Path,
     http_transport_factory: Callable[[], Any] | None = None,
     mode: str | None = None,
+    features: FeatureOverrides = (),
 ) -> ClientLease:
     """Construct a public SDK client and return its explicit runtime lease.
 
     `mode` is the SDK pipeline mode (lite / pro / ultra); None keeps the
     pre-setting default (ultra when `ONE_MEMORY_GRAPH_STORE` is set, else pro).
+    `features` are the `memory_features` set on its config; none keeps every
+    SDK default.
     Waits while `hold_stores_offline` holds this home's stores.
     """
     key = data_dir.resolve()
@@ -376,6 +425,7 @@ def acquire_client(
             data_dir=data_dir,
             http_transport_factory=http_transport_factory,
             mode=mode or effective_memory_mode(),
+            features=features,
         )
     finally:
         with _STORE_GATE:
@@ -415,8 +465,9 @@ def _acquire_client(
     data_dir: Path,
     http_transport_factory: Callable[[], Any] | None,
     mode: str = "pro",
+    features: FeatureOverrides = (),
 ) -> ClientLease:
-    config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir)
+    config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir, features=features)
     config.http_transport_factory = http_transport_factory
     mismatch = inspect_graph_width_mismatch(config)
     if mismatch is not None:
