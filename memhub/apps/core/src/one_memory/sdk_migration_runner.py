@@ -259,6 +259,7 @@ def prepare_legacy_write_queue_for_cutover(database_path: Path) -> tuple[int, in
         internal_session_id = internal_session_id_for(
             source.conversation_id,
             source.source_id,
+            source.user_id,
         )
         queue.submit(
             WriteRequest(

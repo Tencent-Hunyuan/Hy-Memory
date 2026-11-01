@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import unicodedata
 import uuid
 import weakref
 from dataclasses import dataclass
@@ -209,6 +211,76 @@ def _sanitize_kv(
 
 
 # ================================================================
+# 占位符守卫（P0-1）
+# ================================================================
+# 弱模型（如 qwen3.5-2b）在用户什么都没说时，会把 schema 字段说明里的词当值
+# 填进 basic_info：{"name": "用户"} / "The user" / "N/A"。每个占位符都会
+# supersede 掉真实值，演化链变成 费天翔 → Fei → 用户 → The user。
+# 规则：占位符永远不入库；读侧组装 KV 时占位符也不覆盖已有真实值。
+
+_PLACEHOLDER_VALUES = frozenset({
+    "用户", "该用户", "本用户", "用户本人",
+    "the user", "the user's", "user", "a user", "this user",
+    "n/a", "na", "none", "null", "nil", "unknown", "unspecified",
+    "not provided", "not specified", "not mentioned",
+    "未提供", "未知", "不详", "未说明", "未提及", "无",
+    "-", "?",
+})
+
+# 内置字段的中文标签：弱模型也会把字段说明的中文词当值。
+_FIELD_LABELS: Dict[str, tuple] = {
+    "name": ("姓名", "名字", "用户名", "用户姓名", "用户名字"),
+    "age": ("年龄", "用户年龄"),
+    "location": ("所在地", "地点", "城市", "用户所在地"),
+    "occupation": ("职业", "工作", "用户职业"),
+    "employer": ("雇主", "公司", "用户雇主"),
+}
+
+# 去掉标点/符号后再比较，让 "The user." / "用户。" / "N/A" 都命中。
+# "-" / "?" 本身就是纯标点，剥完为空串，同样判为占位符。
+_PUNCT_RE = re.compile(r"[\s\.,;:!?'\"`~()\[\]{}<>/\\|_\-\u3000-\u303f\uff00-\uff0f\uff1a-\uff20]+")
+
+
+def _placeholder_key(value: str) -> str:
+    s = unicodedata.normalize("NFKC", str(value or "")).strip().lower()
+    s = s.replace("\u2019", "'")
+    s = _PUNCT_RE.sub(" ", s)
+    return " ".join(s.split())
+
+
+_PLACEHOLDER_KEYS = frozenset(_placeholder_key(v) for v in _PLACEHOLDER_VALUES)
+
+
+def is_placeholder_value(field_name: str, value: Any) -> bool:
+    """value 是否为占位符（空 / 用户 / The user / N/A / 字段名本身 等）。
+
+    大小写不敏感、首尾空白与标点不敏感。数字（如 age=30）永远不是占位符。
+    """
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return False
+    key = _placeholder_key(value)
+    if not key:
+        return True
+    if key in _PLACEHOLDER_KEYS:
+        return True
+    field_key = _placeholder_key(field_name)
+    if field_key and key in (field_key, field_key.replace("_", " ")):
+        return True
+    for label in _FIELD_LABELS.get(field_name, ()):
+        if key == _placeholder_key(label):
+            return True
+    return False
+
+
+def _drop_placeholders(kv: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in kv.items() if not is_placeholder_value(k, v)}
+
+
+# ================================================================
 # 公共入口：upsert_basic_profile
 # ================================================================
 
@@ -287,6 +359,8 @@ async def _upsert_basic_profile_unlocked(
     # L0 Basic Info 从输入、唯一性到落盘都只属于 user_id。
 
     new_kv = _sanitize_kv(kv or {}, allowed_fields=allowed_fields)
+    # 单调性守卫：占位符永远不覆盖已有值，过滤后为空就不写新版本、不产生新链头。
+    new_kv = _drop_placeholders(new_kv)
     if not new_kv:
         return BasicProfileUpsertResult(
             success=True, changed=False, reason="no valid fields after sanitize"
@@ -512,6 +586,9 @@ def _assemble_full_kv_from_nodes(
             continue
         for k, v in kv.items():
             if allowed_set is not None and k not in allowed_set:
+                continue
+            # 历史上已落盘的占位符版本（如 name=用户）不覆盖更早的真实值。
+            if is_placeholder_value(k, v):
                 continue
             full_kv[k] = v
     return full_kv

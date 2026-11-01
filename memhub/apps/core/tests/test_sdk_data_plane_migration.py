@@ -1353,7 +1353,7 @@ def test_the_sdk_memory_map_draws_sdk_memories_without_legacy_tables(tmp_path) -
             original = app.state.sdk_client_handle
             app.state.sdk_client_handle = Handle()
 
-            async def graph_snapshot(*, limit):
+            async def graph_snapshot(*, limit, user_id="local"):
                 del limit
                 return HyGraphSnapshot(
                     nodes=(HyGraphNode(node_id="t1", content="topic", layer="TOPIC"),),

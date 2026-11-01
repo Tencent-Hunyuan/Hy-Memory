@@ -28,6 +28,7 @@ from one_memory.memory_server.contracts import (
     internal_session_id_for,
 )
 from one_memory.memory_server.durable_queue import DurableWriteQueue, DurableWriteRecord
+from one_memory.user_scope import lane_key
 
 WritePriority = Literal["live", "normal"]
 
@@ -74,7 +75,7 @@ class UnifiedWriteIntake:
         if priority not in {"live", "normal"}:
             raise ValueError("priority must be 'live' or 'normal'")
         if self.source_writes_permitted is not None and not self.source_writes_permitted(
-            record.source_id
+            lane_key(record.user_id, record.source_id)
         ):
             # Freeze is the product's one Harness processing decision. Refuse
             # new intake so a frozen source creates no new durable write row;
@@ -106,7 +107,9 @@ class UnifiedWriteIntake:
         last_round: int,
         priority: WritePriority,
     ) -> WriteRequest:
-        session_id = internal_session_id_for(record.conversation_id, record.source_id)
+        session_id = internal_session_id_for(
+            record.conversation_id, record.source_id, record.user_id
+        )
         event_at, time_quality = _job_time((record,))
         request_key = (
             f"entry:{record.evidence_id}"
@@ -145,14 +148,14 @@ class UnifiedWriteIntake:
         ):
             raise ValueError("records must belong to one conversation")
         if self.source_writes_permitted is not None and not self.source_writes_permitted(
-            first.source_id
+            lane_key(first.user_id, first.source_id)
         ):
             raise SourceWriteDisabledError(first.evidence_id)
         material = ":".join(
             f"{record.evidence_id}:{record.revision}:{record.content_hash}" for record in records
         )
         request_id = f"turn:v1:{sha256(material.encode()).hexdigest()}"
-        session_id = internal_session_id_for(first.conversation_id, first.source_id)
+        session_id = internal_session_id_for(first.conversation_id, first.source_id, first.user_id)
         event_at, time_quality = _job_time(records)
         durable = self.queue.submit(
             WriteRequest(

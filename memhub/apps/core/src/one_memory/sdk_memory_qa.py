@@ -32,6 +32,7 @@ from one_memory.model_profiles import (
     attach_disable_thinking,
 )
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
+from one_memory.user_scope import owns
 
 _NO_GROUNDING = "现有记忆不足以回答这个问题。"
 _GROUNDING_LIMIT = 6
@@ -117,7 +118,12 @@ class SdkMemoryAnswerer:
             if hit.memory_id in seen:
                 continue
             record = await _get_memory(client, hit.memory_id)
-            if record is None or record.status != "active" or not record.is_latest:
+            if (
+                record is None
+                or record.status != "active"
+                or not record.is_latest
+                or not owns(record.user_id, user_id)
+            ):
                 continue
             seen.add(record.memory_id)
             found.append(_wire_memory(record))

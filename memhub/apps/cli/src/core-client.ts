@@ -12,6 +12,7 @@ const READ_ONLY_PATHS = [
   "/api/v1/live-sync",
   "/api/v1/memory-processing",
   "/api/v1/model-profiles",
+  "/api/v1/source-grants",
   "/api/v1/sources",
   "/api/v2/home-summary",
   "/api/v2/memory-library",
@@ -310,6 +311,8 @@ export async function submitMemoryWrite(
     messages: readonly OpenAIMessage[];
     memory_at?: string;
     priority?: "live" | "normal";
+    /** Whose memory this is. Omitted for the default user (`local`). */
+    user_id?: string;
   },
 ): Promise<MemoryWriteOutcome> {
   let response: { status: number; data: unknown };
@@ -327,6 +330,9 @@ export async function submitMemoryWrite(
         ...(request.priority === undefined
           ? {}
           : { priority: request.priority }),
+        ...(request.user_id === undefined || request.user_id === "local"
+          ? {}
+          : { user_id: request.user_id }),
       },
       {
         headers: { Authorization: `Bearer ${attachment.apiToken}` },
@@ -469,11 +475,16 @@ export async function deleteModelProfile(
 export async function readMemoryWrite(
   attachment: RuntimeAttachmentLike,
   requestId: string,
+  /** A receipt belongs to the user that submitted it; omit for `local`. */
+  userId?: string,
 ): Promise<MemoryWriteReceipt | null> {
   try {
     const response = await axios.get<MemoryWriteReceipt>(
       `${baseUrlOf(attachment)}/api/v2/memory-writes/${encodeURIComponent(requestId)}`,
       {
+        ...(userId === undefined || userId === "local"
+          ? {}
+          : { params: { user_id: userId } }),
         headers: { Authorization: `Bearer ${attachment.apiToken}` },
         timeout: 10_000,
         proxy: false,

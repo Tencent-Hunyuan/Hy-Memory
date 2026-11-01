@@ -682,6 +682,23 @@ Output:
 ```
 John's occupation and location are HIS attributes, so they go into `memory` with "John" as the subject. They must NEVER land in `basic_info.occupation` / `basic_info.location` — `basic_info` is exclusively the user's own profile. Only `name` (Tim, from the user message's `name` field) belongs there.
 
+## Example 11 — Counter-example: small talk has no basic_info
+
+New Messages:
+[{"role": "user", "content": "Hi"},
+ {"role": "assistant", "content": "Hello! The user's name is The user. How can I help?"}]
+Memory Date: 2025-09-03
+
+Output:
+```json
+{
+  "memory": [],
+  "intentions": [],
+  "basic_info": {}
+}
+```
+The user stated nothing about themselves. The assistant's line is not a user turn, and "The user" is a placeholder, not a name. Output `{}` — never `{"name": "The user"}` or `{"name": "user"}`.
+
 ---
 """
 
@@ -749,6 +766,14 @@ Rules:
   fields (e.g. name, age, location, occupation, employer) **explicitly stated**
   in the NEW user messages. Never infer, never invent. If no field is explicitly
   stated, output `{{}}`.
+  * HARD RULE: fill a field ONLY if the user stated it in a `user` turn.
+    Anything said only by the assistant (including the assistant quoting an
+    earlier memory such as "The user's name is X") does NOT count. If nothing
+    qualifies, output `"basic_info": {{}}`.
+  * NEVER write the field name itself or a placeholder as a value ("user",
+    "The user", "用户", "name", "N/A", "unknown", "none", "-"). Omit the field.
+  * Negative example: small talk such as `[user]: Hi` / `[assistant]: How can
+    I help?`, or `[user]: Reply with exactly: PONG` → `"basic_info": {{}}`.
   * Exception for `name`: the `name` field on the user's own message, or a leading
     line "The user's name is X" / "用户名叫X", is an authoritative source for
     `name` — even though the user never said it out loud.
@@ -817,6 +842,14 @@ Rules:
   fields (e.g. name, age, location, occupation, employer) **explicitly stated**
   in the NEW user messages. Never infer, never invent. If no field is explicitly
   stated, output `{{}}`.
+  * HARD RULE: fill a field ONLY if the user stated it in a `user` turn.
+    Anything said only by the assistant (including the assistant quoting an
+    earlier memory such as "The user's name is X") does NOT count. If nothing
+    qualifies, output `"basic_info": {{}}`.
+  * NEVER write the field name itself or a placeholder as a value ("user",
+    "The user", "用户", "name", "N/A", "unknown", "none", "-"). Omit the field.
+  * Negative example: small talk such as `[user]: Hi` / `[assistant]: How can
+    I help?`, or `[user]: Reply with exactly: PONG` → `"basic_info": {{}}`.
   * Exception for `name`: the `name` field on the user's own message, or a leading
     line "The user's name is X" / "用户名叫X", is an authoritative source for
     `name` — even though the user never said it out loud.

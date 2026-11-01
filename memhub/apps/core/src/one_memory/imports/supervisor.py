@@ -24,6 +24,7 @@ from one_memory.service_levels import (
     ServiceLevelScheduler,
     ServiceResource,
 )
+from one_memory.user_scope import lane_key, split_lane
 
 
 class UnknownSourceError(KeyError):
@@ -82,11 +83,17 @@ class ImportSupervisor:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._drains: dict[str, asyncio.Task[None]] = {}
 
-    def register_adapter(self, adapter: SourceAdapter) -> None:
-        self.adapters[adapter.descriptor.source_id] = adapter
+    def register_adapter(self, adapter: SourceAdapter, *, user_id: str = "local") -> None:
+        """Adapters are keyed by lane: the source id for `local`, `source@user`
+        for another user's grant of the same source."""
+        self.adapters[lane_key(user_id, adapter.descriptor.source_id)] = adapter
 
     def unregister_adapter(self, source_id: str) -> None:
         self.adapters.pop(source_id, None)
+
+    @staticmethod
+    def lane_of(job: ImportJob) -> str:
+        return lane_key(job.user_id, job.source_id)
 
     def active_job_ids(self) -> frozenset[str]:
         return frozenset(job_id for job_id, task in self._tasks.items() if not task.done())
@@ -94,24 +101,27 @@ class ImportSupervisor:
     def create_job(
         self, source_id: str, *, operation: Literal["history", "sync"] = "history"
     ) -> ImportJob:
+        """`source_id` is a lane key: another user's lane creates that user's job."""
         if self.source_enabled is not None and not self.source_enabled(source_id):
             raise SourceAccessError(SourceAccessErrorCode.GRANT_REQUIRED)
-        return self.job_store.create(user_id="local", source_id=source_id, operation=operation)
+        user_id, bare_source_id = split_lane(source_id)
+        return self.job_store.create(user_id=user_id, source_id=bare_source_id, operation=operation)
 
     def enqueue(self, job_id: str) -> ImportJob:
         if job_id in self._drains:
             raise InvalidJobTransitionError("import_cleanup_in_progress")
         job = self.job_store.require(job_id)
-        if job.source_id not in self.adapters:
-            raise UnknownSourceError(job.source_id)
-        if self.source_enabled is not None and not self.source_enabled(job.source_id):
+        lane = self.lane_of(job)
+        if lane not in self.adapters:
+            raise UnknownSourceError(lane)
+        if self.source_enabled is not None and not self.source_enabled(lane):
             return job
         existing = self._tasks.get(job_id)
         if existing is None or existing.done():
             self._tasks[job_id] = asyncio.create_task(
                 self._execute(
                     job_id,
-                    source_id=job.source_id,
+                    source_id=lane,
                     operation=job.operation,
                 )
             )
@@ -130,8 +140,10 @@ class ImportSupervisor:
         # pending history. Each resumed runner will yield after one bounded slice.
         for status in (ImportStatus.INTERRUPTED, ImportStatus.PENDING):
             for job in self.job_store.list_jobs(status=status):
-                if job.source_id in self.adapters:
-                    if self.source_enabled is not None and not self.source_enabled(job.source_id):
+                if self.lane_of(job) in self.adapters:
+                    if self.source_enabled is not None and not self.source_enabled(
+                        self.lane_of(job)
+                    ):
                         continue
                     if job.status is not ImportStatus.PENDING:
                         self.job_store.queue_for_resume(job.job_id)
@@ -227,7 +239,7 @@ class ImportSupervisor:
                     }:
                         return
                     if self.source_enabled is not None and not await in_the_background(
-                        self.source_enabled, job.source_id
+                        self.source_enabled, self.lane_of(job)
                     ):
                         return
                     runner = ImportRunner(
@@ -238,7 +250,7 @@ class ImportSupervisor:
                         sdk_queue=self.sdk_queue,
                         sdk_authority=self.sdk_authority,
                     )
-                    adapter = self.adapters[job.source_id]
+                    adapter = self.adapters[self.lane_of(job)]
                     if self.prepare_adapter is not None:
                         adapter = await self.prepare_adapter(job, adapter)
 
@@ -273,7 +285,7 @@ class ImportSupervisor:
                 and retry_attempt < self.max_history_retries
                 and (
                     self.source_enabled is None
-                    or await in_the_background(self.source_enabled, current.source_id)
+                    or await in_the_background(self.source_enabled, self.lane_of(current))
                 )
             ):
                 delay = self.retry_base_seconds * (2**retry_attempt)

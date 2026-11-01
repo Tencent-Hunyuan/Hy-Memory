@@ -190,8 +190,10 @@ import {
 } from "./managed-cli-link.js";
 import {
   addMemory,
+  DEFAULT_USER_ID,
   isMemoryId,
   isRequestId,
+  isUserId,
   MEMORY_KINDS,
   MEMORY_SCENES,
   MEMORY_VARIANTS,
@@ -209,6 +211,7 @@ import {
   renderMemoryAddText,
   renderMemoryDetailText,
   renderMemoryPageText,
+  userIdParameters,
   validMemoryText,
 } from "./memory-report.js";
 import {
@@ -538,6 +541,23 @@ async function runCommand(
       environment = { ...environment, ONE_MEMORY_DATA_DIR: lifted.dataDir };
     }
   }
+  // `--user-id <id>` is global to the memory commands: it names whose
+  // memories are read or written. It is lifted before dispatch so each
+  // command's own parser keeps seeing exactly the arguments it always did.
+  // `sources connect` gives the flag its own meaning and parses it itself.
+  let userId: string | undefined;
+  if (USER_ID_COMMANDS.has(arguments_[0] ?? "")) {
+    const lifted = liftUserIdOption(arguments_);
+    if (lifted === null) {
+      return reject(
+        findCommand(arguments_[0] ?? ""),
+        asJson,
+        "--user-id 无效：只能是 1–64 位字母、数字、点、下划线或连字符。",
+      );
+    }
+    arguments_ = lifted.arguments_;
+    userId = lifted.userId;
+  }
   environment = await environmentWithManagedDataDir(environment);
   const command = arguments_[0];
   if (command === undefined) return reject(undefined, asJson, "缺少命令。");
@@ -776,9 +796,11 @@ async function runCommand(
     const attachment = await attachToRuntimeOrNull(environment);
     if (attachment === null) return runtimeUnavailable(descriptor, asJson);
     if (parsed.kind === "status") {
-      const receipt = await readMemoryWrite(attachment, parsed.id).catch(
-        () => undefined,
-      );
+      const receipt = await readMemoryWrite(
+        attachment,
+        parsed.id,
+        userId,
+      ).catch(() => undefined);
       if (receipt === undefined) {
         return emitFailure(asJson, "write status", "memory_write_read_failed");
       }
@@ -812,6 +834,7 @@ async function runCommand(
         ? {}
         : { memory_at: parsed.memory_at }),
       ...(parsed.priority === undefined ? {} : { priority: parsed.priority }),
+      ...(userId === undefined ? {} : { user_id: userId }),
     });
     if (outcome.state !== "accepted") {
       emit(
@@ -1585,6 +1608,7 @@ async function runCommand(
           limit: parsed.limit,
           character_budget: parsed.characterBudget,
           timeout_ms: parsed.timeoutMs,
+          ...userIdParameters(userId),
         })
       : ({
           schema_version: 2,
@@ -1783,6 +1807,16 @@ async function runCommand(
   }
   if (named === "sources" && arguments_[1] !== "list") {
     const parsed = parseSourcesCommand(arguments_.slice(1));
+    if (
+      !parsed &&
+      arguments_.some((item) => item === "--user-id" || item === "--root")
+    ) {
+      return reject(
+        descriptor,
+        asJson,
+        "--user-id 和 --root 只能用于接入单个 hermes 来源（Hermes profile），用户 ID 只能是 1–64 位字母、数字、点、下划线或连字符。",
+      );
+    }
     if (!parsed) return usage();
     if (parsed.kind === "receipt") {
       const connected = await connectRuntime(environment);
@@ -2007,7 +2041,11 @@ async function runCommand(
       );
       return connected.exitCode;
     }
-    const outcome = await connected.reader<unknown>("/api/v2/user-profile");
+    const profileUser = userIdParameters(userId);
+    const outcome =
+      profileUser.user_id === undefined
+        ? await connected.reader<unknown>("/api/v2/user-profile")
+        : await connected.reader<unknown>("/api/v2/user-profile", profileUser);
     const value =
       outcome.state === "ok"
         ? (outcome.data as {
@@ -2112,7 +2150,7 @@ async function runCommand(
     }
     const { reader, operations } = connected;
     if (parsed.kind === "list") {
-      const document = await readMemoryPage(reader, parsed.query);
+      const document = await readMemoryPage(reader, parsed.query, userId);
       emit(
         asJson
           ? `${JSON.stringify(document)}\n`
@@ -2125,6 +2163,7 @@ async function runCommand(
         reader,
         parsed.memoryId,
         parsed.namespace,
+        userId,
       );
       emit(
         asJson
@@ -2136,8 +2175,8 @@ async function runCommand(
     if (parsed.kind === "add" || parsed.kind === "add-status") {
       const document =
         parsed.kind === "add"
-          ? await addMemory(operations, text ?? "", parsed.requestId)
-          : await readMemoryAddStatus(reader, parsed.requestId);
+          ? await addMemory(operations, text ?? "", parsed.requestId, userId)
+          : await readMemoryAddStatus(reader, parsed.requestId, userId);
       emit(
         asJson
           ? `${JSON.stringify(document)}\n`
@@ -2152,9 +2191,13 @@ async function runCommand(
             content: text,
             ...namespaceParameters(parsed.namespace),
             ...(parsed.task === undefined ? {} : { task: parsed.task }),
+            ...userIdParameters(userId),
           })
         : await operations.delete<unknown>(
-            withQuery(memoryPath, namespaceParameters(parsed.namespace)),
+            withQuery(memoryPath, {
+              ...namespaceParameters(parsed.namespace),
+              ...userIdParameters(userId),
+            }),
           );
     const document = {
       schema_version: 2,
@@ -3678,13 +3721,21 @@ async function connectSources(
       asJson,
     );
   }
-  if (parsed.importHistory) {
+  // Another user's Hermes profile is granted and imported in one connect
+  // request: only that request can carry a user and a root.
+  if (
+    parsed.importHistory ||
+    parsed.userId !== undefined ||
+    parsed.root !== undefined
+  ) {
     const document = await connectSourcesWithImport(reader, operations, {
       sourceIds: parsed.sourceIds,
       confirmOverrides: parsed.confirmOverrides,
       ...(parsed.requestId === undefined
         ? {}
         : { requestId: parsed.requestId }),
+      ...(parsed.userId === undefined ? {} : { userId: parsed.userId }),
+      ...(parsed.root === undefined ? {} : { root: parsed.root }),
     });
     emitFlowDocument(document, asJson);
     return flowExitCode(document);
@@ -5134,14 +5185,23 @@ type SourcesCommand =
       importHistory: boolean;
       confirmOverrides: boolean;
       requestId?: string;
+      /** `--user-id`: whose grant (Hermes only). Absent for `local`. */
+      userId?: string;
+      /** `--root`: an absolute root other than the candidate (Hermes only). */
+      root?: string;
     }
   | { kind: "all"; importHistory: boolean; confirmOverrides: boolean }
   | { kind: "receipt"; requestId: string };
 
 const SOURCE_ID_SHAPE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 
+/** Only Hermes keeps one history per profile, so only Hermes may be
+ * connected for another user or from another root. */
+const MULTI_USER_SOURCES = new Set(["hermes"]);
+
 /** `sources connect <id> [<id> ...] | --all-detected [--import]
- * [--confirm-overrides] [--request-id <uuid>]` and `sources receipt <id>`.
+ * [--confirm-overrides] [--request-id <uuid>]
+ * [--user-id <id>] [--root <path>]` and `sources receipt <id>`.
  *
  * Sources may be named positionally or with repeated `--source` (the old
  * `init --source` spelling is rewritten to this command). */
@@ -5157,11 +5217,28 @@ function parseSourcesCommand(rest: readonly string[]): SourcesCommand | null {
   const sourceIds: string[] = [];
   const switches = new Set<string>();
   let requestId: string | undefined;
+  let userId: string | undefined;
+  let root: string | undefined;
   for (let index = 1; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (["--import", "--confirm-overrides", "--all-detected"].includes(token)) {
       if (switches.has(token)) return null;
       switches.add(token);
+      continue;
+    }
+    if (token === "--user-id" || token === "--root") {
+      const value = tokens[index + 1];
+      if (value === undefined || value.startsWith("--")) return null;
+      if (token === "--user-id") {
+        if (userId !== undefined || !isUserId(value)) return null;
+        userId = value;
+      } else {
+        if (root !== undefined) return null;
+        const expanded = expandRootPath(value);
+        if (expanded === null) return null;
+        root = expanded;
+      }
+      index += 1;
       continue;
     }
     if (token === "--source" || token === "--request-id") {
@@ -5187,9 +5264,22 @@ function parseSourcesCommand(rest: readonly string[]): SourcesCommand | null {
   const confirmOverrides = switches.has("--confirm-overrides");
   if (
     requestId !== undefined &&
-    (!OPERATION_ID.test(requestId) || !importHistory)
+    (!OPERATION_ID.test(requestId) ||
+      !(importHistory || userId !== undefined || root !== undefined))
   ) {
     return null;
+  }
+  // `--user-id local` is the default and changes nothing.
+  if (userId === DEFAULT_USER_ID) userId = undefined;
+  if (userId !== undefined || root !== undefined) {
+    // One Hermes profile per connect: the user and root name one grant.
+    if (
+      switches.has("--all-detected") ||
+      sourceIds.length !== 1 ||
+      !MULTI_USER_SOURCES.has(sourceIds[0])
+    ) {
+      return null;
+    }
   }
   if (switches.has("--all-detected")) {
     // One names exact sources, the other means "whatever is detected".
@@ -5203,7 +5293,22 @@ function parseSourcesCommand(rest: readonly string[]): SourcesCommand | null {
     importHistory,
     confirmOverrides,
     ...(requestId === undefined ? {} : { requestId }),
+    ...(userId === undefined ? {} : { userId }),
+    ...(root === undefined ? {} : { root }),
   };
+}
+
+/** `--root` as an absolute path: a leading `~` is the home directory, a
+ * relative path is taken from the working directory. Core expands nothing. */
+function expandRootPath(value: string): string | null {
+  if (value.length === 0 || /[\0\r\n]/.test(value)) return null;
+  const expanded =
+    value === "~"
+      ? os.homedir()
+      : value.startsWith("~/")
+        ? path.join(os.homedir(), value.slice(2))
+        : value;
+  return path.resolve(expanded);
 }
 
 function parseGraphWidthCommand(
@@ -6599,6 +6704,30 @@ const OWN_DATA_DIR_COMMANDS = new Set([
 
 /** Remove one `--data-dir <absolute path>` from argv; null when it is
  * repeated, missing its value, or not an absolute path. */
+/** Memory commands that honour the global `--user-id`. */
+const USER_ID_COMMANDS = new Set(["memories", "recall", "profile", "write"]);
+
+/**
+ * Take `--user-id <id>` out of the arguments. The default user (`local`) is
+ * returned as undefined, so a default request names no user at all and stays
+ * byte-identical to one sent before multi-user support.
+ */
+function liftUserIdOption(
+  arguments_: readonly string[],
+): { arguments_: string[]; userId?: string } | null {
+  const index = arguments_.indexOf("--user-id");
+  if (index === -1) return { arguments_: [...arguments_] };
+  if (arguments_.indexOf("--user-id", index + 1) !== -1) return null;
+  const value = arguments_[index + 1];
+  if (value === undefined || value.startsWith("--") || !isUserId(value)) {
+    return null;
+  }
+  return {
+    arguments_: [...arguments_.slice(0, index), ...arguments_.slice(index + 2)],
+    ...(value === DEFAULT_USER_ID ? {} : { userId: value }),
+  };
+}
+
 function liftDataDirOption(
   arguments_: readonly string[],
 ): { arguments_: string[]; dataDir?: string } | null {
