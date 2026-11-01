@@ -11,6 +11,7 @@ Coding Memory 预处理工具（规则，零 LLM）
 使用方式与 scene 路由见 docs/scene_coding_usage.md。
 """
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..pipelines.base import ChatMessage
@@ -63,6 +64,13 @@ DEFAULT_MAX_TOOL_RESULT_BYTES = 2048
 DEFAULT_HEAD_BYTES = 1024
 DEFAULT_TAIL_BYTES = 512
 
+# 本模块自己产出的省略标记。截断结果会再次经过截断（落库前一次、读历史时又一次），
+# 认出自己的标记才能保证幂等：已截断的文本再截一次原样返回，而不是把省略计数改写。
+_TOOL_OMIT_MARKER_RE = re.compile(r"\n\n\[\.\.\.\d+ bytes omitted by truncate\.\.\.\]\n\n")
+# 标记本身的字节数上限（数字位数有限），用于判断「已截断且只超出一个标记的长度」。
+_TOOL_OMIT_MARKER_MAX_BYTES = 128
+_ASSISTANT_OMIT_MARKER_RE = re.compile(r" \[\.\.\.\d+ chars omitted\.\.\.\] ")
+
 
 def truncate_tool_result_text(
     text: str,
@@ -80,6 +88,12 @@ def truncate_tool_result_text(
         text = "" if text is None else str(text)
     raw = text.encode("utf-8")
     if len(raw) <= max_bytes:
+        return text
+    # 已截断过（max_bytes 很小时标记本身会让结果略超上限）：原样返回，保证幂等。
+    if (
+        len(raw) <= max_bytes + _TOOL_OMIT_MARKER_MAX_BYTES
+        and _TOOL_OMIT_MARKER_RE.search(text)
+    ):
         return text
     # 自定义 max_bytes 可能小于默认 head+tail（1024+512）。按原比例缩放内容窗口，
     # 给省略标记预留空间，不能因为窗口和过大而把超限原文直接返回。
@@ -160,6 +174,10 @@ def truncate_assistant_text(
     if not isinstance(text, str):
         text = "" if text is None else str(text)
     if len(text) <= head_chars + tail_chars:
+        return text
+    # 已截断过：中段恰好是本函数的省略标记 → 原样返回，保证幂等（否则会把
+    # 省略计数改写成标记自身的长度）。
+    if _ASSISTANT_OMIT_MARKER_RE.fullmatch(text[head_chars:len(text) - tail_chars]):
         return text
     omitted = len(text) - head_chars - tail_chars
     return (

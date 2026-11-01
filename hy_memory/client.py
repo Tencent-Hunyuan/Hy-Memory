@@ -3089,9 +3089,18 @@ class HyMemoryClient:
             if self._history_store is not None:
                 try:
                     isolation_key = self._build_isolation_key(uid, agent_id)
-                    # 从 content 或 messages 中提取用于记录的文本
+                    # 从 content 或 messages 中提取用于记录的文本。messages 与 L1_RAW
+                    # 同一规则先裁剪再落审计库（工具输出 / 长回复不原样长期保存）。
+                    from .utils.raw_trim import trim_raw_messages
                     history_content = content or "; ".join(
-                        f"{m.role}: {m.content}" for m in chat_messages
+                        f"{m.role}: {m.content}"
+                        for m in trim_raw_messages(
+                            chat_messages,
+                            tool_max_bytes=getattr(
+                                getattr(self._config, "coding", None),
+                                "tool_result_max_bytes", None,
+                            ),
+                        )
                     )
                     await self._history_store.record_add(
                         memory_id=result.memory_id,

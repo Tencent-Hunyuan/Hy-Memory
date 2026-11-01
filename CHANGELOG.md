@@ -4,6 +4,34 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+### Hy Memory (next release)
+
+- Raw conversations are stored already trimmed. MemHub now keeps every raw
+  forever and lite mode stores nothing else, so tool output and long pasted
+  logs no longer stay in full. One rule (`hy_memory/utils/raw_trim.py`) is
+  applied to each message when the raw is written:
+  - `user` and `system` turns are kept in full;
+  - `assistant` turns and other speakers (`[John]:`) longer than 500
+    characters, after stripping, are cut to the first 500 plus `...`. This is
+    the limit history injection used before;
+  - `tool` turns keep their head and tail, and the middle becomes
+    `[...N bytes omitted by truncate...]`, with the coding limit
+    `coding.tool_result_max_bytes` (`MEMORY_CODING_TOOL_RESULT_MAX_BYTES`,
+    default 2048).
+
+  The rule is idempotent. It covers chat `L1_RAW` in lite, pro and ultra (lite
+  keeps tool turns, because it has no coding route) and the `memory_history`
+  ADD record. The coding/working `coding_trace` was already trimmed when it
+  was written. Its tool and assistant truncations are now idempotent, so
+  reading the history back no longer rewrites the omitted-count markers. The
+  text embedded for `L1_RAW` is the trimmed text. New raws carry
+  `custom.raw_trimmed=true`.
+- Extractor history ("last k messages") now joins the stored raws directly
+  and does not trim them again. Raws written before this change have no
+  `raw_trimmed` flag, so they are still trimmed with the same rule when they
+  are read. The extractor still receives the current batch in full (tool
+  turns are still removed on the chat route).
+
 ## MemHub 1.0.5 — 2026-10-28
 
 Build 36, on `hy-memory==2.0.8`. Linux x64/arm64 Runtime and macOS arm64

@@ -280,6 +280,22 @@ class MemoryWriter(WritePipeline):
             custom["source_raw_memory_ids"] = source_ids
         return custom
 
+    def _flat_trimmed_raw(self, request: WriteRequest) -> str:
+        """把 request.messages 按 raw 统一规则裁剪后拼成 L1_RAW 文本。
+
+        只裁落库副本；request.messages 不动（本次 extractor 输入仍用完整 messages）。
+        """
+        import copy as _copy
+        from ..utils.raw_trim import trim_raw_messages
+
+        _coding_cfg = getattr(getattr(self, "config", None), "coding", None)
+        _trimmed_req = _copy.copy(request)
+        _trimmed_req.messages = trim_raw_messages(
+            request.messages,
+            tool_max_bytes=getattr(_coding_cfg, "tool_result_max_bytes", None),
+        )
+        return _trimmed_req.get_flat_content()
+
     @staticmethod
     def _attach_client_meta(custom: Dict[str, Any], request: Optional[WriteRequest]) -> None:
         """给新建节点挂上调用方 meta（单份 list）。
@@ -2554,9 +2570,14 @@ class MemoryWriter(WritePipeline):
         try:
             # 参数校验
             content = request.content
+            # raw 在写入时就按统一规则裁好（见 utils/raw_trim.py）：工具输出、长
+            # assistant 回复不再原样长期存储；历史拼接直接用存下来的文本，不再二次裁剪。
+            # request.messages 保持原样——本次 extractor 输入仍是完整 messages。
+            _raw_trimmed = False
             if not content and request.has_messages():
-                content = request.get_flat_content()
+                content = self._flat_trimmed_raw(request)
                 request.content = content
+                _raw_trimmed = True
 
             if not content:
                 response.error_code = 400
@@ -2627,6 +2648,9 @@ class MemoryWriter(WritePipeline):
                     vector_store = await self._get_vector_store()
                     layer_enum = MemoryLayer.from_string(suggested_layer)
                     _raw_custom: Dict[str, Any] = {}
+                    if _raw_trimmed:
+                        from ..utils.raw_trim import RAW_TRIMMED_KEY
+                        _raw_custom[RAW_TRIMMED_KEY] = True
                     self._attach_client_meta(_raw_custom, request)
                     mem_node = MemoryNode(
                         user_id=request.user_id,
@@ -2929,13 +2953,16 @@ class MemoryWriter(WritePipeline):
         agent_id: Optional[str] = None,
         exclude_memory_id: str = "",
         max_turns: int = 20,
-        max_chars_assistant: int = 500,
+        max_chars_assistant: Optional[int] = None,
     ) -> str:
         """
         获取该用户最近的 L1_RAW 对话记录，按轮次拆分后拼成 history context。
 
         每条 L1_RAW 的 content 是多轮对话（[user]: ...\n[assistant]: ...）。
-        拆成单条 message 后，user 消息完整保留，assistant 消息截取前 max_chars_assistant 字符。
+        raw 在写入时已按 utils/raw_trim.py 的规则裁好（custom[RAW_TRIMMED_KEY]），
+        这里拆成单条 message 后直接拼接，不再二次裁剪。该规则之前写入的旧 raw
+        没有这个标记，仍按同一（幂等）规则裁剪后再拼，避免旧的长回复 / 工具输出
+        撑大 prompt。max_chars_assistant 只作用于这些旧 raw，默认同写入规则。
         最终取最近 max_turns 条 message（注意单位是 message 条数，非对话轮数；
         调用方按 k 轮 × 2 传入）。
 
@@ -2977,23 +3004,33 @@ class MemoryWriter(WritePipeline):
             # 避免把正文里形如 "[注]: xxx" 的普通文本误判成消息边界。
             import re as _re
             from .base import parse_user_name_line
-            _KNOWN_ROLES = {"user", "assistant", "system", "tool"}
             # 带方括号的任意 label（含对方真人名字）
             _labeled_prefix = _re.compile(r"^\[([^\]\n]{1,32})\]:\s?")
             # 无方括号的已知 role（历史数据容错，沿用旧正则的 `\[?...\]?` 宽容度）
             _bare_role_prefix = _re.compile(r"^(user|assistant|system|tool):\s?")
 
-            # (label, content) 元组列表；label 为 role 或对方真人名字
-            parsed: List[Tuple[str, str]] = []
+            from ..utils.raw_trim import (
+                DEFAULT_RAW_ASSISTANT_MAX_CHARS,
+                RAW_TRIMMED_KEY,
+                trim_raw_body,
+            )
+            if max_chars_assistant is None:
+                max_chars_assistant = DEFAULT_RAW_ASSISTANT_MAX_CHARS
+            _coding_cfg = getattr(getattr(self, "config", None), "coding", None)
+            _tool_max_bytes = getattr(_coding_cfg, "tool_result_max_bytes", None)
+
+            # (label, content, 是否旧 raw 需兼容裁剪) 元组列表；label 为 role 或对方真人名字
+            parsed: List[Tuple[str, str, bool]] = []
             user_name: str = ""
             for node in nodes:
                 content = node.content or ""
+                _legacy = not bool((node.custom or {}).get(RAW_TRIMMED_KEY))
                 for _line_idx, line in enumerate(content.split("\n")):
                     m = _labeled_prefix.match(line) or _bare_role_prefix.match(line)
                     if m:
                         label = m.group(1)
                         body = line[m.end():]
-                        parsed.append((label, body))
+                        parsed.append((label, body, _legacy))
                         continue
                     # 名字行只可能是每个 node content 的第一行（get_flat_content 插在文首）。
                     # 逐 node 判断而非用 `not parsed`：parsed 跨 node 累积，第二个 node
@@ -3006,18 +3043,18 @@ class MemoryWriter(WritePipeline):
                             continue
                     if parsed:
                         # 续行：拼回上一条 message（保留换行）
-                        prev_label, prev_body = parsed[-1]
-                        parsed[-1] = (prev_label, prev_body + "\n" + line)
+                        prev_label, prev_body, prev_legacy = parsed[-1]
+                        parsed[-1] = (prev_label, prev_body + "\n" + line, prev_legacy)
                     else:
                         # 开头就是无前缀行（异常/老数据）：当成 user 消息兜底
-                        parsed.append(("user", line))
+                        parsed.append(("user", line, _legacy))
 
             # 取最近 max_turns 条 message（按 message 截断，绝不从消息中间切开）
             recent = parsed[-max_turns:] if len(parsed) > max_turns else parsed
             if not recent:
                 return ""
 
-            # 格式化：非 user 侧整条截断（含对方真人），user 完整保留
+            # 格式化：新 raw 直接拼接；旧 raw 按写入同一规则兼容裁剪
             all_messages: List[str] = []
             if user_name:
                 from .base import render_user_name_line
@@ -3025,17 +3062,18 @@ class MemoryWriter(WritePipeline):
 
                 _name_line = render_user_name_line(
                     user_name,
-                    is_chinese("\n".join(b for _, b in recent)),
+                    is_chinese("\n".join(b for _, b, _ in recent)),
                 )
                 if _name_line:
                     all_messages.append(_name_line)
-            for label, body in recent:
+            for label, body, legacy in recent:
+                if legacy:
+                    body = trim_raw_body(
+                        label, body,
+                        assistant_max_chars=max_chars_assistant,
+                        tool_max_bytes=_tool_max_bytes,
+                    )
                 body = body.strip()
-                # 截断口径：assistant + 对方真人（非已知 role 的 label）。
-                # user 完整保留；system / tool 沿用历史行为（不截断）。
-                _truncate = label == "assistant" or label not in _KNOWN_ROLES
-                if _truncate and len(body) > max_chars_assistant:
-                    body = body[:max_chars_assistant] + "..."
                 all_messages.append(f"[{label}]: {body}")
 
             return "\n".join(all_messages)
