@@ -52,7 +52,12 @@ export async function recallHosts(
   const opencodeDir = path.join(home, ".config", "opencode");
   const qwenDir = path.join(home, ".qwen");
   const openclawDir = path.join(home, ".openclaw");
-  const hermesDir = path.join(home, ".hermes");
+  // Hermes keeps one `state.db` per profile, so `~/.hermes` is only right for
+  // the default profile. `HERMES_HOME` is Hermes' own override for that and
+  // must move the host install with it, or the installer writes the provider,
+  // MCP block and skill into the default profile while imports read another.
+  const hermesHome = environment.HERMES_HOME?.trim();
+  const hermesDir = hermesHome ? path.resolve(hermesHome) : path.join(home, ".hermes");
   // Pi keeps everything a level down, under `agent`, and that is also where
   // its skills live — so it is the directory that says the agent is set up,
   // not `~/.pi` itself.

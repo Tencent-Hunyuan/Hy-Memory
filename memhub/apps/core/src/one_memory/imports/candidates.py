@@ -27,7 +27,7 @@ from one_memory.imports.sources.registry import (
 from one_memory.memory_server.migrations import source_candidates_ddl
 
 SCHEMA = source_candidates_ddl("sqlite")
-PICKER_SOURCE_IDS = frozenset({"workbuddy", "cursor", "claude-code", "codex"})
+PICKER_SOURCE_IDS = frozenset({"workbuddy", "cursor", "claude-code", "codex", "hermes"})
 
 
 class SourceCandidateError(RuntimeError):
