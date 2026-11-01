@@ -17,6 +17,7 @@ const READ_ONLY_PATHS = [
   "/api/v2/home-summary",
   "/api/v2/memory-library",
   "/api/v2/user-profile",
+  "/api/v2/user-profile/versions",
 ] as const;
 const SDK_MEMORY_DETAIL = /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
 /** Status of one `POST /api/v2/memories` addition, by its request id. */

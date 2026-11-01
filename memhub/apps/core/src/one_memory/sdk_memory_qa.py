@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from one_memory.http_client import create_async_client
 from one_memory.hy_runtime_config import HY_MEMORY_READER
 from one_memory.hy_sdk_runtime import sdk_relevance_floor
-from one_memory.hy_sdk_types import HySdkMemoryRecord, parse_sdk_search
+from one_memory.hy_sdk_types import HySdkMemoryRecord, parse_sdk_lane_search, parse_sdk_search
 from one_memory.memory_qa import (
     MemoryAnswerError,
     _DeferredSecretStore,
@@ -31,6 +31,7 @@ from one_memory.model_profiles import (
     ProviderKind,
     attach_disable_thinking,
 )
+from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 from one_memory.user_scope import owns
 
@@ -96,22 +97,39 @@ class SdkMemoryAnswerer:
         question: str,
         *,
         user_id: str = "local",
+        filters: SdkSearchFilters | None = None,
     ) -> tuple[SdkAskMemory, ...]:
+        """The user's active memories nearest the question.
+
+        `filters` are a caller's pass-through search options; absent, the
+        search is the one ask always made.
+        """
         client = await self.client_handle.client()
+        overrides = filters.search_overrides() if filters is not None else {}
         raw = await asyncio.to_thread(
             client.search,
             question,
-            user_ids=[user_id],
-            agent_ids=[],
-            limit=12,
-            min_score=sdk_relevance_floor(),
-            schema_min_score=sdk_relevance_floor(),
-            schema_limit=12,
-            intention_limit=12,
-            scene="normal",
-            reader=HY_MEMORY_READER,
+            **{
+                "user_ids": [user_id],
+                "agent_ids": [],
+                "limit": 12,
+                "min_score": sdk_relevance_floor(),
+                "schema_min_score": sdk_relevance_floor(),
+                "schema_limit": 12,
+                "intention_limit": 12,
+                "scene": "normal",
+                "reader": HY_MEMORY_READER,
+                **overrides,
+            },
         )
-        hits = parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+        if filters is not None and overrides:
+            hits = tuple(
+                hit
+                for hit in parse_sdk_lane_search(raw, error_code="hy_memory_search_shape_unknown")
+                if filters.passes_floor(cast(SearchLane, hit.lane), hit.score)
+            )
+        else:
+            hits = parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
         found: list[SdkAskMemory] = []
         seen: set[str] = set()
         for hit in hits:
@@ -134,8 +152,9 @@ class SdkMemoryAnswerer:
         question: str,
         *,
         user_id: str = "local",
+        filters: SdkSearchFilters | None = None,
     ) -> SdkMemoryAnswer:
-        candidates = await self.retrieve(question, user_id=user_id)
+        candidates = await self.retrieve(question, user_id=user_id, filters=filters)
         if not candidates:
             return SdkMemoryAnswer(answer=_NO_GROUNDING, memories=(), mode="empty")
         profile = await self._active_profile()
@@ -166,8 +185,9 @@ class SdkMemoryAnswerer:
         question: str,
         *,
         user_id: str = "local",
+        filters: SdkSearchFilters | None = None,
     ) -> AsyncIterator[dict[str, object]]:
-        candidates = await self.retrieve(question, user_id=user_id)
+        candidates = await self.retrieve(question, user_id=user_id, filters=filters)
         await self._require_current(candidates)
         yield {"type": "recall", "memories": candidates}
         if not candidates:

@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from one_memory.sdk_search_options import SdkSearchOptions
 from one_memory.user_scope import DEFAULT_USER_ID, UserId
 
 ContextKind = Literal["raw", "memory"]
@@ -49,12 +50,17 @@ class ContextSearchRequest(BaseModel):
         return self
 
 
-class SdkContextSearchRequest(ContextSearchRequest):
+class SdkContextSearchRequest(ContextSearchRequest, SdkSearchOptions):
     """`POST /api/v2/context/search`: the three SDK recall lanes are set apart.
 
     `limit` is the normal lane's top-k and the cap on returned items;
     `schema_limit` and `intention_limit` are the SDK's schema (L6) and
     proactive intention (L7) lanes. A caller's values are passed through.
+
+    The `SdkSearchOptions` fields reach the memory lane's `client.search`;
+    the raw lane takes the floor and the source, session, agent and time
+    filters (never wider than the caller's raw authority). Absent, both
+    lanes make the call they always made.
     """
 
     limit: int = Field(default=10, ge=1, le=20, strict=True)

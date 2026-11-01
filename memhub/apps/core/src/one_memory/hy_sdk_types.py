@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Literal, NamedTuple, cast
@@ -391,6 +392,8 @@ class HySdkRawRecord(BaseModel):
     memory_at: int | None = None
     gmt_created: int | None = None
     custom: dict[str, object] = Field(default_factory=dict)
+    #: active, or shadow once pro extracted it; None when the SDK gave none.
+    status: str | None = None
 
     @classmethod
     def from_sdk(cls, raw: object) -> HySdkRawRecord:
@@ -417,9 +420,32 @@ class HySdkRawRecord(BaseModel):
                     raw.get("gmt_created") if isinstance(raw.get("gmt_created"), int) else None
                 ),
                 custom=dict(custom),
+                status=str(raw["status"]) if isinstance(raw.get("status"), str) else None,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise HySdkReadError("hy_memory_raw_shape_unknown") from error
+
+
+_RAW_TURN_LINE = re.compile(r"^\[(user|assistant|tool|system)\]:\s?(.*)$")
+
+
+def raw_turn_messages(content: str) -> tuple[tuple[str, str], ...]:
+    """The `(role, text)` messages of one SDK raw turn.
+
+    The SDK stores a turn as `[user]: …\\n[assistant]: …`; a line without a
+    role prefix continues the message above it. Content that names no role
+    at all is one message of unknown role (`""`).
+    """
+    messages: list[list[str]] = []
+    for line in content.splitlines():
+        match = _RAW_TURN_LINE.match(line)
+        if match is not None:
+            messages.append([match.group(1), match.group(2)])
+        elif messages:
+            messages[-1][1] += "\n" + line
+        else:
+            messages.append(["", line])
+    return tuple((role, text) for role, text in messages)
 
 
 class HySdkRawHit(HySdkRawRecord):
@@ -516,6 +542,96 @@ class HySdkUserProfile(BaseModel):
         )
 
 
+class HySdkProfileVersion(BaseModel):
+    """One version on an L0 basic-info chain."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memory_id: str
+    content: str
+    #: Conversation time as the SDK renders it on a chain (epoch or text).
+    memory_at: int | str | None = None
+    gmt_created: int | None = None
+    #: The chain head: the version the profile shows now.
+    current: bool = False
+
+
+class HySdkProfileChain(BaseModel):
+    """One L0 basic-info head and its versions, latest first."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memory_id: str
+    content: str
+    status: str
+    memory_at: int | None = None
+    gmt_created: int | None = None
+    #: The structured fields this head holds (`basic_info_kv`).
+    basic_info: dict[str, object] = Field(default_factory=dict)
+    versions: tuple[HySdkProfileVersion, ...]
+
+
+class HySdkProfileVersions(BaseModel):
+    """`get_user_basic_info`: the long-term profile's L0 version chains."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_id: str
+    chains: tuple[HySdkProfileChain, ...]
+    elapsed_ms: float = Field(ge=0)
+
+    @classmethod
+    def from_sdk(cls, raw: object) -> HySdkProfileVersions:
+        if not isinstance(raw, Mapping):
+            raise HySdkReadError("hy_memory_profile_versions_shape_unknown")
+        request_id = raw.get("request_id")
+        rows = raw.get("memories")
+        elapsed_ms = raw.get("elapsed_ms")
+        if (
+            not isinstance(request_id, str)
+            or not isinstance(rows, list)
+            or not isinstance(elapsed_ms, int | float)
+            or isinstance(elapsed_ms, bool)
+        ):
+            raise HySdkReadError("hy_memory_profile_versions_shape_unknown")
+        chains: list[HySdkProfileChain] = []
+        for row in rows:
+            if not isinstance(row, Mapping) or not isinstance(row.get("memory_id"), str):
+                raise HySdkReadError("hy_memory_profile_versions_shape_unknown")
+            head_id = str(row["memory_id"])
+            chain = row.get("evolution_chain")
+            entries = chain if isinstance(chain, list) and chain else [{**row, "node_id": head_id}]
+            versions = tuple(
+                HySdkProfileVersion(
+                    memory_id=str(entry.get("node_id") or entry.get("memory_id")),
+                    content=str(entry.get("content") or ""),
+                    memory_at=(
+                        entry.get("memory_at")
+                        if isinstance(entry.get("memory_at"), int | str)
+                        and not isinstance(entry.get("memory_at"), bool)
+                        else None
+                    ),
+                    gmt_created=_epoch(entry.get("gmt_created")),
+                    current=str(entry.get("node_id") or entry.get("memory_id")) == head_id,
+                )
+                for entry in entries
+                if isinstance(entry, Mapping) and (entry.get("node_id") or entry.get("memory_id"))
+            )
+            basic_info = row.get("basic_info_kv")
+            chains.append(
+                HySdkProfileChain(
+                    memory_id=head_id,
+                    content=str(row.get("content") or ""),
+                    status=str(row.get("status") or "active"),
+                    memory_at=_epoch(row.get("memory_at")),
+                    gmt_created=_epoch(row.get("gmt_created")),
+                    basic_info=dict(basic_info) if isinstance(basic_info, Mapping) else {},
+                    versions=versions,
+                )
+            )
+        return cls(request_id=request_id, chains=tuple(chains), elapsed_ms=float(elapsed_ms))
+
+
 def parse_sdk_search(raw: object, *, error_code: str) -> tuple[SemanticMemoryHit, ...]:
     rows = _reply_rows(raw, error_code)
     found: list[SemanticMemoryHit] = []
@@ -540,6 +656,120 @@ def parse_sdk_search(raw: object, *, error_code: str) -> tuple[SemanticMemoryHit
             )
         )
     return tuple(found)
+
+
+def parse_sdk_lane_search(raw: object, *, error_code: str) -> tuple[SemanticMemoryHit, ...]:
+    """Every scene's search reply as hits that name their lane and namespace.
+
+    `parse_sdk_search` reads the chat reply only and forgets which lane a hit
+    came from. A caller may now pick the scene and a floor per lane, so this
+    reads all three reply shapes:
+
+    - chat: `memories` as `{schema, proactive, normal}` (or one list, normal);
+    - working/coding: `facts` and `experiences` of that variant;
+    - all: one fused `memories` list whose rows carry `scene`, `kind` and
+      their own lane's score (`lane_score`). The fused `score` is a rank
+      fusion (1/(60+rank)), not a relevance, so the lane score is reported.
+
+    Highest score first, first occurrence of an id kept.
+    """
+    if not isinstance(raw, Mapping):
+        raise HySdkReadError(error_code)
+    scene = raw.get("scene")
+    found: list[SemanticMemoryHit] = []
+    if scene == "all":
+        rows = raw.get("memories")
+        if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+            raise HySdkReadError(error_code)
+        for row in rows:
+            hit = _lane_hit(row, scene=str(row.get("scene") or "chat"), score_key="lane_score")
+            if hit is not None:
+                found.append(hit)
+    elif scene in ("productivity", "working", "coding"):
+        variant = raw.get("variant") if raw.get("variant") in {"working", "coding"} else None
+        lane = variant or (scene if scene in {"working", "coding"} else "working")
+        for key, kind in (("facts", "fact"), ("experiences", "experience")):
+            rows = raw.get(key) or []
+            if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+                raise HySdkReadError(error_code)
+            for row in rows:
+                hit = _lane_hit({**row, "kind": kind}, scene=lane, score_key="score")
+                if hit is not None:
+                    found.append(hit)
+    else:
+        memories = raw.get("memories")
+        if isinstance(memories, Mapping):
+            if set(memories) != {"schema", "proactive", "normal"}:
+                raise HySdkReadError(error_code)
+            channels = tuple(memories.items())
+        elif isinstance(memories, list):
+            channels = (("normal", memories),)
+        else:
+            raise HySdkReadError(error_code)
+        for lane, rows in channels:
+            if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+                raise HySdkReadError(error_code)
+            for row in rows:
+                hit = _lane_hit(row, scene="chat", score_key="score", lane=str(lane))
+                if hit is not None:
+                    found.append(hit)
+    ordered: list[SemanticMemoryHit] = []
+    seen: set[tuple[str, str, str | None]] = set()
+    for hit in sorted(found, key=lambda value: value.score, reverse=True):
+        identity = (hit.memory_id, hit.kind, hit.variant)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        ordered.append(hit)
+    return tuple(ordered)
+
+
+def _lane_hit(
+    row: Mapping[str, object],
+    *,
+    scene: str,
+    score_key: str,
+    lane: str | None = None,
+) -> SemanticMemoryHit | None:
+    kind = str(row.get("kind")) if row.get("kind") in {"experience", "fact"} else "chat"
+    if kind == "chat":
+        memory_id = row.get("memory_id") or row.get("id")
+        variant = None
+        hit_lane = lane or "normal"
+    else:
+        id_key = "experience_id" if kind == "experience" else "fact_id"
+        memory_id = row.get("memory_id") or row.get(id_key)
+        variant = scene if scene in {"working", "coding"} else None
+        if variant is None:
+            return None
+        hit_lane = variant
+    if not isinstance(memory_id, str) or not memory_id:
+        return None
+    value = row.get(score_key)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        value = row.get("score")
+    score = (
+        max(0.0, min(1.0, float(value)))
+        if isinstance(value, int | float) and not isinstance(value, bool)
+        else 0.0
+    )
+    if kind != "chat":
+        return SemanticMemoryHit(
+            memory_id=memory_id, score=score, lane=hit_lane, kind=kind, variant=variant
+        )
+    content = row.get("content")
+    member_ids, formatting_complete = _formatted_member_ids(row)
+    return SemanticMemoryHit(
+        memory_id=memory_id,
+        score=score,
+        formatted_content=(
+            content.strip() if isinstance(content, str) and content.strip() else None
+        ),
+        member_ids=member_ids,
+        sdk_formatted=True,
+        formatting_complete=formatting_complete,
+        lane=hit_lane,
+    )
 
 
 class LibraryHit(NamedTuple):

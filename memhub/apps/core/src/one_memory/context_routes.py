@@ -24,13 +24,56 @@ from one_memory.hy_runtime_config import HY_MEMORY_READER
 from one_memory.hy_sdk_runtime import sdk_relevance_floor
 from one_memory.hy_sdk_types import (
     HySdkMemoryRecord,
+    parse_sdk_lane_search,
     parse_sdk_raw_search,
     parse_sdk_search,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
+from one_memory.semantic_deadline import SemanticMemoryHit
 from one_memory.user_scope import owns
 
 CALL_EVENT_RESPONSE_BUDGET_MS = 250
+
+#: Pass-through filters the raw lane honours. Scene, layers, reader and the
+#: schema/working floors describe memory lanes; the raw lane is always the
+#: chat store's L1 raw layer.
+_RAW_LANE_FILTERS = ("created_after", "session_ids", "agent_ids", "exclude_sources", "rerank")
+
+
+def raw_lane_sources(
+    allowed: Sequence[str] | frozenset[str] | None,
+    requested: Sequence[str] | None,
+) -> list[str] | None:
+    """The raw lane's source filter: the caller's, never wider than its authority.
+
+    `allowed` empty or None means every source (the call Core always made).
+    None back means nothing is left to search.
+    """
+    allowed_list = list(allowed or ())
+    if requested is None:
+        return allowed_list
+    chosen = [
+        source for source in dict.fromkeys(requested) if not allowed_list or source in allowed_list
+    ]
+    return chosen or None
+
+
+def raw_lane_overrides(value: SdkSearchFilters) -> dict[str, object]:
+    """The caller's raw-lane overrides: its floor and its row filters."""
+    overrides = value.filter_kwargs()
+    found = {name: overrides[name] for name in _RAW_LANE_FILTERS if name in overrides}
+    floor = value.lane_floor("raw")
+    if floor is not None:
+        found["min_score"] = floor
+    return found
+
+
+def hit_namespace(hit: SemanticMemoryHit) -> dict[str, str]:
+    """The `get` namespace of a hit: nothing for chat, kind and variant otherwise."""
+    if hit.kind in {"experience", "fact"} and hit.variant is not None:
+        return {"kind": hit.kind, "variant": hit.variant}
+    return {}
 
 
 def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
@@ -71,22 +114,30 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
         async def raw_lane() -> tuple[SdkRawContextItem, ...]:
             if "raw" not in value.kinds or not authority.raw_allowed:
                 return ()
+            sources = raw_lane_sources(authority.raw_sources, value.include_sources)
+            if sources is None:
+                return ()
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
-                user_ids=[value.user_id],
-                agent_ids=[],
-                include_sources=list(authority.raw_sources or ()),
-                limit=value.limit,
-                min_score=0.0,
-                schema_min_score=0.0,
-                schema_limit=0,
-                intention_limit=0,
-                scene="chat",
-                reader=HY_MEMORY_READER,
-                layers=["l1_raw"],
+                **{
+                    "user_ids": [value.user_id],
+                    "agent_ids": [],
+                    "include_sources": sources,
+                    "limit": value.limit,
+                    "min_score": 0.0,
+                    "schema_min_score": 0.0,
+                    "schema_limit": 0,
+                    "intention_limit": 0,
+                    "scene": "chat",
+                    "reader": HY_MEMORY_READER,
+                    "layers": ["l1_raw"],
+                    **raw_lane_overrides(value),
+                },
             )
-            hits = parse_sdk_raw_search(raw)
+            hits = tuple(
+                hit for hit in parse_sdk_raw_search(raw) if value.passes_floor("raw", hit.score)
+            )
             return tuple(
                 SdkRawContextItem(
                     raw_id=hit.raw_id,
@@ -106,23 +157,37 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
         async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
             if "memory" not in value.kinds or not authority.memory_allowed:
                 return ()
+            overrides = value.search_overrides()
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
-                user_ids=[value.user_id],
-                agent_ids=[],
-                limit=value.limit,
-                min_score=sdk_relevance_floor(),
-                schema_min_score=sdk_relevance_floor(),
-                schema_limit=value.schema_limit,
-                intention_limit=value.intention_limit,
-                scene="normal",
-                reader=HY_MEMORY_READER,
+                **{
+                    "user_ids": [value.user_id],
+                    "agent_ids": [],
+                    "limit": value.limit,
+                    "min_score": sdk_relevance_floor(),
+                    "schema_min_score": sdk_relevance_floor(),
+                    "schema_limit": value.schema_limit,
+                    "intention_limit": value.intention_limit,
+                    "scene": "normal",
+                    "reader": HY_MEMORY_READER,
+                    **overrides,
+                },
             )
-            hits = parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+            hits = (
+                tuple(
+                    hit
+                    for hit in parse_sdk_lane_search(
+                        raw, error_code="hy_memory_search_shape_unknown"
+                    )
+                    if value.passes_floor(cast(SearchLane, hit.lane), hit.score)
+                )
+                if overrides
+                else parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+            )
             items: list[SdkMemoryContextItem] = []
             for hit in hits:
-                record = await asyncio.to_thread(client.get, hit.memory_id)
+                record = await asyncio.to_thread(client.get, hit.memory_id, **hit_namespace(hit))
                 memory = None if record is None else HySdkMemoryRecord.from_sdk(record)
                 # `get` takes no user: a hit is kept only if it is the caller's.
                 if (

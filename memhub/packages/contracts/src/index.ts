@@ -636,6 +636,16 @@ export interface SdkRawRecord {
   memory_at: number | null;
   gmt_created: number | null;
   custom: Record<string, unknown>;
+  /** active, or shadow once pro extracted it. */
+  status?: string | null;
+  /** The turn's messages, parsed from the SDK's `[role]: text` lines. */
+  messages?: { role: string; content: string }[];
+  /** The one role of a single-message turn; null for a mixed turn. */
+  role?: string | null;
+  /** `sha256:<hex>` of the stored content, computed by Core. */
+  content_hash?: string;
+  /** ISO time the SDK stored the raw. */
+  created?: string | null;
 }
 
 export interface SdkRawPage {
@@ -643,6 +653,37 @@ export interface SdkRawPage {
   total: number;
   limit: number;
   offset: number;
+  /** A time range was applied to this page in Core (the SDK list has none). */
+  time_filtered?: boolean;
+}
+
+/** `GET /api/v2/memory-library/layers`: memories per SDK layer. */
+export interface SdkLayerCounts {
+  layers: Record<string, number>;
+  total: number;
+  statuses: string[] | null;
+}
+
+/** `GET /api/v2/user-profile/versions`: the L0 basic-info version chains. */
+export interface SdkProfileVersions {
+  user_id: string;
+  request_id: string;
+  elapsed_ms: number;
+  chains: {
+    memory_id: string;
+    content: string;
+    status: string;
+    memory_at: number | null;
+    gmt_created: number | null;
+    basic_info: Record<string, unknown>;
+    versions: {
+      memory_id: string;
+      content: string;
+      memory_at: number | string | null;
+      gmt_created: number | null;
+      current: boolean;
+    }[];
+  }[];
 }
 
 export interface FileImportReceipt {

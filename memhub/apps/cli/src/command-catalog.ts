@@ -434,9 +434,18 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   },
   {
     name: "profile",
-    summary: "读取 SDK 组装后的用户长期画像（L0 + 已启用的长期画像补充）。",
-    usage: "memhub profile [--user-id <id>] [--json]",
-    options: [USER_ID_OPTION, JSON_OPTION],
+    summary:
+      "读取 SDK 组装后的用户长期画像（L0 + 已启用的长期画像补充）；--versions 列出 L0 画像的版本链（最新在前，* 为当前版本）。",
+    usage: "memhub profile [--versions] [--user-id <id>] [--json]",
+    options: [
+      {
+        flag: "--versions",
+        summary:
+          "列出 L0 基本信息的版本链（get_user_basic_info），用于找出覆盖了正确值的错误版本。",
+      },
+      USER_ID_OPTION,
+      JSON_OPTION,
+    ],
     exit_codes: RUNTIME_EXITS,
   },
   {
