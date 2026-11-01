@@ -6,7 +6,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Hy Memory 2.0.10 — 2026-11-01
 
-- new `hy_memory.reembed` module for switching the embedding
+- New `hy_memory.reembed` module for switching the embedding
   model. Writers must be paused for the whole run. Nothing is derived from
   the provider or endpoint: source and target are named explicitly, and the
   identity of a space is the model name plus the width (`space_identity`).
