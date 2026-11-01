@@ -70,6 +70,23 @@ function object(
   return result;
 }
 
+/** Bind the tested input to the only revision change a probe can make. */
+export function modelProbeMatchesRevision(
+  result: ModelProbeResult | null | undefined,
+  profileId: string,
+  inputRevision: number,
+): boolean {
+  return (
+    result?.profile_id === profileId &&
+    // Older receipts can match the same revision, but cannot justify an upgrade.
+    (result.input_profile_revision ?? result.profile_revision) ===
+      inputRevision &&
+    revision(result.profile_revision) &&
+    (result.profile_revision === inputRevision ||
+      result.profile_revision === inputRevision + 1)
+  );
+}
+
 function validateResult(
   value: unknown,
   pending: PendingModelProbe,
@@ -81,14 +98,7 @@ function validateResult(
     "stages",
     "capabilities",
   ]);
-  if (
-    result.profile_id !== pending.profileId ||
-    result.input_profile_revision !== pending.inputRevision ||
-    !revision(result.profile_revision) ||
-    (result.profile_revision !== pending.inputRevision &&
-      result.profile_revision !== pending.inputRevision + 1)
-  )
-    fail();
+  if (result.input_profile_revision !== pending.inputRevision) fail();
   const capabilities = object(result.capabilities, [
     "endpoint_reachable",
     "model_available",
@@ -132,7 +142,20 @@ function validateResult(
     return stage;
   });
   // Project validated data, never expose extra fields from a transport response.
-  return { ...result, stages, capabilities } as unknown as ModelProbeResult;
+  const validated = {
+    ...result,
+    stages,
+    capabilities,
+  } as unknown as ModelProbeResult;
+  if (
+    !modelProbeMatchesRevision(
+      validated,
+      pending.profileId,
+      pending.inputRevision,
+    )
+  )
+    fail();
+  return validated;
 }
 
 function receipt(value: unknown, operationId: string): Record<string, unknown> {
