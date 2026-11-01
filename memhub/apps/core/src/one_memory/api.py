@@ -94,7 +94,6 @@ from one_memory.hy_runtime_config import (
 from one_memory.hy_sdk_runtime import (
     AmbiguousMemoryIdError,
     SdkClientHandle,
-    builtin_retrieval_snapshot,
     close_all_shared_runtimes,
     hold_stores_offline,
     release_stores,
@@ -229,6 +228,7 @@ from one_memory.sdk_memory_qa import (
 )
 from one_memory.sdk_memory_runtime import SdkMemoryRuntime
 from one_memory.sdk_migration_log import error_chain_text, error_frames
+from one_memory.sdk_read_handle import ActiveProfileReadHandle
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.secrets import (
     KeyringSecretStore,
@@ -4880,9 +4880,11 @@ async def _search_sdk_raw(
 def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
     handle = cast(SdkClientHandle | None, app.state.sdk_client_handle)
     if handle is None:
-        handle = SdkClientHandle(
-            profile=builtin_retrieval_snapshot(),
-            api_key=None,
+        # Reads open the embedding space writes fill: the active profile's,
+        # the built-in one only when none is active (#242).
+        handle = ActiveProfileReadHandle(
+            profiles=_model_profile_store(app),
+            secrets=_secret_store(app),
             data_dir=cast(Settings, app.state.settings).data_dir,
         )
         app.state.sdk_client_handle = handle

@@ -777,9 +777,7 @@ def run_startup_migration(
         step["chat"] = len(legacy.chat)
         step["productivity"] = len(legacy.productivity)
         step["users"] = len(legacy.users)
-    if active is None and not legacy.empty and vectors_belong_to_another_space(
-        data_dir, profile
-    ):
+    if active is None and not legacy.empty and vectors_belong_to_another_space(data_dir, profile):
         # The memories live in the space of a profile that is no longer active,
         # so the built-in model cannot read them. Legacy stays intact.
         log.check("preflight.vector_space_check", "sdk_migration_vector_profile_missing")

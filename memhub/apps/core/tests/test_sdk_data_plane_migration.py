@@ -888,9 +888,7 @@ def test_vectors_left_by_a_deleted_profile_stop_the_upgrade_by_name(store, monke
     assert not (home / "backups").exists()
 
 
-def test_confirmed_chats_the_sdk_had_already_merged_do_not_fail_the_upgrade(
-    store, active_profile
-):
+def test_confirmed_chats_the_sdk_had_already_merged_do_not_fail_the_upgrade(store, active_profile):
     """#229/#240: 658 confirmed chats, 657 in the store, and the upgrade failed.
 
     A 1.0.4 library can hold confirmed rows whose SDK node had been merged or
