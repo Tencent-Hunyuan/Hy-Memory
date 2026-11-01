@@ -449,6 +449,43 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     exit_codes: RUNTIME_EXITS,
   },
   {
+    name: "settings",
+    summary:
+      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。",
+    usage: "memhub settings mode [lite|pro|ultra] [--yes] [--json]",
+    options: [
+      {
+        flag: "mode [lite|pro|ultra]",
+        summary: "不带模式只显示当前模式；带模式时先显示切换计划。",
+      },
+      CONFIRM_OPTION,
+      JSON_OPTION,
+    ],
+    exit_codes: RUNTIME_EXITS,
+  },
+  {
+    name: "evolve",
+    summary:
+      "立即为一个用户运行记忆进化（System 2，仅 ultra 模式）。在后台运行并返回运行 ID；--wait 等待结果。同一用户同时只运行一次；每晚的自动进化由 Runtime 按设置安排。",
+    usage:
+      "memhub evolve [--user-id <id>] [--agent-id <id>] [--max-batches <n>] [--wait] [--json]",
+    options: [
+      USER_ID_OPTION,
+      {
+        flag: "--agent-id <id>",
+        summary:
+          "进化哪个 agent 的记忆，默认 all-apps（MemHub 写入记忆用的 agent）。",
+      },
+      {
+        flag: "--max-batches <n>",
+        summary: "每轮最多处理的批次数（1–1000），默认由 SDK 决定。",
+      },
+      { flag: "--wait", summary: "等待这次进化结束再返回。" },
+      JSON_OPTION,
+    ],
+    exit_codes: RUNTIME_EXITS,
+  },
+  {
     name: "graph-width",
     summary:
       "嵌入维度变化、图谱宽度不匹配时的处置决定。keep_existing 与 export_first 直接执行；rebuild_with_new 会归档旧图谱并重建，需 --yes。",

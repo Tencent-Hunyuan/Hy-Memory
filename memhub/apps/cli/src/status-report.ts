@@ -57,10 +57,95 @@ export interface StatusDocument {
     broker?: BackgroundHealth["broker"];
   };
   sections: Record<string, Section>;
+  /** R10: the SDK mode and System 2 state; null when the Runtime is not read
+   * or is older than the setting. */
+  pipeline?: PipelineSummary | null;
   summary: {
     state: "ok" | "partial";
     degraded: string[];
     not_checked: string[];
+  };
+}
+
+export interface PipelineSummary {
+  mode: "lite" | "pro" | "ultra";
+  configured_mode: "lite" | "pro" | "ultra";
+  forced_by_env: boolean;
+  last_evolve_at: string | null;
+  evolve_schedule: { enabled: boolean; time: string } | null;
+  evolve_running: number;
+  evolve_users: Record<
+    string,
+    {
+      last_run_at: string | null;
+      last_error: string | null;
+      state: string | null;
+    }
+  >;
+  graph_build: string | null;
+}
+
+const MODES = new Set(["lite", "pro", "ultra"]);
+
+/** Projection of `pipeline` in `/api/v1/memory-processing`; null if absent or malformed. */
+export function describePipeline(value: unknown): PipelineSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const pipeline = (value as { pipeline?: unknown }).pipeline;
+  if (!pipeline || typeof pipeline !== "object") return null;
+  const item = pipeline as Record<string, unknown>;
+  if (
+    !MODES.has(String(item.mode)) ||
+    !MODES.has(String(item.configured_mode))
+  ) {
+    return null;
+  }
+  const evolve =
+    item.evolve && typeof item.evolve === "object"
+      ? (item.evolve as Record<string, unknown>)
+      : {};
+  const schedule =
+    evolve.schedule && typeof evolve.schedule === "object"
+      ? (evolve.schedule as Record<string, unknown>)
+      : null;
+  const users: PipelineSummary["evolve_users"] = {};
+  if (evolve.users && typeof evolve.users === "object") {
+    for (const [userId, raw] of Object.entries(
+      evolve.users as Record<string, unknown>,
+    )) {
+      const user =
+        raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      const result =
+        user.last_result && typeof user.last_result === "object"
+          ? (user.last_result as Record<string, unknown>)
+          : {};
+      users[userId] = {
+        last_run_at:
+          typeof user.last_run_at === "string" ? user.last_run_at : null,
+        last_error:
+          typeof user.last_error === "string" ? user.last_error : null,
+        state: typeof result.state === "string" ? result.state : null,
+      };
+    }
+  }
+  const graph =
+    item.graph_build && typeof item.graph_build === "object"
+      ? (item.graph_build as Record<string, unknown>)
+      : {};
+  return {
+    mode: item.mode as PipelineSummary["mode"],
+    configured_mode: item.configured_mode as PipelineSummary["mode"],
+    forced_by_env: item.forced_by_env === true,
+    last_evolve_at:
+      typeof item.last_evolve_at === "string" ? item.last_evolve_at : null,
+    evolve_schedule:
+      schedule &&
+      typeof schedule.enabled === "boolean" &&
+      typeof schedule.time === "string"
+        ? { enabled: schedule.enabled, time: schedule.time }
+        : null,
+    evolve_running: Array.isArray(evolve.running) ? evolve.running.length : 0,
+    evolve_users: users,
+    graph_build: typeof graph.state === "string" ? graph.state : null,
   };
 }
 
@@ -97,6 +182,7 @@ export async function composeStatusReport(options: {
   attachFailure?: string;
 }): Promise<StatusDocument> {
   const sections: Record<string, Section> = {};
+  let pipeline: PipelineSummary | null = null;
   if (options.reader === null) {
     const state: SectionState =
       options.attachFailure === undefined ? "not_checked" : "unavailable";
@@ -118,6 +204,8 @@ export async function composeStatusReport(options: {
       validateProcessing,
       describeProcessing,
     );
+    pipeline =
+      processing.state === "ok" ? describePipeline(processing.data) : null;
     sections.model = section(model, validateModelProfiles, describeModel);
     sections.memories = section(
       memories,
@@ -169,6 +257,7 @@ export async function composeStatusReport(options: {
     },
     bridge,
     sections,
+    pipeline,
     summary: {
       state:
         degraded.length === 0 && notChecked.length === 0 ? "ok" : "partial",
@@ -205,6 +294,7 @@ export function renderStatusText(
       `${SECTION_LABELS[name]}：${sectionLine(report.sections[name])}`,
     );
   }
+  if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -218,6 +308,28 @@ export function renderStatusText(
   }
   lines.push("");
   return lines.join("\n");
+}
+
+export function pipelineLine(pipeline: PipelineSummary): string {
+  const parts: string[] = [pipeline.mode];
+  if (pipeline.forced_by_env)
+    parts.push("（ONE_MEMORY_GRAPH_STORE 强制 ultra）");
+  if (pipeline.mode === "ultra") {
+    const schedule = pipeline.evolve_schedule;
+    parts.push(
+      schedule?.enabled
+        ? `，每日 ${schedule.time} 自动进化`
+        : "，自动进化已关闭",
+    );
+    parts.push(
+      pipeline.last_evolve_at
+        ? `，上次进化 ${pipeline.last_evolve_at}`
+        : "，尚未进化",
+    );
+    if (pipeline.evolve_running > 0)
+      parts.push(`，进行中 ${pipeline.evolve_running}`);
+  }
+  return parts.join("");
 }
 
 function runtimeLine(report: StatusDocument): string {

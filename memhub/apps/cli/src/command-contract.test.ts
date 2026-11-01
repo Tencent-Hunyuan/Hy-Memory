@@ -76,6 +76,8 @@ const COMMANDS = [
   "models",
   "memories",
   "profile",
+  "settings",
+  "evolve",
   "graph-width",
   "host",
   "recall",

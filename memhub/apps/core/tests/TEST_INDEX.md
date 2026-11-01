@@ -161,6 +161,7 @@
 | `test_memory_evidence_freshness.py` | `contract` | 新鲜度拆除后：读路径恒为 current；证据修订 / 畸形 proof / segment ref 不再藏记忆或 503。 |
 | `test_memory_freshness_integration_review.py` | `integration` | Independent synthetic read-path review; no lifespan, model or user database. |
 | `test_memory_library_all_scenes.py` | `integration` | The v2 memory library across chat, working and coding memories. |
+| `test_memory_mode_and_evolve.py` | `contract` | The memory mode (lite / pro / ultra), evolve and its nightly schedule. |
 | `test_memory_qa.py` | `contract` | 覆盖 search terms keep meaningful single chinese character、streamed answer emits recall then incremental grounded text、governance change during generation stops the old answer 等 14 个场景。 |
 | `test_memory_qa_api.py` | `integration` | 覆盖 ask stream endpoint emits recall deltas and final、ask stream endpoint requires the local token 场景。 |
 | `test_memory_qa_permissions.py` | `contract` | 覆盖 initial refusal precedes all secret access and network、invalid authorization result fails before secret access、authorization receives exact question and only outbound grounding 等 16 个场景。 |
@@ -312,4 +313,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 307 个测试文件。
+共 308 个测试文件。

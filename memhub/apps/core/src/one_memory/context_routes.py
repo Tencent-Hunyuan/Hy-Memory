@@ -110,6 +110,8 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             client = await client_handle.client()
         except Exception:
             raise HTTPException(503, "sdk_context_unavailable") from None
+        memory_mode = getattr(request.app.state, "memory_mode", None)
+        lite = callable(memory_mode) and memory_mode() == "lite"
 
         async def raw_lane() -> tuple[SdkRawContextItem, ...]:
             if "raw" not in value.kinds or not authority.raw_allowed:
@@ -155,7 +157,9 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             )
 
         async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
-            if "memory" not in value.kinds or not authority.memory_allowed:
+            # lite extracts nothing: its search answers raw turns, which the
+            # raw lane already reads under the raw authority.
+            if "memory" not in value.kinds or not authority.memory_allowed or lite:
                 return ()
             overrides = value.search_overrides()
             raw = await asyncio.to_thread(

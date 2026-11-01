@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from one_memory.hy_sdk_runtime import SdkClientHandle
+from one_memory.hy_graph_admin import effective_memory_mode
+from one_memory.hy_sdk_runtime import SdkClientHandle, builtin_retrieval_snapshot
 from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore
@@ -31,8 +32,11 @@ class SdkWriteReceipt:
 class SdkWriteProcessor:
     """Turn one durable job into exactly one public SDK write call."""
 
-    def __init__(self, client_handle: SdkClientHandle) -> None:
+    def __init__(self, client_handle: SdkClientHandle, *, lite: bool = False) -> None:
         self._client_handle = client_handle
+        #: lite makes no model call: `add_extracted` would still call one, so a
+        #: direct memory note is stored as one raw user turn through `add`.
+        self._lite = lite
 
     async def process_sdk_job(
         self,
@@ -64,7 +68,7 @@ class SdkWriteProcessor:
             # waits and retries instead of being left `unknown`.
             raise RuntimeError("hy_memory_client_unavailable") from error
 
-        if extracted:
+        if extracted and not self._lite:
             contents = [sanitize_model_input(record.verbatim) for record in records]
             await before_hy_invocation()
             result = await asyncio.to_thread(
@@ -81,12 +85,15 @@ class SdkWriteProcessor:
         else:
             messages = [
                 {
-                    "role": record.role,
+                    "role": "user" if extracted else record.role,
                     "content": sanitize_model_input(record.verbatim),
                 }
                 for record in records
-                if record.content_kind is EvidenceContentKind.RAW_CONVERSATION
-                and record.role in _MESSAGE_ROLES
+                if extracted
+                or (
+                    record.content_kind is EvidenceContentKind.RAW_CONVERSATION
+                    and record.role in _MESSAGE_ROLES
+                )
             ]
             if not messages:
                 raise RuntimeError("hy_memory_task_without_inputs")
@@ -138,6 +145,15 @@ class SdkWriteCoordinator:
     from under a write still running on it: the SDK cleared its stores and
     the SharedRuntime closed mid-`add`, the job failed with AttributeError
     after HY was invoked, and it was left `unknown`.
+
+    Handles are keyed by profile and memory mode, so a mode change retires
+    handles the same way. In lite no generation model is needed: without an
+    active profile the built-in local embedder writes raw turns.
+
+    `exclusive_for_evolve(user_id)` keeps evolve and that user's writes
+    apart: it waits for the user's write in flight, and while it runs that
+    user's jobs are refused before the SDK is called
+    (`memory_evolve_in_progress`), so the drain puts them back.
     """
 
     def __init__(
@@ -148,13 +164,22 @@ class SdkWriteCoordinator:
         data_dir: Any,
         transport_factory: Callable[[ModelProfileSnapshot], Callable[[], Any] | None],
         sedimentation_enabled: Callable[[], bool],
+        memory_mode: Callable[[], str] = effective_memory_mode,
     ) -> None:
         self.profiles = profiles
         self.secrets = secrets
         self.data_dir = data_dir
         self.transport_factory = transport_factory
         self.sedimentation_enabled = sedimentation_enabled
-        self._handles: dict[tuple[str, int], SdkClientHandle] = {}
+        self.memory_mode = memory_mode
+        self._handles: dict[tuple[str, int, str], SdkClientHandle] = {}
+        #: Users evolve (or the graph backfill) is running for, the writes in
+        #: flight per user, and one exclusive run per user at a time. Writes
+        #: of one user still run side by side; only evolve waits for them.
+        self._evolving: set[str] = set()
+        self._writing: dict[str, int] = {}
+        self._writes_idle = asyncio.Condition()
+        self._exclusive: dict[str, asyncio.Lock] = {}
         #: Uses in flight per handle; a retired handle closes at zero.
         self._uses: dict[SdkClientHandle, int] = {}
         self._retired: set[SdkClientHandle] = set()
@@ -169,16 +194,66 @@ class SdkWriteCoordinator:
     ) -> SdkWriteReceipt:
         if not self.sedimentation_enabled():
             raise RuntimeError("model_sedimentation_disabled")
-        async with self._active_handle() as handle:
-            return await SdkWriteProcessor(handle).process_sdk_job(
-                records,
-                request_id=request_id,
-                before_hy_invocation=before_hy_invocation,
-            )
+        user_id = records[0].user_id if records else "local"
+        if user_id in self._evolving:
+            # Before any SDK call: the drain returns the job to pending.
+            raise RuntimeError("memory_evolve_in_progress")
+        self._writing[user_id] = self._writing.get(user_id, 0) + 1
+        try:
+            async with self._active_handle() as handle:
+                return await SdkWriteProcessor(
+                    handle, lite=getattr(handle, "mode", None) == "lite"
+                ).process_sdk_job(
+                    records,
+                    request_id=request_id,
+                    before_hy_invocation=before_hy_invocation,
+                )
+        finally:
+            remaining = self._writing.get(user_id, 1) - 1
+            if remaining > 0:
+                self._writing[user_id] = remaining
+            else:
+                self._writing.pop(user_id, None)
+            async with self._writes_idle:
+                self._writes_idle.notify_all()
 
-    async def inquire_write_outcome(
-        self, request_id: str
-    ) -> SdkWriteReceipt | None:
+    async def retire_stale_modes(self) -> None:
+        """After a mode change: retire handles of other modes, closing the idle ones.
+
+        A handle still writing is closed when its last use ends (#218), so a
+        write that started in the old mode finishes in it.
+        """
+        mode = self.memory_mode()
+        async with self._lock:
+            stale = {key: handle for key, handle in self._handles.items() if key[2] != mode}
+            for key in stale:
+                del self._handles[key]
+            self._retired.update(stale.values())
+            unused = {value for value in self._retired if not self._uses.get(value)}
+            self._retired -= unused
+        await asyncio.gather(*(value.close() for value in unused))
+
+    def evolving(self, user_id: str) -> bool:
+        """Whether evolve holds this user, so their queued writes should wait."""
+        return user_id in self._evolving
+
+    @asynccontextmanager
+    async def exclusive_for_evolve(self, user_id: str) -> AsyncIterator[None]:
+        """Hold one user's writes off while evolve runs for them.
+
+        New writes of the user are refused from here on; the ones already in
+        flight are waited for before the body runs.
+        """
+        async with self._exclusive.setdefault(user_id, asyncio.Lock()):
+            self._evolving.add(user_id)
+            try:
+                async with self._writes_idle:
+                    await self._writes_idle.wait_for(lambda: not self._writing.get(user_id))
+                yield
+            finally:
+                self._evolving.discard(user_id)
+
+    async def inquire_write_outcome(self, request_id: str) -> SdkWriteReceipt | None:
         async with self._active_handle() as handle:
             return await SdkWriteProcessor(handle).inquire_write_outcome(request_id)
 
@@ -204,9 +279,11 @@ class SdkWriteCoordinator:
     @asynccontextmanager
     async def _active_handle(self) -> AsyncIterator[SdkClientHandle]:
         """Use the active profile's handle; retire the others, closing the unused."""
-        identity, profile, secret = await asyncio.to_thread(
-            self._read_active_credentials
+        mode = self.memory_mode()
+        profile_identity, profile, secret = await asyncio.to_thread(
+            self._read_active_credentials, mode
         )
+        identity = (*profile_identity, mode)
         async with self._lock:
             handle = self._handles.get(identity)
             if handle is None:
@@ -215,6 +292,7 @@ class SdkWriteCoordinator:
                     api_key=secret,
                     data_dir=self.data_dir,
                     http_transport_factory=self.transport_factory(profile),
+                    mode=mode,
                 )
                 self._handles[identity] = handle
             self._retired.update(value for key, value in self._handles.items() if key != identity)
@@ -239,9 +317,14 @@ class SdkWriteCoordinator:
 
     def _read_active_credentials(
         self,
+        mode: str = "pro",
     ) -> tuple[tuple[str, int], ModelProfileSnapshot, str | None]:
         identity = self.profiles.active_identity()
         if identity is None:
+            if mode == "lite":
+                # lite stores raw turns with one embedding and calls no model.
+                builtin = builtin_retrieval_snapshot()
+                return (builtin.profile_id, builtin.revision), builtin, None
             raise RuntimeError("model_profile_not_active")
         profile = self.profiles.snapshot(*identity)
         try:

@@ -13,8 +13,8 @@
    接口先补 SDK。Runtime writers 停止后的 App 启动迁移可直接操作底层存储，
    但不得把迁移专用方法加入公共 Client。
 3. MemHub **不存 memory 实体**；**可以存 `memory_id`** 做组织/回执。原文进入 **SDK raw**。
-4. SDK raw 只保留滚动三天；一条 raw 对应一个完整 turn，只含真人 user 与
-   assistant，tool 不持久化。提取后的高层 memory 不受该窗口影响。
+4. SDK raw 全部保留，任何模式（lite / pro / ultra）都不删除；一条 raw 对应一个
+   完整 turn，只含真人 user 与 assistant，tool 不持久化。
 5. `source_raw_ids` 是 SDK 内部溯源关系，不是产品 Evidence 合同；记忆详情不提供
    “原始依据”或按 raw ID 展开原文的入口。
 

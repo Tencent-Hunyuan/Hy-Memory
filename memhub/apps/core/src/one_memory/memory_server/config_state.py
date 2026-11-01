@@ -13,6 +13,7 @@ import threading
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
@@ -27,6 +28,31 @@ class SourceConfig(BaseModel):
     sync_enabled: StrictBool = False
 
 
+#: The SDK pipeline mode (hy-memory `HyMemoryClient(mode=...)`):
+#: lite keeps raw conversations only, with no model call; pro extracts
+#: memories (System 1); ultra adds the knowledge graph and evolve (System 2).
+MemoryMode = Literal["lite", "pro", "ultra"]
+MEMORY_MODES: tuple[MemoryMode, ...] = ("lite", "pro", "ultra")
+_SCHEDULE_TIME = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+
+
+class EvolveSchedule(BaseModel):
+    """When ultra runs evolve for every user: once a day, local time."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    enabled: StrictBool = True
+    #: `HH:MM`, 24-hour, the machine's local time.
+    time: str = "03:00"
+
+    @field_validator("time")
+    @classmethod
+    def valid_time(cls, value: str) -> str:
+        if _SCHEDULE_TIME.fullmatch(value) is None:
+            raise ValueError("invalid_evolve_schedule_time")
+        return value
+
+
 class ConfigDocument(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -39,6 +65,10 @@ class ConfigDocument(BaseModel):
     #: needs no re-entry of a key.
     sedimentation_enabled: StrictBool = True
     extraction_window_preset: ExtractionWindowPreset = ExtractionWindowPreset.THREE_MONTHS
+    #: The SDK mode every client is built with. `ONE_MEMORY_GRAPH_STORE` (dev)
+    #: still forces ultra over it; see `hy_graph_admin.effective_memory_mode`.
+    memory_mode: MemoryMode = "pro"
+    evolve_schedule: EvolveSchedule = Field(default_factory=EvolveSchedule)
 
     @field_validator("sources")
     @classmethod
@@ -59,6 +89,9 @@ class ConfigDocument(BaseModel):
 
 class ConfigFileError(RuntimeError):
     pass
+
+
+_WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule"})
 
 
 class ConfigStore:
@@ -103,6 +136,32 @@ class ConfigStore:
             raise ValueError("invalid_extraction_window_config")
         with self._lock:
             updated = self._document.model_copy(update={"extraction_window_preset": preset})
+            self._write(updated)
+            self._document = updated
+            return updated
+
+    def memory_mode(self) -> MemoryMode:
+        with self._lock:
+            return self._document.memory_mode
+
+    def set_memory_mode(self, mode: MemoryMode) -> ConfigDocument:
+        if mode not in MEMORY_MODES:
+            raise ValueError("invalid_memory_mode")
+        with self._lock:
+            updated = self._document.model_copy(update={"memory_mode": mode})
+            self._write(updated)
+            self._document = updated
+            return updated
+
+    def evolve_schedule(self) -> EvolveSchedule:
+        with self._lock:
+            return self._document.evolve_schedule
+
+    def set_evolve_schedule(self, schedule: EvolveSchedule) -> ConfigDocument:
+        if not isinstance(schedule, EvolveSchedule):
+            raise ValueError("invalid_evolve_schedule")
+        with self._lock:
+            updated = self._document.model_copy(update={"evolve_schedule": schedule})
             self._write(updated)
             self._document = updated
             return updated
@@ -152,9 +211,12 @@ class ConfigStore:
             raise ConfigFileError("config_invalid") from error
 
     def _write(self, document: ConfigDocument) -> None:
+        # Settings added after 1.0.5 are written only once a person chose
+        # them, so an untouched install's file stays what older builds read.
+        unset = {name for name in _WRITTEN_WHEN_SET if name not in document.model_fields_set}
         payload = (
             json.dumps(
-                document.model_dump(mode="json"),
+                document.model_dump(mode="json", exclude=unset),
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,

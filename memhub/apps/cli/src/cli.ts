@@ -189,6 +189,18 @@ import {
   rollbackManagedCliLink,
 } from "./managed-cli-link.js";
 import {
+  type EvolveDocument,
+  evolveExitCode,
+  type ModeDocument,
+  modeExitCode,
+  parseEvolveCommand,
+  parseSettingsCommand,
+  renderEvolveText,
+  renderModeText,
+  runEvolveCommand,
+  runModeCommand,
+} from "./memory-mode-flow.js";
+import {
   addMemory,
   DEFAULT_USER_ID,
   isMemoryId,
@@ -325,6 +337,8 @@ export interface RunControls {
   watchSignal?: AbortSignal;
   watchWait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   watchNow?: () => string;
+  /** `memhub evolve --wait` polls on this; tests inject an instant one. */
+  sleep?: (milliseconds: number) => Promise<void>;
   readStdin?: () => Promise<Buffer | null>;
   stdinIsTTY?: boolean;
   /** Injectable onboarding prompter so the wizard can be driven in tests
@@ -2227,6 +2241,55 @@ async function runCommand(
             : `操作失败：${outcome.code}\n`,
     );
     return outcome.state === "committed" ? EXIT_OK : EXIT_FAILED;
+  }
+  if (named === "settings") {
+    const parsed = parseSettingsCommand(arguments_.slice(1));
+    if (!parsed) return usage();
+    const connected = await connectRuntime(environment);
+    if (!connected.ok) {
+      const document: ModeDocument = {
+        schema_version: 1,
+        product: PRODUCT,
+        command: "settings mode",
+        state: "unavailable",
+        code: connected.code,
+      };
+      emit(asJson ? `${JSON.stringify(document)}\n` : renderModeText(document));
+      return connected.exitCode;
+    }
+    const document = await runModeCommand(
+      parsed,
+      connected.reader,
+      connected.operations,
+    );
+    emit(asJson ? `${JSON.stringify(document)}\n` : renderModeText(document));
+    return modeExitCode(document);
+  }
+  if (named === "evolve") {
+    const parsed = parseEvolveCommand(arguments_.slice(1));
+    if (!parsed) return usage();
+    const connected = await connectRuntime(environment);
+    if (!connected.ok) {
+      const document: EvolveDocument = {
+        schema_version: 1,
+        product: PRODUCT,
+        command: "evolve",
+        state: "unavailable",
+        code: connected.code,
+      };
+      emit(
+        asJson ? `${JSON.stringify(document)}\n` : renderEvolveText(document),
+      );
+      return connected.exitCode;
+    }
+    const document = await runEvolveCommand(parsed, {
+      userId: userIdParameters(userId).user_id,
+      reader: connected.reader,
+      operations: connected.operations,
+      sleep: controls.sleep,
+    });
+    emit(asJson ? `${JSON.stringify(document)}\n` : renderEvolveText(document));
+    return evolveExitCode(document);
   }
   if (named === "graph-width") {
     const parsed = parseGraphWidthCommand(arguments_.slice(1));
@@ -6814,7 +6877,13 @@ const OWN_DATA_DIR_COMMANDS = new Set([
 /** Remove one `--data-dir <absolute path>` from argv; null when it is
  * repeated, missing its value, or not an absolute path. */
 /** Memory commands that honour the global `--user-id`. */
-const USER_ID_COMMANDS = new Set(["memories", "recall", "profile", "write"]);
+const USER_ID_COMMANDS = new Set([
+  "memories",
+  "recall",
+  "profile",
+  "write",
+  "evolve",
+]);
 
 /**
  * Take `--user-id <id>` out of the arguments. The default user (`local`) is

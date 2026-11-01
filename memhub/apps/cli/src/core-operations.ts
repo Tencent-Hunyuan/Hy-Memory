@@ -26,6 +26,9 @@ const SOURCE_IMPORT_JOB_PATH = "/api/v1/import-jobs";
 const IMPORT_JOB_ACTION_PATH =
   /^\/api\/v1\/import-jobs\/[A-Za-z0-9][\w.-]{0,127}\/(?:pause|resume|cancel)$/;
 const GRAPH_WIDTH_PATH = "/api/v1/graph-width";
+/** `memhub evolve` starts a run; `memhub settings mode <m> --yes` sets the mode. */
+const EVOLVE_PATH = "/api/v2/evolve";
+const MEMORY_MODE_PATH = "/api/v1/settings/memory-mode";
 const ONBOARDING_COMPLETE_PATH = "/api/v1/onboarding/complete";
 const MAX_BYTES = 4 * 1024 * 1024;
 
@@ -97,6 +100,7 @@ export function createCoreOperations(attachment: {
         !SOURCE_AUTHORIZE_PATH.test(path) &&
         !SOURCE_REVOKE_PATH.test(path) &&
         path !== GRAPH_WIDTH_PATH &&
+        path !== EVOLVE_PATH &&
         path !== ONBOARDING_COMPLETE_PATH &&
         !MODEL_PROFILE_ACTIVATE.test(path)
       ) {
@@ -132,7 +136,10 @@ export function createCoreOperations(attachment: {
       body: Record<string, unknown>,
       signal?: AbortSignal,
     ) {
-      if (!SDK_MEMORY_PATH.test(path) || path.includes("?")) {
+      if (
+        path !== MEMORY_MODE_PATH &&
+        (!SDK_MEMORY_PATH.test(path) || path.includes("?"))
+      ) {
         throw new Error("core_operation_path_not_allowed");
       }
       let response: { status: number; data: unknown };

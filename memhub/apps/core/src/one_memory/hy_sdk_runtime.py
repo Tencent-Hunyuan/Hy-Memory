@@ -31,7 +31,7 @@ from one_memory.embedding_assets import (
 )
 from one_memory.hy_graph_admin import (
     GraphWidthMismatchError,
-    graph_store_enabled,
+    effective_memory_mode,
     inspect_graph_width_mismatch,
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
@@ -170,11 +170,14 @@ class SdkClientHandle:
         api_key: str | None,
         data_dir: Path,
         http_transport_factory: Callable[[], Any] | None = None,
+        mode: str | None = None,
     ) -> None:
         self._profile = profile
         self._api_key = api_key
         self._data_dir = data_dir
         self._http_transport_factory = http_transport_factory
+        #: The SDK mode this handle's client is built with, fixed for its life.
+        self.mode = mode or effective_memory_mode()
         self._lease: ClientLease | None = None
         self._lock = asyncio.Lock()
 
@@ -189,6 +192,7 @@ class SdkClientHandle:
                     api_key=self._api_key,
                     data_dir=self._data_dir,
                     http_transport_factory=self._http_transport_factory,
+                    mode=self.mode,
                 )
             return self._lease.client
 
@@ -352,9 +356,12 @@ def acquire_client(
     api_key: str | None,
     data_dir: Path,
     http_transport_factory: Callable[[], Any] | None = None,
+    mode: str | None = None,
 ) -> ClientLease:
     """Construct a public SDK client and return its explicit runtime lease.
 
+    `mode` is the SDK pipeline mode (lite / pro / ultra); None keeps the
+    pre-setting default (ultra when `ONE_MEMORY_GRAPH_STORE` is set, else pro).
     Waits while `hold_stores_offline` holds this home's stores.
     """
     key = data_dir.resolve()
@@ -368,6 +375,7 @@ def acquire_client(
             api_key=api_key,
             data_dir=data_dir,
             http_transport_factory=http_transport_factory,
+            mode=mode or effective_memory_mode(),
         )
     finally:
         with _STORE_GATE:
@@ -406,6 +414,7 @@ def _acquire_client(
     api_key: str | None,
     data_dir: Path,
     http_transport_factory: Callable[[], Any] | None,
+    mode: str = "pro",
 ) -> ClientLease:
     config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir)
     config.http_transport_factory = http_transport_factory
@@ -423,7 +432,7 @@ def _acquire_client(
         with constructing:
             client = HyMemoryClient(
                 config=config,
-                mode="ultra" if graph_store_enabled() else "pro",
+                mode=mode,
                 runtime=runtime,
                 embedding_service=embedding_service,
             )

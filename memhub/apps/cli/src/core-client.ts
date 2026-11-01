@@ -18,7 +18,12 @@ const READ_ONLY_PATHS = [
   "/api/v2/memory-library",
   "/api/v2/user-profile",
   "/api/v2/user-profile/versions",
+  "/api/v1/settings/memory-mode",
+  "/api/v2/evolve",
 ] as const;
+/** One evolve run's receipt (`memhub evolve --wait`). */
+const EVOLVE_RUN =
+  /^\/api\/v2\/evolve\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SDK_MEMORY_DETAIL = /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}$/;
 /** Status of one `POST /api/v2/memories` addition, by its request id. */
 const MEMORY_ADDITION =
@@ -221,6 +226,7 @@ export function isReadOnlyPath(path: string): boolean {
   if (IMPORT_JOB.test(path)) return true;
   if (OPERATION_RECEIPT.test(path)) return true;
   if (MEMORY_ADDITION.test(path)) return true;
+  if (EVOLVE_RUN.test(path)) return true;
   if (!SDK_MEMORY_DETAIL.test(path)) return false;
   const segment = path.slice("/api/v2/memories/".length);
   return !(RESERVED_MEMORY_SEGMENTS as readonly string[]).includes(segment);
