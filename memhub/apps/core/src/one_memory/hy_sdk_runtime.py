@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Literal, cast
+from typing import Any, ClassVar, Literal, TypedDict, cast
 
 from hy_memory import (  # type: ignore[import-untyped]
     AmbiguousMemoryIdError as AmbiguousMemoryIdError,  # re-export for api.py
@@ -56,6 +57,8 @@ from one_memory.model_profiles import (
     ProviderKind,
     disable_thinking_params,
 )
+
+logger = logging.getLogger(__name__)
 
 _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
@@ -191,6 +194,7 @@ class SdkClientHandle:
         space: EmbeddingSpace | None = None,
         mode: str | None = None,
         features: FeatureOverrides = (),
+        language: str | None = None,
     ) -> None:
         self._profile = profile
         self._api_key = api_key
@@ -201,6 +205,8 @@ class SdkClientHandle:
         self.mode = mode or effective_memory_mode()
         #: The SDK features set on its config (`memory_features`), fixed likewise.
         self.features = features
+        #: The SDK prompt language (`ui_language`); None = SDK auto-detect.
+        self.language = language
         self._lease: ClientLease | None = None
         self._constructing: asyncio.Future[ClientLease] | None = None
         self._lock = asyncio.Lock()
@@ -232,6 +238,7 @@ class SdkClientHandle:
                         http_transport_factory=self._http_transport_factory,
                         mode=self.mode,
                         features=self.features,
+                        **language_kwargs(self.language),
                     )
                 )
                 self._constructing = constructing
@@ -347,6 +354,42 @@ def apply_sdk_features(
     return config
 
 
+_LANGUAGE_UNSUPPORTED_LOGGED = False
+
+
+class LanguageKwargs(TypedDict, total=False):
+    language: str
+
+
+def language_kwargs(language: str | None) -> LanguageKwargs:
+    """`language=` for a client constructor, only when there is one.
+
+    Without a language every call is the one it was before the setting
+    existed, so stand-ins written for that call keep working.
+    """
+    return {"language": language} if language is not None else {}
+
+
+def apply_sdk_language(config: MemoryConfig, language: str | None) -> MemoryConfig:
+    """Set the SDK prompt language, when there is one and the SDK has the field.
+
+    None (zh-Hans, or no choice) sets nothing: the SDK detects zh/en as it
+    always did. An SDK without `MemoryConfig.language` keeps working without
+    it; that is logged once at debug level. Like a feature, the language never
+    touches `vector_store`, so the collection identity never depends on it.
+    """
+    global _LANGUAGE_UNSUPPORTED_LOGGED
+    if language is None:
+        return config
+    if not hasattr(config, "language"):
+        if not _LANGUAGE_UNSUPPORTED_LOGGED:
+            _LANGUAGE_UNSUPPORTED_LOGGED = True
+            logger.debug("hy_sdk_language_unsupported language=%s", language)
+        return config
+    config.language = language
+    return config
+
+
 def build_sdk_config(
     profile: ModelProfileSnapshot,
     space: EmbeddingSpace | None = None,
@@ -355,6 +398,7 @@ def build_sdk_config(
     api_key: str | None,
     data_dir: Path,
     features: Mapping[str, bool] | Iterable[tuple[str, bool]] = (),
+    language: str | None = None,
 ) -> MemoryConfig:
     """Map a model snapshot and its embedding space to an SDK configuration.
 
@@ -365,7 +409,8 @@ def build_sdk_config(
     the registry existed is used: offline tools on a home with no registry.
     `mode` never changes a name, and neither do `features`
     (`memory_features`), which are set on top; with none the config is
-    exactly what it was before the setting existed.
+    exactly what it was before the setting existed. So is `language`
+    (`apply_sdk_language`); None leaves the SDK's own zh/en detection.
     """
     if mode is not None and mode not in {"lite", "pro", "ultra"}:
         raise HySdkRuntimeError("hy_sdk_memory_mode_invalid")
@@ -453,7 +498,7 @@ def build_sdk_config(
             "coding": {"db_path": str(root / "coding.sqlite3")},
         }
     )
-    return apply_sdk_features(config, features)
+    return apply_sdk_language(apply_sdk_features(config, features), language)
 
 
 def _acquire_for_handle(
@@ -465,6 +510,7 @@ def _acquire_for_handle(
     http_transport_factory: Callable[[], Any] | None,
     mode: str | None,
     features: FeatureOverrides = (),
+    language: str | None = None,
 ) -> ClientLease:
     # `acquire_client` is looked up at call time, so a stand-in replaces every
     # construction. A handle without a space keeps the call it always made.
@@ -477,6 +523,7 @@ def _acquire_for_handle(
         mode=mode,
         features=features,
         **named,
+        **language_kwargs(language),
     )
 
 
@@ -489,6 +536,7 @@ def acquire_client(
     http_transport_factory: Callable[[], Any] | None = None,
     mode: str | None = None,
     features: FeatureOverrides = (),
+    language: str | None = None,
 ) -> ClientLease:
     """Construct a public SDK client and return its explicit runtime lease.
 
@@ -496,7 +544,8 @@ def acquire_client(
     pipeline mode (lite / pro / ultra) and never changes a name; None keeps
     the pre-setting default (ultra when `ONE_MEMORY_GRAPH_STORE` is set, else
     pro). `features` are the `memory_features` set on its config; none keeps
-    every SDK default. Waits while `hold_stores_offline` holds this home's stores.
+    every SDK default. `language` is the SDK prompt language; None
+    auto-detects. Waits while `hold_stores_offline` holds this home's stores.
     """
     key = data_dir.resolve()
     with _STORE_GATE:
@@ -513,6 +562,7 @@ def acquire_client(
             mode=mode or effective_memory_mode(),
             features=features,
             **named,
+            **language_kwargs(language),
         )
     finally:
         with _STORE_GATE:
@@ -568,6 +618,7 @@ def _acquire_client(
     http_transport_factory: Callable[[], Any] | None,
     mode: str = "pro",
     features: FeatureOverrides = (),
+    language: str | None = None,
 ) -> ClientLease:
     config = build_sdk_config(
         profile,
@@ -576,6 +627,7 @@ def _acquire_client(
         api_key=api_key,
         data_dir=data_dir,
         features=features,
+        language=language,
     )
     config.http_transport_factory = http_transport_factory
     mismatch = inspect_graph_width_mismatch(config)

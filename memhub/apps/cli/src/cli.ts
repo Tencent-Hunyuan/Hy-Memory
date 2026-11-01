@@ -204,6 +204,13 @@ import {
   runFeaturesCommand,
 } from "./memory-features-flow.js";
 import {
+  type LanguageDocument,
+  languageExitCode,
+  parseLanguageCommand,
+  renderLanguageText,
+  runLanguageCommand,
+} from "./memory-language-flow.js";
+import {
   type EvolveDocument,
   evolveExitCode,
   type ModeDocument,
@@ -2378,6 +2385,40 @@ async function runCommand(
       asJson ? `${JSON.stringify(document)}\n` : renderFeaturesText(document),
     );
     return featuresExitCode(document);
+  }
+  if (
+    named === "settings" &&
+    arguments_.slice(1).find((value) => value !== "--json") === "language"
+  ) {
+    const parsed = parseLanguageCommand(
+      arguments_
+        .slice(1)
+        .filter((value, index, all) => index !== all.indexOf("language")),
+    );
+    if (!parsed) return usage();
+    const connected = await connectRuntime(environment);
+    if (!connected.ok) {
+      const document: LanguageDocument = {
+        schema_version: 1,
+        product: PRODUCT,
+        command: "settings language",
+        state: "unavailable",
+        code: connected.code,
+      };
+      emit(
+        asJson ? `${JSON.stringify(document)}\n` : renderLanguageText(document),
+      );
+      return connected.exitCode;
+    }
+    const document = await runLanguageCommand(
+      parsed,
+      connected.reader,
+      connected.operations,
+    );
+    emit(
+      asJson ? `${JSON.stringify(document)}\n` : renderLanguageText(document),
+    );
+    return languageExitCode(document);
   }
   if (named === "settings") {
     const parsed = parseSettingsCommand(arguments_.slice(1));

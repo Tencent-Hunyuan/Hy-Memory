@@ -28,7 +28,7 @@ it("translates memory filters and detail affordances live without refetching", a
   expect(screen.getByRole("button", { name: "Buscar" })).toBeTruthy();
   const calls = reads.sdkLibrary.mock.calls.length;
   act(() => {
-    localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
     window.dispatchEvent(
       new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
     );

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { translate } from "@one-memory/i18n";
+import { LOCALE_NAMES, SUPPORTED_LOCALES, translate } from "@one-memory/i18n";
 import {
   cleanup,
   fireEvent,
@@ -20,7 +20,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["zh-CN", "en", "es"] as const)(
+it.each(["zh-Hans", "en", "es", "ja", "de", "ru"] as const)(
   "hides the compact label while preserving its accessible name in %s",
   async (locale) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
@@ -42,7 +42,7 @@ it.each(["zh-CN", "en", "es"] as const)(
   },
 );
 
-it.each(["zh-CN", "en", "es"] as const)(
+it.each(["zh-Hans", "en", "es", "zh-Hant", "fr", "ko"] as const)(
   "keeps the normal settings label visible and accessible in %s",
   (locale) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
@@ -66,7 +66,7 @@ it.each(["zh-CN", "en", "es"] as const)(
   },
 );
 
-it.each(["system", "zh-CN", "en", "es"] as const)(
+it.each(["system", "zh-Hans", "en", "es", "pt", "id"] as const)(
   "keeps one stable settings row for the %s preference",
   async (preference) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, preference);
@@ -81,40 +81,46 @@ it.each(["system", "zh-CN", "en", "es"] as const)(
     expect(row).toBeTruthy();
     expect(row?.querySelector("label")?.hidden).toBe(false);
     await userEvent.click(selector);
-    expect(
-      screen
-        .getByRole("option", {
-          name: /简体中文|Simplified Chinese|Chino simplificado/,
-        })
-        .getAttribute("lang"),
-    ).toBe("zh-CN");
-    expect(
-      screen
-        .getByRole("option", { name: /英语|English|Inglés/ })
-        .getAttribute("lang"),
-    ).toBe("en");
-    expect(
-      screen
-        .getByRole("option", { name: /西班牙语|Spanish|Español/ })
-        .getAttribute("lang"),
-    ).toBe("es");
+    // Every language by its own name, whatever the interface language.
+    for (const locale of SUPPORTED_LOCALES) {
+      expect(
+        screen
+          .getByRole("option", { name: LOCALE_NAMES[locale] })
+          .getAttribute("lang"),
+      ).toBe(locale);
+    }
   },
 );
 
 it("offers an accessible selector, persists and updates its label", async () => {
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   render(
     <LanguageProvider>
       <LanguageSelector />
     </LanguageProvider>,
   );
   const selector = screen.getByRole("combobox", {
-    name: translate("zh-CN", "languageLabel"),
+    name: translate("zh-Hans", "languageLabel"),
   });
   expect(selector.getAttribute("aria-describedby")).toBeTruthy();
   await userEvent.click(selector);
-  expect(screen.getAllByRole("option")).toHaveLength(4);
-  await userEvent.click(screen.getByRole("option", { name: "西班牙语" }));
+  expect(
+    screen.getAllByRole("option").map((option) => option.textContent),
+  ).toEqual([
+    translate("zh-Hans", "languageSystem"),
+    "English",
+    "简体中文",
+    "繁體中文",
+    "日本語",
+    "Español",
+    "Deutsch",
+    "Português",
+    "Français",
+    "한국어",
+    "Русский",
+    "Bahasa Indonesia",
+  ]);
+  await userEvent.click(screen.getByRole("option", { name: "Español" }));
   expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("es");
   expect(
     screen.getByRole("combobox", { name: translate("es", "languageLabel") }),
@@ -143,12 +149,12 @@ it("supports keyboard selection without using the system select menu", async () 
   expect(selector.getAttribute("aria-expanded")).toBe("true");
   await userEvent.keyboard("{Escape}");
   await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
-  expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("zh-CN");
+  expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe("en");
   expect(selector.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("announces storage errors without replacing the confirmed choice", async () => {
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   render(
     <LanguageProvider>
       <LanguageSelector />
@@ -158,12 +164,12 @@ it("announces storage errors without replacing the confirmed choice", async () =
     throw new Error("denied");
   });
   await userEvent.click(screen.getByRole("combobox"));
-  await userEvent.click(screen.getByRole("option", { name: "西班牙语" }));
+  await userEvent.click(screen.getByRole("option", { name: "Español" }));
   expect(screen.getByRole("alert").textContent).toBe(
-    translate("zh-CN", "languageSaveError"),
+    translate("zh-Hans", "languageSaveError"),
   );
   expect((screen.getByRole("combobox") as HTMLButtonElement).value).toBe(
-    "zh-CN",
+    "zh-Hans",
   );
 });
 

@@ -33,7 +33,7 @@ describe("language preference IPC", () => {
     if (!read || !write) throw Error("Missing language handlers");
     await expect(read("foreign")).rejects.toThrow("untrusted");
     await expect(write("iframe", "es")).rejects.toThrow("untrusted");
-    await expect(write("trusted", "fr")).rejects.toThrow();
+    await expect(write("trusted", "it")).rejects.toThrow();
     await expect(write("trusted", "es", "extra")).rejects.toThrow();
     expect(save).not.toHaveBeenCalled();
     expect(await read("trusted")).toEqual({

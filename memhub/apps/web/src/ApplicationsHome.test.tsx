@@ -23,8 +23,8 @@ import { queryClient, resetClient } from "./query-client";
 it("localizes the whole home live without repeating reads or changing imported text", async () => {
   let change:
     | ((snapshot: {
-        preference: "es" | "zh-CN";
-        locale: "es" | "zh-CN";
+        preference: "es" | "zh-Hans";
+        locale: "es" | "zh-Hans";
         revision: number;
       }) => void)
     | undefined;
@@ -52,7 +52,9 @@ it("localizes the whole home live without repeating reads or changing imported t
   fireEvent.click(
     screen.getByRole("button", { name: "Ver las 5 aplicaciones" }),
   );
-  act(() => change?.({ preference: "zh-CN", locale: "zh-CN", revision: 2 }));
+  act(() =>
+    change?.({ preference: "zh-Hans", locale: "zh-Hans", revision: 2 }),
+  );
   expect(
     screen.getByRole("heading", { name: "全部应用", level: 1 }),
   ).toBeTruthy();

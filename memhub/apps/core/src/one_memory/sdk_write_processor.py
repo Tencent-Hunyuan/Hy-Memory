@@ -16,7 +16,11 @@ from one_memory.embedding_spaces import (
     registry_for,
 )
 from one_memory.hy_graph_admin import effective_memory_mode
-from one_memory.hy_sdk_runtime import SdkClientHandle, builtin_retrieval_snapshot
+from one_memory.hy_sdk_runtime import (
+    SdkClientHandle,
+    builtin_retrieval_snapshot,
+    language_kwargs,
+)
 from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_features import FeatureOverrides
@@ -153,10 +157,11 @@ class SdkWriteCoordinator:
     the SharedRuntime closed mid-`add`, the job failed with AttributeError
     after HY was invoked, and it was left `unknown`.
 
-    Handles are keyed by profile, memory mode and the SDK features
-    (`memory_features`), so a mode or feature change retires handles the same
-    way. In lite no generation model is needed: without an
-    active profile the built-in local embedder writes raw turns.
+    Handles are keyed by profile, memory mode, the SDK features
+    (`memory_features`) and the SDK language (`ui_language`), so a mode,
+    feature or language change retires handles the same way. In lite no
+    generation model is needed: without an active profile the built-in
+    local embedder writes raw turns.
 
     `exclusive_for_evolve(user_id)` keeps evolve and that user's writes
     apart: it waits for the user's write in flight, and while it runs that
@@ -182,6 +187,7 @@ class SdkWriteCoordinator:
         memory_features: Callable[[], FeatureOverrides] = lambda: (),
         spaces: EmbeddingSpaceStore | None = None,
         writes_open: Callable[[], bool] = lambda: True,
+        sdk_language: Callable[[], str | None] = lambda: None,
     ) -> None:
         self.profiles = profiles
         self.secrets = secrets
@@ -190,8 +196,12 @@ class SdkWriteCoordinator:
         self.sedimentation_enabled = sedimentation_enabled
         self.memory_mode = memory_mode
         self.memory_features = memory_features
-        #: Keyed by (profile id, revision, space id, memory mode, features).
-        self._handles: dict[tuple[str, int, str, str, FeatureOverrides], SdkClientHandle] = {}
+        self.sdk_language = sdk_language
+        #: Keyed by (profile id, revision, space id, memory mode, features,
+        #: SDK language).
+        self._handles: dict[
+            tuple[str, int, str, str, FeatureOverrides, str | None], SdkClientHandle
+        ] = {}
         #: Users evolve (or the graph backfill) is running for, the writes in
         #: flight per user, and one exclusive run per user at a time. Writes
         #: of one user still run side by side; only evolve waits for them.
@@ -244,13 +254,13 @@ class SdkWriteCoordinator:
                 self._writes_idle.notify_all()
 
     async def retire_stale_handles(self) -> None:
-        """After a mode or feature change: retire handles built otherwise.
+        """After a mode, feature or language change: retire handles built otherwise.
 
         The idle ones close now. A handle still writing is closed when its
         last use ends (#218), so a write that started in the old mode, or
         with the old features, finishes in it.
         """
-        build = (self.memory_mode(), self.memory_features())
+        build = (self.memory_mode(), self.memory_features(), self.sdk_language())
         async with self._lock:
             stale = {key: handle for key, handle in self._handles.items() if key[3:] != build}
             for key in stale:
@@ -332,10 +342,17 @@ class SdkWriteCoordinator:
         """Use the active profile's handle; retire the others, closing the unused."""
         mode = self.memory_mode()
         features = self.memory_features()
+        language = self.sdk_language()
         profile_identity, profile, secret, space = await asyncio.to_thread(
             self._read_active_credentials, mode
         )
-        key = (*profile_identity, space.space_id if space is not None else "", mode, features)
+        key = (
+            *profile_identity,
+            space.space_id if space is not None else "",
+            mode,
+            features,
+            language,
+        )
         async with self._lock:
             handle = self._handles.get(key)
             if handle is None:
@@ -347,6 +364,7 @@ class SdkWriteCoordinator:
                     mode=mode,
                     features=features,
                     space=space,
+                    **language_kwargs(language),
                 )
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)

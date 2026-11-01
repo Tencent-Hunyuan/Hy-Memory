@@ -86,6 +86,10 @@ export interface PipelineSummary {
   graph_build: string | null;
   /** SDK features (`memory_features`) whose value differs from the default. */
   features: Record<string, boolean>;
+  /** The App's display language; null = never chosen or "follow the system". */
+  ui_language: string | null;
+  /** The SDK prompt language: `auto` (zh/en detection) or the code passed. */
+  sdk_language: string;
 }
 
 const MODES = new Set(["lite", "pro", "ultra"]);
@@ -158,6 +162,10 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     evolve_users: users,
     graph_build: typeof graph.state === "string" ? graph.state : null,
     features,
+    ui_language: typeof item.ui_language === "string" ? item.ui_language : null,
+    // An older Runtime has no setting: it always left the SDK on auto.
+    sdk_language:
+      typeof item.sdk_language === "string" ? item.sdk_language : "auto",
   };
 }
 
@@ -353,6 +361,13 @@ export function pipelineLine(pipeline: PipelineSummary): string {
         .join("、")}`,
     );
   }
+  parts.push(
+    `；界面语言 ${pipeline.ui_language ?? "跟随系统"}，SDK 提示语言 ${
+      pipeline.sdk_language === "auto"
+        ? "auto（自动识别中/英）"
+        : pipeline.sdk_language
+    }`,
+  );
   return parts.join("");
 }
 

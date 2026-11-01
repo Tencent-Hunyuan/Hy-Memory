@@ -17,9 +17,9 @@ task (one HTTP request, one retention pass).
 
 The memory mode (lite / pro / ultra) is fixed per SDK client, so a mode change
 rebuilds and retires the same way, and so do the SDK features
-(`memory_features`): handles are keyed by (space, profile, mode, features).
-Neither mode nor features names a collection; both are separate client
-parameters.
+(`memory_features`) and the SDK prompt language (`ui_language`): handles are
+keyed by (space, profile, mode, features, language). None of mode, features
+or language names a collection; each is a separate client parameter.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from one_memory.hy_sdk_runtime import (
     SdkClientHandle,
     builtin_retrieval_snapshot,
     embedding_endpoint,
+    language_kwargs,
     retrieval_view,
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
@@ -50,8 +51,8 @@ from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, P
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 _BUILTIN = (BUILTIN_RETRIEVAL_PROFILE_ID, 0)
-#: (space id, profile id, revision, memory mode, features)
-_HandleKey = tuple[str, str, int, str, FeatureOverrides]
+#: (space id, profile id, revision, memory mode, features, SDK language)
+_HandleKey = tuple[str, str, int, str, FeatureOverrides, str | None]
 
 
 class ActiveProfileReadHandle(SdkClientHandle):
@@ -67,6 +68,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
         features: Callable[[], FeatureOverrides] = lambda: (),
         spaces: EmbeddingSpaceStore | None = None,
         health: EmbeddingHealth | None = None,
+        language: Callable[[], str | None] = lambda: None,
     ) -> None:
         super().__init__(builtin_retrieval_snapshot(), api_key=None, data_dir=data_dir)
         self.profiles = profiles
@@ -74,6 +76,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
         self.data_dir = data_dir
         self.memory_mode = memory_mode
         self.current_features = features
+        self.current_language = language
         #: None only for a profile store without a database (test doubles).
         self.spaces = spaces if spaces is not None else registry_for(profiles)
         self.health = health or EmbeddingHealth()
@@ -111,13 +114,22 @@ class ActiveProfileReadHandle(SdkClientHandle):
         """The handle of the live space, held for the asking task."""
         space, identity = await asyncio.to_thread(self._resolve)
         mode, features = self.memory_mode(), self.current_features()
-        key = (space.space_id if space is not None else "", *identity, mode, features)
+        language = self.current_language()
+        key = (
+            space.space_id if space is not None else "",
+            *identity,
+            mode,
+            features,
+            language,
+        )
         async with self._handle_lock:
             handle = self._handles.get(key)
             if handle is None:
                 # Only on a change of space or profile: resolving a key can
                 # reach the system keychain, so it is not done on every read.
-                handle = await asyncio.to_thread(self._build, space, identity, mode, features)
+                handle = await asyncio.to_thread(
+                    self._build, space, identity, mode, features, language
+                )
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)
             self._handles = {key: handle}
@@ -204,10 +216,12 @@ class ActiveProfileReadHandle(SdkClientHandle):
         identity: tuple[str, int],
         mode: str,
         features: FeatureOverrides = (),
+        language: str | None = None,
     ) -> SdkClientHandle:
         # Without a registry (a profile store with no database) the handle
         # opens the space its profile names, exactly as before.
         named: dict[str, Any] = {"space": space} if space is not None else {}
+        named.update(language_kwargs(language))
         if identity == _BUILTIN:
             return SdkClientHandle(
                 builtin_retrieval_snapshot(),

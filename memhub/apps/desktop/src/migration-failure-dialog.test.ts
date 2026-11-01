@@ -7,6 +7,7 @@ import {
   MAX_ISSUE_URL_LENGTH,
   MIGRATION_ISSUE_URL,
   type MigrationDialogDependencies,
+  migrationDialogText,
   migrationFailureCode,
   migrationIssueBody,
   migrationIssueUrl,
@@ -41,7 +42,7 @@ describe("migration failure dialog", () => {
     const handled = showMigrationFailureDialog({
       error: new Error("sdk_migration_preflight_failed"),
       dataDir,
-      locale: "zh-CN",
+      locale: "zh-Hans",
       dependencies: deps,
     });
 
@@ -176,7 +177,7 @@ describe("migration failure dialog", () => {
         // Desktop's own migration throws the code the note records.
         error: new Error("sdk_data_plane_dispatch_failed"),
         dataDir,
-        locale: "zh-CN",
+        locale: "zh-Hans",
         dependencies: deps,
         environment: {
           appVersion: "2.0.6",
@@ -215,6 +216,35 @@ describe("migration failure dialog", () => {
       ].join("\n"),
     );
     expect(body).not.toContain(accountHome);
+  });
+
+  it("speaks the display language in the dialog and the issue body", () => {
+    const en = migrationDialogText("sdk_migration_x", "/tmp/m.log", "en", true);
+    expect(en.detail).toBe(
+      "To protect your data, MemHub will not start. Please attach the migration log to a GitHub issue and send it to us. (Error code: sdk_migration_x)" +
+        "\n\nYour data was restored to its state before the upgrade." +
+        "\n\nLog: /tmp/m.log",
+    );
+    const ja = migrationDialogText("sdk_migration_x", "/tmp/m.log", "ja");
+    expect(ja.message).toBe(
+      "MemHub のアップグレード中にデータ移行が完了しませんでした。",
+    );
+    expect([ja.openLog, ja.quit]).toEqual(["ログを開く", "終了"]);
+    expect(ja.detail).toContain("sdk_migration_x");
+    // A system language code resolves like the GUI does (de-AT → de).
+    expect(migrationDialogText("c", "/l", "de-AT").quit).toBe("Beenden");
+    const body = migrationIssueBody({
+      code: "sdk_migration_preflight_failed",
+      logPath: "~/.one-memory/logs/sdk-migration.log",
+      dataRestored: false,
+      arch: "arm64",
+      locale: "fr",
+    });
+    expect(body).toContain("## Échec de la migration lors de la mise à jour");
+    expect(body).toMatch(/- Code d’erreur\s: sdk_migration_preflight_failed/);
+    expect(body).toContain(": non");
+    expect(body).toMatch(/- Système\s: inconnu \(arm64\)/);
+    expect(body).toContain("~/.one-memory/logs/sdk-migration.log");
   });
 
   it("says 未知 for what the log does not know instead of guessing", () => {
@@ -296,7 +326,7 @@ describe("migration failure dialog", () => {
       showMigrationFailureDialog({
         error: new Error("installed_version_conflict"),
         dataDir: await home(),
-        locale: "zh-CN",
+        locale: "zh-Hans",
         dependencies: deps,
       }),
     ).toBe(false);

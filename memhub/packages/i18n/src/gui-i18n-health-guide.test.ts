@@ -24,7 +24,7 @@ it("covers every health and guide key without accidental Chinese fallback", () =
       expect(translated, key).toBeTruthy();
       expect(params(translated), key).toEqual(params(value));
       expect(translate("es", key as MessageKey), key).toBe(translated);
-      expect(translate("zh-CN", key as MessageKey), key).toBe(value);
+      expect(translate("zh-Hans", key as MessageKey), key).toBe(value);
     }
   }
 });

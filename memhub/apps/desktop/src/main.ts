@@ -59,6 +59,7 @@ import { installApplicationMenu } from "./application-menu";
 import { installBackgroundHealthIpc } from "./background-health-ipc";
 import { installBackgroundTray } from "./background-tray";
 import { installConnectionSetupIpc } from "./connection-setup-ipc";
+import { installCoreLanguageSync } from "./core-language-sync";
 import {
   CoreSupervisor,
   ensureRuntimeProcess,
@@ -151,6 +152,7 @@ let connectionSetup: ReturnType<typeof installConnectionSetupIpc> | null = null;
 let disposeBackgroundHealth: (() => void) | null = null;
 let stableRuntimeRepair: Promise<void> | null = null;
 let disposeDiagnostics: (() => void) | null = null;
+let disposeCoreLanguageSync: (() => void) | null = null;
 let desktopDiagnostics: DiagnosticLogger | null = null;
 let exportDiagnosticsFromMenu: (() => Promise<void>) | null = null;
 const desktopStartupStartedAt = Date.now();
@@ -165,7 +167,7 @@ installEarlyStartupErrorHandler({
     process.env.ONE_MEMORY_DATA_DIR?.trim() ||
     path.join(app.getPath("home"), ".one-memory"),
   stderr: process.stderr,
-  readLocale: () => languagePreferences?.read().locale ?? "zh-CN",
+  readLocale: () => languagePreferences?.read().locale ?? "zh-Hans",
   showError: (title, message) => dialog.showErrorBox(title, message),
   exit: (code) => app.exit(code),
 });
@@ -296,9 +298,9 @@ function installPackagedWebProtocol(): void {
   installAppProtocol(path.join(process.resourcesPath, "web"), {
     // Preferences are open by now: beforeNativeUi runs before this window.
     startupScreen: () => {
-      let locale: GuiLocale = "zh-CN";
+      let locale: GuiLocale = "zh-Hans";
       try {
-        locale = languagePreferences?.read().locale ?? "zh-CN";
+        locale = languagePreferences?.read().locale ?? "zh-Hans";
       } catch {
         // An unreadable preference keeps the Chinese placeholder.
       }
@@ -1404,16 +1406,16 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
       void dialog.showMessageBox({
         type: "warning",
         message: translate(
-          languagePreferences?.read().locale ?? "zh-CN",
+          languagePreferences?.read().locale ?? "zh-Hans",
           "nativeMoveTitle",
         ),
         detail: translate(
-          languagePreferences?.read().locale ?? "zh-CN",
+          languagePreferences?.read().locale ?? "zh-Hans",
           "nativeMoveDetail",
         ),
         buttons: [
           translate(
-            languagePreferences?.read().locale ?? "zh-CN",
+            languagePreferences?.read().locale ?? "zh-Hans",
             "nativeAcknowledge",
           ),
         ],
@@ -1518,6 +1520,43 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         };
       },
     });
+    if (languagePreferences) {
+      // Core builds the SDK clients with the display language (`ui_language`).
+      disposeCoreLanguageSync = installCoreLanguageSync({
+        language: languagePreferences,
+        send: async (uiLanguage) => {
+          const core = coreSupervisor;
+          if (!core) throw new Error("core_supervisor_unavailable");
+          const publishedPort = await readPublishedCorePort(dataDir).catch(
+            () => null,
+          );
+          const response = await fetch(
+            `http://127.0.0.1:${publishedPort ?? core.port}/api/v1/settings/ui-language`,
+            {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${core.apiToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ ui_language: uiLanguage }),
+              signal: AbortSignal.timeout(5_000),
+            },
+          );
+          if (!response.ok)
+            throw new Error(`ui_language_sync_http_${response.status}`);
+        },
+        reportError: (error) =>
+          void diagnostics
+            .log({
+              level: "warn",
+              component: "desktop.language",
+              event: "ui_language.sync_failed",
+              outcome: "failed",
+              ...diagnosticError(error),
+            })
+            .catch(() => {}),
+      });
+    }
     await diagnostics.log({
       level: "info",
       component: "desktop.lifecycle",
@@ -1657,6 +1696,8 @@ if (desktopVersion !== null) {
         ...(coreSupervisor ? { instance_id: coreSupervisor.instanceId } : {}),
       });
       // An admitted native effect must settle and journal before Runtime detach.
+      disposeCoreLanguageSync?.();
+      disposeCoreLanguageSync = null;
       disposeLanguagePreferences?.();
       disposeLanguagePreferences = null;
       await languagePreferences?.drain();
@@ -1708,6 +1749,8 @@ if (desktopVersion !== null) {
       });
     },
     dispose: () => {
+      disposeCoreLanguageSync?.();
+      disposeCoreLanguageSync = null;
       disposeLanguagePreferences?.();
       disposeLanguagePreferences = null;
       disposeApplicationMenu?.();
@@ -1738,7 +1781,7 @@ if (desktopVersion !== null) {
         showMigrationFailureDialog({
           error,
           dataDir: runtimeDataDir,
-          locale: languagePreferences?.read().locale ?? "zh-CN",
+          locale: languagePreferences?.read().locale ?? "zh-Hans",
           dependencies: {
             showMessageBoxSync: (options) => dialog.showMessageBoxSync(options),
             showItemInFolder: (target) => shell.showItemInFolder(target),
@@ -1766,7 +1809,7 @@ if (desktopVersion !== null) {
         return;
       dialog.showErrorBox(
         translate(
-          languagePreferences?.read().locale ?? "zh-CN",
+          languagePreferences?.read().locale ?? "zh-Hans",
           "nativeErrorTitle",
         ),
         stableRuntimeFailureDetail(error),

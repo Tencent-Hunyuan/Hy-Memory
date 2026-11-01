@@ -33,7 +33,7 @@ vi.mock("./api", () => ({
 function HealthLanguageSwitch() {
   const { setPreference } = useGuiLanguage();
   return (
-    <button type="button" onClick={() => void setPreference("zh-CN")}>
+    <button type="button" onClick={() => void setPreference("zh-Hans")}>
       Cambiar idioma
     </button>
   );

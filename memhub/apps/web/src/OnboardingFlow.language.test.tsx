@@ -77,7 +77,7 @@ function controller(overrides: Partial<SourceResponse> = {}) {
 function SwitchLanguage() {
   const { setPreference } = useGuiLanguage();
   return (
-    <button type="button" onClick={() => void setPreference("zh-CN")}>
+    <button type="button" onClick={() => void setPreference("zh-Hans")}>
       中文
     </button>
   );
@@ -100,7 +100,7 @@ afterEach(() => {
 });
 
 it("changes the first-screen language without losing source choices or starting an import", async () => {
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   const imports = controller();
   const finish = vi.fn();
   const user = userEvent.setup();
@@ -330,7 +330,7 @@ it.each([
     );
   },
 );
-it.each(["es", "zh-CN"] as const)(
+it.each(["es", "zh-Hans"] as const)(
   "preserves three multiline progress cards and receipt statuses in %s",
   (locale) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
@@ -475,7 +475,7 @@ it.each([
     } as unknown as ImportJob;
     for (const [locale, expected] of [
       ["es", spanish],
-      ["zh-CN", chinese],
+      ["zh-Hans", chinese],
     ] as const) {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
       const view = render(

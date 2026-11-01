@@ -1947,6 +1947,30 @@ const baseEnglishMessages = {
   startupPreparing: "Starting and preparing the memory service…",
   startupUpgradeHint:
     "The first launch or a memory-data upgrade can take a few minutes. MemHub opens automatically when it is done.",
+  "migration.dialogMessage":
+    "The data migration for this MemHub upgrade did not finish.",
+  "migration.dialogDetail":
+    "To protect your data, MemHub will not start. Please attach the migration log to a GitHub issue and send it to us. (Error code: {code})",
+  "migration.dataRestored":
+    "Your data was restored to its state before the upgrade.",
+  "migration.logPath": "Log: {path}",
+  "migration.openLog": "Open log",
+  "migration.quit": "Quit",
+  "migration.issueHeading": "## Upgrade migration failed",
+  "migration.issueUpgrade":
+    "- Upgrading MemHub from {fromVersion} (build {fromBuild}) to {toVersion} (build {toBuild}) failed to migrate the data.",
+  "migration.issueCode": "- Error code: {code}",
+  "migration.issueStep": "- Failed step: {step}",
+  "migration.issueRestored":
+    "- Data restored to its state before the upgrade: {restored}",
+  "migration.issueSystem": "- System: {system}",
+  "migration.issueArch": " ({arch})",
+  "migration.issueLog": "- Migration log (local): {path}",
+  "migration.issueAttach":
+    "Please drag the log file above here as an attachment, then submit.",
+  "migration.unknown": "unknown",
+  "migration.yes": "yes",
+  "migration.no": "no",
 } as const;
 
 export const englishMessages = {

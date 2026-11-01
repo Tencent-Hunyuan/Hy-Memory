@@ -142,7 +142,7 @@ describe("memhub settings mode", () => {
       ["settings", "mode", "max"],
       ["settings", "mode", "--yes"],
       ["settings", "mode", "lite", "pro"],
-      ["settings", "language", "en"],
+      ["settings", "theme", "dark"],
     ]) {
       expect((await capturedRun(bad)).code, bad.join(" ")).toBe(2);
     }

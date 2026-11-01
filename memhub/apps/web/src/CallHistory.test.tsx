@@ -166,7 +166,7 @@ it("traduce el historial en vivo sin cambiar nombres ni contenido importado", as
   ).toBeTruthy();
   expect(screen.getAllByText("Consulta completada")).toHaveLength(2);
   expect(screen.getByText("Consulta de memorias")).toBeTruthy();
-  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  window.localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   fireEvent(window, new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }));
   expect(screen.getByRole("heading", { name: "这次查记忆" })).toBeTruthy();
   window.localStorage.removeItem(LANGUAGE_STORAGE_KEY);

@@ -65,7 +65,7 @@ export const CALL_HOSTS: Record<string, string> = {
   pi: "Pi",
   "deepseek-harness": "DeepSeek Harness",
 };
-export function callHostName(id: string | null, locale: GuiLocale = "zh-CN") {
+export function callHostName(id: string | null, locale: GuiLocale = "zh-Hans") {
   return id === null
     ? translate(locale, "calls.directHost")
     : Object.hasOwn(CALL_HOSTS, id)
@@ -82,7 +82,7 @@ const HEADLINES = {
 export function callEventHeadline(
   item: CallEvent,
   host?: string,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ) {
   const name = host ?? callHostName(item.host_id, locale);
   const fixed = HEADLINES[item.state as keyof typeof HEADLINES];
@@ -93,10 +93,13 @@ export function callEventHeadline(
     count: plainCount(locale, count),
   });
 }
-export function callRowHeadline(item: CallEvent, locale: GuiLocale = "zh-CN") {
+export function callRowHeadline(
+  item: CallEvent,
+  locale: GuiLocale = "zh-Hans",
+) {
   return callEventHeadline(item, undefined, locale);
 }
-export function callRowDetail(item: CallEvent, locale: GuiLocale = "zh-CN") {
+export function callRowDetail(item: CallEvent, locale: GuiLocale = "zh-Hans") {
   const host = callHostName(item.host_id, locale);
   const key: MessageKey =
     item.state === "timed_out"
@@ -121,13 +124,13 @@ export function callRowDetail(item: CallEvent, locale: GuiLocale = "zh-CN") {
 export function callDetailHeadline(
   item: CallEvent,
   host?: string,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ) {
   return callEventHeadline(item, host, locale);
 }
 export function callDeliveryLabel(
   item: CallEvent,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ) {
   if (item.delivery === "delivered")
     return translate(locale, "calls.detail.delivered", {
@@ -139,7 +142,7 @@ export function callDeliveryLabel(
 }
 export function callReturnDeliveryLabel(
   item: CallEvent,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ) {
   if (
     item.state === "timed_out" ||

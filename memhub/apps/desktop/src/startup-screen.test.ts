@@ -12,7 +12,7 @@ describe("startup screen", () => {
     expect(html).not.toContain("ipcRenderer");
   });
   it("speaks the interface language and keeps Chinese by default", () => {
-    expect(startupScreenHtml()).toContain('<html lang="zh-CN">');
+    expect(startupScreenHtml()).toContain('<html lang="zh-Hans">');
     expect(startupScreenHtml()).toContain("正在启动，正在准备记忆服务…");
     const spanish = startupScreenHtml("es");
     expect(spanish).toContain('<html lang="es">');

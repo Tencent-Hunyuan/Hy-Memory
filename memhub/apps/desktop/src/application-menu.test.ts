@@ -30,7 +30,7 @@ it("rebuilds translated labels from committed language updates without exporting
   expect(buildMenu).toHaveBeenLastCalledWith(
     expect.arrayContaining([expect.objectContaining({ label: "Ayuda" })]),
   );
-  snapshot.locale = "zh-CN";
+  snapshot.locale = "zh-Hans";
   change?.();
   expect(read).toHaveBeenCalledTimes(2);
   expect(buildMenu).toHaveBeenCalledTimes(2);

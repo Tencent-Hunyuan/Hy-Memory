@@ -11,7 +11,7 @@ export const STARTUP_SCREEN_URL = `${APP_ORIGIN}${STARTUP_SCREEN_PATH}`;
  * the gap. It deliberately makes no IPC calls: it renders before `initialize`
  * has registered any handler, and anything it asked for would fail.
  */
-export function startupScreenHtml(locale: GuiLocale = "zh-CN"): string {
+export function startupScreenHtml(locale: GuiLocale = "zh-Hans"): string {
   return `<!doctype html>
 <html lang="${locale}">
   <head>

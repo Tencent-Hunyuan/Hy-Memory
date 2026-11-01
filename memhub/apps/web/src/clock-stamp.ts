@@ -18,7 +18,7 @@ import { type GuiLocale, translate } from "@one-memory/i18n";
  */
 export function clockStamp(
   value: string | null | undefined,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ): string {
   if (!value || !Number.isFinite(Date.parse(value)))
     return translate(locale, "clock.unknown");

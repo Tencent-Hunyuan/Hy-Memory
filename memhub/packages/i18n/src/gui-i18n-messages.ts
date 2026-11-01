@@ -23,6 +23,10 @@ import {
   memorySpanishMessages,
 } from "./gui-i18n-memory.js";
 import {
+  migrationChineseMessages,
+  migrationSpanishMessages,
+} from "./gui-i18n-migration.js";
+import {
   onboardingChineseMessages,
   onboardingSpanishMessages,
 } from "./gui-i18n-onboarding.js";
@@ -140,6 +144,11 @@ export const guiCatalogs: readonly Catalog[] = [
     chinese: languageChineseMessages,
     spanish: languageSpanishMessages,
   },
+  {
+    name: "migration",
+    chinese: migrationChineseMessages,
+    spanish: migrationSpanishMessages,
+  },
 ];
 
 /**
@@ -180,6 +189,7 @@ export const chineseMessages = merged.chinese as typeof guideChineseMessages &
   typeof memoryChineseMessages &
   typeof callsChineseMessages &
   typeof languageChineseMessages &
+  typeof migrationChineseMessages &
   typeof workbenchChineseMessages &
   typeof currentChineseMessages;
 

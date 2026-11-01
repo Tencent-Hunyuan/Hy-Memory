@@ -70,6 +70,10 @@
   color: inherit;
   background: #f7fafc;
   font: inherit;
+  /* One line in the fixed-height button, even for long names (fr, de, ru). */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .onboarding-r6-titlebar .r6-language-option-menu .om-option-menu-button::after {
   top: 10px;

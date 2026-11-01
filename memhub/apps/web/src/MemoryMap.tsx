@@ -114,7 +114,7 @@ type Props = {
 
 function dayStamp(
   value: string | null | undefined,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ) {
   if (!value || !Number.isFinite(Date.parse(value)))
     return memoryText(locale, "时间未知");
@@ -146,7 +146,7 @@ function monthDay(value: string, locale: GuiLocale): string | null {
 function sourceStamp(
   time: { at: string; basis: "conversation" | "import" | "write" } | undefined,
   fallback: string | null | undefined,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ): string {
   const day = time ? monthDay(time.at, locale) : null;
   if (time && day)

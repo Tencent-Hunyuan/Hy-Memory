@@ -184,6 +184,20 @@ node apps/cli/dist/one-memory.cjs settings features reset                       
 - `status --json` / `progress --json` 的 `pipeline.features` 列出与默认值不同的功能。
 - 契约见 `docs/contracts/memory-features-v1.md`。
 
+### 界面语言与 SDK 提示语言（`settings language`）
+
+```bash
+node apps/cli/dist/one-memory.cjs settings language          # 界面语言和 SDK 提示语言
+node apps/cli/dist/one-memory.cjs settings language ja       # 设为日语，立即生效
+node apps/cli/dist/one-memory.cjs settings language system   # 跟随系统（不指定 SDK 语言）
+```
+
+- 可选 11 种：`en`、`zh-Hans`、`zh-Hant`、`ja`、`es`、`de`、`pt`、`fr`、`ko`、`ru`、`id`，以及 `system`；旧代码 `zh-CN` 按 `zh-Hans` 处理。
+- App 切换语言时会自动设置（Desktop 启动时也会同步一次已保存的选择）。全局设置，存于 `config.json` 的 `ui_language`；从未选择时不写入。
+- `zh-Hans` 和 `system` 不向 SDK 传语言，SDK 照旧自动识别中文或英文；其余语言（包括 `en`）作为 `MemoryConfig.language` 传给 SDK，提取等提示使用该语言。
+- 修改会像功能开关一样重建 SDK 客户端；不迁移数据，不改集合名。当前固定的 SDK 版本还没有 `language` 字段时只在 debug 日志记一次，不影响运行。
+- `status --json` 的 `pipeline.ui_language` / `pipeline.sdk_language`（`auto` 或语言代码）。API：`GET`/`PUT /api/v1/settings/ui-language`。
+
 ## 8. 召回（recall）
 
 `recall` 两条路径（raw / memory）此前已真机验证。文本输出会标明每条是「原始对话摘录」

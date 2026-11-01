@@ -59,9 +59,9 @@ export function installEarlyStartupErrorHandler(
       // The dialog is the only part of this a person ever reads, so it gets the
       // explanation, not the code. The code stays in the diagnostic event,
       // where support can still match it against a known failure.
-      let locale: GuiLocale = "zh-CN";
+      let locale: GuiLocale = "zh-Hans";
       try {
-        locale = options.readLocale?.() ?? "zh-CN";
+        locale = options.readLocale?.() ?? "zh-Hans";
       } catch {
         // Preferences may not exist yet; do not read files or guess the locale.
       }
