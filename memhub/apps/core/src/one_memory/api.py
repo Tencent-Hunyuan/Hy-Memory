@@ -3453,16 +3453,16 @@ def create_app(
         _check_memory_namespace(kind, variant)
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
-                # `delete` takes no user. Another user's memory must not be
-                # deleted, nor its existence told: it answers 404. A memory
-                # that is already gone keeps answering 204, as before.
+                # `delete` takes no user. Another user's memory is answered
+                # exactly like an id that does not exist: 204, nothing
+                # touched, so the status cannot tell that it exists.
                 current = await asyncio.to_thread(
                     client.get, memory_id, **_namespace_kwargs(kind, variant)
                 )
                 if current is not None and not owns(
                     HySdkMemoryRecord.from_sdk(current).user_id, user_id
                 ):
-                    raise HTTPException(status_code=404, detail="memory_not_found")
+                    return Response(status_code=204)
                 result = await asyncio.to_thread(
                     client.delete, memory_id, **_namespace_kwargs(kind, variant)
                 )

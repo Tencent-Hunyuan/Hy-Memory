@@ -334,7 +334,7 @@ def test_another_users_memory_id_answers_404_for_read_update_and_delete(
 
         assert (await client.get(path)).status_code == 404
         assert (await client.put(path, json={"content": "stolen"})).status_code == 404
-        assert (await client.delete(path)).status_code == 404
+        assert (await client.delete(path)).status_code == 204
         assert sdk.memories[wife_memory]["content"] == "wife drinks coffee"
 
         own = await client.get(path, params={"user_id": "wife"})
@@ -738,3 +738,52 @@ def test_assembling_rows_and_batches_are_keyed_by_user(tmp_path) -> None:
     ] == [{"local"}]
     assert [split_lane(row["source_key"]) for row in assembling] == [("wife", "hermes")]
     assert pending[0]["session_key"] != assembling[0]["session_key"]
+
+
+def _observed(response) -> tuple[int, bytes]:
+    return response.status_code, response.content
+
+
+@pytest.mark.fresh_sdk
+def test_another_users_id_answers_exactly_like_an_id_that_does_not_exist(
+    tmp_path, monkeypatch
+) -> None:
+    """Comparing responses must not tell whether another user's id exists."""
+
+    async def scenario(app, sdk, client):
+        receipts = await _write_both_users(app, sdk, client)
+        [wife_memory] = [
+            memory_id
+            for memory_id, row in sdk.memories.items()
+            if row["user_id"] == "wife" and row["content"] == "wife drinks coffee"
+        ]
+        before = {key: dict(row) for key, row in sdk.memories.items()}
+        with sqlite3.connect(app.state.settings.data_dir / "one-memory.sqlite3") as db:
+            keys = [row[0] for row in db.execute("SELECT idempotency_key FROM memory_write_jobs")]
+        wife_key = next(key for key in keys if key.startswith("user:wife:"))
+
+        pairs = [
+            ("GET", f"/api/v2/memories/{wife_memory}", "/api/v2/memories/no-such-memory", {}),
+            (
+                "PUT",
+                f"/api/v2/memories/{wife_memory}",
+                "/api/v2/memories/no-such-memory",
+                {"json": {"content": "stolen"}},
+            ),
+            ("DELETE", f"/api/v2/memories/{wife_memory}", "/api/v2/memories/no-such-memory", {}),
+            (
+                "GET",
+                f"/api/v2/memories/additions/{receipts['add:wife']}",
+                f"/api/v2/memories/additions/{uuid4()}",
+                {},
+            ),
+            ("GET", f"/api/v2/memory-writes/{wife_key}", "/api/v2/memory-writes/no-such-id", {}),
+        ]
+        for method, theirs, missing, kwargs in pairs:
+            other = await client.request(method, theirs, **kwargs)
+            absent = await client.request(method, missing, **kwargs)
+            assert _observed(other) == _observed(absent), (method, theirs)
+            assert other.status_code == (204 if method == "DELETE" else 404)
+        assert sdk.memories == before
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
