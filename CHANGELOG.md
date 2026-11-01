@@ -96,6 +96,8 @@ authority on first launch.
 
 ## Hy Memory 2.0.9 — 2026-11-01
 
+- Published
+  [`hy-memory==2.0.9`](https://pypi.org/project/hy-memory/2.0.9/).
 - Placeholder values no longer overwrite the user's basic profile (L0). A
   small extraction model filled `basic_info` with `{"name": "用户"}`,
   `The user` or `N/A` when the user had said nothing about themselves, and
