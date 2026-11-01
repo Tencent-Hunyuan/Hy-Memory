@@ -25,6 +25,7 @@
 | `test_c1_cross_source_session_isolation.py` | `contract` | Same session name in two sources must stay two conversations. |
 | `test_c1_damage_per_source.py` | `contract` | Damage and unknown schema, per source: a bad record must not sink the import. |
 | `test_c1_deepseek_profiles.py` | `contract` | DeepSeek Harness has two profiles; only the headless session form is importable. |
+| `test_c1_deepseek_versioned_sessions.py` | `contract` | DeepSeek Harness versions its session file names; every generation must import. |
 | `test_c1_import_event_matrix.py` | `contract` | C1 owned matrix: existing history, new file, append, truncate/replace, restart, revoke. |
 | `test_c1_import_failure_injection.py` | `contract` | C1 failure injection: atomic receipt, disk-full, read-only source, rotation. |
 | `test_c1_import_instrumentation.py` | `contract` | Instrumented import accounting: bytes read, opens, hashes, jobs, duplicates. |
@@ -309,4 +310,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 304 个测试文件。
+共 305 个测试文件。

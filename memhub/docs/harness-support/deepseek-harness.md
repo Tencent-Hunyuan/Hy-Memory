@@ -16,7 +16,9 @@ DeepSeek Harness 的 Profile 级 MCP 安装器已经实现，Profile Scoped Host
 | Skill | 没有 |
 | Prompt 前自动 Prefetch | 没有 |
 | Capture Hook/Plugin | 没有 |
-| Harness 新会话进入 MemHub | Core 扫描 `$DSH_HOME/sessions` |
+| Harness 新会话进入 MemHub | Core 扫描 `$DSH_HOME/sessions`，按 `session[.vN].jsonl[.zstd]` 识别会话文件 |
+
+会话文件按写入时的格式版本命名：首版为 `session.jsonl` / `session.jsonl.zstd`，v3/v4 起为 `session.v3.jsonl.zstd` / `session.v4.jsonl.zstd`。来源扫描接受带版本号的名称；解析前再读文件头 `version` 字段，只导入已验证的 v0/v3/v4，未来未知版本会以 `unsupported_schema` 跳过（错误导入比暂时漏导更难回滚）。
 
 ## 两个开关分别做什么
 
