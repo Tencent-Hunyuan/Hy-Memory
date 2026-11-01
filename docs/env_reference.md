@@ -45,11 +45,18 @@
 | `MEMORY_EMBEDDER_API_KEY` | — | 回退：`EMBEDDING_API_KEY`、`OPENAI_API_KEY` |
 | `MEMORY_EMBEDDER_BASE_URL` | — | 回退到 `EMBEDDING_BASE_URL` |
 | `MEMORY_EMBEDDING_DIMS` | `1536` | Collection 维度；应与模型输出一致 |
+| `MEMORY_EMBEDDER_SEND_DIMENSIONS` | `true` | 是否向 Embeddings API 发送 `dimensions`；固定输出维度但不接受此参数的模型设为 `false`，仍保留 `MEMORY_EMBEDDING_DIMS` 校验响应与 Collection 维度 |
 | `MEMORY_EMBEDDER_TIMEOUT` | `15` | 单次超时，秒 |
 | `MEMORY_EMBEDDER_MAX_RETRIES` | `2` | 最大重试次数 |
 | `MEMORY_EMBEDDER_RETRY_DELAY` | `0.3` | 重试间隔，秒 |
 | `MEMORY_EMBEDDER_EXTRA_HEADERS` | — | JSON object，附加 HTTP headers |
 | `MEMORY_EMBEDDER_EXTRA_BODY` | — | JSON object，附加请求 body |
+
+例如固定输出 2560 维、但不接受 `dimensions` 参数的兼容服务，设置
+`MEMORY_EMBEDDING_DIMS=2560` 和 `MEMORY_EMBEDDER_SEND_DIMENSIONS=false`。
+Python 配置等价于 `EmbedderConfig(embedding_dims=2560, send_dimensions=False)`；
+默认仍发送已配置的维度，保持现有支持降维的模型行为。响应维度与配置不符时立即失败，
+不会为这个配置错误重复请求。
 
 ## Vector Store
 

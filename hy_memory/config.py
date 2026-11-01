@@ -264,6 +264,8 @@ class EmbedderConfig:
     # 内部平台扩展（extra_headers / extra_body 会透传给 OpenAI client）
     extra_headers: Optional[Dict[str, str]] = None
     extra_body: Optional[Dict[str, Any]] = None
+    # Some compatible providers have a fixed output width but reject dimensions.
+    send_dimensions: Optional[bool] = None
 
     def __post_init__(self):
         if self.provider is None:
@@ -282,6 +284,8 @@ class EmbedderConfig:
         if self.embedding_dims is None:
             val = os.getenv("MEMORY_EMBEDDING_DIMS")
             self.embedding_dims = int(val) if val else None
+        if self.send_dimensions is None:
+            self.send_dimensions = _get_env_bool("MEMORY_EMBEDDER_SEND_DIMENSIONS", True)
         if self.max_retries is None:
             # 重试次数：仅对 timeout/连接错误重试，业务错立即抛。默认 2 次。
             # 总耗时上限 ≈ timeout × (max_retries+1) + retry_delay × max_retries
@@ -1355,6 +1359,7 @@ class MemoryConfig:
                 "model": self.embedder.model,
                 "base_url": self.embedder.base_url,
                 "embedding_dims": self.embedder.embedding_dims,
+                "send_dimensions": self.embedder.send_dimensions,
             },
             "recall": {
                 "default_limit": self.recall.default_limit,
