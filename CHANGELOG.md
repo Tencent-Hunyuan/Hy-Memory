@@ -4,7 +4,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
-- Hy Memory: LLM prompts now ship in 11 languages: `en`, `zh-Hans`,
+## Hy Memory 2.0.11 — 2026-11-01
+
+- LLM prompts now ship in 11 languages: `en`, `zh-Hans`,
   `zh-Hant`, `ja`, `es`, `de`, `pt`, `fr`, `ko`, `ru` and `id`. They live in
   one registry, `hy_memory/prompts/`, with one module per language. Call
   sites use `get_prompt(name, language)`, so a new language only needs a new
@@ -17,7 +19,7 @@ Hy Memory and MemHub are versioned and released independently.
   (`prompts_zh.*_ZH`, `extractor.EXTRACT_SYSTEM_PROMPT`, ...) still import.
   The nine new languages are machine translations, and native-speaker review
   is recommended.
-- Hy Memory: new optional `language` to choose the prompt language
+- New optional `language` to choose the prompt language
   explicitly. Set it on `MemoryConfig.language` (env `MEMORY_LANGUAGE`) for
   a client default, or per call on `add` / `async_add`, `add_extracted`,
   `finalize_session`, `evolve` and `sweep`. A per-call value overrides the
@@ -30,7 +32,7 @@ Hy Memory and MemHub are versioned and released independently.
   Without a language, the existing zh/en auto-detection runs unchanged and
   memories keep the source language. `search` has no `language`: its judge
   and rewrite prompts are English-only and keep the query's language.
-- Hy Memory: the HTTP server accepts `language` on `/api/v1/add` and
+- The HTTP server accepts `language` on `/api/v1/add` and
   `/api/v1/add_extracted`.
 
 ## Hy Memory 2.0.10 — 2026-11-01
