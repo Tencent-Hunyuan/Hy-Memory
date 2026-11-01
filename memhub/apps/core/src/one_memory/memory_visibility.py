@@ -160,7 +160,7 @@ def pending(db: sqlite3.Connection, *, limit: int = 100) -> list[str]:
 
 
 def _trigger_sql() -> list[tuple[str, str]]:
-    """(table it depends on, statement) for each trigger."""
+    """(table it is on, statement) for each trigger."""
     return [
         (
             "evidence",
@@ -303,7 +303,59 @@ def install_triggers(db: sqlite3.Connection) -> None:
     for table, statement in _trigger_sql():
         if table not in present:
             continue
+        if not _body_tables(statement) <= present:
+            # SQLite resolves a trigger body only when it fires, so a body
+            # naming a dropped table fails the write it rides on (#233: the
+            # SDK cutover drops `governed_memory_evidence`, and every grant
+            # write then failed). Not installed, and an old copy is removed.
+            cursor.execute(f"DROP TRIGGER IF EXISTS {_trigger_name(statement)}")
+            continue
         cursor.execute(statement)
+
+
+def _trigger_name(statement: str) -> str:
+    return statement.split("IF NOT EXISTS", 1)[1].split()[0]
+
+
+def _body_tables(statement: str) -> set[str]:
+    """Tables the trigger body reads or writes besides the one it is on."""
+    _head, _begin, body = statement.partition("BEGIN")
+    words = body.replace("(", " ").replace(")", " ").split()
+    return {
+        name
+        for keyword, name in zip(words, words[1:], strict=False)
+        if keyword.upper() in {"FROM", "JOIN", "INTO"}
+    }
+
+
+def drop_stale_triggers(database_path: Path) -> tuple[str, ...]:
+    """Drop this module's triggers whose body names a table that is gone.
+
+    Startup on SDK authority does not install the cache (it is read only on
+    legacy authority), but a home migrated by an earlier build still carries
+    the triggers it installed. One whose body reads a dropped table fails
+    every write to the table it is on, so it is dropped here. Idempotent.
+    """
+    with main_database(database_path).write() as db, db:
+        cursor = db.cursor()
+        cursor.row_factory = sqlite3.Row
+        present = {
+            str(row["name"])
+            for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        installed = {
+            str(row["name"])
+            for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+        }
+        dropped = tuple(
+            name
+            for _table, statement in _trigger_sql()
+            if (name := _trigger_name(statement)) in installed
+            and not _body_tables(statement) <= present
+        )
+        for name in dropped:
+            cursor.execute(f"DROP TRIGGER IF EXISTS {name}")
+    return dropped
 
 
 def startup(database_path: Path) -> None:

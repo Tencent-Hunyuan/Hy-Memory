@@ -584,6 +584,7 @@ def _sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         }
     else:
         from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
+        from one_memory.hy_sdk_runtime import builtin_retrieval_snapshot
         from one_memory.sdk_data_plane_migration import (
             MemoryAuthority,
             SdkDataPlaneMigrationStore,
@@ -595,14 +596,14 @@ def _sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
 
         authority = SdkDataPlaneMigrationStore(database_path).authority()
         if authority is MemoryAuthority.SDK:
-            profile = read_active_profile(database_path)
+            profile = read_active_profile(database_path) or builtin_retrieval_snapshot()
             leftovers = bool(
                 legacy_tables_present(database_path)
                 or abandoned_staging_present(
                     data_dir=settings.data_dir,
                     namespace=HY_MEMORY_NAMESPACE,
                 )
-                or (profile is not None and legacy_vector_collections(settings.data_dir, profile))
+                or legacy_vector_collections(settings.data_dir, profile)
             )
             state = "required" if leftovers else "not_required"
         else:

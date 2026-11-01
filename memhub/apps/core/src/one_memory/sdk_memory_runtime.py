@@ -122,7 +122,9 @@ class SdkMemoryRuntime:
         while True:
             await asyncio.sleep(RAW_RETENTION_CHECK_SECONDS)
             try:
-                removed = await self.prune_expired_raw()
+                # Its own task, so this pass's use of the read client ends
+                # with it instead of with this loop (see `sdk_read_handle`).
+                removed = await asyncio.create_task(self.prune_expired_raw())
                 if removed:
                     logger.info("sdk_raw_retention_deleted count=%d", removed)
             except asyncio.CancelledError:

@@ -198,6 +198,7 @@ def test_active_profile_can_be_deleted_without_changing_other_profiles(tmp_path)
             provider_kind=ProviderKind.OLLAMA,
             model="other",
             embedding_model="nomic-embed-text",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -208,6 +209,7 @@ def test_active_profile_can_be_deleted_without_changing_other_profiles(tmp_path)
             base_url="https://models.example.com/v1",
             model="qwen",
             embedding_model="nomic-embed-text",
+            embedding_base_url="https://models.example.com/v1",
             api_key=SecretStr(API_KEY),
         ),
         secrets,
@@ -349,6 +351,7 @@ def _probed(store, secrets, *, structured: bool, generates: bool = True):
             provider_kind=ProviderKind.OLLAMA,
             model="qwen",
             embedding_model="nomic-embed-text",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -394,3 +397,102 @@ def test_a_model_that_cannot_generate_still_cannot_be_turned_on(tmp_path) -> Non
 
     with pytest.raises(ModelProfileUnavailableError):
         store.activate(profile.profile_id, secrets)
+
+
+def _space(store: ModelProfileStore, profile_id: str) -> str:
+    """The embedding space's collection base, as the Runtime names it."""
+    from one_memory.hy_sdk_runtime import vector_collection_bases
+
+    identity = (profile_id, store.require(profile_id, InMemorySecretStore()).revision)
+    return vector_collection_bases(store.snapshot(*identity))[0]
+
+
+def test_a_remote_embedding_must_name_its_endpoint(tmp_path) -> None:
+    """The endpoint no longer follows the generation `base_url`."""
+    from one_memory.model_profiles import EmbeddingBaseUrlRequiredError
+
+    store = ModelProfileStore(tmp_path / "one-memory.sqlite3")
+    secrets = InMemorySecretStore()
+    unnamed = ModelProfileInput(
+        name="Remote",
+        provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+        base_url="https://models.example.com/v1",
+        model="qwen",
+        embedding_model="text-embedding-3-small",
+        api_key=SecretStr(API_KEY),
+    )
+    with pytest.raises(EmbeddingBaseUrlRequiredError):
+        store.create(unnamed, secrets)
+    assert store.list(secrets) == []
+
+    named = store.create(
+        unnamed.model_copy(update={"embedding_base_url": "https://models.example.com/v1"}),
+        secrets,
+    )
+    with pytest.raises(EmbeddingBaseUrlRequiredError):
+        store.update(
+            named.profile_id,
+            ModelProfilePatch(
+                expected_revision=named.revision,
+                embedding_provider_kind=ProviderKind.OLLAMA,
+                embedding_base_url="",
+            ),
+            secrets,
+        )
+
+
+def test_stored_profiles_get_the_endpoint_they_resolved_to_and_keep_their_space(
+    tmp_path,
+) -> None:
+    """An older build stored remote embeddings with a NULL endpoint and resolved
+    it to the generation `base_url` at runtime. Opening the store writes that
+    endpoint in once, so the collection, and the memories in it, stay put; a
+    later edit of the generation endpoint no longer moves them.
+    """
+    from one_memory.hy_sdk_runtime import vector_collection_bases
+
+    database = tmp_path / "one-memory.sqlite3"
+    store = ModelProfileStore(database)
+    secrets = InMemorySecretStore()
+    profile = store.create(
+        ModelProfileInput(
+            name="Remote",
+            provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="https://gateway.example.com/v1",
+            model="qwen",
+            embedding_model="text-embedding-3-small",
+            embedding_base_url="https://gateway.example.com/v1",
+            embedding_dimensions=1536,
+            api_key=SecretStr(API_KEY),
+        ),
+        secrets,
+    )
+    identity = (profile.profile_id, profile.revision)
+    # The space the older build's Runtime resolved: `embedding_base_url or base_url`.
+    before = vector_collection_bases(store.snapshot(*identity))[0]
+    with sqlite3.connect(database) as db:
+        # The shape an older build stored.
+        db.execute("UPDATE model_profiles SET embedding_base_url=NULL")
+        db.execute("UPDATE model_profile_versions SET embedding_base_url=NULL")
+
+    migrated = ModelProfileStore(database)
+    assert migrated.snapshot(*identity).embedding_base_url == "https://gateway.example.com/v1"
+    assert _space(migrated, profile.profile_id) == before
+    # Idempotent: opening again changes nothing.
+    assert _space(ModelProfileStore(database), profile.profile_id) == before
+    with sqlite3.connect(database) as db:
+        assert db.execute(
+            "SELECT COUNT(*) FROM model_profile_versions WHERE embedding_base_url IS NULL"
+        ).fetchone() == (0,)
+
+    edited = migrated.update(
+        profile.profile_id,
+        ModelProfilePatch(
+            expected_revision=profile.revision,
+            base_url="https://gateway.example.com/eu/v1",
+        ),
+        secrets,
+    )
+    assert edited.base_url == "https://gateway.example.com/eu/v1"
+    assert edited.embedding_base_url == "https://gateway.example.com/v1"
+    assert _space(migrated, profile.profile_id) == before

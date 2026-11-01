@@ -28,6 +28,7 @@ def test_probe_still_measures_embedding_when_structured_output_fails(tmp_path) -
             base_url="http://127.0.0.1:11434",
             model="plain-model",
             embedding_model="nomic-embed-text",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -63,6 +64,7 @@ def test_probe_records_the_real_embedding_width_on_the_profile(tmp_path) -> None
             base_url="http://127.0.0.1:11434",
             model="qwen3:8b",
             embedding_model="nomic-embed-text",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -119,6 +121,7 @@ def test_openai_compatible_probe_checks_model_and_structured_output(tmp_path) ->
             base_url="https://models.example.com/v1",
             model="memory-model",
             embedding_model="embedding-model",
+            embedding_base_url="https://models.example.com/v1",
             api_key=SecretStr(API_KEY),
         ),
         secrets,
@@ -260,6 +263,7 @@ def test_probe_reports_missing_model_without_sending_generation(tmp_path) -> Non
             provider_kind=ProviderKind.OLLAMA,
             model="memory-model",
             embedding_model="embedding-model",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )

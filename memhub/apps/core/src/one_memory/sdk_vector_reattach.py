@@ -9,6 +9,7 @@ one. Runtime code only reaches vectors through the SDK. This module runs from
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
@@ -21,6 +22,8 @@ from one_memory.model_profiles import ModelProfileSnapshot
 from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
 
 _BATCH = 500
+#: Every name a MemHub build gave an embedding space's base collection.
+_SPACE_NAME = re.compile(r"^(?:memhub_[0-9a-f]{16}|one_memory_[0-9a-f]{12})(?:_|$)")
 
 
 def open_offline_chroma(directory: Path) -> Any:
@@ -51,13 +54,20 @@ def _vector_directory(data_dir: Path) -> Path:
     return data_dir / "hy-memory" / "governed-v2" / "vector"
 
 
-def _stored_names(data_dir: Path) -> tuple[str, ...]:
+def _stored_names(data_dir: Path, *, filled: bool = False) -> tuple[str, ...]:
+    """Collection names; with `filled`, only those holding at least one row."""
     database = _vector_directory(data_dir) / "chroma.sqlite3"
     if not database.is_file():
         return ()
     with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
         try:
-            rows = connection.execute("SELECT name FROM collections").fetchall()
+            rows = connection.execute(
+                "SELECT DISTINCT collections.name FROM collections "
+                "JOIN segments ON segments.collection = collections.id "
+                "JOIN embeddings ON embeddings.segment_id = segments.id"
+                if filled
+                else "SELECT name FROM collections"
+            ).fetchall()
         except sqlite3.Error:
             return ()
     return tuple(sorted(str(row[0]) for row in rows))
@@ -78,6 +88,59 @@ def legacy_vector_collections(
                 pairs.append((name, current + name[len(base) :]))
                 break
     return tuple(pairs)
+
+
+def vectors_belong_to_another_space(data_dir: Path, profile: ModelProfileSnapshot) -> bool:
+    """Vectors exist, but only in embedding spaces `profile` does not name.
+
+    Counted rows, not names: every Runtime opens its read collection with
+    `get_or_create`, so an empty collection under the expected base proves
+    nothing. Read-only, so a preflight can ask before anything changes.
+    """
+    current, legacy_bases = vector_collection_bases(profile)
+    known = (current, *legacy_bases)
+    filled = _stored_names(data_dir, filled=True)
+    return not any(
+        name == base or name.startswith(f"{base}_") for name in filled for base in known
+    ) and any(_SPACE_NAME.match(name) for name in filled)
+
+
+def stored_memory_ids(data_dir: Path) -> frozenset[str]:
+    """Every id in the vector store as found, across all embedding spaces.
+
+    All of them on purpose. A memory stranded under a space the Runtime will
+    not read must count as present, so the readback then fails on it instead
+    of excusing it. Both the point id and the SDK's `node_id` are kept: the
+    SDK derives a point id from a node id that is not a UUID.
+
+    Callers must have stopped every SDK writer. A store that cannot be read
+    raises: "unknown" must never be taken for "absent".
+    """
+    if not (_vector_directory(data_dir) / "chroma.sqlite3").is_file():
+        return frozenset()
+    found: set[str] = set()
+    try:
+        client = open_offline_chroma(_vector_directory(data_dir))
+        try:
+            for collection in client.list_collections():
+                offset = 0
+                while True:
+                    page = collection.get(include=["metadatas"], limit=_BATCH, offset=offset)
+                    ids = list(page["ids"])
+                    if not ids:
+                        break
+                    found.update(ids)
+                    found.update(
+                        str(metadata["node_id"])
+                        for metadata in page["metadatas"] or ()
+                        if metadata and metadata.get("node_id")
+                    )
+                    offset += len(ids)
+        finally:
+            client.close()
+    except Exception as error:
+        raise DataPlaneMigrationError("sdk_migration_vector_store_unreadable") from error
+    return frozenset(found)
 
 
 def _records(collection: Any) -> Iterator[dict[str, Any]]:

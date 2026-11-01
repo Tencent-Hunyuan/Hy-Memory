@@ -463,11 +463,17 @@ def test_a_run_killed_after_its_restore_point_is_rolled_back_on_the_next_start(h
 
 
 def test_a_preflight_failure_changes_nothing_and_needs_no_restore(home, monkeypatch):
+    def unreadable(_data_dir, _profile):
+        raise DataPlaneMigrationError("sdk_migration_vector_profile_missing")
+
     monkeypatch.setattr("one_memory.sdk_migration_runner.read_active_profile", lambda _db: None)
+    monkeypatch.setattr(
+        "one_memory.sdk_migration_runner.vectors_belong_to_another_space", unreadable
+    )
     before = _state(home)
     report: dict[str, object] = {}
 
-    with pytest.raises(DataPlaneMigrationError, match="sdk_migration_model_profile_required"):
+    with pytest.raises(DataPlaneMigrationError, match="sdk_migration_vector_profile_missing"):
         _run(home, report=report)
 
     assert report == {}

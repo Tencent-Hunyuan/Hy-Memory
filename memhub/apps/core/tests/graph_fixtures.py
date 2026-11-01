@@ -24,7 +24,8 @@ def model_snapshot(
         model="memory-model",
         embedding_model="embedding-model",
         embedding_provider_kind=embedding_provider,
-        embedding_base_url=embedding_base_url,
+        # Stored profiles always name it; see `pinned_embedding_base_url`.
+        embedding_base_url=embedding_base_url or base_url,
         embedding_dimensions=768,
         timeout_seconds=30,
         max_concurrency=1,

@@ -480,6 +480,30 @@ describe("ModelSettings", () => {
     });
   });
 
+  it("writes the prefilled embedding endpoint instead of leaving it to follow generation", async () => {
+    profiles = [
+      {
+        ...profile,
+        embedding_provider_kind: "openai_compatible",
+        embedding_model: "vector-old",
+        embedding_base_url: null,
+      },
+    ];
+    render(<ModelSettings />);
+    await userEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    await userEvent.clear(screen.getByLabelText("向量模型名"));
+    await userEvent.type(screen.getByLabelText("向量模型名"), "vector-new");
+    await userEvent.click(
+      screen.getByRole("button", { name: "高级：自行配置向量模型" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(update).toHaveBeenCalledWith(profile.profile_id, {
+      expected_revision: 1,
+      embedding_model: "vector-new",
+      embedding_base_url: profile.base_url,
+    });
+  });
+
   it("explicitly switches an edited remote embedding to builtin without retaining its dimensions", async () => {
     profiles = [
       {
