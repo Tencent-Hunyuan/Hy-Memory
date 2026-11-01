@@ -173,12 +173,14 @@ def test_first_import_gate_waits_for_every_selected_history_job() -> None:
     jobs = [
         SimpleNamespace(
             operation="history",
+            user_id="local",
             source_id="cursor",
             created_at=datetime(2026, 10, 18, tzinfo=UTC),
             status="completed",
         ),
         SimpleNamespace(
             operation="history",
+            user_id="local",
             source_id="codex",
             created_at=datetime(2026, 10, 18, tzinfo=UTC),
             status="running",

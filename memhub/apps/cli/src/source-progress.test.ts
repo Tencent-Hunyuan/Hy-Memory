@@ -179,9 +179,69 @@ describe("CLI-07/10 source and synchronization reads", () => {
       sync_enabled: true,
       sync_completeness: "additions_only",
     });
-    expect(requestedPaths()).toEqual(["/api/v1/sources"]);
+    // The grants list answers 404 here, as an older Core does: the source
+    // list is shown as before, every row the default user's.
+    expect(report.sources[0].user_id).toBe("local");
+    expect(report.grants).toBeUndefined();
+    expect(requestedPaths()).toEqual([
+      "/api/v1/sources",
+      "/api/v1/source-grants",
+    ]);
     expect(requestedPaths().some((path) => path.includes("detect"))).toBe(
       false,
+    );
+  });
+
+  it("shows every user's grant, a Hermes profile with its user", async () => {
+    const grants = {
+      schema_version: 1,
+      grants: [
+        {
+          user_id: "local",
+          source_id: "codex",
+          root_label: ".codex",
+          root_path: "/home/synthetic/.codex",
+          authorized: true,
+          revoked_at: null,
+          sync_enabled: true,
+        },
+        {
+          user_id: "wife",
+          source_id: "hermes",
+          root_label: "wife",
+          root_path: "/home/synthetic/.hermes/profiles/wife",
+          authorized: true,
+          revoked_at: null,
+          sync_enabled: true,
+        },
+      ],
+    };
+    transport.get.mockImplementation(async (url: string) =>
+      url === "/api/v1/source-grants"
+        ? { status: 200, data: grants }
+        : (RESPONSES.get(url) ?? { status: 404, data: {} }),
+    );
+    let streams = captureStreams();
+    try {
+      expect(await run(["sources", "list", "--json"], {})).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    const report = JSON.parse(streams.stdout());
+    expect(report.grants).toEqual(grants.grants);
+    expect(report.sources[0]).toMatchObject({
+      source_id: "codex",
+      user_id: "local",
+    });
+    streams = captureStreams();
+    try {
+      expect(await run(["sources", "list"], {})).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    expect(streams.stdout()).toContain("其他用户的连接：");
+    expect(streams.stdout()).toContain(
+      "hermes（用户 wife）：已连接；处理已开启；目录 /home/synthetic/.hermes/profiles/wife",
     );
   });
 
@@ -552,6 +612,7 @@ describe("CLI-19 progress and issue reads", () => {
       requestedPaths().every((path) =>
         [
           "/api/v1/sources",
+          "/api/v1/source-grants",
           "/api/v1/live-sync",
           "/api/v1/import-jobs",
           "/api/v1/memory-processing",

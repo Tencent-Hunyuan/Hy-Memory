@@ -75,7 +75,11 @@ def batch_id(*, internal_session_id: str, first_round: int, last_round: int) -> 
 INTERNAL_SESSION_ID_MAX = 128
 
 
-def internal_session_id_for(conversation_id: str, source_id: str) -> str:
+def internal_session_id_for(
+    conversation_id: str,
+    source_id: str,
+    user_id: str = "local",
+) -> str:
     """Normalise a conversation identity to the durable ``internal_session_id``.
 
     This is the single derivation shared by every Evidence-first intake path.
@@ -86,7 +90,17 @@ def internal_session_id_for(conversation_id: str, source_id: str) -> str:
     per-session serialisation split). Only a value that the contract would have
     rejected before it ever reached the queue is replaced by the versioned
     session id, which is deterministic for a given (source, conversation).
+
+    Another user's conversation is always derived with the user in it: two
+    Hermes profiles can hold the same session id, and sharing a session key
+    would serialise and batch one person's turns behind the other's. `local`
+    keeps the identity it always had.
     """
+    if user_id != "local":
+        return session_id(
+            harness_id=source_id,
+            external_session_id=f"user:{user_id}|{conversation_id}",
+        )
     if len(conversation_id) <= INTERNAL_SESSION_ID_MAX:
         return conversation_id
     derived = session_id(harness_id=source_id, external_session_id=conversation_id)

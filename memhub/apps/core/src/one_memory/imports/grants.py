@@ -252,6 +252,18 @@ class SourceGrantStore:
             ).fetchone()
         return self._to_receipt(row) if row else None
 
+    def grants(self) -> tuple[tuple[SourceGrantReceipt, str], ...]:
+        """Every grant of every user, with its granted root path.
+
+        One source may hold several grants, one per `(user_id, source_id)`:
+        a Hermes root for `local` and a Hermes profile for another user.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM source_grants ORDER BY source_id, user_id"
+            ).fetchall()
+        return tuple((self._to_receipt(row), str(row["requested_path"])) for row in rows)
+
     def require_receipt(self, *, user_id: str, source_id: str) -> SourceGrantReceipt:
         receipt = self.receipt(user_id=user_id, source_id=source_id)
         if receipt is None:

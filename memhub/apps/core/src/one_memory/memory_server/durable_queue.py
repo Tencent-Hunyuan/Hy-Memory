@@ -54,6 +54,7 @@ from one_memory.memory_tasks import (
 )
 from one_memory.sdk_migration_log import error_chain_text
 from one_memory.service_levels import ServiceLevel, service_level_context
+from one_memory.user_scope import DEFAULT_USER_ID, lane_key, other_user_lane_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +344,27 @@ EVENT_TIME_WINDOW = timedelta(minutes=10)
 #: whole unprocessed history. These jobs are claimed ahead of the window,
 #: still one at a time per source and in order within their session.
 DIRECT_WRITE_SOURCES = frozenset({"one-memory-manual"})
+
+
+def request_user_id(request: WriteRequest) -> str:
+    """Whose write this is: its frozen input's user, `local` for id-only rows."""
+    users = {record.user_id for record in request.input_records}
+    if len(users) > 1:
+        raise ValueError("durable_write_multiple_users")
+    return next(iter(users), DEFAULT_USER_ID)
+
+
+def request_source_key(request: WriteRequest) -> str:
+    """The FIFO/claim key of a write: its source, per user.
+
+    `local` keeps the bare source id it always had. Another user's Hermes
+    lane is `hermes@user`, so one person's running job never holds the other
+    person's queue and the claim gate answers for that user's grant.
+    """
+    return lane_key(
+        request_user_id(request),
+        request.source_id or request.internal_session_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -862,7 +884,7 @@ class DurableWriteQueue:
                     job_id,
                     queue_seq,
                     request.internal_session_id,
-                    request.source_id or request.internal_session_id,
+                    request_source_key(request),
                     request.batch_identity.batch_id,
                     key,
                     payload,
@@ -929,7 +951,9 @@ class DurableWriteQueue:
             f"{hashlib.sha256(file_key.encode()).hexdigest()}:"
             f"{hashlib.sha256(record.conversation_id.encode()).hexdigest()}"
         )
-        session_key = internal_session_id_for(record.conversation_id, record.source_id)
+        session_key = internal_session_id_for(
+            record.conversation_id, record.source_id, record.user_id
+        )
         written = connection.execute(
             "SELECT 1 FROM memory_write_jobs AS job, json_each(job.evidence_ids_json) AS ref "
             "WHERE job.session_key=? AND job.state!='assembling' AND ref.value=? LIMIT 1",
@@ -998,7 +1022,7 @@ class DurableWriteQueue:
                 str(uuid4()),
                 queue_seq,
                 session_key,
-                record.source_id,
+                lane_key(record.user_id, record.source_id),
                 assembly_key,
                 assembly_key,
                 payload_json,
@@ -1034,10 +1058,13 @@ class DurableWriteQueue:
         `flush` (history at end of file) completes the last turn and writes a
         short batch; without it (live polling) those stay in the row.
         """
+        # Two users' roots can hold a file with the same relative key (each
+        # Hermes profile has its own `state.db`): only this user's rows.
+        assembly_prefix = f"assembly:{user_id}:{source_id}:"
         rows = connection.execute(
             "SELECT * FROM memory_write_jobs WHERE state='assembling' "
-            "AND source_key=? ORDER BY queue_seq",
-            (source_id,),
+            "AND source_key=? AND substr(idempotency_key,1,?)=? ORDER BY queue_seq",
+            (lane_key(user_id, source_id), len(assembly_prefix), assembly_prefix),
         ).fetchall()
         finalized: list[str] = []
         for row in rows:
@@ -1160,7 +1187,7 @@ class DurableWriteQueue:
         Same records, same key: a re-read returns the job already written.
         """
         first = records[0]
-        session_id = internal_session_id_for(first.conversation_id, first.source_id)
+        session_id = internal_session_id_for(first.conversation_id, first.source_id, first.user_id)
         material = ":".join(f"{item.evidence_id}:{item.content_hash}" for item in records)
         request_id = f"turn:v2:{hashlib.sha256(material.encode()).hexdigest()}"
         existing = connection.execute(
@@ -1205,7 +1232,7 @@ class DurableWriteQueue:
                 job_id,
                 queue_seq,
                 session_id,
-                first.source_id,
+                lane_key(first.user_id, first.source_id),
                 request.batch_identity.batch_id,
                 request_id,
                 json.dumps(
@@ -2494,6 +2521,12 @@ async def execute_job(
             source_id = request.internal_session_id
         if source_ids and source_ids != {source_id}:
             raise RuntimeError("durable_write_multiple_sources")
+        users = {getattr(record, "user_id", DEFAULT_USER_ID) for record in records}
+        if len(users) > 1:
+            raise RuntimeError("durable_write_multiple_users")
+        # The gates answer per user: another user's Hermes job asks about
+        # that user's grant, not `local`'s.
+        source_id = lane_key(next(iter(users), DEFAULT_USER_ID), source_id)
 
         async def mark() -> bool:
             return await in_the_background(queue.mark_invoked, job_id, owner=owner)
@@ -2799,6 +2832,19 @@ class DurableWriteDrain:
                 source_clause = f"AND candidate.source_key IN ({placeholders}) "
                 source_params = tuple(sorted(enabled_sources))
             direct_sources = ",".join("?" for _ in DIRECT_WRITE_SOURCES)
+            # Another user's hand-added memories are `one-memory-manual@user`:
+            # the same lane ahead of history, still serial per user.
+            direct_lanes = " OR ".join(
+                "substr(candidate.source_key,1,?)=?" for _ in DIRECT_WRITE_SOURCES
+            )
+            direct_lane_params = tuple(
+                value
+                for source in sorted(DIRECT_WRITE_SOURCES)
+                for value in (
+                    len(other_user_lane_prefix(source)),
+                    other_user_lane_prefix(source),
+                )
+            )
             # Same eligibility as the window claim below (free lease, no
             # running job of its source, nothing earlier in its session), but
             # not bound to the window: a note must not wait for history.
@@ -2808,7 +2854,7 @@ class DurableWriteDrain:
                 "WHERE candidate.state=? "
                 "AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at < ?) "
                 + source_clause
-                + f"AND candidate.source_key IN ({direct_sources}) "
+                + f"AND (candidate.source_key IN ({direct_sources}) OR {direct_lanes}) "
                 "AND NOT EXISTS ("
                 "SELECT 1 FROM memory_write_jobs AS held "
                 "WHERE held.source_key=candidate.source_key AND held.state=? "
@@ -2826,6 +2872,7 @@ class DurableWriteDrain:
                     now.isoformat(),
                     *source_params,
                     *sorted(DIRECT_WRITE_SOURCES),
+                    *direct_lane_params,
                     RUNNING,
                     now.isoformat(),
                     *_FIFO_BLOCKING_STATES,

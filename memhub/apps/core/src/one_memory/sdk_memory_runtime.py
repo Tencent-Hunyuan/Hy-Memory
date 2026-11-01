@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -56,8 +56,11 @@ class SdkMemoryRuntime:
         write_queue: DurableWriteQueue,
         extraction_settings: ExtractionSettingsStore,
         data_dir: Path,
+        user_ids: Callable[[], Iterable[str]] = lambda: ("local",),
     ) -> None:
         self.coordinator = coordinator
+        #: Every user whose raw layer is kept to the retention window.
+        self.user_ids = user_ids
         self.read_handle = read_handle
         self.write_queue = write_queue
         self.extraction_settings = extraction_settings
@@ -72,6 +75,12 @@ class SdkMemoryRuntime:
             )
 
     async def prune_expired_raw(self, *, now: datetime | None = None) -> int:
+        deleted = 0
+        for user_id in dict.fromkeys(await asyncio.to_thread(lambda: tuple(self.user_ids()))):
+            deleted += await self._prune_expired_raw_for(user_id, now=now)
+        return deleted
+
+    async def _prune_expired_raw_for(self, user_id: str, *, now: datetime | None) -> int:
         cutoff = (now or datetime.now(UTC)) - timedelta(days=RAW_RETENTION_DAYS)
         cutoff_timestamp = int(cutoff.timestamp())
         client = await self.read_handle.client()
@@ -79,7 +88,7 @@ class SdkMemoryRuntime:
         while True:
             page = await asyncio.to_thread(
                 client.list_memories,
-                user_id="local",
+                user_id=user_id,
                 layers=["l1_raw"],
                 statuses=list(_RAW_STATUSES),
                 order="asc",
@@ -95,8 +104,7 @@ class SdkMemoryRuntime:
                 for row in rows
                 if isinstance(row, dict)
                 and isinstance(row.get("memory_id"), str)
-                and int(row.get("memory_at") or row.get("gmt_created") or 0)
-                < cutoff_timestamp
+                and int(row.get("memory_at") or row.get("gmt_created") or 0) < cutoff_timestamp
             ]
             if not expired:
                 return deleted
@@ -154,11 +162,10 @@ class SdkMemoryRuntime:
         limit: int = 12,
     ) -> tuple[tuple[str, float], ...]:
         return tuple(
-            (hit.memory_id, hit.score)
-            for hit in await self.semantic_recall(query, limit=limit)
+            (hit.memory_id, hit.score) for hit in await self.semantic_recall(query, limit=limit)
         )
 
-    async def graph_snapshot(self, *, limit: int = 300) -> HyGraphSnapshot:
+    async def graph_snapshot(self, *, limit: int = 300, user_id: str = "local") -> HyGraphSnapshot:
         try:
             await self.coordinator.active_profile_credentials()
         except RuntimeError as error:
@@ -173,7 +180,7 @@ class SdkMemoryRuntime:
             return await asyncio.to_thread(
                 read_graph_snapshot,
                 client,
-                "local",
+                user_id,
                 "*",
                 limit,
             )

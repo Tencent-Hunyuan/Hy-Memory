@@ -7,9 +7,9 @@ between pages. The matches are kept here under an opaque ``window_id`` that
 the client passes back with the next offset.
 
 A window is bound to the filters it was searched with (query, source,
-statuses, scene). It expires after ``ttl_seconds`` without being read, and the
-store keeps at most ``max_windows`` windows, dropping the least recently read
-first.
+statuses, scene) and to the user whose library it searched. It expires after
+``ttl_seconds`` without being read, and the store keeps at most
+``max_windows`` windows, dropping the least recently read first.
 Only memory identities are kept, never content: each page is read fresh from
 the SDK, so an edit or a delete shows on the next page read.
 """
@@ -28,13 +28,17 @@ from one_memory.hy_sdk_types import LibraryHit
 DEFAULT_WINDOW_TTL_SECONDS = 300.0
 DEFAULT_MAX_WINDOWS = 32
 
-WindowKey = tuple[str, str | None, tuple[str, ...], str]
+WindowKey = tuple[str, str | None, tuple[str, ...], str, str]
 
 
 def window_key(
-    query: str, source: str | None, statuses: list[str], scene: str = "all"
+    query: str,
+    source: str | None,
+    statuses: list[str],
+    scene: str = "all",
+    user_id: str = "local",
 ) -> WindowKey:
-    return (query, source, tuple(sorted(set(statuses))), scene)
+    return (query, source, tuple(sorted(set(statuses))), scene, user_id)
 
 
 @dataclass(frozen=True)

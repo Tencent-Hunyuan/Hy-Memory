@@ -10,6 +10,8 @@ export interface ContextSearchInput {
   limit: number;
   character_budget: number;
   timeout_ms: number;
+  /** Whose memories to search. Omitted for the default user (`local`). */
+  user_id?: string;
 }
 
 /** The CLI's JSON document mirrors Core's SDK-native context schema v2. */

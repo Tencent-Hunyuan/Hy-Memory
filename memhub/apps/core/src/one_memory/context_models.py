@@ -5,6 +5,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from one_memory.user_scope import DEFAULT_USER_ID, UserId
+
 ContextKind = Literal["raw", "memory"]
 ContextSearchChannel = Literal["lexical", "semantic"]
 ContextSemanticStatus = Literal["not_searched", "completed", "failed", "timed_out"]
@@ -58,6 +60,8 @@ class SdkContextSearchRequest(ContextSearchRequest):
     limit: int = Field(default=10, ge=1, le=20, strict=True)
     schema_limit: int = Field(default=3, ge=0, le=20, strict=True)
     intention_limit: int = Field(default=1, ge=0, le=20, strict=True)
+    #: Whose memories to search. The App never sends it and reads `local`.
+    user_id: UserId = DEFAULT_USER_ID
 
 
 class ContextMessage(BaseModel):

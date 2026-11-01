@@ -210,7 +210,7 @@ def test_recall_route_falls_back_and_keeps_the_raw_grant(tmp_path, monkeypatch):
     async def no_model(_app):
         return False
 
-    async def raw(_app, query, *, limit, sources):
+    async def raw(_app, query, *, limit, sources, user_id="local"):
         searched.append(sources)
         return (_raw("r1", "上周决定用 Postgres", source="cursor"),)
 
