@@ -27,6 +27,11 @@ class SemanticMemoryHit:
     member_ids: tuple[str, ...] = ()
     sdk_formatted: bool = False
     formatting_complete: bool = False
+    #: The recall lane that produced the hit (`sdk_search_options.SearchLane`)
+    #: and the namespace to read it back from. Defaults are a chat memory.
+    lane: str = "normal"
+    kind: str = "chat"
+    variant: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {

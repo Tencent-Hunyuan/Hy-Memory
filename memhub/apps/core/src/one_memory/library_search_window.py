@@ -28,7 +28,10 @@ from one_memory.hy_sdk_types import LibraryHit
 DEFAULT_WINDOW_TTL_SECONDS = 300.0
 DEFAULT_MAX_WINDOWS = 32
 
-WindowKey = tuple[str, str | None, tuple[str, ...], str, str]
+#: (query, source, statuses, scene, user, other filters as sorted name/values pairs)
+WindowKey = tuple[
+    str, str | None, tuple[str, ...], str, str, tuple[tuple[str, tuple[str, ...]], ...]
+]
 
 
 def window_key(
@@ -37,8 +40,12 @@ def window_key(
     statuses: list[str],
     scene: str = "all",
     user_id: str = "local",
+    filters: dict[str, list[str]] | None = None,
 ) -> WindowKey:
-    return (query, source, tuple(sorted(set(statuses))), scene, user_id)
+    extra = tuple(
+        sorted((name, tuple(sorted(set(values)))) for name, values in (filters or {}).items())
+    )
+    return (query, source, tuple(sorted(set(statuses))), scene, user_id, extra)
 
 
 @dataclass(frozen=True)

@@ -2018,11 +2018,16 @@ async function runCommand(
     return sourceProgressExitCode(document);
   }
   if (named === "profile") {
+    const profileFlags = arguments_.slice(1);
     if (
-      arguments_.filter((item) => item === "--json").length > 1 ||
-      arguments_.slice(1).some((value) => value !== "--json")
+      profileFlags.filter((item) => item === "--json").length > 1 ||
+      profileFlags.filter((item) => item === "--versions").length > 1 ||
+      profileFlags.some((value) => value !== "--json" && value !== "--versions")
     ) {
       return usage();
+    }
+    if (profileFlags.includes("--versions")) {
+      return await profileVersionsCommand(environment, { asJson, userId });
     }
     const connected = await connectRuntime(environment, {
       readerTimeoutMs: 15_000,
@@ -3888,6 +3893,108 @@ async function emitModelReceipt(
 
 /** Attach to a verified Runtime, telling a stopped one (exit 3) from one
  * that is up but unusable (exit 1). */
+/**
+ * `memhub profile --versions`: the long-term profile's L0 version chains,
+ * latest first, so a value that replaced a better one can be found by id.
+ */
+async function profileVersionsCommand(
+  environment: NodeJS.ProcessEnv,
+  options: { asJson: boolean; userId?: string },
+): Promise<number> {
+  const fail = (state: string, code: string, exitCode: number): number => {
+    emit(
+      options.asJson
+        ? `${JSON.stringify({ schema_version: 2, product: PRODUCT, state, code })}\n`
+        : `画像版本读取失败：${code}\n`,
+    );
+    return exitCode;
+  };
+  const connected = await connectRuntime(environment, {
+    readerTimeoutMs: 15_000,
+  });
+  if (!connected.ok) {
+    return fail("unavailable", connected.code, connected.exitCode);
+  }
+  const outcome = await connected.reader<unknown>(
+    "/api/v2/user-profile/versions",
+    userIdParameters(options.userId),
+  );
+  const chains = outcome.state === "ok" ? profileChains(outcome.data) : null;
+  if (outcome.state !== "ok" || chains === null) {
+    return fail(
+      outcome.state === "ok" ? "invalid" : outcome.state,
+      outcome.state === "ok" ? "response_invalid" : outcome.code,
+      EXIT_FAILED,
+    );
+  }
+  if (options.asJson) {
+    emit(
+      `${JSON.stringify({
+        schema_version: 2,
+        product: PRODUCT,
+        state: "ok",
+        ...(outcome.data as object),
+      })}\n`,
+    );
+    return EXIT_OK;
+  }
+  if (chains.length === 0) {
+    emit("尚未形成用户画像版本。\n");
+    return EXIT_OK;
+  }
+  const lines: string[] = [];
+  for (const chain of chains) {
+    lines.push(`画像 ${chain.memory_id}（${chain.status}）`);
+    for (const version of chain.versions) {
+      const when =
+        typeof version.gmt_created === "number"
+          ? new Date(version.gmt_created * 1000).toISOString()
+          : "时间未知";
+      lines.push(
+        `  ${version.current ? "*" : " "} ${version.memory_id}  ${when}  ${version.content}`,
+      );
+    }
+  }
+  lines.push(
+    "* 表示当前生效的版本；删除错误版本：memhub memories delete <memory-id> --yes",
+  );
+  emit(`${lines.join("\n")}\n`);
+  return EXIT_OK;
+}
+
+type ProfileChainView = {
+  memory_id: string;
+  status: string;
+  versions: {
+    memory_id: string;
+    content: string;
+    gmt_created?: number | null;
+    current: boolean;
+  }[];
+};
+
+function profileChains(value: unknown): ProfileChainView[] | null {
+  if (!value || typeof value !== "object") return null;
+  const chains = (value as { chains?: unknown }).chains;
+  if (!Array.isArray(chains)) return null;
+  const valid = chains.every(
+    (chain) =>
+      chain &&
+      typeof chain === "object" &&
+      typeof (chain as ProfileChainView).memory_id === "string" &&
+      typeof (chain as ProfileChainView).status === "string" &&
+      Array.isArray((chain as ProfileChainView).versions) &&
+      (chain as ProfileChainView).versions.every(
+        (version) =>
+          version &&
+          typeof version.memory_id === "string" &&
+          typeof version.content === "string" &&
+          typeof version.current === "boolean",
+      ),
+  );
+  return valid ? (chains as ProfileChainView[]) : null;
+}
+
 async function connectRuntime(
   environment: NodeJS.ProcessEnv,
   options?: { readerTimeoutMs?: number },

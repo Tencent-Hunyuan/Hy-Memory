@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from one_memory.hy_sdk_types import HySdkMemoryRecord
 from one_memory.memory_governance import GovernedMemory, MemoryStatus
+from one_memory.sdk_search_options import SdkSearchOptions
 from one_memory.semantic_deadline import (
     SemanticMemoryHit,
     SemanticSearch,
@@ -50,7 +51,15 @@ class TruncationBudget(StrEnum):
     TIMEOUT = "timeout_budget"
 
 
-class RecallRequest(BaseModel):
+class RecallRequest(SdkSearchOptions):
+    """`POST /api/v1/recall`.
+
+    The `SdkSearchOptions` fields, `schema_limit` and `intention_limit` pass
+    through to the SDK memory search (and the floor and row filters to the
+    raw fallback). Absent, recall makes the search it always made: the
+    relevance floor, schema and intention lanes sized to `limit`.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     query: str = Field(min_length=1, max_length=2_000)
@@ -70,6 +79,17 @@ class RecallRequest(BaseModel):
     timeout_ms: int = Field(default=2_000, ge=50, le=30_000)
     #: Whose memories to recall. Omitted, it is `local`, the App's library.
     user_id: UserId = DEFAULT_USER_ID
+    #: The SDK's schema (L6) and proactive intention (L7) lanes.
+    schema_limit: int | None = Field(default=None, ge=0, le=20)
+    intention_limit: int | None = Field(default=None, ge=0, le=20)
+
+    def search_overrides(self) -> Mapping[str, object]:
+        values = dict(super().search_overrides())
+        if self.schema_limit is not None:
+            values["schema_limit"] = self.schema_limit
+        if self.intention_limit is not None:
+            values["intention_limit"] = self.intention_limit
+        return values
 
 
 class RecallHit(BaseModel):

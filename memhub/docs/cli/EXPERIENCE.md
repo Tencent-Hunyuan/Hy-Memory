@@ -142,6 +142,16 @@ node apps/cli/dist/one-memory.cjs write status <request_id> --user-id wife
 - 不带 `--user-id`（或写 `--user-id local`）时请求里不出现 `user_id`，和以前完全一样。
 - 用户之间互相隔离：读、改、删另一个用户的记忆 ID 返回「未找到」；write 的 request id 也只属于提交它的用户。
 
+### 画像版本（`profile --versions`）
+
+```bash
+node apps/cli/dist/one-memory.cjs profile --versions            # L0 画像版本链，最新在前，* 为当前版本
+node apps/cli/dist/one-memory.cjs profile --versions --user-id wife --json
+```
+
+用于找出覆盖了正确值的错误版本（例如 `用户` / `The user`），再用
+`memories delete <memory-id> --yes` 删除；对应 `GET /api/v2/user-profile/versions`。
+
 ## 8. 召回（recall）
 
 `recall` 两条路径（raw / memory）此前已真机验证。文本输出会标明每条是「原始对话摘录」

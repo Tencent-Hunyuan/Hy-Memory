@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -103,6 +104,7 @@ from one_memory.hy_sdk_types import (
     HySdkError,
     HySdkMemoryPage,
     HySdkMemoryRecord,
+    HySdkProfileVersions,
     HySdkRawHit,
     HySdkRawPage,
     HySdkRawRecord,
@@ -110,8 +112,10 @@ from one_memory.hy_sdk_types import (
     HySdkUserProfile,
     LibraryHit,
     library_keyword_hits,
+    parse_sdk_lane_search,
     parse_sdk_raw_search,
     parse_sdk_search,
+    raw_turn_messages,
 )
 from one_memory.imports.access import (
     AuthorizedSourceRoot,
@@ -230,6 +234,13 @@ from one_memory.sdk_memory_qa import (
 from one_memory.sdk_memory_runtime import SdkMemoryRuntime
 from one_memory.sdk_migration_log import error_chain_text, error_frames
 from one_memory.sdk_read_handle import ActiveProfileReadHandle
+from one_memory.sdk_search_options import (
+    MEMORY_LAYERS,
+    MEMORY_STATUSES,
+    SdkSearchFilters,
+    SearchLane,
+    split_csv,
+)
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.secrets import (
     KeyringSecretStore,
@@ -237,6 +248,7 @@ from one_memory.secrets import (
     SecretStoreErrorCode,
     SecretStoreUnavailableError,
 )
+from one_memory.semantic_deadline import SemanticMemoryHit
 from one_memory.service_levels import (
     ResourceLimit,
     ServiceLevel,
@@ -399,6 +411,23 @@ class CreateImportJobRequest(BaseModel):
     operation: Literal["history", "sync"] = "history"
 
 
+class CreateImportJobV2Request(CreateImportJobRequest):
+    """`POST /api/v2/import-jobs`: v1's body plus whose lane it runs on."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Only Hermes holds roots for a user other than `local`.
+    user_id: UserId = DEFAULT_USER_ID
+
+
+class SourceSyncNowRequest(BaseModel):
+    """Optional body of `POST /api/v2/sources/{id}/sync`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UserId = DEFAULT_USER_ID
+
+
 class ConnectSourcesRequest(BaseModel):
     source_ids: tuple[str, ...] = Field(min_length=1, max_length=32)
     #: Whose grant this is. Only Hermes may connect a root for a user other
@@ -454,13 +483,83 @@ class SdkUserProfileResponse(BaseModel):
     elapsed_ms: float = Field(ge=0)
 
 
+class SdkProfileVersionsResponse(HySdkProfileVersions):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    user_id: str
+
+
+class SdkRawMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: user / assistant (tool and system if the SDK kept them); "" if unnamed.
+    role: str
+    content: str
+
+
+class SdkRawItem(HySdkRawRecord):
+    """One SDK raw turn as `/api/v2/raw` lists it.
+
+    The SDK record's fields, plus what tracing an import needs: the turn's
+    messages with their roles (parsed from the SDK's `[role]: text` lines),
+    a `sha256:` hash of the stored content computed by Core (the SDK keeps
+    none), and `created`, when the SDK stored it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    messages: tuple[SdkRawMessage, ...] = ()
+    #: The one role of a single-message turn; None for a mixed turn.
+    role: str | None = None
+    content_hash: str
+    created: datetime | None = None
+
+    @classmethod
+    def of(cls, record: HySdkRawRecord) -> "SdkRawItem":
+        messages = tuple(
+            SdkRawMessage(role=role, content=text)
+            for role, text in raw_turn_messages(record.content)
+        )
+        roles = {message.role for message in messages}
+        return cls(
+            **record.model_dump(),
+            messages=messages,
+            role=next(iter(roles)) if len(roles) == 1 and "" not in roles else None,
+            content_hash="sha256:" + hashlib.sha256(record.content.encode("utf-8")).hexdigest(),
+            created=(
+                datetime.fromtimestamp(record.gmt_created, tz=UTC)
+                if record.gmt_created is not None
+                else None
+            ),
+        )
+
+
 class SdkRawPage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: tuple[HySdkRawRecord, ...] = ()
+    items: tuple[SdkRawItem, ...] = ()
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1, le=500)
+    #: Set when a time filter was applied to this page in Core (the SDK list
+    #: has none): `items` is the page's rows inside the range, `total` stays
+    #: the SDK's count before that filter.
+    time_filtered: bool = False
+
+
+class SdkLayerCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Every SDK layer, zero when empty.
+    layers: dict[str, int]
+    total: int = Field(ge=0)
+    #: The statuses counted, or None for the defaults (active; raw: active+shadow).
+    statuses: tuple[str, ...] | None = None
+
+
+#: Raw lifecycle states that are still a kept conversation. Pro marks a raw
+#: SHADOW once extraction succeeds; lite leaves it ACTIVE.
+RAW_STATUSES = ("active", "shadow")
 
 
 class MemoryProcessingBlock(BaseModel):
@@ -605,8 +704,15 @@ class ManualExtractReceipt(BaseModel):
     batches_current: int
 
 
-class AskMemoryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class AskMemoryRequest(SdkSearchFilters):
+    """Ask over one user's memories.
+
+    The `SdkSearchFilters` fields (floors, rerank, source/session/agent/time
+    and layer filters) reach the retrieval search. Scene, reader and search
+    mode stay fixed: the answer cites chat memories read back by id.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=False)
 
     question: str = Field(min_length=1, max_length=2_000)
     scope: str = Field(default="all-apps", min_length=1, max_length=512)
@@ -1964,7 +2070,11 @@ def create_app(
         dependencies=protected,
     )
     async def list_sources() -> list[SourceResponse]:
-        detection = _detection(app)
+        return await sources_for(DEFAULT_USER_ID)
+
+    async def sources_for(user_id: str) -> list[SourceResponse]:
+        """One user's sources. `local`'s are the App's; another user sees Hermes only."""
+        detection = _detection(app) if user_id == DEFAULT_USER_ID else {}
         # Read in threads. The desktop polls this every few seconds, and both
         # reads below are synchronous SQLite — the totals across every source,
         # then a grant receipt per source. Made on the loop, as they were,
@@ -1974,7 +2084,7 @@ def create_app(
         # The totals are also not counted again for each ask: counting is a
         # pass over every row, and answering this took up to 6.70s during a
         # catch-up, nearly all of it the same count repeated.
-        totals_by_source = await app.state.source_totals.by_source(user_id="local")
+        totals_by_source = await app.state.source_totals.by_source(user_id=user_id)
         # Status polling must not trigger history discovery: detect can walk an
         # entire host tree and recheck the grant in SQLite for every file, with
         # concurrent polls duplicating that work. Only the explicit detect
@@ -1984,27 +2094,48 @@ def create_app(
         def describe() -> list[SourceResponse]:
             grant_store = _grant_store(app)
             config_store = _config_store(app)
-            return [
-                _source_response(
-                    registration,
-                    grant_store.receipt(user_id="local", source_id=source_id),
-                    config_store.sync_enabled(source_id),
-                    detection.get(source_id),
-                    runtime_settings.source_home,
-                    totals_by_source.get(source_id, (0, 0)),
-                    candidate_change_reason=app.state.source_candidate_store.change_reason(
-                        registration
-                    ),
-                    authorization_state=grant_store.authorization_state(
-                        user_id="local",
-                        source_id=source_id,
-                        candidate=registration.candidate.path,
-                    ),
+            responses = []
+            for source_id, registration in _catalog(app).items():
+                if user_id != DEFAULT_USER_ID and source_id not in MULTI_USER_SOURCES:
+                    continue
+                if user_id != DEFAULT_USER_ID:
+                    # Another user's Hermes is the profile root they were
+                    # granted, not the App's candidate.
+                    registration = _registration_at_grant(grant_store, registration, user_id)
+                responses.append(
+                    _source_response(
+                        registration,
+                        grant_store.receipt(user_id=user_id, source_id=source_id),
+                        _lane_sync_enabled(config_store, lane_key(user_id, source_id)),
+                        detection.get(source_id),
+                        runtime_settings.source_home,
+                        totals_by_source.get(source_id, (0, 0)),
+                        candidate_change_reason=(
+                            app.state.source_candidate_store.change_reason(registration)
+                            if user_id == DEFAULT_USER_ID
+                            else "multi_user_grant"
+                        ),
+                        authorization_state=grant_store.authorization_state(
+                            user_id=user_id,
+                            source_id=source_id,
+                            candidate=registration.candidate.path,
+                        ),
+                    )
                 )
-                for source_id, registration in _catalog(app).items()
-            ]
+            return responses
 
         return await asyncio.to_thread(describe)
+
+    @app.get(
+        "/api/v2/sources",
+        response_model=list[SourceResponse],
+        dependencies=strict,
+    )
+    async def list_sources_v2(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> list[SourceResponse]:
+        """`GET /api/v1/sources` for one user: `local` (the default) reads the App's."""
+        return await sources_for(user_id)
 
     @app.get(
         "/api/v1/adapters",
@@ -2523,19 +2654,36 @@ def create_app(
         dependencies=protected,
     )
     async def create_import_job(request: CreateImportJobRequest) -> ImportJob:
-        _require_registration(app, request.source_id)
-        if request.source_id not in _supervisor(app).adapters:
+        return await create_job_on(request.source_id, request.operation, DEFAULT_USER_ID)
+
+    async def create_job_on(
+        source_id: str, operation: Literal["history", "sync"], user_id: str
+    ) -> ImportJob:
+        """Start an import on one user's lane of a source (`local`: the bare id)."""
+        _require_registration(app, source_id)
+        _require_multi_user_source(source_id, user_id)
+        lane = lane_key(user_id, source_id)
+        if lane not in _supervisor(app).adapters:
             raise HTTPException(status_code=409, detail="source_not_authorized")
         try:
             job = await asyncio.to_thread(
                 _supervisor(app).create_job,
-                request.source_id,
-                operation=request.operation,
+                lane,
+                operation=operation,
             )
         except SourceAccessError as error:
             raise HTTPException(status_code=409, detail=error.code) from None
         _supervisor(app).enqueue(job.job_id)
         return job
+
+    @app.post(
+        "/api/v2/import-jobs",
+        response_model=ImportJob,
+        dependencies=strict,
+    )
+    async def create_import_job_v2(request: CreateImportJobV2Request) -> ImportJob:
+        """`POST /api/v1/import-jobs` on one user's lane (Hermes only for another user)."""
+        return await create_job_on(request.source_id, request.operation, request.user_id)
 
     @app.post(
         "/api/v1/sources/connect",
@@ -2786,12 +2934,53 @@ def create_app(
         dependencies=protected,
     )
     async def trigger_live_sync(source_id: str) -> ImportJob:
+        return await sync_lane(source_id, DEFAULT_USER_ID)
+
+    async def sync_lane(source_id: str, user_id: str) -> ImportJob:
         _require_registration(app, source_id)
+        _require_multi_user_source(source_id, user_id)
         # Asked for by hand, so it reports a job even when nothing was new;
         # `live_sync_unavailable` keeps meaning the source cannot be synced.
-        job = await _live_sync(app).trigger_now(source_id)
+        job = await _live_sync(app).trigger_now(lane_key(user_id, source_id))
         if job is None:
             raise HTTPException(status_code=409, detail="live_sync_unavailable")
+        return job
+
+    @app.post(
+        "/api/v2/sources/{source_id}/sync",
+        response_model=ImportJob,
+        dependencies=strict,
+    )
+    async def trigger_live_sync_v2(
+        source_id: str,
+        request: SourceSyncNowRequest | None = None,
+    ) -> ImportJob:
+        """`POST /api/v1/sources/{id}/sync` on one user's lane; the body is optional."""
+        return await sync_lane(source_id, request.user_id if request else DEFAULT_USER_ID)
+
+    @app.get(
+        "/api/v2/import-jobs",
+        response_model=list[ImportJob],
+        dependencies=strict,
+    )
+    def list_import_jobs_v2(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> list[ImportJob]:
+        return list_import_jobs(user_id=user_id)
+
+    @app.get(
+        "/api/v2/import-jobs/{job_id}",
+        response_model=ImportJob,
+        dependencies=strict,
+    )
+    def get_import_job_v2(
+        job_id: str,
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> ImportJob:
+        """One job; another user's job answers exactly like a missing one."""
+        job = _require_job(app, job_id)
+        if job.user_id != user_id:
+            raise HTTPException(status_code=404, detail="job_not_found")
         return job
 
     @app.get(
@@ -3156,6 +3345,11 @@ def create_app(
         window_id: str | None = Query(default=None, min_length=1, max_length=64),
         scene: Literal["all", "chat", "working", "coding"] = Query(default="all"),
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+        layers: list[str] | None = Query(default=None),  # noqa: B008
+        layer: list[str] | None = Query(default=None),  # noqa: B008
+        exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
+        session_ids: list[str] | None = Query(default=None),  # noqa: B008
+        agent_ids: list[str] | None = Query(default=None),  # noqa: B008
     ) -> HySdkMemoryPage:
         """One page of memories across chat, working and coding.
 
@@ -3170,7 +3364,29 @@ def create_app(
         and are cut from the same matches, so pages never overlap or skip. A
         `window_id` that expired or was searched with other filters searches
         again and answers page 1 with `window_reset: true`.
+
+        `layers` (or `layer`), `statuses`, `exclude_sources`, `session_ids`
+        and `agent_ids` may each repeat or be comma separated. Layers exist in
+        the chat store only, so a layer filter lists the chat store (graph
+        layers included) and refuses `scene=working|coding`. `l1_raw` belongs
+        to `/api/v2/raw`.
         """
+        statuses = _library_values(statuses, MEMORY_STATUSES, "memory_status_unknown")
+        chosen_layers = _library_values(
+            [*(layers or ()), *(layer or ())], MEMORY_LAYERS, "memory_layer_unknown"
+        )
+        if chosen_layers and scene in {"working", "coding"}:
+            raise HTTPException(status_code=422, detail="memory_layers_require_chat_scene")
+        filters = {
+            name: values
+            for name, values in (
+                ("layers", chosen_layers),
+                ("exclude_sources", split_csv(exclude_sources)),
+                ("session_ids", split_csv(session_ids)),
+                ("agent_ids", split_csv(agent_ids)),
+            )
+            if values
+        }
         try:
             client = await _sdk_client_handle(app).client()
             search_query = (query or "").strip()
@@ -3191,16 +3407,20 @@ def create_app(
                     window_id=window_id,
                     scene=scene,
                     user_id=user_id,
+                    filters=filters,
                 )
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id=user_id,
-                scene=scene,
+                # Layers are chat-store rows: `scene="all"` would still add
+                # every working/coding experience to a layer-filtered page.
+                scene=None if chosen_layers else scene,
                 statuses=list(statuses),
                 include_sources=[source] if source else None,
                 offset=offset,
                 limit=limit,
                 order="desc",
+                **filters,
             )
             page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(
                 raw, limit=limit, offset=offset
@@ -3213,6 +3433,51 @@ def create_app(
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
 
     @app.get(
+        "/api/v2/memory-library/layers",
+        response_model=SdkLayerCounts,
+        dependencies=strict,
+    )
+    async def sdk_memory_layers(
+        statuses: list[str] | None = Query(default=None),  # noqa: B008
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> SdkLayerCounts:
+        """How many memories each SDK layer holds for one user.
+
+        One `list_memories(layers=[layer], limit=1)` per layer, read for its
+        total only. Without `statuses` every layer counts its active rows,
+        and `l1_raw` counts active and shadow raws: pro shadows a raw once
+        it is extracted, and both are the user's kept conversations.
+        """
+        chosen = _library_values(statuses or [], MEMORY_STATUSES, "memory_status_unknown")
+        try:
+            client = await _sdk_client_handle(app).client()
+
+            def count(layer: str) -> int:
+                layer_statuses = chosen or (list(RAW_STATUSES) if layer == "l1_raw" else ["active"])
+                raw = client.list_memories(
+                    user_id=user_id,
+                    layers=[layer],
+                    statuses=layer_statuses,
+                    limit=1,
+                    offset=0,
+                    order="desc",
+                )
+                return _list_total(raw)
+
+            counts = await asyncio.to_thread(
+                lambda: {layer: count(layer) for layer in MEMORY_LAYERS}
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_list_failed") from None
+        return SdkLayerCounts(
+            layers=counts,
+            total=sum(counts.values()),
+            statuses=tuple(chosen) if chosen else None,
+        )
+
+    @app.get(
         "/api/v2/memories/graph",
         response_model=MemoryGraphResponse,
         dependencies=strict,
@@ -3222,13 +3487,30 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         source: str | None = Query(default=None, min_length=1),
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+        layers: list[str] | None = Query(default=None),  # noqa: B008
+        session_ids: list[str] | None = Query(default=None),  # noqa: B008
+        exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
     ) -> MemoryGraphResponse:
         """The memory map on SDK authority: SDK memories plus the Kuzu overlay.
 
         Memories come from the public client; only the overlay reads Kuzu
         (`hy_graph_projection`, the visualization exception). Shape matches
         the legacy map so the same view draws both.
+
+        `layers` maps the chat store's chosen layers only (as on the library);
+        `session_ids` and `exclude_sources` narrow the listed memories. Each
+        may repeat or be comma separated. The overlay is not filtered.
         """
+        chosen_layers = _library_values(layers or [], MEMORY_LAYERS, "memory_layer_unknown")
+        filters = {
+            name: values
+            for name, values in (
+                ("layers", chosen_layers),
+                ("session_ids", split_csv(session_ids)),
+                ("exclude_sources", split_csv(exclude_sources)),
+            )
+            if values
+        }
         try:
             client = await _sdk_client_handle(app).client()
             # The map visualizes the active source scope, independently of the
@@ -3236,17 +3518,20 @@ def create_app(
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id=user_id,
-                scene="all",
+                scene=None if chosen_layers else "all",
                 statuses=["active"],
                 include_sources=[source] if source else None,
                 limit=limit,
                 offset=offset,
                 order="desc",
+                **filters,
             )
             page, skipped = HySdkMemoryPage.from_sdk_skipping_invalid(
                 raw, limit=limit, offset=offset
             )
             _log_skipped_sdk_memories(skipped)
+        except HTTPException:
+            raise
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
         vdb = raw.get("vdb") if isinstance(raw, dict) else None
@@ -3369,6 +3654,27 @@ def create_app(
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_profile_read_failed") from None
         return SdkUserProfileResponse.model_validate(profile.model_dump())
+
+    @app.get(
+        "/api/v2/user-profile/versions",
+        response_model=SdkProfileVersionsResponse,
+        dependencies=strict,
+    )
+    async def sdk_user_profile_versions(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> SdkProfileVersionsResponse:
+        """The long-term profile's L0 version chains (`get_user_basic_info`).
+
+        Each chain is one L0 head with its versions latest first, so a value
+        that replaced a better one can be found and deleted by id.
+        """
+        try:
+            client = await _sdk_client_handle(app).client()
+            value = await asyncio.to_thread(client.get_user_basic_info, user_id=user_id)
+            versions = HySdkProfileVersions.from_sdk(value)
+        except Exception as error:
+            raise _sdk_http_error(error, "hy_memory_profile_read_failed") from None
+        return SdkProfileVersionsResponse(user_id=user_id, **versions.model_dump())
 
     @app.get(
         "/api/v2/memories/{memory_id}",
@@ -3502,25 +3808,69 @@ def create_app(
         dependencies=strict,
     )
     async def sdk_raw_library(
-        source: str | None = Query(default=None, min_length=1),
+        source: list[str] | None = Query(default=None),  # noqa: B008
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+        exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
+        session_id: list[str] | None = Query(default=None),  # noqa: B008
+        statuses: list[str] | None = Query(default=None),  # noqa: B008
+        after: float | None = Query(default=None, ge=0),
+        before: float | None = Query(default=None, ge=0),
+        order: Literal["desc", "asc"] = Query(default="desc"),
     ) -> SdkRawPage:
+        """One page of a user's SDK raw turns: what was imported, as stored.
+
+        The SDK lists raw only when asked for `layers=["l1_raw"]`, and only
+        active rows unless told otherwise. Pro shadows a raw once extraction
+        succeeds, so a raw page reads active and shadow (`statuses` narrows
+        it). `source` and `session_id` (a conversation) may repeat or be comma
+        separated. `after`/`before` (unix seconds, against the conversation
+        time, else the stored time) have no SDK list filter: they cut this
+        page in Core and mark it `time_filtered`.
+        """
+        chosen_statuses = _library_values(
+            statuses or [], MEMORY_STATUSES, "memory_status_unknown"
+        ) or list(RAW_STATUSES)
+        sources = split_csv(source)
+        excluded = split_csv(exclude_sources)
+        sessions = split_csv(session_id)
         try:
             client = await _sdk_client_handle(app).client()
             value = await asyncio.to_thread(
                 client.list_memories,
                 user_id=user_id,
                 layers=["l1_raw"],
-                include_sources=[source] if source else None,
+                statuses=chosen_statuses,
+                include_sources=sources or None,
+                exclude_sources=excluded or None,
+                session_ids=sessions or None,
                 offset=offset,
                 limit=limit,
+                order=order,
             )
             page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
+        except HTTPException:
+            raise
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_raw_list_failed") from None
-        return SdkRawPage(items=page.raw, total=page.total, offset=offset, limit=limit)
+        records = page.raw
+        time_filtered = after is not None or before is not None
+        if time_filtered:
+            records = tuple(
+                record
+                for record in records
+                if (at := record.memory_at or record.gmt_created) is not None
+                and (after is None or at >= after)
+                and (before is None or at < before)
+            )
+        return SdkRawPage(
+            items=tuple(SdkRawItem.of(record) for record in records),
+            total=page.total,
+            offset=offset,
+            limit=limit,
+            time_filtered=time_filtered,
+        )
 
     @app.post(
         "/api/v2/memories/ask",
@@ -3543,7 +3893,7 @@ def create_app(
         )
         try:
             answer = await _sdk_request_answerer(app).answer(
-                request.question, user_id=request.user_id
+                request.question, user_id=request.user_id, **_ask_filters(request)
             )
         except MemoryAnswerError as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
@@ -3584,7 +3934,7 @@ def create_app(
             final: dict[str, object] | None = None
             try:
                 async for event in answerer.answer_stream(
-                    request.question, user_id=request.user_id
+                    request.question, user_id=request.user_id, **_ask_filters(request)
                 ):
                     if event.get("type") == "final":
                         final = event
@@ -3629,11 +3979,15 @@ def create_app(
         await _require_external_recall_scope(
             app, http_request, request.scope, request.workspace_path
         )
+        # A caller's pass-through search options need the SDK target, which
+        # carries them; without any, recall is the call it always was.
+        options = request if request.search_overrides() else None
         target = (
             _recall_target(app)
-            if request.user_id == DEFAULT_USER_ID
-            else _sdk_recall_target(app, request.user_id)
+            if request.user_id == DEFAULT_USER_ID and options is None
+            else _sdk_recall_target(app, request.user_id, options)
         )
+        raw_options = {"filters": options} if options is not None else {}
         access = external_access(http_request.headers)
         receipt = await recall_with_fallback(
             request,
@@ -3642,7 +3996,12 @@ def create_app(
             has_memories=lambda: _library_has_memories(app, request.user_id),
             raw_sources=lambda: _recall_raw_sources(app, request, access, started),
             search_raw=lambda query, limit, sources: _search_sdk_raw(
-                app, query, limit=limit, sources=sources, user_id=request.user_id
+                app,
+                query,
+                limit=limit,
+                sources=sources,
+                user_id=request.user_id,
+                **raw_options,
             ),
         )
         event_store = getattr(app.state, "call_event_store", None)
@@ -3932,6 +4291,11 @@ async def _require_external_recall_scope(
     access.require(tool, frozenset({scope}))
 
 
+def _ask_filters(request: AskMemoryRequest) -> dict[str, SdkSearchFilters]:
+    """The answerer's `filters` argument, only when the caller set any."""
+    return {"filters": request} if request.search_overrides() else {}
+
+
 def _sdk_request_answerer(app: FastAPI) -> SdkMemoryAnswerer:
     return SdkMemoryAnswerer(
         client_handle=_sdk_client_handle(app),
@@ -4108,6 +4472,25 @@ def _active_adapters(
     return adapters
 
 
+def _registration_at_grant(
+    grant_store: SourceGrantStore,
+    registration: SourceRegistration,
+    user_id: str,
+) -> SourceRegistration:
+    """The registration with its candidate at `user_id`'s granted root, if any."""
+    for receipt, root_path in grant_store.grants():
+        if receipt.user_id == user_id and receipt.source_id == registration.descriptor.source_id:
+            return replace(
+                registration,
+                candidate=replace(
+                    registration.candidate,
+                    path=Path(root_path),
+                    kind=RootCandidateKind.USER_SELECTED,
+                ),
+            )
+    return registration
+
+
 def _source_response(
     registration: SourceRegistration,
     receipt: SourceGrantReceipt | None,
@@ -4192,12 +4575,21 @@ def _require_registration(app: FastAPI, source_id: str) -> SourceRegistration:
     return registration
 
 
+def _require_multi_user_source(source_id: str, user_id: str) -> None:
+    """Refuse another user's lane of a source that holds `local`'s roots only."""
+    if user_id != DEFAULT_USER_ID and source_id not in MULTI_USER_SOURCES:
+        raise HTTPException(status_code=422, detail="user_id_requires_multi_user_source")
+
+
 def _diagnostic_request_event(method: str, request_path: str) -> str | None:
     if method == "GET" or request_path in {"/api/v1/health", "/api/v1/runtime/identity"}:
         return None
     families = (
         ("/api/v1/import", "import.request"),
         ("/api/v1/sources", "source.request"),
+        ("/api/v2/import", "import.request"),
+        ("/api/v2/sources", "source.request"),
+        ("/api/v2/evolve", "memory.request"),
         ("/api/v1/model", "model.request"),
         ("/api/v1/memor", "memory.request"),
         ("/api/v2/context", "recall.request"),
@@ -4777,23 +5169,33 @@ async def _recall_model_ready(app: FastAPI) -> bool:
     return profile is not None and bool(profile.capabilities.model_available)
 
 
-def _sdk_recall_target(app: FastAPI, user_id: str) -> SdkRecallTarget:
-    """Recall over one user's SDK memories; `get` results are kept only if theirs."""
+def _sdk_recall_target(
+    app: FastAPI,
+    user_id: str,
+    options: SdkSearchFilters | None = None,
+) -> SdkRecallTarget:
+    """Recall over one user's SDK memories; `get` results are kept only if theirs.
+
+    With a caller's pass-through `options`, the search carries them and a
+    working/coding hit is read back from its own namespace.
+    """
     handle = _sdk_client_handle(app)
+    namespaces: dict[str, dict[str, str]] = {}
 
     async def owned(memory_id: str) -> HySdkMemoryRecord | None:
-        memory = await _get_sdk_memory(handle, memory_id)
+        memory = await _get_sdk_memory(handle, memory_id, **namespaces.get(memory_id, {}))
         return memory if memory is not None and owns(memory.user_id, user_id) else None
 
-    return SdkRecallTarget(
-        semantic_search=lambda query: _search_sdk_memories(
-            handle,
-            query,
-            user_id=user_id,
-            agent_id="*",
-        ),
-        get_memory=owned,
-    )
+    async def search(query: str) -> tuple[object, ...]:
+        hits = await _search_sdk_memories(
+            handle, query, user_id=user_id, agent_id="*", options=options
+        )
+        for hit in hits:
+            if isinstance(hit, SemanticMemoryHit) and hit.variant is not None:
+                namespaces[hit.memory_id] = {"kind": hit.kind, "variant": hit.variant}
+        return hits
+
+    return SdkRecallTarget(semantic_search=search, get_memory=owned)
 
 
 async def _library_has_memories(app: FastAPI, user_id: str = DEFAULT_USER_ID) -> bool:
@@ -4861,25 +5263,47 @@ async def _search_sdk_raw(
     limit: int,
     sources: frozenset[str] | None,
     user_id: str = DEFAULT_USER_ID,
+    filters: SdkSearchFilters | None = None,
 ) -> tuple[HySdkRawHit, ...]:
-    """The imported conversations nearest the query: the SDK raw layer."""
+    """The imported conversations nearest the query: the SDK raw layer.
+
+    `filters` are a caller's pass-through options: its floor and row filters
+    apply, and its `include_sources` only narrow `sources`, never widen them.
+    """
+    from one_memory.context_routes import raw_lane_overrides
+
+    include = sorted(sources) if sources else None
+    if filters is not None and filters.include_sources is not None:
+        include = [
+            source
+            for source in dict.fromkeys(filters.include_sources)
+            if sources is None or source in sources
+        ]
+        if not include:
+            return ()
     client = await _sdk_client_handle(app).client()
     raw = await asyncio.to_thread(
         client.search,
         query,
-        user_ids=[user_id],
-        agent_ids=[],
-        include_sources=sorted(sources) if sources else None,
-        limit=limit,
-        min_score=0.0,
-        schema_min_score=0.0,
-        schema_limit=0,
-        intention_limit=0,
-        scene="chat",
-        reader=HY_MEMORY_READER,
-        layers=["l1_raw"],
+        **{
+            "user_ids": [user_id],
+            "agent_ids": [],
+            "include_sources": include,
+            "limit": limit,
+            "min_score": 0.0,
+            "schema_min_score": 0.0,
+            "schema_limit": 0,
+            "intention_limit": 0,
+            "scene": "chat",
+            "reader": HY_MEMORY_READER,
+            "layers": ["l1_raw"],
+            **(raw_lane_overrides(filters) if filters is not None else {}),
+        },
     )
-    return parse_sdk_raw_search(raw)
+    hits = parse_sdk_raw_search(raw)
+    if filters is None:
+        return hits
+    return tuple(hit for hit in hits if filters.passes_floor("raw", hit.score))
 
 
 def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
@@ -4961,6 +5385,30 @@ def _library_search_windows(app: FastAPI) -> LibrarySearchWindows:
     return cast(LibrarySearchWindows, windows)
 
 
+def _library_values(values: list[str], allowed: tuple[str, ...], code: str) -> list[str]:
+    """Repeated or comma-separated query values, each one the SDK knows."""
+    chosen = split_csv(values)
+    if any(value not in allowed for value in chosen):
+        raise HTTPException(status_code=422, detail=code)
+    return chosen
+
+
+def _list_total(raw: object) -> int:
+    """A chat-store `list_memories` reply's total: its vector and graph buckets."""
+    if not isinstance(raw, dict):
+        raise HySdkReadError("hy_memory_list_shape_unknown")
+    total = 0
+    for name in ("vdb", "graph"):
+        bucket = raw.get(name)
+        if bucket is None:
+            continue
+        value = bucket.get("total") if isinstance(bucket, dict) else None
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise HySdkReadError("hy_memory_list_shape_unknown")
+        total += value
+    return total
+
+
 async def _library_search_page(
     app: FastAPI,
     client: Any,
@@ -4973,6 +5421,7 @@ async def _library_search_page(
     window_id: str | None,
     scene: str = "all",
     user_id: str = DEFAULT_USER_ID,
+    filters: dict[str, list[str]] | None = None,
 ) -> HySdkMemoryPage:
     """One page of a keyword search, cut from a cached result window.
 
@@ -4982,11 +5431,16 @@ async def _library_search_page(
     contain every word, and caches those matches under a `window_id`. Every
     page of that search is a slice of the same matches, read fresh from the
     SDK so edits and deletes show. The whole library is never listed in Core.
+
+    `filters` (layers, exclude_sources, session_ids, agent_ids) reach the SDK
+    search and are part of the window's identity. A layer filter keeps chat
+    matches only: the SDK applies layers to the chat lane alone.
     """
     windows = _library_search_windows(app)
+    filters = filters or {}
     # The user is part of the window's identity: one user's `window_id` must
     # never cut a page from another user's matches.
-    key = window_key(query, source, statuses, scene, user_id)
+    key = window_key(query, source, statuses, scene, user_id, filters)
     window = windows.get(window_id, key) if window_id else None
     window_reset = window_id is not None and window is None
     if window is None:
@@ -4997,7 +5451,7 @@ async def _library_search_page(
             scene="all",
             rerank=False,
             user_ids=[user_id],
-            agent_ids=[],
+            agent_ids=filters.get("agent_ids", []),
             include_sources=[source] if source else None,
             limit=fetch,
             min_score=0.0,
@@ -5009,8 +5463,11 @@ async def _library_search_page(
             # recall-time lane the list never shows.
             intention_limit=0,
             reader=HY_MEMORY_READER,
+            **{name: values for name, values in filters.items() if name != "agent_ids"},
         )
         hits, held = library_keyword_hits(search_raw, query)
+        if "layers" in filters:
+            hits = tuple(hit for hit in hits if hit.kind == "chat")
         if scene != "all":
             # One scene: keep that scene's matches from the same fused window.
             hits = tuple(
@@ -5053,22 +5510,33 @@ async def _search_sdk_memories(
     user_id: str,
     agent_id: str,
     limit: int = 12,
+    options: SdkSearchFilters | None = None,
 ) -> tuple[object, ...]:
     client = await handle.client()
+    overrides = options.search_overrides() if options is not None else {}
     raw = await asyncio.to_thread(
         client.search,
         query,
-        user_ids=[user_id],
-        agent_ids=[] if agent_id == "*" else [agent_id],
-        limit=limit,
-        min_score=sdk_relevance_floor(),
-        schema_min_score=sdk_relevance_floor(),
-        schema_limit=limit,
-        intention_limit=limit,
-        scene="normal",
-        reader=HY_MEMORY_READER,
+        **{
+            "user_ids": [user_id],
+            "agent_ids": [] if agent_id == "*" else [agent_id],
+            "limit": limit,
+            "min_score": sdk_relevance_floor(),
+            "schema_min_score": sdk_relevance_floor(),
+            "schema_limit": limit,
+            "intention_limit": limit,
+            "scene": "normal",
+            "reader": HY_MEMORY_READER,
+            **overrides,
+        },
     )
-    return parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+    if options is None or not overrides:
+        return parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+    return tuple(
+        hit
+        for hit in parse_sdk_lane_search(raw, error_code="hy_memory_search_shape_unknown")
+        if options.passes_floor(cast(SearchLane, hit.lane), hit.score)
+    )
 
 
 def _sdk_http_error(error: Exception, fallback: str) -> HTTPException:
