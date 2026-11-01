@@ -44,7 +44,7 @@ export function installBackgroundTray(options: TrayOptions): () => void {
   let generation = 0;
   const refresh = async () => {
     if (disposed) return;
-    const locale = options.language?.read().locale ?? "zh-CN";
+    const locale = options.language?.read().locale ?? "zh-Hans";
     const t = (key: MessageKey) =>
       translate(locale, key, { product: productName });
     const current = ++generation;
@@ -82,7 +82,7 @@ export function installBackgroundTray(options: TrayOptions): () => void {
               .catch(() =>
                 options.reportError(
                   translate(
-                    options.language?.read().locale ?? "zh-CN",
+                    options.language?.read().locale ?? "zh-Hans",
                     "nativeLoginError",
                   ),
                 ),

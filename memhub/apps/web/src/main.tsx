@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
+import { setUiLanguage } from "./api";
 import { LanguageProvider } from "./gui-language";
 import { installNativeDisplayStyles } from "./native-display-styles";
 import { installRendererDebugLogCapture } from "./renderer-debug-log";
@@ -21,7 +22,7 @@ import.meta.hot?.dispose(stopRendererDebugLogs);
 
 createRoot(root).render(
   <StrictMode>
-    <LanguageProvider>
+    <LanguageProvider reportToCore={setUiLanguage}>
       <App />
     </LanguageProvider>
   </StrictMode>,

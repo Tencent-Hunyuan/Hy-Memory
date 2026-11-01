@@ -9,7 +9,7 @@ export type DiagnosticsExportResult = {
 };
 
 export async function exportDiagnosticsFile(
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ): Promise<DiagnosticsExportResult> {
   if (!window.oneMemory?.exportDiagnostics) {
     return { ok: false, message: translate(locale, "diagnosticExportDesktop") };

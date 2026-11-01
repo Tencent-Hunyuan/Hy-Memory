@@ -27,7 +27,7 @@ it("translates application detail live without triggering extra reads or writes"
   ).toBeTruthy();
   expect(screen.getByRole("switch", { name: "Sincronización" })).toBeTruthy();
   await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   await act(async () =>
     window.dispatchEvent(
       new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
@@ -603,7 +603,7 @@ it("shows insertion still on when neither removal nor revocation succeeded", asy
 });
 
 let languageListener: ((snapshot: unknown) => void) | undefined;
-function switchLanguage(locale: "es" | "zh-CN", revision: number) {
+function switchLanguage(locale: "es" | "zh-Hans", revision: number) {
   act(() => languageListener?.({ preference: locale, locale, revision }));
 }
 async function failDisconnectInSpanish() {
@@ -660,7 +660,7 @@ it("re-words a visible failure when the language changes, without new writes", a
   ).getRecallHosts;
   const readCount = reads.mock.calls.length;
   const revokes = bridge.revokeRecallPermission.mock.calls.length;
-  switchLanguage("zh-CN", 2);
+  switchLanguage("zh-Hans", 2);
   expect(
     await screen.findByText(
       "连接未能移除，记忆权限也未能撤销，OpenCode 仍可使用记忆，请重试。原因：应用控制通道暂不可用。",

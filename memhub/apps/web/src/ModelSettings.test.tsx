@@ -41,7 +41,7 @@ it("keeps the edited model draft and does not mutate on live language changes", 
     activate.mock.calls.length,
     probeProfile.mock.calls.length,
   ];
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   await act(async () =>
     window.dispatchEvent(
       new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),

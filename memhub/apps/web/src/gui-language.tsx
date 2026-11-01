@@ -1,8 +1,10 @@
 import {
+  type GuiLocale,
   isLanguagePreference,
   isLanguageSnapshot,
   type LanguagePreference,
   type LanguageSnapshot,
+  normalizeLanguagePreference,
   plainCount,
   resolveGuiLocale,
   translate,
@@ -20,14 +22,16 @@ import {
 export const LANGUAGE_STORAGE_KEY = "memhub.ui-language";
 type LanguageError = "languageLoadError" | "languageSaveError" | null;
 type State = LanguageSnapshot & { error: LanguageError };
+/** Tells Core the display language (null = follow the system). */
+export type ReportUiLanguage = (language: GuiLocale | null) => Promise<unknown>;
 const initial: State = {
   preference: "system",
-  locale: "zh-CN",
+  locale: "zh-Hans",
   revision: 0,
   error: null,
 };
 
-function createLanguageStore() {
+function createLanguageStore(reportToCore?: ReportUiLanguage) {
   let state = initial;
   let revision = -1;
   let generation = 0;
@@ -54,7 +58,10 @@ function createLanguageStore() {
   const readBrowser = () => {
     try {
       const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-      const preference = isLanguagePreference(stored) ? stored : "system";
+      const preference = normalizeLanguagePreference(stored) ?? "system";
+      // An earlier build's code (zh-CN) is kept as today's (zh-Hans).
+      if (stored !== null && stored !== preference && preference !== "system")
+        window.localStorage.setItem(LANGUAGE_STORAGE_KEY, preference);
       publish({
         preference,
         locale: resolveGuiLocale(preference, navigator.language),
@@ -158,6 +165,11 @@ function createLanguageStore() {
             revision: state.revision + 1,
             error: null,
           });
+          // Desktop tells Core from its main process; the browser UI does it
+          // here. Best effort: the display language is already saved.
+          void reportToCore?.(
+            preference === "system" ? null : preference,
+          ).catch(() => {});
         }
       } catch {
         if (generation === current && request === writeRequest)
@@ -176,8 +188,14 @@ const LanguageContext = createContext<LanguageContextValue>({
   setPreference: async () => {},
 });
 
-export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [store] = useState(createLanguageStore);
+export function LanguageProvider({
+  children,
+  reportToCore,
+}: {
+  children: ReactNode;
+  reportToCore?: ReportUiLanguage;
+}) {
+  const [store] = useState(() => createLanguageStore(reportToCore));
   const state = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,

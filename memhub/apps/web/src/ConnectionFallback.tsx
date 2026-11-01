@@ -205,7 +205,7 @@ function ConnectionMaterialFallback({
     ? t("connectionFallback.promptShell", { shell: material.shell })
     : "";
   const prompt =
-    locale === "zh-CN"
+    locale === "zh-Hans"
       ? material.prompt
       : t("connectionFallback.promptTemplate", {
           mcp: material.mcp,

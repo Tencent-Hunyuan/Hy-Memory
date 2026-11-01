@@ -300,6 +300,12 @@ from one_memory.source_read_access import SourceReadAccess
 from one_memory.source_totals import SourceTotals
 from one_memory.strict_query import forbid_unknown_query_params
 from one_memory.target_schema import bootstrap_fresh_management_schema
+from one_memory.ui_language import (
+    SDK_LANGUAGE_AUTO,
+    UI_LANGUAGES,
+    UiLanguage,
+    sdk_language,
+)
 from one_memory.user_scope import (
     DEFAULT_USER_ID,
     MULTI_USER_SOURCES,
@@ -759,6 +765,38 @@ class PipelineStatus(BaseModel):
     #: The SDK features (`memory_features`) whose value differs from the SDK
     #: default; empty while every feature is at its default.
     features: dict[MemoryFeatureName, bool] = Field(default_factory=dict)
+    #: The display language the App last reported (`ui_language`); null =
+    #: never chosen or "follow the system".
+    ui_language: UiLanguage | None = None
+    #: The SDK prompt language: `auto` (the SDK detects zh/en) or a code.
+    sdk_language: str = SDK_LANGUAGE_AUTO
+
+
+class UiLanguageState(BaseModel):
+    """`GET /api/v1/settings/ui-language`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: What the App reported; null = never chosen or "follow the system".
+    ui_language: UiLanguage | None
+    #: What SDK clients are built with: `auto` (zh-Hans or no choice: the SDK
+    #: detects zh/en, as before) or the code passed as `MemoryConfig.language`.
+    sdk_language: str
+    languages: tuple[UiLanguage, ...] = UI_LANGUAGES
+
+
+class UiLanguageUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: A supported code, or null for "follow the system" (SDK auto-detect).
+    ui_language: UiLanguage | None
+
+
+class UiLanguageChange(UiLanguageState):
+    """`PUT /api/v1/settings/ui-language`."""
+
+    #: Whether the SDK language changed, so the SDK clients were rebuilt.
+    rebuilt: bool
 
 
 class MemoryFeatureState(BaseModel):
@@ -1303,6 +1341,7 @@ def create_app(
                 memory_features=lambda: _memory_features(app),
                 spaces=app.state.embedding_spaces,
                 writes_open=lambda: _embedding_writes_open(app),
+                sdk_language=lambda: _sdk_language(app),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -4561,6 +4600,53 @@ def create_app(
         )
 
     @app.get(
+        "/api/v1/settings/ui-language",
+        response_model=UiLanguageState,
+        dependencies=strict,
+    )
+    def get_ui_language() -> UiLanguageState:
+        """The App's display language and the SDK prompt language it implies."""
+        return _ui_language_state(app)
+
+    @app.put(
+        "/api/v1/settings/ui-language",
+        response_model=UiLanguageChange,
+        dependencies=strict,
+    )
+    async def put_ui_language(request: UiLanguageUpdate) -> UiLanguageChange:
+        """Record the App's display language; one global setting, not per user.
+
+        zh-Hans and null pass no language to the SDK, which keeps detecting
+        zh/en as before; every other code (en included) is passed as
+        `MemoryConfig.language`. A change of that SDK language rebuilds the
+        SDK clients like a feature change: a write in flight finishes in the
+        old language. Nothing stored is migrated and no collection is renamed.
+        """
+        store = _config_store(app)
+        async with app.state.memory_mode_lock:
+            previous = _sdk_language(app)
+            if store.ui_language() != request.ui_language:
+                await asyncio.to_thread(store.set_ui_language, request.ui_language)
+            current = _sdk_language(app)
+            rebuilt = current != previous
+            if rebuilt:
+                coordinator = getattr(app.state, "sdk_write_coordinator", None)
+                if coordinator is not None:
+                    await coordinator.retire_stale_handles()
+                # Reads rebuild on their next request (`ActiveProfileReadHandle`).
+                diagnostic_event(
+                    level="info",
+                    component="memory.language",
+                    event="sdk_language.changed",
+                    outcome="succeeded",
+                    details={
+                        "sdk_language": current or SDK_LANGUAGE_AUTO,
+                        "previous": previous or SDK_LANGUAGE_AUTO,
+                    },
+                )
+        return UiLanguageChange(**_ui_language_state(app).model_dump(), rebuilt=rebuilt)
+
+    @app.get(
         "/api/v1/settings/evolve-schedule",
         response_model=EvolveSchedule,
         dependencies=strict,
@@ -5922,6 +6008,7 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
             memory_mode=lambda: _memory_mode(app),
             features=lambda: _memory_features(app),
             spaces=getattr(app.state, "embedding_spaces", None),
+            language=lambda: _sdk_language(app),
         )
         app.state.sdk_client_handle = handle
     return handle
@@ -5962,6 +6049,20 @@ def _memory_features(app: FastAPI) -> FeatureOverrides:
     """The SDK features a person set, as the key every SDK client is built with."""
     store = getattr(app.state, "config_store", None)
     return store.memory_features().overrides() if store is not None else ()
+
+
+def _sdk_language(app: FastAPI) -> str | None:
+    """The SDK prompt language every client is built with; None = auto-detect."""
+    store = getattr(app.state, "config_store", None)
+    return sdk_language(store.ui_language()) if store is not None else None
+
+
+def _ui_language_state(app: FastAPI) -> UiLanguageState:
+    store = getattr(app.state, "config_store", None)
+    return UiLanguageState(
+        ui_language=store.ui_language() if store is not None else None,
+        sdk_language=_sdk_language(app) or SDK_LANGUAGE_AUTO,
+    )
 
 
 def _memory_features_state(
@@ -6019,6 +6120,7 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
             dict[MemoryFeatureName, bool],
             non_default_features(_memory_features(app), sdk_feature_defaults()),
         ),
+        **_ui_language_state(app).model_dump(exclude={"languages"}),
     )
 
 

@@ -71,7 +71,7 @@ function desktop(get: () => Promise<LanguageSnapshot>) {
 beforeEach(() => {
   localStorage.clear();
   delete window.oneMemory;
-  vi.spyOn(navigator, "language", "get").mockReturnValue("zh-CN");
+  vi.spyOn(navigator, "language", "get").mockReturnValue("zh-Hans");
 });
 afterEach(() => {
   cleanup();
@@ -101,7 +101,7 @@ it("keeps confirmed language and exposes storage write errors", async () => {
     throw new Error("private storage");
   });
   await userEvent.click(screen.getByRole("button"));
-  expect(screen.getByText("zh-CN:system")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:system")).toBeTruthy();
   expect(screen.getByRole("alert").textContent).toBe("languageSaveError");
 });
 it("exposes browser read errors without crashing", () => {
@@ -114,7 +114,7 @@ it("exposes browser read errors without crashing", () => {
 it("validates browser storage and synchronizes tabs and principal navigator language", () => {
   localStorage.setItem(LANGUAGE_STORAGE_KEY, "invalid");
   mount();
-  expect(screen.getByText("zh-CN:system")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:system")).toBeTruthy();
   act(() => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
     window.dispatchEvent(
@@ -147,7 +147,7 @@ it("subscribes before reads, rejects stale snapshots and cleans StrictMode subsc
   });
   await act(async () => {
     for (const read of reads)
-      read.resolve({ preference: "zh-CN", locale: "zh-CN", revision: 1 });
+      read.resolve({ preference: "zh-Hans", locale: "zh-Hans", revision: 1 });
   });
   expect(screen.getByText("es:es")).toBeTruthy();
   view.unmount();
@@ -164,7 +164,7 @@ it("never accesses browser persistence or browser locale in desktop mode and exp
   );
   vi.spyOn(navigator, "language", "get").mockReturnValue("es");
   act(() => window.dispatchEvent(new Event("languagechange")));
-  expect(screen.getByText("zh-CN:system")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:system")).toBeTruthy();
   act(() => {
     for (const listener of listeners)
       listener({ preference: "system", locale: "es", revision: 3 });
@@ -177,7 +177,7 @@ it("never accesses browser persistence or browser locale in desktop mode and exp
 it("does not surface an obsolete write failure after a newer save succeeds", async () => {
   const { bridge } = desktop(async () => ({
     preference: "system",
-    locale: "zh-CN",
+    locale: "zh-Hans",
     revision: 0,
   }));
   const first = deferred<LanguageSnapshot>();
@@ -194,18 +194,18 @@ it("does not surface an obsolete write failure after a newer save succeeds", asy
 });
 
 it("rejects conflicting native locale and explicit preference pairs", async () => {
-  desktop(async () => ({ preference: "es", locale: "zh-CN", revision: 1 }));
+  desktop(async () => ({ preference: "es", locale: "zh-Hans", revision: 1 }));
   mount();
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toBe("languageLoadError"),
   );
-  expect(screen.getByText("zh-CN:system")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:system")).toBeTruthy();
 });
 
 it("does not allow a late write reply to overwrite a newer native event", async () => {
   const { bridge, listeners } = desktop(async () => ({
     preference: "system",
-    locale: "zh-CN",
+    locale: "zh-Hans",
     revision: 0,
   }));
   const write = deferred<LanguageSnapshot>();
@@ -215,12 +215,12 @@ it("does not allow a late write reply to overwrite a newer native event", async 
   await userEvent.click(screen.getByRole("button"));
   act(() => {
     for (const listener of listeners)
-      listener({ preference: "zh-CN", locale: "zh-CN", revision: 8 });
+      listener({ preference: "zh-Hans", locale: "zh-Hans", revision: 8 });
   });
   await act(async () =>
     write.resolve({ preference: "es", locale: "es", revision: 7 }),
   );
-  expect(screen.getByText("zh-CN:zh-CN")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:zh-Hans")).toBeTruthy();
 });
 
 it("groups counts in Chinese only where tn asks for it, never with tnPlain", () => {
@@ -258,4 +258,68 @@ it("groups counts in Chinese only where tn asks for it, never with tnPlain", () 
     "12.345 no se pudieron procesar esta vez; reintentando",
     "1 no se pudo procesar esta vez; reintentando",
   ]);
+});
+
+it.each([
+  ["zh-CN", "zh-Hans"],
+  ["es", "es"],
+  ["en", "en"],
+])(
+  "keeps an existing browser user's stored %s choice as %s",
+  (stored, preference) => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, stored);
+    mount();
+    expect(screen.getByText(`${preference}:${preference}`)).toBeTruthy();
+    expect(localStorage.getItem(LANGUAGE_STORAGE_KEY)).toBe(preference);
+  },
+);
+
+it("tells Core the browser choice, null for the system language", async () => {
+  const reportToCore = vi.fn().mockRejectedValueOnce(new Error("offline"));
+  function Choose() {
+    const language = useGuiLanguage();
+    return (
+      <>
+        <output>{language.preference}</output>
+        <button onClick={() => void language.setPreference("ja")} type="button">
+          ja
+        </button>
+        <button
+          onClick={() => void language.setPreference("system")}
+          type="button"
+        >
+          system
+        </button>
+      </>
+    );
+  }
+  render(
+    <LanguageProvider reportToCore={reportToCore}>
+      <Choose />
+    </LanguageProvider>,
+  );
+  // Opening the browser UI tells Core nothing; only a choice does.
+  expect(reportToCore).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "ja" }));
+  // A failed report never undoes the saved display language.
+  expect(screen.getByRole("status").textContent).toBe("ja");
+  await userEvent.click(screen.getByRole("button", { name: "system" }));
+  expect(reportToCore.mock.calls).toEqual([["ja"], [null]]);
+});
+
+it("leaves telling Core to the Desktop main process", async () => {
+  desktop(async () => ({
+    preference: "system",
+    locale: "zh-Hans",
+    revision: 1,
+  }));
+  const reportToCore = vi.fn();
+  render(
+    <LanguageProvider reportToCore={reportToCore}>
+      <Probe />
+    </LanguageProvider>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Spanish" }));
+  await waitFor(() => expect(screen.getByText("es:es")).toBeTruthy());
+  expect(reportToCore).not.toHaveBeenCalled();
 });

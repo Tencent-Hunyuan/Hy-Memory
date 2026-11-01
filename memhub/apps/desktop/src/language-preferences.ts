@@ -5,6 +5,7 @@ import {
   isLanguagePreference,
   type LanguagePreference,
   type LanguageSnapshot,
+  normalizeLanguagePreference,
   resolveGuiLocale,
 } from "@one-memory/i18n";
 
@@ -58,14 +59,13 @@ export class LanguagePreferences {
     let preference: LanguagePreference = "system";
     try {
       const data: unknown = JSON.parse(await io.read(file));
-      if (
-        data &&
-        typeof data === "object" &&
-        "preference" in data &&
-        isLanguagePreference(data.preference)
-      ) {
-        preference = data.preference;
-      }
+      // An earlier build's code (zh-CN) reads as today's (zh-Hans), so a
+      // person keeps the language they chose; the next change writes it.
+      const stored =
+        data && typeof data === "object" && "preference" in data
+          ? normalizeLanguagePreference(data.preference)
+          : null;
+      if (stored !== null) preference = stored;
     } catch {
       // Missing, unreadable or corrupt preferences never block startup or get rewritten.
     }

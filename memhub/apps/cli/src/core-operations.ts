@@ -31,6 +31,8 @@ const EVOLVE_PATH = "/api/v2/evolve";
 const MEMORY_MODE_PATH = "/api/v1/settings/memory-mode";
 /** `memhub settings features set|reset` sets the SDK features. */
 const MEMORY_FEATURES_PATH = "/api/v1/settings/memory-features";
+/** `memhub settings language <code>` sets the display language Core uses. */
+const UI_LANGUAGE_PATH = "/api/v1/settings/ui-language";
 const ONBOARDING_COMPLETE_PATH = "/api/v1/onboarding/complete";
 const EMBEDDING_SWITCH_PATHS = [
   "/api/v1/embedding-switches",
@@ -165,6 +167,7 @@ export function createCoreOperations(attachment: {
       if (
         path !== MEMORY_MODE_PATH &&
         path !== MEMORY_FEATURES_PATH &&
+        path !== UI_LANGUAGE_PATH &&
         (!SDK_MEMORY_PATH.test(path) || path.includes("?"))
       ) {
         throw new Error("core_operation_path_not_allowed");

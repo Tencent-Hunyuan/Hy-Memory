@@ -28,8 +28,8 @@ function fixture(
   };
   let changed: (() => void) | undefined;
   const languageSnapshot: LanguageSnapshot = {
-    preference: "zh-CN",
-    locale: "zh-CN",
+    preference: "zh-Hans",
+    locale: "zh-Hans",
     revision: 1,
   };
   const app = { isPackaged: packaged, quit: vi.fn() };
@@ -121,7 +121,7 @@ describe("native macOS background tray", () => {
     expect(f.setLoginPreference).not.toHaveBeenCalled();
     f.click(0);
     expect(f.open).toHaveBeenCalledOnce();
-    f.changeLanguage("zh-CN");
+    f.changeLanguage("zh-Hans");
     await flush();
     expect(f.menu()[0]?.label).toBe("打开 MemHub");
     f.click(3);

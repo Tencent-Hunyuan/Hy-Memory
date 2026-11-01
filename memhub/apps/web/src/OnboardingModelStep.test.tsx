@@ -20,7 +20,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it.each(["es", "zh-CN"] as const)(
+it.each(["es", "zh-Hans"] as const)(
   "keeps %s footer actions, pending locks and permission boundaries",
   async (locale) => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);

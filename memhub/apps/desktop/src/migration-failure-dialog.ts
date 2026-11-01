@@ -8,6 +8,12 @@ import {
   readSync,
 } from "node:fs";
 import path from "node:path";
+import {
+  type GuiLocale,
+  isGuiLocale,
+  resolveGuiLocale,
+  translate,
+} from "@one-memory/i18n";
 
 /**
  * What a person sees when an upgrade did not reach SDK authority.
@@ -106,51 +112,70 @@ export interface MigrationIssueFacts {
   arch?: string | null;
   /** The local log path, already shown with the home directory as `~`. */
   logPath: string;
+  /** The display language; Simplified Chinese when absent. */
+  locale?: string;
 }
 
-const UNKNOWN = "未知";
-
-function versionText(value: string | null | undefined): string {
-  return typeof value === "string" && VERSION.test(value) ? value : UNKNOWN;
+/** A display language, or the one a system language code resolves to. */
+function dialogLocale(locale: string | undefined): GuiLocale {
+  if (locale === undefined) return "zh-Hans";
+  return isGuiLocale(locale) ? locale : resolveGuiLocale("system", locale);
 }
 
-function buildText(value: number | null | undefined): string {
+function versionText(value: string | null | undefined): string | null {
+  return typeof value === "string" && VERSION.test(value) ? value : null;
+}
+
+function buildText(value: number | null | undefined): string | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0
     ? String(value)
-    : UNKNOWN;
+    : null;
 }
 
 function stepText(
   step: string | null | undefined,
   sub: string | null | undefined,
-) {
-  if (typeof step !== "string" || !STEP.test(step)) return UNKNOWN;
+): string | null {
+  if (typeof step !== "string" || !STEP.test(step)) return null;
   return typeof sub === "string" && STEP.test(sub) ? `${step} / ${sub}` : step;
 }
 
 /** The issue body: short, content-free, and honest about what is unknown. */
 export function migrationIssueBody(facts: MigrationIssueFacts): string {
+  const locale = dialogLocale(facts.locale);
+  const unknown = translate(locale, "migration.unknown");
+  const known = (value: string | null) => value ?? unknown;
   const restored =
     facts.dataRestored === true
-      ? "是"
+      ? translate(locale, "migration.yes")
       : facts.dataRestored === false
-        ? "否"
-        : UNKNOWN;
+        ? translate(locale, "migration.no")
+        : unknown;
   const system = [facts.osName, facts.osVersion]
     .map((part) => versionText(part))
-    .filter((part) => part !== UNKNOWN)
+    .filter((part) => part !== null)
     .join(" ");
   const arch = versionText(facts.arch);
   return [
-    "## 升级迁移失败",
-    `- 从 MemHub ${versionText(facts.fromVersion)}（build ${buildText(facts.fromBuild)}）升级到 ${versionText(facts.toVersion)}（build ${buildText(facts.toBuild)}），迁移数据失败。`,
-    `- 错误码：${CODE.test(facts.code) ? facts.code : UNKNOWN}`,
-    `- 失败步骤：${stepText(facts.step, facts.subStep)}`,
-    `- 数据已恢复到升级前状态：${restored}`,
-    `- 系统：${system || UNKNOWN}${arch === UNKNOWN ? "" : `（${arch}）`}`,
-    `- 迁移日志（本地）：${facts.logPath}`,
+    translate(locale, "migration.issueHeading"),
+    translate(locale, "migration.issueUpgrade", {
+      fromVersion: known(versionText(facts.fromVersion)),
+      fromBuild: known(buildText(facts.fromBuild)),
+      toVersion: known(versionText(facts.toVersion)),
+      toBuild: known(buildText(facts.toBuild)),
+    }),
+    translate(locale, "migration.issueCode", {
+      code: CODE.test(facts.code) ? facts.code : unknown,
+    }),
+    translate(locale, "migration.issueStep", {
+      step: known(stepText(facts.step, facts.subStep)),
+    }),
+    translate(locale, "migration.issueRestored", { restored }),
+    translate(locale, "migration.issueSystem", { system: system || unknown }) +
+      (arch === null ? "" : translate(locale, "migration.issueArch", { arch })),
+    translate(locale, "migration.issueLog", { path: facts.logPath }),
     "",
-    "请把上面这个日志文件拖到这里作为附件，再提交。",
+    translate(locale, "migration.issueAttach"),
     "",
   ].join("\n");
 }
@@ -302,31 +327,18 @@ export function migrationDialogText(
   locale: string,
   dataRestored = false,
 ): MigrationDialogText {
-  if (locale.toLowerCase().startsWith("en")) {
-    return {
-      title: "MemHub",
-      message: "The data migration for this MemHub upgrade did not finish.",
-      detail:
-        "To protect your data, MemHub will not start. Please attach the migration log to a GitHub issue and send it to us. " +
-        `(Error code: ${code})` +
-        (dataRestored
-          ? "\n\nYour data was restored to its state before the upgrade."
-          : "") +
-        `\n\nLog: ${logPath}`,
-      openLog: "Open log",
-      quit: "Quit",
-    };
-  }
+  const language = dialogLocale(locale);
   return {
     title: "MemHub",
-    message: "MemHub 升级时数据迁移没有完成。",
+    message: translate(language, "migration.dialogMessage"),
     detail:
-      "为保护你的数据，MemHub 不会启动。请把迁移日志附在 GitHub 反馈里发给我们。" +
-      `（错误码：${code}）` +
-      (dataRestored ? "\n\n记忆数据已恢复到升级前的状态。" : "") +
-      `\n\n日志：${logPath}`,
-    openLog: "打开日志",
-    quit: "退出",
+      translate(language, "migration.dialogDetail", { code }) +
+      (dataRestored
+        ? `\n\n${translate(language, "migration.dataRestored")}`
+        : "") +
+      `\n\n${translate(language, "migration.logPath", { path: logPath })}`,
+    openLog: translate(language, "migration.openLog"),
+    quit: translate(language, "migration.quit"),
   };
 }
 
@@ -434,6 +446,7 @@ export function showMigrationFailureDialog(options: {
       osVersion: environment.osVersion ?? null,
       arch: environment.arch ?? null,
       logPath: displayPath(logPath, environment.home ?? null),
+      locale: options.locale,
     });
     void Promise.resolve(
       options.dependencies.openExternal(migrationIssueUrl(code, body)),

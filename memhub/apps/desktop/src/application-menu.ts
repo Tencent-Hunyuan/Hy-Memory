@@ -16,14 +16,14 @@ export function installApplicationMenu(options: {
     } catch {
       options.reportError(
         translate(
-          options.language?.read().locale ?? "zh-CN",
+          options.language?.read().locale ?? "zh-Hans",
           "nativeExportError",
         ),
       );
     }
   };
   const refresh = () => {
-    const locale = options.language?.read().locale ?? "zh-CN";
+    const locale = options.language?.read().locale ?? "zh-Hans";
     options.setMenu(
       options.buildMenu([
         {

@@ -304,6 +304,7 @@
 | `test_sync_facade.py` | `contract` | A2: the sync facade must keep the sync shape call sites already use. |
 | `test_tail_metadata_lane.py` | `contract` | Post-response metadata retries must be bounded and never block the route. |
 | `test_two_level_discovery.py` | `contract` | 3925a kernel item 1: two-level discovery. |
+| `test_ui_language.py` | `contract` | The App's display language, and the SDK prompt language it implies. |
 | `test_ui_session.py` | `contract` | 覆盖 exchange is single use and creates a session、expired exchange cannot create a session、exchange is bound to the core instance 等 5 个场景。 |
 | `test_ui_session_api.py` | `integration` | 覆盖 ui session exchange sets httponly strict cookie、ui session requires bearer for exchange、ui session reports missing web assets 场景。 |
 | `test_unanswered_turn.py` | `contract` | BUG-06: which conversations end on a question nobody answered. |
@@ -317,4 +318,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 312 个测试文件。
+共 313 个测试文件。

@@ -29,23 +29,42 @@ describe("GUI language preferences", () => {
       revision: 0,
     });
     expect(await readdir(root)).toEqual([]);
-    expect(await store.set("zh-CN")).toEqual({
-      preference: "zh-CN",
-      locale: "zh-CN",
+    expect(await store.set("zh-Hans")).toEqual({
+      preference: "zh-Hans",
+      locale: "zh-Hans",
       revision: 1,
     });
     expect(
       JSON.parse(await readFile(path.join(root, "gui-language.json"), "utf8")),
-    ).toEqual({ preference: "zh-CN" });
+    ).toEqual({ preference: "zh-Hans" });
     expect((await LanguagePreferences.open(root, "es")).read().preference).toBe(
-      "zh-CN",
+      "zh-Hans",
     );
     expect(
       (await LanguagePreferences.open(await profile(), "es")).read().preference,
     ).toBe("system");
     expect(await readdir(root)).toEqual(["gui-language.json"]);
   });
-  it.each(["{broken", '{"preference":"fr"}', "null", "[]"])(
+  it.each([
+    ["zh-CN", "zh-Hans", "zh-Hans"],
+    ["es", "es", "es"],
+    ["en", "en", "en"],
+    ["ja", "ja", "ja"],
+    ["system", "system", "en"],
+  ])(
+    "keeps an existing user's stored %s choice as %s",
+    async (stored, preference, locale) => {
+      const root = await profile();
+      const file = path.join(root, "gui-language.json");
+      const content = `${JSON.stringify({ preference: stored })}\n`;
+      await writeFile(file, content);
+      const store = await LanguagePreferences.open(root, "en-US");
+      expect(store.read()).toEqual({ preference, locale, revision: 0 });
+      // Read as today's code; the file is rewritten only by the next change.
+      expect(await readFile(file, "utf8")).toBe(content);
+    },
+  );
+  it.each(["{broken", '{"preference":"it"}', "null", "[]"])(
     "does not overwrite invalid input %s while loading",
     async (content) => {
       const root = await profile();
@@ -69,7 +88,7 @@ describe("GUI language preferences", () => {
     });
     const listener = vi.fn();
     store.subscribe(listener);
-    await expect(store.set("zh-CN")).rejects.toThrow(
+    await expect(store.set("zh-Hans")).rejects.toThrow(
       "language_preference_save_failed",
     );
     expect(store.read()).toEqual({
@@ -78,7 +97,7 @@ describe("GUI language preferences", () => {
       revision: 0,
     });
     expect(listener).not.toHaveBeenCalled();
-    await store.set("zh-CN");
+    await store.set("zh-Hans");
     expect(store.read().revision).toBe(1);
     expect(listener).toHaveBeenCalledTimes(1);
   });
@@ -97,7 +116,7 @@ describe("GUI language preferences", () => {
     });
     const listener = vi.fn();
     const unsubscribe = store.subscribe(listener);
-    const first = store.set("zh-CN");
+    const first = store.set("zh-Hans");
     const second = store.set("es");
     await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(store.read().revision).toBe(0);

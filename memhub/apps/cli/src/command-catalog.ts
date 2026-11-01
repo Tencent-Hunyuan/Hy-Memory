@@ -461,12 +461,13 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "settings",
     summary:
-      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、few_shot 提取示例；set 需 --yes，不加时只显示计划；reset 恢复默认值。",
+      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、few_shot 提取示例；set 需 --yes，不加时只显示计划；reset 恢复默认值。settings language 查看或设置界面语言（App 切换语言时会自动设置）：简体中文（zh-Hans）和 system 不指定 SDK 语言，SDK 照旧自动识别中文或英文；其余语言（en、zh-Hant、ja、es、de、pt、fr、ko、ru、id）会让提取等 SDK 提示使用该语言，立即生效。",
     usage:
       "memhub settings mode [lite|pro|ultra] [--yes] [--json]\n" +
       "            memhub settings features [--json]\n" +
       "            memhub settings features set <name>=<true|false> [...] [--yes] [--json]\n" +
-      "            memhub settings features reset [<name> ...] [--json]",
+      "            memhub settings features reset [<name> ...] [--json]\n" +
+      "            memhub settings language [<code>|system] [--json]",
     options: [
       {
         flag: "mode [lite|pro|ultra]",
@@ -480,6 +481,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "features reset [<name> ...]",
         summary: "把指定功能（不写则全部）恢复为 SDK 默认值。",
+      },
+      {
+        flag: "language [<code>|system]",
+        summary:
+          "不带参数显示界面语言和 SDK 提示语言；带语言代码（en、zh-Hans、zh-Hant、ja、es、de、pt、fr、ko、ru、id）或 system 时设置。",
       },
       CONFIRM_OPTION,
       JSON_OPTION,

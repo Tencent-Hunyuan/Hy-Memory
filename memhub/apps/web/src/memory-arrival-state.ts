@@ -113,7 +113,7 @@ function onlyRetries(blocks: readonly MemoryProcessingBlock[]): boolean {
 
 export function memoryArrivalTitle(
   arrival: MemoryArrival,
-  locale: GuiLocale = "zh-CN",
+  locale: GuiLocale = "zh-Hans",
 ): string {
   switch (arrival.phase) {
     case "checking":

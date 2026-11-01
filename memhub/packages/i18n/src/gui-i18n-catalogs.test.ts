@@ -151,7 +151,7 @@ describe("translateCount", () => {
   it("keeps the Chinese wording for every count", () => {
     for (const count of [0, 1, 3])
       expect(
-        translateCount("zh-CN", "calls.headline.found", count, {
+        translateCount("zh-Hans", "calls.headline.found", count, {
           host: "Cursor",
           count,
         }),

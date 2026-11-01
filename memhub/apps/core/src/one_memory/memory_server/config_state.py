@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from one_memory.memory_features import MemoryFeatures
 from one_memory.memory_queue import ExtractionWindowPreset
+from one_memory.ui_language import UI_LANGUAGES, UiLanguage
 
 _SOURCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 
@@ -73,6 +74,10 @@ class ConfigDocument(BaseModel):
     #: SDK retrieval and extraction features a person set; an unset one keeps
     #: the SDK default. See `one_memory.memory_features`.
     memory_features: MemoryFeatures = Field(default_factory=MemoryFeatures)
+    #: The display language a person chose in the App; None = never chosen or
+    #: "follow the system". See `one_memory.ui_language` for what it does to
+    #: the SDK.
+    ui_language: UiLanguage | None = None
 
     @field_validator("sources")
     @classmethod
@@ -95,7 +100,7 @@ class ConfigFileError(RuntimeError):
     pass
 
 
-_WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule", "memory_features"})
+_WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule", "memory_features", "ui_language"})
 
 
 class ConfigStore:
@@ -179,6 +184,19 @@ class ConfigStore:
             raise ValueError("invalid_memory_features")
         with self._lock:
             updated = self._document.model_copy(update={"memory_features": features})
+            self._write(updated)
+            self._document = updated
+            return updated
+
+    def ui_language(self) -> UiLanguage | None:
+        with self._lock:
+            return self._document.ui_language
+
+    def set_ui_language(self, language: UiLanguage | None) -> ConfigDocument:
+        if language is not None and language not in UI_LANGUAGES:
+            raise ValueError("invalid_ui_language")
+        with self._lock:
+            updated = self._document.model_copy(update={"ui_language": language})
             self._write(updated)
             self._document = updated
             return updated

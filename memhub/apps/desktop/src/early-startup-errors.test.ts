@@ -91,7 +91,7 @@ describe("early desktop startup errors", () => {
         new Error("desktop_startup_failed"),
       );
       expect(showError).toHaveBeenCalledExactlyOnceWith(
-        translate(locale ?? "zh-CN", "nativeErrorTitle"),
+        translate(locale ?? "zh-Hans", "nativeErrorTitle"),
         stableRuntimeUserMessage(new Error("desktop_startup_failed")),
       );
       expect(exit).toHaveBeenCalledExactlyOnceWith(1);

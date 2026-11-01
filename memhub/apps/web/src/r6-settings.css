@@ -61,6 +61,9 @@
   background: #fff;
   font-size: 13px;
   line-height: 22px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .r6-settings .r6-language-option-menu .om-option-menu-button::after {
   top: 16px;

@@ -18,6 +18,6 @@ it("covers every recovery key in Spanish with identical interpolation parameters
       params(recoveryChineseMessages[key]),
     );
     expect(translate("es", key), key).toBe(recoverySpanishMessages[key]);
-    expect(translate("zh-CN", key), key).toBe(recoveryChineseMessages[key]);
+    expect(translate("zh-Hans", key), key).toBe(recoveryChineseMessages[key]);
   }
 });

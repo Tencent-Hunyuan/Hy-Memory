@@ -23,8 +23,8 @@ const fake = vi.hoisted(() => ({
   unload: undefined as unknown as EventTarget,
   packaged: true,
   userData: "",
-  preferred: vi.fn(() => ["es-MX", "zh-CN"]),
-  locale: vi.fn(() => "zh-CN"),
+  preferred: vi.fn(() => ["es-MX", "zh-Hans"]),
+  locale: vi.fn(() => "zh-Hans"),
   menu: vi.fn(),
   loadFailure: false,
   reduceMotion: false as unknown,
@@ -301,10 +301,10 @@ describe("GUI language main IPC", () => {
     await expect(read(eventFor(window))).rejects.toThrow();
     await expect(write(eventFor(window), "es")).rejects.toThrow();
     window.frame.url = "one-memory://app/index.html";
-    await write(eventFor(window), "zh-CN");
+    await write(eventFor(window), "zh-Hans");
     expect(window.frame.send).toHaveBeenCalledWith(
       "one-memory:language-preference-changed",
-      { preference: "zh-CN", locale: "zh-CN", revision: 1 },
+      { preference: "zh-Hans", locale: "zh-Hans", revision: 1 },
     );
     expect(foreign.frame.send).not.toHaveBeenCalled();
     window.frame.send.mockImplementation(() => {
@@ -539,7 +539,7 @@ describe("language preference preload", () => {
       "es",
     );
     fake.invoke.mockClear();
-    await expect(api.setLanguagePreference("fr")).rejects.toThrow();
+    await expect(api.setLanguagePreference("it")).rejects.toThrow();
     expect(fake.invoke).not.toHaveBeenCalled();
     const listener = vi.fn();
     const unsubscribe = api.onLanguagePreferenceChanged(listener);

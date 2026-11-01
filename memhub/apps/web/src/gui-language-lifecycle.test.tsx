@@ -60,7 +60,7 @@ it("removes browser listeners on StrictMode cleanup and final unmount", () => {
   }
 });
 it("ignores unrelated storage and language changes for explicit preferences", async () => {
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-CN");
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
   mount();
   vi.spyOn(navigator, "language", "get").mockReturnValue("es");
   act(() => {
@@ -75,7 +75,7 @@ it("ignores unrelated storage and language changes for explicit preferences", as
       }),
     );
   });
-  expect(screen.getByText("zh-CN:zh-CN")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:zh-Hans")).toBeTruthy();
 });
 it("shows errors for unavailable desktop bridges without using browser fallback", async () => {
   localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
@@ -86,7 +86,7 @@ it("shows errors for unavailable desktop bridges without using browser fallback"
   expect(screen.getByRole("alert").textContent).toBe("languageLoadError");
   await userEvent.click(screen.getByRole("button"));
   expect(screen.getByRole("alert").textContent).toBe("languageSaveError");
-  expect(screen.getByText("zh-CN:system")).toBeTruthy();
+  expect(screen.getByText("zh-Hans:system")).toBeTruthy();
   expect(read).not.toHaveBeenCalled();
   expect(write).not.toHaveBeenCalled();
 });
@@ -130,11 +130,11 @@ it("validates native replies and keeps the last confirmed snapshot when saving f
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toBe("languageLoadError"),
   );
-  act(() => listener({ preference: "system", locale: "zh-CN", revision: 2 }));
+  act(() => listener({ preference: "system", locale: "zh-Hans", revision: 2 }));
   await userEvent.click(screen.getByRole("button"));
   expect(set).toHaveBeenCalledWith("es");
   expect(screen.getByRole("alert").textContent).toBe("languageSaveError");
-  expect(screen.getByText("zh-CN:system")).toBeTruthy();
-  act(() => listener({ preference: "system", locale: "zh-CN", revision: 2 }));
+  expect(screen.getByText("zh-Hans:system")).toBeTruthy();
+  act(() => listener({ preference: "system", locale: "zh-Hans", revision: 2 }));
   expect(screen.queryByRole("alert")).toBeNull();
 });

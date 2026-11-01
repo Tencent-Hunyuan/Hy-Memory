@@ -87,6 +87,26 @@ it("removes the duplicate native drag overlay above the language selector", () =
   ).toMatch(/-webkit-app-region:\s*no-drag/);
 });
 
+it("keeps long language names on one line in the fixed-size selectors", () => {
+  // "Utiliser la langue du système", "Systemsprache verwenden" and
+  // "Bahasa Indonesia" are wider than the 144px title-bar button.
+  for (const [file, selector] of [
+    [
+      "onboarding-r6.css",
+      ".onboarding-r6-titlebar .r6-language-option-menu .om-option-menu-button",
+    ],
+    [
+      "r6-settings.css",
+      ".r6-settings .r6-language-option-menu .om-option-menu-button",
+    ],
+  ] as const) {
+    const rule = declaration(file, selector);
+    expect(rule, selector).toMatch(/white-space:\s*nowrap/);
+    expect(rule, selector).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule, selector).toMatch(/overflow:\s*hidden/);
+  }
+});
+
 it("keeps selection status outside decorative fades and readable when disabled", () => {
   expect(
     declaration("onboarding-r6.css", ".onboarding-r6-list-area::after"),
@@ -122,7 +142,7 @@ it("keeps the product language menu keyboard-focusable and switches both languag
   expect(screen.getByRole("combobox").getAttribute("id")).toBe(selector.id);
   await user.click(selector);
   await user.click(screen.getByRole("option", { name: "简体中文" }));
-  expect(document.documentElement.lang).toBe("zh-CN");
+  expect(document.documentElement.lang).toBe("zh-Hans");
   expect(screen.getByRole("combobox", { name: "界面语言" })).toBe(selector);
 });
 
@@ -146,7 +166,7 @@ it.each([1, 2, 3] as const)(
     await userEvent.click(selector);
     expect(
       screen.getByRole("option", { name: "简体中文" }).getAttribute("lang"),
-    ).toBe("zh-CN");
+    ).toBe("zh-Hans");
     expect(
       screen.getByRole("option", { name: "Español" }).getAttribute("lang"),
     ).toBe("es");

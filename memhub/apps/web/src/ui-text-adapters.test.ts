@@ -24,7 +24,7 @@ describe("presentation adapters", () => {
   it.each(unknown)("memoryText returns unknown text %j untouched", (value) => {
     expect(memoryText("es", value)).toBe(value);
     expect(memoryText("en", value)).toBe(value);
-    expect(memoryText("zh-CN", value)).toBe(value);
+    expect(memoryText("zh-Hans", value)).toBe(value);
   });
 
   it.each(unknown)(
@@ -34,7 +34,7 @@ describe("presentation adapters", () => {
       const key = value as Parameters<typeof applicationsText>[1];
       expect(applicationsText("es", key)).toBe(value);
       expect(applicationsText("en", key)).toBe(value);
-      expect(applicationsText("zh-CN", key)).toBe(value);
+      expect(applicationsText("zh-Hans", key)).toBe(value);
     },
   );
 
@@ -45,7 +45,7 @@ describe("presentation adapters", () => {
     expect(applicationsText("es", "viewAll", { count: 1 })).toBe(
       "Ver la aplicación",
     );
-    expect(applicationsText("zh-CN", "viewAll", { count: 1 })).toBe(
+    expect(applicationsText("zh-Hans", "viewAll", { count: 1 })).toBe(
       "查看全部 1 个应用",
     );
     expect(applicationsText("en", "viewAll", { count: 3 })).not.toMatch(
@@ -93,7 +93,7 @@ describe("presentation adapters", () => {
     "没有匹配的原始对话",
     "还没有导入的原始对话",
   ])("memoryText translates %j and keeps the Chinese as is", (label) => {
-    expect(memoryText("zh-CN", label)).toBe(label);
+    expect(memoryText("zh-Hans", label)).toBe(label);
     const spanish = memoryText("es", label);
     const english = memoryText("en", label);
     expect(spanish).not.toBe(label);
@@ -103,11 +103,11 @@ describe("presentation adapters", () => {
   });
 
   it("words an action as a verb inside sentences and as a noun in history", () => {
-    const action = (locale: "zh-CN" | "en" | "es") =>
+    const action = (locale: "zh-Hans" | "en" | "es") =>
       memoryText(locale, "删除（操作）");
-    expect(action("zh-CN")).toBe("删除");
+    expect(action("zh-Hans")).toBe("删除");
     expect(
-      memoryText("zh-CN", "重试{action}", { action: action("zh-CN") }),
+      memoryText("zh-Hans", "重试{action}", { action: action("zh-Hans") }),
     ).toBe("重试删除");
     expect(memoryText("es", "重试{action}", { action: action("es") })).toBe(
       "Volver a eliminar",
@@ -118,7 +118,7 @@ describe("presentation adapters", () => {
         error: "E",
       }),
     ).toBe("No se pudo eliminar: E");
-    expect(memoryText("zh-CN", "删除（记录）")).toBe("删除");
+    expect(memoryText("zh-Hans", "删除（记录）")).toBe("删除");
     expect(memoryText("es", "删除（记录）")).toBe("Eliminación");
     expect(memoryText("es", "删除")).toBe("Eliminar");
     expect(memoryText("en", "删除（记录）")).toBe("Deletion");
@@ -143,7 +143,7 @@ describe("source authorization notes", () => {
     for (const message of [note as string, `${note}完成后再开启持续同步。`]) {
       expect(isMessageKey(message), message).toBe(true);
       if (!isMessageKey(message)) continue;
-      expect(translate("zh-CN", message)).toBe(message);
+      expect(translate("zh-Hans", message)).toBe(message);
       expect(translate("es", message)).not.toMatch(/[一-鿿]/);
       expect(translate("en", message)).not.toMatch(/[一-鿿]/);
     }

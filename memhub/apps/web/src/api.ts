@@ -1025,6 +1025,20 @@ export type SedimentationState = {
   imports_unaffected: boolean;
 };
 
+/**
+ * Tell Core the display language (null = follow the system). zh-Hans and
+ * null leave the SDK's zh/en detection; any other code sets its prompts.
+ */
+export async function setUiLanguage(
+  uiLanguage: string | null,
+): Promise<{ ui_language: string | null; sdk_language: string }> {
+  const response = await client.put<{
+    ui_language: string | null;
+    sdk_language: string;
+  }>("/api/v1/settings/ui-language", { ui_language: uiLanguage });
+  return response.data;
+}
+
 export async function getSedimentation(): Promise<SedimentationState> {
   const response = await client.get<SedimentationState>(
     "/api/v1/sedimentation",

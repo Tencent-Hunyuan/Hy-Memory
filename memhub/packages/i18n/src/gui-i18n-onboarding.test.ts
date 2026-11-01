@@ -22,7 +22,7 @@ it("provides Spanish copy for every onboarding message with identical interpolat
         .map((match) => match[1])
         .sort(),
     );
-    expect(translate("zh-CN", key)).toBe(chinese);
+    expect(translate("zh-Hans", key)).toBe(chinese);
     expect(translate("es", key)).toBe(spanish);
   }
 });
@@ -31,7 +31,7 @@ it("keeps product names, paths and error codes intact during interpolation", () 
     "Importar el historial de Cursor",
   );
   expect(
-    translate("zh-CN", "onboardingImportHistory", { name: "Cursor" }),
+    translate("zh-Hans", "onboardingImportHistory", { name: "Cursor" }),
   ).toBe("导入 Cursor 历史");
   expect(
     translate("es", "onboardingModelOperationFailed", {

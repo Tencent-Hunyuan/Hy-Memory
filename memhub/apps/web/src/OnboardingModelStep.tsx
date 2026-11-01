@@ -78,7 +78,7 @@ export function OnboardingModelStep(props: OnboardingModelStepProps) {
   // The Chinese label already names the destination; shorter translated labels
   // need it as a description for assistive technology.
   const skipDestination =
-    locale === "zh-CN" ? "" : t("onboardingModelSkipDestination");
+    locale === "zh-Hans" ? "" : t("onboardingModelSkipDestination");
   const fields = useRef<HTMLElement>(null);
   const advancedToggle = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);

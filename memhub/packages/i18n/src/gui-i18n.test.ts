@@ -6,8 +6,11 @@ import {
   isLanguageSnapshot,
   type LanguagePreference,
   type LanguageSnapshot,
+  LOCALE_NAMES,
   type MessageKey,
+  normalizeLanguagePreference,
   resolveGuiLocale,
+  SUPPORTED_LOCALES,
   translate,
 } from "./gui-i18n.js";
 
@@ -27,10 +30,20 @@ const messageKeys = [
 
 describe("GUI language contracts", () => {
   it("pins the language preference and snapshot types", () => {
-    expectTypeOf<LanguagePreference>().toEqualTypeOf<
-      "system" | "zh-CN" | "en" | "es"
+    expectTypeOf<GuiLocale>().toEqualTypeOf<
+      | "en"
+      | "zh-Hans"
+      | "zh-Hant"
+      | "ja"
+      | "es"
+      | "de"
+      | "pt"
+      | "fr"
+      | "ko"
+      | "ru"
+      | "id"
     >();
-    expectTypeOf<GuiLocale>().toEqualTypeOf<"zh-CN" | "en" | "es">();
+    expectTypeOf<LanguagePreference>().toEqualTypeOf<"system" | GuiLocale>();
     expectTypeOf<LanguageSnapshot>().toEqualTypeOf<{
       preference: LanguagePreference;
       locale: GuiLocale;
@@ -38,11 +51,41 @@ describe("GUI language contracts", () => {
     }>();
   });
 
-  it.each(["system", "zh-CN", "en", "es"])("accepts preference %s", (value) => {
-    expect(isLanguagePreference(value)).toBe(true);
+  it.each(["system", ...SUPPORTED_LOCALES])(
+    "accepts preference %s",
+    (value) => {
+      expect(isLanguagePreference(value)).toBe(true);
+    },
+  );
+
+  it("lists eleven languages, each by its own name", () => {
+    expect(SUPPORTED_LOCALES).toHaveLength(11);
+    expect(SUPPORTED_LOCALES.map((locale) => LOCALE_NAMES[locale])).toEqual([
+      "English",
+      "简体中文",
+      "繁體中文",
+      "日本語",
+      "Español",
+      "Deutsch",
+      "Português",
+      "Français",
+      "한국어",
+      "Русский",
+      "Bahasa Indonesia",
+    ]);
   });
 
-  it.each([undefined, null, "", "EN", "ES", "es-MX", {}, [], 1, true])(
+  it("maps the legacy zh-CN preference so existing users keep their choice", () => {
+    expect(isLanguagePreference("zh-CN")).toBe(false);
+    expect(normalizeLanguagePreference("zh-CN")).toBe("zh-Hans");
+    expect(normalizeLanguagePreference("es")).toBe("es");
+    expect(normalizeLanguagePreference("en")).toBe("en");
+    expect(normalizeLanguagePreference("system")).toBe("system");
+    for (const value of [undefined, null, "", "zh", "EN", {}, 1])
+      expect(normalizeLanguagePreference(value)).toBeNull();
+  });
+
+  it.each([undefined, null, "", "EN", "ES", "es-MX", "zh-CN", {}, [], 1, true])(
     "rejects invalid preferences: %j",
     (value) => expect(isLanguagePreference(value)).toBe(false),
   );
@@ -60,8 +103,8 @@ describe("GUI language contracts", () => {
     ).toBe(true);
     expect(
       isLanguageSnapshot({
-        preference: "zh-CN",
-        locale: "zh-CN",
+        preference: "zh-Hans",
+        locale: "zh-Hans",
         revision: Number.MAX_SAFE_INTEGER,
       }),
     ).toBe(true);
@@ -71,8 +114,9 @@ describe("GUI language contracts", () => {
       [],
       {},
       { preference: "en", locale: "es", revision: 0 },
-      { preference: "es", locale: "zh-CN", revision: 0 },
-      { preference: "zh-CN", locale: "es", revision: 0 },
+      { preference: "es", locale: "zh-Hans", revision: 0 },
+      { preference: "zh-Hans", locale: "es", revision: 0 },
+      { preference: "zh-CN", locale: "zh-CN", revision: 0 },
       { preference: "system", locale: "system", revision: 0 },
       { preference: "system", locale: "es" },
       ...[-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "0"].map(
@@ -102,16 +146,36 @@ describe("GUI locale resolution", () => {
     (language) => expect(resolveGuiLocale("system", language)).toBe("en"),
   );
 
-  it.each(["zh", "zh-CN", "zh-SG", "zh-Hans"])(
+  it.each(["zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-HK"])(
     "resolves Simplified Chinese family %s",
-    (language) => expect(resolveGuiLocale("system", language)).toBe("zh-CN"),
+    (language) => expect(resolveGuiLocale("system", language)).toBe("zh-Hans"),
+  );
+
+  it.each(["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW"])(
+    "resolves Traditional Chinese family %s",
+    (language) => expect(resolveGuiLocale("system", language)).toBe("zh-Hant"),
+  );
+
+  it.each([
+    ["ja-JP", "ja"],
+    ["de-AT", "de"],
+    ["pt-BR", "pt"],
+    ["pt-PT", "pt"],
+    ["fr-ES", "fr"],
+    ["fr-CA", "fr"],
+    ["ko-KR", "ko"],
+    ["ru-RU", "ru"],
+    ["id-ID", "id"],
+    ["in-ID", "id"],
+  ])("resolves %s to %s", (language, locale) =>
+    expect(resolveGuiLocale("system", language)).toBe(locale),
   );
 
   it.each([
     undefined,
     "",
-    "zh-TW",
-    "fr-ES",
+    "it-IT",
+    "nl",
     "en-US-u-rg-eszzzz",
     "es_MX",
     "es--ES",
@@ -125,7 +189,8 @@ describe("GUI locale resolution", () => {
 
   it("prioritizes explicit preferences over the system language", () => {
     expect(resolveGuiLocale("es", "zh-CN")).toBe("es");
-    expect(resolveGuiLocale("zh-CN", "es-MX")).toBe("zh-CN");
+    expect(resolveGuiLocale("zh-Hans", "es-MX")).toBe("zh-Hans");
+    expect(resolveGuiLocale("ja", "zh-TW")).toBe("ja");
     expect(resolveGuiLocale("en", "es-MX")).toBe("en");
     expect(resolveGuiLocale("es", "invalid_locale")).toBe("es");
   });
@@ -135,19 +200,19 @@ describe("GUI messages", () => {
   it.each(messageKeys)(
     "provides Chinese, English and Spanish text for %s",
     (key) => {
-      expect(translate("zh-CN", key).length).toBeGreaterThan(0);
+      expect(translate("zh-Hans", key).length).toBeGreaterThan(0);
       expect(translate("en", key).length).toBeGreaterThan(0);
       expect(translate("es", key).length).toBeGreaterThan(0);
-      expect(translate("en", key)).not.toBe(translate("zh-CN", key));
-      expect(translate("es", key)).not.toBe(translate("zh-CN", key));
+      expect(translate("en", key)).not.toBe(translate("zh-Hans", key));
+      expect(translate("es", key)).not.toBe(translate("zh-Hans", key));
     },
   );
 
   it("provides stable settings and language names", () => {
-    expect(translate("zh-CN", "settings")).toBe("设置");
+    expect(translate("zh-Hans", "settings")).toBe("设置");
     expect(translate("en", "settings")).toBe("Settings");
     expect(translate("es", "settings")).toBe("Configuración");
-    expect(translate("zh-CN", "nativeErrorTitle")).toBe("MemHub 无法启动");
+    expect(translate("zh-Hans", "nativeErrorTitle")).toBe("MemHub 无法启动");
     expect(translate("es", "nativeErrorTitle")).toBe(
       "MemHub no pudo iniciarse",
     );
