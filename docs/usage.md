@@ -103,6 +103,7 @@ result = client.add(
     metadata=None,
     meta=None,
     embed_override=None,
+    history_turns=None,
 )
 ```
 
@@ -114,6 +115,16 @@ result = client.add(
   同一记忆被多次合并时，各次 `meta` 会按写入顺序保存在列表中。
 
 需要以后读回的数据必须放在 `meta`，不要放在 `metadata`。
+
+`history_turns` 控制抽取时读取的历史上下文：`None` 使用
+`config.extractor.history_turns`（环境变量 `MEMORY_EXTRACT_HISTORY_TURNS`，默认 5），
+`0` 关闭历史读取，正整数覆盖本次调用的轮数，不改变共享 client 配置。
+chat 按每轮两条 message 限制历史，working/coding 按 user-turn 限制。
+它不会裁剪本次新增消息，也不会停止保存原始输入供后续调用使用。
+例如，分段导入已自带上下文的对话时可用
+`client.add(messages, user_id="user_001", history_turns=0)`；异步 API 使用相同参数。
+历史仍沿用现有的 user/agent 范围及各后端的候选查询顺序；本参数不新增 session
+隔离，也不改变 chat 的 50 条候选窗口。
 
 `scene` 的公开取值：
 

@@ -854,6 +854,7 @@ class CodingMemoryExtractor:
         messages: List[ChatMessage],
         *,
         history_messages: Optional[List[ChatMessage]] = None,
+        history_turns: int = 5,
         tool_result_max_bytes: int = 2048,
         user_id: str,
         agent_id: str = "default_agent",
@@ -865,7 +866,8 @@ class CodingMemoryExtractor:
         """
         Args:
             messages: 本次 write 的完整新消息；只做单条限长，不裁 turn
-            history_messages: 之前 write 的历史消息；仅取最近 5 个 user-turn 作消解上下文
+            history_messages: 之前 write 的历史消息；仅作消解上下文
+            history_turns: 历史最多保留的 user-turn 数；0 关闭，默认 5
             user_id / agent_id / workspace_id / branch / session_id: SDK 注入
 
         Returns:
@@ -881,28 +883,28 @@ class CodingMemoryExtractor:
             messages, tool_max_bytes=tool_result_max_bytes,
         )
 
-        # Last 5 User Turns 是之前 write 的历史，只用于指代消解和上下文。绝不能拿
+        # Last K User Turns 是之前 write 的历史，只用于指代消解和上下文。绝不能拿
         # last-K 去裁本次输入，否则 write(10 turns) 会静默丢掉前 5 个 turn。
         history_window = keep_last_k_user_turns(
             prepare_extractor_messages(
                 history_messages or [], tool_max_bytes=tool_result_max_bytes,
             ),
-            k=5,
-        )
+            k=history_turns,
+        ) if history_turns > 0 else []
 
         history_block = self._format_conversation(history_window).strip()
         new_block = self._format_conversation(new_messages).strip()
         prompt_tmpl, prompt_language = self._select_prompt_template(new_messages)
         if prompt_language == "zh":
             conversation_block = (
-                "最近 5 个用户轮次（仅作上下文，不要重复抽取）：\n"
+                f"最近 {history_turns} 个用户轮次（仅作上下文，不要重复抽取）：\n"
                 + (history_block or "（无）")
                 + "\n\n本次新增消息（只从这次完整写入中抽取）：\n"
                 + (new_block or "（无）")
             )
         else:
             conversation_block = (
-                "LAST 5 USER TURNS (CONTEXT ONLY; do not extract them again):\n"
+                f"LAST {history_turns} USER TURNS (CONTEXT ONLY; do not extract them again):\n"
                 + (history_block or "(none)")
                 + "\n\nNEW MESSAGES (extract only from this complete write):\n"
                 + (new_block or "(none)")
