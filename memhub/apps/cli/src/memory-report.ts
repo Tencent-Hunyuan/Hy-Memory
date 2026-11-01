@@ -372,6 +372,9 @@ export function renderMemoryAddText(document: MemoryAddDocument): string {
 export function renderMemoryPageText(document: MemoryPageDocument): string {
   const page = document.page;
   if (page.state !== "ok") {
+    if (page.state === "unavailable" && page.code === "embedding_unavailable") {
+      return "向量服务不可用，无法检索；请检查向量模型配置。\n";
+    }
     if (page.state === "unavailable") {
       return "后台正忙，记忆列表这次没查完，不代表没有记忆，请稍后再试\n";
     }

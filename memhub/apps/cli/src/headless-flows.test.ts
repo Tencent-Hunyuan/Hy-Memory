@@ -510,15 +510,98 @@ describe("models add", () => {
     expect(result.stdout + result.stderr).not.toContain("SYNTHETIC_LOOSE_KEY");
   });
 
-  it("activates the new profile with --activate", async () => {
+  it("probes the new profile before activating it with --activate", async () => {
     const configFile = await modelConfigFile();
-    transport.post.mockImplementation(async (url: string) =>
-      url === "/api/v1/model-profiles"
-        ? { status: 200, data: PROFILE }
-        : url === "/api/v1/model-profiles/profile-1/activate"
-          ? { status: 200, data: { ...PROFILE, is_active: true } }
-          : { status: 404, data: {} },
+    let probeId: string | undefined;
+    transport.get.mockImplementation(async (url: string) => {
+      if (url === "/api/v1/model-profiles") {
+        return { status: 200, data: [PROBE_PROFILE] };
+      }
+      const match = /^\/api\/v1\/model-probe-operations\/(.+)$/.exec(url);
+      if (match) {
+        return {
+          status: 200,
+          data:
+            probeId === undefined
+              ? probeNotFound(match[1])
+              : probeReceiptPassing(match[1]),
+        };
+      }
+      return { status: 404, data: {} };
+    });
+    transport.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/api/v1/model-profiles") {
+        return { status: 200, data: PROBE_PROFILE };
+      }
+      if (url === `/api/v1/model-profiles/${PROBE_PROFILE.profile_id}/probe`) {
+        probeId = (body as { operation_id: string }).operation_id;
+        return { status: 200, data: probePending(probeId) };
+      }
+      if (url === "/api/v1/embedding-switches/plan") {
+        return { status: 200, data: samePlan() };
+      }
+      if (
+        url === `/api/v1/model-profiles/${PROBE_PROFILE.profile_id}/activate`
+      ) {
+        return {
+          status: 200,
+          data: {
+            ...PROBE_PROFILE,
+            is_active: true,
+            embedding_model: "synthetic-embedding",
+          },
+        };
+      }
+      return { status: 404, data: {} };
+    });
+    const result = await capturedRun(
+      ["models", "add", "--config-file", configFile, "--activate", "--json"],
+      { watchWait: async () => undefined },
     );
+    expect(result.code).toBe(0);
+    const lines = result.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(lines[0].probe).toMatchObject({ state: "completed" });
+    expect(lines.at(-1)).toMatchObject({ state: "committed" });
+    expect(transport.post.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/model-profiles",
+      `/api/v1/model-profiles/${PROBE_PROFILE.profile_id}/probe`,
+      "/api/v1/embedding-switches/plan",
+      `/api/v1/model-profiles/${PROBE_PROFILE.profile_id}/activate`,
+    ]);
+  });
+
+  it("does not activate a profile whose probe fails", async () => {
+    const configFile = await modelConfigFile();
+    let probeId: string | undefined;
+    transport.get.mockImplementation(async (url: string) => {
+      if (url === "/api/v1/model-profiles") {
+        return { status: 200, data: [PROBE_PROFILE] };
+      }
+      const match = /^\/api\/v1\/model-probe-operations\/(.+)$/.exec(url);
+      if (match) {
+        return {
+          status: 200,
+          data:
+            probeId === undefined
+              ? probeNotFound(match[1])
+              : probeReceipt(match[1]),
+        };
+      }
+      return { status: 404, data: {} };
+    });
+    transport.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/api/v1/model-profiles") {
+        return { status: 200, data: PROBE_PROFILE };
+      }
+      if (url.endsWith("/probe")) {
+        probeId = (body as { operation_id: string }).operation_id;
+        return { status: 200, data: probeReceipt(probeId) };
+      }
+      return { status: 404, data: {} };
+    });
     const result = await capturedRun([
       "models",
       "add",
@@ -527,14 +610,12 @@ describe("models add", () => {
       "--activate",
       "--json",
     ]);
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout).activation).toEqual({
-      state: "committed",
-    });
-    expect(transport.post.mock.calls.map(([url]) => url)).toEqual([
-      "/api/v1/model-profiles",
-      "/api/v1/model-profiles/profile-1/activate",
-    ]);
+    expect(result.code).toBe(1);
+    expect(
+      transport.post.mock.calls.some(([url]) =>
+        String(url).endsWith("/activate"),
+      ),
+    ).toBe(false);
   });
 
   it("recovers an unknown create through its operation receipt", async () => {
@@ -752,6 +833,54 @@ function probePending(operationId: string) {
   };
 }
 
+function samePlan() {
+  const space = {
+    space_id: null,
+    model: "synthetic-embedding",
+    dims: 8,
+    collection_base: "",
+  };
+  return {
+    needed: false,
+    reason: "same_embedding",
+    plan_token: "token-1",
+    source: space,
+    target: space,
+    target_profile_id: PROBE_PROFILE.profile_id,
+    target_revision: 3,
+    target_provider_kind: "openai_compatible",
+    target_local: false,
+    blockers: [],
+  };
+}
+
+function probeReceiptPassing(operationId: string) {
+  const receipt = probeReceipt(operationId);
+  return {
+    ...receipt,
+    result: {
+      ...receipt.result,
+      stages: [
+        {
+          stage: "embedding",
+          ok: true,
+          code: "ok",
+          latency_ms: 1,
+          embedding_dimensions: 8,
+        },
+      ],
+      capabilities: {
+        endpoint_reachable: true,
+        model_available: true,
+        structured_output: true,
+        embedding_available: true,
+      },
+      embedding_width: 8,
+      embedding_switch_required: false,
+    },
+  };
+}
+
 function probeNotFound(operationId: string) {
   return {
     schema_version: 1,
@@ -819,7 +948,10 @@ function importJob() {
   };
 }
 
-async function capturedRun(argv: string[]) {
+async function capturedRun(
+  argv: string[],
+  controls: Parameters<typeof run>[2] = {},
+) {
   let stdout = "";
   let stderr = "";
   const originalOut = process.stdout.write;
@@ -833,7 +965,7 @@ async function capturedRun(argv: string[]) {
     return true;
   }) as typeof process.stderr.write;
   try {
-    const code = await run(argv, {});
+    const code = await run(argv, {}, controls);
     return { code, stdout, stderr };
   } finally {
     process.stdout.write = originalOut;

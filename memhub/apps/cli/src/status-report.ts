@@ -18,6 +18,7 @@ import {
   validateProcessing,
   validateSources,
 } from "./core-responses.js";
+import { describeEmbeddingSwitchSummary } from "./embedding-switch-flow.js";
 import { PRODUCT } from "./version.js";
 
 const MIGRATION_ISSUES_URL =
@@ -306,6 +307,10 @@ export function renderStatusText(
     );
   }
   if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
+  const embeddingSwitch = describeEmbeddingSwitchSummary(
+    report.sections.processing?.embedding_switch,
+  );
+  if (embeddingSwitch !== null) lines.push(`向量模型：${embeddingSwitch}`);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -365,7 +370,10 @@ function sectionLine(section: Section | undefined): string {
   if (section.state === "not_checked") return "未检查";
   if (section.state !== "ok") return "暂时不可用，请稍后重试";
   return Object.entries(section)
-    .filter(([key]) => key !== "state" && key !== "code")
+    .filter(
+      ([key]) =>
+        key !== "state" && key !== "code" && key !== "embedding_switch",
+    )
     .map(([key, value]) => `${fieldLabel(key)} ${formatValue(value)}`)
     .join(" ");
 }
@@ -481,7 +489,28 @@ function describeProcessing(
       reason: block.reason,
       count: block.count,
     })),
+    ...embeddingSwitchField(summary),
   };
+}
+
+/** The running switch or merge, projected; absent when none runs. */
+function embeddingSwitchField(
+  summary: MemoryProcessingSummary,
+): Record<string, unknown> {
+  const value = (summary as unknown as Record<string, unknown>)
+    .embedding_switch;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const item = value as Record<string, unknown>;
+  const kind = item.kind === "merge" ? "merge" : "switch";
+  const state =
+    typeof item.state === "string" && /^[a-z_]{1,32}$/.test(item.state)
+      ? item.state
+      : "unknown";
+  const percent =
+    typeof item.percent === "number" && Number.isFinite(item.percent)
+      ? Math.min(100, Math.max(0, item.percent))
+      : 0;
+  return { embedding_switch: { kind, state, percent } };
 }
 
 /** Projection, not passthrough: a Core that leaks a key must not make us leak. */

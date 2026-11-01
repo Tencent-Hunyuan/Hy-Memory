@@ -635,6 +635,8 @@ describe("documented commands", () => {
       "receipt",
       "edit",
       "activate",
+      "switch",
+      "spaces",
       "remove",
     ],
     // Source processing is one Freeze/Thaw switch under `sync`; the obsolete

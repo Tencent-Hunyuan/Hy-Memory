@@ -123,6 +123,14 @@ import {
   renderDoctorText,
 } from "./doctor-report.js";
 import {
+  activateWithEmbeddingSwitch,
+  cleanupSpace,
+  listSpaces,
+  type SwitchIo,
+  switchCancel,
+  switchStatus,
+} from "./embedding-switch-flow.js";
+import {
   EXIT_FAILED,
   EXIT_OK,
   EXIT_PLAN_BLOCKED,
@@ -248,7 +256,6 @@ import {
   renderModelReportText,
 } from "./model-report.js";
 import {
-  activateModelProfile,
   editModelProfile,
   type ModelWriteDocument,
   modelWriteExitCode,
@@ -1703,6 +1710,18 @@ async function runCommand(
       );
       if (apiKey === undefined) return usage();
     }
+    if (
+      parsed.kind === "spaces" &&
+      parsed.cleanup !== undefined &&
+      !parsed.confirmed
+    ) {
+      return emitConfirmPreview(asJson, {
+        command: "models spaces",
+        target: parsed.cleanup,
+        effect: `删除已停用的向量空间 ${parsed.cleanup}（不可恢复；正在使用的空间不能删除）`,
+        retry: `${PRODUCT} models spaces --cleanup ${parsed.cleanup} --yes`,
+      });
+    }
     if (parsed.kind === "remove" && !parsed.confirmed) {
       return emitConfirmPreview(asJson, {
         command: "models remove",
@@ -1725,6 +1744,50 @@ async function runCommand(
       return connected.exitCode;
     }
     const { reader, operations } = connected;
+    // Ctrl-C while following a switch stops watching, never the switch.
+    const interrupt = new AbortController();
+    const switchIo: SwitchIo = {
+      reader,
+      operations,
+      emit: (text) => {
+        emit(text);
+      },
+      asJson,
+      interactive:
+        !asJson && (controls.stdinIsTTY ?? process.stdin.isTTY) === true,
+      confirm: async (question) => {
+        const prompter =
+          controls.wizardPrompter ?? (await createTerminalPrompter());
+        try {
+          return /^(y|yes)$/i.test((await prompter.ask(question)).trim());
+        } finally {
+          if ("close" in prompter && typeof prompter.close === "function") {
+            prompter.close();
+          }
+        }
+      },
+      ...(controls.watchWait ? { wait: controls.watchWait } : {}),
+      signal: controls.watchSignal ?? interrupt.signal,
+    };
+    const withInterrupt = async (run: () => Promise<number>) => {
+      const onInterrupt = () => interrupt.abort();
+      process.once("SIGINT", onInterrupt);
+      try {
+        return await run();
+      } finally {
+        process.removeListener("SIGINT", onInterrupt);
+      }
+    };
+    if (parsed.kind === "switch") {
+      return parsed.action === "status"
+        ? await switchStatus(switchIo)
+        : await switchCancel(switchIo);
+    }
+    if (parsed.kind === "spaces") {
+      return parsed.cleanup === undefined
+        ? await listSpaces(switchIo)
+        : await cleanupSpace(parsed.cleanup, switchIo);
+    }
     if (parsed.kind === "add") {
       const created = await createModelProfile(
         config,
@@ -1739,33 +1802,66 @@ async function runCommand(
         emitFlowDocument(created, asJson);
         return flowExitCode(created);
       }
-      const activated = await activateModelProfile(
-        String(created.receipt.profile_id),
+      // Core activates only a probed profile: probe first, then the same
+      // path as `models activate`, so an embedding change shows its plan.
+      const profileId = String(created.receipt.profile_id);
+      const probe = await probeUntilSettled(
+        reader,
         operations,
+        profileId,
+        controls.watchWait,
       );
-      const document = {
-        ...created,
-        activation:
-          activated.state === "committed"
-            ? { state: "committed" }
-            : { state: activated.state, code: activated.code },
-      };
+      const probed =
+        probe.state === "completed" &&
+        Boolean(
+          (
+            (probe.receipt.result as Record<string, unknown> | undefined)
+              ?.capabilities as Record<string, unknown> | undefined
+          )?.embedding_available,
+        );
       emit(
         asJson
-          ? `${JSON.stringify(document)}\n`
+          ? `${JSON.stringify({
+              ...created,
+              probe: {
+                state: probe.state,
+                ...("operation_id" in probe && probe.operation_id
+                  ? { operation_id: probe.operation_id }
+                  : {}),
+                ...("code" in probe ? { code: probe.code } : {}),
+              },
+            })}\n`
           : `${renderFlowText(created)}${
-              activated.state === "committed"
-                ? "已设为当前使用的模型配置。\n"
-                : `设为当前使用未完成：${activated.state}（${activated.code}）\n`
+              probed
+                ? "探测通过。\n"
+                : `探测未通过（${"code" in probe ? probe.code : probe.state}），没有设为当前使用；用 ${PRODUCT} models test ${profileId} 查看原因。\n`
             }`,
       );
-      return activated.state === "committed" ? EXIT_OK : EXIT_FAILED;
+      if (!probed) return EXIT_FAILED;
+      return await withInterrupt(() =>
+        activateWithEmbeddingSwitch(
+          profileId,
+          { confirmed: parsed.confirmed, follow: parsed.follow },
+          switchIo,
+        ),
+      );
     }
-    if (parsed.kind === "edit" || parsed.kind === "activate") {
-      const document =
-        parsed.kind === "edit"
-          ? await editModelProfile(parsed.profileId, config, apiKey, operations)
-          : await activateModelProfile(parsed.profileId, operations);
+    if (parsed.kind === "activate") {
+      return await withInterrupt(() =>
+        activateWithEmbeddingSwitch(
+          parsed.profileId,
+          { confirmed: parsed.confirmed, follow: parsed.follow },
+          switchIo,
+        ),
+      );
+    }
+    if (parsed.kind === "edit") {
+      const document = await editModelProfile(
+        parsed.profileId,
+        config,
+        apiKey,
+        operations,
+      );
       emitModelWriteDocument(document, asJson);
       return modelWriteExitCode(document);
     }
@@ -5289,6 +5385,8 @@ type ModelsCommand =
       configFile: string;
       apiKeyFile?: string;
       activate: boolean;
+      confirmed: boolean;
+      follow?: boolean;
     }
   | {
       kind: "edit";
@@ -5296,7 +5394,14 @@ type ModelsCommand =
       configFile: string;
       apiKeyFile?: string;
     }
-  | { kind: "activate"; profileId: string }
+  | {
+      kind: "activate";
+      profileId: string;
+      confirmed: boolean;
+      follow?: boolean;
+    }
+  | { kind: "switch"; action: "status" | "cancel" }
+  | { kind: "spaces"; cleanup?: string; confirmed: boolean }
   | { kind: "test"; profileId: string }
   | { kind: "receipt"; operationId: string }
   | { kind: "remove"; profileId: string; confirmed: boolean };
@@ -5337,16 +5442,46 @@ function parseModelsCommand(rest: readonly string[]): ModelsCommand | null {
     const flags = readFlags(
       tokens.slice(1),
       ["--config-file", "--api-key-file"],
-      ["--activate"],
+      ["--activate", "--yes", "--wait", "--no-wait"],
     );
     const configFile = flags?.values.get("--config-file");
     if (!flags || configFile === undefined) return null;
+    const follow = followFlag(flags.switches);
+    if (follow === null) return null;
+    const activate = flags.switches.has("--activate");
+    // The switch flags only mean something when the add also activates.
+    if (
+      !activate &&
+      ["--yes", "--wait", "--no-wait"].some((flag) => flags.switches.has(flag))
+    ) {
+      return null;
+    }
     const apiKeyFile = flags.values.get("--api-key-file");
     return {
       kind: "add",
       configFile,
       ...(apiKeyFile === undefined ? {} : { apiKeyFile }),
-      activate: flags.switches.has("--activate"),
+      activate,
+      confirmed: flags.switches.has("--yes"),
+      ...(follow === undefined ? {} : { follow }),
+    };
+  }
+  if (action === "switch") {
+    if (tokens.length !== 2 || (target !== "status" && target !== "cancel")) {
+      return null;
+    }
+    return { kind: "switch", action: target };
+  }
+  if (action === "spaces") {
+    const flags = readFlags(tokens.slice(1), ["--cleanup"], ["--yes"]);
+    if (!flags) return null;
+    const cleanup = flags.values.get("--cleanup");
+    if (cleanup === undefined && flags.switches.has("--yes")) return null;
+    if (cleanup !== undefined && !OPERATION_ID.test(cleanup)) return null;
+    return {
+      kind: "spaces",
+      ...(cleanup === undefined ? {} : { cleanup }),
+      confirmed: flags.switches.has("--yes"),
     };
   }
   if (target === undefined || !OPERATION_ID.test(target)) return null;
@@ -5367,8 +5502,21 @@ function parseModelsCommand(rest: readonly string[]): ModelsCommand | null {
     };
   }
   if (action === "activate") {
-    const flags = readFlags(tokens.slice(2), [], ["--confirm", "--yes"]);
-    return flags ? { kind: "activate", profileId: target } : null;
+    const flags = readFlags(
+      tokens.slice(2),
+      [],
+      ["--confirm", "--yes", "--wait", "--no-wait"],
+    );
+    if (!flags) return null;
+    const follow = followFlag(flags.switches);
+    if (follow === null) return null;
+    return {
+      kind: "activate",
+      profileId: target,
+      // `--confirm` stays the hidden alias of `--yes`.
+      confirmed: flags.switches.has("--yes") || flags.switches.has("--confirm"),
+      ...(follow === undefined ? {} : { follow }),
+    };
   }
   if (action === "test") {
     return tokens.length === 2 ? { kind: "test", profileId: target } : null;
@@ -5389,6 +5537,35 @@ function parseModelsCommand(rest: readonly string[]): ModelsCommand | null {
       : null;
   }
   return null;
+}
+
+/** `--wait` / `--no-wait`: undefined when neither, null when both. */
+function followFlag(switches: ReadonlySet<string>): boolean | undefined | null {
+  const wait = switches.has("--wait");
+  const noWait = switches.has("--no-wait");
+  if (wait && noWait) return null;
+  return wait ? true : noWait ? false : undefined;
+}
+
+/** Start a probe and read its receipt until it settles (about two minutes). */
+async function probeUntilSettled(
+  reader: CoreReader,
+  operations: CoreOperations,
+  profileId: string,
+  wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>,
+): Promise<ModelProbeFlowDocument> {
+  let document = await startModelProbe(reader, operations, profileId);
+  const pause =
+    wait ??
+    ((milliseconds: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const signal = new AbortController().signal;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (document.state !== "pending" || !document.operation_id) break;
+    await pause(1_000, signal);
+    document = await readModelProbeReceipt(reader, document.operation_id);
+  }
+  return document;
 }
 
 type SourcesCommand =

@@ -32,11 +32,26 @@ const MEMORY_MODE_PATH = "/api/v1/settings/memory-mode";
 /** `memhub settings features set|reset` sets the SDK features. */
 const MEMORY_FEATURES_PATH = "/api/v1/settings/memory-features";
 const ONBOARDING_COMPLETE_PATH = "/api/v1/onboarding/complete";
+const EMBEDDING_SWITCH_PATHS = [
+  "/api/v1/embedding-switches",
+  "/api/v1/embedding-switches/plan",
+] as const;
+const EMBEDDING_SWITCH_CANCEL =
+  /^\/api\/v1\/embedding-switches\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/cancel$/;
+const EMBEDDING_SPACE_PATH =
+  /^\/api\/v1\/embedding-spaces\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_BYTES = 4 * 1024 * 1024;
 
 export type OperationOutcome<T> =
   | { state: "committed"; data: T }
-  | { state: "rejected"; code: string; http_status: number }
+  | {
+      state: "rejected";
+      code: string;
+      http_status: number;
+      /** Core's refusal body, when it carries more than the code (a switch
+       * plan rides along with `embedding_switch_required`). */
+      body?: unknown;
+    }
   | { state: "unknown"; code: string };
 
 export interface CoreOperations {
@@ -104,6 +119,8 @@ export function createCoreOperations(attachment: {
         path !== GRAPH_WIDTH_PATH &&
         path !== EVOLVE_PATH &&
         path !== ONBOARDING_COMPLETE_PATH &&
+        !(EMBEDDING_SWITCH_PATHS as readonly string[]).includes(path) &&
+        !EMBEDDING_SWITCH_CANCEL.test(path) &&
         !MODEL_PROFILE_ACTIVATE.test(path)
       ) {
         throw new Error("core_operation_path_not_allowed");
@@ -121,11 +138,18 @@ export function createCoreOperations(attachment: {
       if (response.status >= 200 && response.status < 300) {
         return { state: "committed", data: response.data as T };
       }
-      if (response.status >= 400 && response.status < 500) {
+      if (
+        (response.status >= 400 && response.status < 500) ||
+        // Core answers a refusal it can name with 503 (`sdk_reembed_unavailable`)
+        // or 507 (`insufficient_disk_space`) on the switch routes.
+        ([503, 507].includes(response.status) &&
+          (EMBEDDING_SWITCH_PATHS as readonly string[]).includes(path))
+      ) {
         return {
           state: "rejected",
           code: safeErrorCode(response.data, response.status),
           http_status: response.status,
+          body: response.data,
         };
       }
       return {
@@ -204,7 +228,11 @@ export function createCoreOperations(attachment: {
       };
     },
     async delete<T>(path: string, signal?: AbortSignal) {
-      if (!SDK_MEMORY_PATH.test(path) && !MODEL_PROFILE_PATH.test(path)) {
+      if (
+        !SDK_MEMORY_PATH.test(path) &&
+        !MODEL_PROFILE_PATH.test(path) &&
+        !EMBEDDING_SPACE_PATH.test(path)
+      ) {
         throw new Error("core_operation_path_not_allowed");
       }
       let response: { status: number; data: unknown };

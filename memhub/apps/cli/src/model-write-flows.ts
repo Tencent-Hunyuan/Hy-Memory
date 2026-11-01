@@ -117,7 +117,7 @@ export async function editModelProfile(
   return modelProfileResult(profileId, result);
 }
 
-function modelProfileResult(
+export function modelProfileResult(
   operationId: string,
   result:
     | Awaited<ReturnType<CoreOperations["post"]>>
