@@ -9,6 +9,7 @@
 |---|---|---|
 | `MEMORY_MODE` | `pro` | `lite` / `pro` / `ultra` |
 | `MEMORY_DATA_DIR` | `~/.hy_memory` | 本地数据、缓存和日志根目录 |
+| `MEMORY_LANGUAGE` | — | LLM 提示词与记忆正文语言：`en` / `zh-Hans` / `zh-Hant` / `ja` / `es` / `de` / `pt` / `fr` / `ko` / `ru` / `id`（别名 `zh`、`zh-CN` → `zh-Hans`，`zh-TW`、`zh-HK` → `zh-Hant`，`pt-BR` → `pt`）。未设置时按输入做 zh/en 自动检测；per-call `language=` 优先 |
 
 - `lite`：纯 Embedding 写入，Graph 强制关闭。
 - `pro`：LLM 提取与 reconcile；Graph 由 `MEMORY_ENABLE_GRAPH` 控制。

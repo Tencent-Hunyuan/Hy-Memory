@@ -64,59 +64,15 @@ def _topic_lock(graph_store, isolation_key: str, topic_id: str) -> asyncio.Lock:
         return lock
 
 
-TOPIC_SUMMARY_PROMPT = """You are summarizing everything known about ONE topic.
-
-## Topic
-
-{topic_name}
-
-## Memories under this topic (oldest → newest)
-
-{memories}
-
----
-
-Write a single dense summary of what is known about the user with respect to this
-topic.
-
-Rules:
-
-* 2–4 sentences, third person, starting with "The user ..." (or the named person
-  if the memories are about someone else).
-* Cover the topic as a whole — state the current situation, and mention how it
-  developed only when the change matters.
-* Preserve concrete details: names, places, numbers, dates.
-* Do NOT invent anything that is not in the memories.
-* Do NOT enumerate the memories one by one; synthesize them.
-* Output language must match the language of the memories.
-
-Return ONLY the summary text, no preamble, no JSON, no quotes."""
-
-
-TOPIC_SUMMARY_PROMPT_ZH = """你在为**一个主题**总结已知的全部信息。
-
-## 主题
-
-{topic_name}
-
-## 该主题下的记忆（时间正序）
-
-{memories}
-
----
-
-写一段关于用户在这个主题上的高密度摘要。
-
-要求：
-
-* 2–4 句，第三人称，以"用户…"开头（若记忆讲的是别人，则以那个人的名字开头）。
-* 覆盖整个主题 —— 说明当前状况；只在变化本身重要时才提它是怎么演变过来的。
-* 保留具体细节：人名、地点、数字、日期。
-* 绝不编造记忆里没有的内容。
-* 不要逐条罗列记忆，要综合成一段。
-* 输出语言与记忆的语言一致。
-
-只返回摘要正文，不要任何前言、不要 JSON、不要引号。"""
+# 多语言版本见 hy_memory/prompts/<language>.py；旧名字保留为别名。
+from ...prompts import (  # noqa: E402
+    get_prompt,
+    normalize_language,
+    resolve_language,
+    with_output_language,
+)
+from ...prompts.en import TOPIC_SUMMARY_PROMPT  # noqa: E402,F401  (re-export)
+from ...prompts.zh_hans import TOPIC_SUMMARY_PROMPT as TOPIC_SUMMARY_PROMPT_ZH  # noqa: E402,F401  (re-export)
 
 
 async def find_latest_topic_summary(
@@ -193,8 +149,12 @@ async def maybe_summarize_topics(
     max_concurrency: int = 3,
     temperature: Optional[float] = None,
     trace=None,
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     """对本次写入触达的 Topic，按需有界并发生成 / 刷新 summary。
+
+    language 为显式 prompt 语言码（随触发本次写入的请求）；None 时按记忆内容
+    做 zh/en 自动检测。
 
     触发条件：Topic 下 active 记忆数 ≥ `min_memories`，且比上次总结时多了 ≥ `step` 条。
     这样既不会每写一条就重算（贵），也不会一直不更新（陈旧）。
@@ -254,6 +214,7 @@ async def maybe_summarize_topics(
                         topic_name=topic_names.get(topic_id) or topic_id,
                         memories=[m.get("content") or "" for m in mems],
                         temperature=temperature,
+                        language=language,
                     )
                     if trace is not None:
                         await trace(
@@ -317,15 +278,18 @@ async def maybe_summarize_topics(
 async def _generate(
     *, llm_provider, topic_name: str, memories: List[str],
     temperature: Optional[float] = None,
+    language: Optional[str] = None,
 ) -> tuple:
     """返回 (摘要文本, 实际 prompt, token 用量) —— 后两个供埋点，线上要能复盘。"""
-    from ...utils.lang_detect import is_chinese
-
     body = "\n".join(f"- {c}" for c in memories if c)
     if not body:
         return "", "", {}
-    tpl = TOPIC_SUMMARY_PROMPT_ZH if is_chinese(body) else TOPIC_SUMMARY_PROMPT
-    prompt = tpl.format(topic_name=topic_name, memories=body)
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, body)
+    prompt = get_prompt("TOPIC_SUMMARY_PROMPT", code).format(
+        topic_name=topic_name, memories=body,
+    )
+    prompt = with_output_language(prompt, code, explicit=explicit is not None)
     resp = await llm_provider.complete(
         prompt=prompt,
         max_tokens=400,

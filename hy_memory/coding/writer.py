@@ -81,10 +81,13 @@ class CodingWriter:
         request_id: Optional[str] = None,
         source: str = "default",
         memory_at: Optional[datetime] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         working/coding 段写入端到端。memory_at 是对话时间，记到这次写出的经验和
-        事实上；不传则用收到请求的时间（与 chat 链路一致）。返回响应 dict（兼容 client.add 返回结构）：
+        事实上；不传则用收到请求的时间（与 chat 链路一致）。language 是显式 prompt
+        语言码，透传给抽取、经验 reconcile、事实 reconcile 与演变总结；None 时各步
+        沿用 zh/en 自动检测。返回响应 dict（兼容 client.add 返回结构）：
             {
                 "success": True,
                 "scene": "productivity",
@@ -151,6 +154,7 @@ class CodingWriter:
                 branch=branch,
                 session_id=session_id,
                 request_id=request_id,
+                language=language,
             )
         finally:
             # 历史服务于下一次 write；即使本次没跨过价值门槛，也不能丢掉上下文。
@@ -187,6 +191,7 @@ class CodingWriter:
                 user_id=user_id,
                 agent_id=agent_id,
                 session_id=session_id or "",
+                language=language,
             )
             if drafts else []
         )
@@ -204,6 +209,7 @@ class CodingWriter:
                 branch=branch,
                 source=source,
                 memory_at=memory_at,
+                language=language,
             )
 
         experience_ids = [op.target_experience_id for op in ops

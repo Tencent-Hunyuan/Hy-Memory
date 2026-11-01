@@ -909,6 +909,19 @@ class HyMemoryClient:
         """
         return "coding" if str(scene or "").strip().lower() == "coding" else "working"
 
+    def _resolve_language(self, language: Optional[str]) -> Optional[str]:
+        """per-call language > MemoryConfig.language; None = zh/en 自动检测。
+
+        返回 canonical 码；未知码抛 ValueError（列出支持的码与别名）。
+        """
+        from .prompts import normalize_language
+
+        code = normalize_language(language)
+        if code is not None:
+            return code
+        config = getattr(self, "_config", None)
+        return normalize_language(getattr(config, "language", None))
+
     @staticmethod
     def _parse_input(data: AddInput):
         """
@@ -1723,6 +1736,7 @@ class HyMemoryClient:
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         写入记忆。
@@ -1773,6 +1787,13 @@ class HyMemoryClient:
                           meta 独立持久化，只做业务透传。
                           语义为「该次 write 时刻的上下文」，故存为 list——同一节点被
                           多次写入合并时会追加而非覆盖，详见 get() 返回的 meta 字段。
+            language:     本次请求的 LLM prompt 语言码（en / zh-Hans / zh-Hant / ja / es /
+                          de / pt / fr / ko / ru / id；别名 zh、zh-CN → zh-Hans，zh-TW、
+                          zh-HK → zh-Hant，pt-BR → pt）。优先于 MemoryConfig.language
+                          （env MEMORY_LANGUAGE）；两者都未设时沿用 zh/en 自动检测。
+                          显式指定时 extract / reconcile / coding 链路 / 基础画像等本次
+                          请求的全部 LLM 调用都用该语言的 prompt，记忆正文也用该语言书写。
+                          未知码抛 ValueError（列出支持的码）。
 
         Returns:
             chat 链路：{"success": True, "memory_id": "...", "request_id": "...", "elapsed_ms": ...}
@@ -1788,6 +1809,7 @@ class HyMemoryClient:
                 workspace_id=workspace_id, branch=branch,
                 request_id=request_id, meta=meta,
                 embed_override=embed_override,
+                language=language,
             ),
             include_runtime_diag=True,
         )
@@ -1798,15 +1820,20 @@ class HyMemoryClient:
         user_id: str,
         agent_id: str = "default_agent",
         session_id: str,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Finalize one caller session into a first-class episode narrative.
 
         The feature is opt-in through MEMORY_SESSION_EPISODE_ENABLED. Calls are
         idempotent: the same user/agent/session tuple upserts one deterministic node.
+
+        ``language`` (or MemoryConfig.language) makes the narrative be written in
+        that language; see add(). The episode prompts themselves are English-only.
         """
         return self._loop_thread.run(
             self.async_finalize_session(
                 user_id=user_id, agent_id=agent_id, session_id=session_id,
+                language=language,
             ),
             include_runtime_diag=True,
         )
@@ -2263,6 +2290,7 @@ class HyMemoryClient:
         user_id: str,
         agent_id: str = "default_agent",
         max_batches: Optional[int] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         手动触发 System 2 认知加工（ultra 模式专用，同步阻塞直到完成）。
@@ -2285,6 +2313,8 @@ class HyMemoryClient:
         Args:
             user_id:  用户 ID
             agent_id: Agent ID
+            language: System 2 / sweeper prompt 语言码，语义同 add()（per-call >
+                      MemoryConfig.language > 按 materials 做 zh/en 检测）。
 
         Returns:
             {"success": True, "request_id": "...", "tasks_processed": 1, "results": {...},
@@ -2298,6 +2328,7 @@ class HyMemoryClient:
         return self._loop_thread.run(
             self.async_evolve(
                 user_id=user_id, agent_id=agent_id, max_batches=max_batches,
+                language=language,
             )
         )
 
@@ -2307,8 +2338,10 @@ class HyMemoryClient:
         user_id: str,
         agent_id: str = "default_agent",
         max_batches: Optional[int] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """手动触发 System 2 认知加工（异步）"""
+        language = self._resolve_language(language)
         t0 = __import__("time").perf_counter()
 
         # 获取 System2Writer
@@ -2331,6 +2364,7 @@ class HyMemoryClient:
 
         result = await writer.evolve(
             user_id=user_id, agent_id=agent_id, max_batches=max_batches,
+            language=language,
         )
         result["elapsed_ms"] = round((__import__("time").perf_counter() - t0) * 1000, 2)
         return result
@@ -2339,6 +2373,7 @@ class HyMemoryClient:
         self,
         user_ids: List[str],
         agent_ids: Optional[List[str]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         手动触发 cross-domain sweeper（同步）。
@@ -2352,6 +2387,8 @@ class HyMemoryClient:
         Args:
             user_ids:  SDK user_id 列表
             agent_ids: Agent ID 列表（默认 ["default_agent"]）
+            language:  输出语言码，语义同 add()。sweeper prompt 只有英文版，显式
+                       指定时追加该语言的输出规则。
 
         Returns:
             {"success": True, "results": [{...}, ...]}
@@ -2361,7 +2398,9 @@ class HyMemoryClient:
                 f"sweep() requires mode='ultra', but this client is mode='{self._mode}'."
             )
         return self._loop_thread.run(
-            self.async_sweep(user_ids=user_ids, agent_ids=agent_ids)
+            self.async_sweep(
+                user_ids=user_ids, agent_ids=agent_ids, language=language,
+            )
         )
 
     @_ensure_internal_loop
@@ -2369,11 +2408,13 @@ class HyMemoryClient:
         self,
         user_ids: List[str],
         agent_ids: Optional[List[str]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """手动触发 cross-domain sweeper（异步）
 
         对每个 user_id × agent_id 组合执行一次 sweeper。
         """
+        language = self._resolve_language(language)
         t0 = __import__("time").perf_counter()
 
         try:
@@ -2385,7 +2426,9 @@ class HyMemoryClient:
         results = []
         for uid in user_ids:
             for aid in effective_agents:
-                r = await writer.run_sweeper(user_id=uid, agent_id=aid)
+                r = await writer.run_sweeper(
+                    user_id=uid, agent_id=aid, language=language,
+                )
                 results.append({"user_id": uid, "agent_id": aid, **r})
 
         elapsed_ms = round((__import__("time").perf_counter() - t0) * 1000, 2)
@@ -2740,13 +2783,17 @@ class HyMemoryClient:
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """写入记忆（异步）
 
         embed_override: 本次写入的 embedding 端点覆盖（不改 model/dims，只换接入点）。
             dict，可含 base_url / api_key / extra_headers / timeout；None = 用 client 配置。
             可用于按请求切换任意 OpenAI-compatible embedding endpoint。
+        language: 本次请求的 prompt 语言码，详见 add()。
         """
+        # 先校验语言码：非法值直接 ValueError，不占用 request_id 的幂等槽位
+        language = self._resolve_language(language)
         request_id = request_id or str(uuid.uuid4())
         replay = await self._claim_write_outcome(
             request_id=request_id,
@@ -2770,7 +2817,7 @@ class HyMemoryClient:
                         source=source,
                         metadata=metadata, memory_at=memory_at,
                         scene=scene, workspace_id=workspace_id, branch=branch,
-                        request_id=request_id, meta=meta,
+                        request_id=request_id, meta=meta, language=language,
                     )
             else:
                 result = await self._async_add_impl(
@@ -2778,7 +2825,7 @@ class HyMemoryClient:
                     source=source,
                     metadata=metadata, memory_at=memory_at,
                     scene=scene, workspace_id=workspace_id, branch=branch,
-                    request_id=request_id, meta=meta,
+                    request_id=request_id, meta=meta, language=language,
                 )
         except BaseException:
             await self._mark_write_outcome_unknown(request_id)
@@ -2797,8 +2844,10 @@ class HyMemoryClient:
         user_id: str,
         agent_id: str = "default_agent",
         session_id: str,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Async counterpart of :meth:`finalize_session`."""
+        language = self._resolve_language(language)
         series = bool(getattr(self._config.recall, "series_episode_enabled", False))
         dynamic = bool(
             getattr(self._config.recall, "dynamic_episode_enabled", False) or series
@@ -2828,6 +2877,7 @@ class HyMemoryClient:
             user_id=user_id,
             agent_id=agent_id,
             session_id=session_id,
+            language=language,
         )
         if finalize is finalize_dynamic_episode_capsules:
             finalize_kwargs["summary_concurrency"] = getattr(
@@ -2867,6 +2917,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """写入记忆（异步）
 
@@ -2875,6 +2926,7 @@ class HyMemoryClient:
                    None = 自动判定。详见 add() docstring。
             workspace_id / branch: Coding memory 路径专用，详见 add() docstring。
             meta: 调用方自定义业务 meta，透传存储，详见 add() docstring。
+            language: 已解析的 canonical 语言码（None = zh/en 自动检测）。
         """
         from .utils.source_filter import normalize_source
         source = normalize_source(source)
@@ -2973,6 +3025,7 @@ class HyMemoryClient:
                     request_id=request_id,
                     source=source,
                     memory_at=memory_at,
+                    language=language,
                 )
                 # Public receipt always identifies the productivity namespace.
                 resp["variant"] = scene_variant
@@ -3038,6 +3091,7 @@ class HyMemoryClient:
             # 落库 memory_ops / WRITE_SUMMARY / pipeline_logs 的单一真相源。
             request_id=request_id,
             client_meta=meta,
+            language=language,
         )
 
         # mode → writer:
@@ -3126,6 +3180,7 @@ class HyMemoryClient:
         metadata: Optional[Dict[str, Any]] = None,
         memory_at: Optional[datetime] = None,
         request_id: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """写入「调用方已抽取好的」记忆：跳过 extract，直接进 reconcile。
 
@@ -3140,6 +3195,7 @@ class HyMemoryClient:
 
         Args:
             contents: 单条事实字符串，或多条事实字符串列表。
+            language: reconcile prompt 的语言码，语义同 add()。
             其余参数语义同 add()。
 
         Returns:
@@ -3151,6 +3207,7 @@ class HyMemoryClient:
                 contents, user_id=user_id, agent_id=agent_id,
                 session_id=session_id, source=source, metadata=metadata,
                 memory_at=memory_at, request_id=request_id,
+                language=language,
             ),
             include_runtime_diag=True,
         )
@@ -3167,8 +3224,10 @@ class HyMemoryClient:
         metadata: Optional[Dict[str, Any]] = None,
         memory_at: Optional[datetime] = None,
         request_id: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Idempotent async wrapper for extracted-memory writes."""
+        language = self._resolve_language(language)
         request_id = request_id or str(uuid.uuid4())
         replay = await self._claim_write_outcome(
             request_id=request_id,
@@ -3189,6 +3248,7 @@ class HyMemoryClient:
                 metadata=metadata,
                 memory_at=memory_at,
                 request_id=request_id,
+                language=language,
             )
         except BaseException:
             await self._mark_write_outcome_unknown(request_id)
@@ -3211,6 +3271,7 @@ class HyMemoryClient:
         metadata: Optional[Dict[str, Any]] = None,
         memory_at: Optional[datetime] = None,
         request_id: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """写入已抽取好的记忆（异步）；跳过 extract，直接 reconcile。详见 add_extracted()。"""
         request_id = request_id or str(uuid.uuid4())
@@ -3251,6 +3312,7 @@ class HyMemoryClient:
             extra=extra,
             memory_at=memory_at,
             request_id=request_id,
+            language=language,
         )
 
         # lite/pro → MemoryWriter；ultra → System2Writer（内部复用 MemoryWriter）

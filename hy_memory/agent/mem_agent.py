@@ -144,6 +144,7 @@ class MemAgent:
         tool_context: Optional[Dict[str, Any]] = None,
         history_context: str = "",
         basic_profile_fields: Optional[Dict[str, str]] = None,
+        language: Optional[str] = None,
     ) -> AgentResult:
         """
         处理添加记忆请求
@@ -161,6 +162,7 @@ class MemAgent:
             basic_profile_fields:
                 {field_name: description} 字段表，由调用方从 MemoryConfig.basic_profile.fields
                 透传过来，extractor 会渲染到 prompt 中要求 LLM 在 JSON basic_info 字段返回。
+            language: 显式 prompt 语言码，透传给 extractor；None 时 zh/en 自动检测。
 
         Returns:
             处理结果
@@ -187,6 +189,7 @@ class MemAgent:
                     tool_context=tool_context,
                     history_context=history_context,
                     basic_profile_fields=basic_profile_fields,
+                    language=language,
                 )
 
             _t_parallel = datetime.now()

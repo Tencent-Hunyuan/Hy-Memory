@@ -243,6 +243,7 @@ class System2Writer(WritePipeline):
             materials=materials,
             tool_executor=tool_executor,
             config=self.config,
+            language=payload.get("language"),
         )
 
         # 计算 timing
@@ -508,6 +509,7 @@ class System2Writer(WritePipeline):
                 materials=batch,
                 tool_executor=tool_executor,
                 config=self.config,
+                language=payload.get("language"),
             )
             batch_record = {
                 "batch_index": batch_index,
@@ -632,6 +634,7 @@ class System2Writer(WritePipeline):
                 materials=holistic_materials,
                 tool_executor=tool_executor,
                 config=self.config,
+                language=payload.get("language"),
             )
             if holistic_result.get("success"):
                 await self._mark_holistic_therapy_reviewed(
@@ -1044,10 +1047,25 @@ class System2Writer(WritePipeline):
         agent_id: str,
         llm_call,
         request_id: str = "",
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """在 System2 Agent 之后运行跨域突破性归纳"""
+        """在 System2 Agent 之后运行跨域突破性归纳
+
+        sweeper 的 prompt 只有英文版（要求与输入 schema 同语言）。显式 language
+        时在每个 prompt 末尾追加该语言的输出规则，让产出用该语言书写。
+        """
         if not _SWEEPER_ENABLED:
             return {"skipped": True, "reason": "SWEEPER_ENABLED=false"}
+
+        if language:
+            from ..prompts import with_output_language
+
+            _base_call = llm_call
+
+            async def llm_call(prompt: str) -> str:
+                return await _base_call(
+                    with_output_language(prompt, language, explicit=True)
+                )
 
         try:
             from .cross_domain_sweeper import CrossDomainSweeper
@@ -1119,6 +1137,7 @@ class System2Writer(WritePipeline):
         self,
         user_id: str,
         agent_id: str = "default_agent",
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         手动触发 cross-domain sweeper（同步等待完成）。
@@ -1145,6 +1164,7 @@ class System2Writer(WritePipeline):
             agent_id=agent_id,
             llm_call=self._get_llm_call(),
             request_id=request_id,
+            language=language,
         )
         result["request_id"] = request_id
         return result
@@ -1154,6 +1174,7 @@ class System2Writer(WritePipeline):
         user_id: str,
         agent_id: str = "default_agent",
         max_batches: Optional[int] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         手动触发 System 2 认知加工（由调用方/App 层控制触发时机）。
@@ -1186,6 +1207,8 @@ class System2Writer(WritePipeline):
             "content": "",
             "created_at": datetime.now().isoformat(),
             "max_batches": max_batches,
+            # 显式 prompt 语言码（None → System 2 按 materials 做 zh/en 检测）
+            "language": language,
         }
         results = await self._run_system2_workers(payload)
 
@@ -1204,6 +1227,7 @@ class System2Writer(WritePipeline):
                 agent_id=agent_id,
                 llm_call=self._get_llm_call(),
                 request_id=request_id,
+                language=language,
             )
 
         agent_success = bool((results.get("system2_agent") or {}).get("success", True))

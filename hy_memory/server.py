@@ -21,6 +21,11 @@ API Endpoints:
     GET  /healthz             — Health check (static, process alive)
     GET  /health              — Liveness probe (pings internal event loop; 503 if loop blocked)
     GET  /info                — Server info
+
+/add and /add_extracted accept an optional "language" (en, zh-Hans, zh-Hant, ja,
+es, de, pt, fr, ko, ru, id, or an alias such as zh-CN / zh-TW / pt-BR). An
+unknown code returns 400. /search has no language option: the search-time
+judge / rewrite prompts are English-only and keep the query's own language.
 """
 
 import asyncio
@@ -98,6 +103,20 @@ def _get_client():
     _client = HyMemoryClient(config=config)
     logger.info("[server] HyMemoryClient ready")
     return _client
+
+
+def _language_arg(handler: BaseHTTPRequestHandler, body: Dict, kwargs: Dict) -> bool:
+    """Validate optional ``language`` and add it to kwargs; False after a 400 reply."""
+    if body.get("language") in (None, ""):
+        return True
+    from .prompts import normalize_language
+
+    try:
+        kwargs["language"] = normalize_language(body["language"])
+    except ValueError as e:
+        _json_response(handler, 400, {"error": str(e)})
+        return False
+    return True
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, data: Any):
@@ -436,6 +455,9 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 kwargs["memory_at"] = datetime.fromisoformat(body["memory_at"])
             except Exception:
                 pass
+        # language: explicit prompt / memory language (see HyMemoryClient.add)
+        if not _language_arg(self, body, kwargs):
+            return
 
         result = client.add(data, **kwargs)
         _json_response(self, 200, result)
@@ -462,6 +484,8 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
                 kwargs["memory_at"] = datetime.fromisoformat(body["memory_at"])
             except Exception:
                 pass
+        if not _language_arg(self, body, kwargs):
+            return
 
         result = client.add_extracted(contents, **kwargs)
         _json_response(self, 200, result)

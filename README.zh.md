@@ -98,6 +98,11 @@ export OPENAI_API_KEY="sk-your-key"
 
 完整配置见 [环境变量参考](docs/env_reference.md)。
 
+提示词提供 11 种语言（`en`、`zh-Hans`、`zh-Hant`、`ja`、`es`、`de`、`pt`、`fr`、
+`ko`、`ru`、`id`）。默认按输入自动在中文与英文之间选择；设置 `MEMORY_LANGUAGE`（或在
+`add()` 上传 `language=`）可显式指定，记忆随之用该语言书写。详见
+[提示词语言](docs/usage.md#提示词语言language)。
+
 ### 3. Chat 记忆
 
 ```python

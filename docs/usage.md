@@ -103,6 +103,7 @@ result = client.add(
     metadata=None,
     meta=None,
     embed_override=None,
+    language=None,
 )
 ```
 
@@ -135,6 +136,54 @@ LLM。pro / ultra 仍遵循各自的层级与场景参数，默认不公开原�
 `source` 是调用方应用来源，例如 `openclaw`、`cursor`、`codex`。它与 `agent_id`
 正交：前者说明“从哪个产品/入口写入”，后者仍是记忆隔离中的 agent 身份。source 会
 执行 `strip().lower()` 后存储，并随 chat、working、coding 记忆一起返回。
+
+### 提示词语言（`language`）
+
+SDK 的 LLM 提示词提供 11 种语言，按语言码注册在 `hy_memory/prompts/`
+（每种语言一个模块，`get_prompt(name, language)` 统一取用）：
+
+| 语言码 | 语言 | 别名 |
+|---|---|---|
+| `en` | English | `en-US`、`en-GB` |
+| `zh-Hans` | 简体中文 | `zh`、`zh-CN`、`zh-SG` |
+| `zh-Hant` | 繁體中文 | `zh-TW`、`zh-HK`、`zh-MO` |
+| `ja` | 日本語 | |
+| `es` | Español | |
+| `de` | Deutsch | |
+| `pt` | Português | `pt-BR`、`pt-PT` |
+| `fr` | Français | |
+| `ko` | 한국어 | |
+| `ru` | Русский | |
+| `id` | Bahasa Indonesia | |
+
+语言码大小写不敏感，`_` 与 `-` 等价；未知语言码抛 `ValueError` 并列出支持的语言码。
+
+```python
+# client 默认值（也可用环境变量 MEMORY_LANGUAGE=ja）
+client = HyMemoryClient.from_config({"mode": "pro", "language": "ja"})
+
+# per-call 覆盖 client 默认值
+client.add(messages, user_id="u1", language="de")
+client.add_extracted(["Der Nutzer trinkt keinen Kaffee."], user_id="u1", language="de")
+client.finalize_session(user_id="u1", session_id="s1", language="de")
+client.evolve(user_id="u1", language="de")   # ultra
+client.sweep(user_ids=["u1"], language="de")  # ultra
+```
+
+优先级：per-call `language` > `MemoryConfig.language`（`MEMORY_LANGUAGE`）> 自动检测。
+
+- **未指定语言（默认）**：行为与以前完全一致。SDK 按输入做 zh/en 自动检测，中文输入用
+  简体中文提示词，其余用英文提示词；自动检测不会选到其他语言。提示词里的「输出语言与
+  输入语言一致」规则仍然生效，所以记忆正文保持对话的原始语言。
+- **显式指定语言**：本次请求的全部 LLM 调用（抽取、基础画像、reconcile、working /
+  coding 链路的抽取与两个 reconciler 及演变总结、episode / topic 摘要、System 2）都使用
+  该语言的提示词，并在提示词末尾追加该语言的「输出语言」规则：记忆正文、摘要等自然语言
+  字段一律用该语言书写，即使对话是另一种语言。JSON 键、字段名、枚举值、代码、路径、
+  报错信息和专有名词保持原样；tags 仍是英文小写关键词。
+- 只有英文版的提示词（session / dynamic episode、cross-domain sweeper）在显式指定语言时
+  同样追加该输出规则；搜索侧的场景判断 / query rewrite 只有英文版且保持 query 原语言，
+  因此 `search()` 不接受 `language`。
+- 自定义 `extract_system_prompt_zh` / `extract_system_prompt_en` 只覆盖 `zh-Hans` / `en`。
 
 ### `search()` / `async_search()`
 
