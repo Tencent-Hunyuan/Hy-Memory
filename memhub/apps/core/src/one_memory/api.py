@@ -922,6 +922,16 @@ def create_app(
                     )
                 except sqlite3.Error as error:
                     app.state.memory_visibility_error = str(error)
+            else:
+                # A home an earlier build migrated still carries the grant
+                # triggers whose body reads a dropped table (#233).
+                try:
+                    await asyncio.to_thread(
+                        memory_visibility.drop_stale_triggers,
+                        database_path,
+                    )
+                except sqlite3.Error as error:
+                    app.state.memory_visibility_error = str(error)
             model_request_budget = (
                 ModelRequestBudget(
                     database_path,

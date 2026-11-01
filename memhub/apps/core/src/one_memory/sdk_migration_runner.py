@@ -457,13 +457,17 @@ def resume_legacy_cleanup(*, data_dir: Path, database_path: Path) -> tuple[str, 
             bundle_id=marker.backup_bundle_id,
         )
     from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
+    from one_memory.memory_visibility import drop_stale_triggers
 
     recover_abandoned_staging(
         data_dir=data_dir,
         database_path=database_path,
         namespace=HY_MEMORY_NAMESPACE,
     )
-    return drop_legacy_tables(database_path)
+    dropped = drop_legacy_tables(database_path)
+    # The visibility cache's grant triggers read a table just dropped (#233).
+    drop_stale_triggers(database_path)
+    return dropped
 
 
 MIGRATION_PREFIX = "sdk-authority-v2"
