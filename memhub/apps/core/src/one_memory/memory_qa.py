@@ -24,7 +24,7 @@ from one_memory.model_profiles import (
     ProviderKind,
     attach_disable_thinking,
 )
-from one_memory.recall import _terms as _recall_terms
+from one_memory.recall import _CANDIDATE_HARD_LIMIT, _terms as _recall_terms
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 from one_memory.semantic_deadline import SemanticMemoryHit, normalize_semantic_hits
 
@@ -144,20 +144,6 @@ class MemoryAnswerer:
         workspace_path: str | None = None,
     ) -> _RetrievalReceipt:
         readable = self._readable_scopes(scope, workspace_path)
-        memories = self.governance.list(
-            user_id=user_id,
-            status=MemoryStatus.CONFIRMED,
-            limit=500,
-            # Narrowed by the query, not after it. This page is the whole
-            # library's newest 500 with no term filter, so reading it first
-            # and discarding unreadable rows here meant any library holding
-            # more than a page of another project's memories answered as
-            # though it held none of this caller's.
-            scopes=readable,
-        )
-        memories = list(await asyncio.to_thread(self.filter_memories, memories))
-        if readable is not None:
-            memories = [memory for memory in memories if not readable.isdisjoint(memory.scopes)]
         semantic_hits: tuple[SemanticMemoryHit, ...] = ()
         semantic_state: Literal["answered", "failed", "timed_out", "absent"] = "absent"
         if self.semantic_search is not None:
@@ -177,10 +163,30 @@ class MemoryAnswerer:
             except Exception:
                 semantic_hits = ()
                 semantic_state = "failed"
-        ranked = _rank_memories(question, memories)
-        by_id = {memory.memory_id: memory for memory in memories}
-        semantic = [by_id[hit.memory_id] for hit in semantic_hits if hit.memory_id in by_id]
-        ordered = [*semantic, *(item.memory for item in ranked)]
+        # Neither lane may depend on the memory being among the library's
+        # newest N. That page was the whole candidate pool, so a match buried
+        # under newer memories scored against nothing and the answer said the
+        # library held no such memory — while recall, reading the same
+        # library, still returned it. The two paths disagreed on one library.
+        semantic_memories = await self._semantic_memories(
+            semantic_hits,
+            user_id=user_id,
+            readable=readable,
+        )
+        keyword_memories = await self._keyword_memories(
+            question,
+            user_id=user_id,
+            readable=readable,
+        )
+        ranked = _rank_memories(question, keyword_memories)
+        by_id = {
+            memory.memory_id: memory
+            for memory in (*semantic_memories, *keyword_memories)
+        }
+        ordered = [
+            *semantic_memories,
+            *(item.memory for item in ranked),
+        ]
         candidate_ids = tuple(dict.fromkeys(memory.memory_id for memory in ordered))[:12]
         semantic_by_id = {hit.memory_id: hit for hit in semantic_hits}
         formatted_contents = {
@@ -201,6 +207,64 @@ class MemoryAnswerer:
             semantic_state,
             formatted_contents,
         )
+
+    async def _semantic_memories(
+        self,
+        semantic_hits: Sequence[SemanticMemoryHit],
+        *,
+        user_id: str,
+        readable: frozenset[str] | None,
+    ) -> tuple[GovernedMemory, ...]:
+        """HY's hits, fetched by id so recency cannot hide them.
+
+        The scope check travels with the fetch: reaching past the candidate
+        page must not reach past what this caller may read.
+        """
+        fetched: list[GovernedMemory] = []
+        seen: set[str] = set()
+        for hit in semantic_hits:
+            memory_id = hit.memory_id
+            if not memory_id or memory_id in seen:
+                continue
+            seen.add(memory_id)
+            memory = self.governance.get(memory_id, user_id=user_id)
+            if memory is None or memory.status is not MemoryStatus.CONFIRMED:
+                continue
+            if readable is not None and readable.isdisjoint(memory.scopes):
+                continue
+            fetched.append(memory)
+        return tuple(await asyncio.to_thread(self.filter_memories, fetched))
+
+    async def _keyword_memories(
+        self,
+        question: str,
+        *,
+        user_id: str,
+        readable: frozenset[str] | None,
+    ) -> tuple[GovernedMemory, ...]:
+        """Keyword matches, filtered in SQL rather than scored off a newest-N page.
+
+        The page is the store's own hard cap rather than recall's 200: the
+        answer grounds on twelve candidates, so a narrower pool would trade
+        matches the newest-N page used to hold for ones it never had. The
+        pool is already term-filtered and scope-filtered in SQL, so it stays
+        bounded.
+        """
+        query_terms = _search_terms(question)
+        if not query_terms:
+            return ()
+        matches, _more = self.governance.find_confirmed_matching_terms(
+            user_id=user_id,
+            terms=query_terms,
+            limit=_CANDIDATE_HARD_LIMIT,
+            scopes=readable,
+        )
+        scoped = tuple(
+            memory
+            for memory in matches
+            if readable is None or not readable.isdisjoint(memory.scopes)
+        )
+        return tuple(await asyncio.to_thread(self.filter_memories, scoped))
 
     async def _sdk_formatted_content(
         self,
