@@ -1,3 +1,4 @@
+import re
 from pathlib import PurePosixPath
 
 from pydantic import JsonValue
@@ -38,6 +39,28 @@ DEEPSEEK_HARNESS_DESCRIPTOR = SourceDescriptor(
 )
 
 
+#: One session is one file. Harness names the file after the format version it
+#: wrote — `session.jsonl.zstd` for the first format, `session.v3.jsonl.zstd`
+#: and `session.v4.jsonl.zstd` after that — so the version segment is part of
+#: the published on-disk contract, not a variant to skip. The desktop profile
+#: this was verified against writes v3/v4 exclusively, and the earlier literal
+#: match imported none of those sessions.
+#:
+#: Discovery is deliberately wider than parsing: a `vN` file is found and then
+#: judged by its header (see `SUPPORTED_SESSION_VERSIONS`), so an unknown
+#: generation is reported as skipped instead of silently vanishing.
+SESSION_FILE = re.compile(r"^session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$")
+
+#: Session generations this parser has been verified against: the first format
+#: (header `version: 0`; its file name carries no `.vN` segment), v3 and v4.
+#: The header states the generation, and the file name repeats it from v3 on.
+#: A future generation may change field semantics, and importing it with
+#: today's rules would store evidence that is harder to undo than a missed
+#: import — so an unknown version is skipped as `unsupported_schema` and left
+#: for a parser that knows it.
+SUPPORTED_SESSION_VERSIONS = frozenset({0, 3, 4})
+
+
 def create_deepseek_harness_adapter(
     grant: AuthorizedSourceRoot,
     *,
@@ -49,9 +72,7 @@ def create_deepseek_harness_adapter(
         grant=grant,
         parser=parse_deepseek_harness_record,
         source_version=source_version,
-        file_predicate=lambda source_file: (
-            source_file.relative_path.name in {"session.jsonl", "session.jsonl.zstd"}
-        ),
+        file_predicate=lambda source_file: bool(SESSION_FILE.match(source_file.relative_path.name)),
         suffixes=frozenset({".jsonl", ".zstd"}),
         header_selector=_is_session_header,
     )
@@ -68,6 +89,24 @@ def _is_session_header(record: dict[str, JsonValue]) -> bool:
     return record.get("type") == "session"
 
 
+def _supported_session(header: dict[str, JsonValue] | None) -> bool:
+    """Whether the session's declared format generation is one we can read.
+
+    The file name only selects the file for reading; the header states the
+    generation this parser would have to interpret. A missing header, or a
+    header without `version`, is treated as the first format — the earliest
+    files this adapter already read. Any declared version outside
+    `SUPPORTED_SESSION_VERSIONS` is refused rather than interpreted with
+    today's field rules.
+    """
+    if header is None:
+        return True
+    version = header.get("version")
+    if version is None:
+        return True
+    return isinstance(version, int) and version in SUPPORTED_SESSION_VERSIONS
+
+
 def parse_deepseek_harness_record(
     record: dict[str, JsonValue],
     context: SourceRecordContext,
@@ -78,6 +117,11 @@ def parse_deepseek_harness_record(
         or relative.parent.name
         or relative.name.split(".", maxsplit=1)[0]
     )
+    if not _supported_session(context.header):
+        return ParsedSkip(
+            reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA,
+            conversation_id=conversation_id,
+        )
     event_type = record.get("type")
     data = as_record(record.get("data"))
     if event_type == "session":
@@ -149,10 +193,24 @@ def _tool_message(
 
     The same call also appears as a `tool-call` block in `assistant/message`;
     only the event is read, so it is stored once.
+
+    The result's content blocks are `tool-result` in the first session format
+    and plain `text` in v4, the only version this shape was verified against;
+    both carry the output, so both are evidence. A block of any other type
+    (image, resource) is not.
     """
     message = as_record(data.get("message"))
     if record.get("type") == "tool/result" and message is not None:
-        text = tool_blocks_evidence(message.get("content"), block_types=frozenset({"tool-result"}))
+        blocks = message.get("content")
+        text = tool_blocks_evidence(blocks, block_types=frozenset({"tool-result"}))
+        if text is None:
+            # v4 writes the output as plain text blocks. Wrapping them in the
+            # shape the helper reads keeps the same clipping and credential
+            # scrubbing instead of writing a second extraction path.
+            text = tool_blocks_evidence(
+                [{"type": "tool-result", "content": blocks}],
+                block_types=frozenset({"tool-result"}),
+            )
         message_id = first_string(message.get("id"), data.get("callId"))
     else:
         text = tool_evidence_text(data)

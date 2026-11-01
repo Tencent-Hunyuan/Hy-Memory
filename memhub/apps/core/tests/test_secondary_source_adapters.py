@@ -996,6 +996,103 @@ def test_deepseek_imports_tool_call_and_result_events_once(tmp_path: Path) -> No
     assert {item.evidence.project for item in (call, result)} == {"project"}
 
 
+def test_deepseek_v4_tool_result_text_blocks_are_tool_evidence(tmp_path: Path) -> None:
+    """From session format v3 on the result's blocks are `text`, not `tool-result`.
+
+    The content is the same output; only the block type changed, so both shapes
+    have to reach the tool row with the same clipping and secret scrubbing.
+    """
+    root = tmp_path / "dsh-v4"
+    session = root / "run-v4"
+    session.mkdir(parents=True)
+    arguments = json.dumps({"command": f"pytest --token {TOOL_SECRET}"})
+    _write_jsonl(
+        session / "session.v4.jsonl",
+        [
+            {"type": "session", "version": 4, "id": "run-v4", "cwd": "/private/project"},
+            {
+                "type": "tool/call",
+                "seq": 1,
+                "time": 1792229396841,
+                "data": {"callId": "call-1", "name": "shell", "arguments": arguments},
+            },
+            {
+                "type": "tool/result",
+                "seq": 2,
+                "time": 1792229396873,
+                "data": {
+                    "message": {
+                        "id": "result-1",
+                        "role": "tool",
+                        "source": {"kind": "tool", "callId": "call-1"},
+                        "toolCallId": "call-1",
+                        "content": [
+                            {"type": "text", "text": "3 failed " + "x" * 5000},
+                        ],
+                        "isError": False,
+                    }
+                },
+            },
+        ],
+    )
+
+    events = _scan(
+        create_deepseek_harness_adapter(
+            _grant(DEEPSEEK_HARNESS_DESCRIPTOR.source_id, root, tmp_path)
+        )
+    )
+
+    call, result = _assert_tool_rows(events, name="shell")
+    assert len(_evidence(events)) == 2
+    assert [item.evidence.message_id for item in (call, result)] == ["call-1", "result-1"]
+    assert TOOL_SECRET not in result.evidence.verbatim
+
+
+def test_deepseek_unknown_session_version_is_skipped_not_guessed(
+    tmp_path: Path,
+) -> None:
+    """A generation this parser was not written for must not be read as v4.
+
+    The file name says v5 and the header repeats it. Discovery still finds the
+    file — so it shows up as a skip with a reason rather than disappearing —
+    and the parser refuses it: reading unknown fields with v4 rules would store
+    wrong evidence, which is harder to undo than a missed import.
+    """
+    root = tmp_path / "dsh-v5"
+    session = root / "run-v5"
+    session.mkdir(parents=True)
+    _write_jsonl(
+        session / "session.v5.jsonl",
+        [
+            {
+                "type": "session",
+                "version": 5,
+                "id": "run-v5",
+                "cwd": "/private/project",
+            },
+            {
+                "type": "user/message",
+                "seq": 1,
+                "data": {
+                    "id": "future-a",
+                    "role": "user",
+                    "source": {"kind": "user"},
+                    "content": [{"type": "text", "text": "future person turn"}],
+                },
+            },
+        ],
+    )
+
+    events = _scan(
+        create_deepseek_harness_adapter(
+            _grant(DEEPSEEK_HARNESS_DESCRIPTOR.source_id, root, tmp_path)
+        )
+    )
+
+    assert _evidence(events) == []
+    assert ScanIssueCode.UNSUPPORTED_SCHEMA in _skip_codes(events)
+
+
 def test_pi_a_scan_stopped_between_a_reply_and_its_call_resumes_with_the_call(
     tmp_path: Path,
 ) -> None:
