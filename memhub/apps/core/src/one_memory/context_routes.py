@@ -28,6 +28,7 @@ from one_memory.hy_sdk_types import (
     parse_sdk_search,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.user_scope import owns
 
 CALL_EVENT_RESPONSE_BUDGET_MS = 250
 
@@ -73,7 +74,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
-                user_ids=["local"],
+                user_ids=[value.user_id],
                 agent_ids=[],
                 include_sources=list(authority.raw_sources or ()),
                 limit=value.limit,
@@ -108,7 +109,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
-                user_ids=["local"],
+                user_ids=[value.user_id],
                 agent_ids=[],
                 limit=value.limit,
                 min_score=sdk_relevance_floor(),
@@ -123,7 +124,12 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             for hit in hits:
                 record = await asyncio.to_thread(client.get, hit.memory_id)
                 memory = None if record is None else HySdkMemoryRecord.from_sdk(record)
-                if memory is None or memory.status != "active":
+                # `get` takes no user: a hit is kept only if it is the caller's.
+                if (
+                    memory is None
+                    or memory.status != "active"
+                    or not owns(memory.user_id, value.user_id)
+                ):
                     continue
                 items.append(
                     SdkMemoryContextItem(

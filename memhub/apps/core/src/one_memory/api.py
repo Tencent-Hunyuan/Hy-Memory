@@ -14,6 +14,7 @@ from collections.abc import (
     MutableMapping,
 )
 from contextlib import asynccontextmanager, nullcontext, suppress
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -117,6 +118,7 @@ from one_memory.imports.access import (
     AuthorizedSourceRoot,
     SourceAccessError,
     root_identity_matches,
+    source_root_identity,
 )
 from one_memory.imports.adapters import (
     ScanFailure,
@@ -157,6 +159,7 @@ from one_memory.imports.sources.common import SourceInstallState
 from one_memory.imports.sources.registry import (
     RootCandidateKind,
     SourceRegistration,
+    SourceRootCandidate,
     build_source_catalog,
     workbuddy_default_homes,
 )
@@ -244,7 +247,17 @@ from one_memory.service_levels import (
 from one_memory.source_import_receipts import SourceImportReceipt, build_source_import_receipt
 from one_memory.source_read_access import SourceReadAccess
 from one_memory.source_totals import SourceTotals
+from one_memory.strict_query import forbid_unknown_query_params
 from one_memory.target_schema import bootstrap_fresh_management_schema
+from one_memory.user_scope import (
+    DEFAULT_USER_ID,
+    MULTI_USER_SOURCES,
+    USER_ID_PATTERN,
+    UserId,
+    lane_key,
+    owns,
+    split_lane,
+)
 from one_memory.workspace_resolution import resolve_workspace_scopes
 
 logger = logging.getLogger(__name__)
@@ -387,6 +400,12 @@ class CreateImportJobRequest(BaseModel):
 
 class ConnectSourcesRequest(BaseModel):
     source_ids: tuple[str, ...] = Field(min_length=1, max_length=32)
+    #: Whose grant this is. Only Hermes may connect a root for a user other
+    #: than `local`: a Hermes profile is another person's history.
+    user_id: UserId = DEFAULT_USER_ID
+    #: A root chosen by the caller instead of the source's candidate, such as
+    #: `~/.hermes/profiles/<name>`. Hermes only; Core computes its identity.
+    root: str | None = Field(default=None, min_length=1, max_length=4096)
     confirm_environment_overrides: bool = False
     full_rescan: bool = False
     onboarding: bool = False
@@ -422,6 +441,8 @@ class SdkMemoryUpdateRequest(BaseModel):
     variant: SdkMemoryVariant | None = None
     # Experiences only: also replace the task.
     task: str | None = Field(default=None, min_length=1, max_length=200_000)
+    #: Whose memory this is; another user's id answers 404.
+    user_id: UserId = DEFAULT_USER_ID
 
 
 class SdkUserProfileResponse(BaseModel):
@@ -584,11 +605,15 @@ class ManualExtractReceipt(BaseModel):
 
 
 class AskMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     question: str = Field(min_length=1, max_length=2_000)
     scope: str = Field(default="all-apps", min_length=1, max_length=512)
     # Host-injected project directory, same boundary as recall. Optional so
     # the web UI and older callers keep working unchanged.
     workspace_path: str | None = Field(default=None, max_length=4_096)
+    #: Whose memories answer. Omitted, it is `local`, the App's library.
+    user_id: UserId = DEFAULT_USER_ID
 
 
 class SdkHomeSummary(BaseModel):
@@ -624,6 +649,27 @@ class MemoryGraphResponse(BaseModel):
     nodes: tuple[MemoryGraphNode, ...]
     edges: tuple[MemoryGraphEdge, ...]
     hy_graph_available: bool = True
+
+
+class SourceGrantView(BaseModel):
+    """One `(user_id, source_id)` grant, as `GET /api/v1/source-grants` lists it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    user_id: str
+    source_id: str
+    root_label: str
+    root_path: str
+    authorized: bool
+    revoked_at: datetime | None
+    sync_enabled: bool
+
+
+class SourceGrantList(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    grants: tuple[SourceGrantView, ...]
 
 
 class SdkMigrationRequired(RuntimeError):
@@ -928,6 +974,7 @@ def create_app(
                 write_queue=memory_write_queue,
                 extraction_settings=app.state.extraction_settings_store,
                 data_dir=runtime_settings.data_dir,
+                user_ids=lambda: _known_user_ids(app),
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -1100,6 +1147,13 @@ def create_app(
                 source_id
                 for source_id, registration in app.state.source_catalog.items()
                 if registration.capabilities.live_sync is CapabilityState.IMPLEMENTED
+            ) + tuple(
+                lane
+                for lane in _other_user_lanes(
+                    app.state.source_catalog, app.state.source_grant_store
+                )
+                if app.state.source_catalog[split_lane(lane)[1]].capabilities.live_sync
+                is CapabilityState.IMPLEMENTED
             )
             # Resolved before the supervisor is built so it can state truthfully
             # how it is being driven: watching only applies to roots that exist
@@ -1496,9 +1550,12 @@ def create_app(
         Depends(local_api_guard(runtime_settings, valid_ui_session=ui_session_valid)),
         Depends(require_external_endpoint),
     ]
-    app.include_router(memory_add_router(protected))
+    # Memory reads and writes refuse a query parameter they do not declare: an
+    # ignored `user_id` would read as isolation that never happened.
+    strict = [*protected, Depends(forbid_unknown_query_params)]
+    app.include_router(memory_add_router(strict))
     app.include_router(file_import_router(protected))
-    app.include_router(sdk_context_router(protected))
+    app.include_router(sdk_context_router(strict))
 
     # A4-01: scan-root configuration, so the CLI's `path` command has something
     # to read instead of refusing.
@@ -1512,7 +1569,7 @@ def create_app(
 
     if getattr(app.state, "memory_write_registry", None) is None:
         app.state.memory_write_registry = WriteRegistry()
-    app.include_router(sdk_memory_write_router(protected))
+    app.include_router(sdk_memory_write_router(strict))
     from one_memory.call_event_routes import call_event_router
 
     app.include_router(call_event_router(protected))
@@ -2287,7 +2344,11 @@ def create_app(
         return SourceSyncState(source_id=source_id, sync_enabled=request.enabled)
 
     async def _prepare_source_resume(source_id: str) -> None:
-        """Prepare catch-up work before committing the new desired state."""
+        """Prepare catch-up work before committing the new desired state.
+
+        `source_id` is a lane key, so another user's lane prepares that
+        user's own cursors and history job.
+        """
         await _live_sync(app).initialize_source(source_id, baseline_missing_files=True)
         active = {
             ImportStatus.PENDING,
@@ -2297,14 +2358,17 @@ def create_app(
             ImportStatus.FAILED,
         }
         if any(
-            job.source_id == source_id and job.operation == "history" and job.status in active
+            lane_key(job.user_id, job.source_id) == source_id
+            and job.operation == "history"
+            and job.status in active
             for job in _job_store(app).list_jobs()
         ):
             return
+        user_id, bare_source_id = split_lane(source_id)
         await asyncio.to_thread(
             _job_store(app).create,
-            user_id="local",
-            source_id=source_id,
+            user_id=user_id,
+            source_id=bare_source_id,
             operation="history",
         )
 
@@ -2312,7 +2376,7 @@ def create_app(
         """Run work prepared for a source after config.json has committed."""
         try:
             for job in _job_store(app).list_jobs():
-                if job.source_id != source_id:
+                if lane_key(job.user_id, job.source_id) != source_id:
                     continue
                 if job.status is ImportStatus.PENDING:
                     _supervisor(app).enqueue(job.job_id)
@@ -2341,8 +2405,13 @@ def create_app(
         response_model=SourceGrantReceipt,
         dependencies=protected,
     )
-    async def revoke_source(source_id: str) -> SourceGrantReceipt:
+    async def revoke_source(
+        source_id: str,
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> SourceGrantReceipt:
         _require_registration(app, source_id)
+        if user_id != DEFAULT_USER_ID:
+            return await _revoke_other_user_grant(source_id, user_id)
         receipt = _grant_store(app).receipt(
             user_id="local",
             source_id=source_id,
@@ -2378,6 +2447,65 @@ def create_app(
         await _refresh_live_watch(app)
         return receipt
 
+    async def _revoke_other_user_grant(source_id: str, user_id: str) -> SourceGrantReceipt:
+        """Stop reading another user's root. The App's switch is left alone."""
+        if source_id not in MULTI_USER_SOURCES:
+            raise HTTPException(status_code=422, detail="user_id_requires_multi_user_source")
+        lane = lane_key(user_id, source_id)
+        receipt = await asyncio.to_thread(
+            partial(_grant_store(app).receipt, user_id=user_id, source_id=source_id)
+        )
+        if receipt is None:
+            raise HTTPException(status_code=404, detail="grant_not_found")
+        active_statuses = {
+            ImportStatus.PENDING,
+            ImportStatus.RUNNING,
+            ImportStatus.PAUSED,
+            ImportStatus.INTERRUPTED,
+            ImportStatus.FAILED,
+        }
+        for job in _job_store(app).list_jobs():
+            if lane_key(job.user_id, job.source_id) == lane and job.status in active_statuses:
+                await _supervisor(app).cancel(job.job_id)
+        await _live_sync(app).stop_source(lane)
+        _supervisor(app).unregister_adapter(lane)
+        receipt = await asyncio.to_thread(
+            partial(_grant_store(app).revoke, user_id=user_id, source_id=source_id)
+        )
+        await _refresh_live_watch(app)
+        return receipt
+
+    @app.get(
+        "/api/v1/source-grants",
+        response_model=SourceGrantList,
+        dependencies=protected,
+    )
+    async def list_source_grants() -> SourceGrantList:
+        """Every grant of every user. `/api/v1/sources` stays `local`'s, as the App reads it."""
+
+        def describe() -> SourceGrantList:
+            config_store = _config_store(app)
+            views = []
+            for receipt, root_path in _grant_store(app).grants():
+                lane = lane_key(receipt.user_id, receipt.source_id)
+                authorized = receipt.revoked_at is None and receipt.revision > 0
+                views.append(
+                    SourceGrantView(
+                        user_id=receipt.user_id,
+                        source_id=receipt.source_id,
+                        root_label=receipt.root_label,
+                        root_path=_display_candidate_path(
+                            Path(root_path), runtime_settings.source_home
+                        ),
+                        authorized=authorized,
+                        revoked_at=receipt.revoked_at,
+                        sync_enabled=authorized and _lane_sync_enabled(config_store, lane),
+                    )
+                )
+            return SourceGrantList(grants=tuple(views))
+
+        return await asyncio.to_thread(describe)
+
     @app.post(
         "/api/v1/import-jobs",
         response_model=ImportJob,
@@ -2406,6 +2534,8 @@ def create_app(
     async def connect_sources(
         request: ConnectSourcesRequest,
     ) -> ConnectSourcesResponse:
+        if request.user_id != DEFAULT_USER_ID or request.root is not None:
+            return await _connect_other_root(request)
         if request.onboarding:
             app.state.history_import_gate_released = False
         source_ids = tuple(dict.fromkeys(request.source_ids))
@@ -2511,6 +2641,103 @@ def create_app(
                 raise
         return ConnectSourcesResponse(**result.model_dump())
 
+    async def _connect_other_root(request: ConnectSourcesRequest) -> ConnectSourcesResponse:
+        """Grant one Hermes root to a user: `~/.hermes/profiles/<name>` for its own user.
+
+        Only Hermes holds more than one person's history (one profile per
+        person), so a non-`local` user or a caller-chosen root is refused for
+        every other source. The grant is `(user_id, source_id)`; its cursors,
+        jobs and live sync follow that key.
+        """
+        source_ids = tuple(dict.fromkeys(request.source_ids))
+        if any(source_id not in MULTI_USER_SOURCES for source_id in source_ids):
+            raise HTTPException(status_code=422, detail="user_id_requires_multi_user_source")
+        if request.root is not None and len(source_ids) != 1:
+            raise HTTPException(status_code=422, detail="source_root_requires_one_source")
+        if request.user_id != DEFAULT_USER_ID and request.root is None:
+            # The user is the root that is read: another user must name theirs,
+            # or they would be handed `local`'s history.
+            raise HTTPException(status_code=422, detail="source_root_required_for_user")
+        if request.onboarding or request.import_upload_id is not None:
+            raise HTTPException(status_code=422, detail="user_id_unsupported_for_request")
+        if request.request_id is None:
+            raise HTTPException(status_code=409, detail="source_confirmation_required")
+        registrations = []
+        source_roots = dict(request.source_roots)
+        for source_id in source_ids:
+            registration = _require_registration(app, source_id)
+            if request.root is not None:
+                root = Path(request.root)
+                if not root.is_absolute():
+                    raise HTTPException(status_code=422, detail="source_root_must_be_absolute")
+                # Named outright by the caller, like an environment override:
+                # no saved candidate may replace it, and naming it confirms it.
+                registration = replace(
+                    registration,
+                    candidate=SourceRootCandidate(
+                        path=root, kind=RootCandidateKind.ENVIRONMENT_OVERRIDE
+                    ),
+                )
+                try:
+                    source_roots[source_id] = await asyncio.to_thread(source_root_identity, root)
+                except SourceAccessError as error:
+                    raise HTTPException(status_code=409, detail=error.code) from None
+            registrations.append(registration)
+        existing_intent = await asyncio.to_thread(
+            partial(
+                app.state.source_connection_store.get,
+                request.request_id,
+                user_id=request.user_id,
+            )
+        )
+        try:
+            result = await asyncio.to_thread(
+                partial(
+                    app.state.source_connection_store.connect,
+                    request_id=request.request_id,
+                    registrations=tuple(registrations),
+                    source_roots=source_roots,
+                    confirm_overrides=(
+                        request.confirm_environment_overrides or request.root is not None
+                    ),
+                    full_rescan=request.full_rescan,
+                    user_id=request.user_id,
+                )
+            )
+        except ConnectionIntentError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        if existing_intent is not None:
+            return ConnectSourcesResponse(**result.model_dump())
+        for job in result.jobs:
+            registration = _require_registration(app, job.source_id)
+            grant = await asyncio.to_thread(
+                partial(
+                    _grant_store(app).authorized_root,
+                    user_id=job.user_id,
+                    source_id=job.source_id,
+                )
+            )
+            if grant is None:
+                continue
+            lane = lane_key(job.user_id, job.source_id)
+            _supervisor(app).register_adapter(
+                registration.create_adapter(grant), user_id=job.user_id
+            )
+            _detection(app).pop(lane, None)
+            if job.user_id != DEFAULT_USER_ID:
+                if registration.capabilities.live_sync is CapabilityState.IMPLEMENTED:
+                    _live_sync(app).ensure_source(lane)
+                # Another user's grant syncs while it stands (see
+                # `_lane_sync_enabled`); the App's switch is not touched.
+                await _prepare_source_resume(lane)
+                await _activate_source_resume(lane)
+            elif request.enable_sync:
+                await _prepare_source_resume(lane)
+                await asyncio.to_thread(_config_store(app).set_sync, job.source_id, True)
+                await _activate_source_resume(lane)
+        await _refresh_live_watch(app)
+        return ConnectSourcesResponse(**result.model_dump())
+
     @app.get(
         "/api/v1/source-connections/{request_id}",
         response_model=ConnectionIntentReceipt,
@@ -2527,8 +2754,12 @@ def create_app(
         response_model=list[ImportJob],
         dependencies=protected,
     )
-    def list_import_jobs() -> list[ImportJob]:
-        return _job_store(app).list_jobs()
+    def list_import_jobs(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> list[ImportJob]:
+        # One user's jobs: the App reads `local`'s and must not show another
+        # user's Hermes import as its own.
+        return [job for job in _job_store(app).list_jobs() if job.user_id == user_id]
 
     @app.get(
         "/api/v1/live-sync",
@@ -2857,9 +3088,11 @@ def create_app(
     @app.get(
         "/api/v2/home-summary",
         response_model=SdkHomeSummary,
-        dependencies=protected,
+        dependencies=strict,
     )
-    async def sdk_home_summary() -> SdkHomeSummary:
+    async def sdk_home_summary(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> SdkHomeSummary:
         """The home card: the memory page's count and its newest memory.
 
         The count is `memory_stats` total (chat + working + coding
@@ -2871,12 +3104,12 @@ def create_app(
             client = await _sdk_client_handle(app).client()
             stats = await asyncio.to_thread(
                 client.memory_stats,
-                user_id="local",
+                user_id=user_id,
                 statuses=["active"],
             )
             raw = await asyncio.to_thread(
                 client.list_memories,
-                user_id="local",
+                user_id=user_id,
                 scene="all",
                 statuses=["active"],
                 limit=1,
@@ -2897,7 +3130,7 @@ def create_app(
     @app.get(
         "/api/v2/memory-library",
         response_model=HySdkMemoryPage,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def sdk_memory_library(
         statuses: list[str] = Query(default=["active"]),  # noqa: B008
@@ -2907,6 +3140,7 @@ def create_app(
         limit: int = Query(default=LIBRARY_PAGE_SIZE, ge=1, le=500),
         window_id: str | None = Query(default=None, min_length=1, max_length=64),
         scene: Literal["all", "chat", "working", "coding"] = Query(default="all"),
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> HySdkMemoryPage:
         """One page of memories across chat, working and coding.
 
@@ -2941,10 +3175,11 @@ def create_app(
                     limit=limit,
                     window_id=window_id,
                     scene=scene,
+                    user_id=user_id,
                 )
             raw = await asyncio.to_thread(
                 client.list_memories,
-                user_id="local",
+                user_id=user_id,
                 scene=scene,
                 statuses=list(statuses),
                 include_sources=[source] if source else None,
@@ -2965,12 +3200,13 @@ def create_app(
     @app.get(
         "/api/v2/memories/graph",
         response_model=MemoryGraphResponse,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def sdk_memory_graph(
         limit: int = Query(default=160, ge=1, le=300),
         offset: int = Query(default=0, ge=0),
         source: str | None = Query(default=None, min_length=1),
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> MemoryGraphResponse:
         """The memory map on SDK authority: SDK memories plus the Kuzu overlay.
 
@@ -2984,7 +3220,7 @@ def create_app(
             # left list's 20-row pagination window.
             raw = await asyncio.to_thread(
                 client.list_memories,
-                user_id="local",
+                user_id=user_id,
                 scene="all",
                 statuses=["active"],
                 include_sources=[source] if source else None,
@@ -3054,7 +3290,9 @@ def create_app(
         # source withholds the overlay, as on the legacy map.
         if not await asyncio.to_thread(_read_access(app).has_revoked_sources):
             try:
-                hy_graph = await _sdk_memory_runtime(app).graph_snapshot(limit=limit)
+                hy_graph = await _sdk_memory_runtime(app).graph_snapshot(
+                    limit=limit, user_id=user_id
+                )
             except HySdkError:
                 hy_graph = None
         if hy_graph is not None:
@@ -3104,12 +3342,14 @@ def create_app(
     @app.get(
         "/api/v2/user-profile",
         response_model=SdkUserProfileResponse,
-        dependencies=protected,
+        dependencies=strict,
     )
-    async def sdk_user_profile() -> SdkUserProfileResponse:
+    async def sdk_user_profile(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> SdkUserProfileResponse:
         try:
             client = await _sdk_client_handle(app).client()
-            value = await asyncio.to_thread(client.get_user_profile, user_id="local")
+            value = await asyncio.to_thread(client.get_user_profile, user_id=user_id)
             profile = HySdkUserProfile.from_sdk(value)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_profile_read_failed") from None
@@ -3118,18 +3358,23 @@ def create_app(
     @app.get(
         "/api/v2/memories/{memory_id}",
         response_model=HySdkMemoryRecord,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def get_sdk_memory(
         memory_id: str,
         kind: SdkMemoryKind | None = None,
         variant: SdkMemoryVariant | None = None,
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> HySdkMemoryRecord:
         _check_memory_namespace(kind, variant)
         try:
             memory = await _get_sdk_memory(
                 _sdk_client_handle(app), memory_id, kind=kind, variant=variant
             )
+            # The SDK's `get` takes no user: another user's memory reads as
+            # missing, never as existing.
+            if memory is not None and not owns(memory.user_id, user_id):
+                memory = None
         except AmbiguousMemoryIdError:
             raise HTTPException(status_code=409, detail="memory_id_ambiguous") from None
         except Exception as error:
@@ -3141,7 +3386,7 @@ def create_app(
     @app.put(
         "/api/v2/memories/{memory_id}",
         response_model=HySdkMemoryRecord,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def update_sdk_memory(
         memory_id: str,
@@ -3153,6 +3398,13 @@ def create_app(
         namespace = _namespace_kwargs(request.kind, request.variant)
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
+                # `update` takes no user: read the memory first and refuse
+                # another user's id exactly as a missing one.
+                current = await asyncio.to_thread(client.get, memory_id, **namespace)
+                if current is None or not owns(
+                    HySdkMemoryRecord.from_sdk(current).user_id, request.user_id
+                ):
+                    raise HTTPException(status_code=404, detail="memory_not_found")
                 update_kwargs: dict[str, object] = dict(namespace)
                 if request.task is not None:
                     update_kwargs["task"] = request.task
@@ -3190,16 +3442,27 @@ def create_app(
     @app.delete(
         "/api/v2/memories/{memory_id}",
         status_code=204,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def delete_sdk_memory(
         memory_id: str,
         kind: SdkMemoryKind | None = None,
         variant: SdkMemoryVariant | None = None,
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> Response:
         _check_memory_namespace(kind, variant)
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
+                # `delete` takes no user. Another user's memory must not be
+                # deleted, nor its existence told: it answers 404. A memory
+                # that is already gone keeps answering 204, as before.
+                current = await asyncio.to_thread(
+                    client.get, memory_id, **_namespace_kwargs(kind, variant)
+                )
+                if current is not None and not owns(
+                    HySdkMemoryRecord.from_sdk(current).user_id, user_id
+                ):
+                    raise HTTPException(status_code=404, detail="memory_not_found")
                 result = await asyncio.to_thread(
                     client.delete, memory_id, **_namespace_kwargs(kind, variant)
                 )
@@ -3210,6 +3473,8 @@ def create_app(
                 raise HySdkError(str(error_code or "hy_memory_delete_incomplete"))
             if result.get("success") is not True and result.get("deleted_count") != 0:
                 raise HySdkError("hy_memory_delete_rejected")
+        except HTTPException:
+            raise
         except AmbiguousMemoryIdError:
             raise HTTPException(status_code=409, detail="memory_id_ambiguous") from None
         except Exception as error:
@@ -3219,18 +3484,19 @@ def create_app(
     @app.get(
         "/api/v2/raw",
         response_model=SdkRawPage,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def sdk_raw_library(
         source: str | None = Query(default=None, min_length=1),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> SdkRawPage:
         try:
             client = await _sdk_client_handle(app).client()
             value = await asyncio.to_thread(
                 client.list_memories,
-                user_id="local",
+                user_id=user_id,
                 layers=["l1_raw"],
                 include_sources=[source] if source else None,
                 offset=offset,
@@ -3244,7 +3510,7 @@ def create_app(
     @app.post(
         "/api/v2/memories/ask",
         response_model=SdkMemoryAnswer,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def ask_sdk_memories(
         request: AskMemoryRequest,
@@ -3261,7 +3527,9 @@ def create_app(
             "om_ask",
         )
         try:
-            answer = await _sdk_request_answerer(app).answer(request.question)
+            answer = await _sdk_request_answerer(app).answer(
+                request.question, user_id=request.user_id
+            )
         except MemoryAnswerError as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
         if request.question != "__om_probe__" and access is not None:
@@ -3278,7 +3546,7 @@ def create_app(
 
     @app.post(
         "/api/v2/memories/ask/stream",
-        dependencies=protected,
+        dependencies=strict,
     )
     async def ask_sdk_memories_stream(
         request: AskMemoryRequest,
@@ -3300,7 +3568,9 @@ def create_app(
 
             final: dict[str, object] | None = None
             try:
-                async for event in answerer.answer_stream(request.question):
+                async for event in answerer.answer_stream(
+                    request.question, user_id=request.user_id
+                ):
                     if event.get("type") == "final":
                         final = event
                     yield _sse(_serialize_ask_event(event))
@@ -3331,7 +3601,7 @@ def create_app(
     @app.post(
         "/api/v1/recall",
         response_model=RecallReceipt,
-        dependencies=protected,
+        dependencies=strict,
     )
     async def recall_memories(
         request: RecallRequest,
@@ -3344,16 +3614,20 @@ def create_app(
         await _require_external_recall_scope(
             app, http_request, request.scope, request.workspace_path
         )
-        target = _recall_target(app)
+        target = (
+            _recall_target(app)
+            if request.user_id == DEFAULT_USER_ID
+            else _sdk_recall_target(app, request.user_id)
+        )
         access = external_access(http_request.headers)
         receipt = await recall_with_fallback(
             request,
             model_ready=lambda: _recall_model_ready(app),
             recall_memories=target.recall_async,
-            has_memories=lambda: _library_has_memories(app),
+            has_memories=lambda: _library_has_memories(app, request.user_id),
             raw_sources=lambda: _recall_raw_sources(app, request, access, started),
             search_raw=lambda query, limit, sources: _search_sdk_raw(
-                app, query, limit=limit, sources=sources
+                app, query, limit=limit, sources=sources, user_id=request.user_id
             ),
         )
         event_store = getattr(app.state, "call_event_store", None)
@@ -3730,21 +4004,60 @@ def _sync_refused(code: str) -> HTTPException:
     return HTTPException(status_code=409, detail=code)
 
 
+def _lane_sync_enabled(config_store: ConfigStore, lane: str) -> bool:
+    """Whether a lane may sync, before its grant is asked.
+
+    `local` keeps the App's per-source switch in the configuration document,
+    which stays global. Another user's Hermes grant syncs for as long as it
+    stands: connecting it is the consent, revoking it stops it, and it never
+    turns the App's switch on or off.
+    """
+    user_id, source_id = split_lane(lane)
+    if user_id == DEFAULT_USER_ID:
+        return config_store.sync_enabled(source_id)
+    return source_id in MULTI_USER_SOURCES
+
+
+def _other_user_lanes(
+    catalog: dict[str, SourceRegistration],
+    grant_store: SourceGrantStore,
+) -> tuple[str, ...]:
+    """Lanes of every unrevoked grant held by a user other than `local`."""
+    return tuple(
+        lane_key(receipt.user_id, receipt.source_id)
+        for receipt, _root in grant_store.grants()
+        if receipt.user_id != DEFAULT_USER_ID
+        and receipt.revoked_at is None
+        and receipt.source_id in MULTI_USER_SOURCES
+        and receipt.source_id in catalog
+    )
+
+
+def _known_user_ids(app: FastAPI) -> tuple[str, ...]:
+    """`local` and every user holding a grant: the users whose data Core keeps."""
+    users = [DEFAULT_USER_ID]
+    for receipt, _root in _grant_store(app).grants():
+        if receipt.user_id not in users:
+            users.append(receipt.user_id)
+    return tuple(users)
+
+
 def _granted_roots(
     source_ids: Iterable[str],
     grant_store: SourceGrantStore,
     config_store: ConfigStore,
 ) -> dict[str, Path]:
     roots: dict[str, Path] = {}
-    for source_id in source_ids:
-        if not config_store.sync_enabled(source_id):
+    for lane in source_ids:
+        if not _lane_sync_enabled(config_store, lane):
             continue
+        user_id, source_id = split_lane(lane)
         try:
-            grant = grant_store.authorized_root(user_id="local", source_id=source_id)
+            grant = grant_store.authorized_root(user_id=user_id, source_id=source_id)
         except SourceAccessError:
             continue
         if grant is not None:
-            roots[source_id] = grant.root
+            roots[lane] = grant.root
     return roots
 
 
@@ -3753,6 +4066,14 @@ def _active_adapters(
     grant_store: SourceGrantStore,
 ) -> dict[str, SourceAdapter]:
     adapters: dict[str, SourceAdapter] = {}
+    for lane in _other_user_lanes(catalog, grant_store):
+        user_id, source_id = split_lane(lane)
+        try:
+            grant = grant_store.authorized_root(user_id=user_id, source_id=source_id)
+            if grant is not None:
+                adapters[lane] = catalog[source_id].create_adapter(grant)
+        except SourceAccessError:
+            continue
     for source_id, registration in catalog.items():
         try:
             grant = grant_store.authorized_root(
@@ -3915,10 +4236,14 @@ def _config_store(app: FastAPI) -> ConfigStore:
 
 
 def _source_processing_enabled(app: FastAPI, source_id: str) -> bool:
-    if not _config_store(app).sync_enabled(source_id):
+    """`source_id` is a lane key: another user's lane asks that user's grant."""
+    if not _lane_sync_enabled(_config_store(app), source_id):
         return False
+    user_id, bare_source_id = split_lane(source_id)
     try:
-        return _grant_store(app).authorized_root(user_id="local", source_id=source_id) is not None
+        return (
+            _grant_store(app).authorized_root(user_id=user_id, source_id=bare_source_id) is not None
+        )
     except SourceAccessError:
         return False
 
@@ -4437,13 +4762,32 @@ async def _recall_model_ready(app: FastAPI) -> bool:
     return profile is not None and bool(profile.capabilities.model_available)
 
 
-async def _library_has_memories(app: FastAPI) -> bool:
+def _sdk_recall_target(app: FastAPI, user_id: str) -> SdkRecallTarget:
+    """Recall over one user's SDK memories; `get` results are kept only if theirs."""
+    handle = _sdk_client_handle(app)
+
+    async def owned(memory_id: str) -> HySdkMemoryRecord | None:
+        memory = await _get_sdk_memory(handle, memory_id)
+        return memory if memory is not None and owns(memory.user_id, user_id) else None
+
+    return SdkRecallTarget(
+        semantic_search=lambda query: _search_sdk_memories(
+            handle,
+            query,
+            user_id=user_id,
+            agent_id="*",
+        ),
+        get_memory=owned,
+    )
+
+
+async def _library_has_memories(app: FastAPI, user_id: str = DEFAULT_USER_ID) -> bool:
     """Any active memory at all. Asked only after an empty memory search."""
     try:
         client = await _sdk_client_handle(app).client()
         raw = await asyncio.to_thread(
             client.list_memories,
-            user_id="local",
+            user_id=user_id,
             statuses=["active"],
             limit=1,
             offset=0,
@@ -4501,13 +4845,14 @@ async def _search_sdk_raw(
     *,
     limit: int,
     sources: frozenset[str] | None,
+    user_id: str = DEFAULT_USER_ID,
 ) -> tuple[HySdkRawHit, ...]:
     """The imported conversations nearest the query: the SDK raw layer."""
     client = await _sdk_client_handle(app).client()
     raw = await asyncio.to_thread(
         client.search,
         query,
-        user_ids=["local"],
+        user_ids=[user_id],
         agent_ids=[],
         include_sources=sorted(sources) if sources else None,
         limit=limit,
@@ -4610,6 +4955,7 @@ async def _library_search_page(
     limit: int,
     window_id: str | None,
     scene: str = "all",
+    user_id: str = DEFAULT_USER_ID,
 ) -> HySdkMemoryPage:
     """One page of a keyword search, cut from a cached result window.
 
@@ -4621,7 +4967,9 @@ async def _library_search_page(
     SDK so edits and deletes show. The whole library is never listed in Core.
     """
     windows = _library_search_windows(app)
-    key = window_key(query, source, statuses, scene)
+    # The user is part of the window's identity: one user's `window_id` must
+    # never cut a page from another user's matches.
+    key = window_key(query, source, statuses, scene, user_id)
     window = windows.get(window_id, key) if window_id else None
     window_reset = window_id is not None and window is None
     if window is None:
@@ -4631,7 +4979,7 @@ async def _library_search_page(
             query,
             scene="all",
             rerank=False,
-            user_ids=["local"],
+            user_ids=[user_id],
             agent_ids=[],
             include_sources=[source] if source else None,
             limit=fetch,
@@ -4667,7 +5015,7 @@ async def _library_search_page(
         except HySdkReadError:
             skipped += 1
             continue
-        if record.status == "active":
+        if record.status == "active" and owns(record.user_id, user_id):
             memories.append(record)
     _log_skipped_sdk_memories(skipped)
     return HySdkMemoryPage(
@@ -4724,8 +5072,10 @@ def _source_writes_on(app: FastAPI, source_id: str) -> bool:
     forever with attempts=0 while later jobs ran. Intake, claim and execute
     all ask this one question.
     """
-    if source_id == "one-memory-manual":
-        receipt = _grant_store(app).receipt(user_id="local", source_id=source_id)
+    if split_lane(source_id)[1] == "one-memory-manual":
+        # One switch for hand-added memories, whoever adds them: it is a
+        # management setting, and management stays global.
+        receipt = _grant_store(app).receipt(user_id="local", source_id="one-memory-manual")
         return receipt is None or receipt.revoked_at is None
     return _source_processing_enabled(app, source_id)
 
@@ -4759,6 +5109,7 @@ def _history_import_gate_released(app: FastAPI) -> bool:
         job
         for job in jobs.list_jobs()
         if job.operation == "history"
+        and job.user_id == DEFAULT_USER_ID
         and job.source_id in selected
         and (state.started_at is None or job.created_at >= state.started_at)
     ]

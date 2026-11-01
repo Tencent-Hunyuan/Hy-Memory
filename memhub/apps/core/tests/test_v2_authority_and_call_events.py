@@ -57,10 +57,10 @@ def client_for(app, headers=None):
 
 
 class Answerer:
-    async def answer(self, question):
+    async def answer(self, question, *, user_id="local"):
         return SdkMemoryAnswer(answer="真实数据。", memories=(MEMORY,), mode="extractive")
 
-    async def answer_stream(self, question):
+    async def answer_stream(self, question, *, user_id="local"):
         yield {"type": "recall", "memories": (MEMORY,)}
         yield {
             "type": "final",

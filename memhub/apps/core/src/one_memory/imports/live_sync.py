@@ -28,6 +28,7 @@ from one_memory.imports.adapters import (
 )
 from one_memory.imports.jobs import ImportJob, ImportJobStore, ImportStatus
 from one_memory.imports.supervisor import ImportSupervisor
+from one_memory.user_scope import DEFAULT_USER_ID, lane_key, split_lane
 
 #: How long an automatic retry will wait for a wedged worker to notice cancel.
 ABANDON_TIMEOUT_SECONDS = 5.0
@@ -64,7 +65,12 @@ class LiveSyncHealth(BaseModel):
 
 
 class PollingLiveSyncSupervisor:
-    """Near-live sync that reuses each adapter's persisted incremental cursor."""
+    """Near-live sync that reuses each adapter's persisted incremental cursor.
+
+    A "source" here is a lane key (`user_scope.lane_key`): the bare source id
+    for `local`, `source@user` for another user's grant. Cursors, jobs and
+    locks are therefore per `(user_id, source_id)`.
+    """
 
     def __init__(
         self,
@@ -92,7 +98,21 @@ class PollingLiveSyncSupervisor:
         }
         self._locks = {source_id: asyncio.Lock() for source_id in self.source_ids}
         self._task: asyncio.Task[None] | None = None
+        self._group: asyncio.TaskGroup | None = None
         self._observers: set[asyncio.Task[None]] = set()
+
+    def ensure_source(self, source_id: str) -> None:
+        """Follow a lane granted after start, such as a new Hermes profile."""
+        if source_id in self._locks:
+            return
+        self.source_ids = (*self.source_ids, source_id)
+        self._health.setdefault(
+            source_id,
+            LiveSyncHealth(source_id=source_id, mode=self.mode, state=LiveSyncState.IDLE),
+        )
+        self._locks[source_id] = asyncio.Lock()
+        if self._group is not None:
+            self._group.create_task(self._poll_source(source_id))
 
     def _set_health(self, source_id: str, value: LiveSyncHealth) -> None:
         previous = self._health.get(source_id)
@@ -152,7 +172,12 @@ class PollingLiveSyncSupervisor:
         self._watched_sources = frozenset(source_ids)
 
     def all_health(self) -> tuple[LiveSyncHealth, ...]:
-        return tuple(self.health(source_id) for source_id in self.source_ids)
+        """`local`'s lanes only: what the App has always been shown."""
+        return tuple(
+            self.health(source_id)
+            for source_id in self.source_ids
+            if split_lane(source_id)[0] == DEFAULT_USER_ID
+        )
 
     async def initialize_source(
         self, source_id: str, *, baseline_missing_files: bool = True
@@ -164,11 +189,12 @@ class PollingLiveSyncSupervisor:
         baselines = (
             await adapter.live_baseline() if isinstance(adapter, _LiveBaselineAdapter) else {}
         )
+        user_id, bare_source_id = split_lane(source_id)
         await in_the_background(
             partial(
                 self.job_store.ensure_live_cursors,
-                user_id="local",
-                source_id=source_id,
+                user_id=user_id,
+                source_id=bare_source_id,
                 baselines=baselines,
                 baseline_missing_files=baseline_missing_files,
             )
@@ -228,7 +254,7 @@ class PollingLiveSyncSupervisor:
                 (
                     job
                     for job in reversed(source_jobs)
-                    if job.source_id == source_id
+                    if lane_key(job.user_id, job.source_id) == source_id
                     and job.operation == "sync"
                     and job.status
                     in {
@@ -277,13 +303,13 @@ class PollingLiveSyncSupervisor:
             competing = [
                 job
                 for job in source_jobs
-                if job.source_id == source_id
+                if lane_key(job.user_id, job.source_id) == source_id
                 and job.operation != "sync"
                 and job.status
                 in {ImportStatus.PENDING, ImportStatus.RUNNING, ImportStatus.INTERRUPTED}
             ]
             bounded_history_incomplete = any(
-                job.source_id == source_id
+                lane_key(job.user_id, job.source_id) == source_id
                 and job.operation == "history"
                 and job.history_after is not None
                 and job.status is not ImportStatus.COMPLETED
@@ -379,11 +405,12 @@ class PollingLiveSyncSupervisor:
                 await close()
 
     async def _live_cursors(self, source_id: str, adapter: object) -> dict[str, SourceCursor]:
+        user_id, bare_source_id = split_lane(source_id)
         cursors = await in_the_background(
             partial(
                 self.job_store.get_source_cursors,
-                user_id="local",
-                source_id=source_id,
+                user_id=user_id,
+                source_id=bare_source_id,
                 operation="sync",
             )
         )
@@ -395,8 +422,8 @@ class PollingLiveSyncSupervisor:
         return await in_the_background(
             partial(
                 self.job_store.ensure_live_cursors,
-                user_id="local",
-                source_id=source_id,
+                user_id=user_id,
+                source_id=bare_source_id,
                 baselines=baselines,
             )
         )
@@ -520,9 +547,13 @@ class PollingLiveSyncSupervisor:
     async def _run(self) -> None:
         # A source owns its cadence; one large catch-up cannot delay every
         # other source. The group keeps shutdown responsible for every poller.
-        async with asyncio.TaskGroup() as group:
-            for source_id in self.source_ids:
-                group.create_task(self._poll_source(source_id))
+        try:
+            async with asyncio.TaskGroup() as group:
+                self._group = group
+                for source_id in self.source_ids:
+                    group.create_task(self._poll_source(source_id))
+        finally:
+            self._group = None
 
     async def _poll_source(self, source_id: str) -> None:
         while True:

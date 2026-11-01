@@ -271,7 +271,9 @@ def build_request_from_evidence(
         # Keep the exact conversation id when it fits the 128-char contract;
         # otherwise derive the versioned session id, so a long branch id does
         # not reject the whole history import.
-        internal_session_id=internal_session_id_for(seed.conversation_id, seed.source_id),
+        internal_session_id=internal_session_id_for(
+            seed.conversation_id, seed.source_id, seed.user_id
+        ),
         first_round=first_round,
         last_round=last_round,
         evidence_ids=list(ordered),

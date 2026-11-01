@@ -56,7 +56,7 @@ def test_sdk_ask_v2_stream_is_native(tmp_path, monkeypatch) -> None:
     )
 
     class Answerer:
-        async def answer_stream(self, _question):
+        async def answer_stream(self, _question, *, user_id="local"):
             yield {"type": "recall", "memories": (memory,)}
             yield {"type": "delta", "text": "你要求真实数据。"}
             yield {

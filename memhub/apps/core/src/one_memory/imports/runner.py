@@ -3,7 +3,7 @@ import logging
 import math
 import sqlite3
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -227,14 +227,17 @@ class ImportRunner:
         heartbeat = asyncio.create_task(self._keep_alive(job_id=job_id, runner_token=runner_token))
         pending = _PendingSkips()
         writes = _PendingWrites()
-        stream = adapter.scan(
-            ScanOptions(
-                cursors=cursors,
-                reuse_listing=(
-                    job.operation == "history"
-                    or (job.operation == "sync" and job.source_id == "workbuddy")
-                ),
-            )
+        stream = _owned_by(
+            adapter.scan(
+                ScanOptions(
+                    cursors=cursors,
+                    reuse_listing=(
+                        job.operation == "history"
+                        or (job.operation == "sync" and job.source_id == "workbuddy")
+                    ),
+                )
+            ),
+            job.user_id,
         )
         slice_cursors = dict(cursors)
         next_event: asyncio.Future[ScanEvent] | None = None
@@ -924,3 +927,30 @@ async def _settled_work[T](
         with suppress(asyncio.CancelledError, Exception):
             task.result()
         raise
+
+
+def _owned_by(stream: AsyncIterator[ScanEvent], user_id: str) -> AsyncIterator[ScanEvent]:
+    """Stamp every scanned record with the user whose root is being read.
+
+    Adapters know nothing of users and emit `local`. Which user a record
+    belongs to is decided by the grant the job reads (a Hermes profile's
+    `state.db` is that profile's user), so the job's user is the record's.
+    `local` passes the stream through untouched.
+    """
+    if user_id == "local":
+        return stream
+    return _restamped(stream, user_id)
+
+
+async def _restamped(stream: AsyncIterator[ScanEvent], user_id: str) -> AsyncIterator[ScanEvent]:
+    try:
+        async for event in stream:
+            if isinstance(event, ScannedEvidence) and event.evidence.user_id != user_id:
+                event = event.model_copy(
+                    update={"evidence": event.evidence.model_copy(update={"user_id": user_id})}
+                )
+            yield event
+    finally:
+        close = getattr(stream, "aclose", None)
+        if close is not None:
+            await close()

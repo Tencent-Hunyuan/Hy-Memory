@@ -22,6 +22,7 @@ from one_memory.semantic_deadline import (
     normalize_semantic_hits,
     search_within,
 )
+from one_memory.user_scope import DEFAULT_USER_ID, UserId
 
 
 def recall_blend_mode() -> str:
@@ -67,6 +68,8 @@ class RecallRequest(BaseModel):
     #: Wall-clock budget for candidate gather + score. Not a substitute for
     #: raising the old newest-500 page; it is the third parallel budget.
     timeout_ms: int = Field(default=2_000, ge=50, le=30_000)
+    #: Whose memories to recall. Omitted, it is `local`, the App's library.
+    user_id: UserId = DEFAULT_USER_ID
 
 
 class RecallHit(BaseModel):

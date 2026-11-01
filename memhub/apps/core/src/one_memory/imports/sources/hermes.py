@@ -88,6 +88,7 @@ class HermesSourceAdapter:
             self.grant,
             suffixes=frozenset({".jsonl", ".db"}),
             max_targets=10_000,
+            excluded_top_directories=frozenset({HERMES_PROFILES_DIRECTORY}),
         ):
             if isinstance(item, AuthorizedSourceFile) and _is_hermes_target(
                 item.relative_path.as_posix()
@@ -101,6 +102,7 @@ class HermesSourceAdapter:
             self.grant,
             suffixes=frozenset({".jsonl", ".db"}),
             max_targets=options.max_scan_targets or 100_000,
+            excluded_top_directories=frozenset({HERMES_PROFILES_DIRECTORY}),
         ):
             yield ScanProgressEvent(
                 phase=ScanPhase.DISCOVER,
@@ -247,8 +249,17 @@ def parse_hermes_rollout_record(
     )
 
 
+#: Hermes keeps each extra profile under `<root>/profiles/<name>/`, with its
+#: own `state.db` and sessions. A profile is another person's history: it is
+#: read only through its own grant (its own MemHub user), never as part of the
+#: root above it. Hermes' own export skips this directory for the same reason.
+HERMES_PROFILES_DIRECTORY = "profiles"
+
+
 def _is_hermes_target(relative_path: str) -> bool:
     path = PurePosixPath(relative_path)
+    if path.parts and path.parts[0] == HERMES_PROFILES_DIRECTORY:
+        return False
     return path.name == "state.db" or (path.suffix == ".jsonl" and "sessions" in path.parts)
 
 

@@ -102,7 +102,7 @@ def test_memory_add_requires_authentication_explicit_scope_and_nonempty_content(
                 {"text": "  \n"},
                 {"text": "x" * 12_001},
                 {"scope": "*"},
-                {"user_id": "other"},
+                {"user_id": "not:a-user"},
             ):
                 assert (
                     await client.post("/api/v2/memories", json={**base, **change})
