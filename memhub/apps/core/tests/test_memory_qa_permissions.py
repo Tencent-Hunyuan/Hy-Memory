@@ -186,6 +186,7 @@ def _setup(tmp_path: Path, *, model: str = "available") -> _Setup:
             base_url="https://memory-qa.example.invalid/v1",
             model="synthetic-generation",
             embedding_model="synthetic-embedding",
+            embedding_base_url="https://memory-qa.example.invalid/v1",
             api_key=SecretStr(_SECRET),
         ),
         secrets,

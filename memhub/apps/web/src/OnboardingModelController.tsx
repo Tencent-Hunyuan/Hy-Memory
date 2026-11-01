@@ -173,10 +173,15 @@ export function OnboardingModelController({
         draft.embedding_mode === "local"
           ? "bge-small-zh-v1.5"
           : draft.embedding_model.trim(),
+      // Core no longer lets the embedding endpoint follow the generation
+      // one, so an empty field is written as the endpoint it means.
       embedding_base_url:
         draft.embedding_mode === "local"
           ? null
-          : draft.embedding_base_url.trim() || null,
+          : draft.embedding_base_url.trim() ||
+            (draft.embedding_provider_kind === "ollama"
+              ? "http://127.0.0.1:11434"
+              : draft.base_url.trim()),
       embedding_dimensions: draft.embedding_mode === "local" ? 512 : null,
     };
   }

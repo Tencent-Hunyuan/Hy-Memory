@@ -97,7 +97,6 @@ class ModelProfileInput(BaseModel):
         )
         embedding_provider, resolved_embedding_base_url = resolve_embedding_endpoint(
             provider_kind=self.provider_kind,
-            base_url=base_url,
             embedding_model=embedding_model,
             embedding_provider_kind=embedding_provider_kind,
             embedding_base_url=embedding_base_url,
@@ -107,6 +106,12 @@ class ModelProfileInput(BaseModel):
             ProviderKind.ANTHROPIC,
         }:
             raise ValueError("embedding provider must be OpenAI-compatible, Ollama, or local ONNX")
+        if (
+            embedding_provider is not ProviderKind.LOCAL_ONNX
+            and resolved_embedding_base_url is None
+        ):
+            # `ModelProfileStore.create` refuses it with its own code.
+            return self
         if (
             embedding_provider is not ProviderKind.LOCAL_ONNX
             and resolved_embedding_base_url is not None
@@ -308,11 +313,12 @@ class ModelProfileStore:
                     f"""
                     UPDATE {table}
                     SET embedding_provider_kind = provider_kind,
-                        embedding_base_url = base_url
+                        embedding_base_url = COALESCE(embedding_base_url, base_url)
                     WHERE embedding_model IS NOT NULL
                       AND embedding_provider_kind IS NULL
                     """
                 )
+                _pin_embedding_endpoints(connection, table)
             connection.execute(
                 """
                 INSERT OR IGNORE INTO model_profile_versions (
@@ -355,11 +361,11 @@ class ModelProfileStore:
         )
         embedding_provider_kind, embedding_base_url = resolve_embedding_endpoint(
             provider_kind=value.provider_kind,
-            base_url=base_url,
             embedding_model=defaulted_model,
             embedding_provider_kind=defaulted_provider,
             embedding_base_url=defaulted_base_url,
         )
+        require_embedding_base_url(embedding_provider_kind, embedding_base_url)
         try:
             with self._connect(writing=True) as connection:
                 connection.execute(
@@ -612,7 +618,6 @@ class ModelProfileStore:
         )
         embedding_provider_kind, embedding_base_url = resolve_embedding_endpoint(
             provider_kind=current.provider_kind,
-            base_url=base_url,
             embedding_model=embedding_model,
             embedding_provider_kind=(
                 patch.embedding_provider_kind
@@ -627,6 +632,7 @@ class ModelProfileStore:
         )
         if embedding_provider_kind in {ProviderKind.HY_DEFAULT, ProviderKind.ANTHROPIC}:
             raise ValueError("embedding provider must be OpenAI-compatible, Ollama, or local ONNX")
+        require_embedding_base_url(embedding_provider_kind, embedding_base_url)
         if (
             embedding_provider_kind is not ProviderKind.LOCAL_ONNX
             and embedding_base_url is not None
@@ -1167,21 +1173,77 @@ def attach_disable_thinking(
 def resolve_embedding_endpoint(
     *,
     provider_kind: ProviderKind,
-    base_url: str | None,
     embedding_model: str | None,
     embedding_provider_kind: ProviderKind | None,
     embedding_base_url: str | None,
 ) -> tuple[ProviderKind | None, str | None]:
+    """The embedding provider and the endpoint exactly as given.
+
+    The endpoint never follows the generation `base_url`: the collection name
+    hashes it, so a proxy or region edit of the generation endpoint moved
+    writes to a new, empty collection, and providers without embeddings were
+    sent embedding requests. `require_embedding_base_url` refuses a remote
+    embedding without one.
+    """
     if embedding_model is None:
         return None, None
     if embedding_provider_kind is ProviderKind.LOCAL_ONNX:
         return ProviderKind.LOCAL_ONNX, None
-    if embedding_provider_kind is None:
-        return provider_kind, embedding_base_url or base_url
-    return (
-        embedding_provider_kind,
-        embedding_base_url or DEFAULT_BASE_URLS.get(embedding_provider_kind),
-    )
+    return embedding_provider_kind or provider_kind, embedding_base_url
+
+
+class EmbeddingBaseUrlRequiredError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("embedding_base_url_required")
+
+
+def require_embedding_base_url(provider: ProviderKind | None, base_url: str | None) -> None:
+    """A remote embedding must name its endpoint; the UI may offer the generation one."""
+    if provider not in {None, ProviderKind.LOCAL_ONNX} and not base_url:
+        raise EmbeddingBaseUrlRequiredError()
+
+
+def pinned_embedding_base_url(
+    *,
+    provider_kind: ProviderKind | str,
+    base_url: str | None,
+    embedding_model: str | None,
+    embedding_provider_kind: ProviderKind | str | None,
+    embedding_base_url: str | None,
+) -> str | None:
+    """The endpoint a stored profile's embedding resolved to before it was pinned.
+
+    The Runtime used `embedding_base_url or base_url`, and the provider default
+    only when both were empty (no collection could have existed then). Writing
+    that value keeps the endpoint, and so the collection name, byte-identical.
+    """
+    provider = ProviderKind(embedding_provider_kind or provider_kind)
+    if embedding_model is None or embedding_base_url or provider is ProviderKind.LOCAL_ONNX:
+        return embedding_base_url
+    return base_url or DEFAULT_BASE_URLS.get(provider)
+
+
+def _pin_embedding_endpoints(connection: sqlite3.Connection, table: str) -> None:
+    """Write the resolved endpoint into every remote embedding left without one."""
+    rows = connection.execute(
+        f"SELECT rowid, provider_kind, base_url, embedding_model, embedding_provider_kind "
+        f"FROM {table} WHERE embedding_model IS NOT NULL AND embedding_base_url IS NULL "
+        "AND COALESCE(embedding_provider_kind, provider_kind) != 'local_onnx'"
+    ).fetchall()
+    for row in rows:
+        connection.execute(
+            f"UPDATE {table} SET embedding_base_url = ? WHERE rowid = ?",
+            (
+                pinned_embedding_base_url(
+                    provider_kind=row["provider_kind"],
+                    base_url=row["base_url"],
+                    embedding_model=row["embedding_model"],
+                    embedding_provider_kind=row["embedding_provider_kind"],
+                    embedding_base_url=None,
+                ),
+                row["rowid"],
+            ),
+        )
 
 
 def validate_model_base_url(value: str) -> None:

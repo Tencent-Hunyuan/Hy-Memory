@@ -189,6 +189,7 @@ from one_memory.model_presets import seed_preset_profile
 from one_memory.model_probe import ModelProber, ModelProbeResult
 from one_memory.model_profiles import (
     ActiveModelProfileError,
+    EmbeddingBaseUrlRequiredError,
     ModelCreationOperationConflictError,
     ModelCreationOperationLookupError,
     ModelCreationOperationReceipt,
@@ -2873,6 +2874,8 @@ def create_app(
     def create_model_profile(request: ModelProfileInput) -> ModelProfile:
         try:
             return _model_profile_store(app).create(request, _secret_store(app))
+        except EmbeddingBaseUrlRequiredError:
+            raise HTTPException(422, "embedding_base_url_required") from None
         except ModelCreationOperationConflictError:
             raise HTTPException(409, "model_creation_operation_conflict") from None
         except ModelCreationOperationLookupError:
@@ -2924,6 +2927,8 @@ def create_app(
             raise HTTPException(status_code=404, detail="model_profile_not_found") from None
         except ModelProfileConflictError:
             raise HTTPException(status_code=409, detail="model_profile_conflict") from None
+        except EmbeddingBaseUrlRequiredError:
+            raise HTTPException(status_code=422, detail="embedding_base_url_required") from None
         except SecretStoreUnavailableError as error:
             raise HTTPException(
                 status_code=503,

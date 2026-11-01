@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from one_memory.database_access import main_database
-from one_memory.model_profiles import ModelProfileSnapshot
+from one_memory.model_profiles import ModelProfileSnapshot, pinned_embedding_base_url
 from one_memory.sdk_data_plane_migration import DataPlaneMigrationError
 
 _PRODUCTIVITY_KINDS = frozenset({"coding", "working"})
@@ -184,7 +184,14 @@ def read_active_profile(database_path: Path) -> ModelProfileSnapshot | None:
         model=row["model"],
         embedding_model=row["embedding_model"],
         embedding_provider_kind=row["embedding_provider_kind"],
-        embedding_base_url=row["embedding_base_url"],
+        # Read-only, beside a Core that may not have pinned it yet.
+        embedding_base_url=pinned_embedding_base_url(
+            provider_kind=row["provider_kind"],
+            base_url=row["base_url"],
+            embedding_model=row["embedding_model"],
+            embedding_provider_kind=row["embedding_provider_kind"],
+            embedding_base_url=row["embedding_base_url"],
+        ),
         embedding_dimensions=row["embedding_dimensions"],
         timeout_seconds=row["timeout_seconds"],
         max_concurrency=row["max_concurrency"],

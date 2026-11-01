@@ -228,7 +228,7 @@ def retrieval_view(profile: ModelProfileSnapshot) -> ModelProfileSnapshot:
     provider = profile.embedding_provider_kind or profile.provider_kind
     endpoint: str | None = None
     if provider is not ProviderKind.LOCAL_ONNX:
-        endpoint = profile.embedding_base_url or profile.base_url
+        endpoint = profile.embedding_base_url
         if not endpoint:
             raise HySdkRuntimeError("hy_sdk_model_endpoint_missing")
     return builtin_retrieval_snapshot().model_copy(
@@ -276,10 +276,8 @@ def build_sdk_config(
         embedding_key = None
         dimensions = profile.embedding_dimensions or BUILTIN_EMBEDDING_DIMENSIONS
     else:
-        embedding_endpoint = _openai_endpoint(
-            embedding_provider,
-            profile.embedding_base_url or profile.base_url,
-        )
+        # Never the generation endpoint: the collection name hashes this one.
+        embedding_endpoint = _openai_endpoint(embedding_provider, profile.embedding_base_url)
         embedding_key = "ollama" if embedding_provider is ProviderKind.OLLAMA else api_key
         if embedding_provider is ProviderKind.OPENAI_COMPATIBLE and not embedding_key:
             raise HySdkRuntimeError("hy_sdk_embedding_api_key_missing")
@@ -494,7 +492,7 @@ def vector_collection_bases(profile: ModelProfileSnapshot) -> tuple[str, tuple[s
         endpoint, dimensions = None, profile.embedding_dimensions or BUILTIN_EMBEDDING_DIMENSIONS
         legacy_endpoint = "local-onnx"
     else:
-        endpoint = _openai_endpoint(provider, profile.embedding_base_url or profile.base_url)
+        endpoint = _openai_endpoint(provider, profile.embedding_base_url)
         dimensions = profile.embedding_dimensions
         legacy_endpoint = endpoint
     legacy_model = profile.embedding_model or "bge-small-zh-v1.5"
