@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import os
 import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Mapping
@@ -57,8 +56,6 @@ from one_memory.model_profiles import (
     ProviderKind,
     disable_thinking_params,
 )
-
-logger = logging.getLogger(__name__)
 
 _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
@@ -354,9 +351,6 @@ def apply_sdk_features(
     return config
 
 
-_LANGUAGE_UNSUPPORTED_LOGGED = False
-
-
 class LanguageKwargs(TypedDict, total=False):
     language: str
 
@@ -371,22 +365,14 @@ def language_kwargs(language: str | None) -> LanguageKwargs:
 
 
 def apply_sdk_language(config: MemoryConfig, language: str | None) -> MemoryConfig:
-    """Set the SDK prompt language, when there is one and the SDK has the field.
+    """Set the SDK prompt language (`MemoryConfig.language`), when there is one.
 
     None (zh-Hans, or no choice) sets nothing: the SDK detects zh/en as it
-    always did. An SDK without `MemoryConfig.language` keeps working without
-    it; that is logged once at debug level. Like a feature, the language never
-    touches `vector_store`, so the collection identity never depends on it.
+    always did. Like a feature, the language never touches `vector_store`, so
+    the collection identity never depends on it.
     """
-    global _LANGUAGE_UNSUPPORTED_LOGGED
-    if language is None:
-        return config
-    if not hasattr(config, "language"):
-        if not _LANGUAGE_UNSUPPORTED_LOGGED:
-            _LANGUAGE_UNSUPPORTED_LOGGED = True
-            logger.debug("hy_sdk_language_unsupported language=%s", language)
-        return config
-    config.language = language
+    if language is not None:
+        config.language = language
     return config
 
 

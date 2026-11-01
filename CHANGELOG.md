@@ -6,6 +6,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Hy Memory 2.0.11 — 2026-11-01
 
+- Published
+  [`hy-memory==2.0.11`](https://pypi.org/project/hy-memory/2.0.11/).
 - LLM prompts now ship in 11 languages: `en`, `zh-Hans`,
   `zh-Hant`, `ja`, `es`, `de`, `pt`, `fr`, `ko`, `ru` and `id`. They live in
   one registry, `hy_memory/prompts/`, with one module per language. Call
