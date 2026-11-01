@@ -1264,6 +1264,12 @@ class MemoryConfig:
     enable_agent: bool = False
     debug: bool = False
     metrics_enabled: bool = True
+    # LLM prompt 语言（client 默认值；env: MEMORY_LANGUAGE）。canonical 码见
+    # hy_memory.prompts.SUPPORTED_LANGUAGES（en / zh-Hans / zh-Hant / ja / es / de /
+    # pt / fr / ko / ru / id），也接受别名 zh、zh-CN → zh-Hans，zh-TW、zh-HK →
+    # zh-Hant，pt-BR → pt。add() 等的 per-call language 优先于它。None（默认）=
+    # 沿用 zh/en 自动检测。显式指定时记忆正文用该语言书写。未知码抛 ValueError。
+    language: Optional[str] = None
     # Runtime-only HTTP transport factory. MemHub uses this for request-cost
     # budgeting without restricting the embedded SDK's local store access.
     http_transport_factory: Optional[Callable[[], Any]] = field(
@@ -1278,6 +1284,11 @@ class MemoryConfig:
         self.enable_agent = _get_env_bool("MEMORY_ENABLE_AGENT", False)
         self.debug = _get_env_bool("MEMORY_DEBUG", False)
         self.metrics_enabled = _get_env_bool("MEMORY_METRICS", True)
+        if self.language is None:
+            self.language = os.getenv("MEMORY_LANGUAGE", "").strip() or None
+        from .prompts import normalize_language
+
+        self.language = normalize_language(self.language)
 
     @classmethod
     def from_env(cls) -> "MemoryConfig":
@@ -1328,6 +1339,10 @@ class MemoryConfig:
         config.metrics_enabled = config_dict.get(
             "metrics_enabled", config.metrics_enabled
         )
+        if config_dict.get("language") is not None:
+            from .prompts import normalize_language
+
+            config.language = normalize_language(config_dict["language"])
 
         return config
 
@@ -1386,6 +1401,7 @@ class MemoryConfig:
             "enable_graph": self.enable_graph,
             "enable_agent": self.enable_agent,
             "metrics_enabled": self.metrics_enabled,
+            "language": self.language,
         }
 
     def print_config(self) -> None:

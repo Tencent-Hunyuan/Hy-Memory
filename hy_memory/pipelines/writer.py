@@ -997,6 +997,7 @@ class MemoryWriter(WritePipeline):
                         # 这是一次 LLM 调用：prompt / 产出必须能在线上追到，
                         # 否则 badcase 只能看到"摘要内容不对"却拿不到输入
                         trace=self._make_trace_sink(request, "EPISODE_SUMMARY"),
+                        language=request.language,
                     )
                     if nid:
                         logger.info(
@@ -1210,6 +1211,7 @@ class MemoryWriter(WritePipeline):
                     self._make_trace_sink(request, "TOPIC_SUMMARY")
                     if request is not None else None
                 ),
+                language=getattr(request, "language", None),
             )
         except Exception as e:
             logger.warning(f"[topic-summary] failed (non-fatal): {e}")
@@ -1286,6 +1288,7 @@ class MemoryWriter(WritePipeline):
             graph_store=getattr(self, "_graph_store", None),
             new_memory_embeddings=precomputed_embeddings,
             source=request.source,
+            language=request.language,
         )
 
         if not recon_result.success:
@@ -2714,6 +2717,7 @@ class MemoryWriter(WritePipeline):
                         vector_store, request.user_id, request.agent_id,
                         exclude_memory_id=memory_id,
                         max_turns=_hist_turns * 2,  # k 轮对话 = k*2 条 message
+                        language=request.language,
                     )
                     _recent_history_ms = (_t_recent_history and (datetime.now() - _t_recent_history).total_seconds() * 1000) or 0.0
                     _recent_history_count = len([line for line in (_history_context or "").splitlines() if line.strip()])
@@ -2794,6 +2798,7 @@ class MemoryWriter(WritePipeline):
                             user_id=request.user_id,
                             agent_id=request.agent_id,
                             session_id=request.session_id or "default_session",
+                            language=request.language,
                         )
                         if finalize is finalize_dynamic_episode_capsules:
                             finalize_kwargs["summary_concurrency"] = getattr(
@@ -2954,9 +2959,11 @@ class MemoryWriter(WritePipeline):
         exclude_memory_id: str = "",
         max_turns: int = 20,
         max_chars_assistant: Optional[int] = None,
+        language: Optional[str] = None,
     ) -> str:
         """
         获取该用户最近的 L1_RAW 对话记录，按轮次拆分后拼成 history context。
+        language：显式 prompt 语言码，用于渲染名字行；None 时按内容判 zh/en。
 
         每条 L1_RAW 的 content 是多轮对话（[user]: ...\n[assistant]: ...）。
         raw 在写入时已按 utils/raw_trim.py 的规则裁好（custom[RAW_TRIMMED_KEY]），
@@ -3060,9 +3067,13 @@ class MemoryWriter(WritePipeline):
                 from .base import render_user_name_line
                 from ..utils.lang_detect import is_chinese
 
-                _name_line = render_user_name_line(
-                    user_name,
-                    is_chinese("\n".join(b for _, b, _ in recent)),
+                _name_line = (
+                    render_user_name_line(user_name, language=language)
+                    if language else
+                    render_user_name_line(
+                        user_name,
+                        is_chinese("\n".join(b for _, b, _ in recent)),
+                    )
                 )
                 if _name_line:
                     all_messages.append(_name_line)
@@ -3305,6 +3316,7 @@ class MemoryWriter(WritePipeline):
                 existing_tags=existing_tags,
                 history_context=history_context,
                 basic_profile_fields=_basic_profile_fields,
+                language=request.language,
             )
             extract_timing["extract_total_ms"] = round(
                 (datetime.now() - _t_extract_total).total_seconds() * 1000, 2

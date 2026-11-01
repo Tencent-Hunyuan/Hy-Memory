@@ -98,6 +98,12 @@ export OPENAI_API_KEY="sk-your-key"
 
 See the [Environment Variable Reference](docs/env_reference.md) for the full list.
 
+Prompts ship in 11 languages (`en`, `zh-Hans`, `zh-Hant`, `ja`, `es`, `de`, `pt`,
+`fr`, `ko`, `ru`, `id`). By default the SDK picks Chinese or English from the
+input. Set `MEMORY_LANGUAGE` (or `language=` on `add()`) to choose one
+explicitly; memories are then written in that language. See
+[Prompt language](docs/usage.md#提示词语言language).
+
 ### 3. Chat Memory
 
 ```python

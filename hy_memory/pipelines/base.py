@@ -95,21 +95,48 @@ class ToolCall:
 #   [John]: 我也喜欢茶
 # 名字单独占一行、整段只出现一次；[user] 标签**不换成名字**，视角信息留在标签里。
 # extract 用这一行给 L0 basic_info 取 name（用户不必在对话里自报姓名）。
+# 各语言的模板在 hy_memory/prompts/<language>.py 的 USER_NAME_LINE；这两个旧名字保留。
 _USER_NAME_LINE_ZH = "用户名叫{name}"
 _USER_NAME_LINE_EN = "The user's name is {name}"
 
-_USER_NAME_LINE_RE = re.compile(
-    r"^(?:用户名叫|The user's name is)\s*(.+?)\s*$"
-)
+_user_name_line_res: Optional[List["re.Pattern"]] = None
 
 
-def render_user_name_line(name: str, is_zh: bool) -> str:
-    """渲染文首的用户名字行；name 为空返回空串。"""
+def _user_name_line_patterns() -> List["re.Pattern"]:
+    """每种语言一个匹配名字行的正则（L1_RAW 里可能存着任意语言的名字行）。"""
+    global _user_name_line_res
+    if _user_name_line_res is None:
+        from ..prompts import SUPPORTED_LANGUAGES, get_prompt
+
+        patterns = []
+        for code in SUPPORTED_LANGUAGES:
+            try:
+                tpl = get_prompt("USER_NAME_LINE", code)
+            except (ImportError, AttributeError):
+                continue
+            prefix, _, suffix = tpl.partition("{name}")
+            patterns.append(re.compile(
+                r"^" + re.escape(prefix.strip()) + r"\s*(.+?)\s*"
+                + re.escape(suffix.strip()) + r"$"
+            ))
+        _user_name_line_res = patterns
+    return _user_name_line_res
+
+
+def render_user_name_line(
+    name: str, is_zh: bool = False, *, language: Optional[str] = None,
+) -> str:
+    """渲染文首的用户名字行；name 为空返回空串。
+
+    language（语言码）优先；未给时按 is_zh 在 zh-Hans / en 间选（旧行为）。
+    """
     name = (name or "").strip()
     if not name:
         return ""
-    tpl = _USER_NAME_LINE_ZH if is_zh else _USER_NAME_LINE_EN
-    return tpl.format(name=name)
+    from ..prompts import get_prompt
+
+    code = language or ("zh-Hans" if is_zh else "en")
+    return get_prompt("USER_NAME_LINE", code).format(name=name)
 
 
 def parse_user_name_line(line: str) -> Optional[str]:
@@ -118,8 +145,12 @@ def parse_user_name_line(line: str) -> Optional[str]:
     L1_RAW 存的就是 get_flat_content() 的产物，回读历史时要靠这个把名字行识别出来，
     否则它会被当成一条无前缀的裸消息（见 MemoryWriter._get_recent_history）。
     """
-    m = _USER_NAME_LINE_RE.match((line or "").strip())
-    return m.group(1) if m else None
+    text = (line or "").strip()
+    for pattern in _user_name_line_patterns():
+        m = pattern.match(text)
+        if m:
+            return m.group(1)
+    return None
 
 
 @dataclass
@@ -257,6 +288,11 @@ class WriteRequest:
     branch: Optional[str] = None
     # 分支名。同 workspace_id。
 
+    # 显式 prompt 语言码（canonical，见 hy_memory.prompts.SUPPORTED_LANGUAGES）。
+    # 由 client 入口按「per-call > MemoryConfig.language」解析后注入；None 时
+    # 抽取 / reconcile / 画像等各步沿用 zh/en 自动检测。
+    language: Optional[str] = None
+
     # ---- 便捷方法 ----
 
     def has_messages(self) -> bool:
@@ -286,8 +322,8 @@ class WriteRequest:
             [John]: 我也喜欢茶
 
         无 name 时与历史行为完全一致（`[user]: ...` / `[assistant]: ...`）。
-        名字行只在 role=user 带 name 时出现，且整段只出现一次；语言按消息内容判定
-        （与 extractor 选 zh/en prompt 同一套判据）。
+        名字行只在 role=user 带 name 时出现，且整段只出现一次；语言取显式
+        language，未指定时按消息内容判定（与 extractor 选 zh/en prompt 同一套判据）。
         """
         if not self.messages:
             return self.content or ""
@@ -296,11 +332,14 @@ class WriteRequest:
 
         name = self.user_name()
         if name:
-            from ..utils.lang_detect import is_chinese
+            if self.language:
+                name_line = render_user_name_line(name, language=self.language)
+            else:
+                from ..utils.lang_detect import is_chinese
 
-            name_line = render_user_name_line(
-                name, is_chinese(messages=self.messages)
-            )
+                name_line = render_user_name_line(
+                    name, is_chinese(messages=self.messages)
+                )
             if name_line:
                 lines.insert(0, name_line)
 

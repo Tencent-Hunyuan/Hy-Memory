@@ -21,7 +21,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..agent.llm_provider import LLMProvider
 from ..core.embed_service import EmbedService
-from ..utils.lang_detect import is_chinese
+from ..prompts import (
+    get_prompt,
+    normalize_language,
+    resolve_language,
+    with_output_language,
+)
 from .judge import _store_coding_log
 from .store import CodingMemoryStore
 from .types import CodingMemory, CodingMemoryDraft, ReconcileOp
@@ -50,57 +55,7 @@ def _resolve_configured_temperature(llm_provider) -> Optional[float]:
 # Prompt
 # ================================================================
 
-RECONCILE_PROMPT = """\
-You decide how to merge new coding memory drafts with the user's existing memories.
-
-For each new draft, decide one of:
-  ADD     — no existing memory describes the same task/aspect
-  UPDATE  — an existing memory describes the same task; the new draft replaces it
-            (solution may have changed, env may have upgraded, etc.)
-  SKIP    — duplicate of existing; nothing new
-
-Additionally, you may emit DELETE ops on existing candidates when the new
-content makes them obsolete or invalid:
-  DELETE  — the new conversation EXPLICITLY supersedes/cancels/invalidates an
-            existing memory that cannot be repaired via UPDATE. Examples:
-              * user says "don't use X anymore" and X is only present as a
-                separate memory (not the one being added/updated)
-              * candidate's boundary_envs (service / endpoint / SDK) is gone
-                and the new conversation confirms the deprecation
-
-Rules:
-- "Same task" means the existing memory and the new draft would both be valid
-  answers to the same future user query.
-- If solution differs, prefer UPDATE (we don't keep history).
-- If both task and solution match closely, SKIP.
-- DELETE only when there is EXPLICIT evidence the candidate is invalid/obsolete.
-  Never DELETE just because a candidate looks "stale".
-- Output ops can outnumber drafts when DELETEs are produced.
-
-═══════════════════════════════════════════════════════════════════
-NEW DRAFTS
-═══════════════════════════════════════════════════════════════════
-{drafts_block}
-
-═══════════════════════════════════════════════════════════════════
-EXISTING CANDIDATES (per draft, retrieved by task similarity)
-═══════════════════════════════════════════════════════════════════
-{candidates_block}
-
-═══════════════════════════════════════════════════════════════════
-OUTPUT (strict JSON only, no markdown)
-═══════════════════════════════════════════════════════════════════
-{{
-  "ops": [
-    {{"draft_idx": 0, "action": "ADD"}},
-    {{"draft_idx": 1, "action": "UPDATE", "target_experience_id": "exp_xxx", "reason": "..."}},
-    {{"draft_idx": 1, "action": "DELETE", "target_experience_id": "exp_yyy", "reason": "user explicitly deprecated Y"}},
-    {{"draft_idx": 2, "action": "SKIP",   "reason": "duplicate"}}
-  ]
-}}
-
-If there are no drafts, output {{"ops": []}}.
-"""
+from ..prompts.en import CODING_RECONCILE_PROMPT as RECONCILE_PROMPT  # noqa: E402,F401  (re-export)
 
 
 def _drafts_language_text(drafts: List[CodingMemoryDraft]) -> str:
@@ -119,24 +74,23 @@ def _drafts_language_text(drafts: List[CodingMemoryDraft]) -> str:
 def build_experience_reconcile_prompt(
     drafts: List[CodingMemoryDraft],
     candidates_per_draft: List[List[CodingMemory]],
+    language: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Return the language-matched experience reconcile prompt and language."""
+    """Return the experience reconcile prompt and its language code.
+
+    Explicit ``language`` wins; otherwise zh/en auto-detection over the drafts.
+    """
     drafts_block = CodingMemoryReconciler._format_drafts(drafts)
     candidates_block = CodingMemoryReconciler._format_candidates(
         drafts, candidates_per_draft,
     )
-    if is_chinese(_drafts_language_text(drafts)):
-        from .prompts_zh import RECONCILE_PROMPT_ZH
-
-        template = RECONCILE_PROMPT_ZH
-        language = "zh"
-    else:
-        template = RECONCILE_PROMPT
-        language = "en"
-    return template.format(
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, _drafts_language_text(drafts))
+    prompt = get_prompt("CODING_RECONCILE_PROMPT", code).format(
         drafts_block=drafts_block,
         candidates_block=candidates_block,
-    ), language
+    )
+    return with_output_language(prompt, code, explicit=explicit is not None), code
 
 
 # ================================================================
@@ -186,6 +140,7 @@ class CodingMemoryReconciler:
         user_id: str = "",
         agent_id: str = "default_agent",
         session_id: str = "",
+        language: Optional[str] = None,
     ) -> List[ReconcileOp]:
         """
         执行 reconcile + 持久化。返回执行的 ReconcileOp[]（含成功执行的 ADD/UPDATE/DELETE/SKIP）。
@@ -214,7 +169,7 @@ class CodingMemoryReconciler:
         _decide_resp = None
         try:
             ops, _decide_prompt, _decide_raw, _decide_resp = await self._llm_decide(
-                drafts, candidates_per_draft
+                drafts, candidates_per_draft, language=language,
             )
         except Exception as e:
             logger.warning(f"[coding-reconcile] LLM decide failed, fallback to ADD-all: {e}")
@@ -311,9 +266,12 @@ class CodingMemoryReconciler:
         self,
         drafts: List[CodingMemoryDraft],
         candidates_per_draft: List[List[CodingMemory]],
+        language: Optional[str] = None,
     ) -> Tuple[List[ReconcileOp], str, str, Any]:
         """返回 (ops, prompt, raw_response, llm_resp)，供上层打 CODING_RECONCILE log。"""
-        prompt, _ = build_experience_reconcile_prompt(drafts, candidates_per_draft)
+        prompt, _ = build_experience_reconcile_prompt(
+            drafts, candidates_per_draft, language=language,
+        )
 
         resp = await self.llm_provider.complete(
             prompt=prompt,

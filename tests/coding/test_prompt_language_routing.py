@@ -137,7 +137,7 @@ def test_extractor_routes_chinese_new_user_message_to_chinese_prompt(scene, zh_p
         ChatMessage(role="tool", content="Traceback: TypeError at line 100"),
     ])
     expected = zh_prompts["extract_coding" if scene == "coding" else "extract"]
-    assert language == "zh"
+    assert language == "zh-Hans"
     assert template is expected
 
 
@@ -165,7 +165,7 @@ def test_experience_reconcile_routes_from_new_drafts_not_candidates():
         solution="Use the legacy retry helper",
     )]]
     prompt, language = build_experience_reconcile_prompt(drafts, candidates)
-    assert language == "zh"
+    assert language == "zh-Hans"
     assert prompt.startswith("你")
 
 
@@ -191,7 +191,7 @@ def test_fact_reconcile_routes_from_new_fact_statement():
         statement="The previous session inspected retry behavior.",
     )]]
     prompt, language = build_fact_reconcile_prompt(drafts, candidates)
-    assert language == "zh"
+    assert language == "zh-Hans"
     assert prompt.startswith("你")
 
 
@@ -203,7 +203,7 @@ def test_chain_summary_routes_from_current_statement():
         "(now) 用户继续修复 timeout，并完成验证。",
         current_statement="用户继续修复 timeout，并完成验证。",
     )
-    assert language == "zh"
+    assert language == "zh-Hans"
     assert prompt == CHAIN_SUMMARY_PROMPT_ZH.format(
         chain_block=(
             "(2026-10-11) The previous session inspected timeout behavior.\n"

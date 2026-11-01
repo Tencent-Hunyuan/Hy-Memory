@@ -225,6 +225,16 @@ _PLACEHOLDER_VALUES = frozenset({
     "not provided", "not specified", "not mentioned",
     "未提供", "未知", "不详", "未说明", "未提及", "无",
     "-", "?",
+    # 其他提示词语言里的「用户」/「未知」（显式 language 时模型可能照抄）
+    "使用者", "該使用者", "用戶", "該用戶", "不詳", "無",
+    "ユーザー", "ユーザ", "不明", "なし",
+    "사용자", "유저", "알 수 없음", "없음",
+    "el usuario", "usuario", "la usuaria", "desconocido", "ninguno",
+    "der nutzer", "nutzer", "der benutzer", "benutzer", "unbekannt", "keine",
+    "o usuário", "usuário", "o utilizador", "utilizador", "desconhecido", "nenhum",
+    "l'utilisateur", "utilisateur", "inconnu", "aucun",
+    "пользователь", "неизвестно", "нет",
+    "pengguna", "tidak diketahui", "tidak ada",
 })
 
 # 内置字段的中文标签：弱模型也会把字段说明的中文词当值。

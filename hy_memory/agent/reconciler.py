@@ -160,299 +160,18 @@ class ReconcileResult:
 # Prompts
 # ================================================================
 
-SEARCH_QUERY_PROMPT = """You are a search query generator. Given a list of newly extracted memories, generate a set of short search queries that can be used to find related existing memories in a vector database.
-
-The goal is to maximize recall — find existing memories that are semantically related to the new memories, even if the wording is very different.
-
-## New memories:
-{new_memories}
-
-## Instructions
-
-Generate search queries that cover:
-- Key topics, entities, and themes mentioned in the memories
-- Rephrased or abstracted versions of the core concepts
-- Related concepts that might exist in the user's memory store
-
-Output a JSON array of query strings (5-15 queries, short and focused):
-
-["query1", "query2", "query3", ...]
-
-Output JSON array only, no other text."""
-
-RECONCILE_PROMPT = """You are a memory management system.
-
-Your task is to merge new memories into an existing memory base while keeping it:
-
-* lossless
-* non-contradictory
-* compact
-* highly retrievable
-
----
-
-# Operations
-
-## ADD
-
-Use when the information is entirely new.
-
-```json
-{{
-  "op": "ADD",
-  "content": "...",
-  "owner": "user",
-  "tags": ["..."]
-}}
-```
-
----
-
-## UPDATE
-
-Use when:
-
-* the new memory is compatible with an existing one
-* they describe the same topic
-* merging improves completeness or retrievability
-
-Rules:
-
-* merge losslessly
-* preserve all useful information
-* do NOT create duplicates
-* if the two disagree on a value, keep the value from the memory with the later
-  `memory_at`; never let an older memory overwrite a newer value
-
-### Same occurrence vs. another occurrence
-
-Use **UPDATE** only when the new memory adds detail to the same real-world
-occurrence or durable fact already recorded.
-
-If the same person does the same kind of activity/event again at another time
-(another trip, game, injury, purchase, health scare, etc.), keep the occurrence
-as a separate **ADD**. Preserve its own date and details. When an existing memory
-is clearly another occurrence in that same concrete series, link it with
-`related: [{{"memory_id":"...","relation":"same_series"}}]`.
-
-Do not merge separate dated occurrences into one long count/timeline memory.
-The retrieval layer builds timelines from the linked L2 memories.
-
-```json
-{{
-  "op": "UPDATE",
-  "memory_id": "...",
-  "content": "...",
-  "owner": "user",
-  "tags": ["..."]
-}}
-```
-
----
-
-## SUPERSEDE
-
-Use ONLY when:
-
-* the new memory contradicts an existing memory
-* both cannot be true at the same time
-* the old memory would now give the wrong current-state answer
-* the new memory's `memory_at` is the same as or LATER than the existing memory's `memory_at`
-
-Examples:
-
-* city changed
-* employer changed
-* relationship status changed
-
-Do NOT use for:
-
-* added detail
-* compatible preferences
-* wording differences
-* semantic equivalence
-* a new memory whose `memory_at` is EARLIER than the existing memory's — it is an
-  older state and must never replace a newer one (see "Time order")
-
-Rules:
-
-* content must contain ONLY the new state
-* do NOT copy unchanged information
-* the system keeps the old node and links it onto the evolution chain automatically; you don't need to handle history
-
-```json
-{{
-  "op": "SUPERSEDE",
-  "memory_id": "...",
-  "content": "...",
-  "supersede_reason": "...",
-  "owner": "user",
-  "tags": ["..."]
-}}
-```
-
-### Folding several existing memories into one chain
-
-If TWO OR MORE existing memories track the SAME dimension and the new memory is
-the latest change on that dimension — its `memory_at` is later than every folded
-memory's `memory_at` — you may fold them into a single evolution
-chain. Use `memory_ids` (an ordered list, OLDEST → NEWEST) instead of a single
-`memory_id`:
-
-```json
-{{
-  "op": "SUPERSEDE",
-  "memory_ids": ["<oldest_id>", "<newer_id>"],
-  "content": "<only the newest state>",
-  "supersede_reason": "...",
-  "owner": "user",
-  "tags": ["..."]
-}}
-```
-
-The listed memories are chained oldest → newest and the new memory becomes the
-chain head. `content` still describes ONLY the newest state — never copy the
-older memories' text into it; they remain queryable in the chain history.
-
----
-
-# Rules
-
-* Preserve all meaningful information.
-* Skip exact duplicates.
-* Prefer merging related fragments.
-* Separate dated occurrences stay separate ADDs; use `same_series` only for the
-  same subject and same concrete activity/event type.
-* Keep each memory focused on one coherent topic.
-* Follow "Time order" below.
-* **NEVER merge or supersede across different subjects.** The subject is whoever
-  the content is about: "The user ..." vs "John ..." vs "Mary ...". Memories about
-  different people are independent facts even when the sentence is otherwise
-  identical — "The user likes coffee" and "John likes coffee" are two separate
-  memories, never an UPDATE or a SUPERSEDE of each other.
-* `owner` (`user`/`agent`): copy it from the memory being written. NEVER merge or supersede across different owners — a user's fact and the assistant's fact are distinct even on the same topic.
-* A SUPERSEDE either targets ONE memory (`memory_id`) or folds several memories on the same dimension into one chain (`memory_ids`, oldest→newest). An UPDATE targets exactly ONE memory.
-* Never touch the same existing memory from more than one op.
-* Output language matches input memory language.
-
----
-
-# Time order
-
-Every memory, new or existing, has `memory_at`: when it happened. Memories are
-NOT always written in the order they happened — history can be imported late,
-and a memory can be added while older history is still being processed. A new
-memory can therefore be OLDER than an existing one.
-
-* Decide which memory is newer ONLY by `memory_at`. "New memories" means "being
-  written now", not "more recent".
-* An older memory must never replace a newer one: no SUPERSEDE of a newer
-  memory, and no UPDATE that overwrites a newer value with an older one.
-* If a new memory is older than an existing memory it conflicts with, keep the
-  existing memory as the current state. ADD the new one as a past state, worded
-  in the past with its time (for example "In 2023 the user lived in Shanghai"),
-  or output nothing if it adds no information.
-* `memory_at: null` means unknown time. Unknown is NOT newer: never SUPERSEDE a
-  memory that has a known `memory_at` with one whose `memory_at` is null.
-* Do not invent chronology.
-
----
-
-# Optional: `related`
-
-On any op you MAY add a `related` array recording how the memory being written
-relates to an EXISTING memory. This does not change what gets stored — it only
-records a link.
-
-```json
-{{
-  "op": "ADD",
-  "content": "...",
-  "owner": "user",
-  "tags": ["..."],
-  "related": [{{"memory_id": "<existing_id>", "relation": "causes"}}]
-}}
-```
-
-Only these four relations are allowed:
-
-* `causes` — the two memories are in a cause/effect relationship
-  (e.g. "started running daily" → "knee started hurting")
-* `elaborates` — adds detail to, or is a later development of, the existing memory
-* `contrasts` — they are in tension but BOTH still true (if one makes the other
-  false, that is a SUPERSEDE, not a `contrasts` link)
-* `same_series` — separate dated occurrences of the same concrete activity or
-  event type for the same subject (for example, two different skiing trips)
-
-Rules:
-
-* Only link to memories that appear in "Existing memories" — never invent an id.
-* Only emit a link when the relationship is **explicit and specific**. Two memories
-  merely being about the same broad topic is NOT a relation — leave `related` out.
-* `same_series` requires the same subject and a concrete repeated action/event;
-  shared broad tags such as health, travel, sport, food, or work are insufficient.
-* Omit the field entirely when there is nothing to link. Zero links is the normal case.
-* Never use `related` as a substitute for UPDATE / SUPERSEDE.
-
----
-{few_shot_section}
-###################
-Input Data
-###################
-
-Current date: {current_date}
-
-## Existing memories
-
-{existing_memories}
-
-## New memories
-
-{new_memories}
-
----
-
-# Output
-
-Return ONLY a JSON array inside a fenced ```json code block.
-
-If no changes are needed:
-
-```json
-[]
-```
-
-Now produce the JSON array."""
-
-RECONCILE_STRUCTURE_METADATA_PROMPT_EN = """
-
-Additional structural output contract:
-
-For every ADD, UPDATE, or SUPERSEDE result, preserve or refine `topic_paths`,
-`event_facet`, and `topic_assignments`. `event_facet` contains only `subject`,
-`participants`, `action`, `objects`, `locations`, and `state`.
-`topic_assignments` contains subject-specific `{subject, role, path}` entries;
-each path segment is `{name, type}` and type is `topic|facet|series|episode`.
-Types follow `topic -> facet -> series -> episode`; levels may be skipped but
-types may not repeat or move backward.
-Use Series only for repeated occurrences of one concrete activity/state line and
-Episode only for one bounded real-world occurrence. Never infer these types from
-depth, a broad shared tag, or unrelated co-occurrence. When an Existing memory
-already has a semantically equivalent subject-specific path, reuse its exact node
-names and types instead of creating a synonym fork. To request exact reuse, emit
-`structure_references: [{"memory_id":"<existing_id>", "subject":"...",
-"through":"topic|facet|series|episode"}]`. The referenced ID must appear in
-Existing memories. `through` means copy that existing path prefix through the
-named structural type; an explicitly authored deeper suffix remains new. Reuse
-is forbidden when the subject, concrete activity/state line, or Episode boundary
-differs. These fields describe the memory, never a future query form such as
-"when", "how many", or "who".
-
-Series is a reconcile-time relation: establish it only when the new memory and
-at least one independent Existing memory are distinct occurrences of the same
-concrete activity/state line. Multiple propositions from the current write do
-not prove repetition.
-"""
+# Prompt 文本统一放在 hy_memory/prompts/<language>.py（get_prompt 按语言码取）；
+# 以下旧名字保留为英文版别名（向后兼容）。
+from ..prompts import (  # noqa: E402
+    get_prompt,
+    normalize_language,
+    resolve_language,
+    with_output_language,
+)
+from ..prompts.en import SEARCH_QUERY_PROMPT  # noqa: E402,F401  (re-export)
+from ..prompts.en import RECONCILE_PROMPT  # noqa: E402,F401  (re-export)
+from ..prompts.en import RECONCILE_STRUCTURE_METADATA_PROMPT as RECONCILE_STRUCTURE_METADATA_PROMPT_EN  # noqa: E402,F401  (re-export)
+from ..prompts.en import RECONCILE_FEW_SHOT as RECONCILE_FEW_SHOT_EN  # noqa: E402,F401  (re-export)
 
 
 def append_reconcile_structure_prompt(
@@ -461,10 +180,8 @@ def append_reconcile_structure_prompt(
     """Append the structure contract only for an explicit experiment config."""
     if not enabled:
         return prompt
-    if language == "zh":
-        from .prompts_zh import RECONCILE_STRUCTURE_METADATA_PROMPT_ZH
-        return prompt + RECONCILE_STRUCTURE_METADATA_PROMPT_ZH
-    return prompt + RECONCILE_STRUCTURE_METADATA_PROMPT_EN
+    code = "zh-Hans" if language == "zh" else language
+    return prompt + get_prompt("RECONCILE_STRUCTURE_METADATA_PROMPT", code)
 
 
 def _as_aware(value: Any) -> Optional[datetime]:
@@ -550,147 +267,42 @@ def build_reconcile_prompt(
     current_date: str,
     few_shot_enabled: bool = False,
     structure_metadata_enabled: bool = False,
+    language: Optional[str] = None,
 ) -> str:
-    """Build the language-matched reconcile prompt used by the write path."""
-    from ..utils.lang_detect import is_chinese
+    """Build the reconcile prompt used by the write path.
 
-    if is_chinese("\n".join(new_memories)):
-        from .prompts_zh import RECONCILE_FEW_SHOT_ZH, RECONCILE_PROMPT_ZH
-
-        few_shot = ("\n" + RECONCILE_FEW_SHOT_ZH + "\n") if few_shot_enabled else ""
-        prompt = RECONCILE_PROMPT_ZH.format(
-            current_date=current_date,
-            new_memories=new_memories_block,
-            existing_memories=existing_memories_block,
-            few_shot_section=few_shot,
-        )
-        return append_reconcile_structure_prompt(
-            prompt,
-            enabled=structure_metadata_enabled,
-            language="zh",
-        )
-
-    few_shot = ("\n" + RECONCILE_FEW_SHOT_EN + "\n") if few_shot_enabled else ""
-    prompt = RECONCILE_PROMPT.format(
+    ``language`` set → that language's prompt plus the output-language rule;
+    None → zh/en auto-detection over the new memories (unchanged behaviour).
+    """
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, "\n".join(new_memories))
+    few_shot = (
+        ("\n" + get_prompt("RECONCILE_FEW_SHOT", code) + "\n")
+        if few_shot_enabled else ""
+    )
+    prompt = get_prompt("RECONCILE_PROMPT", code).format(
         current_date=current_date,
         new_memories=new_memories_block,
         existing_memories=existing_memories_block,
         few_shot_section=few_shot,
     )
-    return append_reconcile_structure_prompt(
+    prompt = append_reconcile_structure_prompt(
         prompt,
         enabled=structure_metadata_enabled,
-        language="en",
+        language=code,
     )
+    return with_output_language(prompt, code, explicit=explicit is not None)
 
 
-# Reconcile few-shot examples (injected into {few_shot_section} only when
-# few_shot_enabled). Each shows the existing/new input and the expected ops,
-# with a one-line takeaway. IDs are shortened for readability.
-RECONCILE_FEW_SHOT_EN = """
-###################
-Examples
-###################
-
-## Example 1 — One new memory: part conflicts with an existing chain, part is unrelated
-
-Existing memories:
-[
-  {"memory_id": "m1", "content": "The user works as a product manager at Stripe.", "owner": "user", "history_versions": [{"content": "The user works as a product manager at a fintech startup."}]}
-]
-New memories:
-[
-  {"content": "The user has left Stripe and is now a product lead at Notion, and has recently taken up pottery on weekends.", "owner": "user"}
-]
-
-Output:
-```json
-[
-  {"op": "SUPERSEDE", "memory_id": "m1", "content": "The user works as a product lead at Notion.", "supersede_reason": "employer changed from Stripe to Notion", "owner": "user", "tags": ["work"]},
-  {"op": "ADD", "content": "The user has recently taken up pottery on weekends.", "owner": "user", "tags": ["hobby"]}
-]
-```
-A SINGLE new memory carries two things: the job change (same dimension as the existing employment chain m1, which already has history → SUPERSEDE, becomes the new chain head) and an unrelated detail (pottery → ADD). Split the one memory into the right op per part — the new head describes ONLY the employment state, never the pottery.
-
-## Example 2 — Fold two unlinked existing memories + the new change into one 3-node chain
-
-Existing memories:
-[
-  {"memory_id": "a1", "content": "The user is learning to play the guitar.", "owner": "user", "memory_at": "2024-02-10 09:00"},
-  {"memory_id": "a2", "content": "The user can now play a few full songs on the guitar.", "owner": "user", "memory_at": "2024-09-05 09:00"}
-]
-New memories:
-[
-  {"content": "The user now performs guitar at local open-mic nights.", "owner": "user"}
-]
-
-Output:
-```json
-[
-  {"op": "SUPERSEDE", "memory_ids": ["a1", "a2"], "content": "The user performs guitar at local open-mic nights.", "supersede_reason": "guitar skill progressed: learning → playing songs → performing live", "owner": "user", "tags": ["music", "hobby"]}
-]
-```
-a1 and a2 were never linked, but they track the same dimension (guitar progress) and the new memory is the latest step. Fold them with `memory_ids` ordered oldest→newest; they become a 3-node chain (a1 ← a2 ← new head). The head `content` describes ONLY the current state — it does not restate "learning" or "a few songs".
-
-## Example 3 — New head must NOT copy the old memory's content
-
-Existing memories:
-[
-  {"memory_id": "c1", "content": "The user lives in a rented one-bedroom apartment in Shibuya, Tokyo, pays ¥180,000/month, loves the 5-minute walk to the station, but complains the place is noisy at night and has no parking.", "owner": "user"}
-]
-New memories:
-[
-  {"content": "The user just bought and moved into a three-bedroom house in the suburbs of Yokohama with a garden and a two-car garage.", "owner": "user"}
-]
-
-Output:
-```json
-[
-  {"op": "SUPERSEDE", "memory_id": "c1", "content": "The user bought and moved into a three-bedroom house in suburban Yokohama, with a garden and a two-car garage.", "supersede_reason": "residence changed from a rented Shibuya apartment to an owned Yokohama house", "owner": "user", "tags": ["housing"]}
-]
-```
-The new memory SUPERSEDEs c1 and becomes the chain head. The head `content` describes ONLY the new Yokohama house. Do NOT drag the old apartment's distinctive details (Shibuya, ¥180,000 rent, the station walk, the noise/parking complaints) into the new node — those clearly belong to the old residence, not the new one. They stay in chain history and remain retrievable; copying them would make the head self-contradictory (renting in Shibuya AND owning in Yokohama at once).
-
-## Example 4 — Different subjects are never merged, however similar the wording
-
-Existing memories:
-[
-  {"memory_id": "d1", "content": "The user drinks black coffee every morning.", "owner": "user"}
-]
-New memories:
-[
-  {"content": "John drinks black coffee every morning.", "owner": "user"},
-  {"content": "The user now drinks black coffee twice a day, morning and after lunch.", "owner": "user"}
-]
-
-Output:
-```json
-[
-  {"op": "ADD", "content": "John drinks black coffee every morning.", "owner": "user", "tags": ["food"]},
-  {"op": "UPDATE", "memory_id": "d1", "content": "The user drinks black coffee twice a day, in the morning and after lunch.", "owner": "user", "tags": ["food"]}
-]
-```
-The two new memories are near-identical in wording but have DIFFERENT subjects. "John ..." is about another person, so it is a plain ADD — never an UPDATE or SUPERSEDE of d1, even though d1 says almost the same thing about the user. Only the memory whose subject is also "The user" may merge with d1.
-
-## Example 5 — Recurring event: bump count and keep a timeline (UPDATE, not ADD)
-
-Existing memories:
-[
-  {"memory_id": "i1", "content": "John injured his ankle last season and needed time off plus physical therapy.", "owner": "user", "memory_at": "2023-05-21 19:48"}
-]
-New memories:
-[
-  {"content": "John twisted his ankle again during a recent game.", "owner": "user", "memory_at": "2023-10-13 13:50"}
-]
-
-Output:
-```json
-[
-  {"op": "UPDATE", "memory_id": "i1", "content": "John has injured his ankle two times: first last season (around the 2022–2023 season), needing time off and physical therapy; second during a game around 2023-10-13.", "owner": "user", "tags": ["health", "basketball", "injury"]}
-]
-```
-Same event type happening again → UPDATE the old memory. State the **count** and list occurrences with times when known. Do NOT ADD a second "John injured his ankle" fact, and do NOT SUPERSEDE (the first injury did not stop being true).
-"""
+def build_search_query_prompt(
+    new_memories: List[str], *, language: Optional[str] = None,
+) -> str:
+    """Search-query generation prompt (same language rule as reconcile)."""
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, "\n".join(new_memories))
+    mem_lines = "\n".join(f"{i+1}. {m}" for i, m in enumerate(new_memories))
+    prompt = get_prompt("SEARCH_QUERY_PROMPT", code).format(new_memories=mem_lines)
+    return with_output_language(prompt, code, explicit=explicit is not None)
 
 
 # ================================================================
@@ -745,7 +357,9 @@ class MemoryReconciler:
             self._llm = LLMProvider(self.config)
         return self._llm
 
-    async def _generate_search_queries(self, new_memories: List[str]) -> tuple:
+    async def _generate_search_queries(
+        self, new_memories: List[str], language: Optional[str] = None,
+    ) -> tuple:
         """
         Pre-process: 从全部新 memory 中提取 search queries，
         用于补充向量搜索的召回能力。
@@ -753,17 +367,7 @@ class MemoryReconciler:
         Returns:
             (queries: List[str], llm_response: Optional[LLMResponse])
         """
-        mem_lines = "\n".join(f"{i+1}. {m}" for i, m in enumerate(new_memories))
-
-        # Select prompt based on input language
-        from ..utils.lang_detect import is_chinese
-
-        if is_chinese("\n".join(new_memories)):
-            from .prompts_zh import SEARCH_QUERY_PROMPT_ZH
-
-            prompt = SEARCH_QUERY_PROMPT_ZH.format(new_memories=mem_lines)
-        else:
-            prompt = SEARCH_QUERY_PROMPT.format(new_memories=mem_lines)
+        prompt = build_search_query_prompt(new_memories, language=language)
 
         try:
             llm = self._get_llm()
@@ -849,6 +453,7 @@ class MemoryReconciler:
         graph_store=None,  # Optional GraphStore：Entity MENTIONS boost
         new_memory_embeddings: Optional[Dict[str, List[float]]] = None,
         source: str = "default",
+        language: Optional[str] = None,
     ) -> ReconcileResult:
         """
         对 new_memories 做 reconcile。
@@ -856,6 +461,7 @@ class MemoryReconciler:
         Args:
             new_memories: 新记忆内容列表（content only，用于 embed 搜索）
             new_memories_with_meta: 可选，含 tags 的完整 meta
+            language: 显式 prompt 语言码；None 时按新记忆做 zh/en 自动检测
         """
         if not new_memories:
             return ReconcileResult(ops=[], success=True)
@@ -876,7 +482,7 @@ class MemoryReconciler:
 
             if self._enable_search_query:
                 search_queries, sq_response = await self._generate_search_queries(
-                    new_memories
+                    new_memories, language=language,
                 )
             sq_elapsed = (_time.perf_counter() - t_sq) * 1000
 
@@ -887,18 +493,10 @@ class MemoryReconciler:
 
             # 写 SEARCH_QUERY pipeline log
             if cache and request_id:
-                mem_lines = "\n".join(f"{i+1}. {m}" for i, m in enumerate(new_memories))
                 if self._enable_search_query:
-                    from ..utils.lang_detect import is_chinese as _is_zh
-
-                    if _is_zh("\n".join(new_memories)):
-                        from .prompts_zh import SEARCH_QUERY_PROMPT_ZH
-
-                        sq_prompt = SEARCH_QUERY_PROMPT_ZH.format(
-                            new_memories=mem_lines
-                        )
-                    else:
-                        sq_prompt = SEARCH_QUERY_PROMPT.format(new_memories=mem_lines)
+                    sq_prompt = build_search_query_prompt(
+                        new_memories, language=language,
+                    )
                 else:
                     sq_prompt = "[search query disabled — hybrid retrieval per new memory]"
                 try:
@@ -1447,6 +1045,7 @@ class MemoryReconciler:
                     getattr(self.config.llm, "few_shot_enabled", False)
                 ),
                 structure_metadata_enabled=_structure_metadata_on,
+                language=language,
             )
 
             # ── Step 5: LLM 调用 + 重试 ──

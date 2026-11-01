@@ -43,6 +43,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
 
+from ..prompts import (
+    get_prompt,
+    normalize_language,
+    resolve_language,
+    with_output_language,
+)
 from ..utils.source_filter import merge_sources
 
 logger = logging.getLogger(__name__)
@@ -115,56 +121,9 @@ Messages:
 """
 
 
-EPISODE_SUMMARY_PROMPT = """You are summarizing ONE episode of conversation with the user.
-
-An episode is a single stretch of discussion — one thing that was talked about,
-possibly across several sessions of writing.
-
-## Memories captured during this episode (oldest → newest)
-
-{memories}
-
----
-
-Write a single dense summary of what happened / what was discussed in this episode.
-
-Rules:
-
-* 2–4 sentences, third person, starting with "The user ..." (or the named person
-  if the memories are about someone else).
-* Tie the memories together into one coherent account — an episode usually has a
-  thread running through it (a plan, a problem, an outing, a decision).
-* Preserve concrete details: names, places, numbers, dates.
-* Do NOT invent anything that is not in the memories.
-* Do NOT enumerate the memories one by one; synthesize them.
-* Output language must match the language of the memories.
-
-Return ONLY the summary text, no preamble, no JSON, no quotes."""
-
-
-EPISODE_SUMMARY_PROMPT_ZH = """你在为**一段讨论**（一个 episode）做总结。
-
-一个 episode 是一段连续的讨论 —— 围绕一件事，可能跨越好几次写入。
-
-## 这段讨论中抽取到的记忆（时间正序）
-
-{memories}
-
----
-
-写一段关于这次讨论内容的高密度摘要。
-
-要求：
-
-* 2–4 句，第三人称，以"用户…"开头（若记忆讲的是别人，则以那个人的名字开头）。
-* 把这些记忆串成一个连贯的叙述 —— 一段讨论通常有一根主线（一个计划、一个问题、
-  一次出行、一个决定）。
-* 保留具体细节：人名、地点、数字、日期。
-* 绝不编造记忆里没有的内容。
-* 不要逐条罗列记忆，要综合成一段。
-* 输出语言与记忆的语言一致。
-
-只返回摘要正文，不要任何前言、不要 JSON、不要引号。"""
+# 多语言版本见 hy_memory/prompts/<language>.py；旧名字保留为别名。
+from ..prompts.en import EPISODE_SUMMARY_PROMPT  # noqa: E402,F401  (re-export)
+from ..prompts.zh_hans import EPISODE_SUMMARY_PROMPT as EPISODE_SUMMARY_PROMPT_ZH  # noqa: E402,F401  (re-export)
 
 
 SESSION_EPISODE_PROMPT = """Convert this complete conversation session into one retrieval-friendly episode narrative.
@@ -596,8 +555,12 @@ def _assign_facts_to_segments(facts: List[Any], segments: List[dict]) -> Dict[in
 async def finalize_dynamic_episode_capsules(
     *, vector_store, embed_service, llm_provider, user_id: str,
     agent_id: Optional[str], session_id: str, summary_concurrency: int = 3,
+    language: Optional[str] = None,
 ) -> dict:
     """Split a completed session, create compact L3 capsules, and link its facts.
+
+    The capsule prompt is English-only; an explicit ``language`` appends that
+    language's output rule so the capsule text is written in it.
 
     Boundary and summary generation are separate calls. Boundary failure degrades
     to one whole-session capsule. A segmented-summary failure also retries the
@@ -802,6 +765,7 @@ async def finalize_dynamic_episode_capsules(
             start = end + 1
 
         semaphore = asyncio.Semaphore(max(1, min(16, int(summary_concurrency or 1))))
+        explicit_language = normalize_language(language)
 
         async def summarize(spec):
             segment_index, segment_start, segment_end, segment = spec
@@ -809,9 +773,13 @@ async def finalize_dynamic_episode_capsules(
             try:
                 async with semaphore:
                     response = await llm_provider.complete(
-                        prompt=DYNAMIC_CAPSULE_PROMPT.format(
-                            timestamp=timestamp_text,
-                            messages=_render_messages(segment),
+                        prompt=with_output_language(
+                            DYNAMIC_CAPSULE_PROMPT.format(
+                                timestamp=timestamp_text,
+                                messages=_render_messages(segment),
+                            ),
+                            explicit_language,
+                            explicit=explicit_language is not None,
                         ),
                         max_tokens=4096,
                     )
@@ -1128,8 +1096,12 @@ def _cosine(a: List[float], b: List[float]) -> float:
 async def finalize_session_episode(
     *, vector_store, embed_service, llm_provider, user_id: str,
     agent_id: Optional[str], session_id: str,
+    language: Optional[str] = None,
 ) -> dict:
     """Create one first-class narrative from all raw chunks in a caller session.
+
+    The prompt is English-only; an explicit ``language`` appends that
+    language's output rule so the narrative is written in it.
 
     This is deliberately explicit: the SDK cannot infer that the final write of a
     session has arrived. Repeated calls upsert the same deterministic node id.
@@ -1213,6 +1185,10 @@ async def finalize_session_episode(
         timestamp=timestamp_text,
         conversation=conversation,
     )
+    explicit_language = normalize_language(language)
+    prompt = with_output_language(
+        prompt, explicit_language, explicit=explicit_language is not None,
+    )
     response = await llm_provider.complete(prompt=prompt, max_tokens=3000)
     narrative = (getattr(response, "content", "") or "").strip()
     if not narrative:
@@ -1274,8 +1250,11 @@ async def summarize_closed_episode(
     max_memories: int = 60,
     temperature: Optional[float] = None,
     trace=None,
+    language: Optional[str] = None,
 ) -> Optional[str]:
     """总结一个**刚刚关闭**的 episode，返回摘要节点 id（跳过则 None）。
+
+    language 为显式 prompt 语言码；None 时按记忆内容做 zh/en 自动检测。
 
     由 writer 在检测到 episode 滚动时 fire-and-forget 调用：此时上一个 episode
     不会再有新内容进来，所以这一次总结就是最终产物，不需要后续 merge / 重写。
@@ -1317,6 +1296,7 @@ async def summarize_closed_episode(
     _t0 = _dt.now()
     summary, prompt, tokens = await _generate(
         llm_provider=llm_provider, memories=contents, temperature=temperature,
+        language=language,
     )
     _elapsed = (_dt.now() - _t0).total_seconds() * 1000
     if trace is not None:
@@ -1351,15 +1331,16 @@ async def summarize_closed_episode(
 
 async def _generate(
     *, llm_provider, memories: List[str], temperature: Optional[float] = None,
+    language: Optional[str] = None,
 ) -> tuple:
     """返回 (摘要文本, 实际 prompt, token 用量) —— 后两个供埋点，线上要能复盘。"""
-    from ..utils.lang_detect import is_chinese
-
     body = "\n".join(f"- {c}" for c in memories if c)
     if not body:
         return "", "", {}
-    tpl = EPISODE_SUMMARY_PROMPT_ZH if is_chinese(body) else EPISODE_SUMMARY_PROMPT
-    prompt = tpl.format(memories=body)
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, body)
+    prompt = get_prompt("EPISODE_SUMMARY_PROMPT", code).format(memories=body)
+    prompt = with_output_language(prompt, code, explicit=explicit is not None)
     resp = await llm_provider.complete(
         prompt=prompt,
         max_tokens=400,

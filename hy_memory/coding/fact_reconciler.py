@@ -23,7 +23,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..agent.llm_provider import LLMProvider
 from ..core.embed_service import EmbedService
-from ..utils.lang_detect import is_chinese
+from ..prompts import (
+    get_prompt,
+    normalize_language,
+    resolve_language,
+    with_output_language,
+)
 from .store import CodingMemoryStore
 from .types import (
 
@@ -206,143 +211,10 @@ def _subject_conflict(new_subject: str, old_subject: str) -> bool:
 # General subject-isolation rules belong in the prompt; lookalike examples
 # encourage pattern matching instead of teaching the rule.
 
-FACT_RECONCILE_PROMPT = """\
-You maintain session-level WORKING FACTS. Each statement summarizes one whole
-trace/session: the user's task, the rough approach, and the result. It is not an
-atomic claim.
-
-Every new session fact below WILL be stored; that is not your decision. Your only
-job is to detect task continuation: is the new session continuing to advance the
-SAME user task as an existing session fact? If so, SUPERSEDE the older fact so
-the links form a cross-session progress chain for that task.
-
-Mark an existing fact as superseded ONLY when there is strong evidence that:
-  - The subjects match: both records are about the SAME entity — the same
-    person, the same file/module, the same host/service. A shared subject is
-    necessary but not sufficient; AND
-  - The user goal is materially the SAME, not merely in the same topic/project;
-    AND
-  - The new trace continues, retries, extends, verifies, or finishes the work
-    recorded by the existing trace.
-
-Do NOT supersede when:
-  - The two records name different subjects. Two people in one group, two files
-    in one module, two hosts in one cluster are PARALLEL, not successive: one
-    person's state is not a newer version of another's. Where a subject is shown
-    as (unspecified), fall back to judging by the statement alone.
-  - The sessions merely mention the same file, symbol, component, repository,
-    error, or technology but pursue different user goals.
-  - One task only supplies context or a technique for another task.
-  - The relationship is uncertain. Be conservative: INSERT is the safe default;
-    merging unrelated sessions destroys their separate task history.
-
-Treat each statement as evidence-bounded text. Do not reinterpret an inference
-inside it as an established cause or use a shared conjecture/error as proof that
-the user goals are the same. Your decision is only about task continuation; do
-not "correct", complete, or embellish either session record.
-
-Examples:
-  existing: "The user needed to fix CI's npm run build; traced it to
-             ERR_OSSL_EVP_UNSUPPORTED under Node 18, workflow not yet changed."
-  new:      "The user continued fixing the same CI build; raised Node in
-             .github/workflows/ci.yml to 20 and npm run build passed."
-                                                                 → SUPERSEDE
-
-  existing: "The user needed to fix JWT expiry handling in
-             auth/middleware.ts; refresh logic was added."
-  new:      "The user needed performance logging added to
-             auth/middleware.ts; a latency metric was introduced."
-                                                                 → keep both
-            (same file/project, different user goal)
-
-═══════════════════════════════════════════════════════════════════
-NEW SESSION FACTS
-═══════════════════════════════════════════════════════════════════
-{drafts_block}
-
-═══════════════════════════════════════════════════════════════════
-EXISTING SESSION FACTS (per new fact, retrieved by statement similarity)
-═══════════════════════════════════════════════════════════════════
-{candidates_block}
-
-═══════════════════════════════════════════════════════════════════
-OUTPUT (strict JSON only, no markdown)
-═══════════════════════════════════════════════════════════════════
-{{
-  "ops": [
-    {{"draft_idx": 0, "supersedes": ["fact_xxx"], "reason": "continues the same CI fix task"}},
-    {{"draft_idx": 1, "supersedes": []}}
-  ]
-}}
-
-Only use fact ids that appear in the candidate list for that same draft_idx.
-If nothing is superseded anywhere, output {{"ops": []}}.
-"""
+from ..prompts.en import CODING_FACT_RECONCILE_PROMPT as FACT_RECONCILE_PROMPT  # noqa: E402,F401  (re-export)
 
 
-CHAIN_SUMMARY_PROMPT = """\
-A user task in a working-memory store has progressed across sessions. Below are
-the session summaries in that task's progress chain, oldest first, ending with
-the current session.
-
-Summarize how the SAME task progressed across sessions to its current state.
-Cover every important stage in chronological order. For each stage, preserve
-where available: the actual action or change, its direct result, and any
-unresolved issue or limiting condition. End with an explicit current status.
-
-Rules:
-  - This is compression only. Report ONLY what the entries say; never add or
-    complete a command, cause, motive, action, test result, success state, or
-    global negative conclusion.
-  - Preserve evidence status exactly: attempted is not completed, observed is
-    not verified, inferred is not established, and unresolved stays unresolved.
-    Keep uncertainty words and search/permission/coverage limits.
-  - State the current ending status faithfully (completed, partially completed,
-    failed, blocked, or still awaiting verification). Never upgrade it based on
-    a plausible causal story or on a later entry that did not verify it.
-  - When entries mention a suspected cause and a later result, connect them
-    causally only if an entry directly says that cause was verified.
-  - Preserve concrete retrieval anchors: file paths, symbols, commands, error
-    strings, versions, config keys/values, and important numeric values that
-    matter to the progress.
-  - For chains of 2-3 generations, do not over-compress the progression into one
-    sentence. Prefer 2-4 compact paragraphs when useful, or readable prose with
-    a clear task goal, stage-by-stage progression, and current status.
-  - Do not mechanically copy the full history. Omit repetition and low-value
-    detail while retaining important actions, direct results, and leftovers.
-  - Do not invent stage headings or dates. Mention a date only when the entries
-    make it meaningful; bare timestamps are noise.
-  - If the entries say older revisions were omitted, explicitly state that
-    earlier history was omitted; do not imply the supplied entries are complete.
-  - Write in the same language the entries are written in.
-  - No preamble or enclosing quotes.
-
-Example
-  entries:
-    (2026-07-20) The user needed to fix CI's npm run build; traced it to
-                 ERR_OSSL_EVP_UNSUPPORTED under Node 18, workflow not yet
-                 changed.
-    (2026-07-24) The user continued that CI fix; raised Node in
-                 .github/workflows/ci.yml to 20, but the dependency cache
-                 still reproduced the old error.
-    (now)        The user continued verifying the same fix; after clearing the
-                 npm cache, npm run build passed.
-  output:
-    The task goal is fixing CI's npm run build. It was first traced to
-    ERR_OSSL_EVP_UNSUPPORTED under Node 18, with the workflow not yet changed;
-    then .github/workflows/ci.yml was raised to Node 20, but the dependency
-    cache kept the old error present. Finally, after clearing the npm cache,
-    npm run build passed, so this build fix is currently verified as complete.
-
-═══════════════════════════════════════════════════════════════════
-ENTRIES
-═══════════════════════════════════════════════════════════════════
-{chain_block}
-
-═══════════════════════════════════════════════════════════════════
-OUTPUT (the summary itself, nothing else)
-═══════════════════════════════════════════════════════════════════
-"""
+from ..prompts.en import CODING_CHAIN_SUMMARY_PROMPT as CHAIN_SUMMARY_PROMPT  # noqa: E402,F401  (re-export)
 
 
 def _fact_drafts_language_text(drafts: List[WorkingFactDraft]) -> str:
@@ -357,37 +229,34 @@ def _fact_drafts_language_text(drafts: List[WorkingFactDraft]) -> str:
 def build_fact_reconcile_prompt(
     drafts: List[WorkingFactDraft],
     candidates: List[List[WorkingFact]],
+    language: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Return the language-matched fact reconcile prompt and language."""
-    if is_chinese(_fact_drafts_language_text(drafts)):
-        from .prompts_zh import FACT_RECONCILE_PROMPT_ZH
+    """Return the fact reconcile prompt and its language code.
 
-        template = FACT_RECONCILE_PROMPT_ZH
-        language = "zh"
-    else:
-        template = FACT_RECONCILE_PROMPT
-        language = "en"
-    return template.format(
+    Explicit ``language`` wins; otherwise zh/en auto-detection over the drafts.
+    """
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, _fact_drafts_language_text(drafts))
+    prompt = get_prompt("CODING_FACT_RECONCILE_PROMPT", code).format(
         drafts_block=WorkingFactReconciler._format_drafts(drafts),
         candidates_block=WorkingFactReconciler._format_candidates(drafts, candidates),
-    ), language
+    )
+    return with_output_language(prompt, code, explicit=explicit is not None), code
 
 
 def build_chain_summary_prompt(
     chain_block: str,
     *,
     current_statement: str,
+    language: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Return the language-matched cross-session summary prompt and language."""
-    if is_chinese(current_statement or chain_block):
-        from .prompts_zh import CHAIN_SUMMARY_PROMPT_ZH
-
-        template = CHAIN_SUMMARY_PROMPT_ZH
-        language = "zh"
-    else:
-        template = CHAIN_SUMMARY_PROMPT
-        language = "en"
-    return template.format(chain_block=chain_block), language
+    """Return the cross-session summary prompt and its language code."""
+    explicit = normalize_language(language)
+    code = resolve_language(explicit, current_statement or chain_block)
+    prompt = get_prompt("CODING_CHAIN_SUMMARY_PROMPT", code).format(
+        chain_block=chain_block,
+    )
+    return with_output_language(prompt, code, explicit=explicit is not None), code
 
 
 # ================================================================
@@ -455,9 +324,11 @@ class WorkingFactReconciler:
         branch: Optional[str] = None,
         source: str = "default",
         memory_at: Optional[datetime] = None,
+        language: Optional[str] = None,
     ) -> Tuple[List[WorkingFact], List[FactReconcileOp]]:
         """
         执行 reconcile + 持久化。memory_at 是这段对话的时间，记到新事实上。
+        language 为显式 prompt 语言码（None → zh/en 自动检测），同时用于演变总结。
 
         Returns:
             (真正落库的新事实, 执行过的 ops)。LLM 挂掉时退化为全 INSERT 不覆盖，
@@ -477,7 +348,7 @@ class WorkingFactReconciler:
         )
 
         try:
-            supersedes = await self._llm_decide(drafts, candidates)
+            supersedes = await self._llm_decide(drafts, candidates, language=language)
         except Exception as e:
             logger.warning(
                 f"[fact-reconcile] LLM decide failed, insert without supersede: {e}"
@@ -495,6 +366,7 @@ class WorkingFactReconciler:
             branch=branch,
             source=source,
             memory_at=memory_at,
+            language=language,
         )
         logger.info(
             f"[fact-reconcile] drafts={len(drafts)} inserted={len(facts)} "
@@ -588,13 +460,14 @@ class WorkingFactReconciler:
         self,
         drafts: List[WorkingFactDraft],
         candidates: List[List[WorkingFact]],
+        language: Optional[str] = None,
     ) -> Dict[int, List[str]]:
         """返回 {draft_idx: [被它覆盖的旧 fact_id, ...]}。"""
         # 一条候选都没有就没得判，省一次 LLM 调用
         if not any(candidates):
             return {}
 
-        prompt, _ = build_fact_reconcile_prompt(drafts, candidates)
+        prompt, _ = build_fact_reconcile_prompt(drafts, candidates, language=language)
         resp = await self.llm_provider.complete(
             prompt=prompt,
             max_tokens=self.max_tokens,
@@ -638,7 +511,8 @@ class WorkingFactReconciler:
         return ordered[-MAX_FACT_CHAIN_ENTRIES:], truncated
 
     async def _summarize_chain(
-        self, history: List[WorkingFact], current: str, *, truncated: bool = False
+        self, history: List[WorkingFact], current: str, *, truncated: bool = False,
+        language: Optional[str] = None,
     ) -> str:
         """让 LLM 把同一任务的跨 session 进展写成简短摘要。
 
@@ -659,6 +533,7 @@ class WorkingFactReconciler:
         prompt, _ = build_chain_summary_prompt(
             "\n".join(rows),
             current_statement=current,
+            language=language,
         )
 
         try:
@@ -790,6 +665,7 @@ class WorkingFactReconciler:
         branch: Optional[str] = None,
         source: str = "default",
         memory_at: Optional[datetime] = None,
+        language: Optional[str] = None,
     ) -> Tuple[List[WorkingFact], List[FactReconcileOp]]:
         inserted: List[WorkingFact] = []
         ops: List[FactReconcileOp] = []
@@ -873,7 +749,8 @@ class WorkingFactReconciler:
                     retired, user_id=user_id
                 )
                 new_fact.fact_chain_summary = await self._summarize_chain(
-                    history, new_fact.statement, truncated=truncated
+                    history, new_fact.statement, truncated=truncated,
+                    language=language,
                 )
                 # 摘要之外再把历代自己的 details 原样过继一份。摘要保叙事，过继保数值，
                 # 两者不重复：details 本来就不进摘要（_collect_history 只读 statement）。
