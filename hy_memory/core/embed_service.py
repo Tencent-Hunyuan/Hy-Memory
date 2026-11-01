@@ -297,6 +297,7 @@ class EmbedService:
         self._queue_locks: Dict[tuple, asyncio.Lock] = {}
         self._queue_pending: Dict[tuple, List[tuple]] = {}   # bucket -> [(text, Future, enter_at, lock_wait_ms, depth)]
         self._queue_flush_tasks: Dict[tuple, Optional[asyncio.Task]] = {}
+        self._queue_send_tasks: set = set()
 
         # Last embed response metadata (non-sensitive headers + body metadata)
         self._last_embed_meta: Dict[str, Any] = {}
@@ -497,7 +498,11 @@ class EmbedService:
 
         # ── 锁已释放 ── 此时其他协程可以继续入队，不被本批的 HTTP 阻塞
         if batch_to_send is not None:
-            await self._send_batch(batch_to_send)
+            # The full batch belongs to every waiter, not the caller that filled
+            # it. A cancelled write must not cancel its peers' shared request.
+            task = asyncio.create_task(self._send_batch(batch_to_send))
+            self._queue_send_tasks.add(task)
+            task.add_done_callback(self._queue_send_tasks.discard)
 
         result = await fut
         if isinstance(result, tuple) and len(result) == 2:
