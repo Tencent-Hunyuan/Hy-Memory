@@ -53,6 +53,26 @@ node apps/cli/dist/one-memory.cjs sources connect --all-detected --import
 （如 `DSH_HOME`）的来源必须加 `--confirm-overrides`，否则被拒绝（或在
 `--all-detected` 时跳过并列出）。用同一个 `--request-id <uuid>` 重试不会重复导入。
 
+### 接入 Hermes 的另一个 profile（多用户）
+
+一个 Runtime 可以给多个用户记忆。**用户由读的是哪个目录决定**，不看会话或平台账号：
+`~/.hermes/state.db` 属于默认用户 `local`，`~/.hermes/profiles/<name>/state.db` 是另一个用户。
+
+```bash
+# 把 wife 这个 Hermes profile 接成用户 wife：授权 + 导入历史，一步完成
+node apps/cli/dist/one-memory.cjs sources connect hermes --user-id wife --root ~/.hermes/profiles/wife
+# 也可以显式加 --import，效果相同；可带 --request-id <uuid> 幂等重试
+node apps/cli/dist/one-memory.cjs sources connect hermes --user-id wife --root ~/.hermes/profiles/wife --import --json
+
+# 列出来源；其他用户的连接单独列在「其他用户的连接」下，--json 里在 grants 字段
+node apps/cli/dist/one-memory.cjs sources list
+```
+
+- 只有 `hermes` 能带 `--user-id`（非 `local`）或 `--root`；其他来源带了会退 2，什么都不发。
+- `--root` 里的 `~` 由 CLI 展开为主目录，相对路径按当前目录解析成绝对路径。
+- 扫描 `~/.hermes` 时会排除 `profiles/**`，所以 `local` 不会读到 wife 的 `state.db`。
+- App 不变：它只读写 `local`，其他来源也都固定是 `local`。
+
 ## 3. 看导入进度
 
 ```bash
@@ -104,6 +124,23 @@ node apps/cli/dist/one-memory.cjs write status <request_id> --json
 ```
 
 两条都返回 request id；它是幂等键，结果未知时用**同一个** `--request-id` 重试不会重复写入。
+
+### 按用户读写（`--user-id`）
+
+记忆命令都接受全局 `--user-id <id>`（默认 `local`，即 App 看到的那份）：
+`memories list/show/add/add-status/update/delete`、`recall`、`profile`、`write submit/status`。
+
+```bash
+node apps/cli/dist/one-memory.cjs memories list --user-id wife --json
+node apps/cli/dist/one-memory.cjs memories add "我更喜欢喝绿茶" --user-id wife
+node apps/cli/dist/one-memory.cjs recall "喝什么茶" --user-id wife
+node apps/cli/dist/one-memory.cjs profile --user-id wife
+node apps/cli/dist/one-memory.cjs write status <request_id> --user-id wife
+```
+
+- 用户 ID 只能是 1–64 位字母、数字、`.`、`_`、`-`；其他写法退 2，不连 Runtime。
+- 不带 `--user-id`（或写 `--user-id local`）时请求里不出现 `user_id`，和以前完全一样。
+- 用户之间互相隔离：读、改、删另一个用户的记忆 ID 返回「未找到」；write 的 request id 也只属于提交它的用户。
 
 ## 8. 召回（recall）
 

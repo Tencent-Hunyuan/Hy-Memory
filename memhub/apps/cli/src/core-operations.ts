@@ -6,9 +6,10 @@ const WRITE_PATHS = [
 ] as const;
 /** `POST /api/v2/memories` adds one memory (the app's 添加记忆). */
 const MEMORY_ADD_PATH = "/api/v2/memories";
-/** One SDK memory; delete names its namespace in the query string. */
+/** One SDK memory; delete names its namespace, and a non-default user, in
+ * the query string. */
 const SDK_MEMORY_PATH =
-  /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}(?:\?kind=(?:chat|experience|fact)(?:&variant=(?:working|coding))?)?$/;
+  /^\/api\/v2\/memories\/[A-Za-z0-9][\w.-]{0,127}(?:\?(?:kind=(?:chat|experience|fact)(?:&variant=(?:working|coding))?(?:&user_id=[A-Za-z0-9._-]{1,64})?|user_id=[A-Za-z0-9._-]{1,64}))?$/;
 const MODEL_PROBE_PATH =
   /^\/api\/v1\/model-profiles\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/probe$/;
 const MODEL_PROFILE_PATH =

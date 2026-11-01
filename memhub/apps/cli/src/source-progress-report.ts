@@ -38,6 +38,21 @@ export interface SourcesDocument {
   state: ReadState["state"];
   code?: string;
   sources: Array<Record<string, unknown>>;
+  /** Every grant of every user (`GET /api/v1/source-grants`). Absent when
+   * Core is too old to list them; `sources` is the default user's view. */
+  grants?: SourceGrant[];
+}
+
+/** One source grant. Only Hermes has grants for users other than `local`,
+ * one per Hermes profile root. */
+export interface SourceGrant {
+  user_id: string;
+  source_id: string;
+  root_label: string | null;
+  root_path: string | null;
+  authorized: boolean;
+  revoked_at: string | null;
+  sync_enabled: boolean;
 }
 
 export interface SyncDocument {
@@ -86,12 +101,64 @@ export async function readSources(
       sources: [],
     };
   }
+  const grants = await readSourceGrants(reader);
   return {
     schema_version: SCHEMA_VERSION,
     product: PRODUCT,
     state: "ok",
-    sources: result.data.map(projectSource),
+    // `/api/v1/sources` is the default user's view of every source.
+    sources: result.data.map((source) => ({
+      ...projectSource(source),
+      user_id: "local",
+    })),
+    ...(grants === null ? {} : { grants }),
   };
+}
+
+/** The grants of every user, or null when Core cannot list them (an older
+ * Core answers 404): the source list is then shown as before. */
+async function readSourceGrants(
+  reader: CoreReader,
+): Promise<SourceGrant[] | null> {
+  let outcome: ReadOutcome<unknown>;
+  try {
+    outcome = await reader<unknown>("/api/v1/source-grants");
+  } catch {
+    return null;
+  }
+  if (outcome.state !== "ok") return null;
+  const value = outcome.data;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const items = (value as { grants?: unknown }).grants;
+  if (!Array.isArray(items)) return null;
+  const grants: SourceGrant[] = [];
+  const text = (candidate: unknown): string | null =>
+    typeof candidate === "string" && candidate.length <= 4096
+      ? candidate
+      : null;
+  for (const item of items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const grant = item as Record<string, unknown>;
+    if (
+      typeof grant.user_id !== "string" ||
+      !/^[A-Za-z0-9._-]{1,64}$/.test(grant.user_id) ||
+      typeof grant.source_id !== "string" ||
+      !/^[a-z0-9][a-z0-9-]{0,127}$/.test(grant.source_id) ||
+      typeof grant.authorized !== "boolean"
+    ) {
+      return null;
+    }
+    grants.push({
+      user_id: grant.user_id,
+      source_id: grant.source_id,
+      root_label: text(grant.root_label),
+      root_path: text(grant.root_path),
+      authorized: grant.authorized,
+      revoked_at: text(grant.revoked_at),
+      sync_enabled: grant.sync_enabled === true,
+    });
+  }
+  return grants;
 }
 
 export async function readSync(reader: CoreReader): Promise<SyncDocument> {
@@ -231,6 +298,22 @@ export function renderSourcesText(document: SourcesDocument): string {
     );
   }
   if (document.sources.length === 0) lines.push("（没有来源）");
+  // The list above is the default user's (`local`). Another user's grant,
+  // a Hermes profile, is listed with its user so it is not mistaken for it.
+  const others = (document.grants ?? []).filter(
+    (grant) => grant.user_id !== "local",
+  );
+  if (others.length > 0) {
+    lines.push("其他用户的连接：");
+    for (const grant of others) {
+      const name =
+        document.sources.find((source) => source.source_id === grant.source_id)
+          ?.display_name ?? grant.source_id;
+      lines.push(
+        `- ${name}（用户 ${grant.user_id}）：${grant.authorized ? "已连接" : grant.revoked_at ? "已撤销" : "未连接"}；处理${grant.sync_enabled ? "已开启" : "已冻结"}${grant.root_path ? `；目录 ${grant.root_path}` : ""}`,
+      );
+    }
+  }
   lines.push("");
   return lines.join("\n");
 }

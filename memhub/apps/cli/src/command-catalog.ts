@@ -68,6 +68,12 @@ const JSON_OPTION: CommandOption = {
   flag: "--json",
   summary: "以 JSON 输出到 stdout，供脚本与 Agent 消费。",
 };
+/** Global to the memory commands: whose memories are read or written. */
+const USER_ID_OPTION: CommandOption = {
+  flag: "--user-id <id>",
+  summary:
+    "读写哪个用户的记忆，默认 local（App 用的就是 local）。1–64 位字母、数字、点、下划线或连字符；其他用户的记忆来自用 sources connect hermes --user-id 接入的 Hermes profile。",
+};
 const WATCH_OPTION: CommandOption = {
   flag: "--watch",
   summary: "串行持续刷新；Ctrl-C 只停止观察，不停止 Runtime。",
@@ -252,14 +258,24 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "sources",
     summary:
-      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。",
+      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。Hermes 的每个 profile 是一个独立用户：用 --user-id 和 --root 接入，授权并导入历史（会自动排除 ~/.hermes/profiles/**，各用户互不读取）。",
     usage:
-      "memhub sources list [--json]\n            memhub sources connect <id> [<id> ...] [--import] [--confirm-overrides] [--request-id <uuid>] [--json]\n            memhub sources connect --all-detected [--import] [--confirm-overrides] [--json]\n            memhub sources receipt <request-id> [--json]",
+      "memhub sources list [--json]\n            memhub sources connect <id> [<id> ...] [--import] [--confirm-overrides] [--request-id <uuid>] [--json]\n            memhub sources connect hermes --user-id <id> --root <path> [--import] [--request-id <uuid>] [--json]\n            memhub sources connect --all-detected [--import] [--confirm-overrides] [--json]\n            memhub sources receipt <request-id> [--json]",
     options: [
       {
         flag: "--import",
         summary:
           "接入后立即导入历史会话并开启持续同步；不加时只授权，处理保持冻结。",
+      },
+      {
+        flag: "--user-id <id>",
+        summary:
+          "只用于 hermes：这条接入属于哪个用户（默认 local）。和 --root 一起接入一个 Hermes profile，例如 --user-id wife --root ~/.hermes/profiles/wife；其他来源只能是 local。",
+      },
+      {
+        flag: "--root <path>",
+        summary:
+          "只用于 hermes：读取的根目录（~ 会展开为主目录）。默认是 Hermes 自己的目录 ~/.hermes。",
       },
       {
         flag: "--all-detected",
@@ -373,7 +389,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     summary:
       "列出、搜索、查看、添加、修改或物理删除记忆（对话、工作、编码三个场景）。add 和 App 的「添加记忆」是同一个入口；delete 不可逆，需 --yes。",
     usage:
-      "memhub memories list [--scene <all|chat|working|coding>] [--source <id>] [--query <text>] [--status <state>] [--offset <n>] [--limit <n>] [--json]\n            memhub memories show <memory-id> [--kind <kind>] [--variant <variant>] [--json]\n            memhub memories add <text> [--request-id <uuid>] [--json]\n            memhub memories add --content-file <path> [--request-id <uuid>] [--json]\n            memhub memories add-status <request-id> [--json]\n            memhub memories update <memory-id> --content-file <path> [--kind <kind>] [--variant <variant>] [--task <text>] [--json]\n            memhub memories delete <memory-id> [--kind <kind>] [--variant <variant>] [--yes] [--json]",
+      "memhub memories list [--scene <all|chat|working|coding>] [--source <id>] [--query <text>] [--status <state>] [--offset <n>] [--limit <n>] [--user-id <id>] [--json]\n            memhub memories show <memory-id> [--kind <kind>] [--variant <variant>] [--user-id <id>] [--json]\n            memhub memories add <text> [--request-id <uuid>] [--user-id <id>] [--json]\n            memhub memories add --content-file <path> [--request-id <uuid>] [--user-id <id>] [--json]\n            memhub memories add-status <request-id> [--user-id <id>] [--json]\n            memhub memories update <memory-id> --content-file <path> [--kind <kind>] [--variant <variant>] [--task <text>] [--user-id <id>] [--json]\n            memhub memories delete <memory-id> [--kind <kind>] [--variant <variant>] [--yes] [--user-id <id>] [--json]",
     options: [
       {
         flag: "--scene <all|chat|working|coding>",
@@ -411,6 +427,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
           "add 的幂等键；用同一个 id 重试只会读回第一次的结果，不会重复添加。不给时自动生成并输出。",
       },
       DESTRUCTIVE_CONFIRM_OPTION,
+      USER_ID_OPTION,
       JSON_OPTION,
     ],
     exit_codes: RUNTIME_EXITS,
@@ -418,8 +435,8 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "profile",
     summary: "读取 SDK 组装后的用户长期画像（L0 + 已启用的长期画像补充）。",
-    usage: "memhub profile [--json]",
-    options: [JSON_OPTION],
+    usage: "memhub profile [--user-id <id>] [--json]",
+    options: [USER_ID_OPTION, JSON_OPTION],
     exit_codes: RUNTIME_EXITS,
   },
   {
@@ -475,7 +492,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     summary:
       "从原始对话与已沉淀记忆统一检索上下文；本地只读，不调用模型、不触发补索引。文本输出标明每条是「原始对话摘录」还是「记忆」（JSON 里是 kind: raw|memory）。",
     usage:
-      "memhub recall <query> [--kind <raw|memory>] [--source <id>] [--limit <n>] [--character-budget <n>] [--timeout-ms <n>] [--json]\n            memhub recall --query-file <path> [...]\n            memhub recall --stdin [...]",
+      "memhub recall <query> [--kind <raw|memory>] [--source <id>] [--limit <n>] [--character-budget <n>] [--timeout-ms <n>] [--user-id <id>] [--json]\n            memhub recall --query-file <path> [...]\n            memhub recall --stdin [...]",
     options: [
       {
         flag: "--query-file <path>",
@@ -502,6 +519,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
         flag: "--timeout-ms <n>",
         summary: "Core 查询时限 50..30000 毫秒，默认 2000。",
       },
+      USER_ID_OPTION,
       JSON_OPTION,
     ],
     exit_codes: RUNTIME_EXITS,
@@ -650,7 +668,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
     summary:
       "提交一段 OpenAI 格式的对话（messages）到写入队列，异步加工成记忆；或按 request id 查询状态。request id 是幂等键：不给时自动生成并输出，重试请带上同一个。新增一条结论式记忆请用 memories add。",
     usage:
-      "memhub write submit --messages-file <path> --session <id> [--source <id>] [--request-id <id>] [--memory-at <RFC3339>] [--live] [--json]\n            memhub write status <request-id> [--json]",
+      "memhub write submit --messages-file <path> --session <id> [--source <id>] [--request-id <id>] [--memory-at <RFC3339>] [--live] [--user-id <id>] [--json]\n            memhub write status <request-id> [--user-id <id>] [--json]",
     options: [
       {
         flag: "--messages-file <path>",
@@ -666,6 +684,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       { flag: "--memory-at <RFC3339>", summary: "对话发生时间，必须带时区。" },
       { flag: "--live", summary: "优先处理。" },
+      USER_ID_OPTION,
       JSON_OPTION,
     ],
     exit_codes: RUNTIME_EXITS,
