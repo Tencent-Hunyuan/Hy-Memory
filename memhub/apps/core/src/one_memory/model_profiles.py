@@ -703,10 +703,16 @@ class ModelProfileStore:
                     }
                 )
             # User changes to service/model/credentials need a new explicit activation.
-            # Probe-discovered embedding width alone retains its existing behavior.
+            # Probe-discovered embedding width alone retains its existing behavior;
+            # replacing one declared width with another is a new embedding
+            # identity, and activating it goes through an embedding switch.
             deactivate = (
                 patch.api_key is not None
                 or patch.clear_api_key
+                or (
+                    row["embedding_dimensions"] is not None
+                    and next_values["embedding_dimensions"] != row["embedding_dimensions"]
+                )
                 or any(
                     row[key] != next_values[key]
                     for key in (

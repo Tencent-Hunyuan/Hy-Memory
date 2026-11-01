@@ -12,10 +12,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from types import SimpleNamespace
 
 import pytest
 
 from one_memory.database_access import main_database
+from one_memory.embedding_spaces import EmbeddingIdentity
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import (
     CANCELLED,
@@ -1226,6 +1228,10 @@ def _coordinator(monkeypatch, opened: list[_TrackedHandle]):
         return value
 
     monkeypatch.setattr(sdk_write_processor, "SdkClientHandle", handle)
+    # One live embedding space the stand-in profiles all fill.
+    identity = EmbeddingIdentity(model="stand-in")
+    monkeypatch.setattr(sdk_write_processor, "embedding_identity", lambda _profile: identity)
+    space = SimpleNamespace(space_id="space", identity=identity)
     profiles = _SwitchableProfiles()
     coordinator = sdk_write_processor.SdkWriteCoordinator(
         profiles=profiles,  # type: ignore[arg-type]
@@ -1233,6 +1239,7 @@ def _coordinator(monkeypatch, opened: list[_TrackedHandle]):
         data_dir=None,
         transport_factory=lambda _profile: None,
         sedimentation_enabled=lambda: True,
+        spaces=SimpleNamespace(live=lambda: space),  # type: ignore[arg-type]
     )
     return coordinator, profiles
 

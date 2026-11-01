@@ -19,6 +19,7 @@ from one_memory.context_models import (
     SdkMemoryContextItem,
     SdkRawContextItem,
 )
+from one_memory.embedding_health import EMBEDDING_UNAVAILABLE, EmbeddingUnavailableError
 from one_memory.external_memory_access import external_access
 from one_memory.hy_runtime_config import HY_MEMORY_READER
 from one_memory.hy_sdk_runtime import sdk_relevance_floor
@@ -263,6 +264,10 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             )
             await record(final, timed_out=True)
             return final
+        for lane in (raw_items, memory_items):
+            if isinstance(lane, EmbeddingUnavailableError):
+                # No lexical fallback: the query could not be embedded.
+                raise HTTPException(503, EMBEDDING_UNAVAILABLE)
         partial = isinstance(raw_items, Exception) or isinstance(memory_items, Exception)
         raw_candidates = (
             () if isinstance(raw_items, Exception) else cast(tuple[SdkContextItem, ...], raw_items)

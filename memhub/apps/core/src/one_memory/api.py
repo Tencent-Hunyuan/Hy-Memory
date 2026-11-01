@@ -71,6 +71,9 @@ from one_memory.diagnostic_log import (
     reset_trace_id,
     resource_snapshot,
 )
+from one_memory.embedding_health import EMBEDDING_UNAVAILABLE, EmbeddingUnavailableError
+from one_memory.embedding_spaces import EmbeddingSpaceStore
+from one_memory.embedding_switch import EmbeddingSwitchJob, EmbeddingSwitchService
 from one_memory.exception_reporting import (
     install_asyncio_exception_handler,
     install_threading_excepthook,
@@ -237,6 +240,7 @@ from one_memory.model_profiles import (
     ModelProfilePatch,
     ModelProfileStore,
     ModelProfileUnavailableError,
+    ProviderKind,
 )
 from one_memory.model_request_audit import (
     AuditedModelTransport,
@@ -330,6 +334,10 @@ class HealthResponse(BaseModel):
     # failed steps are named so a stuck recovery is visible without a log.
     recovery: Literal["pending", "running", "done", "failed"] = "done"
     recovery_failed_steps: tuple[str, ...] = ()
+    # An embedding switch or a startup merge of stray spaces, while one runs
+    # (`{kind, state, percent, eta_s}`): the loading screen and the status
+    # line read it. Reads are served throughout; model writes are paused.
+    embedding_switch: dict[str, object] | None = None
 
 
 class BackupRequest(BaseModel):
@@ -666,6 +674,9 @@ class MemoryProcessingSummary(BaseModel):
     #: R10: the SDK mode and System 2 state. Optional so older readers and
     #: test doubles stay valid; Core always sends it.
     pipeline: "PipelineStatus | None" = None
+    #: The running embedding switch or merge, `{job_id, kind, state, percent,
+    #: eta_s}`; None when none runs. Model writes wait while it is set.
+    embedding_switch: dict[str, object] | None = None
 
 
 class MemoryModeState(BaseModel):
@@ -1044,6 +1055,16 @@ def create_app(
             # state, so initialize it before authority selection.
             app.state.secret_store = secret_store or KeyringSecretStore()
             app.state.model_profile_store = ModelProfileStore(database_path)
+            # The live embedding space, pinned before any SDK client opens.
+            # A home this build has not seen registers the space it already
+            # uses, under the name it already has (`EmbeddingSpaceStore.bootstrap`).
+            app.state.embedding_spaces = EmbeddingSpaceStore(database_path)
+            active_identity = app.state.model_profile_store.active_identity()
+            app.state.embedding_spaces.bootstrap(
+                app.state.model_profile_store.snapshot(*active_identity)
+                if active_identity is not None
+                else None
+            )
             app.state.sdk_data_plane_migrations = SdkDataPlaneMigrationStore(database_path)
             app.state.memory_authority = app.state.sdk_data_plane_migrations.authority()
             _record_startup_authority(
@@ -1280,6 +1301,8 @@ def create_app(
                 sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
                 memory_mode=lambda: _memory_mode(app),
                 memory_features=lambda: _memory_features(app),
+                spaces=app.state.embedding_spaces,
+                writes_open=lambda: _embedding_writes_open(app),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -1288,6 +1311,7 @@ def create_app(
                 extraction_settings=app.state.extraction_settings_store,
                 data_dir=runtime_settings.data_dir,
                 memory_mode=lambda: _memory_mode(app),
+                writes_open=lambda: _embedding_writes_open(app),
             )
             app.state.evolve_state_store = EvolveStateStore(runtime_settings.data_dir)
             app.state.evolve_service = EvolveService(
@@ -1342,6 +1366,10 @@ def create_app(
                 async with app.state.sedimentation_lock, source_lock:
                     if not _config_store(app).sedimentation_enabled():
                         raise RuntimeError("model_sedimentation_disabled")
+                    if not _embedding_writes_open(app):
+                        # Re-checked at the last boundary: a switch that began
+                        # after the claim keeps this job queued, unsent.
+                        raise RuntimeError("embedding_switch_in_progress")
                     if not _source_writes_on(app, source_id):
                         raise RuntimeError("model_content_source_disabled")
                     return await mark_invoked()
@@ -1393,6 +1421,64 @@ def create_app(
                 source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
             )
             app.state.memory_write_drain = memory_write_drain
+
+            async def embedding_writes_drained() -> bool:
+                """No model write runs: none past its claim, none holding a client."""
+                await asyncio.to_thread(memory_write_queue.reclaim_expired)
+                running, _ = await asyncio.to_thread(app.state.sdk_memory_runtime.active_depths)
+                in_use = cast(SdkWriteCoordinator, app.state.sdk_write_coordinator).in_use()
+                return running == 0 and in_use == 0
+
+            async def quiesce_sdk_clients() -> Callable[[], None]:
+                """Close every SDK client and hold the stores, for the graph re-embed."""
+                deadline = time.monotonic() + 120
+                while True:
+                    await _read_handle(app).close_idle()
+                    await app.state.sdk_write_coordinator.close_idle()
+                    if hold_stores_offline(runtime_settings.data_dir):
+                        return lambda: release_stores(runtime_settings.data_dir)
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("embedding_switch_clients_busy")
+                    await asyncio.sleep(0.2)
+
+            async def after_embedding_commit(job: EmbeddingSwitchJob) -> None:
+                from one_memory.hy_graph_admin import forget_graph_widths
+
+                forget_graph_widths()
+                _read_handle(app).health.forget()
+                if job.kind == "switch" and job.target_profile_id is not None:
+                    profile = await asyncio.to_thread(
+                        _model_profile_store(app).require,
+                        job.target_profile_id,
+                        _secret_store(app),
+                    )
+                    await asyncio.to_thread(
+                        app.state.memory_task_store.rebind_unstarted_profile, profile
+                    )
+                await asyncio.to_thread(memory_write_queue.readmit_model_profile_waiters)
+                _resume_sedimentation(app)
+                _start_backfill(app)
+
+            from one_memory.embedding_switch import default_reembed_backend
+
+            app.state.embedding_switch = EmbeddingSwitchService(
+                database_path=database_path,
+                data_dir=runtime_settings.data_dir,
+                profiles=app.state.model_profile_store,
+                spaces=app.state.embedding_spaces,
+                secrets=app.state.secret_store,
+                backend=default_reembed_backend(runtime_settings.data_dir),
+                drain_idle=embedding_writes_drained,
+                on_commit=after_embedding_commit,
+                quiesce_clients=quiesce_sdk_clients,
+                # Only ultra keeps a graph; its width follows the space.
+                graph_enabled=lambda: _memory_mode(app) == "ultra",
+                worker_enabled=runtime_settings.embedding_switch_worker,
+                drain_timeout_s=runtime_settings.embedding_switch_drain_timeout_seconds,
+            )
+            if app.state.memory_authority is not MemoryAuthority.SDK:
+                # Only an SDK-authority home has SDK spaces to scan and merge.
+                app.state.embedding_switch.release_scan_hold()
             # Started by `recover_after_ready`: a running drain claims jobs and
             # holds the single writer, which the rest of startup still needs.
             app.state.memory_write_drain_task = None
@@ -1631,6 +1717,12 @@ def create_app(
                             repair.coding_rows,
                         )
 
+                async def resume_embedding_spaces() -> None:
+                    try:
+                        await app.state.embedding_switch.recover()
+                    finally:
+                        app.state.embedding_switch.start_retention()
+
                 async def start_write_drain() -> None:
                     app.state.memory_write_drain_task = watched_task(
                         asyncio.get_running_loop(),
@@ -1719,6 +1811,13 @@ def create_app(
                         # Before the drain: the repair restores metadata the
                         # queued writes are read back against.
                         await step("sdk_metadata_repair", repair_sdk_metadata)
+                    # Before the drain too: resume an unfinished embedding
+                    # switch (an App update may have stopped it), or scan for
+                    # stray spaces and start merging them. Until this decides,
+                    # the write gate holds every model write back; reads are
+                    # served from the live space throughout.
+                    if sdk:
+                        await step("embedding_spaces", resume_embedding_spaces)
                     await step("write_drain", start_write_drain)
                     if sdk:
                         await step("evolve_schedule", start_evolve_schedule)
@@ -1821,6 +1920,8 @@ def create_app(
                 await app.state.evolve_scheduler.shutdown()
                 await app.state.evolve_service.shutdown()
                 await app.state.memory_graph_backfill.shutdown()
+                # The job stays where it is; the next start resumes it.
+                await app.state.embedding_switch.shutdown()
                 await app.state.sdk_memory_runtime.shutdown()
                 await app.state.sdk_write_coordinator.close()
                 if app.state.sdk_client_handle is not None:
@@ -1906,6 +2007,9 @@ def create_app(
     from one_memory.call_event_routes import call_event_router
 
     app.include_router(call_event_router(protected))
+    from one_memory.embedding_switch_routes import embedding_switch_router
+
+    app.include_router(embedding_switch_router(protected))
 
     app.add_middleware(
         CORSMiddleware,
@@ -1999,6 +2103,12 @@ def create_app(
             },
         )
 
+    @app.exception_handler(EmbeddingUnavailableError)
+    async def embedding_unavailable(_: Request, _error: EmbeddingUnavailableError) -> JSONResponse:
+        # No lexical fallback: a search that cannot embed its query fails,
+        # and says why, so the App can show it (top-right toast).
+        return JSONResponse(status_code=503, content={"detail": EMBEDDING_UNAVAILABLE})
+
     @app.exception_handler(sqlite3.OperationalError)
     async def sqlite_error(request: Request, error: sqlite3.OperationalError) -> JSONResponse:
         record_database_error("core.api", error, route_path=request.url.path)
@@ -2044,6 +2154,7 @@ def create_app(
             ),
             recovery=getattr(app.state, "recovery", "pending"),
             recovery_failed_steps=getattr(app.state, "recovery_failed_steps", ()),
+            embedding_switch=_embedding_switch_summary(app),
         )
 
     @app.get("/health", response_model=HealthResponse, include_in_schema=False)
@@ -3322,6 +3433,7 @@ def create_app(
         profile_id: str,
         request: ModelProfilePatch,
     ) -> ModelProfile:
+        _refuse_embedding_edit_during_switch(app, profile_id, request)
         try:
             return _model_profile_store(app).update(
                 profile_id,
@@ -3342,25 +3454,62 @@ def create_app(
 
     @app.post(
         "/api/v1/model-profiles/{profile_id}/activate",
-        response_model=ModelProfile,
+        response_model=None,
         dependencies=protected,
     )
-    async def activate_model_profile(profile_id: str) -> ModelProfile:
+    async def activate_model_profile(profile_id: str) -> Any:
         # Asynchronous for the sake of what follows the activation: scheduling
         # work needs the event loop this coroutine runs on, and a synchronous
         # path operation is handed to a worker thread that has none. Activating
         # with any evidence already imported — the ordinary order, since
         # importing comes first — used to fail here outright.
+        #
+        # Activation never changes the embedding space by itself. A profile
+        # with the live space's model and width (a generation-only change, or
+        # another endpoint for the same model) activates as before. Another
+        # embedding on a home with no vector at all moves the space in the
+        # same transaction. Anything else answers 409 `embedding_switch_required`
+        # with the plan: `POST /api/v1/embedding-switches` carries it out.
+        from one_memory.embedding_switch import EmbeddingSwitchError
+        from one_memory.embedding_switch_routes import refusal
+
+        switch = _embedding_switch(app)
         try:
-            profile = await asyncio.to_thread(
-                _model_profile_store(app).activate,
-                profile_id,
-                _secret_store(app),
-            )
+            # The refusals activation always made come first, with their codes.
+            await asyncio.to_thread(_store_activation_preflight, app, profile_id)
+            plan = await switch.plan(profile_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="model_profile_not_found") from None
         except ModelProfileUnavailableError as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
+        except EmbeddingSwitchError as error:
+            if error.code == "model_profile_not_found":
+                raise HTTPException(status_code=404, detail="model_profile_not_found") from None
+            return refusal(error.code, plan=error.plan)
+        if "embedding_switch_running" in plan.blockers:
+            return refusal("embedding_switch_running", plan=plan)
+        try:
+            if plan.needed:
+                return refusal("embedding_switch_required", plan=plan)
+            if plan.reason == "empty_home":
+                await asyncio.to_thread(switch.activate_empty_home, profile_id)
+                profile = await asyncio.to_thread(
+                    _model_profile_store(app).require, profile_id, _secret_store(app)
+                )
+            else:
+                profile = await asyncio.to_thread(
+                    _model_profile_store(app).activate,
+                    profile_id,
+                    _secret_store(app),
+                )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="model_profile_not_found") from None
+        except ModelProfileUnavailableError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        except ModelProfileConflictError:
+            raise HTTPException(status_code=409, detail="model_profile_conflict") from None
+        except EmbeddingSwitchError as error:
+            return refusal(error.code)
         # D75: work queued for the previous model continues with this one.
         # Only tasks that never reached the model are re-bound.
         await asyncio.to_thread(app.state.memory_task_store.rebind_unstarted_profile, profile)
@@ -3933,6 +4082,7 @@ def create_app(
         if request.task is not None and request.kind in {"chat", "fact"}:
             raise HTTPException(status_code=422, detail="memory_task_requires_experience")
         namespace = _namespace_kwargs(request.kind, request.variant)
+        _refuse_write_during_embedding_switch(app)
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
                 # `update` takes no user: read the memory first and refuse
@@ -3988,6 +4138,7 @@ def create_app(
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> Response:
         _check_memory_namespace(kind, variant)
+        _refuse_write_during_embedding_switch(app)
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
                 # `delete` takes no user. Another user's memory is answered
@@ -4296,6 +4447,7 @@ def create_app(
             in_flight_count=in_flight_count,
             metrics=ProcessingMetrics.model_validate(store.processing_metrics()),
             pipeline=_pipeline_status(app),
+            embedding_switch=_embedding_switch_summary(app),
         )
 
     @app.get(
@@ -4545,6 +4697,7 @@ def create_app(
         assumption that cost a live graph once was made in code, not by a user.
         """
         supervisor = _sdk_memory_runtime(app)
+        _refuse_write_during_embedding_switch(app)
         try:
             outcome = await supervisor.decide_graph_width(request.decision)
         except HySdkError as error:
@@ -5768,6 +5921,7 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
             data_dir=cast(Settings, app.state.settings).data_dir,
             memory_mode=lambda: _memory_mode(app),
             features=lambda: _memory_features(app),
+            spaces=getattr(app.state, "embedding_spaces", None),
         )
         app.state.sdk_client_handle = handle
     return handle
@@ -5866,6 +6020,10 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
             non_default_features(_memory_features(app), sdk_feature_defaults()),
         ),
     )
+
+
+def _read_handle(app: FastAPI) -> ActiveProfileReadHandle:
+    return cast(ActiveProfileReadHandle, _sdk_client_handle(app))
 
 
 def _log_skipped_sdk_memories(count: int) -> None:
@@ -6123,6 +6281,7 @@ def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
 
     return (
         _config_store(app).sedimentation_enabled()
+        and _embedding_writes_open(app)
         and (_memory_mode(app) == "lite" or _model_profile_store(app).active_identity() is not None)
         and _history_import_gate_released(app)
         and _source_writes_on(app, source_id)
@@ -6135,6 +6294,74 @@ def _user_evolving(app: FastAPI, user_id: str) -> bool:
     coordinator = getattr(app.state, "sdk_write_coordinator", None)
     evolving = getattr(coordinator, "evolving", None)
     return bool(callable(evolving) and evolving(user_id))
+
+
+def _embedding_switch(app: FastAPI) -> EmbeddingSwitchService:
+    return cast(EmbeddingSwitchService, app.state.embedding_switch)
+
+
+def _embedding_writes_open(app: FastAPI) -> bool:
+    """False while an embedding switch or merge runs, or the startup scan has not decided.
+
+    Intake is not affected: conversations keep being queued, and sediment
+    into the live space once the gate opens again.
+    """
+    switch = getattr(app.state, "embedding_switch", None)
+    return switch is None or switch.writes_open()
+
+
+def _embedding_switch_summary(app: FastAPI) -> dict[str, object] | None:
+    switch = getattr(app.state, "embedding_switch", None)
+    if switch is None:
+        return None
+    try:
+        return cast(EmbeddingSwitchService, switch).summary()
+    except sqlite3.Error:
+        return None
+
+
+def _refuse_write_during_embedding_switch(app: FastAPI) -> None:
+    """Direct edits and deletes wait for the switch: 409, never a write into the old space."""
+    if not _embedding_writes_open(app):
+        raise HTTPException(status_code=409, detail="embedding_switch_in_progress")
+
+
+_EMBEDDING_PATCH_FIELDS = frozenset(
+    {"embedding_model", "embedding_provider_kind", "embedding_base_url", "embedding_dimensions"}
+)
+
+
+def _refuse_embedding_edit_during_switch(
+    app: FastAPI, profile_id: str, patch: ModelProfilePatch
+) -> None:
+    """The profiles a running switch reads from or commits to keep their embedding."""
+    if not (_EMBEDDING_PATCH_FIELDS & patch.model_fields_set):
+        return
+    switch = getattr(app.state, "embedding_switch", None)
+    if switch is None:
+        return
+    row = cast(EmbeddingSwitchService, switch).jobs.open_job()
+    if row is None:
+        return
+    active = _model_profile_store(app).active_identity()
+    if profile_id == row["target_profile_id"] or (active is not None and active[0] == profile_id):
+        raise HTTPException(status_code=409, detail="embedding_switch_running")
+
+
+def _store_activation_preflight(app: FastAPI, profile_id: str) -> None:
+    """The checks `ModelProfileStore.activate` makes, for the empty-home path."""
+    profile = _model_profile_store(app).require(profile_id, _secret_store(app))
+    if profile.provider_kind in {ProviderKind.HY_DEFAULT, ProviderKind.ANTHROPIC}:
+        raise ModelProfileUnavailableError("model_provider_not_supported")
+    if not profile.embedding_model:
+        raise ModelProfileUnavailableError("embedding_model_required")
+    capabilities = profile.capabilities
+    if not (
+        capabilities.endpoint_reachable
+        and capabilities.model_available
+        and capabilities.embedding_available
+    ):
+        raise ModelProfileUnavailableError("model_profile_probe_required")
 
 
 def _history_import_gate_released(app: FastAPI) -> bool:

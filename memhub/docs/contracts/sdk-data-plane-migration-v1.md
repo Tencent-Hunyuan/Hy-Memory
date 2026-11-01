@@ -66,6 +66,13 @@ one-memory sdk-migration-status --json      # read-only: is there work?
 one-memory sdk-migrate --runtime-build <build> --yes --json
 ```
 
+An unfinished embedding switch or merge (`embedding-switch-v1.md`) never makes
+a migration required and never blocks one: `sdk-migration-status` reports it as
+an extra `embedding_switch: {job_id, kind, state}` field, `sdk-migrate` leaves
+the `embedding_spaces` and `embedding_switch_jobs` tables alone, its readback
+opens the registry's live space (which a switch changes only at its commit),
+and the next serving Core resumes the job.
+
 `sdk-migrate` requires a stopped Runtime. It takes the host capture fence
 (hooks return silently instead of writing Evidence while its PID is alive),
 then:

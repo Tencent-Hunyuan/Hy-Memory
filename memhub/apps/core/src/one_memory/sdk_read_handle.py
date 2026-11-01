@@ -1,20 +1,25 @@
-"""The read client, kept in the embedding space the active profile writes to.
+"""The read client, kept in the live embedding space.
 
 Every read used to open the built-in 512-dim collection while writes followed
-the active profile, so a custom embedding read an empty space (#242). This
-handle opens the active profile's `retrieval_view` instead, and the built-in
-space only when no profile is active.
+the active profile, so a custom embedding read an empty space (#242). Reads
+now open the space the registry pins as live (`embedding_spaces`), which is
+the space writes fill. The embedding that reaches it is the active profile's
+when its model and width are the space's -- a new endpoint for the same model
+keeps the space -- and otherwise the profile version that filled the space
+(the built-in model for the built-in space). A switch that is still running
+never changes this: reads keep serving the old space until its commit.
 
-A profile change builds a new client and retires the old one; a retired client
-is closed once no task still uses it, as `SdkWriteCoordinator` does for writes
-(#218). A use is the task that asked for the client: callers keep their
-`client = await handle.client()` shape, and the use ends with that task (one
-HTTP request, one retention pass).
+A change of space or profile builds a new client and retires the old one; a
+retired client is closed once no task still uses it, as `SdkWriteCoordinator`
+does for writes (#218). A use is the task that asked for the client: callers
+keep their `client = await handle.client()` shape, and the use ends with that
+task (one HTTP request, one retention pass).
 
 The memory mode (lite / pro / ultra) is fixed per SDK client, so a mode change
 rebuilds and retires the same way, and so do the SDK features
-(`memory_features`): handles are keyed by (profile, mode, features). Neither
-mode nor features names a collection; both are separate client parameters.
+(`memory_features`): handles are keyed by (space, profile, mode, features).
+Neither mode nor features names a collection; both are separate client
+parameters.
 """
 
 from __future__ import annotations
@@ -24,23 +29,33 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from one_memory.embedding_health import EmbeddingGuardedClient, EmbeddingHealth
+from one_memory.embedding_spaces import (
+    EmbeddingSpace,
+    EmbeddingSpaceStore,
+    embedding_identity,
+    registry_for,
+)
 from one_memory.hy_graph_admin import effective_memory_mode
 from one_memory.hy_sdk_runtime import (
     BUILTIN_RETRIEVAL_PROFILE_ID,
     SdkClientHandle,
     builtin_retrieval_snapshot,
+    embedding_endpoint,
     retrieval_view,
 )
 from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.memory_features import FeatureOverrides
-from one_memory.model_profiles import ModelProfileStore, ProviderKind
+from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 _BUILTIN = (BUILTIN_RETRIEVAL_PROFILE_ID, 0)
+#: (space id, profile id, revision, memory mode, features)
+_HandleKey = tuple[str, str, int, str, FeatureOverrides]
 
 
 class ActiveProfileReadHandle(SdkClientHandle):
-    """An `SdkClientHandle` whose profile follows the active one."""
+    """An `SdkClientHandle` that follows the live space and its embedding."""
 
     def __init__(
         self,
@@ -50,6 +65,8 @@ class ActiveProfileReadHandle(SdkClientHandle):
         data_dir: Path,
         memory_mode: Callable[[], str] = effective_memory_mode,
         features: Callable[[], FeatureOverrides] = lambda: (),
+        spaces: EmbeddingSpaceStore | None = None,
+        health: EmbeddingHealth | None = None,
     ) -> None:
         super().__init__(builtin_retrieval_snapshot(), api_key=None, data_dir=data_dir)
         self.profiles = profiles
@@ -57,7 +74,12 @@ class ActiveProfileReadHandle(SdkClientHandle):
         self.data_dir = data_dir
         self.memory_mode = memory_mode
         self.current_features = features
-        self._handles: dict[tuple[str, int, str, FeatureOverrides], SdkClientHandle] = {}
+        #: None only for a profile store without a database (test doubles).
+        self.spaces = spaces if spaces is not None else registry_for(profiles)
+        self.health = health or EmbeddingHealth()
+        self._handles: dict[_HandleKey, SdkClientHandle] = {}
+        #: Whether an active profile version reads a space, per (profile, space).
+        self._matches: dict[tuple[str, int, str], bool] = {}
         #: Tasks in flight per handle; a retired handle closes at zero.
         self._uses: dict[SdkClientHandle, int] = {}
         self._retired: set[SdkClientHandle] = set()
@@ -65,28 +87,89 @@ class ActiveProfileReadHandle(SdkClientHandle):
         self._handle_lock = asyncio.Lock()
 
     async def client(self) -> Any:
-        profile = await asyncio.to_thread(self.profiles.active_identity) or _BUILTIN
-        identity = (*profile, self.memory_mode(), self.current_features())
+        handle = await self.current_handle()
+        return self._guarded(handle, await handle.client())
+
+    def _guarded(self, handle: SdkClientHandle, client: Any) -> Any:
+        """A remote embedding's searches report `embedding_unavailable` (no fallback)."""
+        profile = getattr(handle, "profile", None)
+        if not isinstance(profile, ModelProfileSnapshot):
+            return client
+        endpoint = embedding_endpoint(profile)
+        if endpoint is None:
+            return client
+        space = handle.space
+        name_dims = space.name_dims if space is not None else profile.embedding_dimensions
+        return EmbeddingGuardedClient(
+            client,
+            lambda: self.health.available(
+                profile, endpoint=endpoint, name_dims=name_dims, api_key=handle.api_key
+            ),
+        )
+
+    async def current_handle(self) -> SdkClientHandle:
+        """The handle of the live space, held for the asking task."""
+        space, identity = await asyncio.to_thread(self._resolve)
+        mode, features = self.memory_mode(), self.current_features()
+        key = (space.space_id if space is not None else "", *identity, mode, features)
         async with self._handle_lock:
-            handle = self._handles.get(identity)
+            handle = self._handles.get(key)
             if handle is None:
-                # Only on a change of profile: resolving a key can reach the
-                # system keychain, so it is not done on every read.
-                handle = await asyncio.to_thread(self._build, identity)
-                self._handles[identity] = handle
-            self._retired.update(value for key, value in self._handles.items() if key != identity)
-            self._handles = {identity: handle}
+                # Only on a change of space or profile: resolving a key can
+                # reach the system keychain, so it is not done on every read.
+                handle = await asyncio.to_thread(self._build, space, identity, mode, features)
+                self._handles[key] = handle
+            self._retired.update(value for name, value in self._handles.items() if name != key)
+            self._handles = {key: handle}
             unused = {value for value in self._retired if not self._uses.get(value)}
             self._retired -= unused
             self._hold(handle)
         await asyncio.gather(*(value.close() for value in unused))
-        return await handle.client()
+        return handle
 
     async def close(self) -> None:
         async with self._handle_lock:
             handles = (*self._handles.values(), *self._retired)
             self._handles, self._retired, self._uses = {}, set(), {}
         await asyncio.gather(*(handle.close() for handle in handles), *self._closing)
+
+    async def close_idle(self) -> None:
+        """Retire every client; the unused close now, the rest when their task ends."""
+        async with self._handle_lock:
+            self._retired.update(self._handles.values())
+            self._handles = {}
+            unused = {value for value in self._retired if not self._uses.get(value)}
+            self._retired -= unused
+        await asyncio.gather(*(value.close() for value in unused))
+
+    def _resolve(self) -> tuple[EmbeddingSpace | None, tuple[str, int]]:
+        active = self.profiles.active_identity()
+        if self.spaces is None:
+            return None, active or _BUILTIN
+        space = self.spaces.live()
+        if space is None:
+            # A home this process has not bootstrapped yet: register what it
+            # already uses, under the name it already has.
+            space = self.spaces.bootstrap(
+                self.profiles.snapshot(*active) if active is not None else None
+            )
+        if active is not None and self._reads(active, space):
+            return space, active
+        if space.profile_id is not None and space.profile_revision is not None:
+            return space, (space.profile_id, space.profile_revision)
+        return space, _BUILTIN
+
+    def _reads(self, identity: tuple[str, int], space: EmbeddingSpace) -> bool:
+        key = (*identity, space.space_id)
+        known = self._matches.get(key)
+        if known is None:
+            if space.identity is None:
+                known = False
+            else:
+                profile = self.profiles.snapshot(*identity)
+                known = embedding_identity(profile).matches(space.identity)
+            self._matches[key] = known
+        return known
 
     def _hold(self, handle: SdkClientHandle) -> None:
         """Count a use of `handle` until the asking task finishes."""
@@ -108,9 +191,16 @@ class ActiveProfileReadHandle(SdkClientHandle):
             self._closing.add(closing)
             closing.add_done_callback(self._closing.discard)
 
-    def _build(self, key: tuple[str, int, str, FeatureOverrides]) -> SdkClientHandle:
-        profile_id, revision, mode, features = key
-        identity = (profile_id, revision)
+    def _build(
+        self,
+        space: EmbeddingSpace | None,
+        identity: tuple[str, int],
+        mode: str,
+        features: FeatureOverrides = (),
+    ) -> SdkClientHandle:
+        # Without a registry (a profile store with no database) the handle
+        # opens the space its profile names, exactly as before.
+        named: dict[str, Any] = {"space": space} if space is not None else {}
         if identity == _BUILTIN:
             return SdkClientHandle(
                 builtin_retrieval_snapshot(),
@@ -118,8 +208,9 @@ class ActiveProfileReadHandle(SdkClientHandle):
                 data_dir=self.data_dir,
                 mode=mode,
                 features=features,
+                **named,
             )
-        profile = self.profiles.snapshot(*identity)
+        profile: ModelProfileSnapshot = self.profiles.snapshot(*identity)
         view = retrieval_view(profile)
         secret: str | None = None
         # Only a remote OpenAI-compatible embedding sends the shared key.
@@ -131,5 +222,5 @@ class ActiveProfileReadHandle(SdkClientHandle):
             if secret is None:
                 raise HySdkRuntimeError("model_secret_unavailable")
         return SdkClientHandle(
-            view, api_key=secret, data_dir=self.data_dir, mode=mode, features=features
+            view, api_key=secret, data_dir=self.data_dir, mode=mode, features=features, **named
         )

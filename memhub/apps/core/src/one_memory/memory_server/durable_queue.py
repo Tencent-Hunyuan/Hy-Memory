@@ -253,6 +253,9 @@ MODEL_NOT_READY_CODES = frozenset(
         "model_secret_unavailable",
         "secure_storage_unavailable",
         "hy_memory_client_unavailable",
+        # The active profile's embedding is not the live space's: activation
+        # must go through an embedding switch, so the write waits for it.
+        "embedding_space_mismatch",
     }
 )
 
@@ -2565,6 +2568,9 @@ async def execute_job(
                 "model_sedimentation_disabled",
                 # Evolve holds this user; the job runs once it is done.
                 "memory_evolve_in_progress",
+                # An embedding switch paused writes: the job stays queued and
+                # sediments into the new space once the switch commits.
+                "embedding_switch_in_progress",
             }
             and not hy_invoked
         ):

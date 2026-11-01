@@ -48,6 +48,7 @@ def test_health_reports_the_single_core() -> None:
         # No lifespan ran, so recovery has not begun.
         "recovery": "pending",
         "recovery_failed_steps": [],
+        "embedding_switch": None,
     }
 
 

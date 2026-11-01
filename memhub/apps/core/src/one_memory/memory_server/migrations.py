@@ -1383,6 +1383,83 @@ async def _050_model_probe_operations_reserved_at(cursor: Any) -> None:
     )
 
 
+def embedding_spaces_ddl() -> str:
+    """The embedding space registry (`embedding_spaces.py`); the main Core SQLite only.
+
+    Unversioned on purpose, like the visibility tables: a migration raises
+    the build's schema version, and a library this build opened would then
+    refuse an older package. The table is additive and created idempotently;
+    an older build ignores it and opens the space its active profile names,
+    which is the registered space on every home that never switched. SQLite
+    only (partial unique indexes): it lives in the main Core database.
+    """
+    return """
+CREATE TABLE IF NOT EXISTS embedding_spaces (
+    space_id TEXT PRIMARY KEY NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('live','building','stray','retired','dropped')),
+    model TEXT,
+    dims INTEGER,
+    name_dims INTEGER,
+    collection_base TEXT NOT NULL,
+    naming TEXT NOT NULL CHECK(naming IN ('legacy','v2','discovered')),
+    graph_dir TEXT,
+    provider_kind TEXT,
+    profile_id TEXT,
+    profile_revision INTEGER,
+    vectors INTEGER,
+    created_at TEXT NOT NULL,
+    live_since TEXT,
+    retired_at TEXT,
+    keep_until TEXT,
+    dropped_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS embedding_spaces_one_live
+    ON embedding_spaces(state) WHERE state = 'live';
+CREATE UNIQUE INDEX IF NOT EXISTS embedding_spaces_one_physical
+    ON embedding_spaces(collection_base, COALESCE(name_dims, 0))
+    WHERE state != 'dropped';
+"""
+
+
+def embedding_switch_jobs_ddl() -> str:
+    """Embedding switch and merge jobs (`embedding_switch.py`); unversioned, as above.
+
+    At most one job is open at a time (the partial unique index), and it
+    lives beside the profiles and the registry so the commit is one
+    transaction over all three.
+    """
+    return """
+CREATE TABLE IF NOT EXISTS embedding_switch_jobs (
+    job_id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('switch','merge')),
+    state TEXT NOT NULL CHECK(state IN (
+        'preparing','reembedding','verifying','committing','done','failed','rolled_back'
+    )),
+    source_space_id TEXT NOT NULL,
+    target_space_id TEXT NOT NULL,
+    stray_space_ids TEXT NOT NULL DEFAULT '[]',
+    target_profile_id TEXT,
+    target_revision INTEGER,
+    prior_profile_id TEXT,
+    requested_by TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    progress_json TEXT NOT NULL DEFAULT '{}',
+    verification_json TEXT,
+    error_code TEXT,
+    error_detail TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    owner_pid INTEGER,
+    heartbeat_at TEXT,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS embedding_switch_one_open
+    ON embedding_switch_jobs((1)) WHERE state NOT IN ('done','rolled_back');
+"""
+
+
 def model_profile_seeds_ddl(dialect: str = "mysql") -> str:
     """Which presets have been seeded, so seeding happens once."""
     if dialect == "sqlite":

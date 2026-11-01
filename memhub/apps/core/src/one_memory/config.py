@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     model_request_limit: int | None = Field(default=None, ge=1, le=100_000)
     model_request_body_byte_limit: int = Field(default=24_576, ge=1)
     model_request_output_token_limit: int = Field(default=16_384, ge=1)
+    # The embedding switch worker (and the startup merge). The maintenance
+    # Core turns it off: only the serving Core may resume or run a switch.
+    embedding_switch_worker: bool = True
+    # How long a switch waits for model writes already past their claim.
+    embedding_switch_drain_timeout_seconds: float = Field(default=600, gt=0)
 
     @field_validator("development_origin")
     @classmethod

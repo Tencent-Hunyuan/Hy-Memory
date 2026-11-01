@@ -141,11 +141,19 @@ class _Recorder:
         self.closed: list[str] = []
 
     def __call__(
-        self, profile, *, api_key, data_dir, http_transport_factory=None, mode="pro", features=()
+        self,
+        profile,
+        space=None,
+        *,
+        api_key,
+        data_dir,
+        http_transport_factory=None,
+        mode=None,
+        features=(),
     ):
         from one_memory.hy_sdk_runtime import build_sdk_config
 
-        config = build_sdk_config(profile, api_key=api_key, data_dir=data_dir)
+        config = build_sdk_config(profile, space, mode, api_key=api_key, data_dir=data_dir)
         name = config.vector_store.collection_name
         self.opened.append((name, config.vector_store.embedding_dims, api_key))
         return SimpleNamespace(
@@ -155,10 +163,11 @@ class _Recorder:
 
 
 @pytest.mark.anyio
-async def test_reads_open_the_collection_the_active_profile_writes(
+async def test_reads_open_the_live_space_the_active_profile_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#242: a 2560-dim profile wrote `memhub_<sha>_2560`, reads opened `_512`."""
+    from one_memory.embedding_spaces import EmbeddingSpaceStore
     from one_memory.hy_sdk_runtime import build_sdk_config
     from one_memory.model_profiles import ModelProfileStore
     from one_memory.sdk_read_handle import ActiveProfileReadHandle
@@ -168,13 +177,14 @@ async def test_reads_open_the_collection_the_active_profile_writes(
     monkeypatch.setattr("one_memory.hy_sdk_runtime.acquire_client", recorder)
     profiles = ModelProfileStore(tmp_path / "one-memory.sqlite3")
     secrets = InMemorySecretStore()
-    handle = ActiveProfileReadHandle(profiles=profiles, secrets=secrets, data_dir=tmp_path)
-
-    builtin = build_sdk_config(builtin_retrieval_snapshot(), api_key=None, data_dir=tmp_path)
-    assert (await handle.client()).collection == builtin.vector_store.collection_name
-
+    # A home whose custom profile was active when this build first started:
+    # the registry pins the collection that profile has been writing.
     written = _activate(profiles, secrets, dimensions=2560)
+    spaces = EmbeddingSpaceStore(profiles.database_path)
+    spaces.bootstrap(written)
+    handle = ActiveProfileReadHandle(profiles=profiles, secrets=secrets, data_dir=tmp_path)
     writes = build_sdk_config(written, api_key="sk-test", data_dir=tmp_path)
+    builtin = build_sdk_config(builtin_retrieval_snapshot(), api_key=None, data_dir=tmp_path)
 
     async def read() -> str:
         return str((await handle.client()).collection)
@@ -186,9 +196,11 @@ async def test_reads_open_the_collection_the_active_profile_writes(
 
 
 @pytest.mark.anyio
-async def test_a_profile_change_rebuilds_reads_without_closing_one_in_flight(
+async def test_an_activation_that_skips_the_switch_never_moves_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Only a switch's commit moves the space; reads stay where the data is."""
+    from one_memory.embedding_spaces import EmbeddingSpaceStore
     from one_memory.model_profiles import ModelProfileStore
     from one_memory.sdk_read_handle import ActiveProfileReadHandle
     from one_memory.secrets import InMemorySecretStore
@@ -197,8 +209,40 @@ async def test_a_profile_change_rebuilds_reads_without_closing_one_in_flight(
     monkeypatch.setattr("one_memory.hy_sdk_runtime.acquire_client", recorder)
     profiles = ModelProfileStore(tmp_path / "one-memory.sqlite3")
     secrets = InMemorySecretStore()
+    first = _activate(profiles, secrets, dimensions=1024)
+    live = EmbeddingSpaceStore(profiles.database_path).bootstrap(first)
     handle = ActiveProfileReadHandle(profiles=profiles, secrets=secrets, data_dir=tmp_path)
-    _activate(profiles, secrets, dimensions=1024)
+    _activate(profiles, secrets, dimensions=2560, model="chat-2")
+
+    collection = (await asyncio.create_task(handle.client())).collection
+
+    assert collection == live.collection_base
+    await handle.close()
+
+
+@pytest.mark.anyio
+async def test_a_committed_switch_rebuilds_reads_without_closing_one_in_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from one_memory.embedding_spaces import (
+        EmbeddingSpaceStore,
+        derived_space,
+        insert_space_in,
+        set_state_in,
+    )
+    from one_memory.model_profiles import ModelProfileStore
+    from one_memory.sdk_read_handle import ActiveProfileReadHandle
+    from one_memory.secrets import InMemorySecretStore
+
+    recorder = _Recorder(tmp_path)
+    monkeypatch.setattr("one_memory.hy_sdk_runtime.acquire_client", recorder)
+    profiles = ModelProfileStore(tmp_path / "one-memory.sqlite3")
+    secrets = InMemorySecretStore()
+    spaces = EmbeddingSpaceStore(profiles.database_path)
+    old_space = spaces.bootstrap(_activate(profiles, secrets, dimensions=1024))
+    handle = ActiveProfileReadHandle(
+        profiles=profiles, secrets=secrets, data_dir=tmp_path, spaces=spaces
+    )
 
     holding = asyncio.Event()
     finish = asyncio.Event()
@@ -213,7 +257,15 @@ async def test_a_profile_change_rebuilds_reads_without_closing_one_in_flight(
     await holding.wait()
     [(old, _, _)] = recorder.opened
 
-    _activate(profiles, secrets, dimensions=2560, model="chat-2")
+    # What a switch's commit does: a new live space, the old one retired, and
+    # the target profile active -- one transaction.
+    target = _activate(profiles, secrets, dimensions=2560, model="chat-2")
+    with spaces.transaction() as connection:
+        set_state_in(connection, old_space.space_id, state="retired", expected=("live",))
+        insert_space_in(
+            connection,
+            derived_space(target).model_copy(update={"space_id": "new-space"}),
+        )
 
     async def read() -> str:
         return str((await handle.client()).collection)

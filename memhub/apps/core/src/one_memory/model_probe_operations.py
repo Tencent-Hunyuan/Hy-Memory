@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from one_memory.database import take_the_write_lock_first
 from one_memory.database_access import main_database
+from one_memory.embedding_spaces import probe_width_allowed
 from one_memory.memory_server.migrations import model_probe_operations_ddl
 from one_memory.model_probe import ModelProbeResult, ProbeStage
 from one_memory.model_profiles import ModelCapabilities, ModelProfileStore
@@ -349,7 +350,19 @@ class ModelProbeOperations:
             )
             revision = profile["revision"]
             now = datetime.now(UTC).isoformat()
-            if width is not None and width != profile["embedding_dimensions"]:
+            # The profile that fills the live embedding space records only the
+            # space's own width: another one would move writes to new, empty
+            # collections (B2). Using it takes an embedding switch.
+            if (
+                width is not None
+                and width != profile["embedding_dimensions"]
+                and probe_width_allowed(
+                    db,
+                    profile["profile_id"],
+                    width,
+                    data_dir=self.store.database_path.parent,
+                )
+            ):
                 revision += 1
                 db.execute(
                     "UPDATE model_profiles SET embedding_dimensions=?,revision=? "

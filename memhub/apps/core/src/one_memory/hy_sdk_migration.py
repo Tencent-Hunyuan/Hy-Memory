@@ -3,6 +3,10 @@
 Runtime product code must use public ``HyMemoryClient`` methods.  The startup
 migration boundary is the isolated exception: all writers are stopped, so it
 may copy, restore and repair SDK-owned local stores.
+
+The embedding switch is the second such boundary: model writes are paused
+while it re-embeds one space into another (`SdkReembedBackend`), so it may
+read and fill SDK collections through the SDK's re-embed module.
 """
 
 from __future__ import annotations
@@ -10,13 +14,14 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from hy_memory import (  # type: ignore[import-untyped]
+import hy_memory  # type: ignore[import-untyped]
+from hy_memory import (
     DataPlaneRestore,
     DataPlaneSnapshot,
     restore_local_data_plane,
@@ -497,7 +502,7 @@ def _ensure_coding_schema(path: Path) -> None:
         CodingMemoryStore,
     )
 
-    # Relies on the pinned SDK's internals (hy-memory==2.0.9 is pinned exactly).
+    # Relies on the pinned SDK's internals (hy-memory==2.0.10 is pinned exactly).
     store = CodingMemoryStore.__new__(CodingMemoryStore)
     store._db_path = str(path)
     store._conn = None
@@ -511,3 +516,225 @@ def _ensure_coding_schema(path: Path) -> None:
 def _batches[T](values: list[T] | tuple[T, ...]) -> Iterator[tuple[T, ...]]:
     for start in range(0, len(values), _BATCH):
         yield tuple(values[start : start + _BATCH])
+
+
+# The SDK functions the embedding switch needs. They arrived in hy-memory
+# 2.0.10; an older SDK reports `sdk_reembed_unavailable` instead of failing.
+_REEMBED_API = (
+    "VectorSpace",
+    "scan_vector_spaces",
+    "diff_spaces",
+    "reembed_vector_space",
+    "verify_reembed",
+    "drop_vector_space",
+    "reembed_graph",
+    "verify_graph_reembed",
+    "drop_graph",
+    "ReembedCancelled",
+)
+
+
+class SdkReembedBackend:
+    """`ReembedBackend` over `hy_memory`'s re-embed module, for one home.
+
+    Runs beside live SDK clients: the vector functions open Chroma with the
+    SDK's own settings, so they share its client system. The graph functions
+    refuse a graph a live client holds open; the switch closes them first.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+        self.root = data_dir.resolve() / "hy-memory" / HY_MEMORY_NAMESPACE
+        self.persist_directory = self.root / "vector"
+
+    def unavailable_reason(self) -> str | None:
+        missing = [name for name in _REEMBED_API if not hasattr(hy_memory, name)]
+        return "sdk_reembed_unavailable" if missing else None
+
+    def _sdk(self) -> Any:
+        from one_memory.embedding_backend import ReembedUnavailableError
+
+        reason = self.unavailable_reason()
+        if reason is not None:
+            raise ReembedUnavailableError(reason)
+        return hy_memory
+
+    def _vector_space(self, space: Any) -> Any:
+        return self._sdk().VectorSpace(
+            base_name=space.collection_base,
+            dims=space.dims,
+            persist_directory=str(self.persist_directory),
+            model=space.model,
+            collections=space.names(),
+        )
+
+    async def scan(self, *, per_user: bool = False) -> tuple[Any, ...]:
+        from one_memory.embedding_backend import ScannedSpace
+
+        if not self.persist_directory.is_dir():
+            return ()
+        found = await self._sdk().scan_vector_spaces(str(self.persist_directory), per_user=per_user)
+        return tuple(
+            ScannedSpace(
+                collection_base=str(item.base_name),
+                name_dims=item.dims,
+                width=item.width,
+                counts={role: int(entry.count) for role, entry in item.roles.items()},
+                collections={role: str(entry.name) for role, entry in item.roles.items()},
+                per_user=dict(item.per_user) if per_user else {},
+            )
+            for item in found
+        )
+
+    async def diff(self, source: Any, target: Any) -> dict[str, int]:
+        result = await self._sdk().diff_spaces(
+            self._vector_space(source), self._vector_space(target)
+        )
+        return {role: len(ids) for role, ids in result.missing.items()}
+
+    async def reembed(
+        self,
+        source: Any,
+        target: Any,
+        *,
+        embedding: Any,
+        cancel: Any,
+        on_step: Any,
+        batch_size: int = 64,
+    ) -> None:
+        from one_memory.embedding_backend import ReembedStep
+
+        sdk = self._sdk()
+
+        def progress(item: Any) -> None:
+            on_step(
+                ReembedStep(
+                    phase="vectors",
+                    role=str(item.role),
+                    done=int(item.done),
+                    total=int(item.total),
+                    embedded=int(item.embedded),
+                    reused=int(item.reused),
+                    kept=int(getattr(item, "kept", 0)),
+                )
+            )
+
+        with self._translated():
+            await sdk.reembed_vector_space(
+                self._vector_space(source),
+                self._vector_space(target),
+                embedding=self._embedding_service(embedding),
+                batch_size=batch_size,
+                cancel=cancel,
+                on_progress=progress,
+                # The target wins: an id it already holds is never touched, so
+                # a resumed run continues and a merge never overwrites live data.
+                skip_existing=True,
+            )
+
+    async def verify(self, source: Any, target: Any, *, embedding: Any) -> Any:
+        from one_memory.embedding_backend import VectorCheck
+
+        with self._translated():
+            result = await self._sdk().verify_reembed(
+                self._vector_space(source),
+                self._vector_space(target),
+                embedding=self._embedding_service(embedding),
+            )
+        return VectorCheck(
+            per_role={role: dict(values) for role, values in result.per_role.items()},
+            per_user=dict(result.per_user),
+            problems=tuple(result.problems),
+            warnings=tuple(result.warnings),
+            self_recall_hits=int(result.self_recall_hits),
+            self_recall_samples=int(result.self_recall_samples),
+        )
+
+    async def graph_vectors(self, path: Path) -> int | None:
+        if not path.exists():
+            return None
+        # Not re-exported at the package root; the module is the SDK's own.
+        plan = await self._sdk().reembed.plan_graph_reembed(path)
+        return int(plan.vectors)
+
+    async def reembed_graph(
+        self,
+        source: Path,
+        target: Path,
+        *,
+        embedding: Any,
+        target_dims: int,
+        cancel: Any,
+        on_step: Any,
+    ) -> None:
+        from one_memory.embedding_backend import ReembedStep
+
+        def progress(item: Any) -> None:
+            on_step(
+                ReembedStep(
+                    phase="graph",
+                    role=str(item.table),
+                    done=int(item.done),
+                    total=int(item.total),
+                    embedded=int(item.embedded),
+                )
+            )
+
+        with self._translated():
+            await self._sdk().reembed_graph(
+                source,
+                target,
+                embedding=self._embedding_service(embedding),
+                target_dims=target_dims,
+                cancel=cancel,
+                on_progress=progress,
+                # A resumed switch rebuilds the copy from the untouched source.
+                overwrite=True,
+            )
+
+    async def verify_graph(self, source: Path, target: Path, *, target_dims: int) -> Any:
+        from one_memory.embedding_backend import GraphCheck
+
+        result = await self._sdk().verify_graph_reembed(source, target, target_dims=target_dims)
+        return GraphCheck(ok=bool(result.ok), problems=tuple(result.problems))
+
+    async def drop(self, space: Any) -> None:
+        await self._sdk().drop_vector_space(self._vector_space(space))
+
+    async def drop_graph(self, path: Path) -> None:
+        await self._sdk().drop_graph(path)
+
+    def _embedding_service(self, embedding: Any) -> Any:
+        """The service that computes a target space's vectors.
+
+        The built-in model is MemHub's ONNX service, exactly what the Runtime
+        client embeds with. A remote model gets the SDK's own service, built
+        from the same configuration the Runtime client would use.
+        """
+        from one_memory.hy_sdk_runtime import LocalOnnxEmbeddingService, build_sdk_config
+        from one_memory.model_profiles import ProviderKind
+
+        profile = embedding.profile
+        provider = profile.embedding_provider_kind or profile.provider_kind
+        if provider is ProviderKind.LOCAL_ONNX:
+            return LocalOnnxEmbeddingService()
+        from hy_memory.core.embed_service import EmbedService  # type: ignore[import-untyped]
+
+        return EmbedService(
+            build_sdk_config(
+                profile, embedding.space, api_key=embedding.api_key, data_dir=self.data_dir
+            )
+        )
+
+    @contextmanager
+    def _translated(self) -> Iterator[None]:
+        """SDK refusals as the Core errors the switch classifies."""
+        from one_memory.embedding_backend import EmbeddingWidthError, ReembedCancelledError
+
+        sdk = self._sdk()
+        try:
+            yield
+        except sdk.ReembedCancelled:
+            raise ReembedCancelledError("embedding_switch_cancelled") from None
+        except hy_memory.EmbeddingDimensionMismatchError as error:
+            raise EmbeddingWidthError("embedding_dimensions_mismatch") from error
