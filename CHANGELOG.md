@@ -4,7 +4,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
-- Hy Memory: new `hy_memory.reembed` module for switching the embedding
+## Hy Memory 2.0.10 — 2026-11-01
+
+- New `hy_memory.reembed` module for switching the embedding
   model. Writers must be paused for the whole run. Nothing is derived from
   the provider or endpoint: source and target are named explicitly, and the
   identity of a space is the model name plus the width (`space_identity`).
@@ -36,14 +38,14 @@ Hy Memory and MemHub are versioned and released independently.
     graph is opened read-only and kept for rollback. A run that fails or is
     cancelled leaves no target behind, and a rerun starts over.
     `verify_graph_reembed` and `drop_graph` complete the graph side.
-- Hy Memory: `EmbedService.embed_batch` now splits large batches into
+- `EmbedService.embed_batch` now splits large batches into
   requests of `embedder.batch_size` texts each (`MEMORY_EMBEDDER_BATCH_SIZE`,
   default 64); before, it sent them all in one request. On a 429 it waits for
   the `Retry-After` time plus jitter, capped at 60 s. It takes a per-call
   `max_retries`. A returned vector whose width differs from the configured
   `embedding_dims` now raises `EmbeddingDimensionMismatchError` and is not
   retried.
-- Hy Memory: Raw conversations are stored already trimmed. MemHub now keeps every raw
+- Raw conversations are stored already trimmed. MemHub now keeps every raw
   forever and lite mode stores nothing else, so tool output and long pasted
   logs no longer stay in full. One rule (`hy_memory/utils/raw_trim.py`) is
   applied to each message when the raw is written:
@@ -63,7 +65,7 @@ Hy Memory and MemHub are versioned and released independently.
   reading the history back no longer rewrites the omitted-count markers. The
   text embedded for `L1_RAW` is the trimmed text. New raws carry
   `custom.raw_trimmed=true`.
-- Hy Memory: extractor history ("last k messages") now joins the stored raws directly
+- Extractor history ("last k messages") now joins the stored raws directly
   and does not trim them again. Raws written before this change have no
   `raw_trimmed` flag, so they are still trimmed with the same rule when they
   are read. The extractor still receives the current batch in full (tool
