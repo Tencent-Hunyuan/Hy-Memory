@@ -8,6 +8,9 @@ import axios from "axios";
  */
 const READ_ONLY_PATHS = [
   "/api/v1/call-events",
+  // Read-only: the registry plus a scan of the vector store's collection names.
+  "/api/v1/embedding-spaces",
+  "/api/v1/embedding-switches/current",
   "/api/v1/import-jobs",
   "/api/v1/live-sync",
   "/api/v1/memory-processing",
@@ -163,9 +166,22 @@ export function createCoreReader(attachment: {
         code: detailCode(response.data, response.status),
       };
     }
-    return { state: "unavailable" as const, code: `http_${response.status}` };
+    return {
+      state: "unavailable" as const,
+      code: unavailableCode(response.data, response.status),
+    };
   };
 }
+
+/** A 503 that names `embedding_unavailable` keeps it: the search could not
+ * embed its query, which needs another fix than "try again later". */
+function unavailableCode(value: unknown, status: number): string {
+  return status === 503 && detailCode(value, status) === EMBEDDING_UNAVAILABLE
+    ? EMBEDDING_UNAVAILABLE
+    : `http_${status}`;
+}
+
+export const EMBEDDING_UNAVAILABLE = "embedding_unavailable";
 
 /** Core's stable `detail` code when it sent one, else the bare status. */
 function detailCode(value: unknown, status: number): string {
@@ -218,7 +234,10 @@ export function createCoreContextQuery(attachment: {
     if (response.status === 404) {
       return { state: "not_found" as const, code: "http_404" };
     }
-    return { state: "unavailable" as const, code: `http_${response.status}` };
+    return {
+      state: "unavailable" as const,
+      code: unavailableCode(response.data, response.status),
+    };
   };
 }
 

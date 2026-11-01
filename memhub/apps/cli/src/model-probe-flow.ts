@@ -22,6 +22,10 @@ const RESULT_KEYS = new Set([
   "stages",
   "capabilities",
 ]);
+const OPTIONAL_RESULT_KEYS = [
+  "embedding_width",
+  "embedding_switch_required",
+] as const;
 const STAGE_KEYS = new Set([
   "stage",
   "ok",
@@ -272,9 +276,34 @@ function validateResult(
   inputRevision: number,
 ): Record<string, unknown> | null {
   const result = record(value);
+  // A Core with the embedding registry adds what the embedding stage measured
+  // and whether using it needs an embedding switch; older Cores send neither.
+  const optional = Object.fromEntries(
+    OPTIONAL_RESULT_KEYS.filter((key) => key in (result ?? {})).map((key) => [
+      key,
+      result?.[key],
+    ]),
+  );
+  const required = result
+    ? Object.fromEntries(
+        Object.entries(result).filter(
+          ([key]) => !(OPTIONAL_RESULT_KEYS as readonly string[]).includes(key),
+        ),
+      )
+    : null;
   if (
     !result ||
-    !exactKeys(result, RESULT_KEYS) ||
+    !required ||
+    !exactKeys(required, RESULT_KEYS) ||
+    !(
+      optional.embedding_width === undefined ||
+      optional.embedding_width === null ||
+      positiveInteger(optional.embedding_width)
+    ) ||
+    !(
+      optional.embedding_switch_required === undefined ||
+      typeof optional.embedding_switch_required === "boolean"
+    ) ||
     result.profile_id !== profileId ||
     result.input_profile_revision !== inputRevision ||
     !positiveInteger(result.profile_revision) ||

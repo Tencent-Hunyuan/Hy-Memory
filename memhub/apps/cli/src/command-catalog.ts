@@ -361,9 +361,9 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "models",
     summary:
-      "管理生成模型配置。add/test 直接提交并返回操作 ID（异步，用 receipt 查结果）；edit/activate 直接执行；remove 不可逆，需 --yes。<profile-id>/<operation-id> 都是 UUID；脚本模式的凭据只从受控文件读取。",
+      "管理生成模型配置。add/test 直接提交并返回操作 ID（异步，用 receipt 查结果）；edit 直接执行；activate 换了向量模型（模型或维度）时先显示切换计划，需 --yes 确认后重新生成全部向量，switch 查看或取消、spaces 查看或清理旧向量数据；remove 不可逆，需 --yes。<profile-id>/<operation-id> 都是 UUID；脚本模式的凭据只从受控文件读取。",
     usage:
-      "memhub models list [--json]\n            memhub models show <profile-id> [--json]\n            memhub models add --config-file <path> [--api-key-file <path>] [--activate] [--json]\n            memhub models test <profile-id> [--json]\n            memhub models receipt <operation-id> [--json]\n            memhub models edit <profile-id> --config-file <path> [--api-key-file <path>] [--json]\n            memhub models activate <profile-id> [--json]\n            memhub models remove <profile-id> [--yes] [--json]",
+      "memhub models list [--json]\n            memhub models show <profile-id> [--json]\n            memhub models add --config-file <path> [--api-key-file <path>] [--activate [--yes] [--wait|--no-wait]] [--json]\n            memhub models test <profile-id> [--json]\n            memhub models receipt <operation-id> [--json]\n            memhub models edit <profile-id> --config-file <path> [--api-key-file <path>] [--json]\n            memhub models activate <profile-id> [--yes] [--wait|--no-wait] [--json]\n            memhub models switch <status|cancel> [--json]\n            memhub models spaces [--cleanup <space-id> --yes] [--json]\n            memhub models remove <profile-id> [--yes] [--json]",
     alternative_usage: "memhub models setup",
     options: [
       {
@@ -377,7 +377,17 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       },
       {
         flag: "--activate",
-        summary: "add 成功后把新配置设为当前使用。",
+        summary:
+          "add 成功后先探测，再按 activate 的规则设为当前使用（向量模型变化时同样要确认切换）。",
+      },
+      {
+        flag: "--wait | --no-wait",
+        summary:
+          "activate 开始向量模型切换后是否跟随进度；终端里默认跟随，Ctrl-C 只停止显示。",
+      },
+      {
+        flag: "--cleanup <space-id>",
+        summary: "spaces：立即删除一个已停用的向量空间（不可恢复，需 --yes）。",
       },
       DESTRUCTIVE_CONFIRM_OPTION,
       JSON_OPTION,

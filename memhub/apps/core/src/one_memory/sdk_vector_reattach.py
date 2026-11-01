@@ -73,6 +73,30 @@ def _stored_names(data_dir: Path, *, filled: bool = False) -> tuple[str, ...]:
     return tuple(sorted(str(row[0]) for row in rows))
 
 
+def filled_collection_names(data_dir: Path) -> tuple[str, ...]:
+    """Every vector collection holding at least one record. Read-only.
+
+    Safe beside a serving Core: it reads Chroma's own SQLite file, never the
+    client system the SDK shares.
+    """
+    return _stored_names(data_dir, filled=True)
+
+
+def stored_collection_width(data_dir: Path, name: str) -> int | None:
+    """The vector width Chroma fixed for `name` on its first add; None if unset."""
+    database = _vector_directory(data_dir) / "chroma.sqlite3"
+    if not database.is_file():
+        return None
+    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+        try:
+            row = connection.execute(
+                "SELECT dimension FROM collections WHERE name=?", (name,)
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+    return int(row[0]) if row is not None and row[0] is not None else None
+
+
 def legacy_vector_collections(
     data_dir: Path, profile: ModelProfileSnapshot
 ) -> tuple[tuple[str, str], ...]:

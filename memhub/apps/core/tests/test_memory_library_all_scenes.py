@@ -318,6 +318,12 @@ def run_with_sdk(tmp_path, monkeypatch, scenario):
         async with app.router.lifespan_context(app):
             app.state.sdk_client_handle = Handle()
             monkeypatch.setattr(app.state.sdk_write_coordinator, "use_client", write_client)
+            # Edits and deletes wait for the startup scan of embedding spaces,
+            # as they would behind the App's loading screen.
+            for _ in range(500):
+                if app.state.embedding_switch.writes_open():
+                    break
+                await asyncio.sleep(0.01)
             async with client_for(app) as client:
                 await scenario(app, sdk, client)
 

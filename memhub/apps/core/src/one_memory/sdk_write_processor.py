@@ -9,6 +9,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from one_memory.embedding_spaces import (
+    EmbeddingSpace,
+    EmbeddingSpaceStore,
+    embedding_identity,
+    registry_for,
+)
 from one_memory.hy_graph_admin import effective_memory_mode
 from one_memory.hy_sdk_runtime import SdkClientHandle, builtin_retrieval_snapshot
 from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
@@ -156,6 +162,12 @@ class SdkWriteCoordinator:
     apart: it waits for the user's write in flight, and while it runs that
     user's jobs are refused before the SDK is called
     (`memory_evolve_in_progress`), so the drain puts them back.
+
+    Writes go to the live embedding space only. An active profile whose
+    embedding (model and width) is not the live space's is refused with
+    `embedding_space_mismatch`: it used to open a new, empty collection.
+    While an embedding switch runs, `writes_open` is false and no write
+    starts (`embedding_switch_in_progress`); the job waits in the queue.
     """
 
     def __init__(
@@ -168,6 +180,8 @@ class SdkWriteCoordinator:
         sedimentation_enabled: Callable[[], bool],
         memory_mode: Callable[[], str] = effective_memory_mode,
         memory_features: Callable[[], FeatureOverrides] = lambda: (),
+        spaces: EmbeddingSpaceStore | None = None,
+        writes_open: Callable[[], bool] = lambda: True,
     ) -> None:
         self.profiles = profiles
         self.secrets = secrets
@@ -176,7 +190,8 @@ class SdkWriteCoordinator:
         self.sedimentation_enabled = sedimentation_enabled
         self.memory_mode = memory_mode
         self.memory_features = memory_features
-        self._handles: dict[tuple[str, int, str, FeatureOverrides], SdkClientHandle] = {}
+        #: Keyed by (profile id, revision, space id, memory mode, features).
+        self._handles: dict[tuple[str, int, str, str, FeatureOverrides], SdkClientHandle] = {}
         #: Users evolve (or the graph backfill) is running for, the writes in
         #: flight per user, and one exclusive run per user at a time. Writes
         #: of one user still run side by side; only evolve waits for them.
@@ -184,6 +199,10 @@ class SdkWriteCoordinator:
         self._writing: dict[str, int] = {}
         self._writes_idle = asyncio.Condition()
         self._exclusive: dict[str, asyncio.Lock] = {}
+        #: None only for a profile store without a database (test doubles):
+        #: then every client opens the space its profile names, as before.
+        self.spaces = spaces if spaces is not None else registry_for(profiles)
+        self.writes_open = writes_open
         #: Uses in flight per handle; a retired handle closes at zero.
         self._uses: dict[SdkClientHandle, int] = {}
         self._retired: set[SdkClientHandle] = set()
@@ -198,6 +217,9 @@ class SdkWriteCoordinator:
     ) -> SdkWriteReceipt:
         if not self.sedimentation_enabled():
             raise RuntimeError("model_sedimentation_disabled")
+        if not self.writes_open():
+            # An embedding switch paused writes: the drain puts the job back.
+            raise RuntimeError("embedding_switch_in_progress")
         user_id = records[0].user_id if records else "local"
         if user_id in self._evolving:
             # Before any SDK call: the drain returns the job to pending.
@@ -230,7 +252,7 @@ class SdkWriteCoordinator:
         """
         build = (self.memory_mode(), self.memory_features())
         async with self._lock:
-            stale = {key: handle for key, handle in self._handles.items() if key[2:] != build}
+            stale = {key: handle for key, handle in self._handles.items() if key[3:] != build}
             for key in stale:
                 del self._handles[key]
             self._retired.update(stale.values())
@@ -250,8 +272,11 @@ class SdkWriteCoordinator:
         """Hold one user's writes off while evolve runs for them.
 
         New writes of the user are refused from here on; the ones already in
-        flight are waited for before the body runs.
+        flight are waited for before the body runs. Evolve and the graph
+        backfill write too, so an embedding switch refuses them as well.
         """
+        if not self.writes_open():
+            raise RuntimeError("embedding_switch_in_progress")
         async with self._exclusive.setdefault(user_id, asyncio.Lock()):
             self._evolving.add(user_id)
             try:
@@ -271,6 +296,19 @@ class SdkWriteCoordinator:
             self._handles, self._retired, self._uses = {}, set(), {}
         await asyncio.gather(*(handle.close() for handle in handles))
 
+    def in_use(self) -> int:
+        """Writes and reads holding a client right now."""
+        return sum(self._uses.values())
+
+    async def close_idle(self) -> None:
+        """Retire every handle; the unused close now, the rest when released."""
+        async with self._lock:
+            self._retired.update(self._handles.values())
+            self._handles = {}
+            unused = {value for value in self._retired if not self._uses.get(value)}
+            self._retired -= unused
+        await asyncio.gather(*(value.close() for value in unused))
+
     @asynccontextmanager
     async def use_client(self) -> AsyncIterator[Any]:
         """The public SDK client of the active write profile, kept open while used."""
@@ -281,20 +319,25 @@ class SdkWriteCoordinator:
         self,
     ) -> tuple[ModelProfileSnapshot, str | None]:
         """Resolve one stable profile snapshot for graph administration."""
-        _identity, profile, secret = await asyncio.to_thread(self._read_active_credentials)
+        _identity, profile, secret, _space = await asyncio.to_thread(self._read_active_credentials)
         return profile, secret
+
+    async def live_space(self) -> EmbeddingSpace | None:
+        if self.spaces is None:
+            return None
+        return await asyncio.to_thread(self._live_space)
 
     @asynccontextmanager
     async def _active_handle(self) -> AsyncIterator[SdkClientHandle]:
         """Use the active profile's handle; retire the others, closing the unused."""
         mode = self.memory_mode()
         features = self.memory_features()
-        profile_identity, profile, secret = await asyncio.to_thread(
+        profile_identity, profile, secret, space = await asyncio.to_thread(
             self._read_active_credentials, mode
         )
-        identity = (*profile_identity, mode, features)
+        key = (*profile_identity, space.space_id if space is not None else "", mode, features)
         async with self._lock:
-            handle = self._handles.get(identity)
+            handle = self._handles.get(key)
             if handle is None:
                 handle = SdkClientHandle(
                     profile,
@@ -303,10 +346,11 @@ class SdkWriteCoordinator:
                     http_transport_factory=self.transport_factory(profile),
                     mode=mode,
                     features=features,
+                    space=space,
                 )
-                self._handles[identity] = handle
-            self._retired.update(value for key, value in self._handles.items() if key != identity)
-            self._handles = {identity: handle}
+                self._handles[key] = handle
+            self._retired.update(value for name, value in self._handles.items() if name != key)
+            self._handles = {key: handle}
             self._uses[handle] = self._uses.get(handle, 0) + 1
             unused = {value for value in self._retired if not self._uses.get(value)}
             self._retired -= unused
@@ -325,18 +369,51 @@ class SdkWriteCoordinator:
                 self._retired.discard(handle)
                 await handle.close()
 
+    def _live_space(self) -> EmbeddingSpace:
+        assert self.spaces is not None
+        space = self.spaces.live()
+        if space is None:
+            active = self.profiles.active_identity()
+            space = self.spaces.bootstrap(
+                self.profiles.snapshot(*active) if active is not None else None
+            )
+        return space
+
+    def _lite_credentials(
+        self,
+    ) -> tuple[tuple[str, int], ModelProfileSnapshot, str | None, EmbeddingSpace | None]:
+        space = self._live_space() if self.spaces is not None else None
+        if space is None or space.profile_id is None or space.profile_revision is None:
+            builtin = builtin_retrieval_snapshot()
+            return (builtin.profile_id, builtin.revision), builtin, None, space
+        identity = (space.profile_id, space.profile_revision)
+        profile = self.profiles.snapshot(*identity)
+        try:
+            secret = self.profiles.resolve_snapshot_secret(*identity, self.secrets)
+        except SecretStoreUnavailableError:
+            raise RuntimeError("secure_storage_unavailable") from None
+        if profile.has_api_key and secret is None:
+            raise RuntimeError("model_secret_unavailable")
+        return identity, profile, secret, space
+
     def _read_active_credentials(
         self,
         mode: str = "pro",
-    ) -> tuple[tuple[str, int], ModelProfileSnapshot, str | None]:
+    ) -> tuple[tuple[str, int], ModelProfileSnapshot, str | None, EmbeddingSpace | None]:
         identity = self.profiles.active_identity()
         if identity is None:
             if mode == "lite":
-                # lite stores raw turns with one embedding and calls no model.
-                builtin = builtin_retrieval_snapshot()
-                return (builtin.profile_id, builtin.revision), builtin, None
+                # lite stores raw turns with one embedding and calls no model:
+                # the live space's own, so they land where reads look.
+                return self._lite_credentials()
             raise RuntimeError("model_profile_not_active")
         profile = self.profiles.snapshot(*identity)
+        space = self._live_space() if self.spaces is not None else None
+        if space is not None and (
+            space.identity is None or not embedding_identity(profile).matches(space.identity)
+        ):
+            # Never a new, empty collection: the switch moves the space.
+            raise RuntimeError("embedding_space_mismatch")
         try:
             secret = self.profiles.resolve_snapshot_secret(
                 *identity,
@@ -348,7 +425,7 @@ class SdkWriteCoordinator:
             raise RuntimeError("model_profile_changed")
         if profile.has_api_key and secret is None:
             raise RuntimeError("model_secret_unavailable")
-        return identity, profile, secret
+        return identity, profile, secret, space
 
 
 @dataclass(frozen=True)

@@ -423,7 +423,7 @@ class ModelProber:
         ModelProbeOperations(self.store).assert_no_pending(profile.profile_id)
         # Measuring embedding width may create a new profile version of its own.
         input_revision = profile.revision
-        profile = self._record_embedding_width(profile, stages)
+        profile, _switch_required = self._record_embedding_width(profile, stages)
         self.store.record_capabilities(
             profile.profile_id,
             expected_revision=profile.revision,
@@ -442,30 +442,53 @@ class ModelProber:
         self,
         profile: ModelProfile,
         stages: tuple[ProbeStage, ...],
-    ) -> ModelProfile:
-        """Store the measured vector width on the profile.
+    ) -> tuple[ModelProfile, bool]:
+        """Store the measured vector width on the profile, unless it moves the space.
 
         The graph store fixes its embedding column width when it is first
         created, so guessing this leaves every relation write failing later.
+        On the profile that fills the live embedding space a different width
+        is not recorded: it would name other collections (B2). True when the
+        width was refused that way: using it takes an embedding switch, which
+        the switch plan reports (the probe result keeps its shape).
         """
-        width = next(
-            (
-                stage.embedding_dimensions
-                for stage in stages
-                if stage.stage == "embedding" and stage.embedding_dimensions
-            ),
-            None,
-        )
+        width = measured_width(stages)
         if width is None or width == profile.embedding_dimensions:
-            return profile
-        return self.store.update(
-            profile.profile_id,
-            ModelProfilePatch(
-                expected_revision=profile.revision,
-                embedding_dimensions=width,
+            return profile, False
+        from one_memory.embedding_spaces import EmbeddingSpaceStore, probe_width_allowed
+
+        spaces = EmbeddingSpaceStore(self.store.database_path)
+        with spaces.transaction() as connection:
+            allowed = probe_width_allowed(
+                connection,
+                profile.profile_id,
+                width,
+                data_dir=self.store.database_path.parent,
+            )
+        if not allowed:
+            return profile, True
+        return (
+            self.store.update(
+                profile.profile_id,
+                ModelProfilePatch(
+                    expected_revision=profile.revision,
+                    embedding_dimensions=width,
+                ),
+                self.secrets,
             ),
-            self.secrets,
+            False,
         )
+
+
+def measured_width(stages: tuple[ProbeStage, ...]) -> int | None:
+    return next(
+        (
+            stage.embedding_dimensions
+            for stage in stages
+            if stage.stage == "embedding" and stage.embedding_dimensions
+        ),
+        None,
+    )
 
 
 def _models_request(

@@ -97,7 +97,12 @@ export function contextExitCode(document: ContextSearchDocument): number {
 }
 
 export function renderContextText(document: ContextSearchDocument): string {
-  if (document.state === "unavailable") return "暂时无法查记忆，请稍后重试。\n";
+  if (document.state === "unavailable") {
+    // No lexical fallback: without the embedding service nothing is searched.
+    return document.code === "embedding_unavailable"
+      ? "向量服务不可用，无法检索；请检查向量模型配置。\n"
+      : "暂时无法查记忆，请稍后重试。\n";
+  }
   if (document.state === "denied") return "当前应用没有查记忆权限。\n";
   if (document.state === "invalid") return "查记忆返回了无法识别的结果。\n";
   if (document.state === "rejected") {

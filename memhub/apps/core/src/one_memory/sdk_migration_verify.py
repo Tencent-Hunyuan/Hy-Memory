@@ -222,11 +222,32 @@ def runtime_sdk_client(
             raise DataPlaneMigrationError("sdk_migration_secure_storage_unavailable") from None
         if secret is None:
             raise DataPlaneMigrationError("sdk_migration_model_secret_unavailable")
-    lease = acquire_client(profile, api_key=secret, data_dir=data_dir)
+    # The registry's live space when this home has one and the profile fills
+    # it; otherwise the space the profile named before the registry existed.
+    # A switch in progress never changes it: the profile and the live space
+    # change together, at the switch's commit.
+    space = live_space_for(database_path, profile)
+    lease = (
+        acquire_client(profile, space, api_key=secret, data_dir=data_dir)
+        if space is not None
+        else acquire_client(profile, api_key=secret, data_dir=data_dir)
+    )
     try:
         yield lease.client
     finally:
         lease.close()
+
+
+def live_space_for(database_path: Path, profile: ModelProfileSnapshot) -> Any:
+    """The live embedding space `profile` reads, or None to derive it from the profile."""
+    from one_memory.embedding_spaces import embedding_identity, read_live_space
+
+    space = read_live_space(database_path)
+    if space is None or space.identity is None:
+        return None
+    if not embedding_identity(profile).matches(space.identity):
+        return None
+    return space
 
 
 def verify_readback(

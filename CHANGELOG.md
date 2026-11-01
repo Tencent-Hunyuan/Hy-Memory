@@ -6,6 +6,8 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Hy Memory 2.0.10 — 2026-11-01
 
+- Published
+  [`hy-memory==2.0.10`](https://pypi.org/project/hy-memory/2.0.10/).
 - New `hy_memory.reembed` module for switching the embedding
   model. Writers must be paused for the whole run. Nothing is derived from
   the provider or endpoint: source and target are named explicitly, and the

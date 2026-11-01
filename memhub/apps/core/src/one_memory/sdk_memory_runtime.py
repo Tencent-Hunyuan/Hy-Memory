@@ -47,10 +47,13 @@ class SdkMemoryRuntime:
         extraction_settings: ExtractionSettingsStore,
         data_dir: Path,
         memory_mode: Callable[[], str] = lambda: "pro",
+        writes_open: Callable[[], bool] = lambda: True,
     ) -> None:
         self.coordinator = coordinator
         #: The SDK mode, for the graph store's path (`hy_graph_admin`).
         self.memory_mode = memory_mode
+        #: False while an embedding switch pauses model writes.
+        self.writes_open = writes_open
         self.read_handle = read_handle
         self.write_queue = write_queue
         self.extraction_settings = extraction_settings
@@ -111,6 +114,8 @@ class SdkMemoryRuntime:
             )
 
     async def digest(self) -> dict[str, object]:
+        if not self.writes_open():
+            raise HySdkError("embedding_switch_in_progress")
         async with self.coordinator.use_client() as client:
             try:
                 raw = await asyncio.to_thread(
@@ -151,12 +156,14 @@ class SdkMemoryRuntime:
             if str(error) == "model_profile_not_active":
                 return None
             raise
+        space = await self.coordinator.live_space()
         return await asyncio.to_thread(
             inspect_profile_graph_width,
             profile,
             api_key=secret,
             data_dir=self.data_dir,
             mode=self.memory_mode(),
+            graph_dir=space.graph_dir if space is not None and space.graph_dir else "graph",
         )
 
     async def decide_graph_width(
@@ -167,6 +174,7 @@ class SdkMemoryRuntime:
             profile, secret = await self.coordinator.active_profile_credentials()
         except RuntimeError as error:
             raise HySdkError(str(error)) from error
+        space = await self.coordinator.live_space()
         return await asyncio.to_thread(
             decide_profile_graph_width,
             profile,
@@ -174,6 +182,7 @@ class SdkMemoryRuntime:
             data_dir=self.data_dir,
             decision=decision,
             mode=self.memory_mode(),
+            graph_dir=space.graph_dir if space is not None and space.graph_dir else "graph",
         )
 
     @asynccontextmanager
@@ -183,6 +192,8 @@ class SdkMemoryRuntime:
         Callers record these against the edit or deletion instead of failing
         the request that already committed it.
         """
+        if not self.writes_open():
+            raise HySdkError("embedding_switch_in_progress")
         async with AsyncExitStack() as stack:
             try:
                 client = await stack.enter_async_context(self.coordinator.use_client())

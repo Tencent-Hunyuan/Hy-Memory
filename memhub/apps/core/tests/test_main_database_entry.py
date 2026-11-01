@@ -111,6 +111,11 @@ ALLOWED = {
         "the offline migration opens Chroma",
         opened_with="?mode=ro",
     ),
+    ("sdk_vector_reattach.py", "stored_collection_width"): Allowed(
+        "Chroma's own chroma.sqlite3, read-only, for the width it fixed on a "
+        "collection: a probe on the live space's profile may only record that one",
+        opened_with="?mode=ro",
+    ),
     ("imports/sqlite_access.py", "open_sqlite_readonly"): Allowed(
         "a host app's own SQLite (Cursor state.vscdb / store.db): one direct "
         "read-only open when there is no WAL, and one read-only open of the "
