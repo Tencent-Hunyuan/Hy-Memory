@@ -260,6 +260,7 @@ class EmbedderConfig:
     max_retries: int = None  # 最大重试次数
     retry_delay: float = None  # 重试间隔（秒）
     timeout: int = None  # 请求超时（秒）
+    batch_size: int = None  # 单次 HTTP 请求最多带多少条 input（embed_batch 按此切块）
 
     # 内部平台扩展（extra_headers / extra_body 会透传给 OpenAI client）
     extra_headers: Optional[Dict[str, str]] = None
@@ -294,6 +295,10 @@ class EmbedderConfig:
             # 请求切断并制造重试风暴。SDK 内层重试已关闭，15s 是每个显式 attempt
             # 的真实上限；部署可通过 MEMORY_EMBEDDER_TIMEOUT 覆盖。
             self.timeout = _get_env_int("MEMORY_EMBEDDER_TIMEOUT", 15)
+        if self.batch_size is None:
+            # 大批量（如重新 embed 整个库）不能一次 HTTP 发几千条：多数服务对
+            # input 数组有上限，超了直接 400。按 batch_size 切块逐块发送。
+            self.batch_size = _get_env_int("MEMORY_EMBEDDER_BATCH_SIZE", 64)
         if self.extra_headers is None:
             val = os.getenv("MEMORY_EMBEDDER_EXTRA_HEADERS")
             if val:

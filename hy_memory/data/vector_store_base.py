@@ -89,6 +89,17 @@ def passes_created_after(
 logger = logging.getLogger(__name__)
 
 
+def physical_collection_name(base_name: Optional[str], dims: Optional[int]) -> str:
+    """The collection name a store opens for ``base_name`` at ``dims``.
+
+    The dims suffix keeps two embedding widths from sharing one collection.
+    `hy_memory.reembed.vector_space_names` uses this too, so callers never
+    re-derive the rule.
+    """
+    base = base_name or "agent_memories"
+    return f"{base}_{dims}" if dims else base
+
+
 class VectorStoreBase(ABC):
     """
     向量存储抽象基类
@@ -98,13 +109,10 @@ class VectorStoreBase(ABC):
 
     def __init__(self, config: MemoryConfig):
         self.config = config
-        base_name = config.vector_store.collection_name or "agent_memories"
-        dims = config.vector_store.embedding_dims
         # 自动拼接维度后缀，避免不同 embedding 模型写入同一 collection 导致维度冲突
-        if dims:
-            self._collection_name = f"{base_name}_{dims}"
-        else:
-            self._collection_name = base_name
+        self._collection_name = physical_collection_name(
+            config.vector_store.collection_name, config.vector_store.embedding_dims,
+        )
 
     _supports_retrieval_clauses: bool = False
     _supports_narrow_episode_queries: bool = False
