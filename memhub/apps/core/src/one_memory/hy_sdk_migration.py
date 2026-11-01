@@ -11,6 +11,7 @@ read and fill SDK collections through the SDK's re-embed module.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -546,6 +547,7 @@ class SdkReembedBackend:
         self.data_dir = data_dir
         self.root = data_dir.resolve() / "hy-memory" / HY_MEMORY_NAMESPACE
         self.persist_directory = self.root / "vector"
+        self._chroma_opened = False
 
     def unavailable_reason(self) -> str | None:
         missing = [name for name in _REEMBED_API if not hasattr(hy_memory, name)]
@@ -558,6 +560,23 @@ class SdkReembedBackend:
         if reason is not None:
             raise ReembedUnavailableError(reason)
         return hy_memory
+
+    def _open_chroma_once(self) -> None:
+        """Open Chroma once under the client-construction lock.
+
+        Every later open beside the Runtime finds that system. Two first
+        opens race over Chroma's unlocked cache, and a client under
+        construction lost its stores that way (see `hy_sdk_runtime`).
+        """
+        if self._chroma_opened or not self.persist_directory.is_dir():
+            return
+        import chromadb
+
+        from one_memory.hy_sdk_runtime import first_store_open
+
+        with first_store_open(self.data_dir):
+            chromadb.PersistentClient(path=str(self.persist_directory))
+        self._chroma_opened = True
 
     def _vector_space(self, space: Any) -> Any:
         return self._sdk().VectorSpace(
@@ -573,6 +592,7 @@ class SdkReembedBackend:
 
         if not self.persist_directory.is_dir():
             return ()
+        await asyncio.to_thread(self._open_chroma_once)
         found = await self._sdk().scan_vector_spaces(str(self.persist_directory), per_user=per_user)
         return tuple(
             ScannedSpace(
@@ -587,6 +607,7 @@ class SdkReembedBackend:
         )
 
     async def diff(self, source: Any, target: Any) -> dict[str, int]:
+        await asyncio.to_thread(self._open_chroma_once)
         result = await self._sdk().diff_spaces(
             self._vector_space(source), self._vector_space(target)
         )
@@ -604,6 +625,7 @@ class SdkReembedBackend:
     ) -> None:
         from one_memory.embedding_backend import ReembedStep
 
+        await asyncio.to_thread(self._open_chroma_once)
         sdk = self._sdk()
 
         def progress(item: Any) -> None:
@@ -635,6 +657,7 @@ class SdkReembedBackend:
     async def verify(self, source: Any, target: Any, *, embedding: Any) -> Any:
         from one_memory.embedding_backend import VectorCheck
 
+        await asyncio.to_thread(self._open_chroma_once)
         with self._translated():
             result = await self._sdk().verify_reembed(
                 self._vector_space(source),
@@ -699,6 +722,7 @@ class SdkReembedBackend:
         return GraphCheck(ok=bool(result.ok), problems=tuple(result.problems))
 
     async def drop(self, space: Any) -> None:
+        await asyncio.to_thread(self._open_chroma_once)
         await self._sdk().drop_vector_space(self._vector_space(space))
 
     async def drop_graph(self, path: Path) -> None:
@@ -711,7 +735,11 @@ class SdkReembedBackend:
         client embeds with. A remote model gets the SDK's own service, built
         from the same configuration the Runtime client would use.
         """
-        from one_memory.hy_sdk_runtime import LocalOnnxEmbeddingService, build_sdk_config
+        from one_memory.hy_sdk_runtime import (
+            LocalOnnxEmbeddingService,
+            build_sdk_config,
+            retrieval_view,
+        )
         from one_memory.model_profiles import ProviderKind
 
         profile = embedding.profile
@@ -721,8 +749,12 @@ class SdkReembedBackend:
         from hy_memory.core.embed_service import EmbedService  # type: ignore[import-untyped]
 
         return EmbedService(
+            # The retrieval view: re-embedding never needs the generation model.
             build_sdk_config(
-                profile, embedding.space, api_key=embedding.api_key, data_dir=self.data_dir
+                retrieval_view(profile),
+                embedding.space,
+                api_key=embedding.api_key,
+                data_dir=self.data_dir,
             )
         )
 

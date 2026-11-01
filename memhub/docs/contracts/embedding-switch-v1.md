@@ -51,9 +51,10 @@ start, follow and cancel. Core implementation: `embedding_switch.py`,
    next serving Core resumes the job from its state. The upgrade migration
    (`sdk-migrate`) never touches the switch tables; `sdk-migration-status`
    reports an open job as `embedding_switch` and does not block on it.
-10. **Ultra graph.** With the graph store enabled the switch builds a new graph
-    at the target width. While it does, every SDK client is closed briefly, so
-    reads wait for that step.
+10. **Graph.** Any graph the live space holds is rebuilt at the target width,
+    whatever the mode, so a pro home keeps the graph of its ultra days. In ultra
+    every SDK client is closed while the graph is copied and again while it is
+    verified, so reads wait for those two steps; the other modes keep reading.
 
 ## 2. Space registry
 
@@ -121,7 +122,10 @@ Core's shape `{"detail": "<code>"}`; a refusal that computed a plan adds
 - `sources[0]` is the live space; further entries are strays folded in
   (`unmerged` = their record count). `users` counts distinct `user_id`s.
 - `requests` is null for a local target (no cost). `estimate_s` is a rough
-  guide (local ≈ 60 vectors/s, remote ≈ 200 vectors/s).
+  guide (local ≈ 60 vectors/s, remote ≈ 200 vectors/s), not measured.
+- `graph_vectors` is null when there is no graph, and also when an SDK client
+  holds it open, as in ultra: the estimate and disk figures then leave the graph
+  out. The switch still rebuilds it.
 - A non-empty `blockers` means the switch cannot start (§5.1).
 
 ### 3.2 Job
@@ -227,6 +231,7 @@ the startup scan, or null.
 | `model_profile_not_found` | 404 | unknown profile |
 | `model_profile_conflict` | 409 | `expected_revision` stale |
 | `embedding_unavailable` | 503 | search, recall, context, library search or ask could not embed the query (remote embedding down). No lexical fallback. |
+| `embedding_space_profile_missing` | 503 | the profile that fills the live space was deleted and no active profile has its model and width; activate one that does |
 
 ### 5.2 Job failure codes (`error_code` on a `rolled_back` job)
 

@@ -11,7 +11,8 @@ import asyncio
 import hashlib
 import os
 import threading
-from collections.abc import Callable, Coroutine, Iterable, Mapping
+from collections.abc import Callable, Coroutine, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Literal, cast
@@ -519,6 +520,20 @@ def acquire_client(
             if not _OPENING[key]:
                 del _OPENING[key]
             _STORE_GATE.notify_all()
+
+
+@contextmanager
+def first_store_open(data_dir: Path) -> Iterator[None]:
+    """One opening of this home's stores at a time: Chroma's first open is unlocked.
+
+    The same lock client construction takes, for anything else that opens
+    Chroma beside the Runtime (the re-embed functions).
+    """
+    key = data_dir.resolve()
+    with _STORE_GATE:
+        constructing = _CONSTRUCTING.setdefault(key, threading.Lock())
+    with constructing:
+        yield
 
 
 def hold_stores_offline(data_dir: Path) -> bool:

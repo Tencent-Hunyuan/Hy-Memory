@@ -156,7 +156,14 @@ class ActiveProfileReadHandle(SdkClientHandle):
         if active is not None and self._reads(active, space):
             return space, active
         if space.profile_id is not None and space.profile_revision is not None:
-            return space, (space.profile_id, space.profile_revision)
+            identity = (space.profile_id, space.profile_revision)
+            try:
+                self.profiles.snapshot(*identity)
+            except KeyError:
+                # Its endpoint and key went with the profile; the built-in
+                # model cannot read these vectors. Say so, never read wrong.
+                raise HySdkRuntimeError("embedding_space_profile_missing") from None
+            return space, identity
         return space, _BUILTIN
 
     def _reads(self, identity: tuple[str, int], space: EmbeddingSpace) -> bool:

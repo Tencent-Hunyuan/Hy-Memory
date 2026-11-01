@@ -556,13 +556,12 @@ class EmbeddingSwitchService:
             )
         total = sum(item.vectors for item in sources)
         graph_vectors: int | None = None
-        if self.graph_enabled():
-            graph = self._graph_path(live)
-            if graph.exists() and unavailable is None:
-                try:
-                    graph_vectors = await self.backend.graph_vectors(graph)
-                except Exception:  # noqa: BLE001 - the plan reports what it can
-                    logger.warning("embedding_switch_plan_graph_unreadable", exc_info=True)
+        graph = self._graph_path(live)
+        if graph.exists() and unavailable is None:
+            try:
+                graph_vectors = await self.backend.graph_vectors(graph)
+            except Exception:  # noqa: BLE001 - a client may hold it open: null, not a refusal
+                logger.info("embedding_switch_plan_graph_unreadable")
         dims = identity.dims or 1024
         needed_bytes = (
             int((total + (graph_vectors or 0)) * (dims * 4 + _BYTES_PER_VECTOR_OVERHEAD) * 1.5)
@@ -1226,8 +1225,10 @@ class EmbeddingSwitchService:
         target: EmbeddingSpace,
         embedding: EmbeddingTarget,
     ) -> None:
+        # Whatever the mode: a pro home can hold the graph of its ultra days,
+        # and it would otherwise be dropped with the old space.
         source_graph = self._graph_path(source)
-        if not self.graph_enabled() or not _graph_has_files(source_graph):
+        if not _graph_has_files(source_graph):
             return
         target_dims = target.dims or target.name_dims
         if target_dims is None:
@@ -1247,8 +1248,11 @@ class EmbeddingSwitchService:
             release()
 
     async def _quiesce(self) -> Callable[[], None]:
-        """Close every SDK client so the graph can be read; reads wait meanwhile."""
-        if self.quiesce_clients is None:
+        """Close every SDK client so the graph can be read; reads wait meanwhile.
+
+        Only ultra clients hold the graph, so other modes keep serving reads.
+        """
+        if self.quiesce_clients is None or not self.graph_enabled():
             return lambda: None
         return await self.quiesce_clients()
 
@@ -1292,11 +1296,17 @@ class EmbeddingSwitchService:
                 for user, count in (live_scan.per_user if live_scan else {}).items():
                     if check.per_user.get(user, 0) < count:
                         problems.append(f"user {user!r}: target holds fewer records")
-            if self.graph_enabled() and _graph_has_files(self._graph_path(source)):
+            if _graph_has_files(self._graph_path(source)):
                 dims = target.dims or target.name_dims or 0
-                graph = await self.backend.verify_graph(
-                    self._graph_path(source), self._graph_path(target), target_dims=dims
-                )
+                # Reads are served between the copy and here: a client may
+                # hold the graph again, and the SDK refuses to open it then.
+                release = await self._quiesce()
+                try:
+                    graph = await self.backend.verify_graph(
+                        self._graph_path(source), self._graph_path(target), target_dims=dims
+                    )
+                finally:
+                    release()
                 report["graph"] = {"ok": graph.ok, "problems": list(graph.problems)}
                 problems.extend(f"graph: {item}" for item in graph.problems)
         report["problems"] = problems
@@ -1417,7 +1427,7 @@ class EmbeddingSwitchService:
                         await self.backend.drop_graph(self._graph_path(target))
                 except ReembedUnavailableError:
                     pass
-                except Exception:  # noqa: BLE001 - leftovers are dropped by the sweep
+                except Exception:  # noqa: BLE001 - the next start's scan merges and retires it
                     logger.warning("embedding_switch_rollback_drop_failed", exc_info=True)
                 await asyncio.to_thread(self.spaces.mark_dropped, target.space_id)
         now = _now().isoformat()

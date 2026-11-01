@@ -1036,7 +1036,8 @@ async def test_ultra_mode_builds_a_new_graph_at_the_target_width(tmp_path: Path)
     assert home.backend.graphs_built == [built]
     assert (built / "width").read_text() == "1024"
     assert graph.exists()  # the source graph is untouched, kept with the old space
-    assert quiesced == ["closed", "released"]
+    # Once to copy the graph, once to verify it.
+    assert quiesced == ["closed", "released", "closed", "released"]
 
 
 async def test_a_job_another_live_core_still_beats_for_is_not_taken_over(tmp_path: Path) -> None:
@@ -1055,3 +1056,60 @@ async def test_a_job_another_live_core_still_beats_for_is_not_taken_over(tmp_pat
     assert second._task is None
     assert not second.writes_open()
     assert second.jobs.get(job_id)["state"] == "preparing"
+
+
+def test_a_live_space_whose_profile_was_deleted_says_so_on_read(tmp_path: Path) -> None:
+    from one_memory.sdk_read_handle import ActiveProfileReadHandle
+
+    home = Home(tmp_path)
+    profile = home.profile(activate=True)
+    home.bootstrap()
+    home.profiles.delete(profile.profile_id, home.secrets)
+    handle = ActiveProfileReadHandle(
+        profiles=home.profiles, secrets=home.secrets, data_dir=tmp_path, spaces=home.spaces
+    )
+
+    with pytest.raises(HySdkRuntimeError, match="embedding_space_profile_missing"):
+        handle._resolve()
+
+
+async def test_legacy_collections_block_a_switch_until_they_are_reattached(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = Home(tmp_path)
+    seed_builtin(home)
+    target = home.profile()
+    monkeypatch.setattr(
+        "one_memory.sdk_vector_reattach.legacy_vector_collections",
+        lambda _data_dir, _profile: (("one_memory_abc", "memhub_abc"),),
+    )
+
+    plan = await home.service().plan(target.profile_id)
+
+    assert "embedding_switch_requires_migration" in plan.blockers
+
+
+def test_sdk_migrate_leaves_an_unfinished_switch_alone(tmp_path: Path) -> None:
+    """The upgrade path runs the real migration entry on a home mid-switch."""
+    from one_memory.sdk_migration_runner import run_startup_migration
+    from one_memory.target_schema import bootstrap_fresh_management_schema
+
+    assert bootstrap_fresh_management_schema(tmp_path / "one-memory.sqlite3")
+    home = Home(tmp_path)
+    live = seed_builtin(home)
+    target = home.profile()
+    service = home.service()
+    job_id = asyncio.run(start(home, service, target))
+    service.jobs.update(job_id, state="reembedding")
+    before = (home.spaces.list_spaces(), dict(service.jobs.get(job_id)))
+
+    result = run_startup_migration(
+        data_dir=tmp_path,
+        runtime_build="99",
+        sdk_version="2.0.10",
+        namespace="governed-v2",
+    )
+
+    assert result.state == "not_required"
+    assert (home.spaces.list_spaces(), dict(service.jobs.get(job_id))) == before
+    assert home.spaces.require_live().space_id == live.space_id
