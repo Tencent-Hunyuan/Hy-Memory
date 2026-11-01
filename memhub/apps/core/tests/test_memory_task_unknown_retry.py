@@ -25,6 +25,7 @@ def _stores(tmp_path):
             provider_kind=ProviderKind.OLLAMA,
             model="hy-bot-phi4",
             embedding_model="nomic-embed-text",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )

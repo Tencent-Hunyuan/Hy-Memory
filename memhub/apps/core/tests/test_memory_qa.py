@@ -66,6 +66,7 @@ def _grounded_setup(tmp_path, *, memory_id: str = "memory-real-data"):
             base_url="http://127.0.0.1:11434",
             model="test-model",
             embedding_model="test-embedding",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -263,6 +264,7 @@ def test_answer_uses_only_grounded_confirmed_memory_citations(tmp_path) -> None:
             base_url="http://127.0.0.1:11434",
             model="test-model",
             embedding_model="test-embedding",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -468,6 +470,7 @@ def test_answer_rejects_model_citation_outside_retrieved_scope(tmp_path) -> None
             base_url="http://127.0.0.1:11434",
             model="test-model",
             embedding_model="test-embedding",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -530,6 +533,7 @@ def _compatible_gateway_setup(tmp_path):
             base_url="https://api.example.invalid/standard/v1",
             model="deepseek-v4-pro",
             embedding_model="text-embedding",
+            embedding_base_url="https://api.example.invalid/standard/v1",
             api_key="probe-key",
         ),
         secrets,

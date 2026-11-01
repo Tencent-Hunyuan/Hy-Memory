@@ -94,7 +94,6 @@ from one_memory.hy_runtime_config import (
 from one_memory.hy_sdk_runtime import (
     AmbiguousMemoryIdError,
     SdkClientHandle,
-    builtin_retrieval_snapshot,
     close_all_shared_runtimes,
     hold_stores_offline,
     release_stores,
@@ -190,6 +189,7 @@ from one_memory.model_presets import seed_preset_profile
 from one_memory.model_probe import ModelProber, ModelProbeResult
 from one_memory.model_profiles import (
     ActiveModelProfileError,
+    EmbeddingBaseUrlRequiredError,
     ModelCreationOperationConflictError,
     ModelCreationOperationLookupError,
     ModelCreationOperationReceipt,
@@ -229,6 +229,7 @@ from one_memory.sdk_memory_qa import (
 )
 from one_memory.sdk_memory_runtime import SdkMemoryRuntime
 from one_memory.sdk_migration_log import error_chain_text, error_frames
+from one_memory.sdk_read_handle import ActiveProfileReadHandle
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.secrets import (
     KeyringSecretStore,
@@ -918,6 +919,16 @@ def create_app(
                 try:
                     await asyncio.to_thread(
                         memory_visibility.startup,
+                        database_path,
+                    )
+                except sqlite3.Error as error:
+                    app.state.memory_visibility_error = str(error)
+            else:
+                # A home an earlier build migrated still carries the grant
+                # triggers whose body reads a dropped table (#233).
+                try:
+                    await asyncio.to_thread(
+                        memory_visibility.drop_stale_triggers,
                         database_path,
                     )
                 except sqlite3.Error as error:
@@ -2863,6 +2874,8 @@ def create_app(
     def create_model_profile(request: ModelProfileInput) -> ModelProfile:
         try:
             return _model_profile_store(app).create(request, _secret_store(app))
+        except EmbeddingBaseUrlRequiredError:
+            raise HTTPException(422, "embedding_base_url_required") from None
         except ModelCreationOperationConflictError:
             raise HTTPException(409, "model_creation_operation_conflict") from None
         except ModelCreationOperationLookupError:
@@ -2914,6 +2927,8 @@ def create_app(
             raise HTTPException(status_code=404, detail="model_profile_not_found") from None
         except ModelProfileConflictError:
             raise HTTPException(status_code=409, detail="model_profile_conflict") from None
+        except EmbeddingBaseUrlRequiredError:
+            raise HTTPException(status_code=422, detail="embedding_base_url_required") from None
         except SecretStoreUnavailableError as error:
             raise HTTPException(
                 status_code=503,
@@ -4870,9 +4885,11 @@ async def _search_sdk_raw(
 def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
     handle = cast(SdkClientHandle | None, app.state.sdk_client_handle)
     if handle is None:
-        handle = SdkClientHandle(
-            profile=builtin_retrieval_snapshot(),
-            api_key=None,
+        # Reads open the embedding space writes fill: the active profile's,
+        # the built-in one only when none is active (#242).
+        handle = ActiveProfileReadHandle(
+            profiles=_model_profile_store(app),
+            secrets=_secret_store(app),
             data_dir=cast(Settings, app.state.settings).data_dir,
         )
         app.state.sdk_client_handle = handle

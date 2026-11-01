@@ -651,6 +651,75 @@ def test_two_hermes_grants_each_read_their_own_root_into_separate_batches(tmp_pa
 
 
 @pytest.mark.fresh_sdk
+def test_a_migrated_home_with_the_old_grant_triggers_can_connect_and_revoke(tmp_path) -> None:
+    """#233: a home an earlier build migrated kept two `source_grants` triggers
+    whose body reads the dropped `governed_memory_evidence`. Every grant write
+    then failed, so connecting and revoking answered 503. Startup drops them.
+    """
+    stale = """
+        CREATE TRIGGER memory_visibility_dirty_on_grants{suffix}
+        AFTER {event} ON source_grants
+        BEGIN
+            INSERT INTO memory_visibility_dirty (memory_id)
+            SELECT DISTINCT link.memory_id
+            FROM governed_memory_evidence link
+            JOIN evidence e ON e.evidence_id = link.evidence_id
+            WHERE e.source_id = NEW.source_id
+            ON CONFLICT(memory_id) DO NOTHING;
+        END;"""
+
+    async def scenario():
+        home = tmp_path / "home"
+        _hermes, wife = _hermes_homes(home)
+        app = application(tmp_path, home=home)
+        async with app.router.lifespan_context(app):
+            database = app.state.settings.data_dir / "one-memory.sqlite3"
+        with sqlite3.connect(database) as db:
+            db.execute("CREATE TABLE IF NOT EXISTS memory_visibility_dirty (memory_id TEXT)")
+            db.execute(stale.format(suffix="", event="INSERT"))
+            db.execute(stale.format(suffix="_update", event="UPDATE"))
+
+        app = application(tmp_path, home=home)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            location = (await client.post("/api/v1/sources/hermes/location")).json()
+            local = await client.post(
+                "/api/v1/sources/connect",
+                json={
+                    "source_ids": ["hermes"],
+                    "request_id": str(uuid4()),
+                    "source_roots": {"hermes": location["root_id"]},
+                },
+            )
+            assert local.status_code == 200, local.text
+            profile = await client.post(
+                "/api/v1/sources/connect",
+                json={
+                    "source_ids": ["hermes"],
+                    "request_id": str(uuid4()),
+                    "user_id": "wife",
+                    "root": str(wife),
+                },
+            )
+            assert profile.status_code == 200, profile.text
+            for user_id in ("wife", "local"):
+                revoked = await client.post(
+                    "/api/v1/sources/hermes/revoke", params={"user_id": user_id}
+                )
+                assert revoked.status_code == 200, revoked.text
+                assert revoked.json()["revoked_at"] is not None
+        with sqlite3.connect(database) as db:
+            assert (
+                db.execute(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type='trigger' AND tbl_name='source_grants'"
+                ).fetchone()[0]
+                == 0
+            )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
 def test_only_hermes_takes_another_user_or_a_custom_root(tmp_path) -> None:
     async def scenario():
         home = tmp_path / "home"

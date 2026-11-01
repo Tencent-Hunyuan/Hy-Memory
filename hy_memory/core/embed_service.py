@@ -38,10 +38,12 @@ import importlib.util
 import json
 from json import JSONDecodeError
 import logging
+import random
 import threading
 import time
 
 from ..config import MemoryConfig
+from ..embedding import EmbeddingDimensionMismatchError
 from .workload import embedding_slot
 from ..utils.log_setup import get_request_id
 
@@ -187,6 +189,41 @@ def _redact_headers(headers: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any
     return out
 
 
+# Retry-After 的上限：服务端给出超长等待（或恶意值）时不让单次调用挂几十分钟。
+_RETRY_AFTER_MAX_S = 60.0
+
+
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """从 429 异常的响应头里取 Retry-After（秒数或 HTTP 日期），取不到返回 None。"""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    try:
+        raw = headers.get("retry-after") or headers.get("Retry-After")
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    raw = str(raw).strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            from email.utils import parsedate_to_datetime
+            from datetime import datetime, timezone
+
+            when = parsedate_to_datetime(raw)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = (when - datetime.now(timezone.utc)).total_seconds()
+        except Exception:
+            return None
+    if seconds != seconds:  # NaN
+        return None
+    return min(max(0.0, seconds), _RETRY_AFTER_MAX_S)
+
+
 def _embeddings_api_url(base_url: str) -> str:
     """OpenAI SDK posts to ``{base_url}/embeddings`` (base_url usually ends with /v1)."""
     base = (base_url or "").rstrip("/")
@@ -205,7 +242,8 @@ class EmbedServiceConfig:
     api_key: str = ""
     base_url: str = ""
     embedding_dims: int = 1536
-    batch_size: int = 100
+    # embed_batch 单次 HTTP 最多带多少条 input；超出按块顺序发送
+    batch_size: int = 64
     enable_cache: bool = True
     cache_size: int = 10000
     max_retries: int = 5
@@ -287,6 +325,7 @@ class EmbedService:
             max_retries=embedder.max_retries if embedder.max_retries is not None else 5,
             retry_delay=embedder.retry_delay if embedder.retry_delay is not None else 3.0,
             timeout=embedder.timeout if embedder.timeout is not None else 60,
+            batch_size=max(1, int(getattr(embedder, "batch_size", None) or 64)),
             queue_batch_size=int(os.getenv("MEMORY_EMBED_BATCH_SIZE", "8")),
             queue_batch_window_ms=float(os.getenv("MEMORY_EMBED_BATCH_WINDOW_MS", "100")),
             extra_headers=embedder.extra_headers,
@@ -640,6 +679,8 @@ class EmbedService:
         self,
         texts: List[str],
         use_cache: bool = True,
+        *,
+        max_retries: Optional[int] = None,
     ) -> List[List[float]]:
         """
         批量向量化
@@ -647,17 +688,23 @@ class EmbedService:
         Args:
             texts: 文本列表
             use_cache: 是否使用缓存
+            max_retries: 本次调用的重试次数；None 用配置值。长批量任务（重新
+                embed 整个库）可以给更宽的重试预算，不影响在线路径。
         
         Returns:
             向量列表
         """
-        vectors, _metas = await self.embed_batch_with_meta(texts, use_cache=use_cache)
+        vectors, _metas = await self.embed_batch_with_meta(
+            texts, use_cache=use_cache, max_retries=max_retries,
+        )
         return vectors
 
     async def embed_batch_with_meta(
         self,
         texts: List[str],
         use_cache: bool = True,
+        *,
+        max_retries: Optional[int] = None,
     ) -> Tuple[List[List[float]], List[Dict[str, Any]]]:
         """批量向量化，同时返回每条的 provider metadata（非 vector）。"""
         if not texts:
@@ -682,7 +729,12 @@ class EmbedService:
             indices_to_embed.append(i)
 
         if texts_to_embed:
-            vectors, batch_metas = await self._embed_texts_with_meta(texts_to_embed)
+            # max_retries 只在显式给出时透传：保持 `_embed_texts_with_meta(texts)`
+            # 这个既有调用形状不变（测试与下游替身按它打桩）。
+            retry_kwargs = {} if max_retries is None else {"max_retries": max_retries}
+            vectors, batch_metas = await self._embed_texts_with_meta(
+                texts_to_embed, **retry_kwargs,
+            )
 
             for j, vector in enumerate(vectors):
                 idx = indices_to_embed[j]
@@ -700,9 +752,9 @@ class EmbedService:
         return results, metas
     
     async def _embed_texts_with_meta(
-        self, texts: List[str]
+        self, texts: List[str], *, max_retries: Optional[int] = None,
     ) -> Tuple[List[List[float]], List[Dict[str, Any]]]:
-        """实际的向量化调用：**一次 HTTP 带走整批**；返回 (vectors, metas)。
+        """实际的向量化调用：**一次 HTTP 带走一块**；返回 (vectors, metas)。
 
         早期实现是 `for text in texts: await _embed_openai([text])` 逐条串行，
         原意是"避免 batch size 限制"，但代价极大：线上一批 8 条 × ~5.6s 串行
@@ -719,21 +771,34 @@ class EmbedService:
         截断在这里做（发送前逐条过 `_truncate_for_embedding`）：所有 embedding
         路径（embed / embed_batch / embed_queued / *_with_meta）最终都落到这个
         方法 —— 放在各入口会漏。理由与阈值见模块头部 `_EMBED_MAX_TOKENS`。
+
+        切块：一次带走整批只适用于小批。几千条的 input 数组会被多数服务直接
+        400（input 上限），所以按 `batch_size`（默认 64）切块，块之间顺序发送。
+        不超过一块时行为与切块前逐字相同（`batch_mode="single_request"`）。
         """
         if not texts:
             return [], []
 
         safe_texts = [_truncate_for_embedding(t) for t in texts]
-        vectors, meta = await self._embed_openai(safe_texts)
-        base_meta = dict(meta or {})
-        base_meta["batch_mode"] = "single_request"
-        base_meta["batch_input_count"] = len(safe_texts)
-
+        chunk = max(1, int(self._embed_config.batch_size or 64))
+        vectors: List[List[float]] = []
         all_metas: List[Dict[str, Any]] = []
-        for idx in range(len(safe_texts)):
-            m = dict(base_meta)
-            m["batch_index"] = idx
-            all_metas.append(m)
+        chunk_count = (len(safe_texts) + chunk - 1) // chunk
+        for start in range(0, len(safe_texts), chunk):
+            part = safe_texts[start:start + chunk]
+            retry_kwargs = {} if max_retries is None else {"max_retries": max_retries}
+            part_vectors, meta = await self._embed_openai(part, **retry_kwargs)
+            base_meta = dict(meta or {})
+            base_meta["batch_mode"] = "single_request" if chunk_count == 1 else "chunked"
+            base_meta["batch_input_count"] = len(part)
+            if chunk_count > 1:
+                base_meta["batch_chunk_index"] = start // chunk
+                base_meta["batch_chunk_count"] = chunk_count
+            for idx in range(len(part)):
+                m = dict(base_meta)
+                m["batch_index"] = start + idx
+                all_metas.append(m)
+            vectors.extend(part_vectors)
 
         self._last_embed_meta = all_metas[-1] if all_metas else {}
         return vectors, all_metas
@@ -783,7 +848,7 @@ class EmbedService:
             )
 
     async def _embed_openai(
-        self, texts: List[str]
+        self, texts: List[str], *, max_retries: Optional[int] = None,
     ) -> Tuple[List[List[float]], Dict[str, Any]]:
         """
         使用 OpenAI 兼容接口向量化
@@ -873,7 +938,9 @@ class EmbedService:
             "endpoint_overridden": bool(_ov),
         }
 
-        _max_retries = max(0, int(self._embed_config.max_retries or 0))
+        _max_retries = max(0, int(
+            (self._embed_config.max_retries or 0) if max_retries is None else max_retries
+        ))
         _retry_delay = max(0.0, float(self._embed_config.retry_delay or 0.0))
         last_exc: Optional[Exception] = None
 
@@ -919,6 +986,17 @@ class EmbedService:
                         f"got={len(vectors)}"
                     )
                 dims = [len(v) for v in vectors]
+                expected_dims = self._embed_config.embedding_dims
+                if expected_dims:
+                    bad = [d for d in dims if d != int(expected_dims)]
+                    if bad:
+                        # 宽度不对的向量写进集合会把集合的维度钉死在错误值上（Chroma
+                        # 首次 add 定维），或在已有集合上整批失败。确定性错误，不重试。
+                        raise EmbeddingDimensionMismatchError(
+                            "embedding dimension mismatch: "
+                            f"expected={int(expected_dims)} got={bad[0]} "
+                            f"model={self._embed_config.model}"
+                        )
                 meta = {
                     "http_status": raw.status_code,
                     "response_headers": resp_headers,
@@ -954,6 +1032,8 @@ class EmbedService:
                     },
                 )
                 return vectors, meta
+            except EmbeddingDimensionMismatchError:
+                raise
             except Exception as e:
                 last_exc = e
                 _err_name = type(e).__name__
@@ -987,12 +1067,18 @@ class EmbedService:
                 if _retryable and attempt < _max_retries:
                     # 逐出可能卡死的 client,下个 attempt 重建干净连接(恢复原防御语义)
                     self._evict_client(_eff_base_url, _eff_api_key, _eff_timeout)
+                    _delay = _retry_delay
+                    _retry_after = _retry_after_seconds(e) if _status == 429 else None
+                    if _retry_after is not None:
+                        # 限流时服务端明确告诉了要等多久：按它等，再加一点抖动，
+                        # 避免多个 worker 在同一时刻一起醒来再次撞限流。
+                        _delay = max(_delay, _retry_after) + random.uniform(0, 0.25 * _retry_after)
                     logger.warning(
                         f"[embed] attempt {attempt + 1}/{_max_retries + 1} failed "
-                        f"({_err_name}): {_err_msg[:200]}; retry in {_retry_delay}s"
+                        f"({_err_name}): {_err_msg[:200]}; retry in {_delay:.2f}s"
                     )
-                    if _retry_delay > 0:
-                        await asyncio.sleep(_retry_delay)
+                    if _delay > 0:
+                        await asyncio.sleep(_delay)
                     continue
                 self._log_embed_call(
                     status="error",

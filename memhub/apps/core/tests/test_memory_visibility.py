@@ -55,6 +55,7 @@ def library(tmp_path):
             provider_kind=ProviderKind.OLLAMA,
             model="hy-bot-phi4",
             embedding_model="nomic-embed-text",
+            embedding_base_url="http://127.0.0.1:11434",
         ),
         secrets,
     )
@@ -611,3 +612,58 @@ def test_granting_a_source_repeatedly_does_not_raise(library):
 
     with main_database_read(database) as db:
         assert memory.memory_id in pending(db)
+
+
+def test_grant_writes_still_work_after_the_cutover_drops_the_link_table(library):
+    """#233: the grant triggers read `governed_memory_evidence`.
+
+    The SDK cutover drops it, and SQLite resolves a trigger body only when it
+    fires, so every grant, revoke and connect then failed with "no such
+    table". A trigger whose body names a missing table is not installed, and
+    the copy an earlier startup installed is dropped.
+    """
+    database, *_ = library
+    from one_memory.imports.candidates import RootCandidateKind
+    from one_memory.imports.grants import SourceGrantStore
+    from one_memory.memory_visibility import drop_stale_triggers
+
+    startup(database)
+    with sqlite3.connect(database) as db:
+        db.execute("DROP TABLE governed_memory_evidence")
+
+    def grant_triggers() -> set[str]:
+        with sqlite3.connect(database) as db:
+            return {
+                str(row[0])
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='trigger' AND tbl_name='source_grants'"
+                )
+            }
+
+    assert grant_triggers() == {
+        "memory_visibility_dirty_on_grants",
+        "memory_visibility_dirty_on_grants_update",
+    }
+    # The `evidence` triggers read the dropped table too; the cutover drops
+    # `evidence` as well, which takes them with it.
+    assert {
+        "memory_visibility_dirty_on_grants",
+        "memory_visibility_dirty_on_grants_update",
+    } <= set(drop_stale_triggers(database))
+    assert grant_triggers() == set()
+    assert drop_stale_triggers(database) == ()
+    # Installing again on this shape skips them instead of bringing them back.
+    startup(database)
+    assert grant_triggers() == set()
+
+    folder = database.parent / "cursor"
+    folder.mkdir(exist_ok=True)
+    store = SourceGrantStore(database, home=database.parent)
+    store.grant(
+        user_id="local",
+        source_id="cursor",
+        root=folder,
+        candidate_kind=RootCandidateKind.DEFAULT,
+    )
+    assert store.revoke(user_id="local", source_id="cursor").revoked_at is not None

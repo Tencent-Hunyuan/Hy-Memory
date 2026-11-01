@@ -26,6 +26,7 @@ def snapshot() -> ModelProfileSnapshot:
         base_url="http://127.0.0.1:11434",
         model="memory-model",
         embedding_model="embedding-model",
+        embedding_base_url="http://127.0.0.1:11434",
         embedding_dimensions=768,
         timeout_seconds=30,
         max_concurrency=1,

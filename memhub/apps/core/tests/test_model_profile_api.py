@@ -50,6 +50,7 @@ def test_model_profile_api_never_returns_key_and_enforces_revision(tmp_path) -> 
                     "base_url": "https://models.example.com/v1",
                     "model": "memory-model",
                     "embedding_model": "embedding-model",
+                    "embedding_base_url": "https://models.example.com/v1",
                     "api_key": API_KEY,
                 },
             )
@@ -134,6 +135,7 @@ def test_model_profile_probe_route_returns_only_machine_results(tmp_path) -> Non
                     "base_url": "https://models.example.com/v1",
                     "model": "memory-model",
                     "embedding_model": "embedding-model",
+                    "embedding_base_url": "https://models.example.com/v1",
                     "api_key": API_KEY,
                 },
             )
@@ -244,6 +246,7 @@ def test_activation_survives_a_corpus_already_imported(tmp_path) -> None:
                     "base_url": "https://models.example.com/v1",
                     "model": "memory-model",
                     "embedding_model": "embedding-model",
+                    "embedding_base_url": "https://models.example.com/v1",
                     "api_key": API_KEY,
                 },
             )

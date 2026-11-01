@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from one_memory.database_access import main_database
+from one_memory.hy_sdk_runtime import builtin_retrieval_snapshot
 from one_memory.imports.models import EvidenceRecord
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import (
@@ -51,6 +52,7 @@ from one_memory.sdk_migration_bundle import inspect_sdk_migration_bundle
 from one_memory.sdk_migration_verify import (
     MemoryReadbackFailed,
     ReadbackReport,
+    expected_memory_ids,
     legacy_memory_ids_from,
     legacy_memory_ids_from_bundle,
     read_active_profile,
@@ -61,6 +63,8 @@ from one_memory.sdk_vector_reattach import (
     ReattachedCollection,
     legacy_vector_collections,
     reattach_legacy_vectors,
+    stored_memory_ids,
+    vectors_belong_to_another_space,
 )
 from one_memory.target_schema import drop_legacy_tables, legacy_tables_present
 
@@ -457,13 +461,17 @@ def resume_legacy_cleanup(*, data_dir: Path, database_path: Path) -> tuple[str, 
             bundle_id=marker.backup_bundle_id,
         )
     from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
+    from one_memory.memory_visibility import drop_stale_triggers
 
     recover_abandoned_staging(
         data_dir=data_dir,
         database_path=database_path,
         namespace=HY_MEMORY_NAMESPACE,
     )
-    return drop_legacy_tables(database_path)
+    dropped = drop_legacy_tables(database_path)
+    # The visibility cache's grant triggers read a table just dropped (#233).
+    drop_stale_triggers(database_path)
+    return dropped
 
 
 MIGRATION_PREFIX = "sdk-authority-v2"
@@ -700,13 +708,14 @@ def run_startup_migration(
         step["authority"] = authority.value
     log.migration_id = authority_migration
     with log.step("preflight.profile_read") as step:
-        profile = read_active_profile(database_path)
-        step["profile_present"] = profile is not None
+        active = read_active_profile(database_path)
+        step["profile_present"] = active is not None
+    # No active profile means no generation model, not no embedding: the
+    # vectors are the built-in model's, which is also what the Runtime reads.
+    profile = active if active is not None else builtin_retrieval_snapshot()
     if authority is MemoryAuthority.SDK:
         with log.step("preflight.leftovers_scan") as step:
-            vectors_waiting = profile is not None and bool(
-                legacy_vector_collections(data_dir, profile)
-            )
+            vectors_waiting = bool(legacy_vector_collections(data_dir, profile))
             leftovers = bool(legacy_tables_present(database_path)) or abandoned_staging_present(
                 data_dir=data_dir, namespace=namespace
             )
@@ -717,7 +726,6 @@ def run_startup_migration(
         reattached: tuple[ReattachedCollection, ...] = ()
         readback: ReadbackReport | None = None
         if vectors_waiting:
-            assert profile is not None
             progress("vectors")
             with log.step("vectors.reattach") as step:
                 reattached = reattach_legacy_vectors(data_dir, profile)
@@ -769,12 +777,12 @@ def run_startup_migration(
         step["chat"] = len(legacy.chat)
         step["productivity"] = len(legacy.productivity)
         step["users"] = len(legacy.users)
-    if profile is None and not legacy.empty:
-        # Without the embedding profile the Runtime's collections cannot be
-        # named, so neither reattached nor read back. Legacy stays intact.
-        log.check("preflight.model_profile_check", "sdk_migration_model_profile_required")
-        raise DataPlaneMigrationError("sdk_migration_model_profile_required")
-    log.check("preflight.model_profile_check", None)
+    if active is None and not legacy.empty and vectors_belong_to_another_space(data_dir, profile):
+        # The memories live in the space of a profile that is no longer active,
+        # so the built-in model cannot read them. Legacy stays intact.
+        log.check("preflight.vector_space_check", "sdk_migration_vector_profile_missing")
+        raise DataPlaneMigrationError("sdk_migration_vector_profile_missing")
+    log.check("preflight.vector_space_check", None)
     with capture_fence(data_dir):
         # Builds through 19 left a staged SDK copy beside the original store.
         # Settling it before the bundle means the bundle holds the original
@@ -830,17 +838,23 @@ def run_startup_migration(
                 step.update(preparation.as_document())
             reattached = ()
             readback = None
-            if profile is not None:
-                progress("vectors")
-                with log.step("vectors.reattach") as step:
-                    reattached = reattach_legacy_vectors(data_dir, profile)
-                    step["collections"] = len(reattached)
-            if not legacy.empty:
-                assert profile is not None
+            # Before reattach touches the store, and after the staging
+            # recovery above has settled which store is the original.
+            with log.step("verify.stored_ids") as step:
+                expected, missing = expected_memory_ids(legacy, stored_memory_ids(data_dir))
+                step["chat_expected"] = len(expected.chat)
+                step["chat_missing_before_migration"] = missing
+            progress("vectors")
+            with log.step("vectors.reattach") as step:
+                reattached = reattach_legacy_vectors(data_dir, profile)
+                step["collections"] = len(reattached)
+            if not expected.empty:
                 progress("verify")
                 with log.step("verify.readback") as step:
                     with client_for(profile) as client:
-                        readback = verify_readback(client, legacy)
+                        readback = verify_readback(
+                            client, expected, chat_missing_before_migration=missing
+                        )
                     step.update(readback.as_document())
                     if not readback.passed:
                         store.set_phase(migration_id, phase="readback_failed", state="blocked")

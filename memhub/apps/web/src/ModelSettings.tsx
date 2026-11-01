@@ -631,10 +631,9 @@ export function ModelSettings({
             patch.embedding_model = embeddingModel;
           if (embeddingProvider !== editing.embedding_provider_kind)
             patch.embedding_provider_kind = embeddingProvider;
-          if (
-            embeddingBaseUrl !==
-            (editing.embedding_base_url ?? editing.base_url ?? "")
-          )
+          // Against the stored value only: the field is prefilled with the
+          // generation endpoint, and Core no longer falls back to it.
+          if (embeddingBaseUrl !== (editing.embedding_base_url ?? ""))
             patch.embedding_base_url = embeddingBaseUrl;
         } else if (
           embeddingModeChanged &&

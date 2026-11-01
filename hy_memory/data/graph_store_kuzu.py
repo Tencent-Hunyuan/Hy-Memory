@@ -22,6 +22,7 @@ import logging
 import json
 import threading
 import time
+import weakref
 
 from ..models.memory import MemoryNode, MemoryLayer, MemoryStatus
 from ..config import MemoryConfig
@@ -75,6 +76,21 @@ async def _run_in_kuzu_pool(func, *args, **kwargs):
                 _kuzu_active -= 1
 
     return await run_in_executor_guarded(_kuzu_executor, _measured)
+
+
+# 本进程里已打开、尚未 close 的 store。drop_graph 据此拒绝删掉一个正被
+# 活着的 client 使用的图库。WeakSet：store 被回收后自动消失。
+_LIVE_STORES: "weakref.WeakSet[KuzuGraphStore]" = weakref.WeakSet()
+
+
+def open_graph_paths() -> List[str]:
+    """Real paths of the graph databases live stores in this process hold open."""
+    import os
+    return [
+        os.path.realpath(str(store._db_path))
+        for store in list(_LIVE_STORES)
+        if store._db is not None
+    ]
 
 
 def kuzu_executor_snapshot() -> Dict[str, Any]:
@@ -350,6 +366,7 @@ class KuzuGraphStore(GraphStoreBase):
             )
             self._db = db
             self._conn = conn
+            _LIVE_STORES.add(self)
         except asyncio.TimeoutError:
             logger.warning(
                 f"GraphStore init timed out after 5s (Kuzu file lock contention). "
@@ -2441,6 +2458,7 @@ class KuzuGraphStore(GraphStoreBase):
     async def close(self) -> None:
         """关闭连接"""
         conn, db = self._conn, self._db
+        _LIVE_STORES.discard(self)
         self._conn = None
         self._db = None
         self._available = False

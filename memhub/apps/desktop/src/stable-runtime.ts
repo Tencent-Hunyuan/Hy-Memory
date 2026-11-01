@@ -133,6 +133,7 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "sdk_migration_preflight_failed",
   "sdk_migration_memory_unreadable",
   "sdk_migration_model_profile_required",
+  "sdk_migration_vector_profile_missing",
   "sdk_migration_model_secret_unavailable",
   "sdk_migration_secure_storage_unavailable",
   "sdk_migration_disk_space_insufficient",
@@ -219,6 +220,8 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "升级前核对发现，新版本还读不到你的全部记忆，所以没有切换数据源，旧数据保持原样可用。请把这个提示反馈给我们；原有记忆数据不会丢失。",
   sdk_migration_model_profile_required:
     "升级记忆数据格式需要先有可用的模型配置，用来核对新版本能否读回你的记忆。请在旧版本中完成模型配置后重启；你的记忆数据不会受到影响。",
+  sdk_migration_vector_profile_missing:
+    "你的记忆是用一个已删除的模型配置生成向量的，当前没有可用的模型配置能读回它们，所以没有升级。请在旧版本中重新添加那个模型配置并启用后重启；你的记忆数据不会受到影响。",
   sdk_migration_model_secret_unavailable:
     "模型密钥读不到（可能被系统钥匙串拒绝），无法核对新版本能否读回你的记忆。请允许 MemHub 访问钥匙串后重新启动；你的记忆数据不会受到影响。",
   sdk_migration_secure_storage_unavailable:
