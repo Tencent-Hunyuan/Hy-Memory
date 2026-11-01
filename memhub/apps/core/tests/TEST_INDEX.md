@@ -159,6 +159,7 @@
 | `test_memory_citation_query_plan.py` | `contract` | Correlated citation checks must look links up by memory, not scan by 'active'. |
 | `test_memory_content_import.py` | `integration` | 覆盖 existing memory preview keeps unknown author and exact original、invalid existing memory records never leave a partial upload、memory content requires explicit mode and rejects vendor guessing 等 5 个场景。 |
 | `test_memory_evidence_freshness.py` | `contract` | 新鲜度拆除后：读路径恒为 current；证据修订 / 畸形 proof / segment ref 不再藏记忆或 503。 |
+| `test_memory_features.py` | `contract` | The SDK retrieval and extraction features MemHub lets a person turn on. |
 | `test_memory_freshness_integration_review.py` | `integration` | Independent synthetic read-path review; no lifespan, model or user database. |
 | `test_memory_library_all_scenes.py` | `integration` | The v2 memory library across chat, working and coding memories. |
 | `test_memory_mode_and_evolve.py` | `contract` | The memory mode (lite / pro / ultra), evolve and its nightly schedule. |
@@ -313,4 +314,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 308 个测试文件。
+共 309 个测试文件。

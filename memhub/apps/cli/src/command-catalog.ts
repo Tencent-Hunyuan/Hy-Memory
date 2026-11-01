@@ -451,12 +451,25 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "settings",
     summary:
-      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。",
-    usage: "memhub settings mode [lite|pro|ultra] [--yes] [--json]",
+      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、few_shot 提取示例；set 需 --yes，不加时只显示计划；reset 恢复默认值。",
+    usage:
+      "memhub settings mode [lite|pro|ultra] [--yes] [--json]\n" +
+      "            memhub settings features [--json]\n" +
+      "            memhub settings features set <name>=<true|false> [...] [--yes] [--json]\n" +
+      "            memhub settings features reset [<name> ...] [--json]",
     options: [
       {
         flag: "mode [lite|pro|ultra]",
         summary: "不带模式只显示当前模式；带模式时先显示切换计划。",
+      },
+      {
+        flag: "features set <name>=<true|false>",
+        summary:
+          "开关一个或多个 SDK 功能；功能在当前模式下不生效时会注明原因（例如 graph_rerank 需要 ultra）。",
+      },
+      {
+        flag: "features reset [<name> ...]",
+        summary: "把指定功能（不写则全部）恢复为 SDK 默认值。",
       },
       CONFIRM_OPTION,
       JSON_OPTION,

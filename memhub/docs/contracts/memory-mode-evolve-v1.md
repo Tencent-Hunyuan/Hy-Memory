@@ -285,10 +285,14 @@ A user is kept when `memory_stats` reports any memory or fact for them.
     "forced_by_env": false,
     "evolve": {"...": "the overview of section 5"},
     "last_evolve_at": "2026-11-01T03:00:00Z",
-    "graph_build": {"...": "as in section 3"}
+    "graph_build": {"...": "as in section 3"},
+    "features": {}
   }
 }
 ```
+
+`features` lists the SDK features whose value differs from the default (empty
+while every feature is at its default); see `memory-features-v1.md`.
 
 `memhub status --json` adds a top-level projection of it:
 
@@ -304,7 +308,8 @@ A user is kept when `memory_stats` reports any memory or fact for them.
     "evolve_users": {
       "local": {"last_run_at": "...", "last_error": null, "state": "succeeded"}
     },
-    "graph_build": "succeeded"
+    "graph_build": "succeeded",
+    "features": {}
   }
 }
 ```
@@ -319,7 +324,13 @@ memhub settings mode                    # show the current mode
 memhub settings mode lite               # print the plan, change nothing
 memhub settings mode lite --yes         # switch
 memhub evolve [--user-id <id>] [--agent-id <id>] [--max-batches <n>] [--wait] [--json]
+memhub settings features [set <name>=<true|false> ... [--yes] | reset [<name> ...]]
 ```
+
+The SDK's optional retrieval and extraction features (graph rerank, episode
+recall, the episode write side, …) are a second global setting beside the
+mode. A change rebuilds the SDK handles the same way. Contract:
+`memory-features-v1.md`.
 
 ## 9. Copy the UI can reuse
 

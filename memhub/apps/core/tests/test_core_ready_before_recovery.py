@@ -164,7 +164,7 @@ def test_metadata_repair_never_overlaps_an_sdk_client(tmp_path, monkeypatch):
         events.append("repair_finished")
         return MetadataRepairResult(None, 0, 0, 0)
 
-    def open_client(profile, *, api_key, data_dir, http_transport_factory, mode="pro"):
+    def open_client(profile, *, api_key, data_dir, http_transport_factory, mode="pro", features=()):
         events.append("client_opened")
         return ClientLease(object(), data_dir.resolve())
 

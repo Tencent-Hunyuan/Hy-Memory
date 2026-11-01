@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
+from one_memory.memory_features import MemoryFeatures
 from one_memory.memory_queue import ExtractionWindowPreset
 
 _SOURCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
@@ -69,6 +70,9 @@ class ConfigDocument(BaseModel):
     #: still forces ultra over it; see `hy_graph_admin.effective_memory_mode`.
     memory_mode: MemoryMode = "pro"
     evolve_schedule: EvolveSchedule = Field(default_factory=EvolveSchedule)
+    #: SDK retrieval and extraction features a person set; an unset one keeps
+    #: the SDK default. See `one_memory.memory_features`.
+    memory_features: MemoryFeatures = Field(default_factory=MemoryFeatures)
 
     @field_validator("sources")
     @classmethod
@@ -91,7 +95,7 @@ class ConfigFileError(RuntimeError):
     pass
 
 
-_WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule"})
+_WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule", "memory_features"})
 
 
 class ConfigStore:
@@ -166,6 +170,19 @@ class ConfigStore:
             self._document = updated
             return updated
 
+    def memory_features(self) -> MemoryFeatures:
+        with self._lock:
+            return self._document.memory_features
+
+    def set_memory_features(self, features: MemoryFeatures) -> ConfigDocument:
+        if not isinstance(features, MemoryFeatures):
+            raise ValueError("invalid_memory_features")
+        with self._lock:
+            updated = self._document.model_copy(update={"memory_features": features})
+            self._write(updated)
+            self._document = updated
+            return updated
+
     def migrate_extraction_window_preset(self, preset: ExtractionWindowPreset) -> ConfigDocument:
         """Adopt the legacy SQL value only when config.json has no value."""
         if not isinstance(preset, ExtractionWindowPreset):
@@ -214,9 +231,13 @@ class ConfigStore:
         # Settings added after 1.0.5 are written only once a person chose
         # them, so an untouched install's file stays what older builds read.
         unset = {name for name in _WRITTEN_WHEN_SET if name not in document.model_fields_set}
+        values = document.model_dump(mode="json", exclude=unset)
+        if "memory_features" in values:
+            # Only the features a person set; an absent one is the SDK default.
+            values["memory_features"] = document.memory_features.model_dump(exclude_none=True)
         payload = (
             json.dumps(
-                document.model_dump(mode="json", exclude=unset),
+                values,
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,

@@ -166,6 +166,24 @@ node apps/cli/dist/one-memory.cjs evolve --user-id wife --wait  # 立即进化�
 - `status --json` 与 `progress --json` 输出 `pipeline.mode`、每晚进化时间和每个用户的上次进化。
 - 契约见 `docs/contracts/memory-mode-evolve-v1.md`。
 
+### SDK 可选功能（`settings features`）
+
+```bash
+node apps/cli/dist/one-memory.cjs settings features                                   # 列出全部功能、默认值、当前模式下是否生效
+node apps/cli/dist/one-memory.cjs settings features set episode_recall=true session_episodes=true        # 只显示计划
+node apps/cli/dist/one-memory.cjs settings features set episode_recall=true session_episodes=true --yes  # 生效
+node apps/cli/dist/one-memory.cjs settings features reset episode_recall               # 恢复默认
+node apps/cli/dist/one-memory.cjs settings features reset                              # 全部恢复默认
+```
+
+- 全局设置，不分用户；没设置的功能保持 SDK 默认值，什么都不设时与以前完全一样（App 不变）。
+- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`few_shot`。
+- 片段召回只对带片段的记忆有用：同时开 `session_episodes`，之后提取的记忆才按会话归入片段。
+- 在当前模式下不生效的功能照样保存，并注明原因（如 `graph_rerank` 在 pro 下「需要 ultra」）。
+- 修改会重建 SDK 客户端：正在写的一批按旧设置写完，之后的写入和检索用新设置；不迁移数据，不改集合名。
+- `status --json` / `progress --json` 的 `pipeline.features` 列出与默认值不同的功能。
+- 契约见 `docs/contracts/memory-features-v1.md`。
+
 ## 8. 召回（recall）
 
 `recall` 两条路径（raw / memory）此前已真机验证。文本输出会标明每条是「原始对话摘录」
