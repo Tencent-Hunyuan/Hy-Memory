@@ -90,6 +90,7 @@ describe("diagnostic log", () => {
     expect(await readDiagnosticEvents(dataDir)).toEqual({
       events: [],
       invalid_lines: 0,
+      unrecognized_lines: 0,
     });
   });
 
@@ -494,6 +495,52 @@ describe("diagnostic log", () => {
       }),
     ).rejects.toThrow("diagnostic_export_invalid_lines");
     expect(await readdir(outputDir)).toEqual([]);
+  });
+
+  it("counts only non-JSON lines as damaged and leaves older records out", async () => {
+    const dataDir = await root();
+    const logger = new DiagnosticLogger({ dataDir, service: "core" });
+    await logger.log({
+      level: "info",
+      component: "core.service",
+      event: "core.ready",
+      outcome: "succeeded",
+    });
+    const older = {
+      schema_version: 0,
+      service: "desktop",
+      component: "desktop.lifecycle",
+      event: "desktop.started",
+    };
+    await writeFile(
+      path.join(dataDir, "logs", "diagnostic-desktop.jsonl"),
+      [
+        JSON.stringify(older),
+        JSON.stringify({ ...older, schema_version: 1 }),
+        JSON.stringify(["not", "an", "event"]),
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+
+    const result = await readDiagnosticEvents(dataDir);
+    expect(result.events.map((event) => event.event)).toEqual(["core.ready"]);
+    expect(result.invalid_lines).toBe(0);
+    expect(result.unrecognized_lines).toBe(3);
+    // An older build's records do not stop a support export either.
+    const target = path.join(await root(), "bundle.json");
+    await expect(
+      exportDiagnosticBundle({ dataDir, target, productVersion: "1.2.3" }),
+    ).resolves.toEqual({ event_count: 1, invalid_lines: 0 });
+
+    await writeFile(
+      path.join(dataDir, "logs", "diagnostic-cli.jsonl"),
+      '{"schema_version": 1, "event": \n',
+      { mode: 0o600 },
+    );
+    const damaged = await readDiagnosticEvents(dataDir);
+    expect(damaged.invalid_lines).toBe(1);
+    expect(damaged.unrecognized_lines).toBe(3);
   });
 
   it("fails closed when the diagnostic directory cannot be read", async () => {

@@ -162,8 +162,52 @@ it("never emits a secret from a malformed manually written event", async () => {
     command: "logs",
     state: "empty",
     events: 0,
-    invalid_lines: 1,
+    invalid_lines: 0,
+    unrecognized_lines: 1,
   });
+});
+
+// After an upgrade the files still hold an older build's records. They are
+// whole JSON lines the reader leaves out, not damage, so the text output must
+// not warn about them; only a line that is not JSON is called damaged.
+it("warns only about lines that are not JSON, not about older records", async () => {
+  const dataDir = await fixture();
+  const older = {
+    schema_version: 0,
+    service: "desktop",
+    component: "desktop.lifecycle",
+    event: "desktop.started",
+  };
+  await writeFile(
+    path.join(dataDir, "logs", "diagnostic-desktop.jsonl"),
+    `${JSON.stringify(older)}\n${JSON.stringify({ ...older, schema_version: 1 })}\n`,
+    { mode: 0o600 },
+  );
+  let stdout = "";
+  let stderr = "";
+  vi.spyOn(process.stdout, "write").mockImplementation((value) => {
+    stdout += String(value);
+    return true;
+  });
+  vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+    stderr += String(value);
+    return true;
+  });
+
+  expect(await run(["logs"], { ONE_MEMORY_DATA_DIR: dataDir })).toBe(0);
+  expect(stdout).toContain("core.start_failed");
+  expect(stdout).not.toContain("损坏");
+  expect(stderr).toBe("");
+
+  await writeFile(
+    path.join(dataDir, "logs", "diagnostic-cli.jsonl"),
+    '{"schema_version": 1, "event": \n',
+    { mode: 0o600 },
+  );
+  stdout = "";
+  expect(await run(["logs"], { ONE_MEMORY_DATA_DIR: dataDir })).toBe(0);
+  expect(stdout).toContain("跳过 1 行损坏的诊断记录。");
+  expect(stderr).toBe("memhub: 跳过 1 行损坏的诊断记录。\n");
 });
 
 it("rejects invalid filters without touching the log directory", async () => {
