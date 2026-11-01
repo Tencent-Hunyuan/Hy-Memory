@@ -9,10 +9,12 @@ Agent Memory V2 - VectorStore (Chroma)
 - 同步 API → _run_in_vdb_pool() 包装为异步
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set, Tuple
 import concurrent.futures
 import functools
 import logging
+import os
+import weakref
 
 from ..models.memory import (
     MemoryNode, MemoryLayer, MemoryStatus,
@@ -31,6 +33,30 @@ _VDB_POOL_SIZE = 64
 _vdb_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=_VDB_POOL_SIZE, thread_name_prefix="vdb"
 )
+
+
+# 本进程里已 initialize、尚未 close 的 store。drop_vector_space 据此拒绝删掉
+# 一个正被活着的 client 使用的集合。WeakSet：store 被回收后自动消失。
+_LIVE_STORES: "weakref.WeakSet[ChromaVectorStore]" = weakref.WeakSet()
+
+
+def _location_key(vs_config) -> Tuple[str, str]:
+    if getattr(vs_config, "host", None):
+        return ("http", f"{vs_config.host}:{vs_config.port or 8000}")
+    return ("local", os.path.realpath(str(vs_config.persist_directory or "")))
+
+
+def open_collection_names(location: Tuple[str, str]) -> Set[str]:
+    """Collections that live stores in this process hold open at ``location``."""
+    names: Set[str] = set()
+    for store in list(_LIVE_STORES):
+        if store._client is None or _location_key(store.config.vector_store) != location:
+            continue
+        names.add(store._collection_name)
+        if store._entity_collection is not None:
+            from ..pipelines._retrieval.config import entity_collection_name
+            names.add(entity_collection_name(store._collection_name))
+    return names
 
 
 async def _run_in_vdb_pool(func, *args, **kwargs):
@@ -88,6 +114,7 @@ class ChromaVectorStore(VectorStoreBase):
             return client, collection
 
         self._client, self._collection = await _run_in_vdb_pool(_init)
+        _LIVE_STORES.add(self)
         logger.debug(f"VectorStore initialized (Chroma), collection={self._collection_name}")
 
     # ================================================================
@@ -561,6 +588,7 @@ class ChromaVectorStore(VectorStoreBase):
     async def close(self) -> None:
         """关闭客户端"""
         # Chroma PersistentClient 无需显式关闭
+        _LIVE_STORES.discard(self)
         self._client = None
         self._collection = None
         self._entity_collection = None

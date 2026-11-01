@@ -48,6 +48,7 @@
 | `MEMORY_EMBEDDER_TIMEOUT` | `15` | 单次超时，秒 |
 | `MEMORY_EMBEDDER_MAX_RETRIES` | `2` | 最大重试次数 |
 | `MEMORY_EMBEDDER_RETRY_DELAY` | `0.3` | 重试间隔，秒 |
+| `MEMORY_EMBEDDER_BATCH_SIZE` | `64` | `embed_batch` 单次请求最多发送的文本条数，超出按此切块 |
 | `MEMORY_EMBEDDER_EXTRA_HEADERS` | — | JSON object，附加 HTTP headers |
 | `MEMORY_EMBEDDER_EXTRA_BODY` | — | JSON object，附加请求 body |
 

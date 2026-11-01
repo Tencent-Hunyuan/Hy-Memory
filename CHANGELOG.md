@@ -4,6 +4,46 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Hy Memory: new `hy_memory.reembed` module for switching the embedding
+  model. Writers must be paused for the whole run. Nothing is derived from
+  the provider or endpoint: source and target are named explicitly, and the
+  identity of a space is the model name plus the width (`space_identity`).
+  Only Chroma and Kuzu are supported.
+  - `vector_space_names(config, base_name=None)` returns every physical
+    collection a client opens for the six vector roles: memory, entities,
+    coding keys and working facts, each in the working and coding variants.
+  - `reembed_vector_space(source, target, embedding=...)` pages every raw
+    source collection, covering all users and all layers including L1_RAW. It
+    embeds the text the write path embedded (`reembed_text`: the canonical
+    state's `state_retrieval_text`, a schema's `retrieval_text`, otherwise the
+    document). It then writes each record into the target with the same id,
+    document and metadata. Each batch's widths are checked before anything is
+    written. A cancel stops at a batch boundary (`ReembedCancelled`). A rerun
+    skips the ids the target already holds, so it resumes, and a merge never
+    overwrites the target. The source is never written.
+  - `plan_reembed`, `verify_reembed` and `drop_vector_space` complete the
+    vector side. `verify_reembed` checks ids, metadata, per-user counts and
+    the width, and runs a self-recall sample. `drop_vector_space` refuses
+    collections that a live client in this process holds open.
+  - `scan_vector_spaces(persist_directory)` is read-only. It lists every
+    space on disk with its roles, counts, stored width, per-user counts and
+    the models recorded in metadata. `diff_spaces(source, target)` returns the
+    ids that the source holds and the target lacks, whatever their status.
+  - `reembed_graph(source_path, target_path, embedding=..., target_dims=...)`
+    builds a new Kuzu graph at the new width. It copies every node and edge
+    and recomputes `Memory.embedding`, `Memory.beh_embedding`, and the Topic
+    and HierarchyTopic embeddings, then rebuilds the HNSW index. The source
+    graph is opened read-only and kept for rollback. A run that fails or is
+    cancelled leaves no target behind, and a rerun starts over.
+    `verify_graph_reembed` and `drop_graph` complete the graph side.
+- Hy Memory: `EmbedService.embed_batch` now splits large batches into
+  requests of `embedder.batch_size` texts each (`MEMORY_EMBEDDER_BATCH_SIZE`,
+  default 64); before, it sent them all in one request. On a 429 it waits for
+  the `Retry-After` time plus jitter, capped at 60 s. It takes a per-call
+  `max_retries`. A returned vector whose width differs from the configured
+  `embedding_dims` now raises `EmbeddingDimensionMismatchError` and is not
+  retried.
+
 ## MemHub 1.0.5 — 2026-10-28
 
 Build 36, on `hy-memory==2.0.8`. Linux x64/arm64 Runtime and macOS arm64
