@@ -315,6 +315,8 @@ describe("catalog exit codes", () => {
       "models",
       "memories",
       "profile",
+      "settings",
+      "evolve",
       "graph-width",
       "host",
       "recall",

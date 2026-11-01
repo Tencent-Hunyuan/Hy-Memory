@@ -14,6 +14,11 @@ import {
   validateProcessing,
   validateSources,
 } from "./core-responses.js";
+import {
+  describePipeline,
+  type PipelineSummary,
+  pipelineLine,
+} from "./status-report.js";
 import { PRODUCT } from "./version.js";
 
 type ReadState =
@@ -84,6 +89,8 @@ export interface ProgressDocument {
     summary_state: ReadState;
     summary: Record<string, unknown> | null;
   };
+  /** The SDK mode and last evolve per user; absent on an older Core. */
+  pipeline?: PipelineSummary | null;
 }
 
 export async function readSources(
@@ -283,6 +290,10 @@ export async function readProgress(
       summary:
         processing.state === "ok" ? projectProcessing(processing.data) : null,
     },
+    pipeline:
+      processingRead.state === "ok"
+        ? describePipeline(processingRead.data)
+        : null,
   };
 }
 
@@ -353,6 +364,18 @@ export function renderProgressText(document: ProgressDocument): string {
       ? `记忆整理：待处理 ${document.generation.summary.pending} · 进行中 ${document.generation.summary.running} · 等待模型 ${document.generation.summary.waiting_for_model} · 失败 ${document.generation.summary.failed}`
       : "记忆整理：暂时无法读取",
   );
+  if (document.pipeline) {
+    lines.push(`记忆模式：${pipelineLine(document.pipeline)}`);
+    for (const [userId, user] of Object.entries(
+      document.pipeline.evolve_users,
+    )) {
+      lines.push(
+        `  进化 ${userId}：${user.last_run_at ?? "尚未进化"}${
+          user.last_error ? `（失败：${user.last_error}）` : ""
+        }`,
+      );
+    }
+  }
   if (document.imports.output_truncated) {
     lines.push("这里只显示汇总；完整记录请使用 --json。");
   }

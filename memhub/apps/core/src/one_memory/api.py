@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import importlib.util
 import json
 import logging
 import os
@@ -83,7 +84,12 @@ from one_memory.external_memory_access import (
 )
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
-from one_memory.hy_graph_admin import GraphWidthDecision, GraphWidthMismatch
+from one_memory.hy_graph_admin import (
+    GraphWidthDecision,
+    GraphWidthMismatch,
+    effective_memory_mode,
+    graph_store_enabled,
+)
 from one_memory.hy_runtime_config import (
     HY_MEMORY_READER,
     DiagnosticLogLevel,
@@ -176,6 +182,16 @@ from one_memory.memory_additions import (
     MemoryAdditionStore,
     memory_add_router,
 )
+from one_memory.memory_evolution import (
+    EvolveModeError,
+    EvolveRunReceipt,
+    EvolveScheduler,
+    EvolveService,
+    EvolveStateStore,
+    GraphBuildState,
+    MemoryGraphBackfill,
+    UserEvolveState,
+)
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
 )
@@ -183,7 +199,12 @@ from one_memory.memory_qa import MemoryAnswerError
 from one_memory.memory_queue import (
     ExtractionWindowPreset,
 )
-from one_memory.memory_server.config_state import ConfigStore
+from one_memory.memory_server.config_state import (
+    MEMORY_MODES,
+    ConfigStore,
+    EvolveSchedule,
+    MemoryMode,
+)
 from one_memory.memory_tasks import (
     NON_RETRYABLE_POST_WRITE_CODES,
     MemoryTaskStatus,
@@ -629,6 +650,119 @@ class MemoryProcessingSummary(BaseModel):
     active_queue: int = 0
     in_flight_count: int = 0
     metrics: ProcessingMetrics = Field(default_factory=ProcessingMetrics)
+    #: R10: the SDK mode and System 2 state. Optional so older readers and
+    #: test doubles stay valid; Core always sends it.
+    pipeline: "PipelineStatus | None" = None
+
+
+class MemoryModeState(BaseModel):
+    """`GET /api/v1/settings/memory-mode`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: What SDK clients are built with now.
+    mode: MemoryMode
+    #: The saved setting (default pro).
+    configured_mode: MemoryMode
+    #: `ONE_MEMORY_GRAPH_STORE` (dev) forces ultra over the setting.
+    forced_by_env: bool
+    modes: tuple[MemoryMode, ...] = MEMORY_MODES
+    graph_build: GraphBuildState
+
+
+class MemoryModeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: MemoryMode
+
+
+MemoryModeEffect = Literal[
+    "earlier_raw_not_extracted",
+    "higher_mode_memories_hidden",
+    "existing_memories_added_to_graph",
+    "evolve_stopped",
+    "lite_search_stops",
+    "graph_backfill_already_running",
+]
+
+
+class MemoryModeChange(MemoryModeState):
+    """`PUT /api/v1/settings/memory-mode`: the new state and what it changes."""
+
+    previous_mode: MemoryMode
+    effects: tuple[MemoryModeEffect, ...] = ()
+
+
+class EvolveScheduleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool | None = None
+    time: str | None = Field(default=None, pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+
+
+class EvolveRequest(BaseModel):
+    """`POST /api/v2/evolve`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UserId = DEFAULT_USER_ID
+    #: Default `all-apps`, the agent MemHub writes every memory under.
+    agent_id: str | None = Field(default=None, min_length=1, max_length=128)
+    max_batches: int | None = Field(default=None, ge=1, le=1_000)
+
+
+class EvolveOverview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: MemoryMode
+    schedule: EvolveSchedule
+    users: dict[str, UserEvolveState]
+    running: tuple[EvolveRunReceipt, ...] = ()
+
+
+class PipelineStatus(BaseModel):
+    """`pipeline` in `/api/v1/memory-processing` and `memhub status --json`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: MemoryMode
+    configured_mode: MemoryMode
+    forced_by_env: bool
+    evolve: EvolveOverview
+    #: Newest finished run across users, for a one-line status.
+    last_evolve_at: datetime | None = None
+    graph_build: GraphBuildState
+
+
+def memory_mode_effects(
+    previous: str,
+    new: str,
+    *,
+    graph_backfill: bool | None = None,
+) -> tuple[MemoryModeEffect, ...]:
+    """What a mode switch changes; the SDK migrates nothing on its own.
+
+    `graph_backfill`: True when this switch started the one-time backfill,
+    False when one was already running, None when not asked (no switch).
+    """
+    if previous == new:
+        return ()
+    rank = {"lite": 0, "pro": 1, "ultra": 2}
+    effects: list[MemoryModeEffect] = []
+    if previous == "lite":
+        effects.extend(("earlier_raw_not_extracted", "lite_search_stops"))
+    if rank[new] < rank[previous]:
+        effects.append("higher_mode_memories_hidden")
+    if previous == "ultra":
+        effects.append("evolve_stopped")
+    if new == "ultra" and graph_backfill is True:
+        effects.append("existing_memories_added_to_graph")
+    if new == "ultra" and graph_backfill is False:
+        effects.append("graph_backfill_already_running")
+    return tuple(effects)
+
+
+MemoryProcessingSummary.model_rebuild()
 
 
 class RetryUnknownMemoryTasksRequest(BaseModel):
@@ -983,6 +1117,7 @@ def create_app(
                 source_id: asyncio.Lock() for source_id in app.state.source_catalog
             }
             app.state.sedimentation_lock = asyncio.Lock()
+            app.state.memory_mode_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
 
@@ -1084,6 +1219,7 @@ def create_app(
                     )
                 ),
                 sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
+                memory_mode=lambda: _memory_mode(app),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -1091,7 +1227,22 @@ def create_app(
                 write_queue=memory_write_queue,
                 extraction_settings=app.state.extraction_settings_store,
                 data_dir=runtime_settings.data_dir,
-                user_ids=lambda: _known_user_ids(app),
+                memory_mode=lambda: _memory_mode(app),
+            )
+            app.state.evolve_state_store = EvolveStateStore(runtime_settings.data_dir)
+            app.state.evolve_service = EvolveService(
+                coordinator=app.state.sdk_write_coordinator,
+                state=app.state.evolve_state_store,
+                memory_mode=lambda: _memory_mode(app),
+            )
+            app.state.evolve_scheduler = EvolveScheduler(
+                service=app.state.evolve_service,
+                schedule=lambda: _config_store(app).evolve_schedule(),
+                users_with_memories=lambda: _users_with_memories(app),
+            )
+            app.state.memory_graph_backfill = MemoryGraphBackfill(
+                coordinator=app.state.sdk_write_coordinator,
+                state=app.state.evolve_state_store,
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -1427,8 +1578,9 @@ def create_app(
                         name="one-memory-durable-write-drain",
                     )
 
-                async def start_raw_retention() -> None:
-                    app.state.sdk_memory_runtime.start_raw_retention()
+                async def start_evolve_schedule() -> None:
+                    # Idle outside ultra: each tick asks the mode first.
+                    app.state.evolve_scheduler.start()
 
                 async def replay_pending_dispatch() -> None:
                     # A file's Evidence and its pending-dispatch row commit atomically,
@@ -1509,7 +1661,7 @@ def create_app(
                         await step("sdk_metadata_repair", repair_sdk_metadata)
                     await step("write_drain", start_write_drain)
                     if sdk:
-                        await step("raw_retention", start_raw_retention)
+                        await step("evolve_schedule", start_evolve_schedule)
                     else:
                         await step("pending_dispatch_replay", replay_pending_dispatch)
                     await step("import_resume", resume_imports)
@@ -1606,6 +1758,9 @@ def create_app(
                 if app.state.memory_write_drain_task is not None:
                     with suppress(asyncio.CancelledError):
                         await app.state.memory_write_drain_task
+                await app.state.evolve_scheduler.shutdown()
+                await app.state.evolve_service.shutdown()
+                await app.state.memory_graph_backfill.shutdown()
                 await app.state.sdk_memory_runtime.shutdown()
                 await app.state.sdk_write_coordinator.close()
                 if app.state.sdk_client_handle is not None:
@@ -1635,6 +1790,7 @@ def create_app(
         version=__version__,
         lifespan=lifespan,
     )
+    app.state.memory_mode = lambda: _memory_mode(app)
     app.state.service_levels = ServiceLevelScheduler(
         {
             ServiceResource.IMPORT: ResourceLimit(
@@ -4079,7 +4235,147 @@ def create_app(
             active_queue=active_queue,
             in_flight_count=in_flight_count,
             metrics=ProcessingMetrics.model_validate(store.processing_metrics()),
+            pipeline=_pipeline_status(app),
         )
+
+    @app.get(
+        "/api/v1/settings/memory-mode",
+        response_model=MemoryModeState,
+        dependencies=strict,
+    )
+    def get_memory_mode() -> MemoryModeState:
+        """The SDK mode (lite / pro / ultra): configured, effective, and why."""
+        return _memory_mode_state(app)
+
+    @app.put(
+        "/api/v1/settings/memory-mode",
+        response_model=MemoryModeChange,
+        dependencies=strict,
+    )
+    async def put_memory_mode(request: MemoryModeUpdate) -> MemoryModeChange:
+        """Choose the SDK mode. Nothing is migrated; `effects` says what changes.
+
+        The mode is read when a queued job runs, not when it was queued: a
+        job already done (in any mode) stays done and is never reprocessed;
+        jobs still waiting, and new input, run in the new mode. A batch in
+        flight finishes in the old mode. Search follows the new mode at once.
+        lite → pro/ultra: what lite stored stays raw, and lite's raw-only
+        search stops. Down to a lower mode: memories the higher mode made stay
+        stored but are not shown. → ultra: every user's existing facts are
+        added to the graph once, in the background (`graph_build`). No raw is
+        ever deleted, in any mode. See docs/contracts/memory-mode-evolve-v1.md.
+        """
+        if request.mode == "ultra" and importlib.util.find_spec("kuzu") is None:
+            raise HTTPException(status_code=409, detail="graph_store_unavailable")
+        store = _config_store(app)
+        async with app.state.memory_mode_lock:
+            previous_effective = _memory_mode(app)
+            previous = store.memory_mode()
+            if previous != request.mode or "memory_mode" not in store.document().model_fields_set:
+                await asyncio.to_thread(store.set_memory_mode, request.mode)
+            effective = _memory_mode(app)
+            backfill: bool | None = None
+            if effective != previous_effective:
+                # Reads rebuild on their next request (`ActiveProfileReadHandle`).
+                await app.state.sdk_write_coordinator.retire_stale_modes()
+                if effective == "ultra":
+                    backfill = not app.state.memory_graph_backfill.running
+                    if backfill:
+                        users = await asyncio.to_thread(_known_user_ids, app)
+                        app.state.memory_graph_backfill.start(users)
+                diagnostic_event(
+                    level="info",
+                    component="memory.mode",
+                    event="memory_mode.changed",
+                    outcome="succeeded",
+                    details={"mode": effective, "previous_mode": previous_effective},
+                )
+        return MemoryModeChange(
+            **_memory_mode_state(app).model_dump(),
+            previous_mode=previous_effective,
+            effects=memory_mode_effects(previous_effective, effective, graph_backfill=backfill),
+        )
+
+    @app.get(
+        "/api/v1/settings/evolve-schedule",
+        response_model=EvolveSchedule,
+        dependencies=strict,
+    )
+    def get_evolve_schedule() -> EvolveSchedule:
+        return _config_store(app).evolve_schedule()
+
+    @app.put(
+        "/api/v1/settings/evolve-schedule",
+        response_model=EvolveSchedule,
+        dependencies=strict,
+    )
+    async def put_evolve_schedule(request: EvolveScheduleUpdate) -> EvolveSchedule:
+        """Turn the nightly evolve on or off, or move it (local `HH:MM`)."""
+        store = _config_store(app)
+        current = store.evolve_schedule()
+        updated = EvolveSchedule(
+            enabled=current.enabled if request.enabled is None else request.enabled,
+            time=current.time if request.time is None else request.time,
+        )
+        await asyncio.to_thread(store.set_evolve_schedule, updated)
+        return updated
+
+    @app.post(
+        "/api/v2/evolve",
+        response_model=EvolveRunReceipt,
+        status_code=202,
+        dependencies=strict,
+    )
+    async def start_evolve(request: EvolveRequest) -> EvolveRunReceipt:
+        """Run System 2 for one user, in the background; read the run by its id.
+
+        Ultra only (409 `memory_mode_not_ultra`). One run per user: asking
+        while one runs answers that run. The run waits for the user's write
+        in flight and holds their next writes until it ends, and repeats
+        while the SDK says there is more to do (up to 20 rounds).
+        """
+        try:
+            return _evolve_service(app).start(
+                request.user_id,
+                agent_id=request.agent_id,
+                max_batches=request.max_batches,
+            )
+        except EvolveModeError:
+            raise HTTPException(status_code=409, detail="memory_mode_not_ultra") from None
+
+    @app.get(
+        "/api/v2/evolve",
+        response_model=EvolveOverview,
+        dependencies=strict,
+    )
+    def evolve_overview(
+        user_id: str | None = Query(default=None, pattern=USER_ID_PATTERN),
+    ) -> EvolveOverview:
+        """Last run per user and the runs in progress; one user's with `user_id`."""
+        overview = _evolve_overview(app)
+        if user_id is None:
+            return overview
+        return overview.model_copy(
+            update={
+                "users": {key: value for key, value in overview.users.items() if key == user_id},
+                "running": tuple(run for run in overview.running if run.user_id == user_id),
+            }
+        )
+
+    @app.get(
+        "/api/v2/evolve/{run_id}",
+        response_model=EvolveRunReceipt,
+        dependencies=strict,
+    )
+    def get_evolve_run(
+        run_id: str,
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> EvolveRunReceipt:
+        """One run; another user's run answers exactly like a missing one."""
+        receipt = _evolve_service(app).get(run_id)
+        if receipt is None or receipt.user_id != user_id:
+            raise HTTPException(status_code=404, detail="evolve_run_not_found")
+        return receipt
 
     @app.post(
         "/api/v1/memory-processing/retry-unknown",
@@ -4413,12 +4709,48 @@ def _other_user_lanes(
 
 
 def _known_user_ids(app: FastAPI) -> tuple[str, ...]:
-    """`local` and every user holding a grant: the users whose data Core keeps."""
+    """Every user whose data Core keeps, from Core's own records.
+
+    The SDK has no "list users": `local`, every user holding a grant (a
+    Hermes profile), and every user whose turns or notes passed the write
+    queue (`POST /api/v2/memories` or `/api/v2/memory-writes` with a user).
+    """
     users = [DEFAULT_USER_ID]
     for receipt, _root in _grant_store(app).grants():
         if receipt.user_id not in users:
             users.append(receipt.user_id)
+    queue = getattr(app.state, "memory_write_queue", None)
+    if queue is not None:
+        with main_database(queue.database_path).read() as database:
+            for (source_key,) in database.execute(
+                "SELECT DISTINCT source_key FROM memory_write_jobs"
+            ):
+                user_id = split_lane(str(source_key))[0]
+                if user_id not in users:
+                    users.append(user_id)
     return tuple(users)
+
+
+async def _users_with_memories(app: FastAPI) -> tuple[str, ...]:
+    """Known users the SDK holds any memory for: the nightly evolve's users."""
+    users = await asyncio.to_thread(_known_user_ids, app)
+    client = await _sdk_client_handle(app).client()
+    found: list[str] = []
+    for user_id in users:
+        try:
+            stats = await asyncio.to_thread(client.memory_stats, user_id=user_id)
+        except Exception:
+            continue
+        scenes = stats.get("scenes") if isinstance(stats, dict) else None
+        total = stats.get("total") if isinstance(stats, dict) else None
+        facts = sum(
+            int(scene.get("facts") or 0)
+            for scene in (scenes or {}).values()
+            if isinstance(scene, dict)
+        )
+        if (isinstance(total, int) and total > 0) or facts > 0:
+            found.append(user_id)
+    return tuple(found)
 
 
 def _granted_roots(
@@ -5161,7 +5493,13 @@ def _sdk_memory_runtime(app: FastAPI) -> SdkMemoryRuntime:
 
 
 async def _recall_model_ready(app: FastAPI) -> bool:
-    """A generation model is configured and usable, so memories can exist."""
+    """A generation model is configured and usable, so memories can exist.
+
+    In lite nothing is extracted whatever model is configured: recall reads
+    the raw conversations.
+    """
+    if _memory_mode(app) == "lite":
+        return False
     try:
         profile = await asyncio.to_thread(_model_profile_store(app).active, _secret_store(app))
     except Exception:
@@ -5310,14 +5648,66 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
     handle = cast(SdkClientHandle | None, app.state.sdk_client_handle)
     if handle is None:
         # Reads open the embedding space writes fill: the active profile's,
-        # the built-in one only when none is active (#242).
+        # the built-in one only when none is active (#242). A profile or a
+        # memory-mode change rebuilds the client.
         handle = ActiveProfileReadHandle(
             profiles=_model_profile_store(app),
             secrets=_secret_store(app),
             data_dir=cast(Settings, app.state.settings).data_dir,
+            memory_mode=lambda: _memory_mode(app),
         )
         app.state.sdk_client_handle = handle
     return handle
+
+
+def _memory_mode(app: FastAPI) -> MemoryMode:
+    """The mode SDK clients are built with: the setting, or ultra forced by env."""
+    store = getattr(app.state, "config_store", None)
+    configured = store.memory_mode() if store is not None else "pro"
+    return cast(MemoryMode, effective_memory_mode(configured))
+
+
+def _memory_mode_state(app: FastAPI) -> MemoryModeState:
+    mode = _memory_mode(app)
+    return MemoryModeState(
+        mode=mode,
+        configured_mode=_config_store(app).memory_mode(),
+        forced_by_env=graph_store_enabled(),
+        graph_build=app.state.evolve_state_store.graph_build(),
+    )
+
+
+def _evolve_service(app: FastAPI) -> EvolveService:
+    return cast(EvolveService, app.state.evolve_service)
+
+
+def _evolve_overview(app: FastAPI) -> EvolveOverview:
+    document = app.state.evolve_state_store.document()
+    return EvolveOverview(
+        mode=_memory_mode(app),
+        schedule=_config_store(app).evolve_schedule(),
+        users=document.users,
+        running=app.state.evolve_service.running(),
+    )
+
+
+def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
+    """R10's `pipeline`, or None before the evolve state exists (legacy tests)."""
+    if getattr(app.state, "evolve_state_store", None) is None:
+        return None
+    state = _memory_mode_state(app)
+    overview = _evolve_overview(app)
+    finished = [
+        user.last_run_at for user in overview.users.values() if user.last_run_at is not None
+    ]
+    return PipelineStatus(
+        mode=state.mode,
+        configured_mode=state.configured_mode,
+        forced_by_env=state.forced_by_env,
+        evolve=overview,
+        last_evolve_at=max(finished, default=None),
+        graph_build=state.graph_build,
+    )
 
 
 def _log_skipped_sdk_memories(count: int) -> None:
@@ -5566,14 +5956,27 @@ def _source_writes_on(app: FastAPI, source_id: str) -> bool:
 
 
 def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
-    """Claim queued model work only when policy, source and model all admit it."""
+    """Claim queued model work only when policy, source and model all admit it.
+
+    lite calls no model, so it needs no active generation profile: the
+    built-in local embedder stores the raw turns. A user evolve is running
+    for waits until it is done.
+    """
 
     return (
         _config_store(app).sedimentation_enabled()
-        and _model_profile_store(app).active_identity() is not None
+        and (_memory_mode(app) == "lite" or _model_profile_store(app).active_identity() is not None)
         and _history_import_gate_released(app)
         and _source_writes_on(app, source_id)
+        and not _user_evolving(app, split_lane(source_id)[0])
     )
+
+
+def _user_evolving(app: FastAPI, user_id: str) -> bool:
+    """Whether evolve holds this user's writes right now."""
+    coordinator = getattr(app.state, "sdk_write_coordinator", None)
+    evolving = getattr(coordinator, "evolving", None)
+    return bool(callable(evolving) and evolving(user_id))
 
 
 def _history_import_gate_released(app: FastAPI) -> bool:

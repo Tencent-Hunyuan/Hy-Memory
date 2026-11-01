@@ -26,8 +26,7 @@ and no raw turn, and does not compare the mirror with the SDK:
   cannot be trusted to decide what the SDK should contain;
 - the product has no user editing of memories in practice, so the mirror holds
   no user intent the SDK lacks;
-- SDK L1 raw is retained for three days by the Runtime's own
-  `prune_expired_raw`, not by the migration.
+- SDK L1 raw is kept: neither the migration nor the Runtime deletes raw.
 
 "Already complete" holds only if the new Runtime opens the same stores. Builds
 before #145 named a profile's vector collections `one_memory_<12 hex>…`; #145

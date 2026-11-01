@@ -2563,6 +2563,8 @@ async def execute_job(
             in {
                 "model_content_source_disabled",
                 "model_sedimentation_disabled",
+                # Evolve holds this user; the job runs once it is done.
+                "memory_evolve_in_progress",
             }
             and not hy_invoked
         ):

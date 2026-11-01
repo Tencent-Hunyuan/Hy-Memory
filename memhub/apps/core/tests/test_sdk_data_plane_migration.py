@@ -6,7 +6,7 @@ import io
 import json
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -30,7 +30,6 @@ from one_memory.sdk_data_plane_migration import (
     MemoryAuthority,
     SdkDataPlaneMigrationStore,
 )
-from one_memory.sdk_memory_runtime import SdkMemoryRuntime
 from one_memory.sdk_migration_bundle import create_sdk_migration_bundle
 from one_memory.sdk_migration_runner import (
     PREPARED_PHASE,
@@ -1348,57 +1347,6 @@ def test_raw_http_dto_uses_the_unified_memory_list_shape():
     )
     assert page.raw[0].raw_id == "raw-1"
     assert page.raw[0].custom == {"role": "user"}
-
-
-def test_sdk_raw_retention_keeps_only_the_latest_three_days():
-    now = datetime(2026, 10, 23, tzinfo=UTC)
-
-    class Client:
-        def __init__(self):
-            self.rows = [
-                {
-                    "memory_id": "old",
-                    "memory_at": int((now - timedelta(days=4)).timestamp()),
-                },
-                {
-                    "memory_id": "recent",
-                    "memory_at": int((now - timedelta(days=2)).timestamp()),
-                },
-            ]
-
-        def list_memories(self, **_kwargs):
-            return {
-                "vdb": {
-                    "memories": list(self.rows),
-                    "total": len(self.rows),
-                    "limit": 500,
-                    "offset": 0,
-                }
-            }
-
-        def delete(self, memory_id):
-            before = len(self.rows)
-            self.rows = [row for row in self.rows if row["memory_id"] != memory_id]
-            return {
-                "success": True,
-                "deleted_count": before - len(self.rows),
-            }
-
-    client = Client()
-
-    class Handle:
-        async def client(self):
-            return client
-
-    runtime = SdkMemoryRuntime(
-        coordinator=None,
-        read_handle=Handle(),
-        write_queue=None,
-        extraction_settings=None,
-        data_dir=Path("."),
-    )
-    assert asyncio.run(runtime.prune_expired_raw(now=now)) == 1
-    assert [row["memory_id"] for row in client.rows] == ["recent"]
 
 
 # The UI asks which memory data plane is authoritative and must get the

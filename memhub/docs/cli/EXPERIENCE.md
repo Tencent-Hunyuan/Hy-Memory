@@ -152,6 +152,20 @@ node apps/cli/dist/one-memory.cjs profile --versions --user-id wife --json
 用于找出覆盖了正确值的错误版本（例如 `用户` / `The user`），再用
 `memories delete <memory-id> --yes` 删除；对应 `GET /api/v2/user-profile/versions`。
 
+### 记忆模式与进化（`settings mode` / `evolve`）
+
+```bash
+node apps/cli/dist/one-memory.cjs settings mode                 # 当前模式
+node apps/cli/dist/one-memory.cjs settings mode ultra           # 只显示切换计划，不改动
+node apps/cli/dist/one-memory.cjs settings mode ultra --yes     # 切换
+node apps/cli/dist/one-memory.cjs evolve --user-id wife --wait  # 立即进化（仅 ultra）
+```
+
+- 切换不迁移数据：已处理的对话不会重做，排队中的和新的按新模式处理；正在写的一批按旧模式写完。
+- 任何模式都保留全部原始对话。
+- `status --json` 与 `progress --json` 输出 `pipeline.mode`、每晚进化时间和每个用户的上次进化。
+- 契约见 `docs/contracts/memory-mode-evolve-v1.md`。
+
 ## 8. 召回（recall）
 
 `recall` 两条路径（raw / memory）此前已真机验证。文本输出会标明每条是「原始对话摘录」

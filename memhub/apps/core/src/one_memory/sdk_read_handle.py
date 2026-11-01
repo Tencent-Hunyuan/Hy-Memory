@@ -10,14 +10,20 @@ is closed once no task still uses it, as `SdkWriteCoordinator` does for writes
 (#218). A use is the task that asked for the client: callers keep their
 `client = await handle.client()` shape, and the use ends with that task (one
 HTTP request, one retention pass).
+
+The memory mode (lite / pro / ultra) is fixed per SDK client, so a mode change
+rebuilds and retires the same way: handles are keyed by (profile, mode). The
+mode never names a collection; it is a separate client parameter.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from one_memory.hy_graph_admin import effective_memory_mode
 from one_memory.hy_sdk_runtime import (
     BUILTIN_RETRIEVAL_PROFILE_ID,
     SdkClientHandle,
@@ -40,12 +46,14 @@ class ActiveProfileReadHandle(SdkClientHandle):
         profiles: ModelProfileStore,
         secrets: SecretStore,
         data_dir: Path,
+        memory_mode: Callable[[], str] = effective_memory_mode,
     ) -> None:
         super().__init__(builtin_retrieval_snapshot(), api_key=None, data_dir=data_dir)
         self.profiles = profiles
         self.secrets = secrets
         self.data_dir = data_dir
-        self._handles: dict[tuple[str, int], SdkClientHandle] = {}
+        self.memory_mode = memory_mode
+        self._handles: dict[tuple[str, int, str], SdkClientHandle] = {}
         #: Tasks in flight per handle; a retired handle closes at zero.
         self._uses: dict[SdkClientHandle, int] = {}
         self._retired: set[SdkClientHandle] = set()
@@ -53,7 +61,8 @@ class ActiveProfileReadHandle(SdkClientHandle):
         self._handle_lock = asyncio.Lock()
 
     async def client(self) -> Any:
-        identity = await asyncio.to_thread(self.profiles.active_identity) or _BUILTIN
+        profile = await asyncio.to_thread(self.profiles.active_identity) or _BUILTIN
+        identity = (*profile, self.memory_mode())
         async with self._handle_lock:
             handle = self._handles.get(identity)
             if handle is None:
@@ -95,10 +104,12 @@ class ActiveProfileReadHandle(SdkClientHandle):
             self._closing.add(closing)
             closing.add_done_callback(self._closing.discard)
 
-    def _build(self, identity: tuple[str, int]) -> SdkClientHandle:
+    def _build(self, key: tuple[str, int, str]) -> SdkClientHandle:
+        profile_id, revision, mode = key
+        identity = (profile_id, revision)
         if identity == _BUILTIN:
             return SdkClientHandle(
-                builtin_retrieval_snapshot(), api_key=None, data_dir=self.data_dir
+                builtin_retrieval_snapshot(), api_key=None, data_dir=self.data_dir, mode=mode
             )
         profile = self.profiles.snapshot(*identity)
         view = retrieval_view(profile)
@@ -111,4 +122,4 @@ class ActiveProfileReadHandle(SdkClientHandle):
                 raise HySdkRuntimeError("secure_storage_unavailable") from None
             if secret is None:
                 raise HySdkRuntimeError("model_secret_unavailable")
-        return SdkClientHandle(view, api_key=secret, data_dir=self.data_dir)
+        return SdkClientHandle(view, api_key=secret, data_dir=self.data_dir, mode=mode)
