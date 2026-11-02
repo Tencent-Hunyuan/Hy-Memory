@@ -74,9 +74,9 @@ class ConfigDocument(BaseModel):
     #: SDK retrieval and extraction features a person set; an unset one keeps
     #: the SDK default. See `one_memory.memory_features`.
     memory_features: MemoryFeatures = Field(default_factory=MemoryFeatures)
-    #: The display language a person chose in the App; None = never chosen or
-    #: "follow the system". See `one_memory.ui_language` for what it does to
-    #: the SDK.
+    #: The display language the App shows (its choice, or the system language
+    #: it follows); None = none set. See `one_memory.ui_language` for what it
+    #: does to the SDK.
     ui_language: UiLanguage | None = None
 
     @field_validator("sources")

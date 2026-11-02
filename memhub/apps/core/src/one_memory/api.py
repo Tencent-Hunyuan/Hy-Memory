@@ -766,7 +766,7 @@ class PipelineStatus(BaseModel):
     #: default; empty while every feature is at its default.
     features: dict[MemoryFeatureName, bool] = Field(default_factory=dict)
     #: The display language the App last reported (`ui_language`); null =
-    #: never chosen or "follow the system".
+    #: none set (the App sends the language it shows, even following the system).
     ui_language: UiLanguage | None = None
     #: The SDK prompt language: `auto` (the SDK detects zh/en) or a code.
     sdk_language: str = SDK_LANGUAGE_AUTO
@@ -777,9 +777,9 @@ class UiLanguageState(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: What the App reported; null = never chosen or "follow the system".
+    #: What the App reported; null = none set (CLI/API-only, or `system`).
     ui_language: UiLanguage | None
-    #: What SDK clients are built with: `auto` (zh-Hans or no choice: the SDK
+    #: What SDK clients are built with: `auto` (no language set: the SDK
     #: detects zh/en, as before) or the code passed as `MemoryConfig.language`.
     sdk_language: str
     languages: tuple[UiLanguage, ...] = UI_LANGUAGES
@@ -4616,9 +4616,9 @@ def create_app(
     async def put_ui_language(request: UiLanguageUpdate) -> UiLanguageChange:
         """Record the App's display language; one global setting, not per user.
 
-        zh-Hans and null pass no language to the SDK, which keeps detecting
-        zh/en as before; every other code (en included) is passed as
-        `MemoryConfig.language`. A change of that SDK language rebuilds the
+        Every code (zh-Hans and en included) is passed as
+        `MemoryConfig.language`; only null passes no language, so the SDK
+        keeps detecting zh/en as before. A change of that SDK language rebuilds the
         SDK clients like a feature change: a write in flight finishes in the
         old language. Nothing stored is migrated and no collection is renamed.
         """

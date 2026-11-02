@@ -143,6 +143,12 @@ export function resolvePackagedBuildNumber(
   return undefined;
 }
 
+/**
+ * The packaged-runtime install, local install, release download and release
+ * scripts all require a full 40-character lowercase commit. Normalise here so
+ * that one format crosses this boundary: an uppercase full SHA is lowercased,
+ * and a short or malformed value is skipped so it cannot shadow the next source.
+ */
 export function resolvePackagedCommit(
   environmentValue: unknown,
   embeddedValue?: unknown,
@@ -150,7 +156,7 @@ export function resolvePackagedCommit(
   for (const value of [environmentValue, embeddedValue]) {
     if (typeof value !== "string") continue;
     const trimmed = value.trim();
-    if (/^[0-9a-f]{7,40}$/i.test(trimmed)) return trimmed;
+    if (/^[0-9a-f]{40}$/i.test(trimmed)) return trimmed.toLowerCase();
   }
   return undefined;
 }
