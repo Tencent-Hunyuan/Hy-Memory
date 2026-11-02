@@ -2308,34 +2308,33 @@ def _parse_operations_json(text: str) -> Optional[List[Dict[str, Any]]]:
 
 
 def _detect_language(materials: Dict[str, Any]) -> str:
+    """Vote over fact languages using the SDK's code-aware language detector.
+
+    Each nonblank fact gets one vote so a long path or code payload cannot
+    outweigh the prose in other facts. Empty materials and ties use English.
+    Explicit language overrides are resolved by the caller before detection.
     """
-    从 materials 的 fact content 检测语言。
-    
-    扫描所有聚类中的 fact content，计算中文字符占比。
-    中文比例 >= 70% → "zh"，否则 → "en"。
-    """
-    import re
-    all_text = ""
-    for cluster in materials.get("clusters", []):
-        for f in cluster.get("facts", []):
-            all_text += f.get("content", "") + " "
-    for f in materials.get("unprocessed_facts", []):
-        all_text += f.get("content", "") + " "
+    from ..utils.lang_detect import detect_language
 
-    if not all_text.strip():
-        return "en"
+    facts = [
+        fact
+        for cluster in materials.get("clusters", [])
+        for fact in cluster.get("facts", [])
+    ]
+    facts.extend(materials.get("unprocessed_facts", []))
+    zh_votes = total = 0
+    for fact in facts:
+        content = fact.get("content", "")
+        if not content.strip():
+            continue
+        total += 1
+        zh_votes += detect_language(content) == "zh"
 
-    # 统计中文字符（CJK Unified Ideographs）
-    zh_chars = len(re.findall(r'[\u4e00-\u9fff]', all_text))
-    # 统计所有非空白字符
-    total_chars = len(re.findall(r'\S', all_text))
-
-    if total_chars == 0:
-        return "en"
-
-    zh_ratio = zh_chars / total_chars
-    lang = "zh" if zh_ratio >= 0.7 else "en"
-    logger.debug(f"[S2-agent] language detection: zh_chars={zh_chars} total={total_chars} ratio={zh_ratio:.2f} → {lang}")
+    lang = "zh" if zh_votes > total / 2 else "en"
+    logger.debug(
+        "[S2-agent] language detection: zh_facts=%d total=%d → %s",
+        zh_votes, total, lang,
+    )
     return lang
 
 
