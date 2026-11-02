@@ -75,7 +75,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.6 — 2026-11-02
 
-Build 37, on `hy-memory==2.0.13`. Linux x64/arm64 Runtime and macOS arm64
+Build 38, on `hy-memory==2.0.13`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - Interfaces in 11 languages: English, Simplified and Traditional Chinese,
