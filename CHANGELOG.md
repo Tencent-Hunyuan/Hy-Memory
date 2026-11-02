@@ -4,6 +4,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- System 2 automatic prompt selection now detects each fact with the SDK language
+  detector and uses a majority vote, so code-heavy Chinese facts are not diluted
+  by long ASCII payloads. Explicit language settings still take precedence.
+
 ## MemHub 1.0.6 — 2026-11-02
 
 Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64
