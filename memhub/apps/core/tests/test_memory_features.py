@@ -28,6 +28,8 @@ from one_memory.memory_features import (
     FEATURE_NAMES,
     FEATURES,
     FEATURES_BY_NAME,
+    PARAMETERS,
+    SETTING_NAMES,
     MemoryFeatures,
     effective_features,
     feature_activity,
@@ -46,15 +48,20 @@ TODAY = {
     "session_episodes": False,
     "episode_summary": False,
     "intention": True,
+    "intention_dedup": True,
     "few_shot": False,
 }
+#: The same for the numeric settings.
+TODAY_PARAMETERS = {"intention_dedup_threshold": 0.95}
 
 
 @pytest.fixture(autouse=True)
 def _clean_sdk_env(monkeypatch):
     """The SDK's own env vars feed its defaults; tests start without them."""
-    for spec in FEATURES:
+    for spec in (*FEATURES, *PARAMETERS):
         monkeypatch.delenv(spec.env, raising=False)
+    # The threshold falls back to the SDK's shared dedup variable.
+    monkeypatch.delenv("MEMORY_DEDUP_THRESHOLD", raising=False)
     monkeypatch.delenv("ONE_MEMORY_GRAPH_STORE", raising=False)
 
 
@@ -95,17 +102,25 @@ def _field(config, name: str) -> bool:
 
 
 def test_the_document_names_exactly_the_catalog() -> None:
-    assert tuple(MemoryFeatures.model_fields) == FEATURE_NAMES
+    assert tuple(MemoryFeatures.model_fields) == SETTING_NAMES
     assert set(TODAY) == set(FEATURE_NAMES)
     # Each feature is a MemoryConfig field the SDK has; no env var is written.
     defaults = hy_sdk_runtime.sdk_feature_defaults()
-    assert set(defaults) == set(FEATURE_NAMES)
+    assert set(defaults) == set(SETTING_NAMES)
 
 
 def test_the_defaults_are_todays_behaviour() -> None:
-    assert hy_sdk_runtime.sdk_feature_defaults() == TODAY
+    everything = {**TODAY, **TODAY_PARAMETERS}
+    assert hy_sdk_runtime.sdk_feature_defaults() == everything
     assert MemoryFeatures().overrides() == ()
-    assert effective_features((), TODAY) == TODAY
+    assert effective_features((), everything) == everything
+
+
+@pytest.mark.parametrize("profile", PROFILES, ids=("builtin", "remote"))
+def test_intention_dedup_defaults_to_on_at_095_in_the_built_config(tmp_path, profile) -> None:
+    config = _config(tmp_path, profile)
+    assert config.recall.intention_dedup_enabled is True
+    assert config.recall.intention_dedup_threshold == 0.95
 
 
 def test_the_sdk_env_var_still_moves_the_default_of_an_unset_feature(monkeypatch) -> None:
@@ -124,6 +139,32 @@ def test_unknown_or_non_boolean_values_are_refused() -> None:
         hy_sdk_runtime.build_sdk_config(
             PROFILES[0], api_key=None, data_dir=Path("/tmp/unused"), features={"nope": True}
         )
+
+
+@pytest.mark.parametrize("bad", (0.79, 1.01, -1, 2, True, "0.9", float("nan"), float("inf")))
+def test_an_intention_dedup_threshold_outside_its_range_is_refused(bad) -> None:
+    with pytest.raises(ValidationError):
+        MemoryFeatures.model_validate({"intention_dedup_threshold": bad})
+
+
+def test_the_intention_dedup_threshold_range_is_inclusive() -> None:
+    for value in (0.8, 0.9, 1, 1.0):
+        document = MemoryFeatures.model_validate({"intention_dedup_threshold": value})
+        assert document.overrides() == (("intention_dedup_threshold", float(value)),)
+    with pytest.raises(ValueError, match="invalid_memory_feature_value"):
+        hy_sdk_runtime.build_sdk_config(
+            PROFILES[0],
+            api_key=None,
+            data_dir=Path("/tmp/unused"),
+            features={"intention_dedup_threshold": 0.5},
+        )
+
+
+def test_the_sdk_env_vars_still_move_the_threshold_default(monkeypatch) -> None:
+    monkeypatch.setenv("MEMORY_DEDUP_THRESHOLD", "0.9")
+    assert hy_sdk_runtime.sdk_feature_defaults()["intention_dedup_threshold"] == 0.9
+    monkeypatch.setenv("MEMORY_INTENTION_DEDUP_THRESHOLD", "0.97")
+    assert hy_sdk_runtime.sdk_feature_defaults()["intention_dedup_threshold"] == 0.97
 
 
 def test_merge_sets_resets_and_leaves_absent_keys_alone() -> None:
@@ -166,12 +207,28 @@ def test_each_feature_reaches_the_built_memory_config(tmp_path, profile) -> None
 
 
 @pytest.mark.parametrize("profile", PROFILES, ids=("builtin", "remote"))
+def test_intention_dedup_on_off_and_threshold_reach_the_built_memory_config(
+    tmp_path, profile
+) -> None:
+    off = _config(tmp_path, profile, {"intention_dedup": False})
+    assert off.recall.intention_dedup_enabled is False
+    assert off.recall.intention_dedup_threshold == 0.95
+    on = _config(tmp_path, profile, {"intention_dedup": True, "intention_dedup_threshold": 0.9})
+    assert on.recall.intention_dedup_enabled is True
+    assert on.recall.intention_dedup_threshold == 0.9
+    # Nothing else moves.
+    assert _field(on, "intention") is True and _field(on, "graph_rerank") is False
+
+
+@pytest.mark.parametrize("profile", PROFILES, ids=("builtin", "remote"))
 def test_nothing_set_is_the_config_of_before_byte_for_byte(tmp_path, profile) -> None:
     before = repr(dataclasses.asdict(_config(tmp_path, profile)))
     assert repr(dataclasses.asdict(_config(tmp_path, profile, ()))) == before
     assert repr(dataclasses.asdict(_config(tmp_path, profile, {}))) == before
     # Setting every feature to its default value changes nothing either.
     assert repr(dataclasses.asdict(_config(tmp_path, profile, TODAY))) == before
+    everything = {**TODAY, **TODAY_PARAMETERS}
+    assert repr(dataclasses.asdict(_config(tmp_path, profile, everything))) == before
 
 
 @pytest.mark.parametrize("profile", PROFILES, ids=("builtin", "remote"))
@@ -190,6 +247,7 @@ def test_features_never_change_the_collection_identity(tmp_path, profile) -> Non
         {name: True for name in FEATURE_NAMES},
         {name: False for name in FEATURE_NAMES},
         {"graph_rerank": True, "episode_recall": True},
+        {"intention_dedup": False, "intention_dedup_threshold": 0.8},
     ):
         assert identity(_config(tmp_path, profile, values)) == baseline
 
@@ -243,6 +301,13 @@ def test_a_feature_needing_a_higher_mode_is_reported_inactive() -> None:
     series = effective_features((("same_series_timeline", True), ("graph_rerank", True)), TODAY)
     assert feature_activity("same_series_timeline", series, "pro") == "requires_ultra"
     assert feature_activity("same_series_timeline", series, "ultra") is None
+    defaults = {**TODAY, **TODAY_PARAMETERS}
+    assert feature_activity("intention_dedup", defaults, "pro") is None
+    assert feature_activity("intention_dedup_threshold", defaults, "pro") is None
+    assert feature_activity("intention_dedup_threshold", defaults, "lite") == "requires_pro"
+    off = effective_features((("intention_dedup", False),), defaults)
+    assert feature_activity("intention_dedup", off, "pro") == "disabled"
+    assert feature_activity("intention_dedup_threshold", off, "pro") == "requires_intention_dedup"
 
 
 # --- rebuilding handles -------------------------------------------------------
@@ -495,5 +560,101 @@ def test_features_api_get_put_reset_and_status(tmp_path, monkeypatch) -> None:
             await client.get("/api/v1/settings/memory-features", params={"user_id": "x"})
         ).status_code == 422
         assert (await client.get("/api/v1/settings/memory-features")).json()["non_default"] == {}
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_intention_dedup_api_on_off_threshold_and_422(tmp_path, monkeypatch) -> None:
+    built: list[tuple[bool, float]] = []
+    original = hy_sdk_runtime.build_sdk_config
+
+    def recording(*args, **kwargs):
+        config = original(*args, **kwargs)
+        built.append(
+            (config.recall.intention_dedup_enabled, config.recall.intention_dedup_threshold)
+        )
+        return config
+
+    monkeypatch.setattr(hy_sdk_runtime, "build_sdk_config", recording)
+
+    def built_now(app) -> tuple[bool, float]:
+        """What a client built with the read handle's current key carries."""
+        recording(
+            hy_sdk_runtime.builtin_retrieval_snapshot(),
+            api_key=None,
+            data_dir=tmp_path,
+            features=app.state.sdk_client_handle.current_features(),
+        )
+        return built[-1]
+
+    async def scenario(app, client):
+        path = "/api/v1/settings/memory-features"
+        current = (await client.get(path)).json()
+        dedup = _by_name(current)["intention_dedup"]
+        assert dedup["enabled"] is True and dedup["default"] is True
+        assert dedup["configured"] is None and dedup["active"] is True
+        assert dedup["sdk_field"] == "recall.intention_dedup_enabled"
+        assert dedup["env"] == "MEMORY_INTENTION_DEDUP_ENABLED"
+        (threshold,) = current["parameters"]
+        assert threshold == {
+            "name": "intention_dedup_threshold",
+            "value": 0.95,
+            "configured": None,
+            "default": 0.95,
+            "minimum": 0.8,
+            "maximum": 1.0,
+            "active": True,
+            "reason": None,
+            "requires_feature": "intention_dedup",
+            "sdk_field": "recall.intention_dedup_threshold",
+            "env": "MEMORY_INTENTION_DEDUP_THRESHOLD",
+            "description": threshold["description"],
+        }
+        assert built_now(app) == (True, 0.95)
+
+        off = await client.put(path, json={"intention_dedup": False})
+        assert off.status_code == 200, off.text
+        body = off.json()
+        assert body["changed"] == ["intention_dedup"]
+        assert body["non_default"] == {"intention_dedup": False}
+        assert body["parameters"][0]["active"] is False
+        assert body["parameters"][0]["reason"] == "requires_intention_dedup"
+        assert app.state.sdk_write_coordinator.memory_features() == (("intention_dedup", False),)
+        assert built_now(app) == (False, 0.95)
+
+        on = (
+            await client.put(path, json={"intention_dedup": True, "intention_dedup_threshold": 0.9})
+        ).json()
+        assert on["changed"] == ["intention_dedup", "intention_dedup_threshold"]
+        assert on["non_default"] == {"intention_dedup_threshold": 0.9}
+        assert on["parameters"][0]["value"] == 0.9 and on["parameters"][0]["active"] is True
+        expected = (("intention_dedup", True), ("intention_dedup_threshold", 0.9))
+        assert app.state.sdk_client_handle.current_features() == expected
+        assert built_now(app) == (True, 0.9)
+        processing = (await client.get("/api/v1/memory-processing")).json()
+        assert processing["pipeline"]["features"] == {"intention_dedup_threshold": 0.9}
+        saved = json.loads((tmp_path / "data" / "config.json").read_text())
+        assert saved["memory_features"] == {
+            "intention_dedup": True,
+            "intention_dedup_threshold": 0.9,
+        }
+
+        for bad in (0.5, 0.79, 1.5, -0.1, "0.9", True):
+            response = await client.put(path, json={"intention_dedup_threshold": bad})
+            assert response.status_code == 422, bad
+        assert (await client.put(path, json={"intention_dedup": "false"})).status_code == 422
+        # A refused body changes nothing.
+        assert app.state.sdk_client_handle.current_features() == expected
+
+        reset = (
+            await client.put(
+                path, json={"intention_dedup": None, "intention_dedup_threshold": None}
+            )
+        ).json()
+        assert reset["changed"] == ["intention_dedup_threshold"]
+        assert reset["non_default"] == {}
+        assert app.state.sdk_client_handle.current_features() == ()
+        assert built_now(app) == (True, 0.95)
 
     run_app(tmp_path, monkeypatch, scenario)

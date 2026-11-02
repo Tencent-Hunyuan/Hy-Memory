@@ -80,6 +80,8 @@ CONFIG_FIELDS = {
         "dynamic_episode_enabled",
         "episode_capsule_context_enabled",
         "local_rerank_enabled",
+        "intention_dedup_enabled",
+        "intention_dedup_threshold",
     ],
 }
 
