@@ -15,6 +15,9 @@ HY Memory - Intention (L7) 召回 + 惰性过期转换 + 复本判定
     → 视为同一个意图的复本（extractor 复读机 / 多 session 重复表达）。
     保留组里 `gmt_created` 最早的（老的先来先得，稳定 id）；
   - **异步删库**：其余复本 fire-and-forget 从 VDB 删除，不影响本次调用 RT。
+  - **开关**：判重受 `MemoryConfig.recall.intention_dedup_enabled`（默认开）与
+    `recall.intention_dedup_threshold` 控制，由 reader 按 client 配置传入。
+    关闭时完全跳过判重：不隐藏、不删除任何意图（写入侧批内判重同样跳过）。
 
 Q: 为什么要看 memory_at 和 valid_until？
 A: 意图是 point-in-time 信号。同一句"我周五要开会"，如果一条 memory_at 在
@@ -38,8 +41,14 @@ from ...models.memory import MemoryLayer, MemoryStatus
 logger = logging.getLogger(__name__)
 
 
-def _get_dedup_threshold() -> float:
-    """去重 cosine 阈值：沿用 dedup 内核的 MEMORY_DEDUP_THRESHOLD，默认 0.95。"""
+def _get_dedup_threshold(configured: Optional[float] = None) -> float:
+    """去重 cosine 阈值：优先用 client 配置；否则（或配置非法）沿用 dedup 内核的
+    MEMORY_DEDUP_THRESHOLD，默认 0.95。"""
+    try:
+        if configured is not None:
+            return float(configured)
+    except (TypeError, ValueError):
+        logger.warning(f"[intention] invalid dedup threshold: {configured!r}")
     try:
         return float(os.environ.get("MEMORY_DEDUP_THRESHOLD", 0.95))
     except (TypeError, ValueError):
@@ -244,6 +253,8 @@ async def recall_intentions(
     stats_out: Optional[Dict[str, Any]] = None,
     include_sources: Optional[List[str]] = None,
     exclude_sources: Optional[List[str]] = None,
+    dedup_enabled: bool = True,
+    dedup_threshold: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
     召回未过期的 L7_INTENTION 节点（VDB），惰性过期转 L2_FACT，判重并异步删复本。
@@ -260,6 +271,11 @@ async def recall_intentions(
         now: 当前时间（默认 datetime.now()，测试可注入）
         stats_out: 可选 dict，本函数把分段耗时与数量**原地回填**进去，供调用方落
             READ_INTENTION pipeline log。传 None 则完全不统计（零开销）。
+        dedup_enabled: 是否执行读侧判重（及复本异步删库）。False 时跳过判重，
+            所有未过期意图原样返回，不删除任何节点。默认 True（历史行为）。
+        dedup_threshold: 判重 cosine 阈值。None 时回退到 env
+            MEMORY_DEDUP_THRESHOLD（默认 0.95），兼容直接调用本函数的旧代码；
+            reader 总是传入 `recall.intention_dedup_threshold`。
 
     Returns:
         [{"node_id", "score", "node", "layer": "l7_intention", "source": "vdb_intention"}, ...]
@@ -272,7 +288,7 @@ async def recall_intentions(
     埋点字段（回填进 stats_out）:
       耗时(ms): vdb_search_ms / expire_ms / backfill_embed_ms / dedup_ms / total_ms
       数量: fetched / expired / survivors / dedup_dropped / returned
-      配置: fetch_limit / out_limit / dedup_threshold
+      配置: fetch_limit / out_limit / dedup_enabled / dedup_threshold
       说明: expire_ms、backfill_embed_ms 只有真的发生了对应操作才非 0，
             借此可判断慢在 VDB 检索、逐条过期转换、补拉向量还是判重计算。
     """
@@ -358,7 +374,7 @@ async def recall_intentions(
     _t = time.perf_counter()
     _backfilled = 0
     _missing_cnt = 0
-    if survivors:
+    if survivors and dedup_enabled:  # 补拉只为判重；关闭时无需这次 VDB 读
         missing_ids = [
             h.get("node_id") for h in survivors
             if h.get("node_id") and not getattr(h.get("node"), "embedding", None)
@@ -391,18 +407,23 @@ async def recall_intentions(
     )
 
     # 2. 判重：同 user + 同天 memory_at + valid_until 同日 + cosine≥threshold
+    #    dedup_enabled=False → 完全跳过：不隐藏、不删除。
     _t = time.perf_counter()
-    threshold = _get_dedup_threshold()
-    try:
-        kept, delete_ids = _partition_duplicates(survivors, threshold)
-    except Exception as e:
-        # 任何 dedup 异常 → 降级为不去重（返回全部 survivors 截断 limit）
-        logger.warning(f"[intention] dedup partition failed, degrade to raw: {e}")
+    threshold = _get_dedup_threshold(dedup_threshold)
+    if dedup_enabled:
+        try:
+            kept, delete_ids = _partition_duplicates(survivors, threshold)
+        except Exception as e:
+            # 任何 dedup 异常 → 降级为不去重（返回全部 survivors 截断 limit）
+            logger.warning(f"[intention] dedup partition failed, degrade to raw: {e}")
+            kept, delete_ids = survivors, []
+    else:
         kept, delete_ids = survivors, []
     # 纯 CPU（cosine 两两比较）；survivors 多时可能显著
     _stat(
         dedup_ms=round((time.perf_counter() - _t) * 1000, 2),
         dedup_dropped=len(delete_ids),
+        dedup_enabled=bool(dedup_enabled),
         dedup_threshold=threshold,
     )
 

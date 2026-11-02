@@ -1856,6 +1856,12 @@ class BaseReadPipeline(ReadPipeline):
                     stats_out=_intent_stats,
                     include_sources=request.include_sources,
                     exclude_sources=request.exclude_sources,
+                    dedup_enabled=bool(getattr(
+                        self.config.recall, "intention_dedup_enabled", True
+                    )),
+                    dedup_threshold=getattr(
+                        self.config.recall, "intention_dedup_threshold", None
+                    ),
                 )
                 await trace_log.log_intention(
                     stats=_intent_stats,

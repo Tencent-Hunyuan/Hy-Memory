@@ -1,4 +1,4 @@
-import type { LanguageSnapshot } from "@one-memory/i18n";
+import type { GuiLocale, LanguageSnapshot } from "@one-memory/i18n";
 import { describe, expect, it, vi } from "vitest";
 import { coreUiLanguage, installCoreLanguageSync } from "./core-language-sync";
 
@@ -21,11 +21,16 @@ function source(initial: LanguageSnapshot) {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("Core language sync", () => {
-  it("tells Core null for system and the code for an explicit choice", () => {
-    expect(coreUiLanguage("system")).toBeNull();
-    expect(coreUiLanguage("zh-Hans")).toBe("zh-Hans");
-    expect(coreUiLanguage("en")).toBe("en");
-    expect(coreUiLanguage("ja")).toBe("ja");
+  it("tells Core the language the GUI shows, system included", () => {
+    const shown = (
+      preference: LanguageSnapshot["preference"],
+      locale: GuiLocale,
+    ) => coreUiLanguage({ preference, locale, revision: 0 });
+    expect(shown("system", "zh-Hans")).toBe("zh-Hans");
+    expect(shown("system", "en")).toBe("en");
+    expect(shown("zh-Hans", "zh-Hans")).toBe("zh-Hans");
+    expect(shown("en", "en")).toBe("en");
+    expect(shown("ja", "ja")).toBe("ja");
   });
 
   it("sends the stored choice once at launch, then every change", async () => {
@@ -38,29 +43,33 @@ describe("Core language sync", () => {
     await settle();
     language.change({ preference: "system", locale: "en", revision: 2 });
     await settle();
-    expect(send.mock.calls).toEqual([["es"], ["ja"], [null]]);
+    expect(send.mock.calls).toEqual([["es"], ["ja"], ["en"]]);
     dispose();
     language.change({ preference: "de", locale: "de", revision: 3 });
     await settle();
     expect(send).toHaveBeenCalledTimes(3);
   });
 
-  it("an untouched install sends null, which leaves the SDK on auto", async () => {
+  it("an untouched install sends the system language the GUI shows", async () => {
     const language = source({
       preference: "system",
-      locale: "ja",
+      locale: "zh-Hans",
       revision: 0,
     });
     const send = vi.fn(async () => {});
     installCoreLanguageSync({ language, send });
     await settle();
-    expect(send.mock.calls).toEqual([[null]]);
+    expect(send.mock.calls).toEqual([["zh-Hans"]]);
+    // Choosing the language already shown changes nothing Core sees.
+    language.change({ preference: "zh-Hans", locale: "zh-Hans", revision: 1 });
+    await settle();
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("reports a failed send and retries it with the next change", async () => {
     const language = source({ preference: "fr", locale: "fr", revision: 0 });
     const send = vi
-      .fn<(value: string | null) => Promise<void>>()
+      .fn<(value: string) => Promise<void>>()
       .mockRejectedValueOnce(new Error("core_unavailable"))
       .mockResolvedValue(undefined);
     const reportError = vi.fn();

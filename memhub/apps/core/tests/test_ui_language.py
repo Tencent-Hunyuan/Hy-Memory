@@ -1,8 +1,8 @@
 """The App's display language, and the SDK prompt language it implies.
 
-The owner's rule: zh-Hans, or no explicit choice, passes no language, so the
-SDK keeps detecting zh/en exactly as before; every other code (en included)
-is passed as `MemoryConfig.language` (hy-memory 2.0.11). A change rebuilds the
+The owner's rule (#243): every display language, zh-Hans and en included, is
+passed as `MemoryConfig.language` (hy-memory 2.0.11); only an unset language
+passes none, so the SDK keeps detecting zh/en exactly as before. A change rebuilds the
 handles the way a mode or feature change does, and the language never touches
 the vector collection identity.
 """
@@ -28,8 +28,8 @@ from one_memory.secrets import InMemorySecretStore
 from one_memory.ui_language import UI_LANGUAGES, normalize_ui_language, sdk_language
 
 TOKEN = "ui-language-test"
-#: Every code except zh-Hans is passed to the SDK.
-PASSED = ("en", "zh-Hant", "ja", "es", "de", "pt", "fr", "ko", "ru", "id")
+#: Every code is passed to the SDK, zh-Hans included.
+PASSED = ("en", "zh-Hans", "zh-Hant", "ja", "es", "de", "pt", "fr", "ko", "ru", "id")
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def _config(tmp_path: Path, language: str | None):
 
 
 def test_eleven_codes_and_the_legacy_chinese_code() -> None:
-    assert ("en", "zh-Hans", *PASSED[1:]) == UI_LANGUAGES
+    assert PASSED == UI_LANGUAGES
     assert len(UI_LANGUAGES) == 11
     # Earlier App builds stored zh-CN; it is zh-Hans now.
     assert normalize_ui_language("zh-CN") == "zh-Hans"
@@ -60,19 +60,20 @@ def test_eleven_codes_and_the_legacy_chinese_code() -> None:
     assert normalize_ui_language(None) is None
 
 
-def test_only_zh_hans_and_no_choice_leave_the_sdk_to_detect() -> None:
+def test_only_an_unset_language_leaves_the_sdk_to_detect() -> None:
     assert sdk_language(None) is None
-    assert sdk_language("zh-Hans") is None
-    assert sdk_language("zh-CN") is None
     assert sdk_language("system") is None
+    assert sdk_language("xx") is None
+    # zh-Hans is passed like every other code; the legacy zh-CN maps to it.
+    assert sdk_language("zh-Hans") == "zh-Hans"
+    assert sdk_language("zh-CN") == "zh-Hans"
     for code in PASSED:
         assert sdk_language(code) == code
 
 
-def test_zh_hans_and_no_choice_build_the_config_of_before(tmp_path) -> None:
-    before = repr(dataclasses.asdict(_config(tmp_path, None)))
+def test_no_language_builds_the_config_of_before(tmp_path) -> None:
     assert _config(tmp_path, None).language is None
-    assert repr(dataclasses.asdict(_config(tmp_path, sdk_language("zh-Hans")))) == before
+    assert _config(tmp_path, sdk_language("zh-Hans")).language == "zh-Hans"
 
 
 @pytest.mark.parametrize("code", PASSED)
@@ -282,17 +283,31 @@ def test_ui_language_api_get_put_and_status(tmp_path, monkeypatch) -> None:
         assert current["languages"] == list(UI_LANGUAGES)
         assert reads.current_language() is None and writes.sdk_language() is None
 
-        # zh-Hans: recorded, but the SDK still detects zh/en; nothing rebuilt.
+        # zh-Hans is passed explicitly: Chinese prompts, handles rebuilt (#243).
         body = (
             await client.put("/api/v1/settings/ui-language", json={"ui_language": "zh-Hans"})
         ).json()
-        assert body == {**current, "ui_language": "zh-Hans", "rebuilt": False}
-        assert retired == [] and reads.current_language() is None
+        assert body == {
+            **current,
+            "ui_language": "zh-Hans",
+            "sdk_language": "zh-Hans",
+            "rebuilt": True,
+        }
+        assert reads.current_language() == "zh-Hans" and writes.sdk_language() == "zh-Hans"
+        assert retired == ["zh-Hans"]
+        processing = (await client.get("/api/v1/memory-processing")).json()
+        assert processing["pipeline"]["sdk_language"] == "zh-Hans"
+
+        # The same value again changes nothing.
+        body = (
+            await client.put("/api/v1/settings/ui-language", json={"ui_language": "zh-Hans"})
+        ).json()
+        assert body["rebuilt"] is False and retired == ["zh-Hans"]
 
         body = (await client.put("/api/v1/settings/ui-language", json={"ui_language": "ja"})).json()
         assert body["sdk_language"] == "ja" and body["rebuilt"] is True
         assert reads.current_language() == "ja" and writes.sdk_language() == "ja"
-        assert retired == ["ja"]
+        assert retired == ["zh-Hans", "ja"]
 
         # An explicit English choice forces English prompts.
         body = (await client.put("/api/v1/settings/ui-language", json={"ui_language": "en"})).json()
@@ -302,7 +317,7 @@ def test_ui_language_api_get_put_and_status(tmp_path, monkeypatch) -> None:
         assert processing["pipeline"]["ui_language"] == "en"
         assert processing["pipeline"]["sdk_language"] == "en"
 
-        # Back to "follow the system": auto again.
+        # Unset (CLI `settings language system`): auto again.
         body = (await client.put("/api/v1/settings/ui-language", json={"ui_language": None})).json()
         assert body["sdk_language"] == "auto" and body["rebuilt"] is True
         assert reads.current_language() is None

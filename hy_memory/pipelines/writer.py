@@ -635,6 +635,7 @@ class MemoryWriter(WritePipeline):
         不查 VDB、不做"新写入 vs 库里已有"的对比，避免给 VDB 增加读压力。
         库内存量污染由 recall 侧异步删除逐步清理。best-effort：任何异常都
         回退到"不判重、全写入"，绝不影响 upsert 主流程。
+        `recall.intention_dedup_enabled=False` 时跳过批内判重，全部写入。
         """
         if not intentions:
             return []
@@ -660,7 +661,11 @@ class MemoryWriter(WritePipeline):
         # ============ 批内 dedup（不查 VDB，只对本批 intentions 互斥判重） ============
         keep_mask: List[bool] = [True] * len(intentions)
         try:
-            dropped = self._intention_batch_dedup(intentions, embeddings)
+            dropped = (
+                self._intention_batch_dedup(intentions, embeddings)
+                if getattr(self.config.recall, "intention_dedup_enabled", True)
+                else []
+            )
             for i in dropped:
                 if 0 <= i < len(keep_mask):
                     keep_mask[i] = False

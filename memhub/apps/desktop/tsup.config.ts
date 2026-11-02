@@ -11,8 +11,20 @@ const { resolveBuildNumber, resolveBuildVersion } =
   };
 const releaseVersion = resolveBuildVersion(process.env);
 const releaseBuildNumber = resolveBuildNumber(process.env);
-const releaseCommit =
-  process.env.ONE_MEMORY_COMMIT?.trim() || readSourceCommit();
+const releaseCommit = resolveReleaseCommit(process.env.ONE_MEMORY_COMMIT);
+
+// The runtime accepts only a full 40-character commit, so an explicitly
+// supplied malformed value fails the build instead of being baked and skipped.
+function resolveReleaseCommit(explicit: string | undefined): string {
+  const trimmed = explicit?.trim();
+  if (!trimmed) return readSourceCommit();
+  if (!/^[0-9a-f]{40}$/i.test(trimmed)) {
+    throw new Error(
+      `ONE_MEMORY_COMMIT must be a full 40-character hex commit, got ${JSON.stringify(trimmed)}`,
+    );
+  }
+  return trimmed.toLowerCase();
+}
 
 function readSourceCommit(): string {
   try {
