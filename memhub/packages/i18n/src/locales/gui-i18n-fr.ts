@@ -1116,6 +1116,23 @@ export const frenchMessages: Record<MessageKey, string> = {
     "L’accès aux mémoires a été révoqué : {name} ne peut plus rechercher de mémoires. La suppression complète n’a pas pu être confirmée ; vérifiez manuellement ces chemins : {paths}.",
   appRemovalReview:
     "La suppression complète de la connexion n’a pas pu être confirmée. Vérifiez manuellement ces chemins : {paths}.",
+  appProfilesLabel: "Profils de {name}",
+  appProfileOn: "{profile} : connecté",
+  appProfileOff: "{profile} : non connecté",
+  appProfilesHint:
+    "L’interrupteur installe la connexion aux mémoires et accorde l’accès à chaque profil détecté, puis les révoque tous lorsqu’il est désactivé. Tant qu’il est activé, les nouveaux profils sont connectés automatiquement.",
+  appProfilesNone:
+    "Aucun profil de {name} n’a été détecté. Créez un profil, puis revenez sur cette page.",
+  appProfilesConnectFailed:
+    "Ces profils n’ont pas pu être connectés : {profiles}. Les autres profils sont conservés. {reason}",
+  appProfilesDisconnectFailed:
+    "Ces profils n’ont pas pu être déconnectés et peuvent encore utiliser les mémoires : {profiles}. Réessayez. {reason}",
+  appProfilesRevokedRetained:
+    "L’accès aux mémoires de ces profils a été révoqué, mais tous leurs fichiers de connexion n’ont pas été supprimés ; vérifiez-les : {profiles}.",
+  appProfileNameUnsupported:
+    "les noms de profil ne peuvent contenir que des minuscules, des chiffres et des tirets, 32 caractères au maximum",
+  "apps.autoHostProfilesFailed":
+    "Ces profils de {name} n’ont pas pu être connectés automatiquement ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "L’identifiant de connexion de Cursor a changé. Quittez complètement Cursor et rouvrez-le avant de démarrer une nouvelle conversation.",
   连接其他工具: "Connecter d’autres outils",

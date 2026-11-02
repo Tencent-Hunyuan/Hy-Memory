@@ -298,6 +298,23 @@ export const settingsSpanishMessages = {
     "Se revocó el permiso; {name} ya no puede consultar memorias. No se pudo confirmar la eliminación completa de la conexión. Comprueba manualmente: {paths}.",
   appRemovalReview:
     "No se pudo confirmar la eliminación completa de la conexión. Comprueba manualmente: {paths}.",
+  appProfilesLabel: "Perfiles de {name}",
+  appProfileOn: "{profile}: conectado",
+  appProfileOff: "{profile}: sin conectar",
+  appProfilesHint:
+    "El interruptor instala la conexión de memorias y concede acceso a cada perfil detectado, y los revoca todos al apagarlo. Mientras esté activado, los perfiles nuevos se conectan automáticamente.",
+  appProfilesNone:
+    "No se detectó ningún perfil de {name}. Crea un perfil y vuelve a esta página.",
+  appProfilesConnectFailed:
+    "No se pudieron conectar estos perfiles: {profiles}. Los demás perfiles se mantienen.{reason}",
+  appProfilesDisconnectFailed:
+    "No se pudieron desconectar estos perfiles y aún pueden usar memorias: {profiles}. Reintenta.{reason}",
+  appProfilesRevokedRetained:
+    "Se revocó el acceso a memorias de estos perfiles, pero no se eliminaron todos sus archivos de conexión; revísalos: {profiles}.",
+  appProfileNameUnsupported:
+    "los nombres de perfil solo admiten minúsculas, dígitos y guiones, hasta 32 caracteres",
+  "apps.autoHostProfilesFailed":
+    "No se pudieron conectar automáticamente estos perfiles de {name} ({profiles}){reason}. ",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Las credenciales de conexión de Cursor se actualizaron. Cierra completamente Cursor y vuelve a abrirlo; después, inicia una conversación nueva.",
   连接其他工具: "Conectar otras herramientas",
@@ -350,6 +367,23 @@ const chineseOverrides: Partial<
   appRevokedReview:
     "已撤销记忆权限，{name} 已查不到记忆。但无法确认连接已全部移除，需要你手动核对：{paths}。",
   appRemovalReview: "无法确认连接已全部移除，需要你手动核对：{paths}。",
+  appProfilesLabel: "{name} 的 Profile",
+  appProfileOn: "{profile}：已接入",
+  appProfileOff: "{profile}：未接入",
+  appProfilesHint:
+    "开关会为每个已检测到的 Profile 安装记忆连接并授权，关闭时全部撤销。开关开启期间，新建的 Profile 会自动接入。",
+  appProfilesNone:
+    "还没有检测到 {name} 的 Profile。创建 Profile 后再回到此页。",
+  appProfilesConnectFailed:
+    "以下 Profile 未能接入：{profiles}。其他 Profile 已保留。{reason}",
+  appProfilesDisconnectFailed:
+    "以下 Profile 的连接未能移除，记忆权限也未能撤销，仍可使用记忆：{profiles}。请重试。{reason}",
+  appProfilesRevokedRetained:
+    "已撤销以下 Profile 的记忆权限，但连接文件没有全部移除，请核对：{profiles}。",
+  appProfileNameUnsupported:
+    "Profile 名称只能包含小写字母、数字和连字符，最长 32 个字符",
+  "apps.autoHostProfilesFailed":
+    "{name} 的以下 Profile 未能自动接入（{profiles}）{reason}。",
 };
 export const settingsChineseMessages = Object.fromEntries(
   Object.keys(settingsSpanishMessages).map((key) => [

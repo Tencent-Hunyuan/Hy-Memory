@@ -732,12 +732,14 @@ export async function createRuntimeService(
         verifyHostRuntime,
         config.hostRuntime?.manifestSha256 ?? "daily",
       );
-      const hosts = (
-        await recallHosts(config.hostHome ?? os.homedir(), {
-          ...process.env,
-          ONE_MEMORY_HOST_HOME: config.hostHome,
-        })
-      ).filter((host) => host.hostId !== "openclaw");
+      const scanHosts = async () =>
+        (
+          await recallHosts(config.hostHome ?? os.homedir(), {
+            ...process.env,
+            ONE_MEMORY_HOST_HOME: config.hostHome,
+          })
+        ).filter((host) => host.hostId !== "openclaw");
+      const hosts = await scanHosts();
       await verifyHostRuntime().then(
         async () => {
           // Every Runtime start after an upgrade, the App's or `memhub
@@ -767,6 +769,9 @@ export async function createRuntimeService(
             connection,
             permissions,
             hosts,
+            // The Runtime outlives the App: a Harness profile created after it
+            // started must not make every later host read fail.
+            discoverHosts: scanHosts,
             layouts: new Map(
               hosts.flatMap((host) =>
                 host.hostId === "claude-code"

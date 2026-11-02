@@ -31,6 +31,8 @@ import {
   hostBridgeAvailable,
   hostConnectionApproved,
   hostConnectionUnknown,
+  sourceConnectionApproved,
+  sourceConnectionIncomplete,
   useRecallHosts,
 } from "./host-state";
 import { subscribePoll } from "./poll-scheduler";
@@ -737,12 +739,7 @@ export function ApplicationsHome({
     failure.kind === "host"
       ? preferences.hostSourceIds.some((id) =>
           sameConnectionHost(id, failure.sourceId),
-        ) &&
-        !hosts.some(
-          (host) =>
-            hostConnectionApproved(host) &&
-            hostMatchesSource(failure.sourceId, host.hostId),
-        )
+        ) && sourceConnectionIncomplete(hosts, failure.sourceId)
       : preferences.syncSourceIds.includes(failure.sourceId) &&
         !imports.sources.some(
           (source) =>
@@ -754,14 +751,22 @@ export function ApplicationsHome({
   const autoFailureText = autoFailures
     .map((failure) =>
       failure.kind === "host"
-        ? t("apps.autoHostFailed", {
-            name: nameOf(failure.sourceId),
-            reason: failure.reason
-              ? t("apps.failureReason", {
-                  reason: localizeFailureReason(failure.reason),
-                })
-              : "",
-          })
+        ? t(
+            failure.profiles
+              ? "apps.autoHostProfilesFailed"
+              : "apps.autoHostFailed",
+            {
+              name: nameOf(failure.sourceId),
+              ...(failure.profiles
+                ? { profiles: failure.profiles.join(", ") }
+                : {}),
+              reason: failure.reason
+                ? t("apps.failureReason", {
+                    reason: localizeFailureReason(failure.reason),
+                  })
+                : "",
+            },
+          )
         : t("apps.autoSyncFailed", {
             name: nameOf(failure.sourceId),
             reason: localizeFailureReason(failure.reason),
@@ -1181,8 +1186,9 @@ export function ApplicationsHome({
                 t,
                 callState === "unavailable",
               ) || sourceSyncActivity(source.source_id, syncHealth, locale, t);
-            const host = hosts.find((item) =>
-              sourceMatchesHost(source.source_id, item.hostId),
+            const recallAllowed = sourceConnectionApproved(
+              hosts,
+              source.source_id,
             );
             return (
               <div className="r6-home-app-row" key={source.source_id}>
@@ -1193,8 +1199,7 @@ export function ApplicationsHome({
                     <p>
                       {source.sync_enabled
                         ? t("apps.syncEnabled")
-                        : host?.installed &&
-                            host.permission?.state === "approved"
+                        : recallAllowed
                           ? t("apps.recallAllowed")
                           : source.authorized
                             ? t("apps.historyAllowed")

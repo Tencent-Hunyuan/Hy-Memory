@@ -1103,6 +1103,23 @@ export const germanMessages: Record<MessageKey, string> = {
     "Der Erinnerungszugriff wurde widerrufen; {name} kann keine Erinnerungen mehr abfragen. Die vollständige Entfernung konnte nicht bestätigt werden; prüfen Sie diese Pfade manuell: {paths}.",
   appRemovalReview:
     "Vollständige Entfernung der Verbindung konnte nicht bestätigt werden. Prüfen Sie diese Pfade manuell: {paths}.",
+  appProfilesLabel: "Profile von {name}",
+  appProfileOn: "{profile}: verbunden",
+  appProfileOff: "{profile}: nicht verbunden",
+  appProfilesHint:
+    "Der Schalter installiert für jedes erkannte Profil die Erinnerungsverbindung und erteilt den Zugriff; beim Ausschalten wird er für alle widerrufen. Solange er eingeschaltet ist, werden neue Profile automatisch verbunden.",
+  appProfilesNone:
+    "Es wurde kein Profil von {name} erkannt. Legen Sie ein Profil an und kehren Sie dann zu dieser Seite zurück.",
+  appProfilesConnectFailed:
+    "Diese Profile konnten nicht verbunden werden: {profiles}. Die übrigen Profile bleiben erhalten. {reason}",
+  appProfilesDisconnectFailed:
+    "Diese Profile konnten nicht getrennt werden und können weiterhin Erinnerungen nutzen: {profiles}. Bitte versuchen Sie es erneut. {reason}",
+  appProfilesRevokedRetained:
+    "Der Erinnerungszugriff dieser Profile wurde widerrufen, aber nicht alle Verbindungsdateien wurden entfernt; prüfen Sie sie: {profiles}.",
+  appProfileNameUnsupported:
+    "Profilnamen dürfen nur Kleinbuchstaben, Ziffern und Bindestriche enthalten, höchstens 32 Zeichen",
+  "apps.autoHostProfilesFailed":
+    "Diese Profile von {name} konnten nicht automatisch verbunden werden ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Die Verbindungs-Anmeldedaten von Cursor haben sich geändert. Beenden Sie Cursor vollständig und öffnen Sie es erneut, bevor Sie eine neue Unterhaltung beginnen.",
   连接其他工具: "Andere Tools verbinden",

@@ -594,9 +594,11 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
     throw new Error("host_permission_store_unavailable");
   }
   if (isQuitting()) return;
-  const hosts = (await recallHosts(app.getPath("home"))).filter(
-    (host) => host.hostId !== "openclaw",
-  );
+  const scanHosts = async () =>
+    (await recallHosts(app.getPath("home"))).filter(
+      (host) => host.hostId !== "openclaw",
+    );
+  const hosts = await scanHosts();
   readDiagnosticSummary = async () => {
     const core = coreSupervisor;
     if (!core) return {};
@@ -876,10 +878,14 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
   });
   ipcMain.handle("one-memory:recall-hosts", async (event) => {
     assertAllowedRenderer(event.senderFrame?.url);
+    // A Harness profile can appear at any time, and which ones exist is only
+    // knowable from the disk. In place, so `requireHost` sees it too. One
+    // directory read per list, next to an IPC round trip per host below.
+    hosts.splice(0, hosts.length, ...(await scanHosts()));
     if (connectionClient?.host) {
       const inspector = createConnectionClient({ dataDir });
       const rows: unknown[] = [];
-      for (const host of hosts) {
+      for (const host of [...hosts]) {
         const inspected = await inspector.host?.({
           hostId: host.hostId,
           operation: "inspect",

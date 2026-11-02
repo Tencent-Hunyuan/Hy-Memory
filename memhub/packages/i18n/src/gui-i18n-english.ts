@@ -926,6 +926,23 @@ const baseEnglishMessages = {
     "Memory access was revoked, so {name} can no longer look up memories. Full removal could not be confirmed; review these paths manually: {paths}.",
   appRemovalReview:
     "Full connection removal could not be confirmed. Review these paths manually: {paths}.",
+  appProfilesLabel: "{name} profiles",
+  appProfileOn: "{profile}: connected",
+  appProfileOff: "{profile}: not connected",
+  appProfilesHint:
+    "The switch installs the memory connection and grants access for every detected profile, and revokes them all when turned off. While it is on, new profiles are connected automatically.",
+  appProfilesNone:
+    "No {name} profile was detected. Create a profile, then come back to this page.",
+  appProfilesConnectFailed:
+    "These profiles could not be connected: {profiles}. The other profiles were kept. {reason}",
+  appProfilesDisconnectFailed:
+    "These profiles could not be disconnected and can still use memories: {profiles}. Please retry. {reason}",
+  appProfilesRevokedRetained:
+    "Memory access was revoked for these profiles, but not all of their connection files were removed; review them: {profiles}.",
+  appProfileNameUnsupported:
+    "profile names may only use lowercase letters, digits and hyphens, up to 32 characters",
+  "apps.autoHostProfilesFailed":
+    "{name} could not connect these profiles automatically ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor's connection credential changed. Fully quit and reopen Cursor before starting a new conversation.",
   连接其他工具: "Connect other tools",

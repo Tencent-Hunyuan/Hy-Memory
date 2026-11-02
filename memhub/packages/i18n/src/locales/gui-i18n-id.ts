@@ -1086,6 +1086,23 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Akses memori telah dicabut, sehingga {name} tidak dapat lagi mencari memori. Penghapusan penuh belum dapat dikonfirmasi; tinjau jalur berikut secara manual: {paths}.",
   appRemovalReview:
     "Penghapusan koneksi penuh belum dapat dikonfirmasi. Tinjau jalur berikut secara manual: {paths}.",
+  appProfilesLabel: "Profil {name}",
+  appProfileOn: "{profile}: terhubung",
+  appProfileOff: "{profile}: belum terhubung",
+  appProfilesHint:
+    "Sakelar ini memasang koneksi memori dan memberi akses untuk setiap profil yang terdeteksi, lalu mencabut semuanya saat dimatikan. Selama sakelar menyala, profil baru akan terhubung otomatis.",
+  appProfilesNone:
+    "Tidak ada profil {name} yang terdeteksi. Buat profil, lalu kembali ke halaman ini.",
+  appProfilesConnectFailed:
+    "Profil berikut tidak dapat dihubungkan: {profiles}. Profil lainnya tetap dipertahankan. {reason}",
+  appProfilesDisconnectFailed:
+    "Profil berikut tidak dapat diputuskan dan masih dapat memakai memori: {profiles}. Coba lagi. {reason}",
+  appProfilesRevokedRetained:
+    "Akses memori untuk profil berikut telah dicabut, tetapi tidak semua file koneksinya dihapus; tinjau: {profiles}.",
+  appProfileNameUnsupported:
+    "nama profil hanya boleh berisi huruf kecil, angka, dan tanda hubung, maksimal 32 karakter",
+  "apps.autoHostProfilesFailed":
+    "Profil {name} berikut tidak dapat terhubung otomatis ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Kredensial koneksi Cursor telah berubah. Keluar sepenuhnya lalu buka kembali Cursor sebelum memulai percakapan baru.",
   连接其他工具: "Hubungkan alat lain",

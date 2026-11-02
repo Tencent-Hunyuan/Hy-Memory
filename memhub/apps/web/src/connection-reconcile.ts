@@ -1,6 +1,10 @@
 import type { SourceResponse } from "@one-memory/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { connectionHostId, sameConnectionHost } from "./connection-hosts";
+import {
+  connectionHostId,
+  isProfileSource,
+  sameConnectionHost,
+} from "./connection-hosts";
 import {
   readConnectionPreferences,
   writeConnectionPreference,
@@ -8,11 +12,13 @@ import {
 import {
   cachedRecallHosts,
   enableHostConnection,
-  hostConnectionApproved,
   hostConnectionUnsupported,
   hostWriteInFlight,
   hostWriteReason,
   matchHost,
+  profileHosts,
+  profileWriteFailures,
+  sourceConnectionIncomplete,
 } from "./host-state";
 import { onClientReset, queryClient } from "./query-client";
 import { latestSource, sourceWriteInFlight } from "./source-state";
@@ -37,6 +43,8 @@ export type AutoConnectFailure = {
   kind: "sync" | "host";
   sourceId: string;
   reason: string | null;
+  /** Which profiles of a per-profile source it was; the others are kept. */
+  profiles?: string[];
 };
 export type AutoConnectState = {
   running: string[];
@@ -53,8 +61,10 @@ queryClient.setQueryDefaults(AUTO_KEY, {
 });
 
 let flight: Promise<AutoConnectFailure[]> | null = null;
+const seenProfiles = new Map<string, Set<string>>();
 onClientReset(() => {
   flight = null;
+  seenProfiles.clear();
 });
 
 function autoState() {
@@ -148,8 +158,26 @@ export async function reconcileConnectionPreferences(
 function hostNeedsApply(sourceId: string) {
   const hosts = cachedRecallHosts();
   if (hosts === undefined) return false;
-  const host = matchHost(hosts, sourceId);
-  return !hostConnectionApproved(host) && !hostConnectionUnsupported(host);
+  return sourceConnectionIncomplete(hosts, sourceId);
+}
+
+/** `attempted` holds one apply per source, which is right until a per-profile
+ * source grows a profile: that one was never tried, so the remembered switch
+ * gets one more apply. A profile that fails is not retried on every poll. */
+function rearmNewProfiles(sourceIds: string[]) {
+  const hosts = cachedRecallHosts();
+  if (hosts === undefined) return;
+  for (const sourceId of sourceIds) {
+    if (!isProfileSource(sourceId)) continue;
+    const current = profileHosts(hosts, sourceId).map((host) => host.hostId);
+    const seen = seenProfiles.get(sourceId);
+    seenProfiles.set(sourceId, new Set([...(seen ?? []), ...current]));
+    if (!seen || current.every((hostId) => seen.has(hostId))) continue;
+    updateAuto((state) => ({
+      ...state,
+      attempted: state.attempted.filter((key) => key !== hostKey(sourceId)),
+    }));
+  }
 }
 
 /** Whether a remembered host is still waiting for (or in) its one apply. */
@@ -191,6 +219,7 @@ export function autoReconcile(
     if (hostConnectionUnsupported(matchHost(hosts, id)))
       writeConnectionPreference("host", id, false);
   const preferences = readConnectionPreferences();
+  rearmNewProfiles(preferences.hostSourceIds);
   const { attempted } = autoState();
   const only = options.only;
   const wantedHosts = only
@@ -256,6 +285,7 @@ export function retryAutoReconcile(options: ReconcileOptions) {
 
 export function resetConnectionReconcile() {
   flight = null;
+  seenProfiles.clear();
   queryClient.removeQueries({ queryKey: AUTO_KEY });
 }
 
@@ -301,12 +331,15 @@ async function runReconcile(
       // Per-app: other hosts keep going. Unsupported never succeeds on retry.
       if (error instanceof Error && error.message === "host_unsupported")
         writeConnectionPreference("host", sourceId, false);
-      else
+      else {
+        const profiles = profileWriteFailures(error);
         failures.push({
           kind: "host",
           sourceId,
           reason: hostWriteReason(error),
+          ...(profiles ? { profiles } : {}),
         });
+      }
     }
   }
   return failures;
