@@ -503,7 +503,7 @@ def _ensure_coding_schema(path: Path) -> None:
         CodingMemoryStore,
     )
 
-    # Relies on the pinned SDK's internals (hy-memory==2.0.12 is pinned exactly).
+    # Relies on the pinned SDK's internals (hy-memory==2.0.13 is pinned exactly).
     store = CodingMemoryStore.__new__(CodingMemoryStore)
     store._db_path = str(path)
     store._conn = None
