@@ -268,20 +268,21 @@ def _is_hermes_target(relative_path: str) -> bool:
     return path.name == "state.db" or (path.suffix == ".jsonl" and "sessions" in path.parts)
 
 
-def hermes_root_conflict(root: Path, other_users_roots: Iterable[Path]) -> str | None:
-    """Why `root` may not be granted beside other users' Hermes roots, or None.
+def hermes_root_is_profiles_container(root: Path) -> bool:
+    """`profiles` itself holds everyone's profiles; it is never one person's history."""
+    return root.name == HERMES_PROFILES_DIRECTORY
 
-    Paths are compared resolved (symlinks followed). `profiles` itself is the
-    container of everyone's profiles, never one person's history. Two roots
-    that are equal or nest would read the same files for two users, except
-    when one is exactly the other's `profiles/<name>`: the scan above never
-    enters `profiles/`, so the two stay apart (`local` on `~/.hermes`, a user
-    on `~/.hermes/profiles/<name>`).
+
+def hermes_root_conflict(mine: Path, other_users_roots: Iterable[Path]) -> str | None:
+    """Why the resolved root `mine` may not be granted beside other users' Hermes roots.
+
+    Paths are compared resolved (symlinks followed; the other users' roots are
+    resolved here). Two roots that are equal or nest would read the same files
+    for two users, except when one is exactly the other's `profiles/<name>`:
+    the scan above never enters `profiles/`, so the two stay apart (`local` on
+    `~/.hermes`, a user on `~/.hermes/profiles/<name>`). None when it may.
     """
-    if root.name == HERMES_PROFILES_DIRECTORY:
-        return HERMES_ROOT_IS_PROFILES_CONTAINER
-    mine = _real(root)
-    if mine.name == HERMES_PROFILES_DIRECTORY:
+    if hermes_root_is_profiles_container(mine):
         return HERMES_ROOT_IS_PROFILES_CONTAINER
     for other in other_users_roots:
         theirs = _real(other)

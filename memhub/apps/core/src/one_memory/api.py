@@ -130,6 +130,7 @@ from one_memory.hy_sdk_types import (
 from one_memory.imports.access import (
     AuthorizedSourceRoot,
     SourceAccessError,
+    resolved_source_root,
     root_identity_matches,
     source_root_identity,
 )
@@ -172,6 +173,7 @@ from one_memory.imports.sources.common import SourceInstallState
 from one_memory.imports.sources.hermes import (
     HERMES_ROOT_IS_PROFILES_CONTAINER,
     hermes_root_conflict,
+    hermes_root_is_profiles_container,
 )
 from one_memory.imports.sources.registry import (
     RootCandidateKind,
@@ -3217,17 +3219,26 @@ def create_app(
         """
         if source_id not in MULTI_USER_SOURCES:
             return
+        if hermes_root_is_profiles_container(root):
+            raise HTTPException(status_code=422, detail=HERMES_ROOT_IS_PROFILES_CONTAINER)
 
-        def others() -> list[Path]:
-            return [
+        def conflict_with_others() -> str | None:
+            try:
+                mine = resolved_source_root(root)
+            except SourceAccessError:
+                # Unreadable or missing: the grant that follows refuses it
+                # with its own code.
+                return None
+            others = [
                 Path(path)
                 for receipt, path in _grant_store(app).grants()
                 if receipt.source_id == source_id
                 and receipt.user_id != user_id
                 and receipt.revoked_at is None
             ]
+            return hermes_root_conflict(mine, others)
 
-        conflict = hermes_root_conflict(root, await asyncio.to_thread(others))
+        conflict = await asyncio.to_thread(conflict_with_others)
         if conflict is not None:
             raise HTTPException(
                 status_code=422 if conflict == HERMES_ROOT_IS_PROFILES_CONTAINER else 409,
