@@ -52,6 +52,7 @@ class TestEmbedInfoLog:
             fake_usage.model_dump.return_value = {"prompt_tokens": 3, "total_tokens": 3}
             fake_item = MagicMock()
             fake_item.embedding = [0.123456789] * 8
+            fake_item.index = 0
             fake_resp = MagicMock()
             fake_resp.model = "text-embedding-test"
             fake_resp.usage = fake_usage
