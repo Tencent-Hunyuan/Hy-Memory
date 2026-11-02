@@ -1727,8 +1727,14 @@ class DurableWriteQueue:
         return updated.rowcount == 1
 
     def release_unstarted(self, job_id: str, *, owner: str | None = None) -> bool:
-        """Return a claimed job to pending when its source was paused pre-HY."""
-        now = datetime.now(UTC).isoformat()
+        """Defer a pre-HY pause without charging an execution attempt.
+
+        Pending claims already honor lease_expires_at. Retain a short not-before
+        deadline there so an unchanged pause cannot hot-loop through the writer,
+        including after a Runtime restart. No model call is replayed here.
+        """
+        now = datetime.now(UTC)
+        retry_at = (now + timedelta(seconds=30)).isoformat()
         where = "job_id=? AND state=? AND hy_invoked=0"
         params: tuple[Any, ...] = (job_id, RUNNING)
         if owner is not None:
@@ -1738,8 +1744,8 @@ class DurableWriteQueue:
             updated = connection.execute(
                 "UPDATE memory_write_jobs SET state=?,lease_owner=NULL,"
                 "attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,"
-                "lease_expires_at=NULL,updated_at=? WHERE " + where,
-                (PENDING, now, *params),
+                "lease_expires_at=?,updated_at=? WHERE " + where,
+                (PENDING, retry_at, now.isoformat(), *params),
             )
         return updated.rowcount == 1
 

@@ -4,6 +4,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Pre-model paused writes wait 30 seconds before they can be claimed again,
+  including after a Runtime restart. Other sources can continue draining, and
+  the pause does not consume an execution attempt.
+
 ## MemHub 1.0.6 — 2026-11-02
 
 Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64
