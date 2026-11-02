@@ -238,19 +238,19 @@ describe("App quit when the service state cannot be determined", () => {
 });
 
 describe("Runtimes quit never touches", () => {
-  it("leaves a Runtime startup refused to adopt, even with the service disabled", async () => {
+  it("leaves a Runtime whose build could not be read, even with the service disabled", async () => {
     const queryServiceState = vi.fn(async () => disabled());
 
     const result = await shutdownRuntime({
       dataDir: "/tmp/runtime-data",
       standalone: true,
       queryServiceState,
-      preserveReason: "runtime-newer-than-app",
+      preserveReason: "runtime-build-unknown",
     });
 
     expect(result).toEqual({
       runtime: "preserved",
-      reason: "runtime-newer-than-app",
+      reason: "runtime-build-unknown",
     });
     expect(stopMock).not.toHaveBeenCalled();
   });

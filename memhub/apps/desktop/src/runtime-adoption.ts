@@ -37,8 +37,10 @@ export type RuntimeAdoption =
   /** Older and transient/CLI-started, or a stray beside an enabled service:
    * stop it gracefully, then install or start the right one. */
   | { action: "stop-then-start"; reason: "app-newer" | "stray-runtime" }
-  /** Newer than this App: never downgrade, never start a second one. */
-  | { action: "refuse" };
+  /** Newer than this App: use it as it is, silently. Never stopped or
+   * downgraded at startup and never joined by a second Runtime; quit treats
+   * it like any adopted Runtime. */
+  | { action: "adopt-newer" };
 
 /** Compare by build number, then by commit when both sides know theirs. */
 export function compareRuntimeBuild(
@@ -78,7 +80,7 @@ export function decideRuntimeAdoption(input: {
   if (running === null) return { action: "start" };
   let relation = compareRuntimeBuild(input.app, running.build);
   if (relation === "same" && input.installedChanged) relation = "app-newer";
-  if (relation === "runtime-newer") return { action: "refuse" };
+  if (relation === "runtime-newer") return { action: "adopt-newer" };
   if (relation === "unknown") return { action: "adopt-unverified" };
   const serviceJob = service.jobPid !== null && service.jobPid === running.pid;
   if (relation === "app-newer") {
@@ -144,18 +146,13 @@ export async function reconcileRunningRuntime(
       await dependencies.stopRuntime();
       return { decision, adopted: false, preserveReason: null };
     case "adopt":
+    case "adopt-newer":
       return { decision, adopted: true, preserveReason: null };
     case "adopt-unverified":
       return {
         decision,
         adopted: true,
         preserveReason: "runtime-build-unknown",
-      };
-    case "refuse":
-      return {
-        decision,
-        adopted: true,
-        preserveReason: "runtime-newer-than-app",
       };
   }
 }

@@ -145,8 +145,8 @@ let runtimeSupervisor: RuntimeSupervisor | null = null;
 let runtimeDataDir: string | null = null;
 // Whether quitting stops the Runtime is asked of the service manager at quit
 // time (`currentRuntimeServiceState`), never remembered from startup. The one
-// startup fact kept is a Runtime this App refused to adopt: it never stops one
-// whose build it could not prove to be its own.
+// startup fact kept is a Runtime whose build could not be read: this App never
+// stops one it could not compare with its own.
 let preserveRuntimeOnQuitReason: string | null = null;
 let runtimeServiceManagedByApp = false;
 let disposeTray: (() => void) | null = null;
@@ -1278,9 +1278,10 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         if (frozen?.frozen !== undefined) throw new Error(frozen.code);
       }
       // One Runtime per data dir. A Runtime already serving it is adopted
-      // only when it is this App's build; an older one is replaced (through
-      // launchd when it is the service's job), a newer one is never
-      // downgraded, and one whose build cannot be read is left alone.
+      // when it is this App's build or newer (silently; a newer one is never
+      // stopped or downgraded at startup); an older one is replaced (through
+      // launchd when it is the service's job), and one whose build cannot be
+      // read is adopted but never stopped.
       const reconciled = await reconcileRunningRuntime({
         app: {
           ...(packagedBuildNumber === undefined
@@ -1304,19 +1305,11 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
         stopRuntime: () => stopRuntimeProcess({ dataDir }),
         log: ({ decision, service, running }) =>
           diagnostics.log({
-            level:
-              decision.action === "refuse" ||
-              decision.action === "adopt-unverified"
-                ? "warn"
-                : "info",
+            level: decision.action === "adopt-unverified" ? "warn" : "info",
             component: "desktop.stable_runtime",
             event: "stable_runtime.adoption",
             outcome:
-              decision.action === "refuse"
-                ? "blocked"
-                : decision.action === "adopt-unverified"
-                  ? "degraded"
-                  : "succeeded",
+              decision.action === "adopt-unverified" ? "degraded" : "succeeded",
             details: {
               action: decision.action,
               reason:
@@ -1334,9 +1327,6 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           }),
       });
       preserveRuntimeOnQuitReason = reconciled.preserveReason;
-      if (reconciled.decision.action === "refuse") {
-        throw new Error("runtime_newer_than_app");
-      }
       if (reconciled.decision.action === "adopt-unverified") {
         void dialog
           .showMessageBox({
@@ -1792,7 +1782,7 @@ if (desktopVersion !== null) {
         },
         readRuntimeHosting: async () => {
           if (!runtimeDataDir || !app.isPackaged) return "unknown";
-          // A Runtime this App refused to adopt is never stopped by it.
+          // A Runtime whose build could not be read is never stopped by it.
           if (preserveRuntimeOnQuitReason) return "unknown";
           const service = await currentRuntimeServiceState();
           return service.state === "enabled"

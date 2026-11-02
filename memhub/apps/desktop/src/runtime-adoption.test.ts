@@ -189,15 +189,30 @@ describe("App start adopts or replaces a running Runtime", () => {
     ).toEqual({ action: "replace-via-service" });
   });
 
-  it("never downgrades a newer Runtime and never stops it", async () => {
+  it("adopts a newer Runtime silently and leaves quit to the service state", async () => {
     const { result, stopRuntime } = reconcile({
       running: running({ buildNumber: 40, commit: null }, 999),
       service: disabled,
     });
+    // No special quit pass: with the service disabled, quit stops it like any
+    // adopted Runtime; with it enabled, quit preserves it.
     await expect(result).resolves.toEqual({
-      decision: { action: "refuse" },
+      decision: { action: "adopt-newer" },
       adopted: true,
-      preserveReason: "runtime-newer-than-app",
+      preserveReason: null,
+    });
+    expect(stopRuntime).not.toHaveBeenCalled();
+  });
+
+  it("never stops or downgrades a newer Runtime at startup, even beside an enabled service", async () => {
+    const { result, stopRuntime } = reconcile({
+      running: running({ buildNumber: 40, commit: null }, 999),
+      service: enabled(4321),
+      installedChanged: true,
+    });
+    await expect(result).resolves.toMatchObject({
+      decision: { action: "adopt-newer" },
+      adopted: true,
     });
     expect(stopRuntime).not.toHaveBeenCalled();
   });

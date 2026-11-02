@@ -12,8 +12,9 @@ export interface RuntimeShutdownOptions {
   /** Asks the service manager whether the background service is on. Called
    * at quit time, every time: what startup saw may no longer be true. */
   queryServiceState: () => Promise<RuntimeServiceState>;
-  /** Set when startup refused to adopt the running Runtime (its build is
-   * newer than this App, or unknown). This App never stops such a Runtime. */
+  /** Set when startup adopted a Runtime whose build it could not read. This
+   * App never stops such a Runtime. A newer Runtime gets no such pass: it
+   * follows the service state like any adopted Runtime. */
   preserveReason?: string | null;
   stopRuntimes?: (options: {
     dataDir: string;
