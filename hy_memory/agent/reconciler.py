@@ -136,10 +136,10 @@ class ReconcileResult:
     ops: List[ReconcileOp] = field(default_factory=list)
     success: bool = True
     error: Optional[str] = None
-    # True = reconcile 失败后走了「全部 ADD」兜底（见 _fallback_add_ops）。
-    # 结果仍然可用（success=True），但没有做过去重/演化判定，可能引入重复。
-    degraded: bool = False
-    degraded_reason: Optional[str] = None
+    # success=False 时的稳定失败码：LLM_UNAVAILABLE / EMPTY_RESPONSE /
+    # JSON_PARSE_FAILED / RECONCILE_EXCEPTION。失败时 ops 恒为空：writer 什么都
+    # 不落库，整次写入报失败，调用方换个 request_id 重跑即可（reconcile 会判重）。
+    error_code: Optional[str] = None
     # reconcile 链路 LLM token 消耗（search-query + reconcile 两次 LLM 调用之和）
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -151,7 +151,7 @@ class ReconcileResult:
     # 用 content 作 key 而不是 node_id：新记忆此刻还没入库、没有 id。
     candidate_scores: Dict[str, List[Tuple[str, float]]] = field(default_factory=dict)
     # reconcile 候选检索已经为每条新 memory 算过 embedding。把原始文本对应向量交回
-    # writer，ADD-all / degraded ADD 可直接落库，避免同一事实再次请求 embedding。
+    # writer，原文不变的 ADD 可直接落库，避免同一事实再次请求 embedding。
     # 仅按完全相同 content 复用；LLM 改写后的 UPDATE/SUPERSEDE 会重新计算，防止错配。
     new_memory_embeddings: Dict[str, List[float]] = field(default_factory=dict)
 
@@ -393,49 +393,6 @@ class MemoryReconciler:
             logger.warning(f"[reconciler] search query generation failed: {e}")
 
         return [], None
-
-    @staticmethod
-    def _fallback_add_ops(
-        new_memories: List[str],
-        new_memories_with_meta: Optional[List[Dict]] = None,
-    ) -> List[ReconcileOp]:
-        """reconcile 彻底失败时的兜底：把抽取结果**原样全部 ADD**。
-
-        为什么必须有这个兜底：reconcile 只是决定「新事实和旧记忆怎么合」。它挂了（网关 500、
-        JSON 解析不出）不代表抽取结果没价值 —— 此前的行为是把一整批完好的事实**全部丢弃**，
-        线上实测因此丢掉过整块内容（含评测题的正确答案）。宁可留重复也不要丢内容：
-        重复还能被后续 dedup / reconcile 收拾，丢了就永远找不回来。
-        """
-        metas = new_memories_with_meta or []
-        by_content = {
-            (m.get("content") or ""): m for m in metas if isinstance(m, dict)
-        }
-        ops: List[ReconcileOp] = []
-        for text in new_memories:
-            if not text:
-                continue
-            meta = by_content.get(text) or {}
-            ops.append(ReconcileOp(
-                op="ADD",
-                content=text,
-                layer=meta.get("layer"),
-                tags=meta.get("tags") or [],
-                owner=meta.get("owner"),
-                topic_paths=meta.get("topic_paths") or [],
-                event_facet=meta.get("event_facet") or {},
-                topic_assignments=meta.get("topic_assignments") or [],
-                topic_paths_provided=bool(
-                    meta.get("topic_paths_provided", "topic_paths" in meta)
-                ),
-                event_facet_provided=bool(
-                    meta.get("event_facet_provided", "event_facet" in meta)
-                ),
-                topic_assignments_provided=bool(meta.get(
-                    "topic_assignments_provided", "topic_assignments" in meta,
-                )),
-                reason="reconcile unavailable → stored as-is (degraded)",
-            ))
-        return ops
 
     async def reconcile(
         self,
@@ -1088,8 +1045,8 @@ class MemoryReconciler:
                     )
                 except Exception as e:
                     # LLM 彻底不可用（provider 已按 max_retries 重试过，网关 500 /
-                    # 连接错误等）。**不能让它冒泡** —— 冒泡会让整批抽取结果连带丢弃。
-                    # 交给下面的 ADD-all 兜底。
+                    # 连接错误等）。不冒泡：下面统一记 RECONCILE 失败日志，再返回
+                    # success=False —— writer 不落任何新记忆，整次写入报失败。
                     _llm_error = f"{type(e).__name__}: {e}"
                     logger.warning(f"[reconciler] RECONCILE LLM unavailable: {_llm_error}")
                     break
@@ -1097,7 +1054,7 @@ class MemoryReconciler:
                 _tok_pt += response.prompt_tokens
                 _tok_ct += response.completion_tokens
                 _tok_total += response.tokens_used
-                raw_response = response.content
+                raw_response = response.content or ""
                 ops = self._parse_ops(raw_response)
                 ops = enforce_time_order(ops, current_time, candidate_map)
                 ops = self._inherit_exact_input_structure(
@@ -1106,7 +1063,9 @@ class MemoryReconciler:
                 if _structure_metadata_on:
                     ops = self._resolve_structure_references(ops, candidate_map)
 
-                _is_empty_array = self._strip_code_fence(raw_response) in ("[]", "")
+                # 只有字面量 "[]" 才是「模型判定无需任何操作」。HTTP 200 但 content
+                # 为空不是决策，是失败：按 EMPTY_RESPONSE 处理，不能当成 0 条成功。
+                _is_empty_array = self._strip_code_fence(raw_response) == "[]"
                 if ops or _is_empty_array:
                     _parse_ok = True
                     break
@@ -1136,7 +1095,7 @@ class MemoryReconciler:
                     error_msg = (
                         f"RECONCILE LLM returned empty response after {_n_attempts} attempts"
                     )
-                    error_code = "EMPTY_RESPONSE" 
+                    error_code = "EMPTY_RESPONSE"
                 logger.warning(f"[reconciler] {error_msg}")
 
                 if cache and request_id:
@@ -1153,14 +1112,13 @@ class MemoryReconciler:
                                 {
                                     "error": error_code,
                                     "message": error_msg,
-                                    "fallback": "ADD_ALL",
-                                    "fallback_count": len(new_memories or []),
+                                    "stored": 0,
                                 },
                                 ensure_ascii=False,
                             ),
                             elapsed_ms=recon_elapsed,
-                            # LLM 彻底不可用时 response 是 None —— 这行本身会抛
-                            # AttributeError，而它正好在兜底路径上，会把兜底也一起废掉
+                            # LLM 彻底不可用时 response 是 None —— 直接取属性会抛
+                            # AttributeError，把失败日志本身也废掉
                             prompt_tokens=getattr(response, "prompt_tokens", 0) or 0,
                             completion_tokens=getattr(response, "completion_tokens", 0) or 0,
                             total_tokens=getattr(response, "tokens_used", 0) or 0,
@@ -1170,22 +1128,16 @@ class MemoryReconciler:
                             f"[reconciler] store failed RECONCILE log failed: {e}"
                         )
 
-                # 兜底：JSON 解析不出来不等于抽取结果没价值 —— 全部 ADD，别丢内容。
-                _fb = self._fallback_add_ops(new_memories, new_memories_with_meta)
-                logger.warning(
-                    f"[reconciler] falling back to ADD-all: {len(_fb)} memories "
-                    f"({error_code})"
-                )
+                # 不做 ADD-all 兜底：没经过判重 / 演化的整批 ADD 会在重跑时产生重复，
+                # 而且调用方看到 success 就不会重试。这里报失败、不落库，由调用方重跑。
                 return ReconcileResult(
-                    ops=_fb,
-                    success=bool(_fb),
-                    error=None if _fb else error_msg,
-                    degraded=bool(_fb),
-                    degraded_reason=error_code,
+                    ops=[],
+                    success=False,
+                    error=error_msg,
+                    error_code=error_code,
                     prompt_tokens=_tok_pt,
                     completion_tokens=_tok_ct,
                     total_tokens=_tok_total,
-                    new_memory_embeddings=new_memory_embeddings,
                 )
 
             # 写 RECONCILE pipeline log
@@ -1250,20 +1202,14 @@ class MemoryReconciler:
 
         except Exception as e:
             logger.error(f"[reconciler] failed: {e}", exc_info=True)
-            # 兜底同样适用于「reconcile 链路任意环节炸了」（候选检索、embed、
-            # prompt 组装…）。此前这里返回 ops=[] → writer 直接丢弃整批抽取结果。
-            _fb = self._fallback_add_ops(new_memories, new_memories_with_meta)
-            if _fb:
-                logger.warning(
-                    f"[reconciler] falling back to ADD-all after unexpected error: "
-                    f"{len(_fb)} memories"
-                )
-                return ReconcileResult(
-                    ops=_fb, success=True,
-                    degraded=True, degraded_reason=f"EXCEPTION:{type(e).__name__}",
-                    new_memory_embeddings=dict(new_memory_embeddings or {}),
-                )
-            return ReconcileResult(ops=[], success=False, error=str(e))
+            # reconcile 链路任意环节炸了（候选检索、embed、prompt 组装…）：此时还
+            # 没有任何新记忆落库，报失败让整次写入可以干净地重跑。
+            return ReconcileResult(
+                ops=[],
+                success=False,
+                error=f"{type(e).__name__}: {e}",
+                error_code="RECONCILE_EXCEPTION",
+            )
 
     @staticmethod
     def _inherit_exact_input_structure(

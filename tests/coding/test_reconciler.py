@@ -6,7 +6,7 @@ import json
 import pytest
 
 from hy_memory.coding.reconciler import CodingMemoryReconciler
-from hy_memory.coding.types import CodingMemory, CodingMemoryDraft
+from hy_memory.coding.types import CodingMemory, CodingMemoryDraft, CodingWriteError
 
 from tests.coding._helpers import MockLLMProvider, FailingLLMProvider
 
@@ -217,12 +217,38 @@ class TestReconcilerActions:
 
 @pytest.mark.asyncio
 class TestReconcilerFallback:
-    async def test_llm_failure_fallback_add_all(self, coding_store, mock_embed):
-        rec = CodingMemoryReconciler(coding_store, mock_embed, FailingLLMProvider())
+    @pytest.mark.parametrize("llm,cause", [
+        (FailingLLMProvider(), "LLM_UNAVAILABLE"),
+        (MockLLMProvider(""), "EMPTY_RESPONSE"),
+        (MockLLMProvider("not json"), "JSON_PARSE_FAILED"),
+        (MockLLMProvider("{}"), "JSON_PARSE_FAILED"),
+        (MockLLMProvider('{"ops": [{"draft_idx": 0, "action": "MERGE"}]}'),
+         "JSON_PARSE_FAILED"),
+    ])
+    async def test_decision_failure_raises_and_stores_nothing(
+        self, coding_store, mock_embed, llm, cause,
+    ):
+        """LLM 失败 / 空回复 / 解析不出不再回退成 ADD-all：抛 RECONCILE_FAILED。"""
+        rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
         d1 = CodingMemoryDraft(task="T1", solution="S", user_id="u1")
         d2 = CodingMemoryDraft(task="T2", solution="S", user_id="u1")
-        ops = await rec.reconcile([d1, d2])
-        assert len(ops) == 2 and all(op.action == "ADD" for op in ops)
+        with pytest.raises(CodingWriteError) as exc:
+            await rec.reconcile([d1, d2])
+        assert exc.value.error_code == "RECONCILE_FAILED"
+        assert exc.value.cause == cause
+        assert await coding_store.list_user_tasks("u1") == []
+
+    async def test_valid_empty_ops_is_a_no_change_decision(
+        self, coding_store, mock_embed,
+    ):
+        """{"ops": []} 与 chat 的 [] 同义：成功、什么都不存。"""
+        rec = CodingMemoryReconciler(
+            coding_store, mock_embed, MockLLMProvider(_llm_resp([])),
+        )
+        d = CodingMemoryDraft(task="T", solution="S", user_id="u1")
+        ops = await rec.reconcile([d])
+        assert ops == []
+        assert await coding_store.list_user_tasks("u1") == []
 
     async def test_missing_draft_idx_fallback_add(self, coding_store, mock_embed):
         # LLM 只处理了 draft 0，draft 1 漏掉
@@ -251,9 +277,13 @@ class TestReconcilerFallback:
         ops = await rec.reconcile([])
         assert ops == []
 
-    async def test_garbage_llm_output_fallback(self, coding_store, mock_embed):
-        rec = CodingMemoryReconciler(coding_store, mock_embed, MockLLMProvider("not json"))
+    async def test_plan_does_not_store(self, coding_store, mock_embed):
+        """plan() 只做检索 + 决策；apply() 之前库里什么都没有。"""
+        llm = MockLLMProvider(_llm_resp([{"draft_idx": 0, "action": "ADD"}]))
+        rec = CodingMemoryReconciler(coding_store, mock_embed, llm)
         d = CodingMemoryDraft(task="T", solution="S", user_id="u1")
-        ops = await rec.reconcile([d])
-        # 解析失败 → fallback ADD
-        assert any(op.action == "ADD" for op in ops)
+        plan = await rec.plan([d])
+        assert [op.action for op in plan.ops] == ["ADD"]
+        assert await coding_store.list_user_tasks("u1") == []
+        await rec.apply(plan)
+        assert await coding_store.list_user_tasks("u1") == ["T"]

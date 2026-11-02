@@ -128,6 +128,14 @@ result = client.add(
 双层 reconcile 操作、`experience_ids`、`fact_ids` 等字段，完整结构见
 [scene_coding_usage.md](scene_coding_usage.md#4-返回结构)。
 
+写入失败时 `success=False`，`error_code` 为 HTTP 风格的整数，`agent_error_code` 给出稳定
+失败码。pro / ultra 的 reconcile（新事实与已有记忆判重、合并）模型调用失败、返回空
+content 或回复解析不出时，`add` 与 `add_extracted` 都报 `agent_error_code="RECONCILE_FAILED"`，
+具体原因在 `reconcile_error_code`（`LLM_UNAVAILABLE` / `EMPTY_RESPONSE` /
+`JSON_PARSE_FAILED` / `RECONCILE_EXCEPTION`）。此时本次一条新记忆都不落库，`add` 已写入
+的原始对话按抽取失败同样回滚（`l1_rollback.retry_safe=True`）；模型恢复后换一个
+`request_id` 重跑即可。`RECONCILE_ENABLED=false` 时不调用 reconcile，直接写入。
+
 `mode="lite"` 不执行 LLM 抽取，写入内容直接以 `L1_RAW` 形式保存。lite 的 Search 是
 严格的 raw-only 向量检索：无论调用方传入什么 `layers`、`scene` 或 `search_mode`，都只
 召回 `L1_RAW`，不会进入 working/coding、Schema 或 Intention 链路，也不会调用场景判断

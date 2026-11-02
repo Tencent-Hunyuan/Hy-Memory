@@ -33,7 +33,7 @@ from .preproc import (
     prepare_extractor_messages,
 )
 from .judge import _store_coding_log
-from .types import CodingMemoryDraft, WorkingFactDraft
+from .types import CodingMemoryDraft, CodingWriteError, WorkingFactDraft
 
 
 
@@ -217,6 +217,10 @@ class CodingMemoryExtractor:
         Returns:
             (经验草稿, 事实草稿)。两层都可能为空。只有显式启用
             verbatim_fallback_enabled 时，模型没产出 fact 才调用 _verbatim_fact。
+
+        Raises:
+            CodingWriteError: 未开启原文兜底时，LLM 调用失败（LLM_ERROR）、返回空
+                content（EMPTY_RESPONSE）或回复解析不出 JSON 对象（JSON_PARSE_FAILED）。
         """
         if not messages:
             return [], []
@@ -268,8 +272,9 @@ class CodingMemoryExtractor:
             )
         except Exception as e:
             logger.warning(f"[coding-extract] LLM call failed: {e}")
-            # 经验层不兜底。事实层原文兜底也默认关闭，避免 assistant/tool 轨迹被
-            # 当作 statement 直接展示；仅在配置显式开启时保留旧行为。
+            # 经验层不兜底。事实层原文兜底默认关闭，避免 assistant/tool 轨迹被
+            # 当作 statement 直接展示；关闭时 LLM 失败抛 CodingWriteError(LLM_ERROR)，
+            # 整次写入报失败，而不是「成功、0 条」。仅在配置显式开启时保留旧行为。
             verbatim = (
                 self._verbatim_fact(messages)
                 if self.verbatim_fallback_enabled else None
@@ -296,8 +301,32 @@ class CodingMemoryExtractor:
                 ),
                 elapsed_ms=round((time.perf_counter() - _t0) * 1000, 2),
             )
+            if not self.verbatim_fallback_enabled:
+                raise CodingWriteError(
+                    "LLM_ERROR",
+                    f"coding extract LLM call failed: {type(e).__name__}: {e}",
+                ) from e
             return [], ([verbatim] if verbatim else [])
         _elapsed = round((time.perf_counter() - _t0) * 1000, 2)
+
+        # 模型答了且没有可记的内容（如 {"experiences": [], "fact": null}）是正常的空
+        # 抽取；200 但 content 为空、或回复解析不出 JSON 对象，是模型失败，不能当成
+        # 「成功、0 条」。原文兜底显式开启时沿用旧行为（交给下面的 verbatim 兜底）。
+        failure = self._output_failure(resp.content)
+        if failure is not None and not self.verbatim_fallback_enabled:
+            code, message = failure
+            await _store_coding_log(
+                self.cache, request_id=request_id, user_id=user_id, agent_id=agent_id,
+                session_id=session_id or "", step="CODING_EXTRACT", prompt=prompt,
+                response=resp.content or "",
+                parsed=json.dumps(
+                    {"drafts": 0, "error": code, "message": message},
+                    ensure_ascii=False,
+                ),
+                elapsed_ms=_elapsed, prompt_tokens=resp.prompt_tokens,
+                completion_tokens=resp.completion_tokens, total_tokens=resp.tokens_used,
+            )
+            raise CodingWriteError(code, message)
 
         raw_experiences, raw_facts = self._parse_output(resp.content)
 
@@ -478,12 +507,22 @@ class CodingMemoryExtractor:
         return "\n".join(rows)
 
     @classmethod
-    def _parse_output(
-        cls, text: str
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """宽松解析 LLM 输出 JSON，返回 (experiences, facts) 两个原始列表。"""
+    def _output_failure(cls, text: Optional[str]) -> Optional[Tuple[str, str]]:
+        """回复本身是失败时返回 (error_code, message)；正常（含空抽取）返回 None。"""
+        if not (text or "").strip():
+            return "EMPTY_RESPONSE", "coding extract LLM returned empty response"
+        if cls._load_output_object(text) is None:
+            return (
+                "JSON_PARSE_FAILED",
+                f"coding extract output is not a JSON object ({len(text)} chars)",
+            )
+        return None
+
+    @staticmethod
+    def _load_output_object(text: Optional[str]) -> Optional[Dict[str, Any]]:
+        """宽松解析 LLM 输出，返回顶层 JSON 对象；解析不出返回 None。"""
         if not text:
-            return [], []
+            return None
         s = text.strip()
         # 去 markdown fence
         if s.startswith("```"):
@@ -509,8 +548,17 @@ class CodingMemoryExtractor:
                     obj = json.loads(s[start: end + 1])
                 except Exception:
                     obj = None
+        return obj if isinstance(obj, dict) else None
 
-        if not isinstance(obj, dict):
+    @classmethod
+    def _parse_output(
+        cls, text: str
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """宽松解析 LLM 输出 JSON，返回 (experiences, facts) 两个原始列表。"""
+        if not text:
+            return [], []
+        obj = cls._load_output_object(text)
+        if obj is None:
             logger.warning(
                 f"[coding-extract] failed to parse output ({len(text or '')} chars)"
             )

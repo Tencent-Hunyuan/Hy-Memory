@@ -107,5 +107,5 @@ L1_RAW 保存的内容使用上述渲染格式。历史回读时：
 ```bash
 python -m pytest -q \
   tests/test_multi_speaker_format.py \
-  tests/test_reconcile_fallback.py
+  tests/test_reconcile_failure.py
 ```
