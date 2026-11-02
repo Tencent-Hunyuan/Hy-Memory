@@ -33,6 +33,7 @@
 ## 最新动态
 
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **模型开源** 在 Hugging Face 发布 **Hy-Memory-30B-A3B** 的 **FP8**（**[Hy-Memory-30B-A3B-FP8](https://huggingface.co/tencent/Hy-Memory-30B-A3B-FP8)**）与 **GGUF**（**[Hy-Memory-30B-A3B-GGUF](https://huggingface.co/tencent/Hy-Memory-30B-A3B-GGUF)**）量化版本模型！
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-11]**: 📦 **正式发布 [MemHub v1.0.6](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.6)**：界面支持 11 种语言，新增记忆模式（lite / pro / ultra，ultra 每晚自动整理），可安全切换嵌入模型，CLI 和 API 支持多用户，升级更可靠；底层使用 **`hy-memory==2.0.11`**。详见发布说明。
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **正式发布 [MemHub v1.0.5](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.5)**：支持中文、英文和西班牙语界面，可通过一次性配对码连接更多自定义 Harness，并优化了记忆浏览、搜索、启动和异常恢复；底层使用 **`hy-memory==2.0.8`**。详见发布说明。
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **正式发布 [MemHub v1.0.4](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.4)** 与 **[memhub-cli 1.0.5](https://www.npmjs.com/package/memhub-cli/v/1.0.5)**，提供已签名的 macOS 桌面应用及经过验证的 macOS/Linux Runtime！
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **正式发布** **Hy Memory 2.0 (`hy-memory==2.0.4`)**（已上线 [PyPI](https://pypi.org/project/hy-memory/2.0.4/)），并开源 **Hy-Memory** monorepo 与 **[MemHub](memhub/README.md)**！
