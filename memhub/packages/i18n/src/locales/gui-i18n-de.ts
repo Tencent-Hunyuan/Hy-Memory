@@ -713,6 +713,8 @@ export const germanMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " (in Entwicklung nicht verfügbar)",
   nativeOpen: "{product} öffnen",
   nativeQuit: "{product} beenden (Hintergrunddienst läuft weiter)",
+  nativeQuitStopsService:
+    "{product} beenden (Gedächtnisdienst wird ebenfalls beendet)",
   nativeLoginError:
     "Starteinstellung bei Anmeldung konnte nicht geändert werden. Bitte wiederholen Sie den Vorgang.",
   nativeMoveTitle: "Verschieben Sie MemHub zuerst nach „Programme“",

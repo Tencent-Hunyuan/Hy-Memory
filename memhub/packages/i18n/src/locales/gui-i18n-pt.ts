@@ -718,6 +718,8 @@ export const portugueseMessages: Record<MessageKey, string> = {
   nativeOpen: "Abrir {product}",
   nativeQuit:
     "Sair do {product} (o serviço em segundo plano continua em execução)",
+  nativeQuitStopsService:
+    "Sair do {product} (o serviço de memória também é encerrado)",
   nativeLoginError:
     "Não foi possível alterar a configuração de abertura ao iniciar sessão. Tente novamente.",
   nativeMoveTitle: "Mova o MemHub para Aplicativos primeiro",

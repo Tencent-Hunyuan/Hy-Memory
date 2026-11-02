@@ -678,6 +678,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " (개발 모드에서 사용 불가)",
   nativeOpen: "{product} 열기",
   nativeQuit: "{product} 종료(백그라운드 서비스는 계속 실행)",
+  nativeQuitStopsService: "{product} 종료(메모리 서비스도 중지)",
   nativeLoginError:
     "로그인 시 실행 설정을 변경하지 못했습니다. 다시 시도하세요.",
   nativeMoveTitle: "먼저 MemHub를 응용 프로그램 폴더로 옮기세요",

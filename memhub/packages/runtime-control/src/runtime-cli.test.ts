@@ -24,6 +24,7 @@ import {
   resolveRuntimeCliConfig,
   revalidateHostRuntime,
   runRuntimeCli,
+  runtimeBuildIdentity,
   waitForAppRemoval,
 } from "./runtime-cli.js";
 import {
@@ -1028,5 +1029,20 @@ describe("Runtime CLI service plan", () => {
     expect(JSON.parse(output).blocked_reason).toBe(
       "windows_acl_and_user_service_not_verified",
     );
+  });
+});
+
+describe("the build a Runtime publishes in its receipt", () => {
+  it("is its build number and commit, and null where it does not know", () => {
+    expect(
+      runtimeBuildIdentity({ buildNumber: "38", commit: "ABCDEF1234" }),
+    ).toEqual({ buildNumber: 38, commit: "abcdef1234" });
+    expect(runtimeBuildIdentity(undefined)).toEqual({
+      buildNumber: null,
+      commit: null,
+    });
+    expect(
+      runtimeBuildIdentity({ buildNumber: "dev", commit: "unknown" }),
+    ).toEqual({ buildNumber: null, commit: null });
   });
 });

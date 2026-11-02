@@ -699,6 +699,8 @@ export const indonesianMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " (tidak tersedia saat pengembangan)",
   nativeOpen: "Buka {product}",
   nativeQuit: "Keluar dari {product} (layanan latar belakang tetap berjalan)",
+  nativeQuitStopsService:
+    "Keluar dari {product} (layanan memori juga dihentikan)",
   nativeLoginError:
     "Tidak dapat mengubah pengaturan mulai saat masuk. Silakan coba lagi.",
   nativeMoveTitle: "Pindahkan MemHub ke Aplikasi terlebih dahulu",

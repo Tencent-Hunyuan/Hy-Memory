@@ -545,6 +545,7 @@ const baseEnglishMessages = {
   nativeDevelopmentUnavailable: " (unavailable in development)",
   nativeOpen: "Open {product}",
   nativeQuit: "Quit {product} (background service keeps running)",
+  nativeQuitStopsService: "Quit {product} (also stops the memory service)",
   nativeLoginError: "Could not change the login startup setting. Please retry.",
   nativeMoveTitle: "Move MemHub to Applications first",
   nativeMoveDetail:
