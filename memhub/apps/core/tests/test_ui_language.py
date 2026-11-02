@@ -2,8 +2,7 @@
 
 The owner's rule: zh-Hans, or no explicit choice, passes no language, so the
 SDK keeps detecting zh/en exactly as before; every other code (en included)
-is passed as `MemoryConfig.language`. The pinned SDK may not have that field
-yet: then nothing is passed and that is logged once. A change rebuilds the
+is passed as `MemoryConfig.language` (hy-memory 2.0.11). A change rebuilds the
 handles the way a mode or feature change does, and the language never touches
 the vector collection identity.
 """
@@ -13,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,31 +32,10 @@ TOKEN = "ui-language-test"
 PASSED = ("en", "zh-Hant", "ja", "es", "de", "pt", "fr", "ko", "ru", "id")
 
 
-@dataclasses.dataclass
-class _MemoryConfigWithLanguage(hy_sdk_runtime.MemoryConfig):
-    """The released SDK's `MemoryConfig`, which adds `language`."""
-
-    language: str | None = None
-
-
-@pytest.fixture
-def sdk_with_language(monkeypatch):
-    monkeypatch.setattr(hy_sdk_runtime, "MemoryConfig", _MemoryConfigWithLanguage)
-
-
-@pytest.fixture
-def sdk_without_language(monkeypatch):
-    """The pinned SDK, whose `MemoryConfig` has no `language` yet."""
-    monkeypatch.setattr(hy_sdk_runtime, "_LANGUAGE_UNSUPPORTED_LOGGED", False)
-
-    @dataclasses.dataclass
-    class Pinned(hy_sdk_runtime.MemoryConfig):
-        def __getattribute__(self, name):
-            if name == "language":
-                raise AttributeError(name)
-            return super().__getattribute__(name)
-
-    monkeypatch.setattr(hy_sdk_runtime, "MemoryConfig", Pinned)
+@pytest.fixture(autouse=True)
+def _clean_sdk_env(monkeypatch):
+    """The SDK's own `MEMORY_LANGUAGE` feeds its default; tests start without it."""
+    monkeypatch.delenv("MEMORY_LANGUAGE", raising=False)
 
 
 def _config(tmp_path: Path, language: str | None):
@@ -92,19 +69,19 @@ def test_only_zh_hans_and_no_choice_leave_the_sdk_to_detect() -> None:
         assert sdk_language(code) == code
 
 
-def test_zh_hans_and_no_choice_build_the_config_of_before(tmp_path, sdk_with_language) -> None:
+def test_zh_hans_and_no_choice_build_the_config_of_before(tmp_path) -> None:
     before = repr(dataclasses.asdict(_config(tmp_path, None)))
     assert _config(tmp_path, None).language is None
     assert repr(dataclasses.asdict(_config(tmp_path, sdk_language("zh-Hans")))) == before
 
 
-@pytest.mark.parametrize("code", ("en", "ja"))
-def test_a_passed_code_reaches_the_memory_config(tmp_path, sdk_with_language, code) -> None:
+@pytest.mark.parametrize("code", PASSED)
+def test_a_passed_code_reaches_the_memory_config(tmp_path, code) -> None:
     config = _config(tmp_path, sdk_language(code))
     assert config.language == code
 
 
-def test_the_language_never_changes_the_collection_identity(tmp_path, sdk_with_language) -> None:
+def test_the_language_never_changes_the_collection_identity(tmp_path) -> None:
     def identity(config):
         return (
             dataclasses.asdict(config.vector_store),
@@ -117,24 +94,6 @@ def test_the_language_never_changes_the_collection_identity(tmp_path, sdk_with_l
     baseline = identity(_config(tmp_path, None))
     for code in PASSED:
         assert identity(_config(tmp_path, code)) == baseline
-
-
-def test_an_sdk_without_the_field_is_left_alone_and_logged_once(
-    tmp_path, sdk_without_language, caplog
-) -> None:
-    caplog.set_level(logging.DEBUG, logger=hy_sdk_runtime.__name__)
-    before = repr(dataclasses.asdict(_config(tmp_path, None)))
-    assert repr(dataclasses.asdict(_config(tmp_path, "ja"))) == before
-    assert repr(dataclasses.asdict(_config(tmp_path, "fr"))) == before
-    logged = [r for r in caplog.records if "hy_sdk_language_unsupported" in r.getMessage()]
-    assert len(logged) == 1 and logged[0].levelno == logging.DEBUG
-
-
-def test_the_pinned_sdk_builds_with_a_language(tmp_path) -> None:
-    """Whatever the pinned SDK is, a language never breaks building a config."""
-    config = _config(tmp_path, "ja")
-    if hasattr(config, "language"):
-        assert config.language == "ja"
 
 
 def test_acquire_client_passes_the_language_only_when_there_is_one(tmp_path, monkeypatch) -> None:
