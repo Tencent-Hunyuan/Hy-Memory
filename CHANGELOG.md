@@ -4,57 +4,6 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
-- MemHub multi-user hardening (follow-up to #250):
-  - Read responses name the user they were read for: `user_id` (the one
-    asked for, `local` by default) is now on `GET /api/v2/memory-library`,
-    `/memory-library/layers`, `/user-profile`, `/home-summary`,
-    `/memories/graph`, `/raw`, and `POST /api/v2/context/search`,
-    `/api/v1/recall`, `/api/v2/memories/ask`. `ask/stream` carries it on its
-    first (`recall`) event. The Host Bridge context validator accepts the new
-    field and still accepts a Core without it.
-  - `DELETE /api/v2/memories/{id}` answers 404 `memory_not_found` for another
-    user's memory and for an id that does not exist (the same response, so
-    existence is still not revealed), and also when the SDK finds nothing to
-    delete; 204 only when the caller's own memory was deleted. The App treats
-    that 404 as already gone (a double-click delete no longer shows an
-    error); `memhub memories delete` prints "未找到记忆 <id>（可能已删除）",
-    exits 0, and its JSON is `state: "committed"` with `already_gone: true`.
-  - Hermes never reads a `profiles/` directory at any depth (scan, detect and
-    live sync), so a root granted above `~/.hermes` cannot pick up another
-    user's profile. Connecting refuses a root that is the `profiles`
-    container itself (422 `hermes_root_is_profiles_container`) and a root
-    equal to, containing or inside another user's active Hermes grant (409
-    `hermes_root_overlaps_other_user`, symlinks resolved); `local` on
-    `~/.hermes` with another user on `~/.hermes/profiles/<name>` stays
-    allowed. The CLI explains both codes.
-  - `memhub sources connect --user-id` with an invalid id now says the user
-    id need not equal the Hermes profile name (e.g. `--user-id wife-work
-    --root ~/.hermes/profiles/wife:work`).
-
-- MemHub's DeepSeek Harness app page can grant recall again (#230). The
-  "一键插入应用" switch used to be greyed out with `unsupported_host`, and a
-  profile installed from the CLI stayed `install-only` with no way to approve
-  it. The one switch now covers every detected profile
-  (`deepseek-harness:<profile>`): on installs each profile's MCP patch and
-  grants recall, off removes the patch and revokes the grant. The page lists
-  each profile with its state, and names any profile that failed while
-  keeping the others. While the switch is on, a profile created later is
-  installed and granted automatically, without restarting MemHub; the Runtime
-  also no longer fails every host read when it meets a profile created after
-  it started. The harness docs no longer describe an unmounted sources page.
-
-- MemHub's `deepseek-harness` source imports session files whose names carry the
-  format generation: `session.v3.jsonl.zstd` and `session.v4.jsonl.zstd` are now
-  discovered alongside the original `session.jsonl[.zstd]`. Discovery accepts
-  any `session[.vN].jsonl[.zstd]` name and the header's `version` decides
-  whether the session is parsed (v0/v3/v4) or refused as `unsupported_schema`.
-  A refused file is reported and keeps no cursor, so the release that learns
-  its format reads it from the top.
-  v4 tool results, which are written as plain `text` blocks rather than
-  `tool-result` blocks, are read through the same clipping and credential
-  scrubbing path. Previously every versioned session was invisible: the import
-  job completed with `discovered 0` while the files sat on disk.
-
 ## Hy Memory 2.0.13 — 2026-11-02
 
 - A model failure during a write now reports failure and stores
@@ -126,14 +75,17 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.6 — 2026-11-02
 
-Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64
+Build 37, on `hy-memory==2.0.13`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - Interfaces in 11 languages: English, Simplified and Traditional Chinese,
   Japanese, Spanish, German, Portuguese, French, Korean, Russian and
-  Indonesian. Choosing any language other than Simplified Chinese also sets
-  the SDK prompt language; Simplified Chinese keeps the automatic zh/en
-  detection.
+  Indonesian. Every interface language, Simplified Chinese included, sets the
+  SDK prompt language (#270). **User-visible:** zh-Hans users now get Chinese
+  prompts and Chinese memory text for every conversation, English ones
+  included; the App sends the language it displays, also when it follows the
+  system. Only an unset language (CLI/API installs, `memhub settings language
+  system`) keeps the SDK's zh/en detection.
 - Memory modes: lite (no LLM, keeps raw conversations), pro (LLM extraction)
   and ultra (pro plus the knowledge graph and a nightly evolve run). Set with
   `GET`/`PUT /api/v1/settings/memory-mode` or `memhub settings mode`. Raw
@@ -146,10 +98,52 @@ App and Runtime.
   embedding service is unavailable, search returns `embedding_unavailable`.
 - Multi-user Runtime: memory APIs and the CLI take `user_id` (default
   `local`); records are isolated per user; Hermes profiles can be connected as
-  separate users. The App keeps using `local`.
+  separate users. The App keeps using `local`. Hardening (#280): read
+  responses echo `user_id`; deleting another user's memory, or one that does
+  not exist, is 404 `memory_not_found` (the App and `memhub memories delete`
+  treat it as already gone); Hermes never reads a `profiles/` directory, and
+  a root that is the `profiles` container or overlaps another user's grant is
+  refused (`hermes_root_is_profiles_container`,
+  `hermes_root_overlaps_other_user`).
 - Configurable SDK features through the CLI and API (`memhub settings
   features`): graph rerank, episode recall, session episodes, episode
-  summaries, intention and few-shot. Defaults are unchanged.
+  summaries, intention and few-shot, and the intention dedup switch with its
+  threshold (`intention_dedup`, `intention_dedup_threshold`, #277). Defaults
+  are unchanged.
+- Memory writes retry themselves (#278), each time under a new SDK request
+  id after checking whether the previous one landed; interrupted writes
+  re-run automatically. A model provider failure (401/403, 404, 408, 429,
+  5xx, timeout, unreachable) keeps the job pending in place without spending
+  a retry, and a per-profile circuit breaker paces the queue (5 s doubling to
+  180 s, one probe job at a time). Any other failure is retried after 30, 60
+  and 120 s, then `failed`. With `hy-memory==2.0.13` a model failure is no
+  longer a silent success, and a failed job's `error_code` names the SDK's
+  cause (`hy_sdk_reconcile_empty_response`, `hy_sdk_llm_error`, ...) rather
+  than `hy_sdk_write_failed`. **User-visible:** the manual 重新整理 button,
+  the "整理结果不确定" display and
+  `POST /api/v1/memory-processing/retry-unknown` are gone; a banner
+  ("模型配置有问题……记忆暂停处理，已有 N 条在排队") with a button to the model
+  settings shows while a model problem pauses processing, and clears on
+  recovery.
+- Queue, WAL and recall (#278): the WAL stays bounded (64 MiB journal limit,
+  idle `TRUNCATE` checkpoints); a disabled or revoked source's jobs are
+  `suspended` and resume when it is turned back on; SDK writes and recall
+  reads use separate thread pools, and recall has a total budget (504
+  `recall_timeout`, `broker_timeout` in clients) instead of starving behind
+  stuck writes.
+- One Runtime per data dir (#273). App quit asks the service manager at quit
+  time: an enabled background service is never stopped, a disabled one has
+  every Runtime of the data dir stopped (only after an authenticated identity
+  check), and an unknown state stops nothing. At start the App adopts a
+  Runtime of the same build, replaces an older one, and silently adopts a
+  newer one. The tray quit label follows the current state.
+- DeepSeek Harness: the app page's one switch installs and grants recall for
+  every detected profile, and keeps new profiles granted without a restart
+  (#230); versioned session files (`session.v3.jsonl.zstd`,
+  `session.v4.jsonl.zstd`) are imported, and v4 tool output goes through the
+  same clipping and scrubbing (#175).
+- The packaged Runtime accepts only a full 40-character commit, lowercased; a
+  malformed `ONE_MEMORY_COMMIT` fails the build (#235, #236).
 - Search and recall pass through the SDK's search parameters with server-side
   score floors; the memory library filters by layer; `/api/v2/raw` returns
   data again; v2 source and import routes; profile version history.

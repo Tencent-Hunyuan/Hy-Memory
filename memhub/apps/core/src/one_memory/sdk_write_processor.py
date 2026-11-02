@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -568,11 +569,36 @@ def _is_extracted_content(record: EvidenceRecord) -> bool:
     )
 
 
+#: The SDK's stable failure codes are upper snake case (`RECONCILE_FAILED`).
+_SDK_FAILURE_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,47}")
+
+
+def sdk_write_failure_code(value: Mapping[object, object]) -> str:
+    """The job's `error_code` for a failed SDK write: the SDK's own cause if it gave one.
+
+    hy-memory 2.0.13 names why a write failed: `agent_error_code`
+    (`LLM_ERROR`, `EMPTY_RESPONSE`, `JSON_PARSE_FAILED`, `EMBEDDING_FAILED`,
+    `RECONCILE_FAILED`) and, for a failed reconcile, `reconcile_error_code`
+    (`LLM_UNAVAILABLE`, `EMPTY_RESPONSE`, `JSON_PARSE_FAILED`,
+    `RECONCILE_EXCEPTION`). They become `hy_sdk_reconcile_empty_response`,
+    `hy_sdk_llm_error`, ... Without a recognisable code it stays
+    `hy_sdk_write_failed`. Only the code is kept, never the SDK's message.
+    """
+    reconcile = value.get("reconcile_error_code")
+    if isinstance(reconcile, str) and _SDK_FAILURE_CODE.fullmatch(reconcile):
+        cause = reconcile.removeprefix("RECONCILE_") or "FAILED"
+        return f"hy_sdk_reconcile_{cause.lower()}"
+    agent = value.get("agent_error_code")
+    if isinstance(agent, str) and _SDK_FAILURE_CODE.fullmatch(agent):
+        return f"hy_sdk_{agent.lower()}"
+    return "hy_sdk_write_failed"
+
+
 def _receipt_from_result(value: object) -> SdkWriteReceipt:
     if not isinstance(value, Mapping):
         raise RuntimeError("hy_sdk_write_receipt_shape_invalid")
     if value.get("success") is not True:
-        raise RuntimeError("hy_sdk_write_failed")
+        raise RuntimeError(sdk_write_failure_code(value))
 
     # Read only documented public receipt fields. ``variant`` identifies the
     # productivity namespace; IDs from both variants are canonical memory IDs.

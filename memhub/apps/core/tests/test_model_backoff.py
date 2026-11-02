@@ -14,6 +14,13 @@ from pydantic import SecretStr
 
 from one_memory.api import create_app
 from one_memory.config import Settings
+from one_memory.imports.models import (
+    EvidenceInput,
+    EvidenceOrigin,
+    OriginMetadata,
+    WrittenBy,
+    materialize_write_input,
+)
 from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
 from one_memory.memory_server.durable_queue import (
     FAILED,
@@ -29,6 +36,7 @@ from one_memory.model_backoff import (
     ModelBackoffRefusal,
     backoff_seconds,
 )
+from one_memory.sdk_write_processor import SdkWriteProcessor, sdk_write_failure_code
 from one_memory.secrets import InMemorySecretStore
 
 CHAT = "https://models.example.com/v1/chat/completions"
@@ -605,3 +613,252 @@ def test_the_manual_retry_endpoint_is_gone(tmp_path) -> None:
             return response.status_code
 
     assert asyncio.run(scenario()) in {404, 405}
+
+
+# --- hy-memory 2.0.13: a model failure is `success: false`, never a silent success ---
+
+
+class _Sdk2013Client:
+    """`HyMemoryClient.add` as hy-memory 2.0.13 answers it.
+
+    Each write makes one model call through MemHub's transport, so the
+    breaker sees what the provider answered. The SDK turns a failed or
+    unusable model reply into `success: false` with its stable codes; the
+    shape of those results is the SDK's own (`_mark_reconcile_failure`,
+    `CodingWriter`).
+    """
+
+    def __init__(self, transport: BackedOffModelTransport) -> None:
+        self.transport = transport
+        self.reply = "[]"
+        self.messages: list[list[dict[str, str]]] = []
+
+    def add(self, messages, **_kwargs):
+        self.messages.append(messages)
+        coding = any(message["role"] == "tool" for message in messages)
+        try:
+            response = asyncio.run(self.transport.handle_async_request(httpx.Request("POST", CHAT)))
+        except httpx.TransportError:
+            return self._failed(coding, "LLM_UNAVAILABLE", "LLM_ERROR")
+        if response.status_code >= 400:
+            return self._failed(coding, "LLM_UNAVAILABLE", "LLM_ERROR")
+        if not self.reply:
+            return self._failed(coding, "EMPTY_RESPONSE", "EMPTY_RESPONSE")
+        if not self.reply.startswith("["):
+            return self._failed(coding, "JSON_PARSE_FAILED", "JSON_PARSE_FAILED")
+        return {"success": True, "memory_ids": ["m-1"]}
+
+    @staticmethod
+    def _failed(coding: bool, reconcile_cause: str, coding_code: str) -> dict[str, object]:
+        if coding:
+            return {"success": False, "agent_error_code": coding_code}
+        return {
+            "success": False,
+            "error_code": 502,
+            "agent_error_code": "RECONCILE_FAILED",
+            "reconcile_error_code": reconcile_cause,
+        }
+
+
+class _Sdk2013Handle:
+    mode = "pro"
+
+    def __init__(self, client: _Sdk2013Client) -> None:
+        self.sdk = client
+
+    async def client(self) -> _Sdk2013Client:
+        return self.sdk
+
+
+class _Sdk2013Supervisor:
+    def __init__(self, client: _Sdk2013Client) -> None:
+        self.processor = SdkWriteProcessor(_Sdk2013Handle(client))  # type: ignore[arg-type]
+
+    async def process_sdk_job(self, records, *, request_id, before_hy_invocation):
+        return await self.processor.process_sdk_job(
+            records, request_id=request_id, before_hy_invocation=before_hy_invocation
+        )
+
+    async def inquire_write_outcome(self, _request_id):
+        return None
+
+
+class _Turns:
+    """Evidence for one conversation batch: a chat turn, or a coding turn with tools."""
+
+    def __init__(self, roles: tuple[str, ...]) -> None:
+        self.records = {
+            f"e-{index}": materialize_write_input(
+                EvidenceInput(
+                    user_id="local",
+                    source_id="cursor",
+                    conversation_id="sess-1",
+                    message_id=f"msg-{index}",
+                    role=role,
+                    written_by=WrittenBy.PERSON,
+                    created_at=datetime(2026, 10, 1, tzinfo=UTC),
+                    verbatim=f"{role} says something worth keeping ({index})",
+                    origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
+                )
+            )
+            for index, role in enumerate(roles)
+        }
+
+    def get(self, evidence_id: str):
+        return self.records[evidence_id]
+
+    def request(self) -> WriteRequest:
+        return WriteRequest(
+            internal_session_id="sess-1",
+            batch_identity=BatchIdentity(internal_session_id="sess-1", first_round=1, last_round=1),
+            evidence_ids=list(self.records),
+            idempotency_key="idem-000",
+            source_id="cursor",
+        )
+
+
+def _outage_then_recovery(tmp_path, roles: tuple[str, ...], failure) -> tuple[list, list]:
+    clock = _Clock()
+    backoff = ModelBackoff(clock=clock)
+    calls: list[float] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        calls.append(clock.now)
+        if clock.now < 60.0:
+            return failure(request)
+        return httpx.Response(200)
+
+    client = _Sdk2013Client(
+        BackedOffModelTransport(backoff, profile_id="p:1", inner=httpx.MockTransport(provider))
+    )
+    turns = _Turns(roles)
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    queue.submit(turns.request())
+    drain = DurableWriteDrain(
+        queue, execute=_never_execute, owner="outage", model_claim_allowance=backoff.allowance
+    )
+    seen: list[tuple[str, int, int, str | None]] = []
+    for second in range(120):
+        clock.now = float(second)
+        for job_id in drain.claim(limit=1):
+            asyncio.run(
+                execute_job(
+                    job_id,
+                    queue=queue,
+                    supervisor=_Sdk2013Supervisor(client),
+                    evidence=turns,
+                    owner="outage",
+                    model_failures=backoff.attempt,
+                )
+            )
+            seen.append(_jobs(path)[0][1:])
+    assert all(len(sent) == len(roles) for sent in client.messages)
+    return calls, seen
+
+
+def _timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("provider timed out", request=request)
+
+
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        (lambda _request: httpx.Response(401), "model_auth_failed"),
+        (lambda _request: httpx.Response(503), "model_server_error"),
+        (_timeout, "model_timeout"),
+    ],
+    ids=["401", "503", "timeout"],
+)
+def test_a_reconcile_model_failure_waits_for_the_provider_and_completes_after_it(
+    tmp_path, failure, code
+) -> None:
+    """hy-memory 2.0.13 fails the write when reconcile cannot reach its model.
+
+    The breaker saw the provider fail, so the job waits in place without
+    spending a retry, is tried once per pause, and lands after recovery.
+    """
+    calls, seen = _outage_then_recovery(tmp_path, ("user", "assistant"), failure)
+    assert calls == [0.0, 5.0, 15.0, 35.0, 75.0]
+    assert seen[:-1] == [("pending", attempt, 0, code) for attempt in range(1, 5)]
+    assert seen[-1] == ("completed", 4, 0, None)
+
+
+def test_a_coding_batch_whose_extractor_fails_at_the_provider_waits_like_chat(tmp_path) -> None:
+    """Tool turns go down the SDK's coding path; its `LLM_ERROR` waits the same way."""
+    calls, seen = _outage_then_recovery(
+        tmp_path, ("user", "assistant", "tool", "assistant"), lambda _request: httpx.Response(502)
+    )
+    assert calls == [0.0, 5.0, 15.0, 35.0, 75.0]
+    assert seen[:-1] == [("pending", attempt, 0, "model_server_error") for attempt in range(1, 5)]
+    assert seen[-1] == ("completed", 4, 0, None)
+
+
+@pytest.mark.parametrize(
+    ("reply", "code"),
+    [
+        ("", "hy_sdk_reconcile_empty_response"),
+        ("I am not sure what you mean.", "hy_sdk_reconcile_json_parse_failed"),
+    ],
+    ids=["empty", "unparseable"],
+)
+def test_a_reconcile_reply_the_sdk_cannot_use_is_retried_then_failed_with_its_cause(
+    tmp_path, reply, code
+) -> None:
+    """HTTP 200 with nothing usable is not a provider failure: 3 retries, then `failed`.
+
+    The job's `error_code` names the SDK's cause instead of a bare
+    `hy_sdk_write_failed`, and the provider is never paused.
+    """
+    backoff = ModelBackoff(clock=_Clock())
+    client = _Sdk2013Client(
+        BackedOffModelTransport(
+            backoff, profile_id="p:1", inner=httpx.MockTransport(lambda _r: httpx.Response(200))
+        )
+    )
+    client.reply = reply
+    turns = _Turns(("user", "assistant"))
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    queue.submit(turns.request())
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="bad-reply")
+    now = datetime.now(UTC)
+    for offset in (0, 40, 150, 400):
+        for job_id in drain.claim(limit=1, now=now + timedelta(seconds=offset)):
+            asyncio.run(
+                execute_job(
+                    job_id,
+                    queue=queue,
+                    supervisor=_Sdk2013Supervisor(client),
+                    evidence=turns,
+                    owner="bad-reply",
+                    model_failures=backoff.attempt,
+                )
+            )
+    assert _jobs(path)[0][1:] == ("failed", 3, 3, code)
+    assert queue.get("idem-000").error_code == code
+    assert len(client.messages) == 4
+    assert backoff.allowance() is None
+
+
+@pytest.mark.parametrize(
+    ("result", "code"),
+    [
+        (
+            {"agent_error_code": "RECONCILE_FAILED", "reconcile_error_code": "LLM_UNAVAILABLE"},
+            "hy_sdk_reconcile_llm_unavailable",
+        ),
+        (
+            {"agent_error_code": "RECONCILE_FAILED", "reconcile_error_code": "RECONCILE_EXCEPTION"},
+            "hy_sdk_reconcile_exception",
+        ),
+        ({"agent_error_code": "RECONCILE_FAILED"}, "hy_sdk_reconcile_failed"),
+        ({"agent_error_code": "EMBEDDING_FAILED"}, "hy_sdk_embedding_failed"),
+        ({"agent_error_code": "JSON_PARSE_FAILED"}, "hy_sdk_json_parse_failed"),
+        ({"agent_error_code": "provider said: bad key sk-123"}, "hy_sdk_write_failed"),
+        ({"agent_error_code": 502}, "hy_sdk_write_failed"),
+        ({}, "hy_sdk_write_failed"),
+    ],
+)
+def test_a_failed_sdk_write_keeps_only_the_sdks_stable_code(result, code) -> None:
+    assert sdk_write_failure_code({"success": False, **result}) == code
