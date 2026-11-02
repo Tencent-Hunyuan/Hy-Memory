@@ -7,7 +7,9 @@ Intention（L7）读侧判重开关（issue #241）。
   2. 关闭：不隐藏、不删除，两条意图都返回；
   3. 阈值生效：cosine 低于阈值不判重，高于阈值判重；
   4. reader 按 client 的 MemoryConfig.recall 读取开关/阈值，而非调用时的 env；
-  5. MemoryConfig 默认值与 env 回退。
+  5. MemoryConfig 默认值与 env 回退；
+  6. 写入侧批内判重同样受开关控制；阈值不影响写入侧；
+  7. 关闭时不为判重补拉 embedding；配置阈值非法时不影响召回。
 """
 
 from __future__ import annotations
@@ -125,6 +127,95 @@ def test_explicit_threshold_wins_over_env(monkeypatch):
     ))
     assert len(result) == 2
     assert vs.delete_calls == []
+
+
+def test_off_skips_embedding_backfill():
+    vs = _FakeVectorStore()
+    emb = _unit([1.0, 0.0])
+    _seed_project_pair(vs, emb_a=emb, emb_b=list(emb))
+
+    backfill_calls = []
+
+    async def _get_embeddings(ids):
+        backfill_calls.append(ids)
+        return {}
+
+    vs.get_embeddings = _get_embeddings
+    for n in vs._nodes.values():
+        n.embedding = None
+    result = _run(recall_intentions(
+        vs, emb, user_ids=["u1"], limit=10, now=_NOW, dedup_enabled=False,
+    ))
+    assert len(result) == 2
+    assert backfill_calls == []
+
+
+def test_invalid_threshold_degrades_to_env_default(monkeypatch):
+    monkeypatch.delenv("MEMORY_DEDUP_THRESHOLD", raising=False)
+    vs = _FakeVectorStore()
+    emb = _unit([1.0, 0.0])
+    a, b = _seed_project_pair(vs, emb_a=emb, emb_b=list(emb))
+    stats = {}
+    result = _run(recall_intentions(
+        vs, emb, user_ids=["u1"], limit=10, now=_NOW, stats_out=stats,
+        dedup_threshold="not-a-number",
+    ))
+    assert [h["node_id"] for h in result] == [a.node_id]
+    assert stats["dedup_threshold"] == 0.95
+
+
+# ============================================================================
+# 写入侧批内判重
+# ============================================================================
+
+
+class _SameVectorEmbed:
+    """所有文本同一向量：cosine=1，开启判重时必判为复本。"""
+
+    async def embed_batch(self, texts):
+        return [_unit([1.0, 0.0]) for _ in texts]
+
+    async def embed_queued(self, text):
+        return _unit([1.0, 0.0])
+
+
+def _store_batch(config_recall):
+    from hy_memory.pipelines.base import WriteRequest
+    from hy_memory.pipelines.writer import MemoryWriter
+
+    cfg = MemoryConfig.from_dict({"recall": config_recall})
+    vs = _FakeVectorStore()
+    writer = MemoryWriter(cfg, embed_service=_SameVectorEmbed(), vector_store=vs)
+    req = WriteRequest(
+        content="", messages=[], user_id="u1", agent_id="a1",
+        session_id="s1", request_id=uuid.uuid4().hex,
+    )
+    intentions = [
+        {"content": "A 项目每周一触发发布前校验流程", "tags": [], "valid_until": None},
+        {"content": "B 项目每周一触发发布前校验流程", "tags": [], "valid_until": None},
+    ]
+    return _run(writer._store_intentions(intentions, req, vs, req.request_id)), vs
+
+
+def test_write_batch_dedup_default_on_unchanged():
+    ids, vs = _store_batch({})
+    assert len(ids) == 1
+    assert [n.content for n in vs._nodes.values()] == [
+        "A 项目每周一触发发布前校验流程",
+    ]
+
+
+def test_write_batch_dedup_off_stores_both():
+    ids, vs = _store_batch({"intention_dedup_enabled": False})
+    assert len(ids) == 2
+    assert len(vs._nodes) == 2
+
+
+def test_read_threshold_does_not_change_write_batch_dedup(monkeypatch):
+    """intention_dedup_threshold 只管读侧；写入侧仍取 MEMORY_DEDUP_THRESHOLD。"""
+    monkeypatch.delenv("MEMORY_DEDUP_THRESHOLD", raising=False)
+    ids, _ = _store_batch({"intention_dedup_threshold": 1.5})
+    assert len(ids) == 1
 
 
 # ============================================================================

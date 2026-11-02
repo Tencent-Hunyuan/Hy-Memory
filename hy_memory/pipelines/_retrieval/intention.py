@@ -17,7 +17,7 @@ HY Memory - Intention (L7) 召回 + 惰性过期转换 + 复本判定
   - **异步删库**：其余复本 fire-and-forget 从 VDB 删除，不影响本次调用 RT。
   - **开关**：判重受 `MemoryConfig.recall.intention_dedup_enabled`（默认开）与
     `recall.intention_dedup_threshold` 控制，由 reader 按 client 配置传入。
-    关闭时完全跳过判重：不隐藏、不删除任何意图。
+    关闭时完全跳过判重：不隐藏、不删除任何意图（写入侧批内判重同样跳过）。
 
 Q: 为什么要看 memory_at 和 valid_until？
 A: 意图是 point-in-time 信号。同一句"我周五要开会"，如果一条 memory_at 在
@@ -41,8 +41,14 @@ from ...models.memory import MemoryLayer, MemoryStatus
 logger = logging.getLogger(__name__)
 
 
-def _get_dedup_threshold() -> float:
-    """去重 cosine 阈值：沿用 dedup 内核的 MEMORY_DEDUP_THRESHOLD，默认 0.95。"""
+def _get_dedup_threshold(configured: Optional[float] = None) -> float:
+    """去重 cosine 阈值：优先用 client 配置；否则（或配置非法）沿用 dedup 内核的
+    MEMORY_DEDUP_THRESHOLD，默认 0.95。"""
+    try:
+        if configured is not None:
+            return float(configured)
+    except (TypeError, ValueError):
+        logger.warning(f"[intention] invalid dedup threshold: {configured!r}")
     try:
         return float(os.environ.get("MEMORY_DEDUP_THRESHOLD", 0.95))
     except (TypeError, ValueError):
@@ -368,7 +374,7 @@ async def recall_intentions(
     _t = time.perf_counter()
     _backfilled = 0
     _missing_cnt = 0
-    if survivors:
+    if survivors and dedup_enabled:  # 补拉只为判重；关闭时无需这次 VDB 读
         missing_ids = [
             h.get("node_id") for h in survivors
             if h.get("node_id") and not getattr(h.get("node"), "embedding", None)
@@ -403,10 +409,7 @@ async def recall_intentions(
     # 2. 判重：同 user + 同天 memory_at + valid_until 同日 + cosine≥threshold
     #    dedup_enabled=False → 完全跳过：不隐藏、不删除。
     _t = time.perf_counter()
-    threshold = (
-        float(dedup_threshold) if dedup_threshold is not None
-        else _get_dedup_threshold()
-    )
+    threshold = _get_dedup_threshold(dedup_threshold)
     if dedup_enabled:
         try:
             kept, delete_ids = _partition_duplicates(survivors, threshold)

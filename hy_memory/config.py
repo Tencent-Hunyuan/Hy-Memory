@@ -432,10 +432,10 @@ class RecallConfig:
     retrieval_clauses_require_keyword: bool = None  # env: MEMORY_RETRIEVAL_CLAUSES_REQUIRE_KEYWORD
     retrieval_clauses_min_keyword_score: float = None  # normalized BM25 floor
     supplemental_propositions_enabled: bool = None  # env: MEMORY_SUPPLEMENTAL_PROPOSITIONS_ENABLED
-    # ── Intention（L7）读侧判重 ──
+    # ── Intention（L7）判重 ──
     # 开启（默认）：召回时同 user+agent+同天 memory_at+同 valid_until 且
     # cosine≥阈值 的意图视为复本，只返回最早一条，其余异步从 VDB 删除（历史行为）。
-    # 关闭：读侧完全不判重——不隐藏、不删除任何意图。
+    # 关闭：读侧与写入侧批内都不判重——不隐藏、不丢弃、不删除任何意图。
     intention_dedup_enabled: bool = None       # env: MEMORY_INTENTION_DEDUP_ENABLED
     # 读侧意图判重 cosine 阈值。env: MEMORY_INTENTION_DEDUP_THRESHOLD，
     # 未设置时回退到共享的 MEMORY_DEDUP_THRESHOLD（兼容旧部署），默认 0.95。
