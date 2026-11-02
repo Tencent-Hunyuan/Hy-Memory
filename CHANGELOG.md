@@ -31,7 +31,33 @@ Hy Memory and MemHub are versioned and released independently.
     id need not equal the Hermes profile name (e.g. `--user-id wife-work
     --root ~/.hermes/profiles/wife:work`).
 
-- Hy Memory: a model failure during a write now reports failure and stores
+- MemHub's DeepSeek Harness app page can grant recall again (#230). The
+  "一键插入应用" switch used to be greyed out with `unsupported_host`, and a
+  profile installed from the CLI stayed `install-only` with no way to approve
+  it. The one switch now covers every detected profile
+  (`deepseek-harness:<profile>`): on installs each profile's MCP patch and
+  grants recall, off removes the patch and revokes the grant. The page lists
+  each profile with its state, and names any profile that failed while
+  keeping the others. While the switch is on, a profile created later is
+  installed and granted automatically, without restarting MemHub; the Runtime
+  also no longer fails every host read when it meets a profile created after
+  it started. The harness docs no longer describe an unmounted sources page.
+
+- MemHub's `deepseek-harness` source imports session files whose names carry the
+  format generation: `session.v3.jsonl.zstd` and `session.v4.jsonl.zstd` are now
+  discovered alongside the original `session.jsonl[.zstd]`. Discovery accepts
+  any `session[.vN].jsonl[.zstd]` name and the header's `version` decides
+  whether the session is parsed (v0/v3/v4) or refused as `unsupported_schema`.
+  A refused file is reported and keeps no cursor, so the release that learns
+  its format reads it from the top.
+  v4 tool results, which are written as plain `text` blocks rather than
+  `tool-result` blocks, are read through the same clipping and credential
+  scrubbing path. Previously every versioned session was invisible: the import
+  job completed with `discovered 0` while the files sat on disk.
+
+## Hy Memory 2.0.13 — 2026-11-02
+
+- A model failure during a write now reports failure and stores
   nothing. **Behaviour change for direct SDK users:** writes that used to
   return `success: true` in a degraded state now return `success: false`;
   retry them with a new `request_id` once the model is back.
@@ -77,30 +103,6 @@ Hy Memory and MemHub are versioned and released independently.
     parse failure. A fact reply of `{"ops": []}` inserts the new fact without
     superseding anything. Fact reconcile still makes no model call when there
     are no candidates.
-
-- MemHub's DeepSeek Harness app page can grant recall again (#230). The
-  "一键插入应用" switch used to be greyed out with `unsupported_host`, and a
-  profile installed from the CLI stayed `install-only` with no way to approve
-  it. The one switch now covers every detected profile
-  (`deepseek-harness:<profile>`): on installs each profile's MCP patch and
-  grants recall, off removes the patch and revokes the grant. The page lists
-  each profile with its state, and names any profile that failed while
-  keeping the others. While the switch is on, a profile created later is
-  installed and granted automatically, without restarting MemHub; the Runtime
-  also no longer fails every host read when it meets a profile created after
-  it started. The harness docs no longer describe an unmounted sources page.
-
-- MemHub's `deepseek-harness` source imports session files whose names carry the
-  format generation: `session.v3.jsonl.zstd` and `session.v4.jsonl.zstd` are now
-  discovered alongside the original `session.jsonl[.zstd]`. Discovery accepts
-  any `session[.vN].jsonl[.zstd]` name and the header's `version` decides
-  whether the session is parsed (v0/v3/v4) or refused as `unsupported_schema`.
-  A refused file is reported and keeps no cursor, so the release that learns
-  its format reads it from the top.
-  v4 tool results, which are written as plain `text` blocks rather than
-  `tool-result` blocks, are read through the same clipping and credential
-  scrubbing path. Previously every versioned session was invisible: the import
-  job completed with `discovered 0` while the files sat on disk.
 
 ## Hy Memory 2.0.12 — 2026-11-02
 
