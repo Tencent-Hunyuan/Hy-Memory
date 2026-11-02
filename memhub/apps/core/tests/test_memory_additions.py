@@ -293,6 +293,7 @@ def test_sdk_user_profile_http_returns_native_assembled_profile(tmp_path):
             response = await client.get("/api/v2/user-profile")
             assert response.status_code == 200, response.text
             assert response.json() == {
+                "user_id": "local",
                 "request_id": "profile-request",
                 "profile": {
                     "memory_id": "l0-head",

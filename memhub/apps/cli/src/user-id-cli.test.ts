@@ -373,6 +373,48 @@ describe("sources connect for a Hermes profile", () => {
     }
     expect(transport.post).not.toHaveBeenCalled();
   });
+
+  it("says the user id need not equal the Hermes profile name", async () => {
+    const result = await capturedRun([
+      "sources",
+      "connect",
+      "hermes",
+      "--user-id",
+      "wife:work",
+      "--root",
+      "~/.hermes/profiles/wife:work",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("用户 ID 不必等于 Hermes profile 名");
+    expect(result.stderr).toContain(
+      "--user-id wife-work --root ~/.hermes/profiles/wife:work",
+    );
+    expect(transport.post).not.toHaveBeenCalled();
+  });
+
+  it("explains a refused overlapping or profiles-container root", async () => {
+    for (const code of [
+      "hermes_root_is_profiles_container",
+      "hermes_root_overlaps_other_user",
+    ]) {
+      transport.post.mockResolvedValueOnce({
+        status: code.endsWith("container") ? 422 : 409,
+        data: { detail: code },
+      });
+      const result = await capturedRun([
+        "sources",
+        "connect",
+        "hermes",
+        "--user-id",
+        "kid",
+        "--root",
+        "/profiles",
+      ]);
+      expect(result.code).toBe(1);
+      expect(result.stdout).toContain(code);
+      expect(result.stdout).toContain("--root");
+    }
+  });
 });
 
 async function capturedRun(arguments_: string[]) {

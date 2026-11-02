@@ -137,6 +137,15 @@ memhub profile
 `user-profile` / `memhub profile` 调用 SDK `get_user_profile()`，返回组装后的
 用户长期画像，不通过普通 Search 拼装。
 
+读接口都回显 `user_id`（实际读的用户，未指定时为 `local`）：
+`GET /api/v2/memory-library`、`/memory-library/layers`、`/user-profile`、
+`/user-profile/versions`、`/home-summary`、`/memories/graph`、`/raw`，
+`POST /api/v2/context/search`、`/api/v1/recall`、`/api/v2/memories/ask`；
+`/memories/ask/stream` 写在第一个 `recall` 事件上。
+`DELETE /api/v2/memories/{id}` 只在删掉调用者自己的记忆时回 204；另一个用户的
+记忆和不存在的 ID 一律回 404 `memory_not_found`（不暴露是否存在），调用方按
+「已不存在」处理。
+
 返回值：
 
 ```python

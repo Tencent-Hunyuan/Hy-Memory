@@ -5,6 +5,11 @@ Post-cutover hosts use SDK-native Context v2 at
 `POST /api/v2/context/search`. A v2 response is never converted into v1 by
 inventing revisions, Evidence IDs, paths, or adoption state.
 
+Since MemHub 1.0.6 the v2 response also carries `user_id`, the user whose
+memories were searched (`local` unless the request named one). The Host
+Bridge validator accepts it as an optional field, so a response from an older
+Core without it still validates; any other unknown field still fails closed.
+
 ## Transport
 
 - The Broker `/context` route (used by host hooks and `recall-cli --context`;

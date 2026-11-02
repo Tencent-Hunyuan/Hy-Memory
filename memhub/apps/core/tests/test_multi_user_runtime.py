@@ -334,7 +334,9 @@ def test_another_users_memory_id_answers_404_for_read_update_and_delete(
 
         assert (await client.get(path)).status_code == 404
         assert (await client.put(path, json={"content": "stolen"})).status_code == 404
-        assert (await client.delete(path)).status_code == 204
+        refused = await client.delete(path)
+        assert refused.status_code == 404
+        assert refused.json()["detail"] == "memory_not_found"
         assert sdk.memories[wife_memory]["content"] == "wife drinks coffee"
 
         own = await client.get(path, params={"user_id": "wife"})
@@ -343,6 +345,36 @@ def test_another_users_memory_id_answers_404_for_read_update_and_delete(
         assert updated.status_code == 200
         assert (await client.delete(path, params={"user_id": "wife"})).status_code == 204
         assert wife_memory not in sdk.memories
+        # A second delete (a double click) finds nothing: 404, already gone.
+        again = await client.delete(path, params={"user_id": "wife"})
+        assert again.status_code == 404
+        assert again.json()["detail"] == "memory_not_found"
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_a_delete_that_loses_the_race_answers_404_like_a_missing_id(tmp_path, monkeypatch) -> None:
+    """Read as the caller's own, then gone before the SDK deletes it."""
+
+    async def scenario(app, sdk, client):
+        await _write_both_users(app, sdk, client)
+        [mine] = [
+            memory_id
+            for memory_id, row in sdk.memories.items()
+            if row["content"] == "local drinks tea"
+        ]
+        original = sdk.delete
+
+        def raced(memory_id, kind=None, variant=None):
+            sdk.memories.pop(memory_id, None)
+            return original(memory_id, kind=kind, variant=variant)
+
+        sdk.delete = raced  # type: ignore[method-assign]
+        response = await client.delete(f"/api/v2/memories/{mine}")
+        missing = await client.delete("/api/v2/memories/no-such-memory")
+        assert _observed(response) == _observed(missing)
+        assert response.status_code == 404
 
     run_with_sdk(tmp_path, monkeypatch, scenario)
 
@@ -424,6 +456,52 @@ def test_omitting_user_id_keeps_local_and_recall_and_ask_pass_it_through(
 
 async def _true() -> bool:
     return True
+
+
+@pytest.mark.fresh_sdk
+@pytest.mark.parametrize("user", [None, "wife"])
+def test_every_read_echoes_the_user_it_was_read_for(tmp_path, monkeypatch, user) -> None:
+    """Each read names the user it answered for: the one asked for, else `local`."""
+
+    async def scenario(app, sdk, client):
+        await _write_both_users(app, sdk, client)
+        monkeypatch.setattr(
+            "one_memory.api._recall_model_ready", lambda _app: _true(), raising=True
+        )
+        app.state.recall_target = _sdk_recall_target(app, "local")
+        expected = user or "local"
+        params = {} if user is None else {"user_id": user}
+        body = {} if user is None else {"user_id": user}
+        reads = [
+            await client.get("/api/v2/memory-library", params=params),
+            await client.get("/api/v2/memory-library", params={**params, "query": "route"}),
+            await client.get("/api/v2/memory-library/layers", params=params),
+            await client.get("/api/v2/user-profile", params=params),
+            await client.get("/api/v2/home-summary", params=params),
+            await client.get("/api/v2/memories/graph", params=params),
+            await client.get("/api/v2/raw", params=params),
+            await client.post(
+                "/api/v2/context/search", json={"query": "drinks", "kinds": ["memory"], **body}
+            ),
+            await client.post("/api/v1/recall", json={"query": "drinks", **body}),
+            await client.post("/api/v2/memories/ask", json={"question": "what drink", **body}),
+        ]
+        for response in reads:
+            assert response.status_code == 200, (response.request.url, response.text)
+            assert response.json()["user_id"] == expected, response.request.url
+
+        async with client.stream(
+            "POST", "/api/v2/memories/ask/stream", json={"question": "what drink", **body}
+        ) as streamed:
+            events = [
+                json.loads(line[5:])
+                async for line in streamed.aiter_lines()
+                if line.startswith("data:")
+            ]
+        assert events[0]["type"] == "recall"
+        assert events[0]["user_id"] == expected
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
 
 
 @pytest.mark.fresh_sdk
@@ -567,6 +645,26 @@ def test_a_hermes_root_scan_never_reads_its_profiles(tmp_path) -> None:
 
     assert _scan_texts(hermes, tmp_path) == ["I am the husband", "hi"]
     assert _scan_texts(wife, tmp_path) == ["I am the wife", "hello", "wife's transcript"]
+
+
+def test_a_profiles_directory_is_skipped_at_any_depth(tmp_path) -> None:
+    """A root above the Hermes home still never reads `.hermes/profiles/**`."""
+    home = tmp_path / "home"
+    hermes, _wife = _hermes_homes(home)
+    (hermes / "sessions").mkdir()
+    (hermes / "sessions" / "own.jsonl").write_text(
+        json.dumps({"type": "message", "role": "user", "content": "own transcript"}) + "\n"
+    )
+    nested = hermes / "sessions" / "profiles" / "kid" / "sessions"
+    nested.mkdir(parents=True)
+    (nested / "k.jsonl").write_text(
+        json.dumps({"type": "message", "role": "user", "content": "kid's transcript"}) + "\n"
+    )
+
+    above = _scan_texts(home, tmp_path)
+    assert "I am the wife" not in above and "kid's transcript" not in above
+    assert set(above) == {"I am the husband", "hi", "own transcript"}
+    assert "kid's transcript" not in _scan_texts(hermes, tmp_path)
 
 
 def _jobs(database: Path) -> list[sqlite3.Row]:
@@ -719,6 +817,87 @@ def test_a_migrated_home_with_the_old_grant_triggers_can_connect_and_revoke(tmp_
     asyncio.run(scenario())
 
 
+async def _connect(client, user_id: str, root: Path | None = None, **extra):
+    body: dict[str, object] = {"source_ids": ["hermes"], "request_id": str(uuid4()), **extra}
+    if user_id != "local":
+        body["user_id"] = user_id
+    if root is not None:
+        body["root"] = str(root)
+    return await client.post("/api/v1/sources/connect", json=body)
+
+
+@pytest.mark.fresh_sdk
+def test_a_hermes_root_that_is_the_profiles_container_is_refused(tmp_path) -> None:
+    async def scenario():
+        home = tmp_path / "home"
+        hermes, _wife = _hermes_homes(home)
+        app = application(tmp_path, home=home)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            for user in ("wife", "local"):
+                refused = await _connect(client, user, hermes / "profiles")
+                assert refused.status_code == 422, refused.text
+                assert refused.json()["detail"] == "hermes_root_is_profiles_container"
+            assert app.state.source_grant_store.grants() == ()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
+def test_two_users_on_one_hermes_root_or_nested_roots_are_refused(tmp_path) -> None:
+    async def scenario():
+        home = tmp_path / "home"
+        hermes, wife = _hermes_homes(home)
+        (wife / "sessions").mkdir()
+        link = home / "hermes-link"
+        link.symlink_to(hermes, target_is_directory=True)
+        app = application(tmp_path, home=home)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            location = (await client.post("/api/v1/sources/hermes/location")).json()
+            local = await _connect(client, "local", source_roots={"hermes": location["root_id"]})
+            assert local.status_code == 200, local.text
+            # Same root, the same root through a symlink, a root inside it
+            # that is not `profiles/<name>`, and a root above it.
+            for root in (hermes, link, wife / "sessions", home):
+                refused = await _connect(client, "kid", root)
+                assert refused.status_code == 409, (root, refused.text)
+                assert refused.json()["detail"] == "hermes_root_overlaps_other_user"
+            # The standard layout: `local` on ~/.hermes, wife on its profile.
+            accepted = await _connect(client, "wife", wife)
+            assert accepted.status_code == 200, accepted.text
+            # Another user on wife's own root is refused too.
+            twin = await _connect(client, "wife2", wife)
+            assert twin.status_code == 409
+            # Once wife's grant is revoked her root is free again.
+            await client.post("/api/v1/sources/hermes/revoke", params={"user_id": "wife"})
+            assert (await _connect(client, "wife2", wife)).status_code == 200
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
+def test_local_cannot_take_another_users_hermes_root(tmp_path) -> None:
+    """The check runs for `local`'s own connect too, not only for other users."""
+
+    async def scenario():
+        home = tmp_path / "home"
+        hermes, _wife = _hermes_homes(home)
+        other = home / "elsewhere" / ".hermes"
+        _hermes_state_db(other, [(1, "s", "user", "elsewhere")])
+        app = application(tmp_path, home=home)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            # wife took ~/.hermes itself, which is `local`'s default root.
+            taken = await _connect(client, "wife", hermes)
+            assert taken.status_code == 200, taken.text
+            location = (await client.post("/api/v1/sources/hermes/location")).json()
+            refused = await _connect(client, "local", source_roots={"hermes": location["root_id"]})
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["detail"] == "hermes_root_overlaps_other_user"
+            # `local` on a root of its own that does not overlap is fine.
+            assert (await _connect(client, "local", other)).status_code == 200
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.fresh_sdk
 def test_only_hermes_takes_another_user_or_a_custom_root(tmp_path) -> None:
     async def scenario():
@@ -852,7 +1031,7 @@ def test_another_users_id_answers_exactly_like_an_id_that_does_not_exist(
             other = await client.request(method, theirs, **kwargs)
             absent = await client.request(method, missing, **kwargs)
             assert _observed(other) == _observed(absent), (method, theirs)
-            assert other.status_code == (204 if method == "DELETE" else 404)
+            assert other.status_code == 404
         assert sdk.memories == before
 
     run_with_sdk(tmp_path, monkeypatch, scenario)

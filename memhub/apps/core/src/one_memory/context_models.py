@@ -155,6 +155,8 @@ class SdkContextSearchResponse(BaseModel):
     used_characters: int = Field(ge=0, le=20000)
     truncated: bool
     total_ms: float = Field(ge=0)
+    #: Whose memories were searched: the request's `user_id`, else `local`.
+    user_id: str = Field(min_length=1, max_length=64)
 
 
 class ContextLaneResult(BaseModel):

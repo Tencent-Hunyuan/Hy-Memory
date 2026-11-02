@@ -1938,7 +1938,7 @@ async function runCommand(
       return reject(
         descriptor,
         asJson,
-        "--user-id 和 --root 只能用于接入单个 hermes 来源（Hermes profile），用户 ID 只能是 1–64 位字母、数字、点、下划线或连字符。",
+        "--user-id 和 --root 只能用于接入单个 hermes 来源（Hermes profile），用户 ID 只能是 1–64 位字母、数字、点、下划线或连字符。用户 ID 不必等于 Hermes profile 名，例如 --user-id wife-work --root ~/.hermes/profiles/wife:work。",
       );
     }
     if (!parsed) return usage();
@@ -2328,29 +2328,41 @@ async function runCommand(
               ...userIdParameters(userId),
             }),
           );
+    // A delete answered 404 `memory_not_found` is already gone (deleted
+    // before, or never this user's): what was asked for holds, so it exits 0
+    // as committed and says so, instead of failing a retry or a double run.
+    const alreadyGone =
+      parsed.kind === "delete" &&
+      outcome.state === "rejected" &&
+      outcome.code === "memory_not_found";
+    const state = alreadyGone ? "committed" : outcome.state;
     const document = {
       schema_version: 2,
       product: PRODUCT,
       command: `memories ${parsed.kind}`,
-      state: outcome.state,
+      state,
       operation: parsed.kind,
       memory_id: parsed.memoryId,
-      ...(outcome.state === "committed"
-        ? parsed.kind === "update"
-          ? { result: outcome.data }
-          : {}
-        : { code: outcome.code }),
+      ...(alreadyGone
+        ? { already_gone: true }
+        : outcome.state === "committed"
+          ? parsed.kind === "update"
+            ? { result: outcome.data }
+            : {}
+          : { code: outcome.code }),
     };
     emit(
       asJson
         ? `${JSON.stringify(document)}\n`
-        : outcome.state === "committed"
-          ? `已${parsed.kind === "update" ? "更新" : "删除"}记忆 ${parsed.memoryId}\n`
-          : outcome.code === "memory_id_ambiguous"
-            ? "这个 ID 同时存在于多个场景；请加 --kind（以及 --variant）指明是哪一条。\n"
-            : `操作失败：${outcome.code}\n`,
+        : alreadyGone
+          ? `未找到记忆 ${parsed.memoryId}（可能已删除），无需再删。\n`
+          : outcome.state === "committed"
+            ? `已${parsed.kind === "update" ? "更新" : "删除"}记忆 ${parsed.memoryId}\n`
+            : outcome.code === "memory_id_ambiguous"
+              ? "这个 ID 同时存在于多个场景；请加 --kind（以及 --variant）指明是哪一条。\n"
+              : `操作失败：${outcome.code}\n`,
     );
-    return outcome.state === "committed" ? EXIT_OK : EXIT_FAILED;
+    return state === "committed" ? EXIT_OK : EXIT_FAILED;
   }
   if (
     named === "settings" &&

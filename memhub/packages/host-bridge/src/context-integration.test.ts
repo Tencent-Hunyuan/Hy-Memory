@@ -90,6 +90,11 @@ it("accepts only the SDK context shape", () => {
   ).toBe(false);
   expect(contextResponseInvalidField(mixed)).toBeNull();
   expect(contextResponseInvalidField(legacyShape)).toBe("response");
+  // Core 1.0.6 echoes whose memories were searched; an older Core does not.
+  expect(isSdkContextSearchResponse({ ...mixed, user_id: "local" })).toBe(true);
+  expect(isSdkContextSearchResponse({ ...mixed, user_id: "" })).toBe(false);
+  expect(isSdkContextSearchResponse({ ...mixed, user_id: 7 })).toBe(false);
+  expect(isSdkContextSearchResponse({ ...mixed, owner: "local" })).toBe(false);
 });
 
 async function fixture(

@@ -763,9 +763,25 @@ export async function deleteSdkMemory(
     ...(traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : {}),
     ...(params ? { params } : {}),
   };
-  await client.delete(
-    `/api/v2/memories/${encodeURIComponent(memoryId)}`,
-    Object.keys(config).length ? config : undefined,
+  try {
+    await client.delete(
+      `/api/v2/memories/${encodeURIComponent(memoryId)}`,
+      Object.keys(config).length ? config : undefined,
+    );
+  } catch (reason) {
+    // 404 `memory_not_found`: already gone (a second click, or another
+    // window deleted it first). The memory is not there, which is what the
+    // person asked for, so it is not an error.
+    if (isMemoryNotFound(reason)) return;
+    throw reason;
+  }
+}
+
+function isMemoryNotFound(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    apiErrorCode(reason) === "memory_not_found"
   );
 }
 

@@ -118,6 +118,9 @@ export interface SdkContextSearchResponse {
   used_characters: number;
   truncated: boolean;
   total_ms: number;
+  /** Whose memories were searched; `local` unless the request named a user.
+   * Absent from a Core older than 1.0.6. */
+  user_id?: string;
 }
 
 /** Native Host Bridge wire response. Schemas stay distinct and are never adapted. */
