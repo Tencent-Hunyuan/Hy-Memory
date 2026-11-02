@@ -223,7 +223,6 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "O processamento precisa de atenção",
   "memory:正在整理记忆": "Processando memórias",
   "memory:整理状态": "Status do processamento",
-  "memory:重新整理": "Processar novamente",
   "memory:自动提炼范围": "Janela de extração automática",
   "memory:手动提炼下一批": "Extrair próximo lote manualmente",
   "memory:刷新核对": "Atualizar e verificar",
@@ -250,10 +249,6 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "processar",
   "memory:{count} 条原话": "Trechos originais: {count}",
   "memory:{count} 条原话.one": "{count} trecho original",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "Resultados de processamento incertos para {count} conversas",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "Resultado de processamento incerto para {count} conversa",
   "memory:{count} 次整理已完成": "Processamentos concluídos: {count}",
   "memory:{count} 次整理已完成.one": "{count} processamento concluído",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -1700,8 +1695,6 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Os resultados da ação em lote foram mantidos, mas não foi possível atualizar a lista. Ela será recarregada automaticamente mais tarde.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Escopo de consulta salvo, mas não foi possível atualizar a lista. Abra Memórias novamente mais tarde.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Processar novamente pode chamar o modelo. Apenas as conversas com resultados incertos serão refeitas. Continuar?",
   "memory:原始对话暂时无法读取":
     "Não foi possível carregar as conversas originais",
   "memory:没有匹配的原始对话": "Nenhuma conversa original correspondente",
@@ -2043,6 +2036,19 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "As memórias não estão sendo criadas: {reason} (pendentes: {count})",
   "memory:去配置生成模型": "Configurar modelo de geração",
+  "memory:模型暂停处理": "Modelo pausado",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Há um problema na configuração do modelo ({reason}). O processamento de memórias está pausado; {count} itens na fila",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Há um problema na configuração do modelo ({reason}). O processamento de memórias está pausado; {count} item na fila",
+  "memory:API Key 无效或没有权限": "chave de API inválida ou sem permissão",
+  "memory:找不到模型或地址": "modelo ou endereço não encontrado",
+  "memory:请求过于频繁，被服务商限流":
+    "muitas solicitações, limitadas pelo provedor",
+  "memory:模型响应超时": "tempo de resposta do modelo esgotado",
+  "memory:模型服务出错": "erro no serviço do modelo",
+  "memory:无法连接模型服务": "não foi possível conectar ao serviço do modelo",
+  "memory:连接模型服务失败": "falha na conexão com o serviço do modelo",
   "calls.directHost": "Chamada direta (diagnóstico)",
   "calls.headline.timedOut":
     "{host} não conseguiu consultar as memórias a tempo",

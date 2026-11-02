@@ -4,7 +4,6 @@ import type { GovernedMemory, MemoryDetail } from "@one-memory/contracts";
 import {
   act,
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
@@ -75,7 +74,6 @@ const {
   askMemoriesStream,
   setExtractionWindow,
   manualExtract,
-  retryUnknownMemoryProcessing,
   getGraphWidth,
   decideGraphWidth,
   getModelProfiles,
@@ -89,7 +87,6 @@ const {
   askMemoriesStream: vi.fn(),
   setExtractionWindow: vi.fn(),
   manualExtract: vi.fn(),
-  retryUnknownMemoryProcessing: vi.fn(),
   getGraphWidth: vi.fn(),
   decideGraphWidth: vi.fn(),
   getModelProfiles: vi.fn(),
@@ -107,7 +104,6 @@ vi.mock("./api", () => ({
   askMemoriesStream,
   setExtractionWindow,
   manualExtract,
-  retryUnknownMemoryProcessing,
   getGraphWidth,
   decideGraphWidth,
   getModelProfiles,
@@ -159,7 +155,6 @@ describe("MemorySpace", () => {
       in_flight_count: 0,
       seconds_per_completion: null,
     });
-    retryUnknownMemoryProcessing.mockResolvedValue({ requeued: 0 });
     getGraphWidth.mockResolvedValue({ mismatch: null, memory_count: 1 });
     decideGraphWidth.mockResolvedValue({
       archived_path: null,
@@ -394,11 +389,9 @@ describe("MemorySpace", () => {
     ).toBeTruthy();
   });
 
-  it("shows unknown results once and only retries after confirmation", async () => {
-    const confirm = vi
-      .spyOn(window, "confirm")
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
+  it("leaves unknown outcomes to Core: no manual retry, no alarm", async () => {
+    // An unknown outcome is a transient "checking" state Core settles by
+    // itself within seconds; there is nothing for the reader to do.
     getMemoryProcessing.mockResolvedValue({
       pending: 0,
       fresh_pending: 0,
@@ -420,20 +413,104 @@ describe("MemorySpace", () => {
       in_flight_count: 0,
       seconds_per_completion: 20,
     });
-    retryUnknownMemoryProcessing.mockResolvedValue({ requeued: 17 });
     render(<MemorySpace />);
 
-    expect(
-      await screen.findByText("有 17 段对话的整理结果不确定"),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "重新整理" }));
-    expect(retryUnknownMemoryProcessing).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "重新整理" }));
-    await waitFor(() =>
-      expect(retryUnknownMemoryProcessing).toHaveBeenCalledOnce(),
-    );
-    expect(confirm).toHaveBeenCalledTimes(2);
-    confirm.mockRestore();
+    expect(await screen.findByText("整理状态")).toBeTruthy();
+    expect(screen.queryByText("整理需要处理")).toBeNull();
+    expect(screen.queryByText(/整理结果不确定/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新整理" })).toBeNull();
+  });
+
+  describe("模型熔断提示", () => {
+    function backoff(
+      error: string | null,
+      pending = 4,
+    ): Record<string, unknown> {
+      return {
+        pending,
+        running: 0,
+        fresh_pending: pending,
+        backlog_pending: 0,
+        recent_completions: [],
+        waiting_for_model: 0,
+        completed: 1,
+        failed: 0,
+        blocked_stages: [],
+        outside_window_pending: 0,
+        extraction_window_preset: "3m",
+        manual_extract_batches_planned: 0,
+        manual_extract_batches_current: 0,
+        active_queue: 0,
+        in_flight_count: 0,
+        seconds_per_completion: null,
+        suspended: 0,
+        llm_backoff_until: error ? "2026-11-02T10:00:00+00:00" : null,
+        llm_backoff_error: error,
+      };
+    }
+
+    it("names the mapped reason and the queued count, and links to the model", async () => {
+      const onConfigureModel = vi.fn();
+      getMemoryProcessing.mockResolvedValue(backoff("model_auth_failed"));
+      render(
+        <MemorySpace
+          onConnect={() => {}}
+          onConfigureModel={onConfigureModel}
+        />,
+      );
+
+      const banner = await screen.findByRole("status", {
+        name: "模型暂停处理",
+      });
+      expect(banner.textContent).toContain(
+        "模型配置有问题（API Key 无效或没有权限），记忆暂停处理，已有 4 条在排队",
+      );
+      await userEvent.click(
+        within(banner).getByRole("button", { name: "配置整理模型" }),
+      );
+      expect(onConfigureModel).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads an unrecognised code as a plain connection failure", async () => {
+      getMemoryProcessing.mockResolvedValue(backoff("model_something_new", 1));
+      render(<MemorySpace onConnect={() => {}} onConfigureModel={() => {}} />);
+
+      const banner = await screen.findByRole("status", {
+        name: "模型暂停处理",
+      });
+      expect(banner.textContent).toContain("（连接模型服务失败）");
+      expect(banner.textContent).toContain("已有 1 条在排队");
+    });
+
+    it("shows nothing while the breaker is closed", async () => {
+      getMemoryProcessing.mockResolvedValue(backoff(null));
+      render(<MemorySpace onConnect={() => {}} onConfigureModel={() => {}} />);
+
+      expect(await screen.findByText("正在整理记忆")).toBeTruthy();
+      expect(screen.queryByRole("status", { name: "模型暂停处理" })).toBeNull();
+      expect(screen.queryByText(/模型配置有问题/)).toBeNull();
+    });
+
+    it("goes away by itself once a refresh clears the pause", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      getMemoryProcessing.mockResolvedValue(backoff("model_timeout"));
+      render(<MemorySpace onConnect={() => {}} onConfigureModel={() => {}} />);
+
+      const banner = await screen.findByRole("status", {
+        name: "模型暂停处理",
+      });
+      expect(banner.textContent).toContain("模型响应超时");
+
+      getMemoryProcessing.mockResolvedValue(backoff(null));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_500);
+      });
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("status", { name: "模型暂停处理" }),
+        ).toBeNull(),
+      );
+    });
   });
 
   it("splits the queue into new and catch-up rather than one total", async () => {

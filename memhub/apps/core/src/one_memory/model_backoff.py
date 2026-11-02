@@ -18,9 +18,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 
@@ -41,6 +43,20 @@ REFUSE_IN_FLIGHT_AFTER = 2
 #: and the provider's own failures. A 400/413/422 is about the request's
 #: content and is left to that job.
 _PROVIDER_STATUSES = {401: "model_auth_failed", 403: "model_auth_failed", 404: "model_not_found"}
+
+#: Every code a provider failure is recorded under: a job that failed with one
+#: of these waits for the provider instead of spending a retry.
+MODEL_FAILURE_CODES = frozenset(
+    {
+        "model_auth_failed",
+        "model_not_found",
+        "model_timeout",
+        "model_rate_limited",
+        "model_server_error",
+        "model_unreachable",
+        "model_transport_failed",
+    }
+)
 
 
 def backoff_seconds(level: int) -> float:
@@ -91,6 +107,17 @@ class ModelBackoffRefusal(httpx.TransportError):
     """A request refused locally because the provider is being given a rest."""
 
 
+@dataclass(eq=False)
+class ModelAttempt:
+    """One job's write, as the provider saw it.
+
+    `failure` is the code of the first provider failure (or local refusal)
+    that happened while this write was in flight, None if there was none.
+    """
+
+    failure: str | None = None
+
+
 class ModelBackoff:
     """Process-wide circuit breaker for the active model profile.
 
@@ -107,6 +134,8 @@ class ModelBackoff:
         self._clock = clock
         self._wall_clock = wall_clock
         self._lock = threading.Lock()
+        #: Writes in flight (`attempt`); never cleared by a reset.
+        self._attempts: set[ModelAttempt] = set()
         self._reset_locked()
 
     def _reset_locked(self) -> None:
@@ -148,6 +177,7 @@ class ModelBackoff:
                 self._reset_locked()
             self._profile_id = profile_id
             self._failing.add(kind)
+            self._mark_attempts_locked(code)
             self._failures += 1
             self._last_error = code
             self._probe_until = 0.0
@@ -164,6 +194,41 @@ class ModelBackoff:
             pause,
             profile_id,
         )
+
+    @contextmanager
+    def attempt(self) -> Iterator[ModelAttempt]:
+        """Hold one job's write open, and learn whether the provider failed it.
+
+        Every provider failure and every local refusal while the write is in
+        flight is charged to it. A request cannot be traced to the job that
+        made it: the SDK sends embeddings from one shared batching worker, so
+        neither the calling thread nor a context variable identifies the job.
+        Charging every write then in flight can name a write the provider did
+        not fail (another job's request failed beside it); that write waits
+        for the provider and is retried with the rest. It can never miss the
+        write the provider did fail, which would spend that job's retries on
+        an outage.
+        """
+        record = ModelAttempt()
+        with self._lock:
+            self._attempts.add(record)
+        try:
+            yield record
+        finally:
+            with self._lock:
+                self._attempts.discard(record)
+
+    def record_refusal(self) -> str:
+        """A request refused locally; charged to the writes in flight like a failure."""
+        with self._lock:
+            code = self._last_error or "model_transport_failed"
+            self._mark_attempts_locked(code)
+        return code
+
+    def _mark_attempts_locked(self, code: str) -> None:
+        for record in self._attempts:
+            if record.failure is None:
+                record.failure = code
 
     def paused(self) -> bool:
         with self._lock:
@@ -211,6 +276,21 @@ class ModelBackoff:
             )
 
 
+def next_retry_at(app: Any, state: str, own: str | None) -> str | None:
+    """When a queued job is tried next: its own retry wait, or the provider's pause.
+
+    While the breaker pauses, nothing is claimed at all, so the pause holds
+    every queued job, whatever it last failed with.
+    """
+    if state not in {"accepted", "pending"}:
+        return None
+    backoff = getattr(getattr(app, "state", None), "model_backoff", None)
+    until = backoff.state().until if isinstance(backoff, ModelBackoff) else None
+    paused = until.isoformat() if until is not None else None
+    candidates = [value for value in (own, paused) if value]
+    return max(candidates) if candidates else None
+
+
 class BackedOffModelTransport(httpx.AsyncBaseTransport):
     """Report each provider exchange to the breaker; refuse while it confirms a pause."""
 
@@ -228,6 +308,7 @@ class BackedOffModelTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         kind = request_kind(request)
         if self.backoff.refuses_requests(kind):
+            self.backoff.record_refusal()
             raise ModelBackoffRefusal("model_backoff_active", request=request)
         try:
             response = await self.inner.handle_async_request(request)

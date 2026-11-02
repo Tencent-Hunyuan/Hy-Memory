@@ -208,7 +208,6 @@ export const koreanMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "정리 작업 확인 필요",
   "memory:正在整理记忆": "기억 정리 중",
   "memory:整理状态": "정리 상태",
-  "memory:重新整理": "다시 정리",
   "memory:自动提炼范围": "자동 추출 범위",
   "memory:手动提炼下一批": "다음 묶음 수동 추출",
   "memory:刷新核对": "새로 고쳐 확인",
@@ -233,10 +232,6 @@ export const koreanMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "정리",
   "memory:{count} 条原话": "원문 발췌 {count}개",
   "memory:{count} 条原话.one": "원문 발췌 {count}개",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "대화 {count}개의 정리 결과가 불확실합니다",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "대화 {count}개의 정리 결과가 불확실합니다",
   "memory:{count} 次整理已完成": "정리 완료 {count}회",
   "memory:{count} 次整理已完成.one": "정리 완료 {count}회",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -1631,8 +1626,6 @@ export const koreanMessages: Record<MessageKey, string> = {
     "일괄 작업 결과는 유지되지만 목록을 새로 고치지 못했습니다. 나중에 자동으로 다시 불러옵니다.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "조회 범위는 저장되었지만 목록을 새로 고치지 못했습니다. 나중에 기억 페이지를 다시 여세요.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "다시 정리하면 모델이 다시 호출될 수 있습니다. 결과가 불확실한 대화만 다시 시도합니다. 계속하시겠습니까?",
   "memory:原始对话暂时无法读取": "원본 대화를 불러오지 못했습니다",
   "memory:没有匹配的原始对话": "일치하는 원본 대화가 없습니다",
   "memory:还没有导入的原始对话": "아직 가져온 원본 대화가 없습니다",
@@ -1961,6 +1954,19 @@ export const koreanMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "기억이 생성되지 않는 중: {reason}(대기 {count}개)",
   "memory:去配置生成模型": "생성 모델 구성",
+  "memory:模型暂停处理": "모델 일시 중지됨",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "모델 설정에 문제가 있습니다({reason}). 기억 처리가 일시 중지되었으며 {count}개가 대기 중입니다",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "모델 설정에 문제가 있습니다({reason}). 기억 처리가 일시 중지되었으며 {count}개가 대기 중입니다",
+  "memory:API Key 无效或没有权限": "API 키가 잘못되었거나 권한이 없습니다",
+  "memory:找不到模型或地址": "모델 또는 주소를 찾을 수 없습니다",
+  "memory:请求过于频繁，被服务商限流":
+    "요청이 너무 많아 서비스 제공자가 제한했습니다",
+  "memory:模型响应超时": "모델 응답 시간이 초과되었습니다",
+  "memory:模型服务出错": "모델 서비스 오류",
+  "memory:无法连接模型服务": "모델 서비스에 연결할 수 없습니다",
+  "memory:连接模型服务失败": "모델 서비스 연결에 실패했습니다",
   "calls.directHost": "직접 호출(진단)",
   "calls.headline.timedOut": "{host}이(가) 제때 기억을 조회하지 못했습니다",
   "calls.headline.unavailable": "{host}이(가) 지금은 기억을 조회할 수 없습니다",

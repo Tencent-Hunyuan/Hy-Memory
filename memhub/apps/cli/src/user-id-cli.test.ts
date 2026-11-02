@@ -208,6 +208,27 @@ describe("--user-id on the memory commands", () => {
     expect(direct.get.mock.calls[0][1].params).toEqual({ user_id: "wife" });
   });
 
+  it("prints the retry code and time of a write still waiting", async () => {
+    direct.get.mockResolvedValue({
+      data: {
+        request_id: REQUEST,
+        state: "accepted",
+        created_at: "T1",
+        updated_at: "T2",
+        error_code: "model_timeout",
+        next_retry_at: "2026-11-02T10:00:00+00:00",
+      },
+    });
+    const text = await capturedRun(["write", "status", REQUEST]);
+    expect(text.stdout).toContain("error_code: model_timeout");
+    expect(text.stdout).toContain("next_retry_at: 2026-11-02T10:00:00+00:00");
+    const json = await capturedRun(["write", "status", REQUEST, "--json"]);
+    expect(JSON.parse(json.stdout).write).toMatchObject({
+      error_code: "model_timeout",
+      next_retry_at: "2026-11-02T10:00:00+00:00",
+    });
+  });
+
   it("passes the user in the body of memory writes and searches", async () => {
     await capturedRun(["memories", "add", "Prefers tea", "--user-id", "wife"]);
     expect(transport.post.mock.calls[0][0]).toBe("/api/v2/memories");

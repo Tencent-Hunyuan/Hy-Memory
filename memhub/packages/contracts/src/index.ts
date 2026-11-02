@@ -1134,6 +1134,12 @@ export interface MemoryAddReceipt {
   task_id: string | null;
   memory_ids: string[];
   error: string | null;
+  /** Stable code of the last failure while the addition still waits (for
+   * example `model_auth_failed`); null when none. Optional so older
+   * Runtimes stay valid. */
+  error_code?: string | null;
+  /** When Core will try this addition again (ISO); null when not scheduled. */
+  next_retry_at?: string | null;
 }
 
 export type {

@@ -67,7 +67,6 @@ const baseEnglishMessages = {
   "memory:整理需要处理": "Processing needs attention",
   "memory:正在整理记忆": "Processing memories",
   "memory:整理状态": "Processing status",
-  "memory:重新整理": "Process again",
   "memory:自动提炼范围": "Automatic extraction window",
   "memory:手动提炼下一批": "Extract next batch manually",
   "memory:刷新核对": "Refresh and check",
@@ -93,10 +92,6 @@ const baseEnglishMessages = {
   "memory:处理（操作）": "process",
   "memory:{count} 条原话": "{count} original excerpts",
   "memory:{count} 条原话.one": "{count} original excerpts",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "Processing results for {count} conversations are uncertain",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "Processing results for {count} conversations are uncertain",
   "memory:{count} 次整理已完成": "{count} processing runs completed",
   "memory:{count} 次整理已完成.one": "{count} processing runs completed",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -1506,8 +1501,6 @@ const baseEnglishMessages = {
     "Bulk action results are retained, but the list could not refresh. It will reload automatically later.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Recall scope saved, but the list could not refresh. Reopen Memories later.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Processing again may call the model. Only conversations with uncertain results will be retried. Continue?",
   "memory:原始对话暂时无法读取": "Could not load original conversations",
   "memory:没有匹配的原始对话": "No matching original conversations",
   "memory:还没有导入的原始对话": "No original conversations imported yet",
@@ -1842,6 +1835,19 @@ const baseEnglishMessages = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Memories are not being created: {reason} ({count} pending)",
   "memory:去配置生成模型": "Configure generation model",
+  "memory:模型暂停处理": "Model paused",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Model setup problem ({reason}). Memory processing is paused; {count} items are queued",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Model setup problem ({reason}). Memory processing is paused; {count} item is queued",
+  "memory:API Key 无效或没有权限": "API key is invalid or lacks permission",
+  "memory:找不到模型或地址": "model or URL not found",
+  "memory:请求过于频繁，被服务商限流":
+    "too many requests, rate-limited by the provider",
+  "memory:模型响应超时": "model response timed out",
+  "memory:模型服务出错": "model service error",
+  "memory:无法连接模型服务": "cannot reach the model service",
+  "memory:连接模型服务失败": "connection to the model service failed",
   "calls.directHost": "Direct call (diagnostic)",
   "calls.headline.timedOut": "{host} could not look up memories in time",
   "calls.headline.unavailable": "{host} could not look up memories right now",

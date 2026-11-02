@@ -25,7 +25,7 @@ from one_memory.hy_runtime_config import HY_MEMORY_READER
 from one_memory.hy_sdk_runtime import SdkClientHandle, sdk_relevance_floor
 from one_memory.hy_sdk_types import HySdkError, parse_sdk_search
 from one_memory.memory_queue import ExtractionWindowPreset, QueueDepths
-from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
+from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.semantic_deadline import SemanticMemoryHit
 
@@ -307,31 +307,6 @@ class SdkMemoryRuntime:
     def promote_next_manual_batch(self, *, task_ids: tuple[str, ...] | None = None) -> list[Any]:
         del task_ids
         return []
-
-    async def reconcile_unknown_outputs(
-        self,
-        *,
-        limit: int = 128,
-        exclude_error_codes: tuple[str, ...] = (),
-    ) -> int:
-        reconciled = 0
-        for job in await asyncio.to_thread(
-            self.write_queue.unknown_jobs,
-            limit=limit,
-            exclude_error_codes=exclude_error_codes,
-        ):
-            receipt = await self.coordinator.inquire_write_outcome(job.request_id)
-            if receipt is None:
-                continue
-            await asyncio.to_thread(
-                self.write_queue.settle,
-                job.job_id,
-                state=COMPLETED,
-                sdk_raw_ids=receipt.raw_ids,
-                sdk_memory_ids=receipt.memory_ids,
-            )
-            reconciled += 1
-        return reconciled
 
     async def resume_allowed(self) -> None:
         await asyncio.to_thread(self.write_queue.readmit_parked)

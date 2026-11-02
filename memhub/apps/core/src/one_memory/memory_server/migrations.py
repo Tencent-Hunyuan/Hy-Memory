@@ -3163,6 +3163,33 @@ async def _060_memory_note_requests(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+def write_job_retries_ddl(dialect: str = "mysql") -> str:
+    """Per-job retry state: which SDK request id is next, and retries spent.
+
+    The SDK replays a request id's first outcome forever, so every re-run of
+    a job needs an id of its own (`sdk_attempt`). `retries` counts automatic
+    retries after failures of the job itself; provider failures spend none.
+    """
+    if dialect == "sqlite":
+        return """
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_attempt INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE memory_write_jobs
+ADD COLUMN retries INTEGER NOT NULL DEFAULT 0;
+"""
+    return """
+ALTER TABLE memory_write_jobs
+ADD COLUMN sdk_attempt INT NOT NULL DEFAULT 0;
+ALTER TABLE memory_write_jobs
+ADD COLUMN retries INT NOT NULL DEFAULT 0;
+"""
+
+
+async def _061_write_job_retries(cursor: Any) -> None:
+    for statement in _split_statements(write_job_retries_ddl(_dialect(cursor))):
+        await cursor.execute(statement)
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3462,4 +3489,5 @@ MIGRATIONS: tuple[Migration, ...] = (
         _060_memory_note_requests,
         ("memory_note_requests",),
     ),
+    Migration(61, "write_job_retries", _061_write_job_retries),
 )

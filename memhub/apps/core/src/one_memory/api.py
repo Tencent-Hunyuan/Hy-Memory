@@ -239,7 +239,6 @@ from one_memory.memory_server.config_state import (
     MemoryMode,
 )
 from one_memory.memory_tasks import (
-    NON_RETRYABLE_POST_WRITE_CODES,
     MemoryTaskStatus,
     MemoryTaskStore,
 )
@@ -297,7 +296,7 @@ from one_memory.sdk_search_options import (
     SearchLane,
     split_csv,
 )
-from one_memory.sdk_write_processor import SdkWriteCoordinator
+from one_memory.sdk_write_processor import SdkWriteCoordinator, sdk_write_in_flight
 from one_memory.secrets import (
     KeyringSecretStore,
     SecretStore,
@@ -946,15 +945,6 @@ def memory_mode_effects(
 MemoryProcessingSummary.model_rebuild()
 
 
-class RetryUnknownMemoryTasksRequest(BaseModel):
-    confirm: Literal[True]
-
-
-class RetryUnknownMemoryTasksReceipt(BaseModel):
-    reconciled: int = 0
-    requeued: int = 0
-
-
 class GraphWidthStatus(BaseModel):
     """What the app needs to offer the choice before extraction fails on it."""
 
@@ -1222,7 +1212,6 @@ def create_app(
             )
             from one_memory.memory_server.data_safety import MIN_FREE_BYTES
             from one_memory.memory_server.durable_queue import (
-                COMPLETED,
                 DurableWriteDrain,
                 DurableWriteQueue,
                 execute_job,
@@ -1464,24 +1453,15 @@ def create_app(
             drain_budget = production_drain_budget()
 
             async def reconcile_unknown_writes() -> None:
-                unknown = await asyncio.to_thread(
-                    memory_write_queue.unknown_jobs,
-                    limit=128,
-                    exclude_error_codes=NON_RETRYABLE_POST_WRITE_CODES,
+                # A write whose worker never learned how it ended (a restart,
+                # a lapsed lease, the work ceiling) goes back into the queue
+                # under a new SDK request id; the re-run first asks the SDK
+                # whether the old one landed (`execute_job`). Nothing stays
+                # `unknown` waiting for a person.
+                await in_the_background(
+                    memory_write_queue.recover_unknown,
+                    in_flight=sdk_write_in_flight,
                 )
-                for job in unknown:
-                    receipt = await app.state.sdk_write_coordinator.inquire_write_outcome(
-                        job.request_id
-                    )
-                    if receipt is None:
-                        continue
-                    await asyncio.to_thread(
-                        memory_write_queue.settle,
-                        job.job_id,
-                        state=COMPLETED,
-                        sdk_raw_ids=receipt.raw_ids,
-                        sdk_memory_ids=receipt.memory_ids,
-                    )
 
             async def admit_hy_invocation(
                 source_id: str,
@@ -1511,6 +1491,7 @@ def create_app(
                     evidence=app.state.evidence_store,
                     source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                     admit_hy_invocation=admit_hy_invocation,
+                    model_failures=app.state.model_backoff.attempt,
                 ),
                 execute_owned=lambda job_id, owner: execute_job(
                     job_id,
@@ -1520,6 +1501,7 @@ def create_app(
                     owner=owner,
                     source_writes_permitted=lambda source_id: _source_writes_on(app, source_id),
                     admit_hy_invocation=admit_hy_invocation,
+                    model_failures=app.state.model_backoff.attempt,
                 ),
                 drain_handle_budget=drain_budget.handle_budget,
                 drain_cleanup_reserve=drain_budget.cleanup_reserve,
@@ -4922,37 +4904,6 @@ def create_app(
         if receipt is None or receipt.user_id != user_id:
             raise HTTPException(status_code=404, detail="evolve_run_not_found")
         return receipt
-
-    @app.post(
-        "/api/v1/memory-processing/retry-unknown",
-        response_model=RetryUnknownMemoryTasksReceipt,
-        dependencies=protected,
-    )
-    async def retry_unknown_memory_tasks(
-        request: RetryUnknownMemoryTasksRequest,
-    ) -> RetryUnknownMemoryTasksReceipt:
-        """Retry unknown writes only behind the user's explicit confirmation."""
-        del request
-        reconciled = await _sdk_memory_runtime(app).reconcile_unknown_outputs()
-        # The startup queue knows the authority. A fresh legacy-mode queue
-        # would recreate the job-evidence table the SDK cutover dropped.
-        queue = app.state.memory_write_queue
-        legacy = app.state.memory_authority is MemoryAuthority.LEGACY
-
-        def requeue_unknown() -> int:
-            unknown = queue.unknown_jobs(limit=2048)
-            if legacy:
-                for job in unknown:
-                    queue.resolve_unknown_from_linked_output(job.job_id)
-            requeued: int = sum(queue.retry_unknown_confirmed(job.job_id) for job in unknown)
-            if legacy:
-                requeued += int(app.state.memory_task_store.retry_unknown_confirmed())
-            return requeued
-
-        # One write transaction per job, up to 2048 of them: on the loop that
-        # froze every request, /health included, for minutes (#162).
-        requeued = await in_the_background(requeue_unknown)
-        return RetryUnknownMemoryTasksReceipt(reconciled=reconciled, requeued=requeued)
 
     @app.get(
         "/api/v1/graph-width",

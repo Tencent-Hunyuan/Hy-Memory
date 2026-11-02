@@ -165,6 +165,25 @@ export function modelBlock(
   );
 }
 
+/** Why Core's circuit breaker paused model work, from `llm_backoff_error`.
+ *
+ * Said as what is wrong with the model, never as the code: the reader's next
+ * step is the model settings, and the code alone does not say which part of
+ * them to check. Unknown codes read as a plain connection failure. */
+export function llmBackoffReasonLabel(code: string): string {
+  return LLM_BACKOFF_REASON_LABELS[code] ?? "连接模型服务失败";
+}
+
+const LLM_BACKOFF_REASON_LABELS: Record<string, string> = {
+  model_auth_failed: "API Key 无效或没有权限",
+  model_not_found: "找不到模型或地址",
+  model_rate_limited: "请求过于频繁，被服务商限流",
+  model_timeout: "模型响应超时",
+  model_server_error: "模型服务出错",
+  model_unreachable: "无法连接模型服务",
+  model_transport_failed: "连接模型服务失败",
+};
+
 /** What went wrong reading a source, said without the code.
  *
  * These are `ScanIssueCode` plus the one access-level refusal, and they land

@@ -268,6 +268,11 @@ export interface MemoryWriteReceipt {
   detail?: string;
   raw_ids?: string[];
   memory_ids?: string[];
+  /** Stable code of the last failure while the write still waits; null when
+   * none. Optional so older Runtimes stay readable. */
+  error_code?: string | null;
+  /** When Core will try this write again (ISO); null when not scheduled. */
+  next_retry_at?: string | null;
 }
 
 export interface OpenAIMessage {

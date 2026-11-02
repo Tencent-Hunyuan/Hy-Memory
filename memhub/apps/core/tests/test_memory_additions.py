@@ -661,6 +661,8 @@ def test_memory_add_routes_do_not_collide_with_single_memory_routes(tmp_path):
                 "task_id",
                 "memory_ids",
                 "error",
+                "error_code",
+                "next_retry_at",
             }
             status = await client.get(f"/api/v2/memories/additions/{request_id}")
             assert status.json()["evidence_id"] == created.json()["evidence_id"]
