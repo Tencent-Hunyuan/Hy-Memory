@@ -209,6 +209,7 @@ class JsonlSourceAdapter:
         file_predicate: Callable[[AuthorizedSourceFile], bool] | None = None,
         suffixes: frozenset[str] = frozenset({".jsonl"}),
         header_selector: Callable[[dict[str, JsonValue]], bool] | None = None,
+        header_gate: Callable[[dict[str, JsonValue] | None], bool] | None = None,
     ) -> None:
         if descriptor.source_id != grant.source_id:
             raise ValueError("Descriptor and authorized root source IDs must match")
@@ -219,6 +220,10 @@ class JsonlSourceAdapter:
         self.file_predicate = file_predicate or (lambda _: True)
         self.suffixes = suffixes
         self.header_selector = header_selector
+        # False refuses the whole file before any record is read. It reports
+        # and leaves no cursor, so a release that learns the format reads the
+        # file from the top instead of finding it already behind a checkpoint.
+        self.header_gate = header_gate
         self._header_cache: dict[str, tuple[str, dict[str, JsonValue] | None]] = {}
         self._history_listing_cache: SourceListing | None = None
 
@@ -371,6 +376,9 @@ class JsonlSourceAdapter:
                 source_file, checkpoint, header = await asyncio.to_thread(
                     self._prepare, listed, options
                 )
+                if self.header_gate is not None and not self.header_gate(header):
+                    yield ScanFailure(reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA)
+                    continue
                 _log.debug(
                     "import_file_read source=%s file=%d/%d file_bytes=%d planned_bytes=%d",
                     self.descriptor.source_id,
@@ -574,6 +582,9 @@ class JsonlSourceAdapter:
             # resumed scan starts past the header, and the records after it need
             # it just as much as the first batch did.
             header = await _read_header(reader, source_file, self.header_selector)
+            if self.header_gate is not None and not self.header_gate(header):
+                yield ScanFailure(reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA)
+                continue
             last: SourceCursor = _start_cursor(source_file, options, checkpoint)
             async for raw in iterate_in_worker(
                 partial(reader, source_file, checkpoint=checkpoint),

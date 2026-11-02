@@ -12,9 +12,11 @@ the versioned files on its next scan.
 import json
 from pathlib import Path
 
+import pytest
 import zstandard
 
-from one_memory.imports.adapters import ScanIssueCode
+from one_memory.imports.adapters import ScanFailure, ScanIssueCode
+from one_memory.imports.sources import deepseek_harness
 from one_memory.imports.sources.deepseek_harness import (
     DEEPSEEK_HARNESS_DESCRIPTOR,
     create_deepseek_harness_adapter,
@@ -189,6 +191,33 @@ def test_unknown_future_session_version_imports_nothing(tmp_path: Path) -> None:
 
     assert _evidence(events) == []
     assert ScanIssueCode.UNSUPPORTED_SCHEMA in _skip_codes(events)
+
+
+def test_unknown_session_version_is_reported_and_read_once_supported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not importing a future format yet must stay "yet".
+
+    A cursor left behind by the refused scan would put the whole session behind
+    the checkpoint, so the release that learns the format would read nothing.
+    """
+    root, adapter = _session_adapter(tmp_path)
+    _write_session(root / "run-v5", "session.v5.jsonl.zstd", _conversation(5))
+
+    refused = _scan(adapter)
+
+    assert _cursors(refused) == {}
+    assert [event.reason_code for event in refused if isinstance(event, ScanFailure)] == [
+        ScanIssueCode.UNSUPPORTED_SCHEMA
+    ]
+
+    monkeypatch.setattr(deepseek_harness, "SUPPORTED_SESSION_VERSIONS", frozenset({0, 3, 4, 5}))
+    _, upgraded = _session_adapter(tmp_path)
+
+    assert _evidence_text(_scan(upgraded, cursors=_cursors(refused))) == [
+        "visible human",
+        "visible assistant",
+    ]
 
 
 def test_upgrade_scan_rediscovers_versioned_files_already_on_disk(tmp_path: Path) -> None:

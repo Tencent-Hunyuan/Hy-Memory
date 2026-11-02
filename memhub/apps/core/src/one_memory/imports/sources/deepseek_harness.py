@@ -66,6 +66,7 @@ def create_deepseek_harness_adapter(
         file_predicate=lambda source_file: bool(SESSION_FILE.match(source_file.relative_path.name)),
         suffixes=frozenset({".jsonl", ".zstd"}),
         header_selector=_is_session_header,
+        header_gate=_supported_session,
     )
 
 
