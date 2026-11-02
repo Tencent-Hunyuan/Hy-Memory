@@ -28,7 +28,9 @@ Hy Memory and MemHub are versioned and released independently.
   scrubbing path. Previously every versioned session was invisible: the import
   job completed with `discovered 0` while the files sat on disk.
 
-- SDK: Intention dedup is now configurable per client
+## Hy Memory 2.0.12 — 2026-11-02
+
+- Intention dedup is now configurable per client
   (`MemoryConfig.recall.intention_dedup_enabled`, default `true`;
   `recall.intention_dedup_threshold`, default `MEMORY_DEDUP_THRESHOLD` or
   `0.95`). Env defaults: `MEMORY_INTENTION_DEDUP_ENABLED`,
