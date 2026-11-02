@@ -37,7 +37,6 @@ import {
   getSdkMemoryGraph,
   getSdkMemoryLibrary,
   manualExtract,
-  retryUnknownMemoryProcessing,
   setExtractionWindow,
   updateSdkMemory,
 } from "./api";
@@ -46,7 +45,6 @@ import { useGuiLanguage } from "./gui-language";
 import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
 import { MemoryMap } from "./MemoryMap";
 import { subscribePoll } from "./poll-scheduler";
-import { R6Button } from "./R6Controls";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
 import {
@@ -65,6 +63,7 @@ import type { MemoryArrival } from "./memory-arrival-state";
 import {
   blockReasonLabel,
   extractionWindowPresetLabel,
+  llmBackoffReasonLabel,
   modelBlock,
   splitBlockedStages,
   taskKindLabel,
@@ -691,44 +690,15 @@ export function MemorySpace({
     }
   }
 
-  async function retryUnknown() {
-    if (
-      busy ||
-      !window.confirm(
-        t(
-          "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？",
-        ),
-      )
-    )
-      return;
-    setBusy(true);
-    setError(null);
-    const trace = traceUiAction("memory", "retry");
-    try {
-      const receipt = await retryUnknownMemoryProcessing(trace.traceId);
-      trace.done("succeeded", { count: receipt.requeued });
-      setProcessing(await getMemoryProcessing());
-    } catch (reason) {
-      trace.done(writeTraceStatus(reason), {
-        reason: isDefiniteRefusal(reason)
-          ? "memory_unknown_retry_rejected"
-          : "memory_unknown_retry_result_unknown",
-      });
-      setError(message(reason, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   // What the reader owes attention, and what the pipeline is already handling
   // on its own. The second half is counted, never listed: an internal guard
   // that clears itself on the next pass is not something to act on. See
-  // `worthNamingBlock`.
+  // `worthNamingBlock`. An unknown outcome is in the second half too: Core
+  // settles it by itself within seconds.
   const blocked = processing
     ? splitBlockedStages(processing.blocked_stages)
     : { named: [], retrying: 0 };
-  const processingNeedsAttention =
-    blocked.named.length > 0 || (processing?.unknown ?? 0) > 0;
+  const processingNeedsAttention = blocked.named.length > 0;
 
   return (
     <section
@@ -933,19 +903,6 @@ export function MemorySpace({
                 </span>
               ) : null}
             </p>
-            {(processing.unknown ?? 0) > 0 ? (
-              <div className="memory-processing-unknown" role="status">
-                <span>
-                  {tn(
-                    "memory:有 {count} 段对话的整理结果不确定",
-                    processing.unknown ?? 0,
-                  )}
-                </span>
-                <R6Button disabled={busy} onClick={() => void retryUnknown()}>
-                  {t("memory:重新整理")}
-                </R6Button>
-              </div>
-            ) : null}
             <ExtractionWindowControls
               processing={processing}
               busy={busy}
@@ -963,6 +920,10 @@ export function MemorySpace({
         </details>
       ) : null}
 
+      <ModelBackoffBanner
+        processing={processing}
+        onConfigureModel={onConfigureModel}
+      />
       <ModelPrompt
         processing={processing}
         hasMemories={(sdkLibrary.page?.total ?? 0) > 0}
@@ -1227,6 +1188,49 @@ function ModelPrompt({
       </span>
       <button type="button" onClick={onConfigureModel}>
         {t("memory:去配置生成模型")}
+      </button>
+    </p>
+  );
+}
+
+/** Core's circuit breaker paused model work because the provider keeps
+ * failing (bad key, wrong URL, missing model, provider down).
+ *
+ * Nothing is lost and nothing needs retrying by hand: the queued work stays
+ * pending and Core keeps probing on its own, so this only says what is wrong
+ * and where to fix it. It is driven by the polled summary alone and goes away
+ * on the first read that no longer carries `llm_backoff_error`. */
+function ModelBackoffBanner({
+  processing,
+  onConfigureModel,
+}: {
+  processing: MemoryProcessingSummary | null;
+  onConfigureModel(): void;
+}) {
+  const { t, tn } = useGuiLanguage();
+  const code = processing?.llm_backoff_error;
+  if (!processing || !code) return null;
+  return (
+    <p
+      className="model-prompt"
+      role="status"
+      aria-label={t("memory:模型暂停处理")}
+    >
+      <span>
+        {tn(
+          "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队",
+          processing.pending,
+          {
+            reason: t(
+              `memory:${llmBackoffReasonLabel(code)}` as Parameters<
+                typeof t
+              >[0],
+            ),
+          },
+        )}
+      </span>
+      <button type="button" onClick={onConfigureModel}>
+        {t("memory:配置整理模型")}
       </button>
     </p>
   );

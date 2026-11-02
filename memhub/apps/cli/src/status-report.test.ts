@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { CoreReader, ReadOutcome } from "./core-client.js";
 import { composeDoctorReport, renderDoctorText } from "./doctor-report.js";
 import {
   composeStatusReport,
@@ -38,6 +39,75 @@ describe("status default output", () => {
     expect(text).not.toMatch(
       /provider_kind|has_api_key|credential_state|observed_at/,
     );
+  });
+});
+
+describe("status on a paused model", () => {
+  const processing = (backoff: {
+    llm_backoff_until: string | null;
+    llm_backoff_error: string | null;
+  }) => ({
+    pending: 4,
+    fresh_pending: 4,
+    backlog_pending: 0,
+    outside_window_pending: 0,
+    running: 0,
+    waiting_for_model: 0,
+    completed: 1,
+    failed: 0,
+    blocked_stages: [],
+    suspended: 2,
+    ...backoff,
+  });
+  const reader =
+    (summary: unknown): CoreReader =>
+    async <T>(path: string) =>
+      (path === "/api/v1/memory-processing"
+        ? { state: "ok", data: summary }
+        : { state: "unavailable", code: "x" }) as ReadOutcome<T>;
+  const compose = (summary: unknown) =>
+    composeStatusReport({
+      dataDir: "/tmp/isolated/.one-memory",
+      runtime: {
+        state: "running",
+        code: "runtime_verified",
+        host: "127.0.0.1",
+        port: 30001,
+      },
+      background: null,
+      reader: reader(summary),
+    });
+
+  it("names the code and the retry time while the breaker pauses", async () => {
+    const report = await compose(
+      processing({
+        llm_backoff_until: "2026-11-02T10:00:00+00:00",
+        llm_backoff_error: "model_auth_failed",
+      }),
+    );
+    expect(report.sections.processing).toMatchObject({
+      state: "ok",
+      pending: 4,
+      suspended: 2,
+      llm_backoff_until: "2026-11-02T10:00:00+00:00",
+      llm_backoff_error: "model_auth_failed",
+    });
+    const text = renderStatusText(report, "MemHub");
+    expect(text).toContain(
+      "模型暂停：model_auth_failed，将于 2026-11-02T10:00:00+00:00 自动重试",
+    );
+    expect(text).not.toContain("llm_backoff");
+  });
+
+  it("prints no pause line and null fields when nothing is paused", async () => {
+    const report = await compose(
+      processing({ llm_backoff_until: null, llm_backoff_error: null }),
+    );
+    expect(report.sections.processing).toMatchObject({
+      llm_backoff_until: null,
+      llm_backoff_error: null,
+    });
+    expect(renderStatusText(report, "MemHub")).not.toContain("模型暂停");
   });
 });
 

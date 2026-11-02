@@ -1181,7 +1181,7 @@ def test_authority_invalid_task_is_never_reinvoked(tmp_path) -> None:
     assert retained.last_error_code == "hy_memory_write_verification_authority_invalid"
 
 
-def test_linked_unknown_is_retried_only_by_the_durable_job(tmp_path) -> None:
+def test_linked_unknown_is_rerun_only_by_the_durable_job(tmp_path) -> None:
     from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
     from one_memory.memory_server.durable_queue import DurableWriteQueue
 
@@ -1241,8 +1241,8 @@ def test_linked_unknown_is_retried_only_by_the_durable_job(tmp_path) -> None:
     cutoff = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
     assert store.retry_first_unknown_after_reconcile(older_than=cutoff) == 0
     assert store.require(task.task_id).status is MemoryTaskStatus.UNKNOWN
-    assert queue.retry_first_unknown_after_reconcile(older_than=cutoff) == 1
-    assert store.require(task.task_id).status is MemoryTaskStatus.PENDING
+    # The durable job is the only execution entry: it re-runs itself.
+    assert queue.recover_unknown() == 1
     assert queue.get(job.request_id).state == "pending"
     assert (
         store.active_window(

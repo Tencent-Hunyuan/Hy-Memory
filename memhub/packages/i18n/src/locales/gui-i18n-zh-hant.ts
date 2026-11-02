@@ -197,7 +197,6 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "整理需要處理",
   "memory:正在整理记忆": "正在整理記憶",
   "memory:整理状态": "整理狀態",
-  "memory:重新整理": "重新整理",
   "memory:自动提炼范围": "自動萃取範圍",
   "memory:手动提炼下一批": "手動萃取下一批",
   "memory:刷新核对": "重新整理核對",
@@ -222,10 +221,6 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "處理",
   "memory:{count} 条原话": "{count} 則原話",
   "memory:{count} 条原话.one": "{count} 則原話",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "有 {count} 段對話的整理結果不確定",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "有 {count} 段對話的整理結果不確定",
   "memory:{count} 次整理已完成": "{count} 次整理已完成",
   "memory:{count} 次整理已完成.one": "{count} 次整理已完成",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -1529,8 +1524,6 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
     "批次處理結果已保留，但清單重新整理失敗，稍後會自動重新讀取。",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "檢索範圍已儲存，但清單重新整理失敗。請稍後重新開啟記憶頁面。",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "重新整理可能再次呼叫模型。只會重跑結果不確定的對話，是否繼續？",
   "memory:原始对话暂时无法读取": "原始對話暫時無法讀取",
   "memory:没有匹配的原始对话": "沒有符合的原始對話",
   "memory:还没有导入的原始对话": "還沒有匯入的原始對話",
@@ -1841,6 +1834,18 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "還沒有開始產生記憶：{reason}（{count} 則待處理）",
   "memory:去配置生成模型": "去設定生成模型",
+  "memory:模型暂停处理": "模型暫停處理",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "模型設定有問題（{reason}），記憶暫停處理，已有 {count} 則在排隊",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "模型設定有問題（{reason}），記憶暫停處理，已有 {count} 則在排隊",
+  "memory:API Key 无效或没有权限": "API Key 無效或沒有權限",
+  "memory:找不到模型或地址": "找不到模型或位址",
+  "memory:请求过于频繁，被服务商限流": "請求過於頻繁，被服務商限流",
+  "memory:模型响应超时": "模型回應逾時",
+  "memory:模型服务出错": "模型服務出錯",
+  "memory:无法连接模型服务": "無法連線模型服務",
+  "memory:连接模型服务失败": "連線模型服務失敗",
   "calls.directHost": "直接呼叫（診斷）",
   "calls.headline.timedOut": "{host} 未能及時查詢到記憶",
   "calls.headline.unavailable": "{host} 暫時無法查詢記憶",

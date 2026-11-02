@@ -954,6 +954,15 @@ export interface MemoryProcessingSummary {
    * Workers own a task from the moment they take it until they finish, fail or
    * give up, so unlike `running` this cannot include work nobody is doing. */
   in_flight_count: number;
+  /** Jobs held back because their source is off or its grant was revoked.
+   * Not part of `pending`: they run again, unchanged, once the source is on.
+   * Optional so older producers stay valid. */
+  suspended?: number;
+  /** Until when model work is paused because the provider kept failing
+   * (bad key, wrong URL, missing model, provider down); null when not. */
+  llm_backoff_until?: string | null;
+  /** The provider failure behind the pause, as a stable code. */
+  llm_backoff_error?: string | null;
   metrics?: {
     raw_evidence: number;
     complete_turns: number;
@@ -1125,6 +1134,12 @@ export interface MemoryAddReceipt {
   task_id: string | null;
   memory_ids: string[];
   error: string | null;
+  /** Stable code of the last failure while the addition still waits (for
+   * example `model_auth_failed`); null when none. Optional so older
+   * Runtimes stay valid. */
+  error_code?: string | null;
+  /** When Core will try this addition again (ISO); null when not scheduled. */
+  next_retry_at?: string | null;
 }
 
 export type {

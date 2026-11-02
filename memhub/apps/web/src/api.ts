@@ -1001,17 +1001,6 @@ export async function getModelUsage(
   return value;
 }
 
-export async function retryUnknownMemoryProcessing(
-  traceId?: string,
-): Promise<{ requeued: number }> {
-  const response = await client.post<{ reconciled: number; requeued: number }>(
-    "/api/v1/memory-processing/retry-unknown",
-    { confirm: true },
-    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
-  );
-  return response.data;
-}
-
 export async function getExtractionSettings(): Promise<ExtractionSettings> {
   const response = await client.get<ExtractionSettings>(
     "/api/v1/extraction-settings",

@@ -1124,13 +1124,13 @@ def test_pre_upgrade_unknown_writes_are_settled_at_cutover_not_retried(store):
     surviving = DurableWriteQueue(store.database_path, sdk_authority=True)
     assert surviving.unknown_jobs() == ()
     # Never requeued: they may already have written.
-    assert surviving.retry_unknown_confirmed(unknown[0]) == 0
+    assert surviving.recover_unknown() == 0
     assert surviving.readmit_parked() == 0
     assert PENDING not in {state for state, _, _ in rows.values()}
 
 
-def test_retrying_unknown_writes_works_after_the_legacy_tables_are_dropped(store):
-    """The retry button raised `no such table: memory_tasks` after an upgrade."""
+def test_recovering_unknown_writes_works_after_the_legacy_tables_are_dropped(store):
+    """The old retry button raised `no such table: memory_tasks` after an upgrade."""
     from one_memory.memory_server.durable_queue import PENDING, UNKNOWN
     from one_memory.target_schema import drop_legacy_tables
 
@@ -1162,14 +1162,10 @@ def test_retrying_unknown_writes_works_after_the_legacy_tables_are_dropped(store
         surviving = DurableWriteQueue(store.database_path, sdk_authority=sdk_authority)
         make_unknown("model_content_outcome_unknown", 1)
         assert surviving.resolve_unknown_from_linked_output(identifier) is False
-        assert surviving.retry_unknown_confirmed(identifier) == 1
+        assert surviving.recover_unknown() == 1
         assert surviving.get("after-upgrade").state == PENDING
-
-        make_unknown("hy_memory_timeout", 1)
-        since = datetime.now(UTC)
-        assert surviving.retry_timed_out_unknown_after_reconcile(older_than=since) == 1
-        make_unknown("model_content_outcome_unknown", 1)
-        assert surviving.retry_first_unknown_after_reconcile(older_than=since) == 1
+        with main_database(store.database_path).write() as database, database:
+            database.execute("UPDATE memory_write_jobs SET retries=0 WHERE job_id=?", (identifier,))
         if sdk_authority:
             # The SDK-authority queue never brings a dropped table back.
             assert legacy_tables_present(store.database_path) == ()

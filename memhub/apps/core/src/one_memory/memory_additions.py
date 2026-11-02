@@ -34,6 +34,7 @@ from one_memory.memory_governance import MemoryGovernanceStore, MemoryStatus
 from one_memory.memory_server.durable_queue import DurableWriteQueue
 from one_memory.memory_server.unified_entry import UnifiedWriteIntake
 from one_memory.memory_tasks import MemoryTaskStatus, MemoryTaskStore
+from one_memory.model_backoff import next_retry_at
 from one_memory.secrets import SecretStoreUnavailableError
 from one_memory.user_scope import DEFAULT_USER_ID, USER_ID_PATTERN, UserId
 
@@ -77,6 +78,12 @@ class MemoryAddReceipt(BaseModel):
     task_id: str | None = None
     memory_ids: list[str] = Field(default_factory=list)
     error: str | None = None
+    #: Why a note still being worked on last failed (`model_auth_failed`, ...),
+    #: or why a failed one failed. A provider failure keeps it `pending`.
+    error_code: str | None = None
+    #: When a pending note is next tried: its own retry wait, or the model
+    #: provider's pause while the provider is failing.
+    next_retry_at: str | None = None
 
 
 class LegacyMemoryAdditionReader:
@@ -258,6 +265,8 @@ class MemoryAdditionStore:
             durable_state = durable.state if durable is not None else "failed"
             mapped: MemoryAddState = {
                 "pending": "pending",
+                # Re-run automatically within seconds (`recover_unknown`).
+                "unknown": "pending",
                 "running": "running",
                 "waiting_for_model": "waiting_for_model",
                 "waiting_for_permission": "waiting_for_permission",
@@ -272,6 +281,12 @@ class MemoryAdditionStore:
                 state=mapped,
                 memory_ids=(list(durable.sdk_memory_ids) if durable is not None else []),
                 error=durable.detail if durable is not None else "write_missing",
+                error_code=(
+                    durable.error_code
+                    if durable is not None and durable.state != "completed"
+                    else None
+                ),
+                next_retry_at=durable.retry_at if durable is not None else None,
             )
         if self.processor is None:
             raise RuntimeError("legacy_memory_add_processor_unavailable")
@@ -402,10 +417,15 @@ def memory_add_router(dependencies: Sequence[Depends]) -> APIRouter:
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> MemoryAddReceipt:
         try:
-            return store(request).receipt_for_request(request_id, user_id=user_id)
+            receipt = store(request).receipt_for_request(request_id, user_id=user_id)
         except KeyError as error:
             raise HTTPException(404, "memory_add_not_found") from error
         except ValueError as error:
             raise HTTPException(409, str(error)) from error
+        return receipt.model_copy(
+            update={
+                "next_retry_at": next_retry_at(request.app, receipt.state, receipt.next_retry_at)
+            }
+        )
 
     return router

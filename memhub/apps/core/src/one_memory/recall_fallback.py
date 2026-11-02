@@ -32,6 +32,19 @@ FallbackReason = Literal["model_unavailable", "no_memories"]
 #: caller). An empty set means the caller may read no raw conversation.
 RawSources = frozenset[str] | None
 
+#: What the whole recall request may take beyond the caller's own
+#: `timeout_ms`: the search keeps to that budget, but the checks around it
+#: (is a model configured, is the library empty, which raw sources) and the
+#: raw fallback need a little room of their own. Well under the broker's 15 s
+#: wait on Core, so a slow Core answers 504 before the broker gives up.
+RECALL_TOTAL_GRACE_SECONDS = 3.0
+RECALL_TOTAL_CEILING_SECONDS = 12.0
+
+
+def recall_total_timeout_seconds(timeout_ms: int) -> float:
+    """The most one recall request may take from start to answer."""
+    return min(timeout_ms / 1_000 + RECALL_TOTAL_GRACE_SECONDS, RECALL_TOTAL_CEILING_SECONDS)
+
 
 async def recall_with_fallback(
     request: RecallRequest,

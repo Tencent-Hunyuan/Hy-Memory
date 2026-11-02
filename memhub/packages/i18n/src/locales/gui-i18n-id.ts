@@ -215,7 +215,6 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "Pemrosesan perlu perhatian",
   "memory:正在整理记忆": "Memproses memori",
   "memory:整理状态": "Status pemrosesan",
-  "memory:重新整理": "Proses ulang",
   "memory:自动提炼范围": "Rentang ekstraksi otomatis",
   "memory:手动提炼下一批": "Ekstrak batch berikutnya secara manual",
   "memory:刷新核对": "Muat ulang dan periksa",
@@ -240,10 +239,6 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "memproses",
   "memory:{count} 条原话": "{count} kutipan asli",
   "memory:{count} 条原话.one": "{count} kutipan asli",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "Hasil pemrosesan untuk {count} percakapan belum pasti",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "Hasil pemrosesan untuk {count} percakapan belum pasti",
   "memory:{count} 次整理已完成": "{count} proses selesai",
   "memory:{count} 次整理已完成.one": "{count} proses selesai",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -1673,8 +1668,6 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Hasil tindakan massal tetap disimpan, tetapi daftar tidak dapat diperbarui. Daftar akan dimuat ulang otomatis nanti.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Cakupan pengambilan disimpan, tetapi daftar tidak dapat diperbarui. Buka kembali Memori nanti.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Memproses ulang mungkin memanggil model. Hanya percakapan dengan hasil yang belum pasti yang akan dicoba ulang. Lanjutkan?",
   "memory:原始对话暂时无法读取": "Tidak dapat memuat percakapan asli",
   "memory:没有匹配的原始对话": "Tidak ada percakapan asli yang cocok",
   "memory:还没有导入的原始对话": "Belum ada percakapan asli yang diimpor",
@@ -2014,6 +2007,20 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Memori tidak sedang dibuat: {reason} ({count} tertunda)",
   "memory:去配置生成模型": "Konfigurasi model generatif",
+  "memory:模型暂停处理": "Model dijeda",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Ada masalah konfigurasi model ({reason}). Pemrosesan memori dijeda; {count} item dalam antrean",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Ada masalah konfigurasi model ({reason}). Pemrosesan memori dijeda; {count} item dalam antrean",
+  "memory:API Key 无效或没有权限":
+    "kunci API tidak valid atau tidak punya izin",
+  "memory:找不到模型或地址": "model atau alamat tidak ditemukan",
+  "memory:请求过于频繁，被服务商限流":
+    "terlalu banyak permintaan, dibatasi oleh penyedia",
+  "memory:模型响应超时": "respons model melewati batas waktu",
+  "memory:模型服务出错": "layanan model mengalami kesalahan",
+  "memory:无法连接模型服务": "tidak dapat terhubung ke layanan model",
+  "memory:连接模型服务失败": "koneksi ke layanan model gagal",
   "calls.directHost": "Panggilan langsung (diagnostik)",
   "calls.headline.timedOut": "{host} tidak dapat mencari memori tepat waktu",
   "calls.headline.unavailable": "{host} tidak dapat mencari memori saat ini",

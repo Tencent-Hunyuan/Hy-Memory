@@ -320,6 +320,8 @@ export function renderStatusText(
     report.sections.processing?.embedding_switch,
   );
   if (embeddingSwitch !== null) lines.push(`向量模型：${embeddingSwitch}`);
+  const backoff = modelBackoffLine(report.sections.processing);
+  if (backoff !== null) lines.push(backoff);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -333,6 +335,21 @@ export function renderStatusText(
   }
   lines.push("");
   return lines.join("\n");
+}
+
+/** "Model paused" while Core's circuit breaker holds model work back; null
+ * otherwise. Nothing to do here: the queue resumes by itself once the model
+ * answers again (or after the model is fixed). */
+function modelBackoffLine(section: Section | undefined): string | null {
+  if (section?.state !== "ok") return null;
+  const error = section.llm_backoff_error;
+  if (typeof error !== "string" || error.length === 0) return null;
+  const until = section.llm_backoff_until;
+  return `模型暂停：${error}，${
+    typeof until === "string" && until.length > 0
+      ? `将于 ${until} 自动重试`
+      : "稍后自动重试"
+  }`;
 }
 
 export function pipelineLine(pipeline: PipelineSummary): string {
@@ -384,15 +401,22 @@ function runtimeLine(report: StatusDocument): string {
   }）`;
 }
 
+/** Fields that have their own line (or none) instead of a place in the
+ * section's one-line summary. */
+const SECTION_LINE_OMITTED = new Set([
+  "state",
+  "code",
+  "embedding_switch",
+  "llm_backoff_until",
+  "llm_backoff_error",
+]);
+
 function sectionLine(section: Section | undefined): string {
   if (!section) return "未检查";
   if (section.state === "not_checked") return "未检查";
   if (section.state !== "ok") return "暂时不可用，请稍后重试";
   return Object.entries(section)
-    .filter(
-      ([key]) =>
-        key !== "state" && key !== "code" && key !== "embedding_switch",
-    )
+    .filter(([key]) => !SECTION_LINE_OMITTED.has(key))
     .map(([key, value]) => `${fieldLabel(key)} ${formatValue(value)}`)
     .join(" ");
 }
@@ -428,6 +452,7 @@ function fieldLabel(key: string): string {
     backlog_pending: "历史待处理",
     outside_window_pending: "稍后处理",
     waiting_for_model: "等待模型",
+    suspended: "来源已暂停",
     completed: "已完成",
     failed: "失败",
     blocked: "卡住",
@@ -508,7 +533,25 @@ function describeProcessing(
       reason: block.reason,
       count: block.count,
     })),
+    suspended: typeof summary.suspended === "number" ? summary.suspended : 0,
+    ...llmBackoffFields(summary),
     ...embeddingSwitchField(summary),
+  };
+}
+
+/** The model circuit breaker: set only while Core pauses model work because
+ * the provider keeps failing. Both null when nothing is paused. */
+function llmBackoffFields(summary: MemoryProcessingSummary): {
+  llm_backoff_until: string | null;
+  llm_backoff_error: string | null;
+} {
+  const until = summary.llm_backoff_until;
+  const error = summary.llm_backoff_error;
+  return {
+    llm_backoff_until:
+      typeof until === "string" && until.length <= 64 ? until : null,
+    llm_backoff_error:
+      typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
   };
 }
 

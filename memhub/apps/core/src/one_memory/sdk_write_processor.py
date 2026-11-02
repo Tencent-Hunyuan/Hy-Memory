@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from one_memory.background_work import in_sdk_write
 from one_memory.embedding_spaces import (
     EmbeddingSpace,
     EmbeddingSpaceStore,
@@ -28,6 +30,61 @@ from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 PRODUCT_AGENT_ID = "all-apps"
+
+#: SDK request ids whose write call is running on a thread right now. A write
+#: the drain gave up on (its work ceiling, a lost lease) keeps running on its
+#: thread; it must not be re-run beside itself (`recover_unknown`).
+_IN_FLIGHT: set[str] = set()
+_IN_FLIGHT_LOCK = threading.Lock()
+
+
+def sdk_write_in_flight(request_id: str) -> bool:
+    with _IN_FLIGHT_LOCK:
+        return request_id in _IN_FLIGHT
+
+
+class _Tracked:
+    """One SDK write call, held in `_IN_FLIGHT` from submission until it ends.
+
+    If the wait for it is cancelled before a thread picked it up, it is
+    abandoned: it will not start, and it leaves `_IN_FLIGHT` at once.
+    """
+
+    def __init__(self, request_id: str, work: Callable[..., Any]) -> None:
+        self.request_id = request_id
+        self.work = work
+        self.started = False
+        self.abandoned = False
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.add(request_id)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        with _IN_FLIGHT_LOCK:
+            if self.abandoned:
+                raise RuntimeError("hy_memory_write_abandoned")
+            self.started = True
+        try:
+            return self.work(*args, **kwargs)
+        finally:
+            with _IN_FLIGHT_LOCK:
+                _IN_FLIGHT.discard(self.request_id)
+
+    def abandon(self) -> None:
+        with _IN_FLIGHT_LOCK:
+            if not self.started:
+                self.abandoned = True
+                _IN_FLIGHT.discard(self.request_id)
+
+
+async def _write(tracked_id: str, work: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    call = _Tracked(tracked_id, work)
+    try:
+        return await in_sdk_write(call, *args, **kwargs)
+    except asyncio.CancelledError:
+        call.abandon()
+        raise
+
+
 _MESSAGE_ROLES = frozenset({"user", "assistant", "tool"})
 _CONVERSATION_ROLES = frozenset({"user", "assistant"})
 
@@ -82,7 +139,8 @@ class SdkWriteProcessor:
         if extracted and not self._lite:
             contents = [sanitize_model_input(record.verbatim) for record in records]
             await before_hy_invocation()
-            result = await asyncio.to_thread(
+            result = await _write(
+                request_id,
                 client.add_extracted,
                 contents,
                 user_id=scope.user_id,
@@ -109,7 +167,8 @@ class SdkWriteProcessor:
             if not messages:
                 raise RuntimeError("hy_memory_task_without_inputs")
             await before_hy_invocation()
-            result = await asyncio.to_thread(
+            result = await _write(
+                request_id,
                 client.add,
                 messages,
                 user_id=scope.user_id,
@@ -130,7 +189,7 @@ class SdkWriteProcessor:
         if not request_id:
             raise ValueError("request_id is required")
         client = await self._client_handle.client()
-        outcome = await asyncio.to_thread(client.get_write_outcome, request_id)
+        outcome = await in_sdk_write(client.get_write_outcome, request_id)
         if outcome is None:
             return None
         if not isinstance(outcome, Mapping):

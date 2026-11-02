@@ -233,6 +233,31 @@ describe("memories add-status", () => {
     });
   });
 
+  it("passes the retry code and time of an addition still waiting", async () => {
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: {
+        ...addReceipt("pending"),
+        error_code: "model_auth_failed",
+        next_retry_at: "2026-11-02T10:00:00+00:00",
+      },
+    });
+    const json = await capturedRun([
+      "memories",
+      "add-status",
+      REQUEST,
+      "--json",
+    ]);
+    expect(JSON.parse(json.stdout).receipt).toMatchObject({
+      state: "pending",
+      error_code: "model_auth_failed",
+      next_retry_at: "2026-11-02T10:00:00+00:00",
+    });
+    const text = await capturedRun(["memories", "add-status", REQUEST]);
+    expect(text.stdout).toContain("error_code: model_auth_failed");
+    expect(text.stdout).toContain("next_retry_at: 2026-11-02T10:00:00+00:00");
+  });
+
   it("reports an unknown request id as not_found, exit 1", async () => {
     transport.get.mockResolvedValue({
       status: 404,

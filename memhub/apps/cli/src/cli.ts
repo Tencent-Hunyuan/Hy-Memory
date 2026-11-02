@@ -4383,6 +4383,10 @@ function renderWriteReceiptText(receipt: MemoryWriteReceipt): string {
     ...(receipt.memory_ids && receipt.memory_ids.length > 0
       ? [`memory_ids: ${receipt.memory_ids.join(",")}`]
       : []),
+    ...(receipt.error_code ? [`error_code: ${receipt.error_code}`] : []),
+    ...(receipt.next_retry_at
+      ? [`next_retry_at: ${receipt.next_retry_at}`]
+      : []),
     "",
   ].join("\n");
 }

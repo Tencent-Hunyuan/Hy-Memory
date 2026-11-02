@@ -222,7 +222,6 @@ export const germanMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "Verarbeitung erfordert Aufmerksamkeit",
   "memory:正在整理记忆": "Erinnerungen werden verarbeitet",
   "memory:整理状态": "Verarbeitungsstatus",
-  "memory:重新整理": "Neu verarbeiten",
   "memory:自动提炼范围": "Automatisches Extraktionsfenster",
   "memory:手动提炼下一批": "Nächsten Stapel manuell extrahieren",
   "memory:刷新核对": "Aktualisieren und prüfen",
@@ -249,10 +248,6 @@ export const germanMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "Verarbeiten",
   "memory:{count} 条原话": "{count} Originalauszüge",
   "memory:{count} 条原话.one": "{count} Originalauszug",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "Verarbeitungsergebnisse für {count} Unterhaltungen sind unklar",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "Verarbeitungsergebnis für {count} Unterhaltung ist unklar",
   "memory:{count} 次整理已完成": "{count} Verarbeitungsläufe abgeschlossen",
   "memory:{count} 次整理已完成.one": "{count} Verarbeitungslauf abgeschlossen",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -1703,8 +1698,6 @@ export const germanMessages: Record<MessageKey, string> = {
     "Ergebnisse der Stapelaktion bleiben erhalten, aber die Liste konnte nicht aktualisiert werden. Sie wird später automatisch neu geladen.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Abrufbereich gespeichert, aber die Liste konnte nicht aktualisiert werden. Öffnen Sie „Erinnerungen“ später erneut.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Eine erneute Verarbeitung kann das Modell aufrufen. Nur Unterhaltungen mit unklaren Ergebnissen werden wiederholt. Fortfahren?",
   "memory:原始对话暂时无法读取":
     "Originalunterhaltungen konnten nicht geladen werden",
   "memory:没有匹配的原始对话": "Keine passenden Originalunterhaltungen",
@@ -2051,6 +2044,20 @@ export const germanMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Es werden keine Erinnerungen erstellt: {reason} ({count} ausstehend)",
   "memory:去配置生成模型": "Generierungsmodell einrichten",
+  "memory:模型暂停处理": "Modell pausiert",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Problem mit der Modellkonfiguration ({reason}). Die Verarbeitung ist pausiert; {count} Einträge warten",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Problem mit der Modellkonfiguration ({reason}). Die Verarbeitung ist pausiert; {count} Eintrag wartet",
+  "memory:API Key 无效或没有权限":
+    "API-Schlüssel ungültig oder ohne Berechtigung",
+  "memory:找不到模型或地址": "Modell oder Adresse nicht gefunden",
+  "memory:请求过于频繁，被服务商限流":
+    "zu viele Anfragen, vom Anbieter gedrosselt",
+  "memory:模型响应超时": "Zeitüberschreitung bei der Modellantwort",
+  "memory:模型服务出错": "Fehler im Modelldienst",
+  "memory:无法连接模型服务": "Modelldienst nicht erreichbar",
+  "memory:连接模型服务失败": "Verbindung zum Modelldienst fehlgeschlagen",
   "calls.directHost": "Direkter Aufruf (Diagnose)",
   "calls.headline.timedOut":
     "{host} konnte Erinnerungen nicht rechtzeitig abfragen",
