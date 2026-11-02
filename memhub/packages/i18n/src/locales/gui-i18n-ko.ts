@@ -1061,6 +1061,23 @@ export const koreanMessages: Record<MessageKey, string> = {
     "기억 접근 권한이 취소되어 {name}은(는) 더 이상 기억을 조회할 수 없습니다. 완전히 제거되었는지 확인할 수 없으니 다음 경로를 직접 확인하세요: {paths}.",
   appRemovalReview:
     "연결이 완전히 제거되었는지 확인할 수 없습니다. 다음 경로를 직접 확인하세요: {paths}.",
+  appProfilesLabel: "{name} 프로필",
+  appProfileOn: "{profile}: 연결됨",
+  appProfileOff: "{profile}: 연결 안 됨",
+  appProfilesHint:
+    "이 스위치는 감지된 모든 프로필에 기억 연결을 설치하고 접근을 허용하며, 끄면 모두 취소합니다. 켜져 있는 동안 새 프로필은 자동으로 연결됩니다.",
+  appProfilesNone:
+    "{name} 프로필이 감지되지 않았습니다. 프로필을 만든 뒤 이 페이지로 돌아오세요.",
+  appProfilesConnectFailed:
+    "다음 프로필을 연결하지 못했습니다: {profiles}. 다른 프로필은 유지됩니다. {reason}",
+  appProfilesDisconnectFailed:
+    "다음 프로필의 연결을 해제하지 못해 여전히 기억을 사용할 수 있습니다: {profiles}. 다시 시도하세요. {reason}",
+  appProfilesRevokedRetained:
+    "다음 프로필의 기억 접근 권한을 취소했지만 연결 파일이 모두 제거되지는 않았습니다. 확인하세요: {profiles}.",
+  appProfileNameUnsupported:
+    "프로필 이름에는 소문자, 숫자, 하이픈만 사용할 수 있으며 최대 32자입니다",
+  "apps.autoHostProfilesFailed":
+    "{name}의 다음 프로필을 자동으로 연결하지 못했습니다({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor의 연결 자격 증명이 변경되었습니다. 새 대화를 시작하기 전에 Cursor를 완전히 종료했다가 다시 여세요.",
   连接其他工具: "다른 도구 연결",

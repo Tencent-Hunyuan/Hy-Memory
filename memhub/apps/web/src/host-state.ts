@@ -1,5 +1,10 @@
 import { MutationObserver, useQuery } from "@tanstack/react-query";
-import { connectionHostId, hostMatchesSource } from "./connection-hosts";
+import {
+  connectionHostId,
+  hostMatchesSource,
+  isProfileSource,
+  profileName,
+} from "./connection-hosts";
 import type {
   RecallHostStatus,
   RecallPermissionStatus,
@@ -226,6 +231,7 @@ export function matchHost(
 
 const REASONS: Record<string, string> = {
   host_unsupported: "它没有 MCP 通道，无法发放可撤销的记忆凭证",
+  profile_name_unsupported: "appProfileNameUnsupported",
   unsupported_host: "当前安装不支持一键插入",
   connection_client_unavailable: "桌面端的连接组件不可用",
   noncanonical_data_dir_host_integration_disabled: "测试实例不接入应用",
@@ -350,8 +356,64 @@ export function hostWriteInFlight() {
   return queryClient.isMutating({ mutationKey: HOST_WRITE }) > 0;
 }
 
+/** A per-profile source writes to every profile, so it waits on each of them. */
 function sourceHost(sourceId: string) {
+  if (isProfileSource(sourceId))
+    return [
+      sourceId,
+      ...profileHosts(cachedRecallHosts(), sourceId).map((host) => host.hostId),
+    ];
   return [connectionHostId(sourceId) ?? sourceId];
+}
+
+/** Every detected profile host of a per-profile source, e.g. DeepSeek Harness. */
+export function profileHosts(
+  hosts: readonly RecallHostStatus[] | undefined,
+  sourceId: string,
+) {
+  if (!isProfileSource(sourceId)) return [];
+  return (hosts ?? []).filter((host) => host.hostId.startsWith(`${sourceId}:`));
+}
+
+/** The app switch reads as on: its host, or for a per-profile source any
+ * profile, may use memory. A failed profile is reported, not hidden. */
+export function sourceConnectionApproved(
+  hosts: readonly RecallHostStatus[] | undefined,
+  sourceId: string,
+) {
+  if (isProfileSource(sourceId))
+    return profileHosts(hosts, sourceId).some(hostConnectionApproved);
+  return hostConnectionApproved(matchHost(hosts, sourceId));
+}
+
+/** Something the switch would still do: a host, or any profile, that is
+ * neither approved nor unsupported. */
+export function sourceConnectionIncomplete(
+  hosts: readonly RecallHostStatus[] | undefined,
+  sourceId: string,
+) {
+  const pending = (host: RecallHostStatus | null) =>
+    !hostConnectionApproved(host) && !hostConnectionUnsupported(host);
+  if (isProfileSource(sourceId))
+    return profileHosts(hosts, sourceId).some(pending);
+  return pending(matchHost(hosts, sourceId));
+}
+
+/** Some profiles of a per-profile source could not be written; the others
+ * were kept. The message keeps the first cause so `hostWriteReason` names it. */
+export class ProfileWriteError extends Error {
+  readonly profiles: string[];
+  constructor(profiles: string[], cause: unknown) {
+    super(
+      `profile_write_failed ${cause instanceof Error ? cause.message : ""}`.trim(),
+    );
+    this.profiles = profiles;
+  }
+}
+
+/** The profile names a failed write left behind, if it was a profile write. */
+export function profileWriteFailures(error: unknown): string[] | null {
+  return error instanceof ProfileWriteError ? error.profiles : null;
 }
 
 type Connected = {
@@ -360,8 +422,11 @@ type Connected = {
   permission?: RecallPermissionStatus;
 };
 
-async function connect(sourceId: string): Promise<Connected | null> {
-  const hostId = connectionHostId(sourceId);
+type Bridge = NonNullable<ReturnType<typeof bridge>>;
+
+async function connect(sourceId: string): Promise<Connected[]> {
+  const profiles = isProfileSource(sourceId);
+  const hostId = profiles ? sourceId : connectionHostId(sourceId);
   const api = bridge();
   if (
     !hostId ||
@@ -371,12 +436,65 @@ async function connect(sourceId: string): Promise<Connected | null> {
     !api.setRecallPermission
   )
     throw Error("unsupported_host");
-  const existing = matchHost(await refreshRecallHosts(), sourceId);
-  if (hostConnectionUnsupported(existing)) throw Error("host_unsupported");
-  if (hostConnectionApproved(existing)) {
-    await api.repairRecallCommands?.();
-    return null;
+  const hosts = await refreshRecallHosts();
+  if (profiles) return connectProfiles(api, sourceId, hosts);
+  const result = await grantHost(
+    api,
+    hostId,
+    sourceId,
+    matchHost(hosts, sourceId),
+  );
+  await api.repairRecallCommands?.();
+  return result ? [result] : [];
+}
+
+/** One switch, every detected profile. A profile that fails does not undo
+ * the ones that worked; the error names it. Profiles already approved are
+ * left alone, so turning the switch on again only reaches what is missing. */
+async function connectProfiles(
+  api: Bridge,
+  sourceId: string,
+  hosts: RecallHostStatus[],
+): Promise<Connected[]> {
+  const profiles = profileHosts(hosts, sourceId);
+  if (!profiles.length) throw Error("profiles_not_found");
+  const connected: Connected[] = [];
+  const failed: string[] = [];
+  let cause: unknown;
+  for (const host of profiles) {
+    try {
+      const result = await grantHost(api, host.hostId, sourceId, host);
+      if (result) connected.push(result);
+    } catch (error) {
+      failed.push(profileName(host.hostId));
+      // Harness speaks MCP, so "unsupported" can only mean the id grammar
+      // refused this name; "no MCP channel" would send the person astray.
+      cause ??= hostConnectionUnsupported(host)
+        ? Error("profile_name_unsupported")
+        : error;
+    }
   }
+  if (failed.length < profiles.length) await api.repairRecallCommands?.();
+  if (failed.length) throw new ProfileWriteError(failed, cause);
+  return connected;
+}
+
+/** Installs and grants one host; null when it was already approved. */
+async function grantHost(
+  api: Bridge,
+  hostId: string,
+  sourceId: string,
+  existing: RecallHostStatus | null,
+): Promise<Connected | null> {
+  if (
+    !api.previewRecallInstall ||
+    !api.installRecall ||
+    !api.getRecallPermission ||
+    !api.setRecallPermission
+  )
+    throw Error("unsupported_host");
+  if (hostConnectionUnsupported(existing)) throw Error("host_unsupported");
+  if (hostConnectionApproved(existing)) return null;
   const preview = await api.previewRecallInstall(hostId);
   const installed = await api.installRecall(hostId, preview.fingerprint);
   let permission =
@@ -394,19 +512,19 @@ async function connect(sourceId: string): Promise<Connected | null> {
   }
   if (permission.receipt?.status !== "approved")
     throw Error("permission_not_approved");
-  await api.repairRecallCommands?.();
   return { hostId, installed: true, permission };
 }
 
-function landConnected(result: Connected | null) {
-  if (result)
+function landConnected(results: Connected[]) {
+  for (const result of results)
     landHost(result.hostId, {
       installed: result.installed,
       permission: result.permission,
     });
 }
 
-/** Installs and grants one host; resolves only once the grant is approved. */
+/** Installs and grants one host (or every profile of a per-profile source);
+ * resolves only once the grants are approved. */
 export const enableHostConnection = hostWrite(
   sourceHost,
   connect,
@@ -479,6 +597,22 @@ async function disconnect(hostId: string): Promise<Disconnected> {
   }
 }
 
+function landDisconnected({
+  hostId,
+  outcome,
+}: {
+  hostId: string;
+  outcome: DisconnectOutcome;
+}) {
+  if (outcome.state === "removed")
+    landHost(hostId, {
+      installed: false,
+      ...(outcome.permission ? { permission: outcome.permission } : {}),
+    });
+  else if (outcome.state !== "failed" && outcome.permission)
+    landHost(hostId, { permission: outcome.permission });
+}
+
 export const disconnectHost = hostWrite(
   (hostId: string) => [hostId],
   async (
@@ -489,14 +623,48 @@ export const disconnectHost = hostWrite(
     const rereadFailed = !(await rereadOnce());
     return { hostId, outcome: { ...result, rereadFailed } };
   },
-  ({ hostId, outcome }) => {
-    if (outcome.state === "removed")
-      landHost(hostId, {
-        installed: false,
-        ...(outcome.permission ? { permission: outcome.permission } : {}),
+  landDisconnected,
+);
+
+export type ProfileDisconnect = { hostId: string; outcome: DisconnectOutcome };
+
+/** Linked to MemHub at all: installed, or holding a receipt that is not yet
+ * revoked. A profile that never was has nothing to remove. */
+function profileLinked(host: RecallHostStatus) {
+  const status = host.permission?.receipt?.status;
+  return host.installed || (status !== undefined && status !== "revoked");
+}
+
+/** Turn a per-profile source off: each linked profile is removed and its grant
+ * revoked, exactly as one host would be. One failure does not stop the rest;
+ * every outcome is returned so the page can name the profile it concerns. */
+export const disconnectProfiles = hostWrite(
+  sourceHost,
+  async (sourceId: string): Promise<ProfileDisconnect[]> => {
+    const profiles = profileHosts(await refreshRecallHosts(), sourceId).filter(
+      profileLinked,
+    );
+    const results: ProfileDisconnect[] = [];
+    let anyFailed = false;
+    for (const host of profiles) {
+      const outcome = await disconnect(host.hostId);
+      anyFailed ||= outcome.state === "failed";
+      results.push({
+        hostId: host.hostId,
+        outcome:
+          outcome.state === "failed"
+            ? { ...outcome, rereadFailed: false }
+            : outcome,
       });
-    else if (outcome.state !== "failed" && outcome.permission)
-      landHost(hostId, { permission: outcome.permission });
+    }
+    if (anyFailed && !(await rereadOnce()))
+      for (const result of results)
+        if (result.outcome.state === "failed")
+          result.outcome = { ...result.outcome, rereadFailed: true };
+    return results;
+  },
+  (results) => {
+    for (const result of results) landDisconnected(result);
   },
 );
 

@@ -991,6 +991,22 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   appRevokedReview:
     "已撤銷記憶權限，{name} 已無法查詢記憶。但無法確認連線已全部移除，請手動核對以下路徑：{paths}。",
   appRemovalReview: "無法確認連線已全部移除，請手動核對以下路徑：{paths}。",
+  appProfilesLabel: "{name} 的 Profile",
+  appProfileOn: "{profile}：已串接",
+  appProfileOff: "{profile}：未串接",
+  appProfilesHint:
+    "開關會為每個已偵測到的 Profile 安裝記憶連線並授權，關閉時全部撤銷。開關開啟期間，新建立的 Profile 會自動串接。",
+  appProfilesNone: "尚未偵測到 {name} 的 Profile。建立 Profile 後請回到此頁。",
+  appProfilesConnectFailed:
+    "以下 Profile 未能串接：{profiles}。其他 Profile 已保留。{reason}",
+  appProfilesDisconnectFailed:
+    "以下 Profile 的連線未能移除，記憶權限也未能撤銷，仍可使用記憶：{profiles}。請重試。{reason}",
+  appProfilesRevokedRetained:
+    "已撤銷以下 Profile 的記憶權限，但連線檔案沒有全部移除，請核對：{profiles}。",
+  appProfileNameUnsupported:
+    "Profile 名稱只能包含小寫字母、數字和連字號，最長 32 個字元",
+  "apps.autoHostProfilesFailed":
+    "{name} 的以下 Profile 未能自動串接（{profiles}）{reason}。",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor 的連線憑證已更新。請完全結束並重新開啟 Cursor，再開始新對話。",
   连接其他工具: "連線其他工具",

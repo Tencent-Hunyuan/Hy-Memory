@@ -1084,6 +1084,23 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "記憶へのアクセスを取り消したため、{name} は記憶を照会できなくなりました。接続が完全に削除されたか確認できませんでした。次のパスを手動で確認してください：{paths}。",
   appRemovalReview:
     "接続が完全に削除されたか確認できませんでした。次のパスを手動で確認してください：{paths}。",
+  appProfilesLabel: "{name} のプロファイル",
+  appProfileOn: "{profile}：接続済み",
+  appProfileOff: "{profile}：未接続",
+  appProfilesHint:
+    "このスイッチは検出されたすべてのプロファイルに記憶の接続をインストールしてアクセスを許可し、オフにするとすべて取り消します。オンの間は、新しいプロファイルも自動的に接続されます。",
+  appProfilesNone:
+    "{name} のプロファイルが検出されませんでした。プロファイルを作成してから、このページに戻ってください。",
+  appProfilesConnectFailed:
+    "次のプロファイルを接続できませんでした：{profiles}。ほかのプロファイルはそのまま維持されます。{reason}",
+  appProfilesDisconnectFailed:
+    "次のプロファイルの接続を解除できず、引き続き記憶を使用できます：{profiles}。もう一度お試しください。{reason}",
+  appProfilesRevokedRetained:
+    "次のプロファイルの記憶へのアクセスを取り消しましたが、接続ファイルの一部は削除されていません。確認してください：{profiles}。",
+  appProfileNameUnsupported:
+    "プロファイル名に使えるのは小文字、数字、ハイフンのみで、32 文字までです",
+  "apps.autoHostProfilesFailed":
+    "{name} の次のプロファイルを自動的に接続できませんでした（{profiles}）{reason}。",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor の接続の認証情報が更新されました。Cursor を完全に終了して開き直してから、新しい会話を始めてください。",
   连接其他工具: "ほかのツールを接続",

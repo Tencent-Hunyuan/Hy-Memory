@@ -1109,6 +1109,23 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "O acesso às memórias foi revogado, então {name} não pode mais consultar memórias. Não foi possível confirmar a remoção completa; revise estes caminhos manualmente: {paths}.",
   appRemovalReview:
     "Não foi possível confirmar a remoção completa da conexão. Revise estes caminhos manualmente: {paths}.",
+  appProfilesLabel: "Perfis de {name}",
+  appProfileOn: "{profile}: conectado",
+  appProfileOff: "{profile}: não conectado",
+  appProfilesHint:
+    "O interruptor instala a conexão de memórias e concede acesso a cada perfil detectado, e revoga todos ao ser desligado. Enquanto estiver ligado, novos perfis são conectados automaticamente.",
+  appProfilesNone:
+    "Nenhum perfil de {name} foi detectado. Crie um perfil e volte a esta página.",
+  appProfilesConnectFailed:
+    "Não foi possível conectar estes perfis: {profiles}. Os outros perfis foram mantidos. {reason}",
+  appProfilesDisconnectFailed:
+    "Não foi possível desconectar estes perfis, que ainda podem usar memórias: {profiles}. Tente novamente. {reason}",
+  appProfilesRevokedRetained:
+    "O acesso às memórias foi revogado para estes perfis, mas nem todos os arquivos de conexão foram removidos; revise-os: {profiles}.",
+  appProfileNameUnsupported:
+    "nomes de perfil só podem usar letras minúsculas, dígitos e hifens, até 32 caracteres",
+  "apps.autoHostProfilesFailed":
+    "Não foi possível conectar automaticamente estes perfis de {name} ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "A credencial de conexão do Cursor mudou. Feche o Cursor por completo e abra novamente antes de iniciar uma nova conversa.",
   连接其他工具: "Conectar outras ferramentas",

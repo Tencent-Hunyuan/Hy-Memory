@@ -91,7 +91,14 @@ describe("single state layer", () => {
   });
 
   it("reads and writes host connections only through host-state", () => {
-    expect(offenders(hostUses, ["host-state.ts", "global.d.ts"])).toEqual([]);
+    expect(
+      offenders(hostUses, [
+        "host-state.ts",
+        "global.d.ts",
+        // Test support: it is the fake bridge, and only tests import it.
+        "harness-profiles.test-fixture.ts",
+      ]),
+    ).toEqual([]);
   });
 
   it("reads and writes sources only through source-state", () => {

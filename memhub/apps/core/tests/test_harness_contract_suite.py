@@ -193,7 +193,7 @@ def _qwenwork() -> Harness:
 
 def _deepseek() -> Harness:
     def write(path: Path, turns: list[Turn]) -> None:
-        # deepseek only accepts a file literally named session.jsonl, and nests
+        # deepseek only accepts files named session[.vN].jsonl[.zstd], and nests
         # the turn under "data".
         lines: list[dict] = [{"type": "session", "version": 0, "id": "s1", "cwd": "/w"}]
         for index, (role, text, _session) in enumerate(turns):
@@ -225,7 +225,7 @@ def _deepseek() -> Harness:
 
     from one_memory.imports.sources.deepseek_harness import create_deepseek_harness_adapter
 
-    # deepseek accepts only a file literally named session.jsonl.
+    # deepseek accepts only session[.vN].jsonl[.zstd]; the first format is used here.
     return Harness(
         "deepseek-harness",
         write,

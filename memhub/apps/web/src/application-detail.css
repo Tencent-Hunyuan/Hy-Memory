@@ -118,6 +118,14 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+.r6-app-profiles {
+  font-size: 13px;
+  color: #637786;
+  line-height: 1.8;
+  margin: 4px 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
 .r6-app-detail-actions {
   display: flex;
   gap: 12px;
