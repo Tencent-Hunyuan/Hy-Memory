@@ -107,6 +107,10 @@ PARKED_STATES = (WAITING_FOR_PERMISSION, WAITING_FOR_MODEL)
 #: re-admitted on a timer. The gap keeps a still-down model from spinning.
 DEFAULT_MODEL_READMIT_AFTER = timedelta(minutes=1)
 
+#: How long a job the execute gate handed back (`release_unstarted`) is left
+#: alone before it can be claimed again.
+RELEASE_HOLD = timedelta(seconds=5)
+
 #: Production drain-budget defaults. These are the single source consumed by
 #: the composition root; callers must not invent a second formula or copy a
 #: test probe's numbers into the product path.
@@ -1726,9 +1730,23 @@ class DurableWriteQueue:
                 )
         return updated.rowcount == 1
 
-    def release_unstarted(self, job_id: str, *, owner: str | None = None) -> bool:
-        """Return a claimed job to pending when its source was paused pre-HY."""
-        now = datetime.now(UTC).isoformat()
+    def release_unstarted(
+        self,
+        job_id: str,
+        *,
+        owner: str | None = None,
+        hold: timedelta = RELEASE_HOLD,
+    ) -> bool:
+        """Return a claimed job to pending when its source was paused pre-HY.
+
+        The row comes back with its lease still set `hold` into the future.
+        Claim only takes a pending row whose lease has expired, so a job the
+        execute gate just refused is not claimed again on the very next tick:
+        when the claim gate and the execute gate disagree for good (a
+        pre-upgrade payload whose Evidence belongs to another user than its
+        lane), the job is retried every few seconds instead of in a tight loop.
+        """
+        now = datetime.now(UTC)
         where = "job_id=? AND state=? AND hy_invoked=0"
         params: tuple[Any, ...] = (job_id, RUNNING)
         if owner is not None:
@@ -1738,8 +1756,8 @@ class DurableWriteQueue:
             updated = connection.execute(
                 "UPDATE memory_write_jobs SET state=?,lease_owner=NULL,"
                 "attempts=CASE WHEN attempts>0 THEN attempts-1 ELSE 0 END,"
-                "lease_expires_at=NULL,updated_at=? WHERE " + where,
-                (PENDING, now, *params),
+                "lease_expires_at=?,updated_at=? WHERE " + where,
+                (PENDING, (now + hold).isoformat(), now.isoformat(), *params),
             )
         return updated.rowcount == 1
 
@@ -2694,6 +2712,7 @@ class DurableWriteDrain:
         reconcile_unknown: Callable[[], Awaitable[None]] | None = None,
         source_writes_permitted: Callable[[str], bool] | None = None,
         source_claim_enabled: Callable[[str], bool] | None = None,
+        model_claim_allowance: Callable[[], int | None] | None = None,
     ) -> None:
         self.queue = queue
         self.execute = execute
@@ -2769,6 +2788,11 @@ class DurableWriteDrain:
         self.reconcile_unknown = reconcile_unknown
         self.source_writes_permitted = source_writes_permitted
         self.source_claim_enabled = source_claim_enabled or source_writes_permitted
+        #: How many jobs may be claimed now while the model provider is being
+        #: given a rest (`model_backoff`): None for no limit, 0 to claim none.
+        #: Without it a backlog failing in 50ms each was hundreds of requests
+        #: a minute against a provider that refused every one (#245).
+        self.model_claim_allowance = model_claim_allowance
         self._last_unknown_reconcile: datetime | None = None
 
     def claim(
@@ -2812,6 +2836,14 @@ class DurableWriteDrain:
                 return ()
         except sqlite3.Error:
             pass
+        if self.model_claim_allowance is not None:
+            # Asked only once there is work to claim: while the provider is
+            # paused nothing is, and after the pause one job probes it.
+            allowance = self.model_claim_allowance()
+            if allowance is not None:
+                if allowance < 1:
+                    return ()
+                limit = min(limit, allowance)
         enabled_sources: set[str] | None = None
         if self.source_writes_permitted is not None:
             with main_database(self.queue.database_path).read() as connection:

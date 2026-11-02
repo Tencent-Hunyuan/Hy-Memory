@@ -46,7 +46,12 @@ from pydantic import (
 
 from one_memory import __version__, memory_visibility
 from one_memory.auth import local_api_guard, renderer_origins
-from one_memory.background_work import shutdown_bulk_pool, warm_bulk_pool
+from one_memory.background_work import (
+    in_sdk_read,
+    in_the_background,
+    shutdown_bulk_pool,
+    warm_bulk_pool,
+)
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import sdk_context_router
 from one_memory.conversation_processing import (
@@ -55,6 +60,7 @@ from one_memory.conversation_processing import (
 )
 from one_memory.database_access import (
     MAIN_DATABASE_REPORT_SECONDS,
+    checkpoint_idle_main_databases,
     close_main_databases,
     log_main_database_stats,
     main_database,
@@ -237,6 +243,7 @@ from one_memory.memory_tasks import (
     MemoryTaskStatus,
     MemoryTaskStore,
 )
+from one_memory.model_backoff import BackedOffModelTransport, ModelBackoff
 from one_memory.model_presets import seed_preset_profile
 from one_memory.model_probe import ModelProber, ModelProbeResult
 from one_memory.model_profiles import (
@@ -712,6 +719,17 @@ class MemoryProcessingSummary(BaseModel):
     #: The running embedding switch or merge, `{job_id, kind, state, percent,
     #: eta_s}`; None when none runs. Model writes wait while it is set.
     embedding_switch: dict[str, object] | None = None
+    #: Jobs held back because their source is off or its grant was revoked.
+    #: Not in `pending` or the queue numbers: they run again, unchanged, once
+    #: the source is turned back on. Nothing is cancelled or deleted.
+    suspended: int = 0
+    #: Until when model work is paused because the provider kept failing
+    #: (bad key, wrong URL, model missing, provider down); None when it is
+    #: not. Ends early on success or when the model configuration changes.
+    llm_backoff_until: datetime | None = None
+    #: The last provider failure behind the pause, as a stable code
+    #: (`model_auth_failed`, `model_not_found`, `model_unreachable`, ...).
+    llm_backoff_error: str | None = None
 
 
 class MemoryModeState(BaseModel):
@@ -1363,6 +1381,9 @@ def create_app(
             )
             app.state.model_request_budget = model_request_budget
             app.state.model_request_audit_store = ModelRequestAuditStore(database_path)
+            #: One pause for every model request while the provider keeps
+            #: failing (`model_backoff`); reset when the configuration changes.
+            app.state.model_backoff = ModelBackoff()
             # Before anything asks for an active profile: a first launch that
             # carries a preset should show it already filled in, so the user
             # meets one empty field instead of a form they cannot answer.
@@ -1381,17 +1402,23 @@ def create_app(
                 profiles=app.state.model_profile_store,
                 secrets=app.state.secret_store,
                 data_dir=runtime_settings.data_dir,
+                # Outermost, so a request the pause refuses never went out and
+                # leaves no audit row behind.
                 transport_factory=lambda profile: (
-                    lambda: AuditedModelTransport(
-                        app.state.model_request_audit_store,
-                        profile_id=profile.profile_id,
-                        profile_revision=profile.revision,
-                        provider_kind=str(profile.provider_kind),
-                        model=profile.model,
-                        inner=(
-                            BudgetedModelTransport(model_request_budget)
-                            if model_request_budget is not None
-                            else None
+                    lambda: BackedOffModelTransport(
+                        app.state.model_backoff,
+                        profile_id=f"{profile.profile_id}:{profile.revision}",
+                        inner=AuditedModelTransport(
+                            app.state.model_request_audit_store,
+                            profile_id=profile.profile_id,
+                            profile_revision=profile.revision,
+                            provider_kind=str(profile.provider_kind),
+                            model=profile.model,
+                            inner=(
+                                BudgetedModelTransport(model_request_budget)
+                                if model_request_budget is not None
+                                else None
+                            ),
                         ),
                     )
                 ),
@@ -1410,6 +1437,9 @@ def create_app(
                 data_dir=runtime_settings.data_dir,
                 memory_mode=lambda: _memory_mode(app),
                 writes_open=lambda: _embedding_writes_open(app),
+                # The claim gate's own source question, so what is counted as
+                # waiting is what the drain would claim (#245).
+                source_active=lambda source_key: _source_writes_on(app, source_key),
             )
             app.state.evolve_state_store = EvolveStateStore(runtime_settings.data_dir)
             app.state.evolve_service = EvolveService(
@@ -1517,6 +1547,7 @@ def create_app(
                 # therefore skipped on every drain tick — the note stayed
                 # "saved, waiting" with no task behind it, forever.
                 source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
+                model_claim_allowance=app.state.model_backoff.allowance,
             )
             app.state.memory_write_drain = memory_write_drain
 
@@ -1554,6 +1585,7 @@ def create_app(
                         app.state.memory_task_store.rebind_unstarted_profile, profile
                     )
                 await asyncio.to_thread(memory_write_queue.readmit_model_profile_waiters)
+                _reset_model_backoff(app)
                 _resume_sedimentation(app)
                 _start_backfill(app)
 
@@ -2029,6 +2061,10 @@ def create_app(
                 # Last: what has just been shut down was using it.
                 shutdown_bulk_pool()
                 log_main_database_stats("shutdown")
+                # Leave an empty WAL behind: everything that wrote is stopped
+                # by now. Busy (another process reading) is fine; the next
+                # start's idle pass truncates it.
+                await asyncio.to_thread(checkpoint_idle_main_databases)
                 close_main_databases()
                 diagnostic_event(
                     level="info",
@@ -3539,7 +3575,7 @@ def create_app(
     )
     def create_model_profile(request: ModelProfileInput) -> ModelProfile:
         try:
-            return _model_profile_store(app).create(request, _secret_store(app))
+            created = _model_profile_store(app).create(request, _secret_store(app))
         except EmbeddingBaseUrlRequiredError:
             raise HTTPException(422, "embedding_base_url_required") from None
         except ModelCreationOperationConflictError:
@@ -3551,6 +3587,8 @@ def create_app(
                 status_code=503,
                 detail=_secret_store_detail(error),
             ) from None
+        _reset_model_backoff(app)
+        return created
 
     @app.get("/api/v1/model-profile-creations/{operation_id}", dependencies=protected)
     def model_creation_operation(operation_id: str) -> ModelCreationOperationReceipt:
@@ -3585,7 +3623,7 @@ def create_app(
     ) -> ModelProfile:
         _refuse_embedding_edit_during_switch(app, profile_id, request)
         try:
-            return _model_profile_store(app).update(
+            updated = _model_profile_store(app).update(
                 profile_id,
                 request,
                 _secret_store(app),
@@ -3601,6 +3639,10 @@ def create_app(
                 status_code=503,
                 detail=_secret_store_detail(error),
             ) from None
+        # A saved key, URL or model is what the paused provider was waiting
+        # for: try it now, not after the rest of the pause.
+        _reset_model_backoff(app)
+        return updated
 
     @app.post(
         "/api/v1/model-profiles/{profile_id}/activate",
@@ -3663,6 +3705,7 @@ def create_app(
         # D75: work queued for the previous model continues with this one.
         # Only tasks that never reached the model are re-bound.
         await asyncio.to_thread(app.state.memory_task_store.rebind_unstarted_profile, profile)
+        _reset_model_backoff(app)
         # A missing profile is an event-driven wait, not a provider outage.
         # Release those durable rows only now that activation has changed the
         # condition; the ordinary drain poll will claim them without a restart.
@@ -4504,7 +4547,10 @@ def create_app(
         http_request: Request,
     ) -> RecallReceipt:
         from one_memory.call_event_recorder import record_legacy_result
-        from one_memory.recall_fallback import recall_with_fallback
+        from one_memory.recall_fallback import (
+            recall_total_timeout_seconds,
+            recall_with_fallback,
+        )
 
         started = time.monotonic()
         await _require_external_recall_scope(
@@ -4520,21 +4566,36 @@ def create_app(
         )
         raw_options = {"filters": options} if options is not None else {}
         access = external_access(http_request.headers)
-        receipt = await recall_with_fallback(
-            request,
-            model_ready=lambda: _recall_model_ready(app),
-            recall_memories=target.recall_async,
-            has_memories=lambda: _library_has_memories(app, request.user_id),
-            raw_sources=lambda: _recall_raw_sources(app, request, access, started),
-            search_raw=lambda query, limit, sources: _search_sdk_raw(
-                app,
-                query,
-                limit=limit,
-                sources=sources,
-                user_id=request.user_id,
-                **raw_options,
-            ),
-        )
+        try:
+            # The whole answer, not only the search: the checks before and
+            # after it used to wait for a thread with no limit at all, so a
+            # pool held by stuck writes left recall hanging while /health
+            # still answered (#231). Late is a clear 504, not silence.
+            receipt = await asyncio.wait_for(
+                recall_with_fallback(
+                    request,
+                    model_ready=lambda: _recall_model_ready(app),
+                    recall_memories=target.recall_async,
+                    has_memories=lambda: _library_has_memories(app, request.user_id),
+                    raw_sources=lambda: _recall_raw_sources(app, request, access, started),
+                    search_raw=lambda query, limit, sources: _search_sdk_raw(
+                        app,
+                        query,
+                        limit=limit,
+                        sources=sources,
+                        user_id=request.user_id,
+                        **raw_options,
+                    ),
+                ),
+                timeout=recall_total_timeout_seconds(request.timeout_ms),
+            )
+        except TimeoutError:
+            logger.warning(
+                "recall_timed_out timeout_ms=%d elapsed_ms=%.0f",
+                request.timeout_ms,
+                (time.monotonic() - started) * 1000,
+            )
+            raise HTTPException(status_code=504, detail="recall_timeout") from None
         event_store = getattr(app.state, "call_event_store", None)
         if event_store is not None and request.query != "__om_probe__":
             try:
@@ -4572,6 +4633,8 @@ def create_app(
         # running" is how a stalled queue looks busy, so the strand is given
         # its own number.
         running_rows = counts.get(MemoryTaskStatus.RUNNING, 0)
+        backoff = cast(ModelBackoff | None, getattr(app.state, "model_backoff", None))
+        backoff_state = backoff.state() if backoff is not None else None
         return MemoryProcessingSummary(
             pending=(
                 sdk_counts.get("pending", 0)
@@ -4612,6 +4675,13 @@ def create_app(
             metrics=ProcessingMetrics.model_validate(store.processing_metrics()),
             pipeline=_pipeline_status(app),
             embedding_switch=_embedding_switch_summary(app),
+            suspended=sdk_counts.get("suspended", 0),
+            llm_backoff_until=backoff_state.until if backoff_state is not None else None,
+            llm_backoff_error=(
+                backoff_state.last_error
+                if backoff_state is not None and backoff_state.until is not None
+                else None
+            ),
         )
 
     @app.get(
@@ -4867,13 +4937,21 @@ def create_app(
         # The startup queue knows the authority. A fresh legacy-mode queue
         # would recreate the job-evidence table the SDK cutover dropped.
         queue = app.state.memory_write_queue
-        unknown = queue.unknown_jobs(limit=2048)
-        if app.state.memory_authority is MemoryAuthority.LEGACY:
-            for job in unknown:
-                queue.resolve_unknown_from_linked_output(job.job_id)
-        requeued = sum(queue.retry_unknown_confirmed(job.job_id) for job in unknown)
-        if app.state.memory_authority is MemoryAuthority.LEGACY:
-            requeued += app.state.memory_task_store.retry_unknown_confirmed()
+        legacy = app.state.memory_authority is MemoryAuthority.LEGACY
+
+        def requeue_unknown() -> int:
+            unknown = queue.unknown_jobs(limit=2048)
+            if legacy:
+                for job in unknown:
+                    queue.resolve_unknown_from_linked_output(job.job_id)
+            requeued: int = sum(queue.retry_unknown_confirmed(job.job_id) for job in unknown)
+            if legacy:
+                requeued += int(app.state.memory_task_store.retry_unknown_confirmed())
+            return requeued
+
+        # One write transaction per job, up to 2048 of them: on the loop that
+        # froze every request, /health included, for minutes (#162).
+        requeued = await in_the_background(requeue_unknown)
         return RetryUnknownMemoryTasksReceipt(reconciled=reconciled, requeued=requeued)
 
     @app.get(
@@ -5042,7 +5120,7 @@ async def _require_external_recall_scope(
     # 299 rows from a covering index, about 52ms warm — enough, repeated and
     # serialised on the loop, to answer nobody for seconds.
     scope_started = time.monotonic()
-    known = await asyncio.to_thread(_evidence_store(app).known_workspaces, user_id="local")
+    known = await in_sdk_read(_evidence_store(app).known_workspaces, user_id="local")
     # Measured because nothing else records it. The ~52ms figure is from a copy
     # of one database at one point in time; this says what it costs here, on a
     # database that has since grown, often enough to show whether the read is
@@ -5978,7 +6056,7 @@ async def _recall_model_ready(app: FastAPI) -> bool:
     if _memory_mode(app) == "lite":
         return False
     try:
-        profile = await asyncio.to_thread(_model_profile_store(app).active, _secret_store(app))
+        profile = await in_sdk_read(_model_profile_store(app).active, _secret_store(app))
     except Exception:
         return False
     return profile is not None and bool(profile.capabilities.model_available)
@@ -6017,7 +6095,7 @@ async def _library_has_memories(app: FastAPI, user_id: str = DEFAULT_USER_ID) ->
     """Any active memory at all. Asked only after an empty memory search."""
     try:
         client = await _sdk_client_handle(app).client()
-        raw = await asyncio.to_thread(
+        raw = await in_sdk_read(
             client.list_memories,
             user_id=user_id,
             statuses=["active"],
@@ -6057,7 +6135,7 @@ async def _recall_raw_sources(
         timeout_ms=request.timeout_ms,
     )
     try:
-        authority = await asyncio.to_thread(
+        authority = await in_sdk_read(
             resolve_context_authority,
             query,
             access,
@@ -6097,7 +6175,7 @@ async def _search_sdk_raw(
         if not include:
             return ()
     client = await _sdk_client_handle(app).client()
-    raw = await asyncio.to_thread(
+    raw = await in_sdk_read(
         client.search,
         query,
         **{
@@ -6308,7 +6386,7 @@ async def _get_sdk_memory(
     variant: str | None = None,
 ) -> HySdkMemoryRecord | None:
     client = await handle.client()
-    raw = await asyncio.to_thread(client.get, memory_id, **_namespace_kwargs(kind, variant))
+    raw = await in_sdk_read(client.get, memory_id, **_namespace_kwargs(kind, variant))
     return None if raw is None else HySdkMemoryRecord.from_sdk(raw)
 
 
@@ -6470,7 +6548,7 @@ async def _search_sdk_memories(
 ) -> tuple[object, ...]:
     client = await handle.client()
     overrides = options.search_overrides() if options is not None else {}
-    raw = await asyncio.to_thread(
+    raw = await in_sdk_read(
         client.search,
         query,
         **{
@@ -6544,6 +6622,13 @@ def _user_evolving(app: FastAPI, user_id: str) -> bool:
     coordinator = getattr(app.state, "sdk_write_coordinator", None)
     evolving = getattr(coordinator, "evolving", None)
     return bool(callable(evolving) and evolving(user_id))
+
+
+def _reset_model_backoff(app: FastAPI) -> None:
+    """The user changed the model configuration: end any provider pause now."""
+    backoff = getattr(app.state, "model_backoff", None)
+    if isinstance(backoff, ModelBackoff):
+        backoff.reset()
 
 
 def _embedding_switch(app: FastAPI) -> EmbeddingSwitchService:

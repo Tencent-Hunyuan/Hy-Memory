@@ -259,3 +259,52 @@ def test_recall_route_falls_back_and_keeps_the_raw_grant(tmp_path, monkeypatch):
     # A host granted recall alone may not read original conversations.
     assert recall_only["mode"] == "raw" and recall_only["hits"] == []
     assert len(searched) == 1
+
+
+def test_the_total_recall_budget_stays_under_the_brokers_wait():
+    from one_memory.recall_fallback import recall_total_timeout_seconds
+
+    assert recall_total_timeout_seconds(800) == pytest.approx(3.8)
+    # The broker gives Core 15 seconds; Core answers before it gives up.
+    assert recall_total_timeout_seconds(60_000) == 12.0
+
+
+@pytest.mark.fresh_sdk
+def test_a_recall_that_cannot_finish_in_time_is_a_clear_timeout(tmp_path, monkeypatch):
+    """A recall stuck behind the SDK answers 504 `recall_timeout`, not nothing (#231)."""
+    from one_memory import recall_fallback
+
+    async def stuck(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(recall_fallback, "recall_with_fallback", stuck)
+    monkeypatch.setattr(recall_fallback, "recall_total_timeout_seconds", lambda _ms: 0.2)
+
+    async def scenario():
+        app = create_app(
+            Settings(
+                data_dir=tmp_path / "data",
+                source_home=tmp_path,
+                api_token=SecretStr("recall-test"),
+                imports_enabled=False,
+                automatic_memory_processing=False,
+                live_sync_enabled=False,
+            ),
+            secret_store=InMemorySecretStore(),
+        )
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer recall-test"},
+            ) as client,
+        ):
+            return await asyncio.wait_for(
+                client.post("/api/v1/recall", json={"query": "数据库"}), 5
+            )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "recall_timeout"

@@ -15,6 +15,11 @@ BULK_WORKERS = 3
 SNAPSHOT_WORKERS = 8
 INTERACTIVE_READ_WORKERS = 4
 SOURCE_READER_WORKERS = 4
+# One per source the drain runs side by side (`max_concurrent_sources`), and
+# two over for the outcome inquiries that follow them.
+SDK_WRITE_WORKERS = 12
+# Recall's SDK reads: one search and the `get`s behind it (`_SDK_GET_CONCURRENCY`).
+SDK_READ_WORKERS = 8
 
 _pool: ThreadPoolExecutor | None = None
 _snapshot_pool: ThreadPoolExecutor | None = None
@@ -22,6 +27,7 @@ _interactive_pool: ThreadPoolExecutor | None = None
 _raw_read_pool: ThreadPoolExecutor | None = None
 _memory_read_pool: ThreadPoolExecutor | None = None
 _source_reader_pool: ThreadPoolExecutor | None = None
+_sdk_write_pool: ThreadPoolExecutor | None = None
 _warmed_readers: weakref.WeakSet[ThreadPoolExecutor] = weakref.WeakSet()
 _reader_warm_lock = threading.Lock()
 _interactive_reads = 0
@@ -71,13 +77,36 @@ def raw_read_pool() -> ThreadPoolExecutor:
 
 
 def memory_read_pool() -> ThreadPoolExecutor:
+    """Recall's own threads: SDK searches, gets, and what decides between them.
+
+    Recall used to hand these to the default pool, which SDK writes share. A
+    write that times out keeps its thread until the SDK returns (#231), so a
+    few stuck writes left recall waiting for a thread while `/health`, which
+    needs none, still answered.
+    """
     global _memory_read_pool
     if _memory_read_pool is None:
         _memory_read_pool = ThreadPoolExecutor(
-            max_workers=INTERACTIVE_READ_WORKERS,
+            max_workers=SDK_READ_WORKERS,
             thread_name_prefix="one-memory-memory-read",
         )
     return _memory_read_pool
+
+
+def sdk_write_pool() -> ThreadPoolExecutor:
+    """SDK writes, bounded and apart from everything else.
+
+    Each thread here only waits for the SDK's own loop thread to answer
+    (`_LoopThread.run`), so any thread outside that loop may make the call; a
+    stuck write therefore costs a thread of this pool and nobody else's.
+    """
+    global _sdk_write_pool
+    if _sdk_write_pool is None:
+        _sdk_write_pool = ThreadPoolExecutor(
+            max_workers=SDK_WRITE_WORKERS,
+            thread_name_prefix="one-memory-sdk-write",
+        )
+    return _sdk_write_pool
 
 
 def source_reader_pool() -> ThreadPoolExecutor:
@@ -175,6 +204,30 @@ async def in_interactive_read[T](
     return await in_read_pool(interactive_read_pool(), work, *args, **kwargs)
 
 
+async def in_sdk_read[T](
+    work: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """A recall-path read, in recall's own pool (`memory_read_pool`)."""
+    return await in_read_pool(memory_read_pool(), work, *args, **kwargs)
+
+
+async def in_sdk_write[T](
+    work: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """One SDK write call, in the write pool (`sdk_write_pool`)."""
+    return await asyncio.get_running_loop().run_in_executor(
+        sdk_write_pool(),
+        copy_context().run,
+        partial(work, *args, **kwargs),
+    )
+
+
 def _retrieve[T](future: "asyncio.Future[T]") -> None:
     """Mark a shielded read's outcome as seen.
 
@@ -261,7 +314,10 @@ def _warm_reader_pool(reader: ThreadPoolExecutor) -> None:
 
 def shutdown_bulk_pool() -> None:
     global _pool, _snapshot_pool, _interactive_pool, _raw_read_pool, _memory_read_pool
-    global _source_reader_pool
+    global _source_reader_pool, _sdk_write_pool
+    if _sdk_write_pool is not None:
+        _sdk_write_pool.shutdown(wait=False, cancel_futures=True)
+        _sdk_write_pool = None
     if _pool is not None:
         _pool.shutdown(wait=False, cancel_futures=True)
         _pool = None

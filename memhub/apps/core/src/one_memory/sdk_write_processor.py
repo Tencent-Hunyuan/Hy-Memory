@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from one_memory.background_work import in_sdk_write
 from one_memory.embedding_spaces import (
     EmbeddingSpace,
     EmbeddingSpaceStore,
@@ -82,7 +83,7 @@ class SdkWriteProcessor:
         if extracted and not self._lite:
             contents = [sanitize_model_input(record.verbatim) for record in records]
             await before_hy_invocation()
-            result = await asyncio.to_thread(
+            result = await in_sdk_write(
                 client.add_extracted,
                 contents,
                 user_id=scope.user_id,
@@ -109,7 +110,7 @@ class SdkWriteProcessor:
             if not messages:
                 raise RuntimeError("hy_memory_task_without_inputs")
             await before_hy_invocation()
-            result = await asyncio.to_thread(
+            result = await in_sdk_write(
                 client.add,
                 messages,
                 user_id=scope.user_id,
@@ -130,7 +131,7 @@ class SdkWriteProcessor:
         if not request_id:
             raise ValueError("request_id is required")
         client = await self._client_handle.client()
-        outcome = await asyncio.to_thread(client.get_write_outcome, request_id)
+        outcome = await in_sdk_write(client.get_write_outcome, request_id)
         if outcome is None:
             return None
         if not isinstance(outcome, Mapping):

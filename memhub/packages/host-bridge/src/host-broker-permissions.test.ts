@@ -846,6 +846,63 @@ describe.skipIf(process.platform === "win32")(
       expect(error).toMatchObject({ code: "broker_request_failed" });
     });
 
+    it("#231: a Core that times out is reported as slow, not as stopped", async () => {
+      const context = await fixture({
+        onCore: async (_call, response) => {
+          response.statusCode = 504;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ detail: "recall_timeout" }));
+        },
+      });
+      const raw = await context.post("recall", context.issued.secret);
+      expect(raw.status).toBe(504);
+      expect(raw.data).toEqual({ error: "recall_timeout" });
+      const error = await clientCall("recall", context.discoveryPath, {
+        credentialProvider: () => context.issued.secret,
+      }).catch((failure: unknown) => failure);
+      expect(error).toMatchObject({
+        code: "broker_timeout",
+        message: "MemHub is running, but did not respond in time.",
+      });
+    });
+
+    it("#231: a broker that accepts and never answers is a timeout, not a stopped MemHub", async () => {
+      const context = await fixture();
+      const silent = createServer((request, response) => {
+        if (request.url === "/health") {
+          response.end(
+            JSON.stringify({
+              status: "ok",
+              service: "one-memory-recall-broker",
+              instance_id: "silent-fixture",
+            }),
+          );
+        }
+        // Anything else is accepted and left unanswered.
+      });
+      await new Promise<void>((resolve) =>
+        silent.listen(0, "127.0.0.1", resolve),
+      );
+      closers.push(async () => {
+        silent.closeAllConnections();
+        await new Promise<void>((resolve) => silent.close(() => resolve()));
+      });
+      const discovery = JSON.parse(
+        await readFile(context.discoveryPath, "utf8"),
+      );
+      discovery.port = (silent.address() as AddressInfo).port;
+      discovery.instance_id = "silent-fixture";
+      await writeFile(context.discoveryPath, JSON.stringify(discovery));
+      const error = await recallThroughBroker(
+        context.discoveryPath,
+        { query: "fixture", timeout_ms: 50 },
+        { credentialProvider: () => context.issued.secret },
+        200,
+      ).catch((failure: unknown) => failure);
+      expect(error).toMatchObject({ code: "broker_timeout" });
+      expect(String((error as Error).message)).not.toContain("not running");
+    });
+
     it.each(["present", "missing", "corrupt", "unset"] as const)(
       "wires ONE_MEMORY_HOST_CREDENTIAL_FILE only in built MCP entry: %s",
       async (state) => {

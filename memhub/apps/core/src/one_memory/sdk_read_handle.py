@@ -29,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from one_memory.background_work import in_sdk_read
 from one_memory.embedding_health import EmbeddingGuardedClient, EmbeddingHealth
 from one_memory.embedding_spaces import (
     EmbeddingSpace,
@@ -112,7 +113,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
 
     async def current_handle(self) -> SdkClientHandle:
         """The handle of the live space, held for the asking task."""
-        space, identity = await asyncio.to_thread(self._resolve)
+        space, identity = await in_sdk_read(self._resolve)
         mode, features = self.memory_mode(), self.current_features()
         language = self.current_language()
         key = (
@@ -127,9 +128,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
             if handle is None:
                 # Only on a change of space or profile: resolving a key can
                 # reach the system keychain, so it is not done on every read.
-                handle = await asyncio.to_thread(
-                    self._build, space, identity, mode, features, language
-                )
+                handle = await in_sdk_read(self._build, space, identity, mode, features, language)
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)
             self._handles = {key: handle}
