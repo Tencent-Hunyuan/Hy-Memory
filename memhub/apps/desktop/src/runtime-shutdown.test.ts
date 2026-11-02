@@ -1,4 +1,8 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readPublishedRuntimeLifetime } from "../../../packages/runtime-control/src/discovery.js";
 
 import { shutdownRuntime } from "./runtime-shutdown";
 
@@ -146,3 +150,40 @@ describe("BUG-12: a full quit stops the standalone Runtime process", () => {
     });
   });
 });
+
+it.each(["transient", "managed", undefined] as const)(
+  "a reattached %s runtime follows its persisted lifetime on quit",
+  async (lifetime) => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "reattached-runtime-"));
+    try {
+      await writeFile(
+        path.join(dataDir, "runtime-service.json"),
+        JSON.stringify({
+          schema_version: 1,
+          service: "one-memory-runtime",
+          status: "running",
+          instance_id: "prior-launch",
+          pid: 4321,
+          core_port: 8765,
+          ...(lifetime === undefined ? {} : { lifetime }),
+        }),
+      );
+      const transient =
+        (await readPublishedRuntimeLifetime(dataDir)) === "transient";
+      const result = await shutdownRuntime({
+        dataDir,
+        standalone: true,
+        preserveManagedRuntime: !transient,
+      });
+      if (lifetime === "transient") {
+        expect(result).toEqual({ runtime: "stopped" });
+        expect(stopMock).toHaveBeenCalledWith({ dataDir });
+      } else {
+        expect(result).toEqual({ runtime: "unchanged" });
+        expect(stopMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  },
+);

@@ -4,6 +4,10 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Desktop fallback runtimes publish their transient lifetime, allowing a later
+  App attachment to stop them on quit. Managed services and legacy receipts with
+  unknown lifetime remain preserved.
+
 ## MemHub 1.0.6 — 2026-11-02
 
 Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64

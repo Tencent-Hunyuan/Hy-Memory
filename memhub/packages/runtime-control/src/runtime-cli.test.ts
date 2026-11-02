@@ -1030,3 +1030,19 @@ describe("Runtime CLI service plan", () => {
     );
   });
 });
+
+describe("runtime launch lifetime", () => {
+  it("carries the explicit desktop fallback marker into the service config", () => {
+    expect(
+      resolveRuntimeCliConfig({ ONE_MEMORY_RUNTIME_LIFETIME: "transient" })
+        .lifetime,
+    ).toBe("transient");
+  });
+  it("defaults ordinary and unrecognized launches to managed lifetime", () => {
+    expect(resolveRuntimeCliConfig({}).lifetime).toBeUndefined();
+    expect(
+      resolveRuntimeCliConfig({ ONE_MEMORY_RUNTIME_LIFETIME: "invalid" })
+        .lifetime,
+    ).toBeUndefined();
+  });
+});

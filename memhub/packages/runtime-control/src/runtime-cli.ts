@@ -51,6 +51,7 @@ declare const __ONE_MEMORY_COMMIT__: string;
 
 export interface RuntimeCliConfig {
   dataDir: string;
+  lifetime?: "managed" | "transient";
   runtimeEntry: string;
   coreCommand: string;
   coreArgs: string[];
@@ -398,6 +399,9 @@ export function resolveRuntimeCliConfig(
       : undefined;
   return {
     dataDir: path.normalize(dataDir),
+    ...(environment.ONE_MEMORY_RUNTIME_LIFETIME === "transient"
+      ? { lifetime: "transient" as const }
+      : {}),
     runtimeEntry: path.resolve(
       environment.ONE_MEMORY_RUNTIME_ENTRY?.trim() ||
         path.join(runtimeRoot, "runtime", "runtime.cjs"),
@@ -667,6 +671,7 @@ export async function createRuntimeService(
   });
   return new RuntimeService({
     dataDir: config.dataDir,
+    lifetime: config.lifetime ?? "managed",
     diagnostics,
     async createSupervisor(onSidecarFault) {
       const { port, overrideApplied, ignoredReason } = resolveCorePort(

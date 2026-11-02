@@ -63,6 +63,7 @@ interface RuntimeServiceReceipt {
   status: "starting" | "running" | "stopping";
   corePort: number | null;
   sidecarState: "running" | "failed" | "stopped" | null;
+  lifetime: "managed" | "transient" | null;
 }
 
 /** The Core port a *running* managed Runtime published, or null when there is
@@ -80,6 +81,15 @@ export async function readPublishedCorePort(
   const receipt = await readRuntimeServiceReceipt(dataDir).catch(() => null);
   if (receipt === null || receipt.status !== "running") return null;
   return receipt.corePort;
+}
+
+/** Read only after the caller has verified attachment. Legacy receipts have
+ * unknown lifetime and must not be treated as permission to stop a service. */
+export async function readPublishedRuntimeLifetime(
+  dataDir: string,
+): Promise<"managed" | "transient" | null> {
+  const receipt = await readRuntimeServiceReceipt(dataDir);
+  return receipt?.status === "running" ? receipt.lifetime : null;
 }
 
 /**
@@ -183,6 +193,9 @@ async function readRuntimeServiceReceipt(
         !Number.isInteger(item.core_port) ||
         item.core_port < 1024 ||
         item.core_port > 65_535)) ||
+    (item.lifetime !== undefined &&
+      item.lifetime !== "managed" &&
+      item.lifetime !== "transient") ||
     (item.sidecar !== undefined &&
       item.sidecar !== "running" &&
       item.sidecar !== "failed" &&
@@ -195,6 +208,10 @@ async function readRuntimeServiceReceipt(
     pid: item.pid,
     status: item.status as RuntimeServiceReceipt["status"],
     corePort: item.core_port,
+    lifetime:
+      item.lifetime === undefined
+        ? null
+        : (item.lifetime as RuntimeServiceReceipt["lifetime"]),
     sidecarState:
       item.sidecar === undefined
         ? null

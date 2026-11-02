@@ -30,6 +30,8 @@ export interface ManagedRuntime {
 
 export interface RuntimeServiceOptions {
   dataDir: string;
+  /** A desktop fallback remains app-lifetime when another App attaches. */
+  lifetime?: "managed" | "transient";
   /** Build the supervisor. `onSidecarFault` must be wired into it so a captured
    * post-start sidecar fault reaches the durable receipt this service writes. */
   createSupervisor(
@@ -405,6 +407,7 @@ export class RuntimeService {
           instance_id: instanceId,
           pid: this.pid(),
           core_port: Number(url.port),
+          lifetime: this.options.lifetime ?? "managed",
           ...(sidecar === undefined ? {} : { sidecar }),
           started_at: new Date().toISOString(),
         },

@@ -72,6 +72,7 @@ export {
   RuntimeDiscoveryError,
   type RuntimeIdentity,
   readPublishedCorePort,
+  readPublishedRuntimeLifetime,
 } from "./discovery.js";
 export {
   createHostPermissionClient,

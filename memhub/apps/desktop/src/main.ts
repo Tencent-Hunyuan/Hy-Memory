@@ -27,6 +27,7 @@ import {
   RuntimeSupervisor,
   readInstalledRuntimeSource,
   readPublishedCorePort,
+  readPublishedRuntimeLifetime,
   readRuntimeServiceOwner,
   readSdkMigrationBlock,
   removeRuntimeServiceOwner,
@@ -1245,6 +1246,10 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
             () => true,
             () => false,
           );
+      if (alreadyRunning) {
+        transientRuntime =
+          (await readPublishedRuntimeLifetime(dataDir)) === "transient";
+      }
       if (owner?.owner !== "cli") {
         const appBundle = path.resolve(path.dirname(process.execPath), "../..");
         owner = await claimRuntimeServiceForApp({
@@ -1284,9 +1289,16 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
               error_code: "runtime_service_disabled_by_system",
             }),
           startTransient: async () => {
+            const launch = runtimeLaunch();
             await ensureRuntimeProcess({
               dataDir,
-              launch: runtimeLaunch(),
+              launch: {
+                ...launch,
+                env: {
+                  ...launch.env,
+                  ONE_MEMORY_RUNTIME_LIFETIME: "transient",
+                },
+              },
               attempts: app.isPackaged ? 360 : 120,
             });
           },
