@@ -150,7 +150,14 @@ working/coding 写入返回双层结果：
 }
 ```
 
-`scene="coding"` 还会返回 `chain_rounds`。出于历史兼容，该字段当前统计本次识别并处理
+抽取 LLM 调用失败、返回空 content 或回复解析不出 JSON，以及经验 / 事实向量化失败时，
+写入返回 `success=False`、`error_code=502`，`agent_error_code` 依次为 `LLM_ERROR`、
+`EMPTY_RESPONSE`、`JSON_PARSE_FAILED`、`EMBEDDING_FAILED`，`error_message` 以
+`[CODE]` 开头；没有向量的经验 / 事实不会落库，失败的写入也不追加对话 trace，换一个
+`request_id` 重跑即可。模型正常作答但没有值得记的内容仍是 `success=True`、0 条。
+显式开启 `MEMORY_CODING_VERBATIM_FALLBACK_ENABLED` 时抽取失败沿用原文兜底。
+
+`scene="coding"` 还会返回 `chain_rounds`（写入失败时不记录演进链，也不返回该字段）。出于历史兼容，该字段当前统计本次识别并处理
 的 diff hunk 数，而不保证等于最终合并后的唯一演进 round 数。`0` 表示没有识别到可记录
 的代码修改，不代表双层 memory 写入失败。
 

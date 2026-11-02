@@ -73,6 +73,19 @@ def _write_apply_verify_enabled() -> bool:
 _RECONCILE_LOOP_USER_LOCKS = weakref.WeakKeyDictionary()
 
 
+class ReconcileFailure(str):
+    """reconcile 失败时 `_reconcile_and_store` 返回的 error：仍是错误信息字符串，
+    另带稳定的失败码 `code`（LLM_UNAVAILABLE / EMPTY_RESPONSE / JSON_PARSE_FAILED /
+    RECONCILE_EXCEPTION），供 writer 透传给调用方。"""
+
+    code: str = "RECONCILE_FAILED"
+
+    def __new__(cls, message: str, code: str = "RECONCILE_FAILED"):
+        obj = super().__new__(cls, message)
+        obj.code = code
+        return obj
+
+
 def _reconcile_user_lock(user_id: str) -> asyncio.Lock:
     loop = asyncio.get_running_loop()
     locks = _RECONCILE_LOOP_USER_LOCKS.get(loop)
@@ -1262,15 +1275,6 @@ class MemoryWriter(WritePipeline):
             recon_tokens 含 prompt/completion/total（reconcile 链路 LLM 消耗）
         """
         stored_ids: List[str] = []
-        # Episode：本次写入归属的内部会话 id（跨 write 把"一件事"归到一起）。
-        # 只数 user 侧记忆（与 rolling summary 只数 pending_user_count 一致）——
-        # agent 侧记忆若参与计数会把 episode 提前撑到上限、切得过碎，白付摘要的 token。
-        episode_id = await self._resolve_episode_id(
-            request, _count_user_owned(new_memories_meta)
-        )
-        session_episode_id = self._session_episode_id(request)
-        if session_episode_id:
-            episode_id = session_episode_id
         # 关系图用：收集本次落库的 (node, op)，供 graph 投影建边。
         # 收 op 是为了拿 op.related（LLM 标注的 typed 关系）。
         graph_payload: List[Tuple[Any, Any]] = []
@@ -1297,7 +1301,32 @@ class MemoryWriter(WritePipeline):
         )
 
         if not recon_result.success:
-            return [], recon_result.error, {"add": 0, "supersede": 0, "update": 0, "total": 0}, {"prompt": 0, "completion": 0, "total": 0}
+            # reconcile 失败：本次一条新记忆都不落库（不做 ADD-all 兜底），由调用方重跑。
+            # episode 状态也还没推进，重跑不会把同一批记忆重复计数。
+            error = ReconcileFailure(
+                recon_result.error or "reconcile failed",
+                code=recon_result.error_code or "RECONCILE_FAILED",
+            )
+            logger.warning(
+                f"TRACE_PERF [{req_id}] S1_RECONCILE_FAILED "
+                f"code={error.code} candidates={len(new_memory_texts)} stored=0"
+            )
+            return [], error, {"add": 0, "supersede": 0, "update": 0, "total": 0}, {
+                "prompt": recon_result.prompt_tokens,
+                "completion": recon_result.completion_tokens,
+                "total": recon_result.total_tokens,
+            }
+
+        # Episode：本次写入归属的内部会话 id（跨 write 把"一件事"归到一起）。
+        # 只数 user 侧记忆（与 rolling summary 只数 pending_user_count 一致）——
+        # agent 侧记忆若参与计数会把 episode 提前撑到上限、切得过碎，白付摘要的 token。
+        # 放在 reconcile 成功之后：失败的写入不能推进 episode 计数。
+        episode_id = await self._resolve_episode_id(
+            request, _count_user_owned(new_memories_meta)
+        )
+        session_episode_id = self._session_episode_id(request)
+        if session_episode_id:
+            episode_id = session_episode_id
 
         # 分类统计
         _op_counts = {}
@@ -1308,16 +1337,7 @@ class MemoryWriter(WritePipeline):
         logger.info(
             f"TRACE_PERF [{req_id}] S1_RECONCILE_DONE "
             f"ops={len(recon_result.ops)} candidates={len(new_memory_texts)} | {_op_counts_str}"
-            + (f" | DEGRADED({recon_result.degraded_reason})"
-               if getattr(recon_result, "degraded", False) else "")
         )
-        if getattr(recon_result, "degraded", False):
-            # 走了 ADD-all 兜底：内容保住了，但没做去重/演化判定。必须可观测，
-            # 否则线上只会看到"记忆变多了"而不知道为什么。
-            logger.warning(
-                f"[write] reconcile degraded → ADD-all "
-                f"({recon_result.degraded_reason}), {len(recon_result.ops)} memories stored as-is"
-            )
         # 逐条 op 详情由 reconciler 的 "[reconciler] ops detail" 单条 JSON list 输出，
         # 这里不再逐条打印（避免重复刷屏）。
 
@@ -2507,12 +2527,10 @@ class MemoryWriter(WritePipeline):
             response.extra["extract_tokens"] = {"prompt": 0, "completion": 0, "total": 0}
 
             if recon_error is not None:
-                response.success = False
-                response.error_code = 502
-                response.error_message = f"[RECONCILE_FAILED] {recon_error}"
-                response.extra["agent_status"] = "failed"
-                response.extra["agent_error"] = recon_error
-                response.extra["agent_nodes"] = 0
+                # 与 write() 一致：reconcile 失败不落任何记忆，报失败供调用方重跑。
+                self._mark_reconcile_failure(response, recon_error)
+                response.extra["agent_mode"] = "extracted"
+                logger.warning(f"[write_extracted] reconcile failed: {recon_error}")
                 return response
 
             response.success = True
@@ -3531,12 +3549,11 @@ class MemoryWriter(WritePipeline):
                 response.extra["reconcile_ops"] = ops_counts
                 response.extra["reconcile_tokens"] = recon_tokens
                 if recon_error is not None:
+                    # stored_ids 为空：reconcile 失败时一条新记忆都不落库，write()
+                    # 随后回滚 L1_RAW（retry_safe=True），换个 request_id 重跑即可。
                     response.extra["agent_stored_ids"] = stored_ids
-                    self._mark_agent_failure(
-                        response,
-                        error_code="RECONCILE_FAILED",
-                        error_message=recon_error,
-                        agent_nodes=len(stored_ids),
+                    self._mark_reconcile_failure(
+                        response, recon_error, agent_nodes=len(stored_ids),
                     )
                     logger.warning(f"[write] reconcile failed: {recon_error}")
                     return
@@ -3658,6 +3675,29 @@ class MemoryWriter(WritePipeline):
         response.success = False
         response.error_code = 502
         response.error_message = f"[{code}] {message}"
+
+    @classmethod
+    def _mark_reconcile_failure(
+        cls,
+        response: WriteResponse,
+        recon_error: str,
+        *,
+        agent_nodes: int = 0,
+    ) -> None:
+        """reconcile 失败：agent_error_code 恒为 RECONCILE_FAILED，具体原因
+        （LLM_UNAVAILABLE / EMPTY_RESPONSE / JSON_PARSE_FAILED / RECONCILE_EXCEPTION）
+        放在 reconcile_error_code。"""
+        reason = getattr(recon_error, "code", "") or "RECONCILE_FAILED"
+        response.extra["reconcile_error_code"] = reason
+        cls._mark_agent_failure(
+            response,
+            error_code="RECONCILE_FAILED",
+            error_message=(
+                f"{reason}: {recon_error}"
+                if reason != "RECONCILE_FAILED" else str(recon_error)
+            ),
+            agent_nodes=agent_nodes,
+        )
 
     async def _handle_agent_failure(self, request, response, agent_result, tracer_span, extract_timing: Optional[Dict[str, Any]] = None) -> None:
         """处理 agent extract 失败的情况。"""

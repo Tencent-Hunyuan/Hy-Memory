@@ -30,7 +30,7 @@ from .judge import classify_messages_is_coding
 from .preproc import has_any_tool_message, prepare_extractor_messages
 from .reconciler import CodingMemoryReconciler
 from .store import CodingMemoryStore
-from .types import FactReconcileOp, ReconcileOp, WorkingFact
+from .types import CodingWriteError, FactReconcileOp, ReconcileOp, WorkingFact
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,11 @@ class CodingWriter:
                 ],
                 "fact_ids": ["..."],         # 这趟真正落库的 fact_id
             }
+
+        模型失败（抽取 LLM 调用失败 / 空回复 / 解析不出）或向量化失败时返回
+        success=False，agent_error_code 为 LLM_ERROR / EMPTY_RESPONSE /
+        JSON_PARSE_FAILED / EMBEDDING_FAILED，error_code=502。模型答了但没有值得
+        记的内容仍是 success=True、0 条。
         """
         request_id = request_id or str(uuid.uuid4())
         t0 = time.perf_counter()
@@ -143,6 +148,10 @@ class CodingWriter:
         # 跟库里已有的什么关系是 reconcile 的事。把已有 task 摆到它面前，它会把
         # 一个其实不同的任务往清单里某个措辞上靠，reconciler 随后判成 UPDATE 合并
         # 掉，那个区别就没了——措辞对不上顶多多存一条，措辞被带偏是直接写错。
+        #
+        # 模型失败（LLM 调用失败 / 空回复 / 解析不出）抛 CodingWriteError：整次写入
+        # 报失败、什么都不存，连 trace 也不追加——调用方换个 request_id 重跑时，
+        # 历史窗口里不会多出这段本该是「新消息」的对话。
         try:
             drafts, fact_drafts = await self.extractor.extract(
                 messages,
@@ -156,26 +165,26 @@ class CodingWriter:
                 request_id=request_id,
                 language=language,
             )
-        finally:
-            # 历史服务于下一次 write；即使本次没跨过价值门槛，也不能丢掉上下文。
-            try:
-                await self.store.append_trace(
-                    current_messages,
-                    request_id=request_id,
-                    user_id=user_id,
-                    agent_id=agent_id or "default_agent",
-                    session_id=session_id,
-                    workspace_id=workspace_id,
-                    branch=branch,
-                    source=source,
-                )
-            except Exception as e:
-                logger.warning(f"[coding-write] append trace failed: {e}")
+        except CodingWriteError as e:
+            return self._failure_response(request_id, t0, e)
+
+        trace_kwargs = dict(
+            request_id=request_id,
+            user_id=user_id,
+            agent_id=agent_id or "default_agent",
+            session_id=session_id,
+            workspace_id=workspace_id,
+            branch=branch,
+            source=source,
+        )
 
         if not drafts and not fact_drafts:
+            # 模型答了、只是没有值得记的：正常的空抽取，仍算成功。历史服务于下一次
+            # write；即使本次没跨过价值门槛，也不能丢掉上下文。
             logger.info(
                 f"[coding-write] no drafts produced (value bar); request_id={request_id}"
             )
+            await self._append_trace(current_messages, **trace_kwargs)
             return self._empty_response(request_id, t0)
 
         # extractor 只负责内容；调用来源由 SDK 入口注入，不能交给 LLM 生成。
@@ -184,33 +193,38 @@ class CodingWriter:
             draft.memory_at = memory_at
 
         # 3. 经验层 reconcile + 持久化
-        ops: List[ReconcileOp] = (
-            await self.reconciler.reconcile(
-                drafts,
-                request_id=request_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id or "",
-                language=language,
-            )
-            if drafts else []
-        )
-
         # 4. 事实层 reconcile + 持久化（独立链路，不受经验层结果影响）
+        #
+        # 向量化失败抛 CodingWriteError(EMBEDDING_FAILED)：不落没有向量的节点，
+        # 整次写入报失败。
         facts: List[WorkingFact] = []
         fact_ops: List[FactReconcileOp] = []
-        if fact_drafts:
-            facts, fact_ops = await self.fact_reconciler.reconcile(
-                fact_drafts,
-                user_id=user_id,
-                agent_id=agent_id,
-                session_id=session_id,
-                workspace_id=workspace_id,
-                branch=branch,
-                source=source,
-                memory_at=memory_at,
-                language=language,
+        try:
+            ops: List[ReconcileOp] = (
+                await self.reconciler.reconcile(
+                    drafts,
+                    request_id=request_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    session_id=session_id or "",
+                    language=language,
+                )
+                if drafts else []
             )
+            if fact_drafts:
+                facts, fact_ops = await self.fact_reconciler.reconcile(
+                    fact_drafts,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    branch=branch,
+                    source=source,
+                    memory_at=memory_at,
+                    language=language,
+                )
+        except CodingWriteError as e:
+            return self._failure_response(request_id, t0, e)
 
         experience_ids = [op.target_experience_id for op in ops
                           if op.action in ("ADD", "UPDATE") and op.target_experience_id]
@@ -218,6 +232,7 @@ class CodingWriter:
 
         # 5. 同批全互链
         await self._crosslink(experience_ids, facts, user_id=user_id)
+        await self._append_trace(current_messages, **trace_kwargs)
 
         add_cnt = sum(1 for op in ops if op.action == "ADD")
         update_cnt = sum(1 for op in ops if op.action == "UPDATE")
@@ -297,6 +312,37 @@ class CodingWriter:
                     logger.warning(
                         f"[coding-write] crosslink fact {f.fact_id} failed: {e}"
                     )
+
+    async def _append_trace(self, current_messages: List[ChatMessage], **kwargs) -> None:
+        """把本次对话追加进 recent trace（下一次 write 的历史上下文），best-effort。"""
+        try:
+            await self.store.append_trace(current_messages, **kwargs)
+        except Exception as e:
+            logger.warning(f"[coding-write] append trace failed: {e}")
+
+    def _failure_response(
+        self, request_id: str, t0: float, error: CodingWriteError,
+    ) -> Dict[str, Any]:
+        """模型 / 向量化失败：success=False，稳定失败码在 agent_error_code。
+
+        形状与 chat 链路的失败回执一致（error_code=502，error_message 带
+        「[CODE] 」前缀），调用方据 success 判定并重跑。
+        """
+        code = error.error_code
+        message = str(error)
+        logger.warning(
+            f"[coding-write] failed: code={code} request_id={request_id}: {message}"
+        )
+        resp = self._empty_response(request_id, t0)
+        resp.update({
+            "success": False,
+            "error_code": 502,
+            "error_message": f"[{code}] {message}",
+            "agent_status": "failed",
+            "agent_error_code": code,
+            "agent_error": message,
+        })
+        return resp
 
     def _empty_response(self, request_id: str, t0: float) -> Dict[str, Any]:
         return {

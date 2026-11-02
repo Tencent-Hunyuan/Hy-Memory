@@ -134,6 +134,7 @@ _WRITE_DIAGNOSTIC_KEYS = (
     "agent_status",
     "agent_error_code",
     "agent_error",
+    "reconcile_error_code",
     "l1_rollback",
     "l1_rollback_failed",
     "partial_agent_persist",
@@ -3032,7 +3033,9 @@ class HyMemoryClient:
                 # 版本演进链层（scene="coding" 独有）。放在 writer.write 之后、返回
                 # 之前，因为它只依赖对话原文，与向量层写入结果无关。
                 # best-effort：这层挂不上不影响本次 add 的向量层产出。
-                if scene_variant == "coding":
+                # 向量层写入失败（success=False）时跳过：调用方会重跑整段，失败的
+                # 那次不该先把改动记进演进链。
+                if scene_variant == "coding" and resp.get("success"):
                     resp["chain_rounds"] = self._observe_chain(
                         chat_messages, user_id=uid,
                         workspace_id=workspace_id, branch=branch,

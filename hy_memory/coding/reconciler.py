@@ -29,7 +29,7 @@ from ..prompts import (
 )
 from .judge import _store_coding_log
 from .store import CodingMemoryStore
-from .types import CodingMemory, CodingMemoryDraft, ReconcileOp
+from .types import CodingMemory, CodingMemoryDraft, CodingWriteError, ReconcileOp
 
 
 
@@ -394,6 +394,9 @@ class CodingMemoryReconciler:
         - UPDATE  需 draft_idx 合法 + target_experience_id 非空
         - DELETE  需 target_experience_id 非空
         - SKIP    不执行任何 store 操作
+
+        向量化失败（CodingWriteError(EMBEDDING_FAILED)）不吞成「少执行一条」，
+        原样抛给 CodingWriter，整次写入报失败。
         """
         executed: List[ReconcileOp] = []
         # 已被 UPDATE 占用的 draft_idx → 防止同 draft 被重复 ADD/UPDATE
@@ -414,6 +417,8 @@ class CodingMemoryReconciler:
                     op.target_experience_id = memory.experience_id  # 回写 id 供 caller 读
                     executed.append(op)
                     consumed.add(op.draft_idx)
+                except CodingWriteError:
+                    raise
                 except Exception as e:
                     logger.warning(f"[coding-reconcile] ADD failed: {e}")
 
@@ -444,6 +449,8 @@ class CodingMemoryReconciler:
                     await self.store.update(memory)
                     executed.append(op)
                     consumed.add(op.draft_idx)
+                except CodingWriteError:
+                    raise
                 except Exception as e:
                     logger.warning(f"[coding-reconcile] UPDATE failed: {e}")
 
@@ -487,6 +494,8 @@ class CodingMemoryReconciler:
                     target_experience_id=memory.experience_id,
                     reason="fallback ADD (no LLM op)",
                 ))
+            except CodingWriteError:
+                raise
             except Exception as e:
                 logger.warning(f"[coding-reconcile] fallback ADD failed: {e}")
 

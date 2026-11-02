@@ -6,6 +6,7 @@ import json
 import pytest
 
 from hy_memory.coding.extractor import CodingMemoryExtractor, EXTRACT_PROMPT
+from hy_memory.coding.types import CodingWriteError
 from hy_memory.pipelines.base import ChatMessage, ToolCall
 
 from tests.coding._helpers import MockLLMProvider, FailingLLMProvider
@@ -267,11 +268,31 @@ class TestExtractor:
         assert drafts == []
         _assert_verbatim_fallback(facts)
 
-    async def test_failsafe_on_llm_error(self):
+    async def test_llm_error_raises_instead_of_empty_success(self):
+        """LLM 失败不再返回 ([], [])（等于「成功、0 条」），而是抛 LLM_ERROR。"""
         ext = CodingMemoryExtractor(FailingLLMProvider())
-        drafts, facts = await ext.extract(_msgs(), user_id="u1")
-        assert drafts == []
-        assert facts == []
+        with pytest.raises(CodingWriteError) as exc:
+            await ext.extract(_msgs(), user_id="u1")
+        assert exc.value.error_code == "LLM_ERROR"
+
+    async def test_empty_200_reply_raises(self):
+        ext = CodingMemoryExtractor(MockLLMProvider(""))
+        with pytest.raises(CodingWriteError) as exc:
+            await ext.extract(_msgs(), user_id="u1")
+        assert exc.value.error_code == "EMPTY_RESPONSE"
+
+    async def test_unparseable_reply_raises(self):
+        ext = CodingMemoryExtractor(MockLLMProvider("sorry, I can't do that"))
+        with pytest.raises(CodingWriteError) as exc:
+            await ext.extract(_msgs(), user_id="u1")
+        assert exc.value.error_code == "JSON_PARSE_FAILED"
+
+    async def test_model_answered_nothing_to_remember_is_not_an_error(self):
+        """模型答了 {} / 空列表：正常的空抽取，不是失败。"""
+        for reply in ("{}", _llm_resp([]), _llm_resp([], None)):
+            ext = CodingMemoryExtractor(MockLLMProvider(reply))
+            drafts, facts = await ext.extract(_msgs(), user_id="u1")
+            assert drafts == [] and facts == []
 
     async def test_failsafe_on_llm_error_fallback_can_be_enabled(self):
         ext = CodingMemoryExtractor(

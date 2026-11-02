@@ -12,6 +12,7 @@ HY Memory - Coding Memory 模块
 
 from .types import (
     CodingMemory,
+    CodingWriteError,
     CodingMemoryDraft,
     ReconcileOp,
     WorkingFact,
@@ -26,6 +27,7 @@ from .types import (
 
 __all__ = [
     "CodingMemory",
+    "CodingWriteError",
     "CodingMemoryDraft",
     "ReconcileOp",
     "WorkingFact",

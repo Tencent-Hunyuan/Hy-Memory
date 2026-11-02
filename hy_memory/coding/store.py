@@ -44,7 +44,7 @@ from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
 from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
 from ..utils.async_executor import run_in_executor_guarded
-from .types import CodingMemory, WorkingFact
+from .types import CodingMemory, CodingWriteError, WorkingFact
 
 logger = logging.getLogger(__name__)
 
@@ -599,10 +599,15 @@ class CodingMemoryStore:
     # ------------------------------------------------------------
 
     async def insert(self, memory: CodingMemory) -> None:
-        """新增一条 coding memory（SQLite + VDB 全套）"""
+        """新增一条 coding memory（SQLite + VDB 全套）。
+
+        先向量化再落 SQLite：向量化失败抛 CodingWriteError(EMBEDDING_FAILED)，
+        什么都不写，不留一条没有向量、永远检索不到的经验。
+        """
         self._fill_timestamps(memory)
+        embeddings = await self._embed_vec_keys(memory)
         await _run_in_pool(self._upsert_sql_sync, memory)
-        await self._upsert_vec_keys(memory)
+        await self._upsert_vec_keys(memory, embeddings=embeddings)
         logger.info(
             f"[coding-store] inserted experience_id={memory.experience_id} "
             f"keys={1 + len(memory.search_keys)}"
@@ -627,6 +632,8 @@ class CodingMemoryStore:
         ):
             raise ValueError("coding_memory_update_authority_mismatch")
         prev_key_count = 1 + len(prev.search_keys)
+        # 先向量化：失败时旧经验（SQLite 与向量行）原样保留，不改一个字。
+        embeddings = await self._embed_vec_keys(memory)
 
         memory.updated_at = datetime.utcnow()
         if memory.created_at is None:
@@ -637,7 +644,7 @@ class CodingMemoryStore:
         # 删旧 VDB
         await self._delete_vec_keys_by_count(memory.experience_id, prev_key_count)
         # 写新 VDB
-        await self._upsert_vec_keys(memory)
+        await self._upsert_vec_keys(memory, embeddings=embeddings)
         logger.info(
             f"[coding-store] updated experience_id={memory.experience_id} "
             f"old_keys={prev_key_count} new_keys={1 + len(memory.search_keys)}"
@@ -1000,12 +1007,22 @@ class CodingMemoryStore:
     # 事实层
     # ------------------------------------------------------------
 
-    async def insert_fact(self, fact: WorkingFact) -> None:
-        """新增一条事实（SQLite + 事实 collection 各一行）。"""
+    async def insert_fact(
+        self, fact: WorkingFact, embedding: Optional[List[float]] = None,
+    ) -> None:
+        """新增一条事实（SQLite + 事实 collection 各一行）。
+
+        embedding 可由调用方预先用 embed_fact() 算好（fact reconcile 要在覆盖旧
+        事实之前确认新事实能向量化）；不传时这里算。向量化失败抛
+        CodingWriteError(EMBEDDING_FAILED)，什么都不写。
+        """
         if fact.created_at is None:
             fact.created_at = datetime.utcnow()
+        # 先向量化再落 SQLite，理由同 insert()：不落没有向量的事实。
+        if embedding is None:
+            embedding = await self.embed_fact(fact)
         await _run_in_pool(self._upsert_fact_sql_sync, fact)
-        await self._upsert_fact_vec(fact)
+        await self._upsert_fact_vec(fact, embedding=embedding)
         logger.info(f"[coding-store] inserted fact_id={fact.fact_id}")
         logger.debug(
             f"[coding-store] inserted fact_id={fact.fact_id} "
@@ -1574,25 +1591,64 @@ class CodingMemoryStore:
     # VDB 实现
     # ------------------------------------------------------------
 
-    async def _upsert_vec_keys(self, memory: CodingMemory) -> None:
-        """把 task + search_keys 写入 VDB（每行一个 MemoryNode）。"""
-        if self._vec is None:
-            return
-
+    @staticmethod
+    def _vec_key_texts(memory: CodingMemory) -> List[Tuple[str, str]]:
         all_keys: List[Tuple[str, str]] = [("task", memory.task)]
         for k in memory.search_keys:
             if k:
                 all_keys.append(("aspect", k))
+        return all_keys
+
+    async def _embed_vec_keys(
+        self, memory: CodingMemory
+    ) -> Optional[List[List[float]]]:
+        """写入链路用：向量化 task + search_keys，失败抛 CodingWriteError。
+
+        无 VDB 时返回 None（不需要向量）。
+        """
+        if self._vec is None:
+            return None
+        texts = [t for _, t in self._vec_key_texts(memory)]
+        try:
+            embeddings = await self.embed_service.embed_batch(texts)
+        except Exception as e:
+            logger.warning(f"[coding-store] embed_batch failed: {e}")
+            raise CodingWriteError(
+                "EMBEDDING_FAILED",
+                f"coding experience embedding failed: {type(e).__name__}: {e}",
+            ) from e
+        if len(embeddings or []) != len(texts) or not all(embeddings):
+            raise CodingWriteError(
+                "EMBEDDING_FAILED",
+                "coding experience embedding returned no vector",
+            )
+        return embeddings
+
+    async def _upsert_vec_keys(
+        self,
+        memory: CodingMemory,
+        embeddings: Optional[List[List[float]]] = None,
+    ) -> None:
+        """把 task + search_keys 写入 VDB（每行一个 MemoryNode）。
+
+        embeddings 由写入链路预先算好（见 _embed_vec_keys）；不传时现算，
+        失败只记 warning（edit_experience 的手动编辑路径沿用这一行为）。
+        """
+        if self._vec is None:
+            return
+
+        all_keys = self._vec_key_texts(memory)
         if not all_keys:
             return
 
         # batch embed
         texts = [t for _, t in all_keys]
-        try:
-            embeddings = await self.embed_service.embed_batch(texts)
-        except Exception as e:
-            logger.warning(f"[coding-store] embed_batch failed: {e}")
-            return
+        if embeddings is None:
+            try:
+                embeddings = await self.embed_service.embed_batch(texts)
+            except Exception as e:
+                logger.warning(f"[coding-store] embed_batch failed: {e}")
+                return
 
         nodes: List[MemoryNode] = []
         for i, ((kind, text), emb) in enumerate(zip(all_keys, embeddings)):
@@ -1623,7 +1679,34 @@ class CodingMemoryStore:
         except Exception as e:
             logger.warning(f"[coding-store] vdb upsert_batch failed: {e}")
 
-    async def _upsert_fact_vec(self, fact: WorkingFact) -> None:
+    @staticmethod
+    def _fact_vector_text(fact: WorkingFact) -> str:
+        return f"{fact.subject}: {fact.statement}" if fact.subject else fact.statement
+
+    async def embed_fact(self, fact: WorkingFact) -> Optional[List[float]]:
+        """写入链路用：向量化事实检索文本，失败抛 CodingWriteError。
+
+        无事实 VDB 或 statement 为空时返回 None（不需要向量）。
+        """
+        if self._fact_vec is None or not fact.statement:
+            return None
+        try:
+            embedding = await self.embed_service.embed(self._fact_vector_text(fact))
+        except Exception as e:
+            logger.warning(f"[coding-store] fact embed failed: {e}")
+            raise CodingWriteError(
+                "EMBEDDING_FAILED",
+                f"working fact embedding failed: {type(e).__name__}: {e}",
+            ) from e
+        if not embedding:
+            raise CodingWriteError(
+                "EMBEDDING_FAILED", "working fact embedding returned no vector",
+            )
+        return embedding
+
+    async def _upsert_fact_vec(
+        self, fact: WorkingFact, embedding: Optional[List[float]] = None,
+    ) -> None:
         """事实入向量库。一条事实一行，node_id 就是 fact_id。
 
         检索文本是 statement，前面缀上 subject（有的话）。subject 通常已经在
@@ -1634,14 +1717,14 @@ class CodingMemoryStore:
         """
         if self._fact_vec is None or not fact.statement:
             return
-        vector_text = (
-            f"{fact.subject}: {fact.statement}" if fact.subject else fact.statement
-        )
-        try:
-            embedding = await self.embed_service.embed(vector_text)
-        except Exception as e:
-            logger.warning(f"[coding-store] fact embed failed: {e}")
-            return
+        vector_text = self._fact_vector_text(fact)
+        if embedding is None:
+            # edit_fact 的手动编辑路径：现算，失败只记 warning。
+            try:
+                embedding = await self.embed_service.embed(vector_text)
+            except Exception as e:
+                logger.warning(f"[coding-store] fact embed failed: {e}")
+                return
 
         node = MemoryNode(
             node_id=fact.fact_id,

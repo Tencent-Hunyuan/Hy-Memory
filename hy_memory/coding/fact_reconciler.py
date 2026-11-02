@@ -34,6 +34,7 @@ from .types import (
 
 
     MAX_FACT_CHAIN_ENTRIES,
+    CodingWriteError,
     FactReconcileOp,
     WorkingFact,
     WorkingFactDraft,
@@ -689,6 +690,11 @@ class WorkingFactReconciler:
                 memory_at=memory_at,
             )
 
+            # 先确认新事实能向量化，再去覆盖旧事实：否则 embedding 挂掉时旧事实
+            # 已被软删、新事实又落不了库，这条结论就凭空没了。失败抛
+            # CodingWriteError(EMBEDDING_FAILED)，整次写入报失败。
+            new_embedding = await self.store.embed_fact(new_fact)
+
             allowed = {c.fact_id for c in (candidates[idx] if idx < len(candidates) else [])}
             targets = [
                 fid for fid in supersedes.get(idx, [])
@@ -769,7 +775,9 @@ class WorkingFactReconciler:
                         )
 
             try:
-                await self.store.insert_fact(new_fact)
+                await self.store.insert_fact(new_fact, embedding=new_embedding)
+            except CodingWriteError:
+                raise
             except Exception as e:
                 logger.warning(f"[fact-reconcile] INSERT failed: {e}")
                 continue

@@ -31,6 +31,38 @@ Hy Memory and MemHub are versioned and released independently.
     id need not equal the Hermes profile name (e.g. `--user-id wife-work
     --root ~/.hermes/profiles/wife:work`).
 
+- Hy Memory: a model failure during a write now reports failure and stores
+  nothing. **Behaviour change for direct SDK users:** writes that used to
+  return `success: true` in a degraded state now return `success: false`;
+  retry them with a new `request_id` once the model is back.
+  - Reconcile (pro / ultra `add` and `add_extracted`): when the reconcile model
+    call fails, returns HTTP 200 with empty content, or returns a reply that
+    cannot be parsed, or reconcile raises before anything is stored, the write
+    used to fall back to adding every extracted memory as-is (no dedup or
+    evolution) and report success. That fallback is removed, with its
+    `degraded` / `degraded_reason` result fields. The write now returns
+    `success: false`, `error_code: 502`,
+    `agent_error_code: "RECONCILE_FAILED"`, and the cause in the new
+    `reconcile_error_code` (`LLM_UNAVAILABLE`, `EMPTY_RESPONSE`,
+    `JSON_PARSE_FAILED`, `RECONCILE_EXCEPTION`). None of the new memories are
+    stored, the episode counter does not advance, and `add` rolls back its
+    raw turn the same way as an extraction failure
+    (`l1_rollback.retry_safe: true`). An empty 200 reply was previously
+    counted as "no changes" and reported success with 0 memories; only a
+    literal `[]` reply still means that. `RECONCILE_ENABLED=false` is a
+    configuration choice and still writes directly.
+  - Working / coding path: an extraction model failure used to return
+    success with 0 operations. It now returns `success: false` with
+    `agent_error_code` `LLM_ERROR`, `EMPTY_RESPONSE` or `JSON_PARSE_FAILED`.
+    A model that answers with nothing worth remembering is still a success.
+    An embedding failure used to store the experience or fact without a
+    vector, where search never finds it, and report success; it now returns
+    `EMBEDDING_FAILED` and the node is not stored. A fact embedding is checked
+    before any older fact is superseded. A failed write no longer appends its
+    turns to the recent trace and records no `chain_rounds`.
+    With `MEMORY_CODING_VERBATIM_FALLBACK_ENABLED` turned on, extraction
+    failures keep the verbatim fallback.
+
 - MemHub's DeepSeek Harness app page can grant recall again (#230). The
   "一键插入应用" switch used to be greyed out with `unsupported_host`, and a
   profile installed from the CLI stayed `install-only` with no way to approve
