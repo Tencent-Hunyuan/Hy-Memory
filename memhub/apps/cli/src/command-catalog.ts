@@ -258,7 +258,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "sources",
     summary:
-      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。Hermes 的每个 profile 是一个独立用户：用 --user-id 和 --root 接入，授权并导入历史（会自动排除 ~/.hermes/profiles/**，各用户互不读取）。",
+      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。Hermes 的每个 profile 是一个独立用户：用 --user-id 和 --root 接入，授权并导入历史（任何层级的 profiles/ 目录都会被排除，各用户互不读取）。--root 不能是 profiles 目录本身，也不能与另一个用户的 Hermes 目录相同或互相包含（~/.hermes 与 ~/.hermes/profiles/<name> 除外）。",
     usage:
       "memhub sources list [--json]\n            memhub sources connect <id> [<id> ...] [--import] [--confirm-overrides] [--request-id <uuid>] [--json]\n            memhub sources connect hermes --user-id <id> --root <path> [--import] [--request-id <uuid>] [--json]\n            memhub sources connect --all-detected [--import] [--confirm-overrides] [--json]\n            memhub sources receipt <request-id> [--json]",
     options: [
@@ -270,7 +270,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "--user-id <id>",
         summary:
-          "只用于 hermes：这条接入属于哪个用户（默认 local）。和 --root 一起接入一个 Hermes profile，例如 --user-id wife --root ~/.hermes/profiles/wife；其他来源只能是 local。",
+          "只用于 hermes：这条接入属于哪个用户（默认 local）。和 --root 一起接入一个 Hermes profile，例如 --user-id wife --root ~/.hermes/profiles/wife；用户 ID 不必等于 profile 名，例如 --user-id wife-work --root ~/.hermes/profiles/wife:work。其他来源只能是 local。",
       },
       {
         flag: "--root <path>",
@@ -397,7 +397,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "memories",
     summary:
-      "列出、搜索、查看、添加、修改或物理删除记忆（对话、工作、编码三个场景）。add 和 App 的「添加记忆」是同一个入口；delete 不可逆，需 --yes。",
+      "列出、搜索、查看、添加、修改或物理删除记忆（对话、工作、编码三个场景）。add 和 App 的「添加记忆」是同一个入口；delete 不可逆，需 --yes；要删的记忆已不存在（或不属于该用户）时提示未找到，按已删除处理并退出 0。",
     usage:
       "memhub memories list [--scene <all|chat|working|coding>] [--source <id>] [--query <text>] [--status <state>] [--offset <n>] [--limit <n>] [--user-id <id>] [--json]\n            memhub memories show <memory-id> [--kind <kind>] [--variant <variant>] [--user-id <id>] [--json]\n            memhub memories add <text> [--request-id <uuid>] [--user-id <id>] [--json]\n            memhub memories add --content-file <path> [--request-id <uuid>] [--user-id <id>] [--json]\n            memhub memories add-status <request-id> [--user-id <id>] [--json]\n            memhub memories update <memory-id> --content-file <path> [--kind <kind>] [--variant <variant>] [--task <text>] [--user-id <id>] [--json]\n            memhub memories delete <memory-id> [--kind <kind>] [--variant <variant>] [--yes] [--user-id <id>] [--json]",
     options: [

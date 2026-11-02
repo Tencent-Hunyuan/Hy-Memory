@@ -20,6 +20,20 @@ cursor。旧文件后续追加也必须能被再次发现，不能只有一个�
 用户授权是读取前置条件。环境变量只用于发现候选根，不能代替授权。每个候选
 文件必须在打开时再次验证 realpath 归属、symlink、普通文件类型和大小预算。
 
+多用户（仅 Hermes）：一个授权根属于一个 `user_id`。Hermes 的扫描、检测和
+持续同步共用同一次遍历，**任何层级**名为 `profiles` 的目录都不进入（发现
+helper 的 `excluded_directory_names`），所以授权根即使在 `~/.hermes` 之上，
+也不会读到 `.hermes/profiles/<name>`。接入时 Core 拒绝：
+
+- 根的最后一段是 `profiles`（profiles 容器本身）：422
+  `hermes_root_is_profiles_container`；
+- 根（解析 symlink 后）与另一个用户未撤销的 Hermes 授权根相同、包含它或在
+  它之内：409 `hermes_root_overlaps_other_user`。唯一例外是一方正好是另一方
+  的 `profiles/<name>`（`local` 在 `~/.hermes`、另一个用户在
+  `~/.hermes/profiles/<name>`），因为上面的排除已把两者隔开。
+
+本机 `local` 的接入（`/sources/connect`、`/sources/{id}/authorize`）也走同一检查。
+
 ## Imported source record
 
 Adapter 输出的 `ScannedEvidence` 是兼容命名的导入中间表示。原文持久化与 raw

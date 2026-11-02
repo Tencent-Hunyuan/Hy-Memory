@@ -261,6 +261,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                 used_characters=0,
                 truncated=True,
                 total_ms=(time.monotonic() - started) * 1000,
+                user_id=value.user_id,
             )
             await record(final, timed_out=True)
             return final
@@ -306,6 +307,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             used_characters=used,
             truncated=truncated,
             total_ms=(time.monotonic() - started) * 1000,
+            user_id=value.user_id,
         )
         await record(final, timed_out=False)
         return final

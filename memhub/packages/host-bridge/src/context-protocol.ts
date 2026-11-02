@@ -140,15 +140,22 @@ export function isSdkContextSearchResponse(
 ): value is SdkContextSearchResponse {
   if (
     !record(value) ||
-    !exact(value, [
-      "schema_version",
-      "request_id",
-      "state",
-      "items",
-      "used_characters",
-      "truncated",
-      "total_ms",
-    ]) ||
+    // `user_id` (whose memories were searched) is optional so a Core from
+    // before it was echoed still validates.
+    !exact(
+      value,
+      [
+        "schema_version",
+        "request_id",
+        "state",
+        "items",
+        "used_characters",
+        "truncated",
+        "total_ms",
+      ],
+      ["user_id"],
+    ) ||
+    (value.user_id !== undefined && !text(value.user_id, 1, 64)) ||
     value.schema_version !== 2 ||
     !text(value.request_id, 1, 64) ||
     !member(value.state, ["grounded", "empty", "partial", "unavailable"]) ||
@@ -223,8 +230,15 @@ function record(value: unknown): value is Record<string, unknown> {
 function only(value: Record<string, unknown>, keys: string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
-function exact(value: Record<string, unknown>, keys: string[]): boolean {
-  return only(value, keys) && keys.every((key) => Object.hasOwn(value, key));
+function exact(
+  value: Record<string, unknown>,
+  keys: string[],
+  optional: string[] = [],
+): boolean {
+  return (
+    only(value, [...keys, ...optional]) &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
 }
 function text(value: unknown, min: number, max: number): value is string {
   return (

@@ -130,6 +130,7 @@ from one_memory.hy_sdk_types import (
 from one_memory.imports.access import (
     AuthorizedSourceRoot,
     SourceAccessError,
+    resolved_source_root,
     root_identity_matches,
     source_root_identity,
 )
@@ -169,6 +170,11 @@ from one_memory.imports.locations import SourceLocation, inspect_source_location
 from one_memory.imports.models import EvidenceRecord
 from one_memory.imports.runner import live_sync_arrival
 from one_memory.imports.sources.common import SourceInstallState
+from one_memory.imports.sources.hermes import (
+    HERMES_ROOT_IS_PROFILES_CONTAINER,
+    hermes_root_conflict,
+    hermes_root_is_profiles_container,
+)
 from one_memory.imports.sources.registry import (
     RootCandidateKind,
     SourceRegistration,
@@ -531,9 +537,23 @@ class SdkMemoryUpdateRequest(BaseModel):
 class SdkUserProfileResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: The user whose profile this is: the `user_id` asked for, else `local`.
+    user_id: str
     request_id: str
     profile: dict[str, object] | None
     elapsed_ms: float = Field(ge=0)
+
+
+class SdkMemoryLibraryPage(HySdkMemoryPage):
+    """`GET /api/v2/memory-library`: one SDK page and the user it was read for."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    user_id: str
+
+    @classmethod
+    def of(cls, page: HySdkMemoryPage, user_id: str) -> "SdkMemoryLibraryPage":
+        return cls(**dict(page), user_id=user_id)
 
 
 class SdkProfileVersionsResponse(HySdkProfileVersions):
@@ -590,6 +610,8 @@ class SdkRawItem(HySdkRawRecord):
 class SdkRawPage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: The user whose raw turns these are.
+    user_id: str
     items: tuple[SdkRawItem, ...] = ()
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
@@ -603,6 +625,8 @@ class SdkRawPage(BaseModel):
 class SdkLayerCounts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    #: The user whose memories were counted.
+    user_id: str
     #: Every SDK layer, zero when empty.
     layers: dict[str, int]
     total: int = Field(ge=0)
@@ -998,6 +1022,8 @@ class AskMemoryRequest(SdkSearchFilters):
 
 class SdkHomeSummary(BaseModel):
     schema_version: Literal[2] = 2
+    #: The user the card was read for.
+    user_id: str
     memory_count: int
     latest: HySdkMemoryRecord | None
     observed_at: datetime
@@ -1024,6 +1050,8 @@ class MemoryGraphEdge(BaseModel):
 
 
 class MemoryGraphResponse(BaseModel):
+    #: The user whose memories were mapped.
+    user_id: str
     total_memories: int
     projected_memories: int
     nodes: tuple[MemoryGraphNode, ...]
@@ -2698,6 +2726,7 @@ def create_app(
         )
         if not root_identity_matches(registration.candidate.path, request.expected_root_id):
             raise HTTPException(status_code=409, detail="source_identity_changed")
+        await _refuse_overlapping_root(source_id, registration.candidate.path, DEFAULT_USER_ID)
         root_changed = prior is not None and prior.root_id != request.expected_root_id
         if root_changed:
             source_jobs = [job for job in _job_store(app).list_jobs() if job.source_id == source_id]
@@ -3098,6 +3127,20 @@ def create_app(
         registrations = [_require_registration(app, source_id) for source_id in source_ids]
         if request.request_id is None:
             raise HTTPException(status_code=409, detail="source_confirmation_required")
+        for registration in registrations:
+            if registration.descriptor.source_id in MULTI_USER_SOURCES:
+                try:
+                    resolved = await asyncio.to_thread(
+                        app.state.source_candidate_store.resolve, registration
+                    )
+                except SourceCandidateError:
+                    # The connect below reports the missing candidate itself.
+                    continue
+                await _refuse_overlapping_root(
+                    registration.descriptor.source_id,
+                    resolved.candidate.path,
+                    DEFAULT_USER_ID,
+                )
         history_after = await _onboarding_history_after(
             request,
             registrations,
@@ -3197,6 +3240,42 @@ def create_app(
                 raise
         return ConnectSourcesResponse(**result.model_dump())
 
+    async def _refuse_overlapping_root(source_id: str, root: Path, user_id: str) -> None:
+        """Refuse a Hermes root that would read another user's files.
+
+        422 `hermes_root_is_profiles_container` for `.../profiles` itself;
+        409 `hermes_root_overlaps_other_user` for a root equal to, holding or
+        inside another user's active grant, unless one is the other's
+        `profiles/<name>` (the scan never enters `profiles/`).
+        """
+        if source_id not in MULTI_USER_SOURCES:
+            return
+        if hermes_root_is_profiles_container(root):
+            raise HTTPException(status_code=422, detail=HERMES_ROOT_IS_PROFILES_CONTAINER)
+
+        def conflict_with_others() -> str | None:
+            try:
+                mine = resolved_source_root(root)
+            except SourceAccessError:
+                # Unreadable or missing: the grant that follows refuses it
+                # with its own code.
+                return None
+            others = [
+                Path(path)
+                for receipt, path in _grant_store(app).grants()
+                if receipt.source_id == source_id
+                and receipt.user_id != user_id
+                and receipt.revoked_at is None
+            ]
+            return hermes_root_conflict(mine, others)
+
+        conflict = await asyncio.to_thread(conflict_with_others)
+        if conflict is not None:
+            raise HTTPException(
+                status_code=422 if conflict == HERMES_ROOT_IS_PROFILES_CONTAINER else 409,
+                detail=conflict,
+            )
+
     async def _connect_other_root(request: ConnectSourcesRequest) -> ConnectSourcesResponse:
         """Grant one Hermes root to a user: `~/.hermes/profiles/<name>` for its own user.
 
@@ -3226,6 +3305,7 @@ def create_app(
                 root = Path(request.root)
                 if not root.is_absolute():
                     raise HTTPException(status_code=422, detail="source_root_must_be_absolute")
+                await _refuse_overlapping_root(source_id, root, request.user_id)
                 # Named outright by the caller, like an environment override:
                 # no saved candidate may replace it, and naming it confirms it.
                 registration = replace(
@@ -3761,6 +3841,7 @@ def create_app(
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
         total = stats.get("total") if isinstance(stats, dict) else None
         return SdkHomeSummary(
+            user_id=user_id,
             memory_count=total if isinstance(total, int) and total >= 0 else page.total,
             latest=page.memories[0] if page.memories else None,
             observed_at=datetime.now(UTC),
@@ -3768,7 +3849,7 @@ def create_app(
 
     @app.get(
         "/api/v2/memory-library",
-        response_model=HySdkMemoryPage,
+        response_model=SdkMemoryLibraryPage,
         dependencies=strict,
     )
     async def sdk_memory_library(
@@ -3785,7 +3866,7 @@ def create_app(
         exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
         session_ids: list[str] | None = Query(default=None),  # noqa: B008
         agent_ids: list[str] | None = Query(default=None),  # noqa: B008
-    ) -> HySdkMemoryPage:
+    ) -> SdkMemoryLibraryPage:
         """One page of memories across chat, working and coding.
 
         Without `query`: `list_memories(scene="all")`, newest update first;
@@ -3831,7 +3912,7 @@ def create_app(
                         status_code=422,
                         detail="sdk_search_supports_active_status_only",
                     )
-                return await _library_search_page(
+                searched = await _library_search_page(
                     app,
                     client,
                     query=search_query,
@@ -3844,6 +3925,7 @@ def create_app(
                     user_id=user_id,
                     filters=filters,
                 )
+                return SdkMemoryLibraryPage.of(searched, user_id)
             raw = await asyncio.to_thread(
                 client.list_memories,
                 user_id=user_id,
@@ -3861,7 +3943,7 @@ def create_app(
                 raw, limit=limit, offset=offset
             )
             _log_skipped_sdk_memories(skipped)
-            return page
+            return SdkMemoryLibraryPage.of(page, user_id)
         except HTTPException:
             raise
         except Exception as error:
@@ -3907,6 +3989,7 @@ def create_app(
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_list_failed") from None
         return SdkLayerCounts(
+            user_id=user_id,
             layers=counts,
             total=sum(counts.values()),
             statuses=tuple(chosen) if chosen else None,
@@ -4067,6 +4150,7 @@ def create_app(
                     )
                 )
         return MemoryGraphResponse(
+            user_id=user_id,
             total_memories=total if isinstance(total, int) else len(memories),
             projected_memories=len(memories),
             nodes=tuple(nodes.values()),
@@ -4088,7 +4172,7 @@ def create_app(
             profile = HySdkUserProfile.from_sdk(value)
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_profile_read_failed") from None
-        return SdkUserProfileResponse.model_validate(profile.model_dump())
+        return SdkUserProfileResponse(user_id=user_id, **profile.model_dump())
 
     @app.get(
         "/api/v2/user-profile/versions",
@@ -4212,15 +4296,16 @@ def create_app(
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
                 # `delete` takes no user. Another user's memory is answered
-                # exactly like an id that does not exist: 204, nothing
-                # touched, so the status cannot tell that it exists.
+                # exactly like an id that does not exist: 404
+                # `memory_not_found`, nothing touched, so the status cannot
+                # tell that it exists. Callers read 404 as "already gone".
                 current = await asyncio.to_thread(
                     client.get, memory_id, **_namespace_kwargs(kind, variant)
                 )
-                if current is not None and not owns(
+                if current is None or not owns(
                     HySdkMemoryRecord.from_sdk(current).user_id, user_id
                 ):
-                    return Response(status_code=204)
+                    raise HTTPException(status_code=404, detail="memory_not_found")
                 result = await asyncio.to_thread(
                     client.delete, memory_id, **_namespace_kwargs(kind, variant)
                 )
@@ -4229,7 +4314,11 @@ def create_app(
             error_code = result.get("error_code")
             if error_code or result.get("partial") is True:
                 raise HySdkError(str(error_code or "hy_memory_delete_incomplete"))
-            if result.get("success") is not True and result.get("deleted_count") != 0:
+            if result.get("success") is not True:
+                # Read a moment ago, found by nobody now (a second delete won
+                # the race): the same answer as an id that never existed.
+                if result.get("deleted_count") == 0:
+                    raise HTTPException(status_code=404, detail="memory_not_found")
                 raise HySdkError("hy_memory_delete_rejected")
         except HTTPException:
             raise
@@ -4302,6 +4391,7 @@ def create_app(
                 and (before is None or at < before)
             )
         return SdkRawPage(
+            user_id=user_id,
             items=tuple(SdkRawItem.of(record) for record in records),
             total=page.total,
             offset=offset,
@@ -4334,6 +4424,7 @@ def create_app(
             )
         except MemoryAnswerError as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
+        answer = answer.model_copy(update={"user_id": request.user_id})
         if request.question != "__om_probe__" and access is not None:
             from one_memory.call_event_recorder import ask_call_event, try_record
 
@@ -4375,6 +4466,9 @@ def create_app(
                 ):
                     if event.get("type") == "final":
                         final = event
+                    elif event.get("type") == "recall":
+                        # The first event names whose memories answer.
+                        event = {**event, "user_id": request.user_id}
                     yield _sse(_serialize_ask_event(event))
             except MemoryAnswerError:
                 yield _sse({"type": "error", "code": "memory_answer_failed"})
@@ -4453,7 +4547,7 @@ def create_app(
                 )
             except Exception:
                 app.state.call_event_recording_error = True
-        return receipt
+        return receipt.model_copy(update={"user_id": request.user_id})
 
     @app.get(
         "/api/v1/memory-processing",

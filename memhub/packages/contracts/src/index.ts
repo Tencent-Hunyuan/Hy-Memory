@@ -425,6 +425,8 @@ export interface HomeSummary {
 
 export interface SdkHomeSummary {
   schema_version: 2;
+  /** The user the card was read for (`local` unless one was named). */
+  user_id?: string;
   memory_count: number;
   latest: SdkMemoryRecord | null;
   observed_at: string;
@@ -605,6 +607,8 @@ export interface SdkMemoryRecord {
 }
 
 export interface SdkMemoryPage {
+  /** `GET /api/v2/memory-library`: the user the page was read for. */
+  user_id?: string;
   memories: SdkMemoryRecord[];
   total: number;
   limit: number;
@@ -621,6 +625,8 @@ export interface SdkMemoryPage {
 }
 
 export interface SdkUserProfileResponse {
+  /** The user whose profile this is (`local` unless one was named). */
+  user_id?: string;
   request_id: string;
   profile: Record<string, unknown> | null;
   elapsed_ms: number;
@@ -649,6 +655,8 @@ export interface SdkRawRecord {
 }
 
 export interface SdkRawPage {
+  /** The user whose raw turns these are. */
+  user_id?: string;
   items: SdkRawRecord[];
   total: number;
   limit: number;
@@ -659,6 +667,8 @@ export interface SdkRawPage {
 
 /** `GET /api/v2/memory-library/layers`: memories per SDK layer. */
 export interface SdkLayerCounts {
+  /** The user whose memories were counted. */
+  user_id?: string;
   layers: Record<string, number>;
   total: number;
   statuses: string[] | null;
@@ -763,7 +773,8 @@ export type AskMemoryEvent =
   | { type: "error"; code: string };
 
 export type SdkAskMemoryEvent =
-  | { type: "recall"; memories: SdkAskMemory[] }
+  /** `user_id`: whose memories answer (Core 1.0.6+). */
+  | { type: "recall"; memories: SdkAskMemory[]; user_id?: string }
   | { type: "delta"; text: string }
   | {
       type: "final";
@@ -833,6 +844,8 @@ export interface RecallReceipt {
   fallback_reason?: "model_unavailable" | "no_memories" | null;
   /** Sources the caller was not allowed to read, left out of this result. */
   excluded_sources?: string[];
+  /** Whose memories were searched (`local` unless the request named a user). */
+  user_id?: string;
 }
 
 export interface LiveSyncHealth {
@@ -874,6 +887,8 @@ export interface MemoryGraphEdge {
 }
 
 export interface MemoryGraphResponse {
+  /** The user whose memories were mapped. */
+  user_id?: string;
   total_memories: number;
   projected_memories: number;
   nodes: MemoryGraphNode[];

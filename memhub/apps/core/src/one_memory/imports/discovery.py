@@ -27,7 +27,7 @@ def discovered_off_loop(
     *,
     suffixes: frozenset[str],
     max_targets: int,
-    excluded_top_directories: frozenset[str] = frozenset(),
+    excluded_directory_names: frozenset[str] = frozenset(),
 ) -> AsyncIterator[SourceFileDiscoveryEvent]:
     """The same walk, for callers that have an event loop to keep free.
 
@@ -42,7 +42,7 @@ def discovered_off_loop(
             grant,
             suffixes=suffixes,
             max_targets=max_targets,
-            excluded_top_directories=excluded_top_directories,
+            excluded_directory_names=excluded_directory_names,
         ),
         scope_key=grant.source_id,
     )
@@ -53,15 +53,17 @@ def discover_source_files(
     *,
     suffixes: frozenset[str],
     max_targets: int,
-    excluded_top_directories: frozenset[str] = frozenset(),
+    excluded_directory_names: frozenset[str] = frozenset(),
 ) -> Iterator[SourceFileDiscoveryEvent]:
     """Metadata only: one lstat per candidate, no open and no per-file grant lookup.
 
     The grant and root identity are checked once before the walk. Each listed
     file keeps the grant's check, which runs again when that file is opened;
     the open itself refuses symlinks and any inode other than the one listed.
-    `excluded_top_directories` are directories directly under the root that
-    are never entered, such as another user's Hermes profiles.
+    `excluded_directory_names` are directory names never entered, at any
+    depth under the root, such as the `profiles` container that holds other
+    users' Hermes profiles. Any depth, because the granted root may sit above
+    the Hermes home (`~/.hermes` inside it is then `.hermes/profiles`).
     """
     grant.check_root()
     inspected = 0
@@ -69,12 +71,10 @@ def discover_source_files(
         grant.root,
         followlinks=False,
     ):
-        at_root = Path(directory) == grant.root
         child_directories[:] = sorted(
             child
             for child in child_directories
-            if not (Path(directory) / child).is_symlink()
-            and not (at_root and child in excluded_top_directories)
+            if not (Path(directory) / child).is_symlink() and child not in excluded_directory_names
         )
         for filename in sorted(filenames):
             if Path(filename).suffix.lower() not in suffixes:

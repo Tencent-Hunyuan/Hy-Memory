@@ -348,12 +348,25 @@ export function parseApiKey(bytes: Buffer | null): string | undefined {
   return value;
 }
 
+/** What to do about a refusal whose code alone does not say. */
+const FLOW_CODE_HINTS: Record<string, string> = {
+  hermes_root_is_profiles_container:
+    "--root 指向的是 profiles 目录本身；请指向其中一个 profile，例如 ~/.hermes/profiles/wife。",
+  hermes_root_overlaps_other_user:
+    "--root 与另一个用户已接入的 Hermes 目录相同或互相包含，会读到对方的记录；请换一个目录，或先撤销对方的接入。~/.hermes 与 ~/.hermes/profiles/<name> 可以分属两个用户。",
+};
+
 export function renderFlowText(document: FlowDocument): string {
   const lines = [
     `操作状态：${document.state}`,
     `操作 ID：${document.operation_id ?? "无"}`,
     "code" in document ? `代码：${document.code}` : "已返回有界回执。",
   ];
+  const hint =
+    "code" in document && typeof document.code === "string"
+      ? FLOW_CODE_HINTS[document.code]
+      : undefined;
+  if (hint) lines.push(hint);
   // A partial success or an all-rejected batch must name each source that was
   // not accepted; a bare "partial" leaves the user with nothing to act on.
   if (

@@ -4,6 +4,33 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub multi-user hardening (follow-up to #250):
+  - Read responses name the user they were read for: `user_id` (the one
+    asked for, `local` by default) is now on `GET /api/v2/memory-library`,
+    `/memory-library/layers`, `/user-profile`, `/home-summary`,
+    `/memories/graph`, `/raw`, and `POST /api/v2/context/search`,
+    `/api/v1/recall`, `/api/v2/memories/ask`. `ask/stream` carries it on its
+    first (`recall`) event. The Host Bridge context validator accepts the new
+    field and still accepts a Core without it.
+  - `DELETE /api/v2/memories/{id}` answers 404 `memory_not_found` for another
+    user's memory and for an id that does not exist (the same response, so
+    existence is still not revealed), and also when the SDK finds nothing to
+    delete; 204 only when the caller's own memory was deleted. The App treats
+    that 404 as already gone (a double-click delete no longer shows an
+    error); `memhub memories delete` prints "未找到记忆 <id>（可能已删除）",
+    exits 0, and its JSON is `state: "committed"` with `already_gone: true`.
+  - Hermes never reads a `profiles/` directory at any depth (scan, detect and
+    live sync), so a root granted above `~/.hermes` cannot pick up another
+    user's profile. Connecting refuses a root that is the `profiles`
+    container itself (422 `hermes_root_is_profiles_container`) and a root
+    equal to, containing or inside another user's active Hermes grant (409
+    `hermes_root_overlaps_other_user`, symlinks resolved); `local` on
+    `~/.hermes` with another user on `~/.hermes/profiles/<name>` stays
+    allowed. The CLI explains both codes.
+  - `memhub sources connect --user-id` with an invalid id now says the user
+    id need not equal the Hermes profile name (e.g. `--user-id wife-work
+    --root ~/.hermes/profiles/wife:work`).
+
 - MemHub's DeepSeek Harness app page can grant recall again (#230). The
   "一键插入应用" switch used to be greyed out with `unsupported_host`, and a
   profile installed from the CLI stayed `install-only` with no way to approve

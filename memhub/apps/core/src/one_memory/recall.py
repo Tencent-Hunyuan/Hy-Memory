@@ -135,6 +135,8 @@ class RecallReceipt(BaseModel):
     #: exists yet (`fallback_reason`). Raw hits are excerpts, not memories.
     mode: Literal["memory", "raw"] = "memory"
     fallback_reason: Literal["model_unavailable", "no_memories"] | None = None
+    #: Whose memories were searched: the request's `user_id`, else `local`.
+    user_id: str = DEFAULT_USER_ID
 
 
 class RecallTarget(Protocol):

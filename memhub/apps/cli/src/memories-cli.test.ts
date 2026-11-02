@@ -366,6 +366,33 @@ describe("memories update / delete pass the namespace", () => {
     );
   });
 
+  it("reports a delete answered 404 as already gone and exits 0", async () => {
+    transport.delete.mockResolvedValue({
+      status: 404,
+      data: { detail: "memory_not_found" },
+    });
+    const json = await capturedRun([
+      "memories",
+      "delete",
+      "gone-1",
+      "--yes",
+      "--json",
+    ]);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual({
+      schema_version: 2,
+      product: expect.any(String),
+      command: "memories delete",
+      state: "committed",
+      operation: "delete",
+      memory_id: "gone-1",
+      already_gone: true,
+    });
+    const text = await capturedRun(["memories", "delete", "gone-1", "--yes"]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("未找到记忆 gone-1");
+  });
+
   it("explains an ambiguous id instead of a bare code", async () => {
     transport.delete.mockResolvedValue({
       status: 409,

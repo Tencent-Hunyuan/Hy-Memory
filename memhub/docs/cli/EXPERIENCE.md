@@ -69,8 +69,14 @@ node apps/cli/dist/one-memory.cjs sources list
 ```
 
 - 只有 `hermes` 能带 `--user-id`（非 `local`）或 `--root`；其他来源带了会退 2，什么都不发。
+- 用户 ID 不必等于 profile 名：profile 名里有 `:` 等字符时另起一个，例如
+  `--user-id wife-work --root ~/.hermes/profiles/wife:work`。
 - `--root` 里的 `~` 由 CLI 展开为主目录，相对路径按当前目录解析成绝对路径。
-- 扫描 `~/.hermes` 时会排除 `profiles/**`，所以 `local` 不会读到 wife 的 `state.db`。
+- 扫描时任何层级名为 `profiles` 的目录都会被排除，所以 `local` 不会读到 wife 的 `state.db`，
+  即使授权的根在 `~/.hermes` 之上。
+- `--root` 不能是 `profiles` 目录本身（`hermes_root_is_profiles_container`），也不能与另一个
+  用户已接入的 Hermes 目录相同、包含它或在它之内（`hermes_root_overlaps_other_user`，解析
+  symlink 后比较）；`~/.hermes` 给 `local`、`~/.hermes/profiles/<name>` 给另一个用户是允许的。
 - App 不变：它只读写 `local`，其他来源也都固定是 `local`。
 
 ## 3. 看导入进度
@@ -140,7 +146,11 @@ node apps/cli/dist/one-memory.cjs write status <request_id> --user-id wife
 
 - 用户 ID 只能是 1–64 位字母、数字、`.`、`_`、`-`；其他写法退 2，不连 Runtime。
 - 不带 `--user-id`（或写 `--user-id local`）时请求里不出现 `user_id`，和以前完全一样。
-- 用户之间互相隔离：读、改、删另一个用户的记忆 ID 返回「未找到」；write 的 request id 也只属于提交它的用户。
+- 用户之间互相隔离：读、改、删另一个用户的记忆 ID 返回「未找到」（HTTP 404 `memory_not_found`，
+  与不存在的 ID 完全一样）；write 的 request id 也只属于提交它的用户。
+- `memories delete <id> --yes` 遇到「未找到」时按已删除处理：提示「未找到记忆 <id>（可能已删除）」，
+  退出 0；`--json` 为 `state: "committed"` 加 `already_gone: true`。App 里重复点删除也不再报错。
+- 读接口（`memories list`、`profile`、`recall` 等背后的 HTTP 响应）都带 `user_id`，即实际读的是哪个用户。
 
 ### 画像版本（`profile --versions`）
 
