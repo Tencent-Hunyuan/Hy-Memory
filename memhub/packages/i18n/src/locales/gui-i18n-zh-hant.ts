@@ -625,6 +625,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: "（開發模式不可用）",
   nativeOpen: "開啟 {product}",
   nativeQuit: "結束 {product}（背景服務會繼續執行）",
+  nativeQuitStopsService: "結束 {product}（同時停止記憶服務）",
   nativeLoginError: "無法更改登入啟動設定，請重試。",
   nativeMoveTitle: "請先將 MemHub 移到「應用程式」檔案夾",
   nativeMoveDetail:

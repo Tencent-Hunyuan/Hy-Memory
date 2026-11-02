@@ -143,6 +143,8 @@ const SAFE_STABLE_RUNTIME_ERROR_CODES = new Set([
   "sdk_migration_status_unavailable",
   "sdk_migration_incomplete",
   "runtime_service_not_ready",
+  "runtime_newer_than_app",
+  "runtime_build_unknown",
 ]);
 
 /** Every migration code is a stable token Core or the orchestrator chose;
@@ -242,6 +244,10 @@ export const STABLE_RUNTIME_USER_MESSAGES: Record<string, string> = {
     "记忆数据格式升级没有完成，MemHub 暂时无法打开。请重新启动重试；如果仍然失败，请把这个提示反馈给我们，原有记忆数据不会丢失。",
   runtime_service_not_ready:
     "记忆服务仍在首次启动，请稍候后重试。你的记忆数据不会受到影响。",
+  runtime_newer_than_app:
+    "MemHub 后台版本比 App 新，请更新 App。后台服务保持运行，不会被降级；你的记忆数据不会受到影响。",
+  runtime_build_unknown:
+    "无法确认正在运行的 MemHub 后台版本，App 已连接到它，但不会停止或替换它。如遇问题，请更新 App 或重启后台服务；你的记忆数据不会受到影响。",
   desktop_start_failed:
     "MemHub 启动失败。请重新启动；如果仍然打不开，请重新安装，你的记忆数据不会受到影响。",
 };

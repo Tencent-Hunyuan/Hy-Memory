@@ -705,6 +705,7 @@ export const russianMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " (недоступно в режиме разработки)",
   nativeOpen: "Открыть {product}",
   nativeQuit: "Выйти из {product} (фоновая служба продолжит работу)",
+  nativeQuitStopsService: "Выйти из {product} (служба памяти тоже остановится)",
   nativeLoginError:
     "Не удалось изменить настройку запуска при входе. Повторите попытку.",
   nativeMoveTitle: "Сначала переместите MemHub в «Программы»",

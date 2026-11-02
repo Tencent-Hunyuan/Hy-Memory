@@ -697,6 +697,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " （開発モードでは利用不可）",
   nativeOpen: "{product} を開く",
   nativeQuit: "{product} を終了（バックグラウンドサービスは引き続き実行）",
+  nativeQuitStopsService: "{product} を終了（メモリサービスも停止）",
   nativeLoginError:
     "ログイン時の起動設定を変更できませんでした。もう一度お試しください。",
   nativeMoveTitle:

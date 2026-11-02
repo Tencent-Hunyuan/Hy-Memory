@@ -9,7 +9,7 @@ import type {
   Tray,
 } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import { installBackgroundTray } from "./background-tray";
+import { installBackgroundTray, type RuntimeHosting } from "./background-tray";
 import type { LoginPreference } from "./login-preference";
 
 async function flush() {
@@ -27,6 +27,7 @@ function fixture(
     status: "disabled",
   };
   let changed: (() => void) | undefined;
+  let hosting: RuntimeHosting | Error = "background-service";
   const languageSnapshot: LanguageSnapshot = {
     preference: "zh-Hans",
     locale: "zh-Hans",
@@ -49,6 +50,10 @@ function fixture(
       status: enabled ? "enabled" : "disabled",
     };
     return state;
+  });
+  const readRuntimeHosting = vi.fn(async () => {
+    if (hosting instanceof Error) throw hosting;
+    return hosting;
   });
   const open = vi.fn();
   const reportError = vi.fn();
@@ -77,6 +82,7 @@ function fixture(
       reportError,
       readLoginPreference,
       setLoginPreference,
+      readRuntimeHosting,
       ...(trial
         ? { allowLoginStartup: false, productName: "One Memory Trial" }
         : {}),
@@ -91,6 +97,7 @@ function fixture(
     menus,
     readLoginPreference,
     setLoginPreference,
+    readRuntimeHosting,
     open,
     reportError,
     install,
@@ -102,6 +109,9 @@ function fixture(
     },
     setState(value: LoginPreference) {
       state = value;
+    },
+    setHosting(value: RuntimeHosting | Error) {
+      hosting = value;
     },
   };
 }
@@ -177,6 +187,50 @@ describe("native macOS background tray", () => {
     dispose();
     expect(f.tray.destroy).toHaveBeenCalledOnce();
     expect(f.tray.eventNames()).toEqual([]);
+  });
+
+  it("says quitting stops the memory service when the App hosts it", async () => {
+    const f = fixture();
+    f.setHosting("app-hosted");
+    f.install();
+    await flush();
+    expect(f.menu()[3]?.label).toBe("退出 MemHub（同时停止记忆服务）");
+    f.changeLanguage("es");
+    await flush();
+    expect(f.menu()[3]?.label).toBe(
+      "Salir de MemHub (también detiene el servicio de memoria)",
+    );
+  });
+
+  it("re-reads who hosts the Runtime every time the menu opens", async () => {
+    const f = fixture();
+    f.install();
+    await flush();
+    expect(f.menu()[3]?.label).toContain("后台服务继续运行");
+
+    // The user turned the background service off in Settings.
+    f.setHosting("app-hosted");
+    f.tray.emit("mouse-down");
+    await flush();
+    expect(f.menu()[3]?.label).toContain("同时停止记忆服务");
+
+    f.setHosting("background-service");
+    f.tray.emit("right-click");
+    await flush();
+    expect(f.menu()[3]?.label).toContain("后台服务继续运行");
+    expect(f.readRuntimeHosting).toHaveBeenCalledTimes(3);
+  });
+
+  it("never claims quit stops the service when the state is unknown", async () => {
+    const f = fixture();
+    f.setHosting(new Error("launchctl timed out"));
+    f.install();
+    await flush();
+    expect(f.menu()[3]?.label).toContain("后台服务继续运行");
+    f.setHosting("unknown");
+    f.tray.emit("mouse-down");
+    await flush();
+    expect(f.menu()[3]?.label).toContain("后台服务继续运行");
   });
 
   it("blocks login changes for trial, development and non-macOS builds", async () => {

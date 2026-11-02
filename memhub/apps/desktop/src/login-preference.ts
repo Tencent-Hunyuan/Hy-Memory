@@ -1,6 +1,7 @@
 import {
   disableRuntimeService,
   enableRuntimeService,
+  type RuntimeServiceState,
   readRuntimeServiceOwner,
   runtimeServiceEnabled,
   setAppRuntimeStartAtLogin,
@@ -12,10 +13,16 @@ export interface LoginPreference {
   status: string;
 }
 
+/** "Launch at login" is the background service switch: it writes the enable
+ * marker the LaunchAgent's `KeepAlive` waits on. On it means the Runtime
+ * outlives the App and quitting leaves it running; off means quitting stops
+ * it. `serviceState`, when given, is asked fresh so a `launchctl disable`
+ * override (which the switch cannot undo) reads as off, not as on. */
 export async function readLoginPreference(
   dataDir: string,
   platform: NodeJS.Platform,
   supported: boolean,
+  serviceState?: () => Promise<RuntimeServiceState>,
 ): Promise<LoginPreference> {
   if (platform !== "darwin" || !supported) {
     return { supported: false, enabled: false, status: "unsupported" };
@@ -27,6 +34,12 @@ export async function readLoginPreference(
     }
     if (owner?.owner !== "app") {
       return { supported: false, enabled: false, status: "not-installed" };
+    }
+    if (
+      serviceState &&
+      (await serviceState()).reason === "service-disabled-by-launchctl"
+    ) {
+      return { supported: false, enabled: false, status: "disabled-by-system" };
     }
     return {
       supported: true,
@@ -46,6 +59,7 @@ export async function setLoginPreference(
   platform: NodeJS.Platform,
   input: unknown,
   supported: boolean,
+  serviceState?: () => Promise<RuntimeServiceState>,
 ): Promise<LoginPreference> {
   if (
     !input ||
@@ -63,5 +77,5 @@ export async function setLoginPreference(
   await setAppRuntimeStartAtLogin(dataDir, input.openAtLogin);
   if (input.openAtLogin) await enableRuntimeService(dataDir);
   else await disableRuntimeService(dataDir);
-  return readLoginPreference(dataDir, platform, supported);
+  return readLoginPreference(dataDir, platform, supported, serviceState);
 }

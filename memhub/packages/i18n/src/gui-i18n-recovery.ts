@@ -13,6 +13,7 @@ export const recoveryChineseMessages = {
   nativeDevelopmentUnavailable: "（开发模式不可用）",
   nativeOpen: "打开 {product}",
   nativeQuit: "退出 {product}（后台服务继续运行）",
+  nativeQuitStopsService: "退出 {product}（同时停止记忆服务）",
   nativeLoginError: "无法更改登录启动设置，请重试。",
   nativeMoveTitle: "请先将 MemHub 拖到“应用程序”文件夹",
   nativeMoveDetail:
@@ -115,6 +116,8 @@ export const recoverySpanishMessages: Record<
   nativeDevelopmentUnavailable: " (no disponible en desarrollo)",
   nativeOpen: "Abrir {product}",
   nativeQuit: "Salir de {product} (el servicio sigue en segundo plano)",
+  nativeQuitStopsService:
+    "Salir de {product} (también detiene el servicio de memoria)",
   nativeLoginError:
     "No se pudo cambiar el inicio de sesión. Inténtalo de nuevo.",
   nativeMoveTitle: "Arrastra MemHub a la carpeta Aplicaciones primero",

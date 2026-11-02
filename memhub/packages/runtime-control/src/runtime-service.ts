@@ -46,6 +46,16 @@ export interface RuntimeServiceOptions {
    * owner.json; see removeUnownedLease. Injectable for tests. */
   legacyBootTime?: () => number | null;
   diagnostics?: DiagnosticSink;
+  /** Build this process runs, published in the receipt so an App can tell an
+   * older or newer Runtime from its own before adopting it. `null` fields mean
+   * "this Runtime does not know"; a receipt without the fields at all was
+   * written by a Runtime older than this contract. */
+  buildIdentity?: RuntimeBuildIdentity;
+}
+
+export interface RuntimeBuildIdentity {
+  buildNumber: number | null;
+  commit: string | null;
 }
 
 interface LeaseIdentity {
@@ -406,6 +416,12 @@ export class RuntimeService {
           pid: this.pid(),
           core_port: Number(url.port),
           ...(sidecar === undefined ? {} : { sidecar }),
+          ...(this.options.buildIdentity === undefined
+            ? {}
+            : {
+                build_number: this.options.buildIdentity.buildNumber,
+                git_commit: this.options.buildIdentity.commit,
+              }),
           started_at: new Date().toISOString(),
         },
         null,

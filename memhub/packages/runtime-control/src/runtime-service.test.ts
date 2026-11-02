@@ -73,6 +73,23 @@ async function lockEntries(dataDir: string): Promise<string[]> {
 }
 
 describe("RuntimeService", () => {
+  it("publishes its build so an App can compare it before adopting", async () => {
+    const dataDir = await directory("runtime-service-build-");
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: () => supervisor(),
+      pid: 4321,
+      buildIdentity: { buildNumber: 38, commit: null },
+    });
+
+    await service.start();
+    const receipt = JSON.parse(
+      await readFile(path.join(dataDir, "runtime-service.json"), "utf8"),
+    );
+    expect(receipt).toMatchObject({ build_number: 38, git_commit: null });
+    await service.stop();
+  });
+
   it("publishes and removes an outer Runtime receipt without secrets", async () => {
     const dataDir = await directory("runtime-service-");
     const runtime = supervisor();
