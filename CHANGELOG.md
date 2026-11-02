@@ -4,6 +4,42 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+## MemHub 1.0.6 — 2026-11-02
+
+Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64
+App and Runtime.
+
+- Interfaces in 11 languages: English, Simplified and Traditional Chinese,
+  Japanese, Spanish, German, Portuguese, French, Korean, Russian and
+  Indonesian. Choosing any language other than Simplified Chinese also sets
+  the SDK prompt language; Simplified Chinese keeps the automatic zh/en
+  detection.
+- Memory modes: lite (no LLM, keeps raw conversations), pro (LLM extraction)
+  and ultra (pro plus the knowledge graph and a nightly evolve run). Set with
+  `GET`/`PUT /api/v1/settings/memory-mode` or `memhub settings mode`. Raw
+  conversations are now kept permanently. `POST /api/v2/evolve` and
+  `memhub evolve` run System 2 on demand.
+- Safe embedding-model switching: an embedding-space registry, a switch that
+  pauses writes, re-embeds every user's vectors and the graph, verifies and
+  commits atomically, and resumes after a crash or an App update. Every start
+  scans the vector store and merges data left in other spaces. When the
+  embedding service is unavailable, search returns `embedding_unavailable`.
+- Multi-user Runtime: memory APIs and the CLI take `user_id` (default
+  `local`); records are isolated per user; Hermes profiles can be connected as
+  separate users. The App keeps using `local`.
+- Configurable SDK features through the CLI and API (`memhub settings
+  features`): graph rerank, episode recall, session episodes, episode
+  summaries, intention and few-shot. Defaults are unchanged.
+- Search and recall pass through the SDK's search parameters with server-side
+  score floors; the memory library filters by layer; `/api/v2/raw` returns
+  data again; v2 source and import routes; profile version history.
+- Upgrade fixes: migration no longer stops without a model profile (#234) or
+  on a pre-existing readback mismatch (#229, #240); source grants work after
+  the cutover (#233); reads use the active embedding (#242); the embedding
+  endpoint no longer follows the generation `base_url`.
+- Hermes import drops gateway notices and probes and unwraps relayed
+  messages; `memhub logs` no longer reports valid older records as damaged.
+
 ## Hy Memory 2.0.11 — 2026-11-01
 
 - Published
