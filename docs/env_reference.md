@@ -182,8 +182,26 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 | `MEMORY_RECALL_STRENGTH_TAU` | `180` | 衰减时间常数，天 |
 | `MEMORY_RECALL_ACCESS_TRACKING` | `true` | Strength 开启时是否回写访问信息 |
 | `MEMORY_ENTITY_STORE_ENABLED` | `false` | 是否维护独立 entity collection；当前 Reader 不直接读取 |
+| `MEMORY_INTENTION_DEDUP_ENABLED` | `true` | Search 召回 L7 Intention 时是否判重；见下文 |
+| `MEMORY_INTENTION_DEDUP_THRESHOLD` | `MEMORY_DEDUP_THRESHOLD`，再缺省为 `0.95` | Intention 读侧判重的 cosine 阈值 |
 
 旧数据可调用当前公开方法 `client.build_entity_store(user_id)` 补建 Entity Store。
+
+Intention 读侧判重：开启时（默认，与以往行为一致），Search 召回的 L7 Intention 中，
+同 `user_id` + 同 `agent_id` + `memory_at` 同一天 + `valid_until` 相同、且 cosine ≥ 阈值的
+条目视为复本，只返回最早写入的一条，其余在后台从向量库**删除**。判重不区分内容中的项目、
+对象等语义差异，内容高度相似但对象不同的意图可能被误删；关闭后读侧不做任何判重，不隐藏、
+也不删除意图。两项对应 `MemoryConfig.recall.intention_dedup_enabled` /
+`recall.intention_dedup_threshold`，按 client 生效，环境变量只提供默认值：
+
+```python
+client = HyMemoryClient.from_config({
+    "recall": {"intention_dedup_enabled": False},
+})
+```
+
+`MEMORY_DEDUP_THRESHOLD` 同时被写入侧批内意图判重和 dedup 内核使用；
+`MEMORY_INTENTION_DEDUP_THRESHOLD` 只影响读侧 Intention 判重。
 
 ## 日志、Trace 与历史
 

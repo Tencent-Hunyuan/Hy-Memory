@@ -432,6 +432,14 @@ class RecallConfig:
     retrieval_clauses_require_keyword: bool = None  # env: MEMORY_RETRIEVAL_CLAUSES_REQUIRE_KEYWORD
     retrieval_clauses_min_keyword_score: float = None  # normalized BM25 floor
     supplemental_propositions_enabled: bool = None  # env: MEMORY_SUPPLEMENTAL_PROPOSITIONS_ENABLED
+    # ── Intention（L7）读侧判重 ──
+    # 开启（默认）：召回时同 user+agent+同天 memory_at+同 valid_until 且
+    # cosine≥阈值 的意图视为复本，只返回最早一条，其余异步从 VDB 删除（历史行为）。
+    # 关闭：读侧完全不判重——不隐藏、不删除任何意图。
+    intention_dedup_enabled: bool = None       # env: MEMORY_INTENTION_DEDUP_ENABLED
+    # 读侧意图判重 cosine 阈值。env: MEMORY_INTENTION_DEDUP_THRESHOLD，
+    # 未设置时回退到共享的 MEMORY_DEDUP_THRESHOLD（兼容旧部署），默认 0.95。
+    intention_dedup_threshold: float = None
 
     # 最小分数阈值
     min_score_threshold: float = 0.0
@@ -749,6 +757,15 @@ class RecallConfig:
         if self.supplemental_propositions_enabled is None:
             self.supplemental_propositions_enabled = _get_env_bool(
                 "MEMORY_SUPPLEMENTAL_PROPOSITIONS_ENABLED", False
+            )
+        if self.intention_dedup_enabled is None:
+            self.intention_dedup_enabled = _get_env_bool(
+                "MEMORY_INTENTION_DEDUP_ENABLED", True
+            )
+        if self.intention_dedup_threshold is None:
+            self.intention_dedup_threshold = _get_env_float(
+                "MEMORY_INTENTION_DEDUP_THRESHOLD",
+                _get_env_float("MEMORY_DEDUP_THRESHOLD", 0.95),
             )
 
 
@@ -1384,6 +1401,8 @@ class MemoryConfig:
                 "supplemental_propositions_enabled": (
                     self.recall.supplemental_propositions_enabled
                 ),
+                "intention_dedup_enabled": self.recall.intention_dedup_enabled,
+                "intention_dedup_threshold": self.recall.intention_dedup_threshold,
             },
             "pipeline": {
                 "default_version": self.pipeline.default_version,

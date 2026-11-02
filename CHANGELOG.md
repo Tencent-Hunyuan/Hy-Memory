@@ -4,6 +4,14 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- SDK: Intention read-time dedup is now configurable per client
+  (`MemoryConfig.recall.intention_dedup_enabled`, default `true`;
+  `recall.intention_dedup_threshold`, default `MEMORY_DEDUP_THRESHOLD` or
+  `0.95`). Env defaults: `MEMORY_INTENTION_DEDUP_ENABLED`,
+  `MEMORY_INTENTION_DEDUP_THRESHOLD`. When on, behaviour is unchanged
+  (duplicates found at read time are still deleted); when off, no intention
+  dedup runs and nothing is hidden or deleted. Refs #241.
+
 ## MemHub 1.0.6 — 2026-11-02
 
 Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64
