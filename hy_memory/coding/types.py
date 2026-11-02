@@ -33,11 +33,15 @@ class CodingWriteError(RuntimeError):
     - EMPTY_RESPONSE     抽取 LLM 返回 200 但 content 为空
     - JSON_PARSE_FAILED  抽取 LLM 的回复解析不出 JSON 对象
     - EMBEDDING_FAILED   经验 / 事实向量化失败（不落没有向量的节点）
+    - RECONCILE_FAILED   经验 / 事实 reconcile 的模型决策失败；具体原因在 cause
+                         （LLM_UNAVAILABLE / EMPTY_RESPONSE / JSON_PARSE_FAILED），
+                         透传为 reconcile_error_code，与 chat 链路一致
     """
 
-    def __init__(self, error_code: str, message: str):
+    def __init__(self, error_code: str, message: str, cause: Optional[str] = None):
         super().__init__(message)
         self.error_code = error_code
+        self.cause = cause
 
 
 def _epoch(value: Optional[datetime]) -> Optional[int]:

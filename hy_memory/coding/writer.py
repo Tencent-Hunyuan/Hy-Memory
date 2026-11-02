@@ -10,8 +10,9 @@ CodingWriter - 写入端协调器
              ├── recent history: 最近 K 个 user-turn（只作上下文）
              ├── new messages: 本次全部 turn（只做单条限长）
              ├── extractor.extract(...)            ← 一次 LLM 产出双层草稿
-             ├── reconciler.reconcile(经验草稿)     ← ADD/UPDATE/DELETE/SKIP
-             ├── fact_reconciler.reconcile(事实草稿) ← INSERT/SUPERSEDE
+             ├── reconciler.plan(经验草稿)          ← ADD/UPDATE/DELETE/SKIP 决策
+             ├── fact_reconciler.plan(事实草稿)      ← INSERT/SUPERSEDE 决策
+             ├── reconciler.apply / fact_reconciler.apply ← 两层决策都成功后才落库
              └── _crosslink(...)                   ← 同批全互链回填
 """
 
@@ -107,8 +108,10 @@ class CodingWriter:
 
         模型失败（抽取 LLM 调用失败 / 空回复 / 解析不出）或向量化失败时返回
         success=False，agent_error_code 为 LLM_ERROR / EMPTY_RESPONSE /
-        JSON_PARSE_FAILED / EMBEDDING_FAILED，error_code=502。模型答了但没有值得
-        记的内容仍是 success=True、0 条。
+        JSON_PARSE_FAILED / EMBEDDING_FAILED，error_code=502。经验层 / 事实层
+        reconcile 的模型决策失败时 agent_error_code=RECONCILE_FAILED，原因在
+        reconcile_error_code（LLM_UNAVAILABLE / EMPTY_RESPONSE / JSON_PARSE_FAILED），
+        本次什么都不落库。模型答了但没有值得记的内容仍是 success=True、0 条。
         """
         request_id = request_id or str(uuid.uuid4())
         t0 = time.perf_counter()
@@ -192,16 +195,22 @@ class CodingWriter:
             draft.source = source
             draft.memory_at = memory_at
 
-        # 3. 经验层 reconcile + 持久化
-        # 4. 事实层 reconcile + 持久化（独立链路，不受经验层结果影响）
+        # 3. 两层 reconcile 的模型决策（只检索 + 调 LLM，不落库）
+        # 4. 两层决策都成功后才落库：经验层 apply → 事实层 apply
+        #
+        # 先把所有模型决策做完再写库，任何一层的决策失败（LLM 失败 / 空回复 /
+        # 解析不出 → CodingWriteError(RECONCILE_FAILED)）都发生在落库之前，本次
+        # 写入一条经验 / 事实都没存、也没覆盖旧事实，换个 request_id 重跑即干净。
+        # 两层决策互不依赖（各自检索各自的候选），提前做不改变结果。
         #
         # 向量化失败抛 CodingWriteError(EMBEDDING_FAILED)：不落没有向量的节点，
         # 整次写入报失败。
         facts: List[WorkingFact] = []
         fact_ops: List[FactReconcileOp] = []
+        ops: List[ReconcileOp] = []
         try:
-            ops: List[ReconcileOp] = (
-                await self.reconciler.reconcile(
+            experience_plan = (
+                await self.reconciler.plan(
                     drafts,
                     request_id=request_id,
                     user_id=user_id,
@@ -209,10 +218,10 @@ class CodingWriter:
                     session_id=session_id or "",
                     language=language,
                 )
-                if drafts else []
+                if drafts else None
             )
-            if fact_drafts:
-                facts, fact_ops = await self.fact_reconciler.reconcile(
+            fact_plan = (
+                await self.fact_reconciler.plan(
                     fact_drafts,
                     user_id=user_id,
                     agent_id=agent_id,
@@ -223,6 +232,12 @@ class CodingWriter:
                     memory_at=memory_at,
                     language=language,
                 )
+                if fact_drafts else None
+            )
+            if experience_plan is not None:
+                ops = await self.reconciler.apply(experience_plan)
+            if fact_plan is not None:
+                facts, fact_ops = await self.fact_reconciler.apply(fact_plan)
         except CodingWriteError as e:
             return self._failure_response(request_id, t0, e)
 
@@ -329,7 +344,8 @@ class CodingWriter:
         「[CODE] 」前缀），调用方据 success 判定并重跑。
         """
         code = error.error_code
-        message = str(error)
+        cause = getattr(error, "cause", None)
+        message = f"{cause}: {error}" if cause else str(error)
         logger.warning(
             f"[coding-write] failed: code={code} request_id={request_id}: {message}"
         )
@@ -342,6 +358,9 @@ class CodingWriter:
             "agent_error_code": code,
             "agent_error": message,
         })
+        if cause:
+            # 与 chat 链路一致：reconcile 失败的具体原因
+            resp["reconcile_error_code"] = cause
         return resp
 
     def _empty_response(self, request_id: str, t0: float) -> Dict[str, Any]:

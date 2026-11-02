@@ -62,6 +62,21 @@ Hy Memory and MemHub are versioned and released independently.
     turns to the recent trace and records no `chain_rounds`.
     With `MEMORY_CODING_VERBATIM_FALLBACK_ENABLED` turned on, extraction
     failures keep the verbatim fallback.
+  - Working / coding reconcile: when the experience reconcile or the fact
+    reconcile model call fails, returns empty content, or returns a reply that
+    is not a JSON object with an `ops` list, the write returns
+    `success: false`, `agent_error_code: "RECONCILE_FAILED"` and the cause in
+    `reconcile_error_code` (`LLM_UNAVAILABLE`, `EMPTY_RESPONSE`,
+    `JSON_PARSE_FAILED`), the same as chat. Before, experience reconcile fell
+    back to adding every draft, and fact reconcile inserted the new fact
+    without superseding older ones. Both model decisions now run before
+    anything is stored, so a failure in either leaves no experience or fact
+    from the write and supersedes no older fact. An experience reply of
+    `{"ops": []}` is a valid "no changes" decision: the write succeeds and no
+    experience is stored. A non-empty `ops` list with no recognizable op is a
+    parse failure. A fact reply of `{"ops": []}` inserts the new fact without
+    superseding anything. Fact reconcile still makes no model call when there
+    are no candidates.
 
 - MemHub's DeepSeek Harness app page can grant recall again (#230). The
   "一键插入应用" switch used to be greyed out with `unsupported_host`, and a
