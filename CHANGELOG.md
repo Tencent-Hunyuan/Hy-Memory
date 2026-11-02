@@ -4,7 +4,9 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
-- Hy Memory: a model failure during a write now reports failure and stores
+## Hy Memory 2.0.13 — 2026-11-02
+
+- A model failure during a write now reports failure and stores
   nothing. **Behaviour change for direct SDK users:** writes that used to
   return `success: true` in a degraded state now return `success: false`;
   retry them with a new `request_id` once the model is back.
