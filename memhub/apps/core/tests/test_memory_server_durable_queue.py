@@ -5674,3 +5674,77 @@ def test_hand_added_memories_still_run_one_at_a_time_in_order(tmp_path) -> None:
     assert drain.claim(limit=5) == ()
     assert queue.get("note-2").state == PENDING
     assert second.job_id
+
+
+def test_unstarted_pause_is_not_immediately_claimed_again_after_restart(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    paused = queue.submit(_request(key="paused", source="cursor"))
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="first")
+    assert drain.claim() == (paused.job_id,)
+
+    assert queue.release_unstarted(paused.job_id, owner="first")
+    assert drain.claim() == ()
+    row = _rows(path)[0]
+    assert row["state"] == PENDING
+    assert row["attempts"] == 0
+    assert row["hy_invoked"] == 0
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is not None
+    retry_at = datetime.fromisoformat(row["lease_expires_at"])
+    assert retry_at > datetime.now(UTC)
+
+    reopened = DurableWriteQueue(path)
+    restarted = DurableWriteDrain(reopened, execute=_never_execute, owner="restarted")
+    for _ in range(3):
+        assert restarted.claim(now=retry_at - timedelta(milliseconds=1)) == ()
+    other = reopened.submit(_request(key="other", source="codex", evidence=("e2",)))
+    assert restarted.claim(now=retry_at - timedelta(milliseconds=1)) == (other.job_id,)
+    reopened.settle(other.job_id, state=COMPLETED, owner="restarted")
+    assert restarted.claim(now=retry_at + timedelta(milliseconds=1)) == (paused.job_id,)
+    assert _rows(path)[0]["attempts"] == 1
+
+
+def test_unstarted_pause_cannot_release_a_sent_job_or_another_owner(tmp_path) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="owner")
+    assert drain.claim() == (record.job_id,)
+    before = _rows(path)[0]
+    assert not queue.release_unstarted(record.job_id, owner="wrong-owner")
+    assert _rows(path)[0] == before
+    assert queue.mark_invoked(record.job_id, owner="owner")
+    before_sent = _rows(path)[0]
+    assert not queue.release_unstarted(record.job_id, owner="owner")
+    assert _rows(path)[0] == before_sent
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "model_content_source_disabled",
+        "model_sedimentation_disabled",
+        "memory_evolve_in_progress",
+        "embedding_switch_in_progress",
+    ],
+)
+def test_execute_job_defers_a_pre_hy_pause_without_hot_reclaims(tmp_path, error_code) -> None:
+    path = tmp_path / "one-memory.sqlite3"
+    queue = DurableWriteQueue(path)
+    record = queue.submit(_request())
+    drain = DurableWriteDrain(queue, execute=_never_execute, owner="paused-owner")
+    assert drain.claim() == (record.job_id,)
+    asyncio.run(
+        execute_job(
+            record.job_id,
+            queue=queue,
+            supervisor=_Recorder(error=RuntimeError(error_code)),
+            evidence=_EvidenceStore({"e1"}),
+            owner="paused-owner",
+        )
+    )
+    assert queue.get(record.request_id).state == PENDING
+    assert _rows(path)[0]["hy_invoked"] == 0
+    assert _rows(path)[0]["attempts"] == 0
+    assert drain.claim() == ()
