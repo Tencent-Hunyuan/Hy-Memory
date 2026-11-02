@@ -198,12 +198,17 @@ from one_memory.memory_evolution import (
 )
 from one_memory.memory_features import (
     FEATURES,
+    PARAMETERS,
+    SETTING_NAMES,
     FeatureCost,
     FeatureOverrides,
     FeatureReason,
     FeatureSide,
     MemoryFeatureName,
     MemoryFeatures,
+    MemoryParameterName,
+    MemorySettingName,
+    SettingValue,
     effective_features,
     feature_activity,
     non_default_features,
@@ -763,8 +768,9 @@ class PipelineStatus(BaseModel):
     last_evolve_at: datetime | None = None
     graph_build: GraphBuildState
     #: The SDK features (`memory_features`) whose value differs from the SDK
-    #: default; empty while every feature is at its default.
-    features: dict[MemoryFeatureName, bool] = Field(default_factory=dict)
+    #: default; empty while every feature is at its default. A parameter
+    #: (`intention_dedup_threshold`) appears as its number.
+    features: dict[MemorySettingName, SettingValue] = Field(default_factory=dict)
     #: The display language the App last reported (`ui_language`); null =
     #: none set (the App sends the language it shows, even following the system).
     ui_language: UiLanguage | None = None
@@ -824,6 +830,30 @@ class MemoryFeatureState(BaseModel):
     description: str
 
 
+class MemoryParameterState(BaseModel):
+    """One numeric setting in `GET /api/v1/settings/memory-features`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: MemoryParameterName
+    #: What clients are built with: `configured`, else `default`.
+    value: float
+    #: What a person set; null = not set, the SDK default applies.
+    configured: float | None
+    #: The SDK default (its code default, or its own env var when set).
+    default: float
+    #: The range a `PUT` accepts, inclusive.
+    minimum: float
+    maximum: float
+    #: Whether it acts: exactly when `requires_feature` acts.
+    active: bool
+    reason: FeatureReason | None
+    requires_feature: MemoryFeatureName
+    sdk_field: str
+    env: str
+    description: str
+
+
 class MemoryFeaturesState(BaseModel):
     """`GET /api/v1/settings/memory-features`."""
 
@@ -831,15 +861,16 @@ class MemoryFeaturesState(BaseModel):
 
     mode: MemoryMode
     features: tuple[MemoryFeatureState, ...]
+    parameters: tuple[MemoryParameterState, ...] = ()
     #: Same as `pipeline.features`: the values that differ from the defaults.
-    non_default: dict[MemoryFeatureName, bool]
+    non_default: dict[MemorySettingName, SettingValue]
 
 
 class MemoryFeaturesChange(MemoryFeaturesState):
     """`PUT /api/v1/settings/memory-features`: the new state and what changed."""
 
-    #: Features whose value changed; empty = nothing rebuilt.
-    changed: tuple[MemoryFeatureName, ...] = ()
+    #: Features and parameters whose value changed; empty = nothing rebuilt.
+    changed: tuple[MemorySettingName, ...] = ()
 
 
 def memory_mode_effects(
@@ -4565,7 +4596,8 @@ def create_app(
         """Turn SDK features on or off; one global setting, not per user.
 
         A key sets that feature, null resets it to the SDK default, an absent
-        key is left as it is; an unknown key or a non-boolean is 422. A
+        key is left as it is; an unknown key, a non-boolean feature or an
+        `intention_dedup_threshold` outside its range is 422. A
         change rebuilds the SDK clients like a mode change: a write in flight
         finishes with the old features, the next job and search use the new
         ones. Nothing stored is migrated and no collection is renamed. See
@@ -4581,7 +4613,7 @@ def create_app(
             current = _memory_features(app)
             before = effective_features(previous, defaults)
             after = effective_features(current, defaults)
-            changed = tuple(spec.name for spec in FEATURES if before[spec.name] != after[spec.name])
+            changed = tuple(name for name in SETTING_NAMES if before[name] != after[name])
             if current != previous:
                 # Even a reset to the default value rebuilds: the client then
                 # carries no override at all, byte for byte the default config.
@@ -6066,7 +6098,7 @@ def _ui_language_state(app: FastAPI) -> UiLanguageState:
 
 
 def _memory_features_state(
-    app: FastAPI, defaults: dict[str, bool] | None = None
+    app: FastAPI, defaults: dict[str, SettingValue] | None = None
 ) -> MemoryFeaturesState:
     defaults = sdk_feature_defaults() if defaults is None else defaults
     overrides = _memory_features(app)
@@ -6079,9 +6111,9 @@ def _memory_features_state(
         features.append(
             MemoryFeatureState(
                 name=spec.name,
-                enabled=effective[spec.name],
-                configured=configured.get(spec.name),
-                default=defaults[spec.name],
+                enabled=bool(effective[spec.name]),
+                configured=cast(bool | None, configured.get(spec.name)),
+                default=bool(defaults[spec.name]),
                 active=reason is None,
                 reason=reason,
                 side=spec.side,
@@ -6093,10 +6125,32 @@ def _memory_features_state(
                 description=spec.description,
             )
         )
+    parameters = []
+    for parameter in PARAMETERS:
+        reason = feature_activity(parameter.name, effective, mode)
+        parameters.append(
+            MemoryParameterState(
+                name=parameter.name,
+                value=float(effective[parameter.name]),
+                configured=cast(float | None, configured.get(parameter.name)),
+                default=float(defaults[parameter.name]),
+                minimum=parameter.minimum,
+                maximum=parameter.maximum,
+                active=reason is None,
+                reason=reason,
+                requires_feature=parameter.requires_feature,
+                sdk_field=parameter.sdk_field,
+                env=parameter.env,
+                description=parameter.description,
+            )
+        )
     return MemoryFeaturesState(
         mode=mode,
         features=tuple(features),
-        non_default=cast(dict[MemoryFeatureName, bool], non_default_features(overrides, defaults)),
+        parameters=tuple(parameters),
+        non_default=cast(
+            dict[MemorySettingName, SettingValue], non_default_features(overrides, defaults)
+        ),
     )
 
 
@@ -6117,7 +6171,7 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
         last_evolve_at=max(finished, default=None),
         graph_build=state.graph_build,
         features=cast(
-            dict[MemoryFeatureName, bool],
+            dict[MemorySettingName, SettingValue],
             non_default_features(_memory_features(app), sdk_feature_defaults()),
         ),
         **_ui_language_state(app).model_dump(exclude={"languages"}),

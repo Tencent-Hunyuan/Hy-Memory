@@ -47,8 +47,10 @@ from one_memory.local_embedding import LocalEmbedder
 from one_memory.log_file import confine_hy_sdk_logging
 from one_memory.memory_features import (
     FEATURES,
-    FEATURES_BY_NAME,
+    PARAMETERS,
+    SETTINGS_BY_NAME,
     FeatureOverrides,
+    SettingValue,
     feature_overrides,
 )
 from one_memory.model_profiles import (
@@ -321,21 +323,27 @@ def sdk_relevance_floor() -> float:
     return min(1.0, max(0.0, value))
 
 
-def sdk_feature_defaults() -> dict[str, bool]:
-    """Each `memory_features` feature's SDK default, as a fresh config has it.
+def sdk_feature_defaults() -> dict[str, SettingValue]:
+    """Each `memory_features` setting's SDK default, as a fresh config has it.
 
     That is the SDK's code default unless the process environment sets the
     SDK's own variable (`FeatureSpec.env`), exactly what an unset feature
     leaves on a client.
     """
     config = MemoryConfig()
-    return {
+    defaults: dict[str, SettingValue] = {
         spec.name: bool(getattr(getattr(config, spec.section), spec.field)) for spec in FEATURES
     }
+    for parameter in PARAMETERS:
+        defaults[parameter.name] = float(
+            getattr(getattr(config, parameter.section), parameter.field)
+        )
+    return defaults
 
 
 def apply_sdk_features(
-    config: MemoryConfig, features: Mapping[str, bool] | Iterable[tuple[str, bool]]
+    config: MemoryConfig,
+    features: Mapping[str, SettingValue] | Iterable[tuple[str, SettingValue]],
 ) -> MemoryConfig:
     """Set each feature a person chose on its `MemoryConfig` field.
 
@@ -346,7 +354,7 @@ def apply_sdk_features(
     """
     values = dict(features.items() if isinstance(features, Mapping) else features)
     for name, value in feature_overrides(values):
-        spec = FEATURES_BY_NAME[name]
+        spec = SETTINGS_BY_NAME[name]
         setattr(getattr(config, spec.section), spec.field, value)
     return config
 
@@ -383,7 +391,7 @@ def build_sdk_config(
     *,
     api_key: str | None,
     data_dir: Path,
-    features: Mapping[str, bool] | Iterable[tuple[str, bool]] = (),
+    features: Mapping[str, SettingValue] | Iterable[tuple[str, SettingValue]] = (),
     language: str | None = None,
 ) -> MemoryConfig:
     """Map a model snapshot and its embedding space to an SDK configuration.

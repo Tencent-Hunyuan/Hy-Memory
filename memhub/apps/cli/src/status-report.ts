@@ -85,7 +85,7 @@ export interface PipelineSummary {
   >;
   graph_build: string | null;
   /** SDK features (`memory_features`) whose value differs from the default. */
-  features: Record<string, boolean>;
+  features: Record<string, boolean | number>;
   /** The App's display language; null = never chosen or "follow the system". */
   ui_language: string | null;
   /** The SDK prompt language: `auto` (zh/en detection) or the code passed. */
@@ -134,12 +134,13 @@ export function describePipeline(value: unknown): PipelineSummary | null {
       };
     }
   }
-  const features: Record<string, boolean> = {};
+  const features: Record<string, boolean | number> = {};
   if (item.features && typeof item.features === "object") {
     for (const [name, value] of Object.entries(
       item.features as Record<string, unknown>,
     )) {
-      if (typeof value === "boolean") features[name] = value;
+      if (typeof value === "boolean" || typeof value === "number")
+        features[name] = value;
     }
   }
   const graph =
@@ -357,7 +358,10 @@ export function pipelineLine(pipeline: PipelineSummary): string {
   if (changed.length > 0) {
     parts.push(
       `；SDK 功能：${changed
-        .map(([name, value]) => `${name}=${value ? "开" : "关"}`)
+        .map(
+          ([name, value]) =>
+            `${name}=${typeof value === "number" ? value : value ? "开" : "关"}`,
+        )
         .join("、")}`,
     );
   }

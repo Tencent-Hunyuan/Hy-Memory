@@ -36,15 +36,17 @@ const DEFAULTS: Record<string, boolean> = {
   session_episodes: false,
   episode_summary: false,
   intention: true,
+  intention_dedup: true,
   few_shot: false,
 };
+const THRESHOLD_DEFAULT = 0.95;
 
 function featuresState(
-  configured: Record<string, boolean> = {},
+  configured: Record<string, boolean | number> = {},
   mode = "pro",
   extra: Record<string, unknown> = {},
 ) {
-  const nonDefault: Record<string, boolean> = {};
+  const nonDefault: Record<string, boolean | number> = {};
   const features = Object.entries(DEFAULTS).map(([name, fallback]) => {
     const enabled = configured[name] ?? fallback;
     if (enabled !== fallback) nonDefault[name] = enabled;
@@ -70,7 +72,34 @@ function featuresState(
       description: name,
     };
   });
-  return { mode, features, non_default: nonDefault, ...extra };
+  const threshold =
+    (configured.intention_dedup_threshold as number | undefined) ??
+    THRESHOLD_DEFAULT;
+  if (threshold !== THRESHOLD_DEFAULT)
+    nonDefault.intention_dedup_threshold = threshold;
+  const dedupOn =
+    (configured.intention_dedup as boolean | undefined) ??
+    DEFAULTS.intention_dedup;
+  const parameters = [
+    {
+      name: "intention_dedup_threshold",
+      value: threshold,
+      configured:
+        "intention_dedup_threshold" in configured
+          ? configured.intention_dedup_threshold
+          : null,
+      default: THRESHOLD_DEFAULT,
+      minimum: 0.8,
+      maximum: 1,
+      active: dedupOn,
+      reason: dedupOn ? null : "requires_intention_dedup",
+      requires_feature: "intention_dedup",
+      sdk_field: "recall.intention_dedup_threshold",
+      env: "MEMORY_INTENTION_DEDUP_THRESHOLD",
+      description: "threshold",
+    },
+  ];
+  return { mode, features, parameters, non_default: nonDefault, ...extra };
 }
 
 beforeEach(() => {
@@ -110,11 +139,16 @@ describe("memhub settings features", () => {
     expect(result.code).toBe(0);
     const json = JSON.parse(result.stdout);
     expect(json.state).toBe("ok");
-    expect(json.features.features).toHaveLength(7);
+    expect(json.features.features).toHaveLength(8);
+    expect(json.features.parameters[0].name).toBe("intention_dedup_threshold");
     expect(transport.put).not.toHaveBeenCalled();
     const text = (await capturedRun(["settings", "features"])).stdout;
     expect(text).toContain("graph_rerank：关（默认）");
     expect(text).toContain("intention：开（默认）");
+    expect(text).toContain("intention_dedup：开（默认）");
+    expect(text).toContain(
+      "intention_dedup_threshold：0.95（默认，可设 0.8–1）",
+    );
     expect(text).toContain("先开启 session_episodes");
   });
 
@@ -158,6 +192,130 @@ describe("memhub settings features", () => {
     expect(result.stdout).toContain(
       "graph_rerank：开（已设置，当前模式下不生效（需要 ultra））",
     );
+  });
+
+  it("turns intention dedup off and sets its threshold, round trip", async () => {
+    transport.put.mockResolvedValueOnce({
+      status: 200,
+      data: featuresState({ intention_dedup: false }, "pro", {
+        changed: ["intention_dedup"],
+      }),
+    });
+    const off = await capturedRun([
+      "settings",
+      "features",
+      "set",
+      "intention_dedup=false",
+      "--yes",
+      "--json",
+    ]);
+    expect(off.code).toBe(0);
+    expect(transport.put).toHaveBeenLastCalledWith(
+      "/api/v1/settings/memory-features",
+      { intention_dedup: false },
+      undefined,
+    );
+    const offJson = JSON.parse(off.stdout);
+    expect(offJson.state).toBe("committed");
+    expect(offJson.changed).toEqual(["intention_dedup"]);
+    expect(offJson.features.parameters[0].reason).toBe(
+      "requires_intention_dedup",
+    );
+
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: featuresState({ intention_dedup: false }),
+    });
+    transport.put.mockResolvedValueOnce({
+      status: 200,
+      data: featuresState(
+        { intention_dedup: true, intention_dedup_threshold: 0.9 },
+        "pro",
+        { changed: ["intention_dedup", "intention_dedup_threshold"] },
+      ),
+    });
+    const on = await capturedRun([
+      "settings",
+      "features",
+      "set",
+      "intention_dedup=true",
+      "intention_dedup_threshold=0.9",
+      "--yes",
+    ]);
+    expect(on.code).toBe(0);
+    expect(transport.put).toHaveBeenLastCalledWith(
+      "/api/v1/settings/memory-features",
+      { intention_dedup: true, intention_dedup_threshold: 0.9 },
+      undefined,
+    );
+    expect(on.stdout).toContain(
+      "已更新：intention_dedup、intention_dedup_threshold",
+    );
+    expect(on.stdout).toContain("intention_dedup_threshold：0.9（已设置");
+
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: featuresState({ intention_dedup_threshold: 0.9 }),
+    });
+    transport.put.mockResolvedValueOnce({
+      status: 200,
+      data: featuresState({}, "pro", {
+        changed: ["intention_dedup_threshold"],
+      }),
+    });
+    const reset = await capturedRun([
+      "settings",
+      "features",
+      "reset",
+      "intention_dedup_threshold",
+    ]);
+    expect(reset.code).toBe(0);
+    expect(transport.put).toHaveBeenLastCalledWith(
+      "/api/v1/settings/memory-features",
+      { intention_dedup_threshold: null },
+      undefined,
+    );
+  });
+
+  it("previews a threshold without --yes and refuses one out of range", async () => {
+    const preview = await capturedRun([
+      "settings",
+      "features",
+      "set",
+      "intention_dedup_threshold=0.85",
+    ]);
+    expect(preview.code).toBe(0);
+    expect(preview.stdout).toContain("- intention_dedup_threshold = 0.85");
+    for (const value of ["0.5", "0.79", "1.01", "2", "-0.9", "abc", "1e0"]) {
+      const result = await capturedRun([
+        "settings",
+        "features",
+        "set",
+        `intention_dedup_threshold=${value}`,
+        "--yes",
+      ]);
+      expect(result.code, value).toBe(2);
+    }
+    expect(transport.put).not.toHaveBeenCalled();
+  });
+
+  it("does not send a threshold to a Runtime that does not list it", async () => {
+    const { parameters: _unused, ...older } = featuresState();
+    transport.get.mockResolvedValue({ status: 200, data: older });
+    const result = await capturedRun([
+      "settings",
+      "features",
+      "set",
+      "intention_dedup_threshold=0.9",
+      "--yes",
+      "--json",
+    ]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      state: "rejected",
+      code: "memory_feature_unsupported",
+    });
+    expect(transport.put).not.toHaveBeenCalled();
   });
 
   it("does nothing when the values are already set", async () => {
@@ -210,6 +368,8 @@ describe("memhub settings features", () => {
       ["settings", "features", "set", "graph_rerank=yes"],
       ["settings", "features", "set", "graph_rerank"],
       ["settings", "features", "set", "few_shot=true", "few_shot=false"],
+      ["settings", "features", "set", "intention_dedup=0.9"],
+      ["settings", "features", "set", "intention_dedup_threshold=true"],
       ["settings", "features", "reset", "nope"],
       ["settings", "features", "toggle"],
     ]) {
@@ -269,7 +429,11 @@ describe("status pipeline features", () => {
         last_evolve_at: null,
         graph_build: { state: "idle", users: {} },
         evolve: { mode: "pro", schedule: null, running: [], users: {} },
-        features: { episode_recall: true, intention: false },
+        features: {
+          episode_recall: true,
+          intention: false,
+          intention_dedup_threshold: 0.9,
+        },
       },
     };
     const report = await composeStatusReport({
@@ -284,9 +448,12 @@ describe("status pipeline features", () => {
     expect(report.pipeline?.features).toEqual({
       episode_recall: true,
       intention: false,
+      intention_dedup_threshold: 0.9,
     });
     const text = renderStatusText(report, "MemHub");
-    expect(text).toContain("SDK 功能：episode_recall=开、intention=关");
+    expect(text).toContain(
+      "SDK 功能：episode_recall=开、intention=关、intention_dedup_threshold=0.9",
+    );
   });
 });
 

@@ -37,6 +37,15 @@ Hy Memory and MemHub are versioned and released independently.
   dedup runs, at read time or within a write batch, and nothing is hidden,
   dropped or deleted. The threshold applies to read-time dedup only. Refs #241.
 
+- MemHub pins `hy-memory==2.0.12` and exposes that intention dedup switch in
+  its memory-features setting (`GET`/`PUT /api/v1/settings/memory-features`,
+  `memhub settings features`): the feature `intention_dedup` (default on) and
+  the numeric `intention_dedup_threshold` (default 0.95, accepted 0.8–1.0,
+  anything else is 422 or a CLI usage error). Unset, both keep the SDK
+  default, so nothing changes for the App; a change rebuilds the SDK clients
+  like the other feature switches. The API answer gains `parameters`, and
+  `pipeline.features` can now carry the threshold as a number. Refs #241.
+
 ## MemHub 1.0.6 — 2026-11-02
 
 Build 37, on `hy-memory==2.0.11`. Linux x64/arm64 Runtime and macOS arm64
