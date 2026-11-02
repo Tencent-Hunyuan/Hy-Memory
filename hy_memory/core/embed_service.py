@@ -990,6 +990,13 @@ class EmbedService:
                         f"Embedding count mismatch: expected={len(texts)} "
                         f"got={len(vectors)}"
                     )
+                # Sorting alone cannot detect duplicate, missing or out-of-range
+                # indices. Require a complete input mapping before caching vectors.
+                if any(
+                    type(getattr(item, "index", None)) is not int or item.index != index
+                    for index, item in enumerate(_data)
+                ):
+                    raise ValueError("Embedding index mismatch: expected one index per input")
                 dims = [len(v) for v in vectors]
                 expected_dims = self._embed_config.embedding_dims
                 if expected_dims:
