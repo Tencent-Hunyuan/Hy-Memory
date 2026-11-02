@@ -114,6 +114,60 @@ def test_versioned_v3_session_file_is_discovered_and_imported(tmp_path: Path) ->
     assert _evidence_text(events) == ["visible human", "visible assistant"]
 
 
+def _tool_result(content: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "type": "tool/result",
+        "seq": 3,
+        "data": {"callId": "call-1", "message": {"role": "tool", "content": content}},
+    }
+
+
+def test_tool_output_imports_in_either_block_shape(tmp_path: Path) -> None:
+    """`tool/result` output written as `text` blocks used to be dropped.
+
+    Only `tool-result` blocks were read, so a session that writes plain `text`
+    blocks lost every tool output. Both shapes must arrive, in any generation.
+    """
+    root, adapter = _session_adapter(tmp_path)
+    v3 = _conversation(3, directory="run-v3-text")
+    v3.append(_tool_result([{"type": "text", "text": "v3 text output"}]))
+    _write_session(root / "run-v3-text", "session.v3.jsonl.zstd", v3)
+    v0 = _conversation(0, directory="run-v0-block")
+    v0.append(_tool_result([{"type": "tool-result", "content": "v0 block output"}]))
+    _write_session(root / "run-v0-block", "session.jsonl.zstd", v0)
+
+    texts = _evidence_text(_scan(adapter))
+
+    assert "v3 text output" in texts
+    assert "v0 block output" in texts
+
+
+def test_text_tool_output_is_scrubbed_like_block_output(tmp_path: Path) -> None:
+    root, adapter = _session_adapter(tmp_path)
+    secret = "sk-" + "a" * 40
+    records = _conversation(4, directory="run-secret")
+    records.append(_tool_result([{"type": "text", "text": f"token {secret} " + "x" * 5000}]))
+    _write_session(root / "run-secret", "session.v4.jsonl.zstd", records)
+
+    tool = _evidence_text(_scan(adapter))[-1]
+
+    assert secret not in tool
+    assert len(tool) < 2000
+
+
+def test_session_file_names_outside_the_contract_are_not_imported(tmp_path: Path) -> None:
+    root, adapter = _session_adapter(tmp_path)
+    for name in (
+        "session.v4.jsonl.zstd.orig-20261027",
+        "session.vx.jsonl.zstd",
+        "other.v4.jsonl.zstd",
+        "session.v4.json",
+    ):
+        _write_session(root / name.replace(".", "-"), name, _conversation(4))
+
+    assert _evidence(_scan(adapter)) == []
+
+
 def test_unknown_future_session_version_imports_nothing(tmp_path: Path) -> None:
     root, adapter = _session_adapter(tmp_path)
     records = _conversation(5)
