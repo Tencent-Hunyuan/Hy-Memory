@@ -5,6 +5,7 @@ Agent Memory - 配置管理
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
@@ -1145,6 +1146,37 @@ class HistoryConfig:
 
 
 @dataclass
+class BusinessStoreConfig:
+    """Working/coding authoritative data; independent of vector and audit stores."""
+
+    backend: str = None  # sqlite (default) | postgres
+    postgres_dsn: Optional[str] = field(default=None, repr=False)
+    postgres_schema: str = None
+    connect_timeout: int = None
+
+    def __post_init__(self):
+        if self.backend is None:
+            self.backend = os.getenv("MEMORY_BUSINESS_STORE", "sqlite")
+        if self.postgres_dsn is None:
+            self.postgres_dsn = os.getenv("MEMORY_POSTGRES_DSN")
+        if self.postgres_schema is None:
+            self.postgres_schema = os.getenv("MEMORY_POSTGRES_SCHEMA", "hy_memory")
+        if self.connect_timeout is None:
+            self.connect_timeout = _get_env_int("MEMORY_POSTGRES_CONNECT_TIMEOUT", 10)
+        self.validate()
+
+    def validate(self) -> None:
+        # Revalidate at the factory too: from_dict and callers can mutate config.
+        self.backend = str(self.backend).strip().lower()
+        if self.backend not in ("sqlite", "postgres"):
+            raise ValueError("business_store.backend must be sqlite / postgres")
+        if not re.fullmatch(r"[a-z_][a-z0-9_]{0,47}", str(self.postgres_schema)):
+            raise ValueError("postgres_schema must be a lowercase SQL identifier (1-48 characters)")
+        if not isinstance(self.connect_timeout, int) or self.connect_timeout <= 0:
+            raise ValueError("business_store.connect_timeout must be a positive integer")
+
+
+@dataclass
 class CodingConfig:
     """
     Coding Memory 配置（生产力 / 编码场景独立链路）
@@ -1274,6 +1306,7 @@ class MemoryConfig:
     pipeline: PipelineRouteConfig = field(default_factory=PipelineRouteConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
+    business_store: BusinessStoreConfig = field(default_factory=BusinessStoreConfig)
     basic_profile: BasicProfileConfig = field(default_factory=BasicProfileConfig)
 
     # 全局配置
@@ -1330,6 +1363,7 @@ class MemoryConfig:
             "pipeline",
             "history",
             "coding",
+            "business_store",
         ]
         for section in _sections:
             if section in config_dict:
@@ -1337,6 +1371,8 @@ class MemoryConfig:
                 for key, value in config_dict[section].items():
                     if hasattr(sub, key):
                         setattr(sub, key, value)
+
+        config.business_store.validate()
 
         # basic_profile: fields 是 Dict[str, str]，整体替换（非空时）
         if "basic_profile" in config_dict:
@@ -1377,6 +1413,11 @@ class MemoryConfig:
                 "db_path": self.graph_store.db_path,
                 "url": self.graph_store.url,
                 "database": self.graph_store.database,
+            },
+            "business_store": {
+                "backend": self.business_store.backend,
+                "postgres_schema": self.business_store.postgres_schema,
+                "connect_timeout": self.business_store.connect_timeout,
             },
             "cache": {
                 "backend": self.cache.backend,

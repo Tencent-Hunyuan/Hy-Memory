@@ -8,7 +8,7 @@ Hy Memory 的公开 `scene` 参数支持三个值：
 | `"working"` | 文档、办公、研究、财经、内容创作和电脑操作等生产力任务 | working 双层 memory |
 | `"coding"` | 编码、调试、测试、构建、API/SDK、脚本、SQL 等软件工程任务 | coding 双层 memory，并附带版本演进链 |
 
-working 与 coding 复用同一套生产力 pipeline 结构和数据 schema，但使用不同的抽取规范、SQLite 文件和向量集合，数据不会混在一起。
+working 与 coding 复用同一套生产力 pipeline 结构和数据 schema，但使用不同的抽取规范、业务存储命名空间和向量集合，数据不会混在一起。业务存储默认 SQLite，也可配置 PostgreSQL，详见[业务存储后端](business_storage.md)。
 
 ## 1. 写入路由
 
