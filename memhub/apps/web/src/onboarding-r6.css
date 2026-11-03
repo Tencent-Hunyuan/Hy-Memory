@@ -573,11 +573,11 @@
   border: 0;
 }
 .onboarding-r6-mode {
-  width: min(760px, 100%);
+  width: min(720px, 100%);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  gap: 20px;
 }
 .onboarding-r6-mode-intro {
   text-align: center;
@@ -585,8 +585,8 @@
 .onboarding-r6-mode-intro h2 {
   margin: 0;
   color: #263947;
-  font-size: 24px;
-  line-height: 34px;
+  font-size: 20px;
+  line-height: 30px;
 }
 .onboarding-r6-mode-intro p {
   margin: 8px 0 0;
@@ -601,15 +601,14 @@
   border: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  gap: 12px;
 }
 .onboarding-r6-mode-card {
-  min-height: 196px;
-  padding: 24px;
-  border: 1px solid #bdcad4;
-  border-radius: 16px;
-  background: rgb(255 255 255 / 58%);
-  box-shadow: 0 12px 30px rgb(50 74 94 / 7%);
+  min-height: 136px;
+  padding: 20px;
+  border: 1px solid #c9d5de;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 72%);
   cursor: pointer;
   display: flex;
   align-items: flex-start;
@@ -625,10 +624,8 @@
 }
 .onboarding-r6-mode-card[data-selected="true"] {
   border-color: #557c93;
-  background: #f8fbfd;
-  box-shadow:
-    0 0 0 2px rgb(85 124 147 / 18%),
-    0 14px 34px rgb(50 74 94 / 10%);
+  background: #edf3f6;
+  box-shadow: 0 0 0 2px rgb(85 124 147 / 10%);
 }
 .onboarding-r6-mode-card:has(input:focus-visible) {
   outline: 2px solid #557c93;
@@ -648,7 +645,7 @@
   line-height: 23px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 .onboarding-r6-mode-heading {
   display: flex;
@@ -657,8 +654,8 @@
 }
 .onboarding-r6-mode-heading strong {
   color: #263947;
-  font-size: 20px;
-  line-height: 28px;
+  font-size: 17px;
+  line-height: 26px;
 }
 .onboarding-r6-mode-heading > span {
   padding: 2px 8px;

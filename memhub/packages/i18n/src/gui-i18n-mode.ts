@@ -2,41 +2,42 @@ const modeChineseMessages = {
   "模式未能保存。你的选择已保留，请重试。":
     "模式未能保存。你的选择已保留，请重试。",
   选择记忆方式: "选择记忆方式",
-  "最后一步 · 决定如何处理对话": "最后一步 · 决定如何处理对话",
+  "最后一步 · 决定如何处理对话": "最后一步 · 选择记忆模式",
   返回导入: "返回导入",
   继续: "继续",
   "正在保存…": "正在保存…",
   "当前模型已经启用，可以继续完成首次设置。":
     "当前模型已经启用，可以继续完成首次设置。",
   继续使用当前模型: "继续使用当前模型",
-  "你希望 MemHub 如何形成记忆？": "你希望 MemHub 如何形成记忆？",
+  "你希望 MemHub 如何形成记忆？": "选择记忆模式",
   "需要明确选择一种方式；之后仍可在设置中更改。":
-    "需要明确选择一种方式；之后仍可在设置中更改。",
+    "之后可在设置中更改。",
   记忆模式: "记忆模式",
+  记忆模式与模型: "记忆模式与模型",
   推荐: "推荐",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
-    "使用模型理解对话，提取并整理可持续生长的记忆。",
+    "使用模型提取事实、偏好和计划。",
   "无需模型，只保存并检索原始对话，不生成提炼记忆。":
-    "无需模型，只保存并检索原始对话，不生成提炼记忆。",
+    "无需模型。保存并搜索原始对话。",
   "基础记忆（lite）": "基础记忆（lite）",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
-    "不调用生成模型。保存并检索原始对话，不再生成高级记忆。",
+    "保存并搜索原始对话，不生成高级记忆。",
   "智能记忆（pro）": "智能记忆（pro）",
   "使用当前模型从新对话中提取事实、偏好和计划。":
     "使用当前模型从新对话中提取事实、偏好和计划。",
   "深度记忆（ultra）": "深度记忆（ultra）",
   "在智能记忆之上使用知识图谱，并默认每天 03:00 自动整合记忆。":
-    "在智能记忆之上使用知识图谱，并默认每天 03:00 自动整合记忆。",
+    "使用知识图谱，每天自动整合记忆。",
   "lite 下已经处理完成的原始对话不会补提取；排队中和之后的新对话会生成高级记忆。":
-    "lite 下已经处理完成的原始对话不会补提取；排队中和之后的新对话会生成高级记忆。",
+    "lite 期间已完成的对话不会补提取；待处理和新对话会生成高级记忆。",
   "原始对话检索会停止，改为使用高级记忆。":
-    "原始对话检索会停止，改为使用高级记忆。",
+    "搜索将改为使用高级记忆。",
   "以前生成的高级记忆会继续保留，但在 lite 下不会显示或参与记忆召回。":
-    "以前生成的高级记忆会继续保留，但在 lite 下不会显示或参与记忆召回。",
+    "高级记忆会保留，但在 lite 下不显示、不参与召回。",
   "每天自动整合会停止，已经生成的数据不会删除。":
-    "每天自动整合会停止，已经生成的数据不会删除。",
+    "自动整合会停止，已有数据保留。",
   "已有高级记忆会在后台加入知识图谱，期间可以继续使用 MemHub。":
-    "已有高级记忆会在后台加入知识图谱，期间可以继续使用 MemHub。",
+    "已有高级记忆将在后台加入知识图谱。",
   "知识图谱仍在补建，不会重复启动。": "知识图谱仍在补建，不会重复启动。",
   "记忆模式状态暂时无法读取，请重试。": "记忆模式状态暂时无法读取，请重试。",
   "使用 pro 或 ultra 前需要先配置并启用生成模型。":
@@ -52,7 +53,7 @@ const modeChineseMessages = {
     "正在检查或切换向量模型，完成后才能整合记忆。",
   "未能开始整合记忆，请重试。": "未能开始整合记忆，请重试。",
   "模式决定新对话如何保存，以及记忆页面展示什么。":
-    "模式决定新对话如何保存，以及记忆页面展示什么。",
+    "决定新对话的处理方式和记忆页内容。",
   刷新记忆模式: "刷新记忆模式",
   当前模式: "当前模式",
   "开发环境当前强制使用 ultra，保存的选择暂不会生效。":
@@ -95,6 +96,7 @@ export const modeEnglishMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Choose one option. You can change it later in Settings.",
   记忆模式: "Memory mode",
+  记忆模式与模型: "Memory mode and model",
   推荐: "Recommended",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Use a model to understand conversations and build memories that grow over time.",
@@ -179,6 +181,7 @@ export const modeSpanishMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Elige una opción. Podrás cambiarla después en Configuración.",
   记忆模式: "Modo de memoria",
+  记忆模式与模型: "Modo de memoria y modelo",
   推荐: "Recomendado",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Usa un modelo para comprender las conversaciones y crear memorias que evolucionan con el tiempo.",
@@ -263,6 +266,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "請選擇一種方式；之後仍可在設定中更改。",
   记忆模式: "記憶模式",
+  记忆模式与模型: "記憶模式與模型",
   推荐: "推薦",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "使用模型理解對話，擷取並整理可持續成長的記憶。",
@@ -341,6 +345,7 @@ export const modeJapaneseMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "いずれかを選択してください。後から設定で変更できます。",
   记忆模式: "記憶モード",
+  记忆模式与模型: "記憶モードとモデル",
   推荐: "おすすめ",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "モデルで会話を理解し、継続的に成長する記憶として整理します。",
@@ -425,6 +430,7 @@ export const modeGermanMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Wählen Sie eine Option. Sie können sie später in den Einstellungen ändern.",
   记忆模式: "Erinnerungsmodus",
+  记忆模式与模型: "Erinnerungsmodus und Modell",
   推荐: "Empfohlen",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Ein Modell versteht Unterhaltungen und erstellt daraus Erinnerungen, die sich weiterentwickeln.",
@@ -510,6 +516,7 @@ export const modePortugueseMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Escolha uma opção. Pode alterá-la mais tarde nas Definições.",
   记忆模式: "Modo de memória",
+  记忆模式与模型: "Modo de memória e modelo",
   推荐: "Recomendado",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Use um modelo para compreender conversas e criar memórias que evoluem com o tempo.",
@@ -595,6 +602,7 @@ export const modeFrenchMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Choisissez une option. Vous pourrez la modifier plus tard dans les réglages.",
   记忆模式: "Mode de mémoire",
+  记忆模式与模型: "Mode de mémoire et modèle",
   推荐: "Recommandé",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Utilisez un modèle pour comprendre les conversations et créer des mémoires qui évoluent.",
@@ -679,6 +687,7 @@ export const modeKoreanMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "한 가지 방식을 선택하세요. 나중에 설정에서 변경할 수 있습니다.",
   记忆模式: "메모리 모드",
+  记忆模式与模型: "메모리 모드 및 모델",
   推荐: "추천",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "모델이 대화를 이해하고 시간이 지날수록 발전하는 메모리로 정리합니다.",
@@ -763,6 +772,7 @@ export const modeRussianMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Выберите один вариант. Его можно изменить позже в настройках.",
   记忆模式: "Режим памяти",
+  记忆模式与模型: "Режим памяти и модель",
   推荐: "Рекомендуется",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Модель анализирует диалоги и создаёт воспоминания, которые развиваются со временем.",
@@ -848,6 +858,7 @@ export const modeIndonesianMessages: ModeMessages = {
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Pilih satu opsi. Anda dapat mengubahnya nanti di Pengaturan.",
   记忆模式: "Mode memori",
+  记忆模式与模型: "Mode memori dan model",
   推荐: "Disarankan",
   "使用模型理解对话，提取并整理可持续生长的记忆。":
     "Gunakan model untuk memahami percakapan dan membuat memori yang terus berkembang.",

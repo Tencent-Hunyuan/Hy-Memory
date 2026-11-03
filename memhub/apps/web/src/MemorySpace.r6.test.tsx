@@ -75,6 +75,7 @@ const { reads } = vi.hoisted(() => ({
     processing: vi.fn(),
     profiles: vi.fn(),
     raw: vi.fn(),
+    rawSearch: vi.fn(),
   },
 }));
 vi.mock("./api", async (importOriginal) => ({
@@ -84,6 +85,7 @@ vi.mock("./api", async (importOriginal) => ({
   getMemoryProcessing: reads.processing,
   getModelProfiles: reads.profiles,
   getSdkRaw: reads.raw,
+  searchSdkRaw: reads.rawSearch,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryAddComposer", () => ({
@@ -202,6 +204,7 @@ function setup() {
     limit: 100,
     offset: 0,
   });
+  reads.rawSearch.mockResolvedValue([]);
 }
 
 it("shows raw conversations instead of advanced memory in lite", async () => {
@@ -236,23 +239,43 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
       {
         raw_id: "raw-1",
         content: "原始对话内容",
+        user_id: "local",
+        agent_id: "all-apps",
         source: "cursor",
         session_id: "session-1",
         memory_at: null,
+        gmt_created: 1_761_000_000,
+        custom: {},
+        messages: [{ role: "user", content: "原始对话内容" }],
       },
     ],
     total: 1,
-    limit: 100,
+    limit: 20,
     offset: 0,
   });
 
   render(<MemorySpace simplified />);
 
-  expect(await screen.findByText("原始对话内容")).toBeTruthy();
+  expect(await screen.findAllByText("原始对话内容")).toHaveLength(2);
+  expect(document.querySelector(".core-memory-map")?.hasAttribute("hidden")).toBe(
+    false,
+  );
+  expect(screen.getByTestId("graph-owner")).toBeTruthy();
   expect(
-    document.querySelector(".core-memory-map")?.hasAttribute("hidden"),
-  ).toBe(true);
-  expect(screen.getByText(/当前使用基础记忆/)).toBeTruthy();
+    screen.getByRole("textbox", { name: "搜索原始对话" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "补充记忆" })).toBeNull();
+  expect(reads.sdkLibrary).not.toHaveBeenCalled();
+  expect(reads.sdkGraph).not.toHaveBeenCalled();
+  expect(reads.raw).toHaveBeenCalledWith(
+    expect.objectContaining({
+      source: undefined,
+      offset: 0,
+      limit: 20,
+      signal: expect.any(AbortSignal),
+    }),
+  );
+  expect(screen.getByText(/当前为 lite/)).toBeTruthy();
 });
 
 it("does not request advanced memories before the pipeline mode is known", async () => {
@@ -296,7 +319,7 @@ it("does not request advanced memories before the pipeline mode is known", async
       },
     });
   });
-  await screen.findByText(/当前使用基础记忆/);
+  await screen.findByText(/当前为 lite/);
   expect(reads.sdkLibrary).not.toHaveBeenCalled();
   expect(reads.sdkGraph).not.toHaveBeenCalled();
 });

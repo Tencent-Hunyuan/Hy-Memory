@@ -8,6 +8,8 @@ import type {
   MemoryProcessingSummary,
   SdkAskMemory,
   SdkMemoryScene,
+  SdkRawContextItem,
+  SdkRawRecord,
   SourceResponse,
 } from "@one-memory/contracts";
 import type { GuiLocale } from "@one-memory/i18n";
@@ -33,6 +35,7 @@ import {
 import { HandoffBar } from "./HandoffBar";
 import { MemoryEvidencePanel } from "./MemoryEvidencePanel";
 import { MemoryGraph3D } from "./MemoryGraph3D";
+import { useGuiLanguage } from "./gui-language";
 import { MemoryArrivalPanel } from "./memory-arrival";
 import {
   type MemoryArrival,
@@ -48,6 +51,7 @@ import {
 import { OptionMenu } from "./OptionMenu";
 import { R6Button } from "./R6Controls";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
+import { SelectedRawDetail } from "./SelectedRawDetail";
 import { sourceNameOr } from "./source-label";
 import { useMediaPreference } from "./use-media-preference";
 import { Answer, NodeDetail, type SavedAnswer } from "./Workbench";
@@ -89,6 +93,8 @@ type Props = {
   id?: string;
   arrival?: MemoryArrival;
   onViewHistory?(): void;
+  contentKind?: "memory" | "raw";
+  rawRecord?: SdkRawRecord | SdkRawContextItem | null;
   libraryView?: {
     query: string;
     source: string;
@@ -171,6 +177,8 @@ const SCENE_LABELS: Record<SdkMemoryScene, string> = {
 
 export function MemoryMap(props: Props) {
   const { locale, text, count, plain } = useMemoryLanguage();
+  const { t } = useGuiLanguage();
+  const raw = props.contentKind === "raw";
   const {
     memories,
     graph: baseGraph,
@@ -699,6 +707,7 @@ export function MemoryMap(props: Props) {
           : "";
   if (
     props.simplified &&
+    !raw &&
     (!library ||
       (!library.loading &&
         !library.failed &&
@@ -860,11 +869,15 @@ export function MemoryMap(props: Props) {
         >
           <Search size={16} aria-hidden="true" />
           <input
-            aria-label={text("筛选地图记忆")}
+            aria-label={raw ? t("sdk.raw.searchLabel") : text("筛选地图记忆")}
             name="map-memory-search"
             autoComplete="off"
             placeholder={
-              props.simplified ? text("搜索记忆") : text("筛选记忆…")
+              raw
+                ? t("sdk.raw.searchLabel")
+                : props.simplified
+                  ? text("搜索记忆")
+                  : text("筛选记忆…")
             }
             value={library ? searchDraft : search}
             maxLength={library ? 512 : undefined}
@@ -971,7 +984,7 @@ export function MemoryMap(props: Props) {
         <ul
           ref={memoryList}
           className="map-memory-list"
-          aria-label={text("地图记忆列表")}
+          aria-label={raw ? t("memory:原始对话") : text("地图记忆列表")}
           id="memory-pane-memories"
         >
           {filtered.map((m) => (
@@ -1014,12 +1027,12 @@ export function MemoryMap(props: Props) {
                         m.updated_at,
                         locale,
                       )}`}
-                      {/* D99: the conversation date alone would hide that this
-                          one was made today, so the generated day stays too. */}
-                      <span className="map-memory-made">
-                        {text("沉淀于 ")}
-                        {dayStamp(m.updated_at, locale)}
-                      </span>
+                      {!raw ? (
+                        <span className="map-memory-made">
+                          {text("沉淀于 ")}
+                          {dayStamp(m.updated_at, locale)}
+                        </span>
+                      ) : null}
                     </>
                   ) : (
                     text("已可用 · {count} 段原文", {
@@ -1033,9 +1046,11 @@ export function MemoryMap(props: Props) {
         </ul>
         {library?.failed && (
           <div role="alert">
-            <p>{text("记忆读取失败，请重试。")}</p>
+            <p>
+              {raw ? t("sdk.raw.loadFailed") : text("记忆读取失败，请重试。")}
+            </p>
             <R6Button onClick={retryLibrary}>
-              {text("重新读取地图记忆")}
+              {raw ? t("connectionFallback.retry") : text("重新读取地图记忆")}
             </R6Button>
           </div>
         )}
@@ -1045,13 +1060,17 @@ export function MemoryMap(props: Props) {
           !library.stale &&
           !filtered.length && (
             <p className="map-empty">
-              {library.query
-                ? text("没有匹配的记忆")
-                : library.source
-                  ? text("这个来源下还没有记忆")
-                  : groupKey
-                    ? text("本页没有匹配的主题记忆")
-                    : text("还没有已生成的记忆")}
+              {raw
+                ? library.query
+                  ? t("sdk.raw.found", { count: 0 })
+                  : t("sdk.raw.empty")
+                : library.query
+                  ? text("没有匹配的记忆")
+                  : library.source
+                    ? text("这个来源下还没有记忆")
+                    : groupKey
+                      ? text("本页没有匹配的主题记忆")
+                      : text("还没有已生成的记忆")}
             </p>
           )}
         {library?.page?.search_window &&
@@ -1151,12 +1170,20 @@ export function MemoryMap(props: Props) {
             <span className="map-kicker" hidden={props.simplified}>
               {text(axis === "topic" ? "主题视角（非事项）" : "来源视角")}
             </span>
-            <h2>{props.simplified ? text("记忆关联") : label}</h2>
+            <h2>
+              {props.simplified
+                ? raw
+                  ? t("memory:原始对话")
+                  : text("记忆关联")
+                : label}
+            </h2>
             {props.simplified && (
               <p className="selected-graph-subtitle">
                 {projection.nodes.length
                   ? text("来源归属")
-                  : text("可在沉淀记忆后查看视图")}
+                  : raw
+                    ? t("sdk.raw.empty")
+                    : text("可在沉淀记忆后查看视图")}
               </p>
             )}
           </div>
@@ -1195,18 +1222,30 @@ export function MemoryMap(props: Props) {
                   : {})}
               >
                 {library?.stale
-                  ? text("可在沉淀记忆后查看视图")
+                  ? raw
+                    ? t("sdk.raw.loadFailed")
+                    : text("可在沉淀记忆后查看视图")
                   : library?.graphFailed || library?.failed
-                    ? text("记忆暂时无法读取")
+                    ? raw
+                      ? t("sdk.raw.loadFailed")
+                      : text("记忆暂时无法读取")
                     : library?.graphLoading
                       ? text("正在读取记忆地图…")
                       : library?.page &&
                           (library.query || library.source || groupKey)
-                        ? text("当前筛选没有可显示的记忆")
+                        ? raw
+                          ? t("sdk.raw.found", { count: 0 })
+                          : text("当前筛选没有可显示的记忆")
                         : !loaded
-                          ? text("正在读取记忆…")
+                          ? raw
+                            ? t("sdk.raw.recent")
+                            : text("正在读取记忆…")
                           : active.length
-                            ? text("当前筛选没有可显示的记忆")
+                            ? raw
+                              ? t("sdk.raw.found", { count: 0 })
+                              : text("当前筛选没有可显示的记忆")
+                            : raw
+                              ? t("sdk.raw.empty")
                             : arrival.importedMessages > 0
                               ? text("已保存的对话还未生成记忆")
                               : text("还没有可显示的记忆")}
@@ -1313,8 +1352,10 @@ export function MemoryMap(props: Props) {
       >
         <header className="map-inspector-heading">
           <h2>
-            {inspectorDetail
-              ? text("记忆详情")
+            {raw
+              ? t("memory:原始对话")
+              : inspectorDetail
+                ? text("记忆详情")
               : selectedSource
                 ? text("记忆详情")
                 : visibleGroupNode
@@ -1339,7 +1380,9 @@ export function MemoryMap(props: Props) {
               {library?.failed &&
               library.source === selectedSource.source_id ? (
                 <>
-                  <p role="alert">{text("记忆暂时无法读取")}</p>
+                  <p role="alert">
+                    {raw ? t("sdk.raw.loadFailed") : text("记忆暂时无法读取")}
+                  </p>
                   <button
                     type="button"
                     className="secondary"
@@ -1356,10 +1399,14 @@ export function MemoryMap(props: Props) {
                     <i />
                     <i />
                   </div>
-                  <p role="status">{text("正在读取记忆详情…")}</p>
+                  <p role="status">
+                    {raw ? t("sdk.raw.recent") : text("正在读取记忆详情…")}
+                  </p>
                 </>
               ) : (
-                <p>{text("还没有已生成的记忆")}</p>
+                <p>
+                  {raw ? t("sdk.raw.empty") : text("还没有已生成的记忆")}
+                </p>
               )}
             </div>
           ) : props.simplified && inspectorDetail ? (
@@ -1423,6 +1470,11 @@ export function MemoryMap(props: Props) {
                   </div>
                   <p role="status">{text("正在读取这条记忆…")}</p>
                 </div>
+              ) : raw && props.rawRecord ? (
+                <SelectedRawDetail
+                  record={props.rawRecord}
+                  sources={sources}
+                />
               ) : (
                 <SelectedMemoryDetail
                   detail={inspectorDetail}

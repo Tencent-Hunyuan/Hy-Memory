@@ -944,30 +944,34 @@ export async function getSdkRaw({
   source,
   offset = 0,
   limit = 100,
+  signal,
 }: {
   source?: string;
   offset?: number;
   limit?: number;
+  signal?: AbortSignal;
 } = {}): Promise<SdkRawPage> {
   const response = await client.get<SdkRawPage>("/api/v2/raw", {
     params: { source, offset, limit },
+    signal,
   });
   return response.data;
 }
 
 export async function searchSdkRaw(
   query: string,
-  signal?: AbortSignal,
+  options: { source?: string; signal?: AbortSignal } = {},
 ): Promise<SdkRawContextItem[]> {
   const response = await client.post(
     "/api/v2/context/search",
     {
       query,
       kinds: ["raw"],
+      ...(options.source ? { include_sources: [options.source] } : {}),
       limit: 20,
       character_budget: 12_000,
     },
-    { signal, timeout: 10_000 },
+    { signal: options.signal, timeout: 10_000 },
   );
   const items = response.data?.items;
   return Array.isArray(items)

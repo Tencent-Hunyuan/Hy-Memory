@@ -35,7 +35,7 @@ import "./r6-settings.css";
 type Group = "model" | "connections" | "help";
 
 const labels: Record<Group, string> = {
-  model: "模型",
+  model: "记忆模式与模型",
   connections: "连接其他应用",
   help: "帮助与诊断",
 };
