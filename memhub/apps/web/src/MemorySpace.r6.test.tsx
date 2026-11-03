@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { SourceResponse } from "@one-memory/contracts";
 import {
   act,
   cleanup,
@@ -208,6 +209,34 @@ function setup() {
   reads.rawSearch.mockResolvedValue([]);
 }
 
+function modeProcessing(mode: "lite" | "pro" | "ultra") {
+  return {
+    running: 0,
+    pending: 0,
+    blocked_stages: [],
+    completed: 1,
+    pipeline: {
+      mode,
+      configured_mode: mode,
+      forced_by_env: false,
+      evolve: {
+        mode,
+        schedule: { enabled: true, time: "03:00" },
+        users: {},
+        running: [],
+      },
+      last_evolve_at: null,
+      graph_build: {
+        state: "idle",
+        started_at: null,
+        finished_at: null,
+        users: {},
+      },
+      features: {},
+    },
+  };
+}
+
 it("shows raw conversations instead of advanced memory in lite", async () => {
   setup();
   reads.processing.mockResolvedValue({
@@ -278,6 +307,126 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
     "lite",
   );
   expect(document.querySelector(".memory-mode-notice")).toBeNull();
+});
+
+it("pages and filters the raw conversation data plane in lite", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("lite"));
+  reads.raw.mockImplementation(async (options = {}) => {
+    const offset = "offset" in options ? (options.offset ?? 0) : 0;
+    const source = "source" in options ? options.source : undefined;
+    const rawId = `${source ?? "all"}-${offset}`;
+    return {
+      items: [
+        {
+          raw_id: rawId,
+          content: `原始会话 ${rawId}`,
+          user_id: "local",
+          agent_id: "all-apps",
+          source: source ?? "cursor",
+          session_id: `session-${rawId}`,
+          memory_at: null,
+          gmt_created: 1_761_000_000 - offset,
+          custom: {},
+          messages: [{ role: "user", content: `原始会话 ${rawId}` }],
+        },
+      ],
+      total: source ? 1 : 21,
+      limit: 20,
+      offset,
+    };
+  });
+  const user = userEvent.setup();
+  render(
+    <MemorySpace
+      simplified
+      sources={
+        [
+          {
+            source_id: "cursor",
+            display_name: "Cursor",
+            authorized: true,
+          },
+        ] as SourceResponse[]
+      }
+    />,
+  );
+
+  expect(await screen.findAllByText("原始会话 all-0")).toHaveLength(2);
+  await user.click(screen.getByRole("button", { name: "下一页记忆" }));
+  expect(await screen.findAllByText("原始会话 all-20")).toHaveLength(2);
+  expect(reads.raw).toHaveBeenLastCalledWith(
+    expect.objectContaining({ source: undefined, offset: 20, limit: 20 }),
+  );
+
+  await user.click(screen.getByRole("combobox", { name: "来源" }));
+  await user.click(screen.getByRole("option", { name: "Cursor" }));
+  expect(await screen.findAllByText("原始会话 cursor-0")).toHaveLength(2);
+  expect(reads.raw).toHaveBeenLastCalledWith(
+    expect.objectContaining({ source: "cursor", offset: 0, limit: 20 }),
+  );
+});
+
+it("switches data planes without keeping rows or details from the prior mode", async () => {
+  setup();
+  vi.useFakeTimers();
+  reads.processing.mockResolvedValue(modeProcessing("pro"));
+  reads.raw.mockResolvedValue({
+    items: [
+      {
+        raw_id: "raw-after-switch",
+        content: "切换后的原始会话",
+        user_id: "local",
+        agent_id: "all-apps",
+        source: "cursor",
+        session_id: "session-after-switch",
+        memory_at: null,
+        gmt_created: 1_761_000_000,
+        custom: {},
+        messages: [{ role: "user", content: "切换后的原始会话" }],
+      },
+    ],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  });
+  render(<MemorySpace simplified />);
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(reads.sdkLibrary).toHaveBeenCalled();
+  expect(screen.getAllByText("已保存的记忆").length).toBeGreaterThan(0);
+
+  reads.processing.mockResolvedValue(modeProcessing("lite"));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  await vi.waitFor(() => expect(reads.raw).toHaveBeenCalled(), {
+    timeout: 1_000,
+  });
+  expect(screen.getAllByText("切换后的原始会话")).toHaveLength(2);
+  expect(screen.queryByText("已保存的记忆")).toBeNull();
+  expect(document.querySelector(".memory-mode-label")?.textContent).toBe(
+    "lite",
+  );
+
+  const libraryCalls = reads.sdkLibrary.mock.calls.length;
+  reads.processing.mockResolvedValue(modeProcessing("ultra"));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000);
+  });
+  await vi.waitFor(
+    () =>
+      expect(reads.sdkLibrary.mock.calls.length).toBeGreaterThan(libraryCalls),
+    { timeout: 1_000 },
+  );
+  expect(screen.getAllByText("已保存的记忆").length).toBeGreaterThan(0);
+  expect(screen.queryByText("切换后的原始会话")).toBeNull();
+  expect(document.querySelector(".memory-mode-label")?.textContent).toBe(
+    "ultra",
+  );
 });
 
 it("opens a search hit with the complete role transcript", async () => {

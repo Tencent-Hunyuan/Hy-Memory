@@ -216,8 +216,13 @@ export function MemorySpace({
     processing?.pipeline?.mode ??
     (processingResolved && !processingFailed ? "pro" : null);
   const lite = pipelineMode === "lite";
-  const sdkPage =
-    sdkLibrary.settledMode === pipelineMode ? sdkLibrary.page : null;
+  const requestedQuery = sdkLibraryQuery.trim();
+  const sdkPageSettled =
+    sdkLibrary.settledMode === pipelineMode &&
+    sdkLibrary.settledSource === sdkLibrarySource &&
+    sdkLibrary.settledQuery.trim() === requestedQuery &&
+    sdkLibrary.page?.offset === sdkLibraryOffset;
+  const sdkPage = sdkPageSettled ? sdkLibrary.page : null;
   const sdkRequestedScope = JSON.stringify([
     pipelineMode,
     sdkLibraryQuery.trim(),

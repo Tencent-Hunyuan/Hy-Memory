@@ -174,6 +174,12 @@ it("replaces a topic detail with an off-page graph memory detail", async () => {
         memory_id: null,
         label: "git",
       },
+      {
+        node_id: "schema:workflow",
+        node_type: "schema",
+        memory_id: null,
+        label: "先验证，再推送",
+      },
     ],
     edges: [
       {
@@ -189,6 +195,13 @@ it("replaces a topic detail with an off-page graph memory detail", async () => {
         target_node_id: "memory:outside",
         relation: "tagged_with",
         origin: "shared_tag",
+      },
+      {
+        edge_id: "schema-m0",
+        source_node_id: "schema:workflow",
+        target_node_id: "memory:m0",
+        relation: "derived_from",
+        origin: "hy_relation",
       },
     ],
   } as MemoryGraphResponse;
@@ -216,12 +229,20 @@ it("replaces a topic detail with an off-page graph memory detail", async () => {
   expect(screen.queryByText("主题")).toBeNull();
   expect(screen.queryByText("两跳")).toBeNull();
   await userEvent.click(
+    screen.getByRole("button", { name: "图中选择 先验证，再推送" }),
+  );
+  expect(screen.getByRole("heading", { name: "先验证，再推送" })).toBeTruthy();
+  expect(screen.queryByText("关系归纳")).toBeNull();
+  expect(screen.queryByText("归纳自")).toBeNull();
+  await userEvent.click(
     screen.getByRole("button", {
       name: "图中选择 图中但不在当前页的记忆",
     }),
   );
 
   expect(onOpen).toHaveBeenLastCalledWith("outside");
+  expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:outside");
+  expect(screen.queryByText("所选记忆不在当前筛选内，已取消选择。")).toBeNull();
 });
 
 it("OBS-19: Enter in the memory filter submits it; submitting it again re-reads", async () => {

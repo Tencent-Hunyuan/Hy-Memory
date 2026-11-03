@@ -632,7 +632,12 @@ export function MemoryMap(props: Props) {
       clear();
       return;
     }
-    if (!activeId || filtered.some((memory) => memory.memory_id === activeId))
+    const listed = active.some((memory) => memory.memory_id === activeId);
+    if (
+      !activeId ||
+      filtered.some((memory) => memory.memory_id === activeId) ||
+      (!listed && projectedMemoryIds.has(activeId))
+    )
       return;
     clear();
     setFilterNotice("所选记忆不在当前筛选内，已取消选择。");
@@ -1382,13 +1387,10 @@ export function MemoryMap(props: Props) {
                 : selectedSource
                   ? text("记忆详情")
                   : visibleGroupNode
-                    ? visibleGroupNode.node_type === "topic"
+                    ? visibleGroupNode.node_type === "topic" ||
+                      visibleGroupNode.node_type === "schema"
                       ? visibleGroupNode.label
-                      : text(
-                          visibleGroupNode.node_type === "schema"
-                            ? "关系归纳"
-                            : "关联节点",
-                        )
+                      : text("关联节点")
                     : text("记忆详情")}
           </h2>
           {(activeId || visibleGroupNode) && (
