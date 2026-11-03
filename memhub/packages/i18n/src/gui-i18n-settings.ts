@@ -174,6 +174,19 @@ export const settingsSpanishMessages = {
   设置分组: "Secciones de configuración",
   记忆模型: "Modelo de memorias",
   当前模型: "Modelo actual",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Gestiona por separado los modelos usados para organizar y buscar recuerdos.",
+  记忆整理: "Organización de recuerdos",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Convierte las conversaciones en recuerdos útiles a largo plazo.",
+  记忆搜索: "Búsqueda de recuerdos",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Encuentra los recuerdos más relevantes para tu pregunta cuando los necesitas.",
+  "本地内置（推荐）": "Integrado localmente (recomendado)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Personalizable tras configurar la organización de recuerdos",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Procesamiento local, sin configuración adicional",
   "正在读取模型…": "Leyendo el modelo…",
   模型状态暂不可读: "Estado del modelo no disponible",
   尚未配置模型: "No hay un modelo configurado",

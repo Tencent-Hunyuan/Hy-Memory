@@ -24,7 +24,7 @@
   padding: 20px 24px;
   border: 1px solid #d5dfe8;
   border-radius: 12px;
-  background: rgb(255 255 255 / 78%);
+  background: #fff;
 }
 .r6-language-setting-title {
   margin: 0 0 14px;
@@ -151,9 +151,9 @@
   box-shadow: none;
   transform: none;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: normal;
+  text-wrap: pretty;
+  white-space: normal;
   transition:
     color 140ms ease-out,
     background-color 140ms ease-out;
@@ -194,6 +194,17 @@
   margin: 0;
   text-wrap: balance;
 }
+.r6-settings .r6-settings-language .r6-language-setting {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+.r6-settings .r6-settings-language .r6-language-setting-title {
+  margin: 0 0 18px;
+  font-size: 20px;
+  line-height: 32px;
+}
 .r6-memory-mode-settings {
   margin: 0 0 32px;
   padding: 0 0 32px;
@@ -217,53 +228,70 @@
   font-size: 13px;
   line-height: 22px;
 }
-.r6-settings .r6-mode-setting-row {
-  max-width: none;
-  margin-top: 4px;
-}
-.r6-settings .r6-mode-option-menu {
-  width: 100%;
+.r6-mode-choice-list {
   max-width: 760px;
+  overflow: hidden;
+  border: 1px solid #d8e2ea;
+  border-radius: 10px;
+  background: #fff;
 }
-.r6-settings
-  .r6-mode-option-menu.r6-language-option-menu
-  .om-option-menu-button {
-  height: auto;
-  min-height: 68px;
-  padding: 10px 44px 10px 14px;
-  white-space: normal;
-}
-.r6-settings
-  .r6-mode-option-menu.r6-language-option-menu
-  .om-option-menu-button::after {
-  top: 27px;
-}
-.r6-mode-option-menu .om-option-menu-copy,
-.r6-mode-option-menu-panel .om-option-menu-copy {
+.r6-mode-choice {
   display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.r6-mode-option-menu .om-option-menu-copy > span,
-.r6-mode-option-menu-panel .om-option-menu-copy > span {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 74px;
+  padding: 12px 16px;
   color: #304757;
-  font-size: 13px;
-  font-weight: 500;
+  cursor: pointer;
+}
+.r6-mode-choice + .r6-mode-choice {
+  border-top: 1px solid #d8e2ea;
+}
+.r6-mode-choice[data-current="true"] {
+  background: #edf3f6;
+}
+.r6-mode-choice[data-disabled="true"] {
+  color: #71808b;
+  cursor: default;
+}
+.r6-mode-choice:focus-within {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: -2px;
+}
+.r6-mode-choice input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--r6-action);
+}
+.r6-mode-choice input:focus-visible {
+  outline: 0;
+}
+.r6-mode-choice-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.r6-mode-choice-copy strong {
+  font-size: 14px;
+  font-weight: 600;
   line-height: 22px;
 }
-.r6-mode-option-menu .om-option-menu-copy > small,
-.r6-mode-option-menu-panel .om-option-menu-copy > small {
+.r6-mode-choice-copy small {
   color: #5e6e7a;
   font-size: 12px;
-  font-weight: 400;
-  line-height: 19px;
-  overflow-wrap: anywhere;
+  line-height: 20px;
+  overflow-wrap: normal;
+  word-break: normal;
 }
-.r6-language-option-menu-panel--settings.r6-mode-option-menu-panel
-  [role="option"] {
-  min-height: 62px;
-  padding: 9px 10px;
-  white-space: normal;
+.r6-mode-current {
+  align-self: start;
+  color: #405e75;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 22px;
+  white-space: nowrap;
 }
 .r6-settings-note {
   margin: 14px 0 0;
@@ -275,16 +303,130 @@
   line-height: 22px;
 }
 .r6-evolve-settings {
-  margin-top: 20px;
+  margin-top: 28px;
+  padding-top: 24px;
   border-top: 1px solid #d8e2ea;
 }
+.r6-evolve-settings:focus-visible {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: 4px;
+}
+.r6-evolve-heading {
+  margin-bottom: 8px;
+}
+.r6-evolve-heading h3,
+.r6-evolve-setting h3 {
+  margin: 0;
+  color: #304757;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 26px;
+  word-break: normal;
+}
+.r6-evolve-heading p,
+.r6-evolve-setting p {
+  margin: 3px 0 0;
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 22px;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.r6-evolve-setting {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) auto;
+  align-items: center;
+  gap: 16px 24px;
+  padding: 18px 0;
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-evolve-setting-copy {
+  min-width: 280px;
+}
+.r6-evolve-setting > .r6-switch,
+.r6-evolve-setting > .r6-button {
+  flex-shrink: 0;
+}
+.r6-evolve-time {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 180px;
+  align-items: center;
+  gap: 24px;
+  margin-top: 2px;
+  padding-top: 16px;
+  border-top: 1px solid #e1e8ed;
+}
+.r6-settings .r6-evolve-time label {
+  color: #304757;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.r6-evolve-time p {
+  margin-top: 1px;
+}
 .r6-evolve-settings input[type="time"] {
-  min-height: 40px;
+  box-sizing: border-box;
+  width: 180px;
+  min-height: 44px;
   padding: 0 10px;
   border: 1px solid #c6d2da;
   border-radius: 8px;
   color: #304757;
   background: #fff;
+}
+.r6-evolve-settings input[type="time"]:focus-visible {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: 2px;
+}
+.r6-state-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+}
+.r6-state-recovery .r6-settings-error {
+  margin: 0;
+}
+.r6-mode-confirm-effects {
+  margin: 18px 0 22px;
+}
+.r6-mode-confirm-dialog {
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+.r6-mode-confirm-dialog footer {
+  flex-wrap: wrap;
+}
+.r6-mode-confirm-effects > div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid #d8e2ea;
+}
+.r6-mode-confirm-effects > div:last-child {
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-mode-confirm-effects dt {
+  color: #304757;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.r6-mode-confirm-effects dd {
+  margin: 0;
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-settings .r6-settings-mode .r6-memory-mode-settings {
+  margin: 0;
+  padding: 0;
+  border-bottom: 0;
 }
 .r6-settings-dialog ul {
   margin: 14px 0 20px;
@@ -473,28 +615,94 @@
   font-size: 13px;
   line-height: 24px;
 }
-.r6-settings .r6-model-overview {
-  padding: 26px 0 20px;
-  border-bottom: 0;
+.r6-settings .r6-model-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
-.r6-settings .r6-model-caption {
+.r6-settings .r6-model-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 32px;
+}
+.r6-settings .r6-model-heading p {
+  margin: 2px 0 0;
+  color: #63707b;
   font-size: 13px;
-  line-height: 28px;
+  line-height: 22px;
+}
+.r6-settings .r6-model-mode-status {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--r6-field-fill);
+}
+.r6-settings .r6-model-mode-status strong {
+  display: block;
+  color: var(--r6-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.r6-settings .r6-model-mode-status p {
+  margin: 2px 0 0;
+  color: var(--r6-muted);
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-settings .r6-model-overview {
+  margin-top: 18px;
+  border: 1px solid #d8e2ea;
+  border-radius: 10px;
+  background: #fff;
+}
+.r6-settings .r6-model-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  min-height: 108px;
+  padding: 18px 20px;
+}
+.r6-settings .r6-model-lane + .r6-model-lane {
+  border-top: 1px solid #d8e2ea;
+}
+.r6-settings .r6-model-lane-copy {
+  min-width: 0;
+}
+.r6-settings .r6-model-lane h3 {
+  margin: 0;
+  color: #304757;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 25px;
+}
+.r6-settings .r6-model-lane p {
+  margin: 2px 0 9px;
   color: #63707b;
-  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 21px;
 }
-.r6-settings .r6-current-model {
-  font:
-    500 22px / 34px "Noto Sans SC",
-    "PingFang SC",
-    sans-serif;
-  margin: 0 0 7px;
+.r6-settings .r6-model-lane strong,
+.r6-settings .r6-model-lane small {
+  display: block;
+  overflow-wrap: anywhere;
 }
-.r6-settings .r6-model-state {
+.r6-settings .r6-model-lane strong {
+  color: #304757;
   font-size: 14px;
-  line-height: 28px;
-  color: #63707b;
-  margin: 0 0 13px;
+  font-weight: 500;
+  line-height: 23px;
+}
+.r6-settings .r6-model-lane small {
+  margin-top: 1px;
+  color: var(--r6-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+.r6-settings .r6-model-lane > .r6-button {
+  min-width: 72px;
 }
 .r6-settings .r6-model-recipient {
   font-size: 14px;
@@ -534,36 +742,6 @@
   border-color: transparent;
   background: rgb(158 178 194 / 22%);
   color: #0f6e56;
-}
-.r6-settings-dialog-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  background: rgb(46 66 82 / 18%);
-  backdrop-filter: blur(8px);
-}
-.r6-settings-dialog {
-  width: min(420px, calc(100vw - 40px));
-  padding: 28px;
-  border: 1px solid white;
-  border-radius: 16px;
-  background: #f3f7f9;
-  box-shadow: 0 24px 64px rgb(38 59 74 / 18%);
-}
-.r6-settings-dialog h2 {
-  margin: 0 0 10px;
-  font-size: 20px;
-}
-.r6-settings-dialog p {
-  margin: 0 0 24px;
-  color: #63707b;
-}
-.r6-settings-dialog footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
 }
 .r6-settings .r6-model-maintenance {
   margin-top: 24px;
@@ -713,16 +891,60 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 54px;
-  border: 1px solid #c0ccd5;
+  min-height: 44px;
+  border: 1px solid var(--r6-control-edge);
   border-radius: 8px;
-  background: #f0f5f6;
-  color: #262a2e;
-  font-size: 15px;
-  padding: 14px 16px;
+  background: #fff;
+  color: var(--r6-text);
+  font-size: 14px;
+  padding: 10px 13px;
+}
+.r6-settings .model-form .om-option-menu-button {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 42px 0 13px;
+  border-color: var(--r6-control-edge);
+  background: #fff;
+  color: var(--r6-text);
+  font-size: 14px;
+}
+.r6-settings .model-form .om-option-menu-button::after {
+  top: 16px;
+  right: 16px;
+}
+.r6-settings .model-form .om-option-menu-button[aria-expanded="true"] {
+  border-color: #7892a6;
+  box-shadow: 0 0 0 3px rgb(85 124 147 / 12%);
+}
+.r6-settings .model-form input:not([type="checkbox"]):hover,
+.r6-settings .model-form select:hover,
+.r6-settings .model-form .om-option-menu-button:hover:not(:disabled) {
+  border-color: #aabcc8;
+  background: #fff;
+}
+.r6-settings .model-form input:not([type="checkbox"]):focus-visible,
+.r6-settings .model-form select:focus-visible,
+.r6-settings .model-form .om-option-menu-button:focus-visible {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: 2px;
 }
 .r6-settings .model-advanced {
   grid-column: 1 / -1;
+}
+.r6-settings .model-search-intro {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-settings .model-search-intro strong {
+  font-size: 15px;
+  line-height: 24px;
+}
+.r6-settings .model-search-intro p {
+  margin: 4px 0 0;
+  color: #63707b;
+  font-size: 13px;
+  line-height: 21px;
 }
 .r6-settings .model-advanced label {
   display: flex;
@@ -828,9 +1050,48 @@
     padding: 24px 20px;
     border-radius: 0 0 11px 11px;
   }
+  .r6-settings .r6-model-lane {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px;
+  }
+  .r6-settings .r6-model-lane > .r6-button {
+    justify-self: start;
+  }
   .r6-settings .r6-language-setting-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
+  }
+  .r6-mode-choice {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .r6-mode-current {
+    grid-column: 2;
+  }
+  .r6-evolve-setting,
+  .r6-evolve-time,
+  .r6-mode-confirm-effects > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .r6-evolve-setting-copy {
+    min-width: 0;
+  }
+  .r6-evolve-setting > .r6-switch,
+  .r6-evolve-setting > .r6-button {
+    justify-self: start;
+  }
+  .r6-evolve-time {
+    gap: 8px;
+  }
+  .r6-evolve-settings input[type="time"] {
+    width: min(220px, 100%);
+  }
+  .r6-state-recovery {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .r6-mode-confirm-dialog footer .r6-button {
+    width: 100%;
   }
   .r6-language-setting-description {
     margin-left: 0;

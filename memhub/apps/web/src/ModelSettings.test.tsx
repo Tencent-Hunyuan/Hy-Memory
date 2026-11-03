@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import type { ModelProbeResult, ModelProfile } from "@one-memory/contracts";
+import type {
+  EmbeddingSwitchCurrent,
+  EmbeddingSwitchJob,
+  EmbeddingSwitchPlan,
+  ModelProbeResult,
+  ModelProfile,
+} from "@one-memory/contracts";
 import {
   act,
   cleanup,
@@ -66,6 +72,10 @@ const probeProfile = vi.fn();
 const activate = vi.fn();
 const remove = vi.fn();
 const update = vi.fn();
+const planActivation = vi.fn();
+const startPlannedSwitch = vi.fn();
+let switchPlan: EmbeddingSwitchPlan | null = null;
+let switchCurrent: EmbeddingSwitchCurrent | null = null;
 
 it("explains an insufficient model balance with the required recovery", () => {
   expect(probeLabel("insufficient_balance")).toBe(
@@ -114,6 +124,71 @@ const preset: ModelProfile = {
   has_api_key: false,
   disable_thinking: true,
 };
+const migrationPlan: EmbeddingSwitchPlan = {
+  needed: true,
+  reason: "embedding_identity_changed",
+  plan_token: "plan-token",
+  source: {
+    space_id: "old-space",
+    model: "old-search",
+    dims: 512,
+    collection_base: "memory",
+    vectors: 12,
+  },
+  target: {
+    space_id: null,
+    model: "new-search",
+    dims: 1024,
+    collection_base: "",
+    vectors: null,
+  },
+  target_profile_id: profile.profile_id,
+  target_revision: profile.revision,
+  target_provider_kind: "openai_compatible",
+  target_local: false,
+  sources: [],
+  total_vectors: 12,
+  users: 1,
+  graph_vectors: null,
+  estimate_s: 10,
+  requests: 1,
+  disk_bytes_needed: 1024,
+  disk_bytes_free: 4096,
+  retention_days: 14,
+  blockers: [],
+};
+const oldFinishedJob: EmbeddingSwitchJob = {
+  job_id: "old-job",
+  kind: "switch",
+  state: "done",
+  source: migrationPlan.source,
+  target: { ...migrationPlan.target, space_id: "new-space", vectors: 12 },
+  stray_space_ids: [],
+  target_profile_id: profile.profile_id,
+  target_revision: profile.revision,
+  requested_by: "app",
+  progress: {
+    phase: "done",
+    done: 12,
+    total: 12,
+    percent: 100,
+    embedded: 12,
+    reused: 0,
+    kept: 0,
+    role: null,
+    source_index: 0,
+    sources: 1,
+    rate_per_s: null,
+    eta_s: 0,
+    updated_at: "2026-11-03T09:00:00Z",
+  },
+  cancel_requested: false,
+  error_code: null,
+  attempt: 1,
+  created_at: "2026-11-03T09:00:00Z",
+  updated_at: "2026-11-03T09:00:01Z",
+  finished_at: "2026-11-03T09:00:01Z",
+};
 
 /** Re-renders on demand so a cleared journal is picked up, like a real refresh. */
 function ProbeRecoveryHarness({
@@ -149,6 +224,19 @@ vi.mock("./use-model-profiles", () => ({
     activate,
     remove,
     update,
+  }),
+}));
+vi.mock("./use-embedding-switch", () => ({
+  useEmbeddingSwitch: () => ({
+    current: switchCurrent,
+    plan: switchPlan,
+    busy: null,
+    errorCode: null,
+    planActivation,
+    startPlannedSwitch,
+    shouldUseLegacyActivation: () => false,
+    clearPlan: vi.fn(),
+    clearError: vi.fn(),
   }),
 }));
 
@@ -187,8 +275,14 @@ describe("ModelSettings", () => {
     probes = {};
     pendingProbe = null;
     profiles = [profile];
+    switchPlan = null;
+    switchCurrent = null;
     create.mockResolvedValue(profile);
     update.mockResolvedValue({ ...preset, has_api_key: true, revision: 2 });
+    planActivation.mockResolvedValue({
+      needed: false,
+      reason: "same_embedding",
+    });
   });
 
   it("submits a generation-only profile and leaves embedding to the builtin", async () => {
@@ -396,6 +490,62 @@ describe("ModelSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
     expect(update).toHaveBeenCalledExactlyOnceWith(profile.profile_id, {
       expected_revision: 1,
+    });
+  });
+
+  it("focuses generation without exposing or patching the search lane", async () => {
+    update.mockResolvedValue(profile);
+    render(<ModelSettings focusSection="generation" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    expect(screen.getByRole("heading", { name: "记忆整理" })).toBeTruthy();
+    expect(screen.queryByLabelText("搜索模型")).toBeNull();
+    expect(screen.getByLabelText("生成模型名")).toHaveProperty(
+      "value",
+      profile.model,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(update).toHaveBeenCalledExactlyOnceWith(profile.profile_id, {
+      expected_revision: profile.revision,
+    });
+  });
+
+  it("does not repair a hidden legacy search endpoint while editing generation", async () => {
+    const legacy = {
+      ...profile,
+      embedding_provider_kind: "openai_compatible" as const,
+      embedding_model: "remote-search",
+      embedding_base_url: null,
+    };
+    profiles = [legacy];
+    update.mockResolvedValue(legacy);
+    render(<ModelSettings focusSection="generation" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    await userEvent.type(screen.getByLabelText("生成模型名"), "-new");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(update).toHaveBeenCalledExactlyOnceWith(profile.profile_id, {
+      expected_revision: profile.revision,
+      model: "memory-model-new",
+    });
+  });
+
+  it("focuses search on the recommended builtin without exposing or patching generation", async () => {
+    update.mockResolvedValue(profile);
+    render(<ModelSettings focusSection="embedding" />);
+
+    await userEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    expect(screen.getByRole("heading", { name: "记忆搜索" })).toBeTruthy();
+    expect(screen.queryByLabelText("生成模型名")).toBeNull();
+    expect(screen.getByLabelText("搜索模型")).toHaveProperty("value", "local");
+    expect(screen.getByText(/无需密钥/)).toBeTruthy();
+    expect(screen.getByText("技术类型：Embedding")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(update).toHaveBeenCalledExactlyOnceWith(profile.profile_id, {
+      expected_revision: profile.revision,
     });
   });
 
@@ -661,7 +811,43 @@ describe("ModelSettings", () => {
 
     expect(container.textContent).not.toContain("secret-value");
     await user.click(screen.getByRole("button", { name: "设为当前模型" }));
+    expect(planActivation).toHaveBeenCalledWith("profile-1", 1);
     expect(activate).toHaveBeenCalledWith("profile-1");
+  });
+
+  it("asks before activation when the search index must be rebuilt", async () => {
+    profiles = [
+      {
+        ...profile,
+        capabilities: {
+          ...profile.capabilities,
+          endpoint_reachable: true,
+          model_available: true,
+          embedding_available: true,
+        },
+      },
+    ];
+    planActivation.mockImplementationOnce(async () => {
+      switchPlan = migrationPlan;
+      return migrationPlan;
+    });
+    switchCurrent = {
+      schema_version: 1,
+      phase: "idle",
+      writes_paused: false,
+      scan_state: "done",
+      scan_error: null,
+      job: null,
+      last_finished: oldFinishedJob,
+    };
+    render(<ModelSettings />);
+
+    await userEvent.click(screen.getByRole("button", { name: "设为当前模型" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "更新记忆搜索索引？" }),
+    ).toBeTruthy();
+    expect(activate).not.toHaveBeenCalled();
   });
 
   it("hands a successful save to its card, clears only the key, and never tests or activates", async () => {

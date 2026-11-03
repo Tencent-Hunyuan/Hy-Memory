@@ -69,9 +69,80 @@ const modeChineseMessages = {
   "上次整合：{time}": "上次整合：{time}",
   尚未整合: "尚未整合",
   立即整合: "立即整合",
-  "切换到 {mode}？": "切换到 {mode}？",
+  "切换到 {mode}？": "切换到{mode}？",
+  "切换到 {mode}": "切换到{mode}",
   "原始对话在所有模式下都会保留。": "原始对话在所有模式下都会保留。",
   切换模式: "切换模式",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "保存原始对话 · 不调用生成模型 · 搜索原始会话",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回",
+  新对话: "新对话",
+  模型调用与费用: "模型调用与费用",
+  搜索范围: "搜索范围",
+  已有数据: "已有数据",
+  切换后: "切换后",
+  "之后只保存原始对话，不再生成新记忆。":
+    "之后只保存原始对话，不再生成新记忆。",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "停止调用生成模型；每天自动整合也会停止。",
+  "停止调用生成模型，不再产生这部分费用。":
+    "停止调用生成模型，不再产生这部分费用。",
+  "立即改为搜索原始对话。": "立即改为搜索原始对话。",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "仍会由模型整理成记忆；新记忆不再写入知识图谱。",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "提取仍会调用生成模型；每天自动整合会停止。",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "开始调用当前生成模型，可能产生服务商费用。",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "改为搜索智能记忆，不再使用知识图谱补充关联。",
+  "立即改为搜索沉淀后的记忆。": "立即改为搜索沉淀后的记忆。",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。",
+  "原始对话全部保留，不会删除。": "原始对话全部保留，不会删除。",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "提取方式不变，新记忆会写入知识图谱。",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "搜索沉淀后的记忆，并用知识图谱补充关联。",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "可设置每天自动整合时间，也可以随时立即整合一次。",
+  "记忆整合（Evolve）": "记忆整合（Evolve）",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "定期重新整理已有记忆，补充更稳定的关联和结论。",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
+  执行时间: "执行时间",
+  立即整合一次: "立即整合一次",
+  "只运行这一次，不改变每天的计划。": "只运行这一次，不改变每天的计划。",
+  "当前是基础记忆（lite）": "当前是基础记忆（lite）",
+  "当前是智能记忆（pro）": "当前是智能记忆（pro）",
+  "当前是深度记忆（ultra）": "当前是深度记忆（ultra）",
+  "正在读取记忆模式…": "正在读取记忆模式…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "模型配置已保留，目前不会用于整理新对话。切换到 pro 或 ultra 后，是否开始整理取决于单独的“用模型沉淀记忆”（沉淀）开关。",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "模型配置已保留，确认记忆模式后会显示是否生效。",
 } as const;
 
 export { modeChineseMessages };
@@ -158,9 +229,84 @@ export const modeEnglishMessages: ModeMessages = {
   尚未整合: "Not yet consolidated",
   立即整合: "Consolidate now",
   "切换到 {mode}？": "Switch to {mode}?",
+  "切换到 {mode}": "Switch to {mode}",
   "原始对话在所有模式下都会保留。":
     "Original conversations are kept in every mode.",
   切换模式: "Switch mode",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Save original conversations · No generation model calls · Search original conversations",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Create advanced memories · Calls a generation model · Search created memories",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Smart memory + knowledge graph · Optional automatic Evolve · Related-context recall",
+  新对话: "New conversations",
+  模型调用与费用: "Model calls and cost",
+  搜索范围: "Search scope",
+  已有数据: "Existing data",
+  切换后: "After switching",
+  "之后只保存原始对话，不再生成新记忆。":
+    "New conversations are saved as original text only; no new memories are created.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "Generation model calls stop, and daily consolidation stops too.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "Generation model calls stop, so this part no longer incurs provider charges.",
+  "立即改为搜索原始对话。":
+    "Search immediately switches to original conversations.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "Existing memories are kept, but Basic memory does not show or recall them. Original conversations are not deleted.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "Queued and future conversations become memories. Conversations already completed are not processed again.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "The model still creates memories, but new memories are no longer written to the knowledge graph.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "Extraction still calls the generation model; daily consolidation stops.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "The current generation model starts being called and may incur provider charges.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "Search uses Smart memories without knowledge-graph relationships.",
+  "立即改为搜索沉淀后的记忆。":
+    "Search immediately switches to created memories.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "Regular memories remain available. Higher-level memories and graph data added by Deep memory are kept but are not shown or recalled in Smart memory. Original conversations are not deleted.",
+  "原始对话全部保留，不会删除。":
+    "All original conversations are kept and are not deleted.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "Queued and future conversations become memories and are written to the knowledge graph. Conversations already completed are not processed again.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "Memory extraction stays the same, and new memories are written to the knowledge graph.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "Extraction calls the generation model. If daily consolidation is enabled, it makes additional calls at the saved time. Switching does not run consolidation immediately.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "Search uses created memories and supplements them with knowledge-graph relationships.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "Existing memories are added to the knowledge graph in the background and remain usable. Original conversations are not deleted.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Set a daily consolidation time or run one consolidation at any time.",
+  "记忆整合（Evolve）": "Memory consolidation (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Periodically reorganize existing memories to strengthen relationships and conclusions.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Consolidates daily around {time} in this device's local time. A missed run catches up after wake.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Off. When re-enabled, it still runs at {time}. Existing results are kept.",
+  执行时间: "Run time",
+  立即整合一次: "Consolidate once now",
+  "只运行这一次，不改变每天的计划。":
+    "Runs once without changing the daily schedule.",
+  "当前是基础记忆（lite）": "Current mode: Basic memory (lite)",
+  "当前是智能记忆（pro）": "Current mode: Smart memory (pro)",
+  "当前是深度记忆（ultra）": "Current mode: Deep memory (ultra)",
+  "正在读取记忆模式…": "Reading memory mode…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "The model configuration is retained and is not currently used to organize new conversations. After switching to pro or ultra, whether it starts organizing them depends on the separate “Create memories with a model” switch.",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "Checking memory creation status. The model configuration and existing memories are unaffected.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "This mode supports memory creation, but model processing is paused. Re-enable it to continue retained tasks.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "The model is active in this mode and creates memories from new conversations.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "The model configuration is kept. Its active state appears after the memory mode is confirmed.",
 };
 
 export const modeSpanishMessages: ModeMessages = {
@@ -243,9 +389,84 @@ export const modeSpanishMessages: ModeMessages = {
   尚未整合: "Aún sin consolidar",
   立即整合: "Consolidar ahora",
   "切换到 {mode}？": "¿Cambiar a {mode}?",
+  "切换到 {mode}": "Cambiar a {mode}",
   "原始对话在所有模式下都会保留。":
     "Las conversaciones originales se conservan en todos los modos.",
   切换模式: "Cambiar modo",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Guarda conversaciones originales · Sin llamadas al modelo generativo · Busca conversaciones originales",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Crea memorias avanzadas · Usa un modelo generativo · Busca memorias creadas",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Memoria inteligente + grafo de conocimiento · Evolve automático opcional · Recuperación relacionada",
+  新对话: "Conversaciones nuevas",
+  模型调用与费用: "Llamadas al modelo y coste",
+  搜索范围: "Ámbito de búsqueda",
+  已有数据: "Datos existentes",
+  切换后: "Después del cambio",
+  "之后只保存原始对话，不再生成新记忆。":
+    "Las conversaciones nuevas se guardan solo como texto original; no se crean memorias nuevas.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "Se detienen las llamadas al modelo generativo y la consolidación diaria.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "Se detienen las llamadas al modelo generativo, por lo que esta parte deja de generar costes.",
+  "立即改为搜索原始对话。":
+    "La búsqueda cambia de inmediato a las conversaciones originales.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "Las memorias existentes se conservan, pero la memoria básica no las muestra ni recupera. Las conversaciones originales no se eliminan.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "Las conversaciones en cola y futuras se convierten en memorias. Las ya procesadas no se vuelven a procesar.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "El modelo sigue creando memorias, pero las nuevas ya no se escriben en el grafo de conocimiento.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "La extracción sigue usando el modelo generativo; la consolidación diaria se detiene.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "Empieza a usarse el modelo generativo actual y puede generar costes del proveedor.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "La búsqueda usa memorias inteligentes sin relaciones del grafo de conocimiento.",
+  "立即改为搜索沉淀后的记忆。":
+    "La búsqueda cambia de inmediato a las memorias creadas.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "Las memorias normales siguen disponibles. Las memorias de nivel superior y los datos del grafo añadidos por la memoria profunda se conservan, pero no se muestran ni recuperan en la memoria inteligente. Las conversaciones originales no se eliminan.",
+  "原始对话全部保留，不会删除。":
+    "Todas las conversaciones originales se conservan y no se eliminan.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "Las conversaciones en cola y futuras se convierten en memorias y se escriben en el grafo. Las ya procesadas no se vuelven a procesar.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "La extracción no cambia y las memorias nuevas se escriben en el grafo de conocimiento.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "La extracción usa el modelo generativo. Si la consolidación diaria está activa, hará llamadas adicionales a la hora guardada. El cambio no consolida de inmediato.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "La búsqueda usa memorias creadas y añade relaciones del grafo de conocimiento.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "Las memorias existentes se añaden al grafo en segundo plano y siguen disponibles. Las conversaciones originales no se eliminan.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Configura una hora diaria o ejecuta una consolidación cuando quieras.",
+  "记忆整合（Evolve）": "Consolidación de memoria (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Reorganiza periódicamente las memorias para reforzar relaciones y conclusiones.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Consolida cada día alrededor de las {time}, según la hora local del dispositivo. Si se omite por suspensión, se ejecuta al reactivarse.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Desactivado. Al reactivarlo, seguirá ejecutándose a las {time}. Los resultados existentes se conservan.",
+  执行时间: "Hora de ejecución",
+  立即整合一次: "Consolidar una vez ahora",
+  "只运行这一次，不改变每天的计划。":
+    "Se ejecuta una vez sin cambiar la programación diaria.",
+  "当前是基础记忆（lite）": "Modo actual: memoria básica (lite)",
+  "当前是智能记忆（pro）": "Modo actual: memoria inteligente (pro)",
+  "当前是深度记忆（ultra）": "Modo actual: memoria profunda (ultra)",
+  "正在读取记忆模式…": "Leyendo el modo de memoria…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "La configuración del modelo se conserva y actualmente no se usa para organizar conversaciones nuevas. Tras cambiar a pro o ultra, que empiece a organizarlas dependerá del interruptor independiente «Generar memorias con el modelo».",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "Comprobando la creación de memorias. La configuración y las memorias existentes no se ven afectadas.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "Este modo admite la creación de memorias, pero el procesamiento está pausado. Reactívalo para continuar las tareas conservadas.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "El modelo está activo en este modo y crea memorias a partir de conversaciones nuevas.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "La configuración se conserva. Su estado aparecerá cuando se confirme el modo de memoria.",
 };
 
 export const modeTraditionalChineseMessages: ModeMessages = {
@@ -322,9 +543,80 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "上次整合：{time}": "上次整合：{time}",
   尚未整合: "尚未整合",
   立即整合: "立即整合",
-  "切换到 {mode}？": "切換到 {mode}？",
+  "切换到 {mode}？": "切換到{mode}？",
+  "切换到 {mode}": "切換到{mode}",
   "原始对话在所有模式下都会保留。": "原始對話會在所有模式下保留。",
   切换模式: "切換模式",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "儲存原始對話 · 不呼叫生成模型 · 搜尋原始對話",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "建立進階記憶 · 呼叫生成模型 · 搜尋已建立的記憶",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "智慧記憶 + 知識圖譜 · 可自動 Evolve · 強化關聯召回",
+  新对话: "新對話",
+  模型调用与费用: "模型呼叫與費用",
+  搜索范围: "搜尋範圍",
+  已有数据: "現有資料",
+  切换后: "切換後",
+  "之后只保存原始对话，不再生成新记忆。":
+    "之後只儲存原始對話，不再產生新記憶。",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "停止呼叫生成模型；每日自動整合也會停止。",
+  "停止调用生成模型，不再产生这部分费用。":
+    "停止呼叫生成模型，不再產生這部分費用。",
+  "立即改为搜索原始对话。": "立即改為搜尋原始對話。",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "現有記憶會繼續保留，但在基礎記憶下不會顯示或參與召回；原始對話不會刪除。",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "佇列中及之後的新對話會由模型整理成記憶；已處理完成的舊對話不會補做。",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "仍會由模型整理成記憶；新記憶不再寫入知識圖譜。",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "擷取仍會呼叫生成模型；每日自動整合會停止。",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "開始呼叫目前的生成模型，可能產生服務供應商費用。",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "改為搜尋智慧記憶，不再使用知識圖譜補充關聯。",
+  "立即改为搜索沉淀后的记忆。": "立即改為搜尋已建立的記憶。",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "一般記憶仍可使用；深度記憶新增的高階記憶與圖譜資料會繼續保留，但在智慧記憶下不會顯示或參與召回。原始對話不會刪除。",
+  "原始对话全部保留，不会删除。": "所有原始對話都會保留，不會刪除。",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "佇列中及之後的新對話會擷取記憶並寫入知識圖譜；已處理完成的舊對話不會補做。",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "擷取方式不變，新記憶會寫入知識圖譜。",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "擷取會呼叫生成模型；若已開啟每日自動整合，到了設定時間還會產生額外呼叫。切換本身不會立即整合。",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "搜尋已建立的記憶，並用知識圖譜補充關聯。",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "現有記憶會在背景加入知識圖譜，期間仍可使用；原始對話不會刪除。",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "可設定每日自動整合時間，也可以隨時立即整合一次。",
+  "记忆整合（Evolve）": "記憶整合（Evolve）",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "定期重新整理現有記憶，補充更穩定的關聯與結論。",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "每天約 {time} 自動整合，使用這台裝置的本地時間；休眠錯過後會補跑。",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "已關閉。重新開啟後仍會在 {time} 執行；已產生的結果會保留。",
+  执行时间: "執行時間",
+  立即整合一次: "立即整合一次",
+  "只运行这一次，不改变每天的计划。": "只執行這一次，不變更每日排程。",
+  "当前是基础记忆（lite）": "目前是基礎記憶（lite）",
+  "当前是智能记忆（pro）": "目前是智慧記憶（pro）",
+  "当前是深度记忆（ultra）": "目前是深度記憶（ultra）",
+  "正在读取记忆模式…": "正在讀取記憶模式…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "模型設定已保留，目前不會用於整理新對話。切換到 pro 或 ultra 後，是否開始整理取決於獨立的「用模型建立記憶」（沉澱）開關。",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "正在確認模型建立記憶的狀態，模型設定與現有記憶不會受到影響。",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "目前模式支援模型建立記憶，但模型整理已暫停；重新開啟後會繼續處理保留的工作。",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "模型已在目前模式下生效，會用於整理新對話並建立記憶。",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "模型設定已保留，確認記憶模式後會顯示是否生效。",
 };
 
 export const modeJapaneseMessages: ModeMessages = {
@@ -365,8 +657,81 @@ export const modeJapaneseMessages: ModeMessages = {
   尚未整合: "まだ統合されていません",
   立即整合: "今すぐ統合",
   "切换到 {mode}？": "{mode} に切り替えますか？",
+  "切换到 {mode}": "{mode} に切り替える",
   "原始对话在所有模式下都会保留。": "元の会話はどのモードでも保持されます。",
   切换模式: "モードを切り替える",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "元の会話を保存 · 生成モデルを呼び出さない · 元の会話を検索",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "高度な記憶を作成 · 生成モデルを呼び出す · 作成した記憶を検索",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "スマート記憶 + 知識グラフ · 自動 Evolve に対応 · 関連情報の想起を強化",
+  新对话: "新しい会話",
+  模型调用与费用: "モデル呼び出しと料金",
+  搜索范围: "検索範囲",
+  已有数据: "既存データ",
+  切换后: "切り替え後",
+  "之后只保存原始对话，不再生成新记忆。":
+    "以降は元の会話のみを保存し、新しい記憶は生成しません。",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "生成モデルの呼び出しと毎日の自動統合を停止します。",
+  "停止调用生成模型，不再产生这部分费用。":
+    "生成モデルの呼び出しを停止するため、この料金は発生しなくなります。",
+  "立即改为搜索原始对话。": "検索対象がすぐに元の会話へ切り替わります。",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "既存の記憶は保持されますが、基本記憶では表示も想起もされません。元の会話は削除されません。",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "待機中および今後の会話はモデルによって記憶に整理されます。処理済みの会話は再処理されません。",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "引き続きモデルが記憶を作成しますが、新しい記憶は知識グラフに書き込まれません。",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "抽出では引き続き生成モデルを呼び出しますが、毎日の自動統合は停止します。",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "現在の生成モデルの呼び出しが始まり、プロバイダー料金が発生する場合があります。",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "スマート記憶を検索し、知識グラフによる関連情報の補完は行いません。",
+  "立即改为搜索沉淀后的记忆。":
+    "検索対象がすぐに作成済みの記憶へ切り替わります。",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "通常の記憶は引き続き利用できます。高度な記憶で追加された上位の記憶とグラフデータは保持されますが、スマート記憶では表示も想起もされません。元の会話は削除されません。",
+  "原始对话全部保留，不会删除。": "元の会話はすべて保持され、削除されません。",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "待機中および今後の会話から記憶を抽出し、知識グラフに書き込みます。処理済みの会話は再処理されません。",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "抽出方法は変わらず、新しい記憶が知識グラフに書き込まれます。",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "抽出では生成モデルを呼び出します。毎日の自動統合が有効な場合、設定時刻に追加の呼び出しが発生します。切り替えただけではすぐに統合されません。",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "作成済みの記憶を検索し、知識グラフで関連情報を補完します。",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "既存の記憶はバックグラウンドで知識グラフに追加され、その間も利用できます。元の会話は削除されません。",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "毎日の自動統合時刻を設定するか、いつでも一度だけ統合できます。",
+  "记忆整合（Evolve）": "記憶の統合（Evolve）",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "既存の記憶を定期的に再整理し、より安定した関連性と結論を補います。",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "このデバイスの現地時刻で毎日 {time} ごろに自動統合します。スリープ中に実行できなかった場合は復帰後に実行します。",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "オフです。再度有効にすると {time} に実行されます。生成済みの結果は保持されます。",
+  执行时间: "実行時刻",
+  立即整合一次: "今すぐ一度統合",
+  "只运行这一次，不改变每天的计划。":
+    "今回だけ実行し、毎日のスケジュールは変更しません。",
+  "当前是基础记忆（lite）": "現在は基本記憶（lite）です",
+  "当前是智能记忆（pro）": "現在はスマート記憶（pro）です",
+  "当前是深度记忆（ultra）": "現在は高度な記憶（ultra）です",
+  "正在读取记忆模式…": "記憶モードを読み込み中…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "モデル設定は保持されていますが、現在は新しい会話の整理には使用されません。pro または ultra に切り替えた後、整理を開始するかどうかは、独立した「モデルで記憶を作成」スイッチによって決まります。",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "モデルによる記憶作成の状態を確認中です。モデル設定と既存の記憶には影響しません。",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "現在のモードはモデルによる記憶作成に対応していますが、処理は一時停止中です。再度有効にすると保留中のタスクを再開します。",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "このモードではモデルが有効で、新しい会話を整理して記憶を作成します。",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "モデル設定は保持されています。記憶モードの確認後に有効状態が表示されます。",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "生成モデルを使わず、元の会話を保存・検索します。高度な記憶は生成しません。",
   "使用当前模型从新对话中提取事实、偏好和计划。":
@@ -450,9 +815,84 @@ export const modeGermanMessages: ModeMessages = {
   尚未整合: "Noch nicht konsolidiert",
   立即整合: "Jetzt konsolidieren",
   "切换到 {mode}？": "Zu {mode} wechseln?",
+  "切换到 {mode}": "Zu {mode} wechseln",
   "原始对话在所有模式下都会保留。":
     "Originalunterhaltungen bleiben in jedem Modus erhalten.",
   切换模式: "Modus wechseln",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Originalunterhaltungen speichern · Keine Aufrufe des generativen Modells · Originalunterhaltungen durchsuchen",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Erweiterte Erinnerungen erstellen · Generatives Modell aufrufen · Erstellte Erinnerungen durchsuchen",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Intelligente Erinnerung + Wissensgraph · Optionales automatisches Evolve · Verbesserter Abruf von Zusammenhängen",
+  新对话: "Neue Unterhaltungen",
+  模型调用与费用: "Modellaufrufe und Kosten",
+  搜索范围: "Suchbereich",
+  已有数据: "Vorhandene Daten",
+  切换后: "Nach dem Wechsel",
+  "之后只保存原始对话，不再生成新记忆。":
+    "Neue Unterhaltungen werden nur noch im Original gespeichert; es werden keine neuen Erinnerungen erstellt.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "Aufrufe des generativen Modells und die tägliche Konsolidierung werden beendet.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "Aufrufe des generativen Modells werden beendet, sodass dafür keine Anbieterkosten mehr anfallen.",
+  "立即改为搜索原始对话。":
+    "Die Suche wechselt sofort zu den Originalunterhaltungen.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "Vorhandene Erinnerungen bleiben erhalten, werden in der Basiserinnerung aber weder angezeigt noch abgerufen. Originalunterhaltungen werden nicht gelöscht.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "Unterhaltungen in der Warteschlange und künftige Unterhaltungen werden zu Erinnerungen verarbeitet. Bereits abgeschlossene Unterhaltungen werden nicht erneut verarbeitet.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "Das Modell erstellt weiterhin Erinnerungen, neue Erinnerungen werden aber nicht mehr in den Wissensgraphen geschrieben.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "Die Extraktion ruft weiterhin das generative Modell auf; die tägliche Konsolidierung wird beendet.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "Das aktuelle generative Modell wird aufgerufen, wodurch Anbieterkosten entstehen können.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "Die Suche verwendet intelligente Erinnerungen ohne Ergänzungen aus dem Wissensgraphen.",
+  "立即改为搜索沉淀后的记忆。":
+    "Die Suche wechselt sofort zu den erstellten Erinnerungen.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "Normale Erinnerungen bleiben verfügbar. Höherstufige Erinnerungen und Graphdaten aus der tiefen Erinnerung bleiben erhalten, werden in der intelligenten Erinnerung aber weder angezeigt noch abgerufen. Originalunterhaltungen werden nicht gelöscht.",
+  "原始对话全部保留，不会删除。":
+    "Alle Originalunterhaltungen bleiben erhalten und werden nicht gelöscht.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "Aus Unterhaltungen in der Warteschlange und künftigen Unterhaltungen werden Erinnerungen extrahiert und in den Wissensgraphen geschrieben. Bereits abgeschlossene Unterhaltungen werden nicht erneut verarbeitet.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "Die Extraktion bleibt unverändert; neue Erinnerungen werden in den Wissensgraphen geschrieben.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "Die Extraktion ruft das generative Modell auf. Bei aktivierter täglicher Konsolidierung erfolgen zur festgelegten Zeit zusätzliche Aufrufe. Der Wechsel löst keine sofortige Konsolidierung aus.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "Die Suche verwendet erstellte Erinnerungen und ergänzt Zusammenhänge aus dem Wissensgraphen.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "Vorhandene Erinnerungen werden im Hintergrund dem Wissensgraphen hinzugefügt und bleiben dabei nutzbar. Originalunterhaltungen werden nicht gelöscht.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Legen Sie eine tägliche Konsolidierungszeit fest oder führen Sie jederzeit eine Konsolidierung aus.",
+  "记忆整合（Evolve）": "Erinnerungskonsolidierung (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Vorhandene Erinnerungen regelmäßig neu ordnen, um Zusammenhänge und Schlussfolgerungen zu festigen.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Konsolidiert täglich gegen {time} nach der lokalen Zeit dieses Geräts. Ein verpasster Lauf wird nach dem Aufwachen nachgeholt.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Aus. Nach dem erneuten Aktivieren wird weiterhin um {time} ausgeführt. Vorhandene Ergebnisse bleiben erhalten.",
+  执行时间: "Ausführungszeit",
+  立即整合一次: "Jetzt einmal konsolidieren",
+  "只运行这一次，不改变每天的计划。":
+    "Wird einmal ausgeführt, ohne den täglichen Zeitplan zu ändern.",
+  "当前是基础记忆（lite）": "Aktueller Modus: Basiserinnerung (lite)",
+  "当前是智能记忆（pro）": "Aktueller Modus: Intelligente Erinnerung (pro)",
+  "当前是深度记忆（ultra）": "Aktueller Modus: Tiefe Erinnerung (ultra)",
+  "正在读取记忆模式…": "Erinnerungsmodus wird gelesen…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "Die Modellkonfiguration bleibt erhalten und wird derzeit nicht zum Ordnen neuer Unterhaltungen verwendet. Ob sie nach dem Wechsel zu pro oder ultra damit beginnt, hängt vom separaten Schalter „Erinnerungen mit Modell erstellen“ ab.",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "Der Status der Erinnerungserstellung wird geprüft. Modellkonfiguration und vorhandene Erinnerungen bleiben unverändert.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "Dieser Modus unterstützt die Erinnerungserstellung, die Modellverarbeitung ist jedoch pausiert. Nach dem erneuten Aktivieren werden zurückgehaltene Aufgaben fortgesetzt.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "Das Modell ist in diesem Modus aktiv und erstellt Erinnerungen aus neuen Unterhaltungen.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "Die Modellkonfiguration bleibt erhalten. Nach Bestätigung des Erinnerungsmodus wird ihr Aktivierungsstatus angezeigt.",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "Originalunterhaltungen ohne generatives Modell speichern und durchsuchen. Es werden keine erweiterten Erinnerungen erstellt.",
   "使用当前模型从新对话中提取事实、偏好和计划。":
@@ -536,9 +976,84 @@ export const modePortugueseMessages: ModeMessages = {
   尚未整合: "Ainda não consolidado",
   立即整合: "Consolidar agora",
   "切换到 {mode}？": "Mudar para {mode}?",
+  "切换到 {mode}": "Mudar para {mode}",
   "原始对话在所有模式下都会保留。":
     "As conversas originais são mantidas em todos os modos.",
   切换模式: "Mudar de modo",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Guardar conversas originais · Sem chamadas ao modelo generativo · Pesquisar conversas originais",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Criar memórias avançadas · Chamar o modelo generativo · Pesquisar memórias criadas",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Memória inteligente + grafo de conhecimento · Evolve automático opcional · Recuperação de relações melhorada",
+  新对话: "Novas conversas",
+  模型调用与费用: "Chamadas ao modelo e custos",
+  搜索范围: "Âmbito da pesquisa",
+  已有数据: "Dados existentes",
+  切换后: "Após a mudança",
+  "之后只保存原始对话，不再生成新记忆。":
+    "As novas conversas passam a ser guardadas apenas como texto original; não são criadas novas memórias.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "As chamadas ao modelo generativo e a consolidação diária são interrompidas.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "As chamadas ao modelo generativo são interrompidas, deixando de gerar estes custos.",
+  "立即改为搜索原始对话。":
+    "A pesquisa muda imediatamente para as conversas originais.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "As memórias existentes são mantidas, mas a memória básica não as mostra nem recupera. As conversas originais não são eliminadas.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "As conversas em fila e futuras são convertidas em memórias. As conversas já concluídas não são processadas novamente.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "O modelo continua a criar memórias, mas as novas memórias deixam de ser escritas no grafo de conhecimento.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "A extração continua a chamar o modelo generativo; a consolidação diária é interrompida.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "O modelo generativo atual começa a ser chamado e pode gerar custos do fornecedor.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "A pesquisa passa a usar memórias inteligentes sem relações do grafo de conhecimento.",
+  "立即改为搜索沉淀后的记忆。":
+    "A pesquisa muda imediatamente para as memórias criadas.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "As memórias normais continuam disponíveis. As memórias de nível superior e os dados do grafo acrescentados pela memória profunda são mantidos, mas não são mostrados nem recuperados na memória inteligente. As conversas originais não são eliminadas.",
+  "原始对话全部保留，不会删除。":
+    "Todas as conversas originais são mantidas e não são eliminadas.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "As conversas em fila e futuras geram memórias que são escritas no grafo de conhecimento. As conversas já concluídas não são processadas novamente.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "A extração mantém-se igual e as novas memórias são escritas no grafo de conhecimento.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "A extração chama o modelo generativo. Se a consolidação diária estiver ativa, haverá chamadas adicionais à hora definida. A mudança não executa uma consolidação imediata.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "A pesquisa usa as memórias criadas e complementa-as com relações do grafo de conhecimento.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "As memórias existentes são adicionadas ao grafo em segundo plano e continuam disponíveis. As conversas originais não são eliminadas.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Defina uma hora de consolidação diária ou execute uma consolidação a qualquer momento.",
+  "记忆整合（Evolve）": "Consolidação de memórias (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Reorganiza periodicamente as memórias existentes para reforçar relações e conclusões.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Consolida diariamente por volta das {time}, segundo a hora local deste dispositivo. Uma execução perdida é retomada ao reativar.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Desativado. Quando reativado, continua a executar às {time}. Os resultados existentes são mantidos.",
+  执行时间: "Hora de execução",
+  立即整合一次: "Consolidar uma vez agora",
+  "只运行这一次，不改变每天的计划。":
+    "Executa uma vez sem alterar o horário diário.",
+  "当前是基础记忆（lite）": "Modo atual: memória básica (lite)",
+  "当前是智能记忆（pro）": "Modo atual: memória inteligente (pro)",
+  "当前是深度记忆（ultra）": "Modo atual: memória profunda (ultra)",
+  "正在读取记忆模式…": "A ler o modo de memória…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "A configuração do modelo é mantida e não é atualmente usada para organizar novas conversas. Após mudar para pro ou ultra, o início dessa organização depende do interruptor separado «Criar memórias com um modelo».",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "A verificar o estado da criação de memórias. A configuração do modelo e as memórias existentes não são afetadas.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "Este modo permite criar memórias, mas o processamento está em pausa. Reative-o para continuar as tarefas mantidas.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "O modelo está ativo neste modo e cria memórias a partir de novas conversas.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "A configuração do modelo é mantida. O estado de ativação aparece após a confirmação do modo de memória.",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "Guarda e pesquisa conversas originais sem usar um modelo generativo nem criar memórias avançadas.",
   "使用当前模型从新对话中提取事实、偏好和计划。":
@@ -622,9 +1137,84 @@ export const modeFrenchMessages: ModeMessages = {
   尚未整合: "Pas encore consolidé",
   立即整合: "Consolider maintenant",
   "切换到 {mode}？": "Passer à {mode} ?",
+  "切换到 {mode}": "Passer à {mode}",
   "原始对话在所有模式下都会保留。":
     "Les conversations originales sont conservées dans tous les modes.",
   切换模式: "Changer de mode",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Enregistrer les conversations originales · Aucun appel au modèle génératif · Rechercher les conversations originales",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Créer des mémoires avancées · Appeler le modèle génératif · Rechercher les mémoires créées",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Mémoire intelligente + graphe de connaissances · Evolve automatique en option · Rappel contextuel enrichi",
+  新对话: "Nouvelles conversations",
+  模型调用与费用: "Appels au modèle et coût",
+  搜索范围: "Périmètre de recherche",
+  已有数据: "Données existantes",
+  切换后: "Après le changement",
+  "之后只保存原始对话，不再生成新记忆。":
+    "Les nouvelles conversations sont uniquement enregistrées dans leur forme originale ; aucune nouvelle mémoire n’est créée.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "Les appels au modèle génératif et la consolidation quotidienne s’arrêtent.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "Les appels au modèle génératif s’arrêtent, ce qui supprime les frais correspondants.",
+  "立即改为搜索原始对话。":
+    "La recherche bascule immédiatement vers les conversations originales.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "Les mémoires existantes sont conservées, mais la mémoire de base ne les affiche ni ne les rappelle. Les conversations originales ne sont pas supprimées.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "Les conversations en attente et futures deviennent des mémoires. Les conversations déjà traitées ne le sont pas de nouveau.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "Le modèle continue à créer des mémoires, mais les nouvelles mémoires ne sont plus ajoutées au graphe de connaissances.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "L’extraction continue à appeler le modèle génératif ; la consolidation quotidienne s’arrête.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "Le modèle génératif actuel commence à être appelé et peut entraîner des frais du fournisseur.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "La recherche utilise les mémoires intelligentes sans les relations du graphe de connaissances.",
+  "立即改为搜索沉淀后的记忆。":
+    "La recherche bascule immédiatement vers les mémoires créées.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "Les mémoires ordinaires restent disponibles. Les mémoires de niveau supérieur et les données de graphe ajoutées par la mémoire approfondie sont conservées, mais ne sont ni affichées ni rappelées dans la mémoire intelligente. Les conversations originales ne sont pas supprimées.",
+  "原始对话全部保留，不会删除。":
+    "Toutes les conversations originales sont conservées et ne sont pas supprimées.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "Les conversations en attente et futures produisent des mémoires qui sont ajoutées au graphe de connaissances. Les conversations déjà traitées ne le sont pas de nouveau.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "L’extraction reste inchangée et les nouvelles mémoires sont ajoutées au graphe de connaissances.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "L’extraction appelle le modèle génératif. Si la consolidation quotidienne est activée, des appels supplémentaires ont lieu à l’heure définie. Le changement ne lance pas immédiatement de consolidation.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "La recherche utilise les mémoires créées et les complète avec les relations du graphe de connaissances.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "Les mémoires existantes sont ajoutées au graphe en arrière-plan et restent utilisables. Les conversations originales ne sont pas supprimées.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Définissez une heure de consolidation quotidienne ou lancez-en une à tout moment.",
+  "记忆整合（Evolve）": "Consolidation des mémoires (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Réorganise régulièrement les mémoires existantes pour renforcer les relations et les conclusions.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Consolide chaque jour vers {time}, selon l’heure locale de cet appareil. Une exécution manquée est rattrapée au réveil.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Désactivé. Après réactivation, l’exécution aura toujours lieu à {time}. Les résultats existants sont conservés.",
+  执行时间: "Heure d’exécution",
+  立即整合一次: "Consolider une fois maintenant",
+  "只运行这一次，不改变每天的计划。":
+    "S’exécute une fois sans modifier la programmation quotidienne.",
+  "当前是基础记忆（lite）": "Mode actuel : mémoire de base (lite)",
+  "当前是智能记忆（pro）": "Mode actuel : mémoire intelligente (pro)",
+  "当前是深度记忆（ultra）": "Mode actuel : mémoire approfondie (ultra)",
+  "正在读取记忆模式…": "Lecture du mode de mémoire…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "La configuration du modèle est conservée et n’est actuellement pas utilisée pour organiser les nouvelles conversations. Après le passage à pro ou ultra, leur organisation dépend de l’interrupteur distinct « Créer des mémoires avec un modèle ».",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "Vérification de l’état de création des mémoires. La configuration du modèle et les mémoires existantes ne sont pas affectées.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "Ce mode prend en charge la création de mémoires, mais le traitement est en pause. Réactivez-le pour reprendre les tâches conservées.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "Le modèle est actif dans ce mode et crée des mémoires à partir des nouvelles conversations.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "La configuration du modèle est conservée. Son état d’activation s’affichera après confirmation du mode de mémoire.",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "Enregistre et recherche les conversations originales sans modèle génératif ni création de mémoires avancées.",
   "使用当前模型从新对话中提取事实、偏好和计划。":
@@ -707,8 +1297,81 @@ export const modeKoreanMessages: ModeMessages = {
   尚未整合: "아직 통합되지 않음",
   立即整合: "지금 통합",
   "切换到 {mode}？": "{mode}(으)로 전환할까요?",
+  "切换到 {mode}": "{mode}(으)로 전환",
   "原始对话在所有模式下都会保留。": "원본 대화는 모든 모드에서 유지됩니다.",
   切换模式: "모드 전환",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "원본 대화 저장 · 생성 모델 호출 없음 · 원본 대화 검색",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "고급 메모리 생성 · 생성 모델 호출 · 생성된 메모리 검색",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "스마트 메모리 + 지식 그래프 · 자동 Evolve 선택 가능 · 연관 정보 검색 강화",
+  新对话: "새 대화",
+  模型调用与费用: "모델 호출 및 비용",
+  搜索范围: "검색 범위",
+  已有数据: "기존 데이터",
+  切换后: "전환 후",
+  "之后只保存原始对话，不再生成新记忆。":
+    "이후 새 대화는 원본만 저장되며 새 메모리는 생성되지 않습니다.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "생성 모델 호출과 매일 통합이 중지됩니다.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "생성 모델 호출이 중지되어 관련 제공업체 비용이 더 이상 발생하지 않습니다.",
+  "立即改为搜索原始对话。": "검색 대상이 즉시 원본 대화로 전환됩니다.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "기존 메모리는 유지되지만 기본 메모리에서는 표시되거나 검색되지 않습니다. 원본 대화는 삭제되지 않습니다.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "대기 중인 대화와 이후의 새 대화는 메모리로 정리됩니다. 이미 처리가 끝난 대화는 다시 처리되지 않습니다.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "모델은 계속 메모리를 생성하지만 새 메모리는 지식 그래프에 기록되지 않습니다.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "추출에는 계속 생성 모델이 호출되지만 매일 통합은 중지됩니다.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "현재 생성 모델 호출이 시작되며 제공업체 비용이 발생할 수 있습니다.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "지식 그래프 관계를 사용하지 않고 스마트 메모리를 검색합니다.",
+  "立即改为搜索沉淀后的记忆。": "검색 대상이 즉시 생성된 메모리로 전환됩니다.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "일반 메모리는 계속 사용할 수 있습니다. 심층 메모리가 추가한 상위 메모리와 그래프 데이터는 유지되지만 스마트 메모리에서는 표시되거나 검색되지 않습니다. 원본 대화는 삭제되지 않습니다.",
+  "原始对话全部保留，不会删除。":
+    "모든 원본 대화는 유지되며 삭제되지 않습니다.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "대기 중인 대화와 이후의 새 대화에서 메모리를 추출해 지식 그래프에 기록합니다. 이미 처리가 끝난 대화는 다시 처리되지 않습니다.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "추출 방식은 그대로 유지되며 새 메모리는 지식 그래프에 기록됩니다.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "추출에는 생성 모델이 호출됩니다. 매일 통합이 켜져 있으면 설정된 시간에 추가 호출이 발생합니다. 모드 전환만으로 즉시 통합되지는 않습니다.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "생성된 메모리를 검색하고 지식 그래프 관계로 보완합니다.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "기존 메모리가 백그라운드에서 지식 그래프에 추가되며 그동안 계속 사용할 수 있습니다. 원본 대화는 삭제되지 않습니다.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "매일 통합 시간을 설정하거나 언제든 한 번 통합할 수 있습니다.",
+  "记忆整合（Evolve）": "메모리 통합(Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "기존 메모리를 주기적으로 재구성해 관계와 결론을 더 안정적으로 보강합니다.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "이 기기의 현지 시간으로 매일 {time}경 자동 통합합니다. 절전 중 놓친 실행은 기기가 깨어난 뒤 수행됩니다.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "꺼짐. 다시 켜면 {time}에 실행됩니다. 기존 결과는 유지됩니다.",
+  执行时间: "실행 시간",
+  立即整合一次: "지금 한 번 통합",
+  "只运行这一次，不改变每天的计划。":
+    "한 번만 실행하며 매일 일정을 변경하지 않습니다.",
+  "当前是基础记忆（lite）": "현재 모드: 기본 메모리(lite)",
+  "当前是智能记忆（pro）": "현재 모드: 스마트 메모리(pro)",
+  "当前是深度记忆（ultra）": "현재 모드: 심층 메모리(ultra)",
+  "正在读取记忆模式…": "메모리 모드 읽는 중…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "모델 구성은 유지되며 현재 새 대화를 정리하는 데 사용되지 않습니다. pro 또는 ultra로 전환한 후 정리를 시작할지는 별도의 ‘모델로 기억 생성’ 스위치에 따라 결정됩니다.",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "모델의 메모리 생성 상태를 확인 중입니다. 모델 구성과 기존 메모리는 영향을 받지 않습니다.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "현재 모드는 메모리 생성을 지원하지만 모델 처리가 일시 중지되었습니다. 다시 켜면 보류된 작업을 계속 처리합니다.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "이 모드에서 모델이 활성화되어 새 대화를 정리하고 메모리를 생성합니다.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "모델 구성은 유지됩니다. 메모리 모드가 확인되면 활성화 상태가 표시됩니다.",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "생성 모델을 사용하지 않고 원본 대화를 저장하고 검색합니다. 고급 메모리는 만들지 않습니다.",
   "使用当前模型从新对话中提取事实、偏好和计划。":
@@ -792,9 +1455,83 @@ export const modeRussianMessages: ModeMessages = {
   尚未整合: "Ещё не объединялись",
   立即整合: "Объединить сейчас",
   "切换到 {mode}？": "Переключиться на {mode}?",
+  "切换到 {mode}": "Переключиться на {mode}",
   "原始对话在所有模式下都会保留。":
     "Исходные диалоги сохраняются во всех режимах.",
   切换模式: "Переключить режим",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Сохранять исходные диалоги · Не вызывать генеративную модель · Искать в исходных диалогах",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Создавать расширенные воспоминания · Вызывать генеративную модель · Искать в созданных воспоминаниях",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Интеллектуальная память + граф знаний · Автоматический Evolve по желанию · Расширенный поиск связей",
+  新对话: "Новые диалоги",
+  模型调用与费用: "Вызовы модели и расходы",
+  搜索范围: "Область поиска",
+  已有数据: "Существующие данные",
+  切换后: "После переключения",
+  "之后只保存原始对话，不再生成新记忆。":
+    "Новые диалоги будут сохраняться только в исходном виде; новые воспоминания создаваться не будут.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "Вызовы генеративной модели и ежедневное объединение прекратятся.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "Вызовы генеративной модели прекратятся, поэтому связанные с ними расходы исчезнут.",
+  "立即改为搜索原始对话。": "Поиск сразу переключится на исходные диалоги.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "Существующие воспоминания сохранятся, но базовая память не будет показывать или находить их. Исходные диалоги не удаляются.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "Диалоги в очереди и будущие диалоги станут воспоминаниями. Уже обработанные диалоги не будут обрабатываться повторно.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "Модель продолжит создавать воспоминания, но новые воспоминания больше не будут записываться в граф знаний.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "Для извлечения по-прежнему вызывается генеративная модель; ежедневное объединение прекратится.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "Начнутся вызовы текущей генеративной модели, за которые поставщик может взимать плату.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "Поиск будет использовать интеллектуальную память без связей из графа знаний.",
+  "立即改为搜索沉淀后的记忆。":
+    "Поиск сразу переключится на созданные воспоминания.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "Обычные воспоминания останутся доступны. Воспоминания более высокого уровня и данные графа, добавленные глубокой памятью, сохранятся, но не будут показываться или находиться в интеллектуальной памяти. Исходные диалоги не удаляются.",
+  "原始对话全部保留，不会删除。":
+    "Все исходные диалоги сохраняются и не удаляются.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "Из диалогов в очереди и будущих диалогов будут извлекаться воспоминания и записываться в граф знаний. Уже обработанные диалоги не будут обрабатываться повторно.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "Способ извлечения не изменится, а новые воспоминания будут записываться в граф знаний.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "Для извлечения вызывается генеративная модель. Если включено ежедневное объединение, в заданное время будут выполняться дополнительные вызовы. Само переключение не запускает объединение сразу.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "Поиск использует созданные воспоминания и дополняет их связями из графа знаний.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "Существующие воспоминания добавляются в граф знаний в фоновом режиме и остаются доступны. Исходные диалоги не удаляются.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Задайте время ежедневного объединения или запустите его один раз в любой момент.",
+  "记忆整合（Evolve）": "Объединение воспоминаний (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Периодически реорганизует существующие воспоминания, укрепляя связи и выводы.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Ежедневно объединяет воспоминания примерно в {time} по местному времени устройства. Пропущенный запуск выполняется после выхода из сна.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Выключено. После повторного включения запуск по-прежнему будет выполняться в {time}. Существующие результаты сохранятся.",
+  执行时间: "Время запуска",
+  立即整合一次: "Объединить один раз сейчас",
+  "只运行这一次，不改变每天的计划。":
+    "Выполняется один раз без изменения ежедневного расписания.",
+  "当前是基础记忆（lite）": "Текущий режим: базовая память (lite)",
+  "当前是智能记忆（pro）": "Текущий режим: интеллектуальная память (pro)",
+  "当前是深度记忆（ultra）": "Текущий режим: глубокая память (ultra)",
+  "正在读取记忆模式…": "Чтение режима памяти…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "Конфигурация модели сохранена и сейчас не используется для упорядочивания новых диалогов. После переключения на pro или ultra начало обработки зависит от отдельного переключателя «Создавать записи памяти с помощью модели».",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "Проверяется состояние создания воспоминаний. Конфигурация модели и существующие воспоминания не изменятся.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "Этот режим поддерживает создание воспоминаний, но обработка моделью приостановлена. После повторного включения сохранённые задачи продолжатся.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "Модель активна в этом режиме и создаёт воспоминания из новых диалогов.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "Конфигурация модели сохранена. Её состояние появится после подтверждения режима памяти.",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "Сохраняет и ищет исходные диалоги без генеративной модели. Расширенные воспоминания не создаются.",
   "使用当前模型从新对话中提取事实、偏好和计划。":
@@ -878,8 +1615,82 @@ export const modeIndonesianMessages: ModeMessages = {
   尚未整合: "Belum dikonsolidasikan",
   立即整合: "Konsolidasikan sekarang",
   "切换到 {mode}？": "Beralih ke {mode}?",
+  "切换到 {mode}": "Beralih ke {mode}",
   "原始对话在所有模式下都会保留。": "Percakapan asli disimpan di semua mode.",
   切换模式: "Beralih mode",
+  "保存原始对话 · 不调用生成模型 · 搜索原始会话":
+    "Simpan percakapan asli · Tanpa panggilan model generatif · Cari percakapan asli",
+  "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
+    "Buat memori lanjutan · Panggil model generatif · Cari memori yang dibuat",
+  "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回":
+    "Memori cerdas + knowledge graph · Evolve otomatis opsional · Pencarian konteks terkait yang lebih baik",
+  新对话: "Percakapan baru",
+  模型调用与费用: "Panggilan model dan biaya",
+  搜索范围: "Cakupan pencarian",
+  已有数据: "Data yang ada",
+  切换后: "Setelah beralih",
+  "之后只保存原始对话，不再生成新记忆。":
+    "Percakapan baru hanya disimpan sebagai teks asli; tidak ada memori baru yang dibuat.",
+  "停止调用生成模型；每天自动整合也会停止。":
+    "Panggilan model generatif dan konsolidasi harian dihentikan.",
+  "停止调用生成模型，不再产生这部分费用。":
+    "Panggilan model generatif dihentikan sehingga biaya penyedia terkait tidak lagi timbul.",
+  "立即改为搜索原始对话。": "Pencarian langsung beralih ke percakapan asli.",
+  "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。":
+    "Memori yang ada tetap disimpan, tetapi memori dasar tidak menampilkan atau mengambilnya. Percakapan asli tidak dihapus.",
+  "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。":
+    "Percakapan dalam antrean dan percakapan mendatang akan menjadi memori. Percakapan yang sudah selesai tidak diproses ulang.",
+  "仍会由模型整理成记忆；新记忆不再写入知识图谱。":
+    "Model tetap membuat memori, tetapi memori baru tidak lagi ditulis ke knowledge graph.",
+  "提取仍会调用生成模型；每天自动整合会停止。":
+    "Ekstraksi tetap memanggil model generatif; konsolidasi harian dihentikan.",
+  "开始调用当前生成模型，可能产生服务商费用。":
+    "Model generatif saat ini mulai dipanggil dan dapat menimbulkan biaya penyedia.",
+  "改为搜索智能记忆，不再使用知识图谱补充关联。":
+    "Pencarian menggunakan memori cerdas tanpa relasi dari knowledge graph.",
+  "立即改为搜索沉淀后的记忆。":
+    "Pencarian langsung beralih ke memori yang dibuat.",
+  "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。":
+    "Memori biasa tetap tersedia. Memori tingkat tinggi dan data graf yang ditambahkan oleh memori mendalam tetap disimpan, tetapi tidak ditampilkan atau diambil dalam memori cerdas. Percakapan asli tidak dihapus.",
+  "原始对话全部保留，不会删除。":
+    "Semua percakapan asli tetap disimpan dan tidak dihapus.",
+  "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。":
+    "Percakapan dalam antrean dan percakapan mendatang menghasilkan memori yang ditulis ke knowledge graph. Percakapan yang sudah selesai tidak diproses ulang.",
+  "提取方式不变，新记忆会写入知识图谱。":
+    "Ekstraksi tetap sama dan memori baru ditulis ke knowledge graph.",
+  "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。":
+    "Ekstraksi memanggil model generatif. Jika konsolidasi harian aktif, panggilan tambahan dilakukan pada waktu yang ditetapkan. Peralihan tidak langsung menjalankan konsolidasi.",
+  "搜索沉淀后的记忆，并用知识图谱补充关联。":
+    "Pencarian menggunakan memori yang dibuat dan melengkapinya dengan relasi dari knowledge graph.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。":
+    "Memori yang ada ditambahkan ke knowledge graph di latar belakang dan tetap dapat digunakan. Percakapan asli tidak dihapus.",
+  "可设置每天自动整合时间，也可以随时立即整合一次。":
+    "Tetapkan waktu konsolidasi harian atau jalankan satu konsolidasi kapan saja.",
+  "记忆整合（Evolve）": "Konsolidasi memori (Evolve)",
+  "定期重新整理已有记忆，补充更稳定的关联和结论。":
+    "Susun ulang memori yang ada secara berkala untuk memperkuat relasi dan kesimpulan.",
+  "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。":
+    "Konsolidasi otomatis setiap hari sekitar {time} menurut waktu lokal perangkat ini. Proses yang terlewat dijalankan setelah perangkat aktif kembali.",
+  "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。":
+    "Nonaktif. Setelah diaktifkan kembali, proses tetap berjalan pukul {time}. Hasil yang ada tetap disimpan.",
+  执行时间: "Waktu pelaksanaan",
+  立即整合一次: "Konsolidasikan sekali sekarang",
+  "只运行这一次，不改变每天的计划。":
+    "Berjalan sekali tanpa mengubah jadwal harian.",
+  "当前是基础记忆（lite）": "Mode saat ini: memori dasar (lite)",
+  "当前是智能记忆（pro）": "Mode saat ini: memori cerdas (pro)",
+  "当前是深度记忆（ultra）": "Mode saat ini: memori mendalam (ultra)",
+  "正在读取记忆模式…": "Membaca mode memori…",
+  "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
+    "Konfigurasi model tetap disimpan dan saat ini tidak digunakan untuk menata percakapan baru. Setelah beralih ke pro atau ultra, apakah penataan dimulai bergantung pada sakelar terpisah “Buat memori dengan model”.",
+  "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
+    "Memeriksa status pembuatan memori. Konfigurasi model dan memori yang ada tidak terpengaruh.",
+  "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
+    "Mode ini mendukung pembuatan memori, tetapi pemrosesan model dijeda. Aktifkan kembali untuk melanjutkan tugas yang disimpan.",
+  "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。":
+    "Model aktif dalam mode ini dan membuat memori dari percakapan baru.",
+  "模型配置已保留，确认记忆模式后会显示是否生效。":
+    "Konfigurasi model tetap disimpan. Status aktifnya muncul setelah mode memori dikonfirmasi.",
   "不调用生成模型。保存并检索原始对话，不再生成高级记忆。":
     "Simpan dan cari percakapan asli tanpa model generatif. Memori lanjutan tidak dibuat.",
   "使用当前模型从新对话中提取事实、偏好和计划。":

@@ -605,6 +605,7 @@ it("prevents an older refresh from overwriting discard's profile snapshot", asyn
     refreshing = hook.result.current.refreshProfiles();
   });
   await waitFor(() => expect(api.getModelProfiles).toHaveBeenCalledTimes(2));
+  expect(hook.result.current.refreshing).toBe(true);
   await act(async () => {
     expect(await hook.result.current.discardMissingCreation()).toBeUndefined();
   });
@@ -614,6 +615,7 @@ it("prevents an older refresh from overwriting discard's profile snapshot", asyn
     await refreshing;
   });
   expect(hook.result.current.profiles).toEqual([profile]);
+  expect(hook.result.current.refreshing).toBe(false);
   expect(readPendingModelCreation()).toBe(ID);
 });
 

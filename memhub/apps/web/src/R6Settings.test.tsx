@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { getModelProfiles, getSedimentation, setSedimentation } from "./api";
+import {
+  getMemoryMode,
+  getModelProfiles,
+  getSedimentation,
+  setSedimentation,
+} from "./api";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { queryClient, resetClient } from "./query-client";
 import { R6Settings } from "./R6Settings";
@@ -19,7 +30,7 @@ it("changes settings copy live without rereading profiles or changing permission
     </LanguageProvider>,
   );
   expect(
-    await screen.findByRole("heading", { name: "Modelo de memorias" }),
+    await screen.findByRole("heading", { name: "Modo de memoria" }),
   ).toBeTruthy();
   expect(
     screen.queryByRole("switch", {
@@ -27,9 +38,13 @@ it("changes settings copy live without rereading profiles or changing permission
     }),
   ).toBeNull();
   const reads = vi.mocked(getModelProfiles).mock.calls.length;
+  await user.click(
+    screen.getByRole("button", { name: "Idioma de la interfaz" }),
+  );
   await user.click(screen.getByRole("combobox", { name: "Idioma" }));
   await user.click(screen.getByRole("option", { name: "简体中文" }));
-  expect(await screen.findByRole("heading", { name: "记忆模型" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+  expect(await screen.findByRole("heading", { name: "模型配置" })).toBeTruthy();
   expect(vi.mocked(getModelProfiles).mock.calls).toHaveLength(reads);
 });
 vi.mock("./api", () => ({
@@ -85,14 +100,25 @@ vi.mock("./ModelSettings", async () => {
     // Stands in for the real component at its worst: every mutating action is
     // fenced, and the only way out is the recovery entry that lives inside the
     // same area the fence used to keep shut.
-    ModelSettings: ({ controlsRef }: { controlsRef?: Ref<unknown> }) => {
+    ModelSettings: ({
+      controlsRef,
+      focusSection,
+    }: {
+      controlsRef?: Ref<unknown>;
+      focusSection?: "generation" | "embedding";
+    }) => {
       useImperativeHandle(controlsRef, () => ({
         edit: () => false,
         editProfile: () => false,
         add: () => false,
         test: () => Promise.resolve(undefined),
       }));
-      return createElement("button", { type: "button" }, "核对测试结果");
+      return createElement(
+        "div",
+        null,
+        createElement("span", null, focusSection),
+        createElement("button", { type: "button" }, "核对测试结果"),
+      );
     },
   };
 });
@@ -127,6 +153,7 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   } as NonNullable<typeof window.oneMemory>;
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "界面语言" }));
   expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
   await user.click(screen.getByRole("combobox", { name: "语言" }));
   expect(screen.getAllByRole("option")).toHaveLength(12);
@@ -145,6 +172,79 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
 });
 
+it("uses one sidebar hierarchy and explains when a saved model is inactive in lite", async () => {
+  vi.mocked(getMemoryMode).mockResolvedValueOnce({
+    mode: "lite",
+    configured_mode: "lite",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  });
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  expect(screen.getByRole("button", { name: "界面语言" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "记忆模式" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "模型配置" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "刷新记忆模式" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "界面语言" }));
+  expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+  expect(await screen.findByText("当前是基础记忆（lite）")).toBeTruthy();
+  expect(
+    screen.getByText(/是否开始整理取决于.*“用模型沉淀记忆”.*开关/),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "刷新模型状态" })).toBeNull();
+});
+
+it("carries a missing-model explanation into model configuration and moves focus", async () => {
+  vi.mocked(getModelProfiles).mockResolvedValueOnce([]);
+  vi.mocked(getMemoryMode).mockResolvedValueOnce({
+    mode: "lite",
+    configured_mode: "lite",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  });
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  await user.click(
+    await screen.findByRole("radio", { name: /智能记忆（pro）/ }),
+  );
+
+  expect(
+    await screen.findByText("使用 pro 或 ultra 前需要先配置并启用生成模型。"),
+  ).toBeTruthy();
+  const heading = screen.getByRole("heading", { name: "模型配置" });
+  await waitFor(() => expect(document.activeElement).toBe(heading));
+});
+
+it("offers a text recovery action when the model overview cannot be read", async () => {
+  vi.mocked(getModelProfiles).mockRejectedValueOnce(new Error("offline"));
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+
+  expect(await screen.findByText("模型状态未能读取，请重试。")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "重新读取" }));
+
+  expect(await screen.findByText("当前模型")).toBeTruthy();
+});
+
 it("stops model sedimentation on one switch flip without touching the model config", async () => {
   const user = userEvent.setup();
   vi.mocked(setSedimentation).mockResolvedValue({
@@ -153,6 +253,7 @@ it("stops model sedimentation on one switch flip without touching the model conf
     imports_unaffected: true,
   });
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const toggle = await screen.findByRole("switch", { name: "用模型沉淀记忆" });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -171,6 +272,7 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
   const user = userEvent.setup();
   vi.mocked(setSedimentation).mockRejectedValue(new Error("offline"));
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const toggle = await screen.findByRole("switch", { name: "用模型沉淀记忆" });
   await user.click(toggle);
@@ -181,14 +283,21 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
   );
   // The model configuration is a different store: a failed switch must not
   // leave the page claiming the model was removed.
-  expect(screen.getByRole("heading", { name: "当前模型" })).toBeTruthy();
+  expect(screen.getByText("当前模型")).toBeTruthy();
 });
 
 it("opens the model area even when a pending probe fences the editor, so recovery stays reachable", async () => {
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
-  await user.click(await screen.findByRole("button", { name: "修改模型" }));
+  const generationLane = (
+    await screen.findByRole("heading", { name: "记忆整理" })
+  ).closest(".r6-model-lane") as HTMLElement | null;
+  if (!generationLane) throw new Error("Missing generation lane");
+  await user.click(
+    within(generationLane).getByRole("button", { name: "配置" }),
+  );
 
   // The fence is still reported: the editor really did refuse.
   const alert = await screen.findByRole("alert");
@@ -202,15 +311,57 @@ it("reaches the same recovery entry when no model has been configured yet", asyn
   vi.mocked(getModelProfiles).mockResolvedValueOnce([]);
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
-  await user.click(await screen.findByRole("button", { name: "配置模型" }));
+  const generationLane = (
+    await screen.findByRole("heading", { name: "记忆整理" })
+  ).closest(".r6-model-lane") as HTMLElement | null;
+  if (!generationLane) throw new Error("Missing generation lane");
+  await user.click(
+    await within(generationLane).findByRole("button", { name: "配置模型" }),
+  );
 
   expect(screen.getByRole("button", { name: "核对测试结果" })).toBeTruthy();
+  const searchLane = screen
+    .getByRole("heading", { name: "记忆搜索" })
+    .closest(".r6-model-lane") as HTMLElement | null;
+  if (!searchLane) throw new Error("Missing search lane");
+  expect(
+    within(searchLane).getByRole("button", { name: "配置" }),
+  ).toHaveProperty("disabled", true);
+  expect(searchLane.textContent).toContain("配置记忆整理后可自定义");
+});
+
+it("shows separate compact lanes and opens the requested presentation", async () => {
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+
+  const generationLane = (
+    await screen.findByRole("heading", { name: "记忆整理" })
+  ).closest(".r6-model-lane") as HTMLElement | null;
+  const embeddingLane = screen
+    .getByRole("heading", { name: "记忆搜索" })
+    .closest(".r6-model-lane") as HTMLElement | null;
+  if (!generationLane || !embeddingLane) throw new Error("Missing model lane");
+
+  expect(generationLane.textContent).toContain("当前模型");
+  expect(generationLane.textContent).toContain("LLM");
+  expect(embeddingLane.textContent).toContain("本地内置（推荐）");
+  expect(embeddingLane.textContent).toContain("Embedding");
+
+  await user.click(within(embeddingLane).getByRole("button", { name: "配置" }));
+  expect(screen.getByText("embedding")).toBeTruthy();
+  await user.click(
+    within(generationLane).getByRole("button", { name: "配置" }),
+  );
+  expect(screen.getByText("generation")).toBeTruthy();
 });
 
 it("leaves the switch unusable when the state cannot be read", async () => {
   vi.mocked(getSedimentation).mockRejectedValueOnce(new Error("offline"));
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
 
   const toggle = (await screen.findByRole("switch", {
     name: "用模型沉淀记忆",

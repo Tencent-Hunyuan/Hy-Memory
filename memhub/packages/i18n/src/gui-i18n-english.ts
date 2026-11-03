@@ -1,4 +1,5 @@
 import { currentEnglishMessages } from "./gui-i18n-current.js";
+import { embeddingSwitchEnglishMessages } from "./gui-i18n-embedding-switch.js";
 import { modeEnglishMessages } from "./gui-i18n-mode.js";
 
 // English translations integrated from PR #114.
@@ -800,6 +801,19 @@ const baseEnglishMessages = {
   设置分组: "Settings sections",
   记忆模型: "Memory model",
   当前模型: "Current model",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Manage the models used for memory processing and search separately.",
+  记忆整理: "Memory processing",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Turn conversations into memories you can use over the long term.",
+  记忆搜索: "Memory search",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Find the memories most relevant to your question when you need them.",
+  "本地内置（推荐）": "Built-in locally (recommended)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Customizable after memory processing is configured",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Processed locally, no extra setup required",
   "正在读取模型…": "Loading model…",
   模型状态暂不可读: "Model status is unavailable",
   尚未配置模型: "No model configured",
@@ -2007,5 +2021,6 @@ const baseEnglishMessages = {
 export const englishMessages = {
   ...baseEnglishMessages,
   ...currentEnglishMessages,
+  ...embeddingSwitchEnglishMessages,
   ...modeEnglishMessages,
 } as const;

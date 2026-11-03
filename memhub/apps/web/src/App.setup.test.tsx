@@ -68,6 +68,10 @@ vi.mock("./api", () => ({
   startEvolve: vi.fn(),
   apiErrorCode: vi.fn().mockReturnValue(null),
   getSources: vi.fn().mockResolvedValue(sources),
+  getCurrentEmbeddingSwitch: vi
+    .fn()
+    .mockRejectedValue(new Error("unsupported")),
+  embeddingSwitchUnsupported: vi.fn().mockReturnValue(true),
   ...mutations,
 }));
 vi.mock("./use-import-sources", () => ({
@@ -149,7 +153,9 @@ it("enters D47 settings without a tour or mandatory second scope-confirmation fl
   ).toBeNull();
   noModelWrites();
   expect(screen.queryByRole("button", { name: "管理已有授权" })).toBeNull();
-  expect(screen.getByRole("button", { name: "记忆模式与模型" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "界面语言" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "记忆模式" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "模型配置" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "连接其他应用" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "帮助与诊断" })).toBeTruthy();
   noModelWrites();
@@ -212,13 +218,14 @@ it("keeps an open model draft while switching settings groups", async () => {
   window.history.replaceState({}, "", "/?view=settings");
   render(<App />);
   await waitFor(() => expect(modelProps).toHaveBeenCalled());
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
   await userEvent.click(screen.getByRole("button", { name: "配置模型" }));
   await userEvent.type(
     screen.getByLabelText("保留的模型草稿"),
     "unsaved draft",
   );
   await userEvent.click(screen.getByRole("button", { name: "连接其他应用" }));
-  await userEvent.click(screen.getByRole("button", { name: "记忆模式与模型" }));
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
   expect(window.location.search).toBe("?view=settings");
   expect(screen.getByLabelText("保留的模型草稿")).toHaveProperty(
     "value",

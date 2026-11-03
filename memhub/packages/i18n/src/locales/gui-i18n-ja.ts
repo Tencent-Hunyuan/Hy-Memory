@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchJapaneseMessages } from "../gui-i18n-embedding-switch.js";
 import { modeJapaneseMessages } from "../gui-i18n-mode.js";
 
 /** Japanese (ja) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const japaneseMessages: Record<MessageKey, string> = {
   ...modeJapaneseMessages,
+  ...embeddingSwitchJapaneseMessages,
   "connectionFallback.title": "ほかのツールを接続",
   "connectionFallback.desktopOnly":
     "ローカルのペアリングはデスクトップアプリでのみ利用できます。",
@@ -966,6 +968,19 @@ export const japaneseMessages: Record<MessageKey, string> = {
   设置分组: "設定のセクション",
   记忆模型: "記憶モデル",
   当前模型: "現在のモデル",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "記憶の整理と検索に使うモデルを個別に管理します。",
+  记忆整理: "記憶の整理",
+  "把会话理解并整理成可长期使用的记忆。":
+    "会話を理解し、長期的に活用できる記憶として整理します。",
+  记忆搜索: "記憶の検索",
+  "在需要时找到与你的问题最相关的记忆。":
+    "必要なときに、質問に最も関連する記憶を見つけます。",
+  "本地内置（推荐）": "ローカル内蔵（推奨）",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · 記憶の整理を設定後にカスタマイズ可能",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · このデバイスで処理、追加設定不要",
   "正在读取模型…": "モデルを読み込み中…",
   模型状态暂不可读: "モデルの状態を取得できません",
   尚未配置模型: "モデル未設定",

@@ -25,6 +25,7 @@ import { useApplicationsLanguage } from "./applications-language";
 import { CallHistory } from "./CallHistory";
 import { DebugLogPanel } from "./DebugLogPanel";
 import { DesktopFrame } from "./DesktopFrame";
+import { EmbeddingSwitchGlobalStatus } from "./EmbeddingSwitchExperience";
 import { useGuiLanguage } from "./gui-language";
 import { HealthPanel } from "./HealthPanel";
 import { ImportProgressStrip } from "./ImportProgressStrip";
@@ -34,6 +35,7 @@ import { OnboardingFlow } from "./OnboardingFlow";
 import { R6Button, R6LocalStorage } from "./R6Controls";
 import { R6Settings } from "./R6Settings";
 import { prefetchDataRuntime } from "./runtime-state";
+import { EmbeddingSwitchProvider } from "./use-embedding-switch";
 import "./styles.css";
 import "./core-visual.css";
 import "./r6-shell.css";
@@ -47,10 +49,12 @@ const rendererStartedAt = Date.now();
 
 export function App() {
   return (
-    <DesktopFrame>
-      <AppContent />
-      <DebugLogPanel />
-    </DesktopFrame>
+    <EmbeddingSwitchProvider>
+      <DesktopFrame>
+        <AppContent />
+        <DebugLogPanel />
+      </DesktopFrame>
+    </EmbeddingSwitchProvider>
   );
 }
 
@@ -309,6 +313,10 @@ function AppContent() {
         ref={content}
         data-view={displayedView}
       >
+        <EmbeddingSwitchGlobalStatus
+          onConfigureSearch={() => navigate("settings")}
+          onDiagnostics={() => navigate("health")}
+        />
         {/* First run hands the user in here while the import is still going.
          * Without this the work would be invisible from every screen except
          * the one they were no longer required to sit on. */}

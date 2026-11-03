@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchGermanMessages } from "../gui-i18n-embedding-switch.js";
 import { modeGermanMessages } from "../gui-i18n-mode.js";
 
 /** German (de, formal Sie) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const germanMessages: Record<MessageKey, string> = {
   ...modeGermanMessages,
+  ...embeddingSwitchGermanMessages,
   "connectionFallback.title": "Andere Tools verbinden",
   "connectionFallback.desktopOnly":
     "Lokale Kopplung ist nur in der Desktop-App verfügbar.",
@@ -986,6 +988,19 @@ export const germanMessages: Record<MessageKey, string> = {
   设置分组: "Einstellungsbereiche",
   记忆模型: "Erinnerungsmodell",
   当前模型: "Aktuelles Modell",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Verwalten Sie die Modelle für die Aufbereitung und Suche von Erinnerungen getrennt.",
+  记忆整理: "Erinnerungen aufbereiten",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Verarbeitet Unterhaltungen zu langfristig nutzbaren Erinnerungen.",
+  记忆搜索: "Erinnerungen durchsuchen",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Findet bei Bedarf die Erinnerungen, die für Ihre Frage am relevantesten sind.",
+  "本地内置（推荐）": "Lokal integriert (empfohlen)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Nach Einrichtung der Erinnerungsaufbereitung anpassbar",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Lokale Verarbeitung, keine zusätzliche Einrichtung erforderlich",
   "正在读取模型…": "Modell wird geladen…",
   模型状态暂不可读: "Modellstatus nicht verfügbar",
   尚未配置模型: "Kein Modell eingerichtet",

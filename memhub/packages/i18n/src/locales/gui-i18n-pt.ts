@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchPortugueseMessages } from "../gui-i18n-embedding-switch.js";
 import { modePortugueseMessages } from "../gui-i18n-mode.js";
 
 /** Portuguese (pt, Brazilian usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const portugueseMessages: Record<MessageKey, string> = {
   ...modePortugueseMessages,
+  ...embeddingSwitchPortugueseMessages,
   "connectionFallback.title": "Conectar outras ferramentas",
   "connectionFallback.desktopOnly":
     "O pareamento local só está disponível no app para desktop.",
@@ -990,6 +992,19 @@ export const portugueseMessages: Record<MessageKey, string> = {
   设置分组: "Seções das configurações",
   记忆模型: "Modelo de memória",
   当前模型: "Modelo atual",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Gerencie separadamente os modelos usados para organizar e pesquisar memórias.",
+  记忆整理: "Organização de memórias",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Transforma conversas em memórias úteis a longo prazo.",
+  记忆搜索: "Pesquisa de memórias",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Encontra, quando necessário, as memórias mais relevantes para sua pergunta.",
+  "本地内置（推荐）": "Integrado localmente (recomendado)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Personalizável após configurar a organização de memórias",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Processamento local, sem configuração adicional",
   "正在读取模型…": "Carregando modelo…",
   模型状态暂不可读: "O status do modelo não está disponível",
   尚未配置模型: "Nenhum modelo configurado",

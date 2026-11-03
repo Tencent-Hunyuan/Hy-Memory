@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchRussianMessages } from "../gui-i18n-embedding-switch.js";
 import { modeRussianMessages } from "../gui-i18n-mode.js";
 
 /** Russian (ru) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const russianMessages: Record<MessageKey, string> = {
   ...modeRussianMessages,
+  ...embeddingSwitchRussianMessages,
   "connectionFallback.title": "Подключить другие инструменты",
   "connectionFallback.desktopOnly":
     "Локальное сопряжение доступно только в настольном приложении.",
@@ -974,6 +976,19 @@ export const russianMessages: Record<MessageKey, string> = {
   设置分组: "Разделы настроек",
   记忆模型: "Модель памяти",
   当前模型: "Текущая модель",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Отдельно управляйте моделями для обработки и поиска записей памяти.",
+  记忆整理: "Обработка памяти",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Преобразует диалоги в записи памяти для долгосрочного использования.",
+  记忆搜索: "Поиск по памяти",
+  "在需要时找到与你的问题最相关的记忆。":
+    "При необходимости находит записи памяти, наиболее релевантные вашему вопросу.",
+  "本地内置（推荐）": "Встроенная локальная модель (рекомендуется)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Настраивается после конфигурации обработки памяти",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Локальная обработка, дополнительная настройка не требуется",
   "正在读取模型…": "Загрузка модели…",
   模型状态暂不可读: "Статус модели недоступен",
   尚未配置模型: "Модель не настроена",

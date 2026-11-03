@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchFrenchMessages } from "../gui-i18n-embedding-switch.js";
 import { modeFrenchMessages } from "../gui-i18n-mode.js";
 
 /** French (fr, vous) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const frenchMessages: Record<MessageKey, string> = {
   ...modeFrenchMessages,
+  ...embeddingSwitchFrenchMessages,
   "connectionFallback.title": "Connecter d’autres outils",
   "connectionFallback.desktopOnly":
     "L’association locale n’est disponible que dans l’application de bureau.",
@@ -998,6 +1000,19 @@ export const frenchMessages: Record<MessageKey, string> = {
   设置分组: "Sections des paramètres",
   记忆模型: "Modèle de mémoire",
   当前模型: "Modèle actuel",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Gérez séparément les modèles utilisés pour organiser et rechercher les mémoires.",
+  记忆整理: "Organisation des mémoires",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Transforme les conversations en mémoires utiles à long terme.",
+  记忆搜索: "Recherche de mémoires",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Trouve, au besoin, les mémoires les plus pertinentes pour votre question.",
+  "本地内置（推荐）": "Intégré en local (recommandé)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Personnalisable après la configuration de l’organisation des mémoires",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Traitement local, sans configuration supplémentaire",
   "正在读取模型…": "Chargement du modèle…",
   模型状态暂不可读: "L’état du modèle est indisponible",
   尚未配置模型: "Aucun modèle configuré",

@@ -41,6 +41,21 @@ const { models } = vi.hoisted(() => ({
 vi.mock("./use-model-profiles", () => ({
   useModelProfiles: () => models,
 }));
+vi.mock("./use-embedding-switch", () => ({
+  useEmbeddingSwitch: () => ({
+    current: null,
+    plan: null,
+    busy: null,
+    errorCode: null,
+    refreshFailed: false,
+    supported: false,
+    planActivation: vi.fn(),
+    startPlannedSwitch: vi.fn(),
+    shouldUseLegacyActivation: () => true,
+    clearPlan: vi.fn(),
+    clearError: vi.fn(),
+  }),
+}));
 vi.mock("./OnboardingModelStep", () => ({
   OnboardingModelStep: (props: {
     probe?: { message: string } | null;

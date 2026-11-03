@@ -11,6 +11,10 @@ import {
   currentSpanishMessages,
 } from "./gui-i18n-current.js";
 import {
+  embeddingSwitchChineseMessages,
+  embeddingSwitchSpanishMessages,
+} from "./gui-i18n-embedding-switch.js";
+import {
   guideChineseMessages,
   guideSpanishMessages,
 } from "./gui-i18n-guide.js";
@@ -94,6 +98,11 @@ export const guiCatalogs: readonly Catalog[] = [
     name: "current",
     chinese: currentChineseMessages,
     spanish: currentSpanishMessages,
+  },
+  {
+    name: "embedding-switch",
+    chinese: embeddingSwitchChineseMessages,
+    spanish: embeddingSwitchSpanishMessages,
   },
   {
     name: "workbench",
@@ -187,6 +196,7 @@ const merged = mergeCatalogs(guiCatalogs);
 
 /** The complete Chinese GUI catalog defines the supported message keys. */
 export const chineseMessages = merged.chinese as typeof guideChineseMessages &
+  typeof embeddingSwitchChineseMessages &
   typeof healthChineseMessages &
   typeof recoveryChineseMessages &
   typeof settingsChineseMessages &

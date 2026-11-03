@@ -2,6 +2,9 @@
 
 Updated: 2026-11-01.
 
+Status: Core, CLI and App implemented. The App presents this as a user-facing
+"memory search" and "index update" flow; protocol names remain unchanged.
+
 This contract is what the App and the CLI build on to change the embedding
 model without losing a memory, and to fold in vector data an earlier build left
 in another embedding space. Core owns every decision; clients plan, confirm,

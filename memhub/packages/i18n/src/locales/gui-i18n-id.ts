@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchIndonesianMessages } from "../gui-i18n-embedding-switch.js";
 import { modeIndonesianMessages } from "../gui-i18n-mode.js";
 
 /** Indonesian (id, Anda) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const indonesianMessages: Record<MessageKey, string> = {
   ...modeIndonesianMessages,
+  ...embeddingSwitchIndonesianMessages,
   "connectionFallback.title": "Hubungkan alat lain",
   "connectionFallback.desktopOnly":
     "Pemasangan lokal hanya tersedia di aplikasi desktop.",
@@ -969,6 +971,19 @@ export const indonesianMessages: Record<MessageKey, string> = {
   设置分组: "Bagian pengaturan",
   记忆模型: "Model memori",
   当前模型: "Model saat ini",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Kelola secara terpisah model yang digunakan untuk mengolah dan mencari memori.",
+  记忆整理: "Pengolahan memori",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Mengubah percakapan menjadi memori yang dapat digunakan dalam jangka panjang.",
+  记忆搜索: "Pencarian memori",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Menemukan memori yang paling relevan dengan pertanyaan Anda saat diperlukan.",
+  "本地内置（推荐）": "Bawaan lokal (disarankan)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Dapat disesuaikan setelah pengolahan memori dikonfigurasi",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Diproses secara lokal, tanpa konfigurasi tambahan",
   "正在读取模型…": "Memuat model…",
   模型状态暂不可读: "Status model tidak tersedia",
   尚未配置模型: "Belum ada model yang dikonfigurasi",
