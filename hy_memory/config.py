@@ -144,6 +144,8 @@ class LLMConfig:
     omit_temperature: bool = None
     max_tokens: int = None  # 默认 max_tokens（通用）
     agent_max_tokens: int = None  # Agent 场景统一 max_tokens
+    # Chat Completions gateways differ in the name of their output budget.
+    output_token_parameter: Optional[str] = None
 
     # 调用参数
     timeout: int = None  # LLM 请求超时（秒）
@@ -203,6 +205,10 @@ class LLMConfig:
             self.max_tokens = _get_env_int("MEMORY_LLM_MAX_TOKENS", 1024)
         if self.agent_max_tokens is None:
             self.agent_max_tokens = _get_env_int("MEMORY_AGENT_MAX_TOKENS", 2000)
+        if self.output_token_parameter is None:
+            self.output_token_parameter = os.getenv("MEMORY_LLM_OUTPUT_TOKEN_PARAMETER", "max_tokens")
+        if self.output_token_parameter not in ("max_tokens", "max_completion_tokens"):
+            raise ValueError("MEMORY_LLM_OUTPUT_TOKEN_PARAMETER must be max_tokens or max_completion_tokens")
         if self.timeout is None:
             self.timeout = _get_env_int("MEMORY_LLM_TIMEOUT", 180)
         if self.max_retries is None:
@@ -1386,6 +1392,7 @@ class MemoryConfig:
                 "provider": self.llm.provider,
                 "model": self.llm.model,
                 "base_url": self.llm.base_url,
+                "output_token_parameter": self.llm.output_token_parameter,
             },
             "embedder": {
                 "provider": self.embedder.provider,

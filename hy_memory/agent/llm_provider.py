@@ -214,6 +214,7 @@ class LLMConfig:
     # None = **请求里完全不带 temperature**。
     # 有些网关（如 Opus 5）只接受 temperature=1 或干脆不传，传 0/0.1/0.3 会 400。
     temperature: Optional[float] = 0.7
+    output_token_parameter: str = "max_tokens"
     timeout: int = 30
     max_retries: int = 5
     retry_delay: float = 1.0  # 初始 delay，每次递增
@@ -308,6 +309,8 @@ class LLMProvider:
     def _build_llm_config(self) -> LLMConfig:
         """从配置构建 LLM 配置"""
         llm = self.config.llm
+        if llm.output_token_parameter not in ("max_tokens", "max_completion_tokens"):
+            raise ValueError("output_token_parameter must be max_tokens or max_completion_tokens")
         return LLMConfig(
             backend=LLMBackend.OPENAI,
             model=llm.model,
@@ -319,6 +322,7 @@ class LLMProvider:
                 None if getattr(llm, "omit_temperature", False)
                 else llm.temperature
             ),
+            output_token_parameter=llm.output_token_parameter,
             timeout=llm.timeout or 120,
             max_retries=llm.max_retries if llm.max_retries is not None else 5,
             retry_delay=llm.retry_delay if llm.retry_delay is not None else 1.0,
@@ -523,7 +527,7 @@ class LLMProvider:
         kwargs: Dict[str, Any] = {
             "model": self._llm_config.model,
             "messages": messages,
-            "max_tokens": max_tokens,
+            self._llm_config.output_token_parameter: max_tokens,
         }
         # 解析到 None → **整个参数不发**（Opus 5 等网关只接受 1 或不传）
         _temp = self._resolve_temperature(temperature)
