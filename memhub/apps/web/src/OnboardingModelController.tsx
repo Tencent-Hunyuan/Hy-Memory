@@ -3,7 +3,7 @@ import type {
   ModelProfile,
   ModelProfileInput,
 } from "@one-memory/contracts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getModelProfiles } from "./api";
 import {
   type OnboardingModelDraft,
@@ -83,9 +83,41 @@ export function OnboardingModelController({
     message: string;
   } | null>(null);
   const flight = useRef(false);
+  const draftTouched = useRef(false);
+
+  useEffect(() => {
+    const active = (models.profiles ?? []).find((profile) => profile.is_active);
+    if (!active || saved || draftTouched.current) return;
+    setSaved(active);
+    setDraft((current) => ({
+      ...current,
+      name: active.name,
+      provider_kind: active.provider_kind,
+      model: active.model,
+      base_url: active.base_url ?? "",
+      disable_thinking: active.disable_thinking,
+      embedding_mode:
+        active.embedding_provider_kind === "local_onnx" ? "local" : "custom",
+      embedding_provider_kind:
+        active.embedding_provider_kind === "ollama"
+          ? "ollama"
+          : "openai_compatible",
+      embedding_model: active.embedding_model ?? "",
+      embedding_base_url: active.embedding_base_url ?? "",
+      timeout_seconds: String(active.timeout_seconds),
+      max_concurrency: String(active.max_concurrency),
+      context_window:
+        active.context_window === null ? "" : String(active.context_window),
+    }));
+    setProbe({
+      state: "passed",
+      message: "当前模型已经启用，可以继续完成首次设置。",
+    });
+  }, [models.profiles, saved]);
 
   function edit(patch: Partial<OnboardingModelDraft>) {
     if (flight.current) return;
+    draftTouched.current = true;
     if (patch.provider_id && patch.provider_id !== draft.provider_id) {
       const preset = PROVIDER_PRESETS.find(
         (item) => item.id === patch.provider_id,
@@ -232,6 +264,10 @@ export function OnboardingModelController({
 
   async function enable() {
     if (flight.current || probe?.state !== "passed" || !saved) return;
+    if (saved.is_active) {
+      onEnabled?.();
+      return;
+    }
     flight.current = true;
     setPhase("enabling");
     setError(null);
@@ -273,6 +309,7 @@ export function OnboardingModelController({
       phase={phase}
       capability={{ saveAndEnable: true }}
       canSaveAndEnable={probe?.state === "passed" && !!saved}
+      enableActionLabel={saved?.is_active ? "继续使用当前模型" : undefined}
       canTest={!models.pendingProbe && !models.probeStorageFailed}
       canSaveDraft={!models.pendingCreation && !models.creationStorageFailed}
       inputsLocked={flight.current}

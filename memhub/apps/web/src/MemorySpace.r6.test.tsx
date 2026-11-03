@@ -255,6 +255,52 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
   expect(screen.getByText(/当前使用基础记忆/)).toBeTruthy();
 });
 
+it("does not request advanced memories before the pipeline mode is known", async () => {
+  setup();
+  let resolveProcessing!: (value: unknown) => void;
+  reads.processing.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveProcessing = resolve;
+    }),
+  );
+  render(<MemorySpace simplified />);
+
+  await act(async () => Promise.resolve());
+  expect(reads.sdkLibrary).not.toHaveBeenCalled();
+  expect(reads.sdkGraph).not.toHaveBeenCalled();
+
+  await act(async () => {
+    resolveProcessing({
+      running: 0,
+      pending: 0,
+      blocked_stages: [],
+      completed: 0,
+      pipeline: {
+        mode: "lite",
+        configured_mode: "lite",
+        forced_by_env: false,
+        evolve: {
+          mode: "lite",
+          schedule: { enabled: true, time: "03:00" },
+          users: {},
+          running: [],
+        },
+        last_evolve_at: null,
+        graph_build: {
+          state: "idle",
+          started_at: null,
+          finished_at: null,
+          users: {},
+        },
+        features: {},
+      },
+    });
+  });
+  await screen.findByText(/当前使用基础记忆/);
+  expect(reads.sdkLibrary).not.toHaveBeenCalled();
+  expect(reads.sdkGraph).not.toHaveBeenCalled();
+});
+
 it("keeps an added memory visible while it waits for model processing", async () => {
   setup();
   render(<MemorySpace simplified onConfigureModel={vi.fn()} />);

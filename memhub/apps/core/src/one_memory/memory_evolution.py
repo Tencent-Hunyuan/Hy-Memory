@@ -545,10 +545,12 @@ class MemoryGraphBackfill:
         *,
         coordinator: EvolveCoordinator,
         state: EvolveStateStore,
+        lifecycle_open: Callable[[], bool] = lambda: True,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.coordinator = coordinator
         self.state = state
+        self.lifecycle_open = lifecycle_open
         self._now = now
         self._task: asyncio.Task[None] | None = None
 
@@ -569,6 +571,35 @@ class MemoryGraphBackfill:
         self._task = asyncio.create_task(self._run(users), name="one-memory-graph-backfill")
         return state
 
+    def recover(self, user_ids: Iterable[str]) -> GraphBuildState:
+        """Resume an interrupted backfill without repeating completed users."""
+        if self.running:
+            return self.state.graph_build()
+        saved = self.state.graph_build()
+        if saved.state != "running":
+            return saved
+        users = tuple(dict.fromkeys((*saved.users.keys(), *user_ids)))
+        pending = tuple(
+            user_id
+            for user_id in users
+            if saved.users.get(user_id, GraphBuildUser()).state != "succeeded"
+        )
+        resumed = saved.model_copy(deep=True)
+        for user_id in pending:
+            resumed.users[user_id] = GraphBuildUser()
+        if not pending:
+            resumed.state = "succeeded"
+            resumed.finished_at = self._now()
+            self.state.set_graph_build(resumed)
+            return resumed
+        resumed.state = "running"
+        resumed.finished_at = None
+        self.state.set_graph_build(resumed)
+        self._task = asyncio.create_task(
+            self._run(pending), name="one-memory-graph-backfill-recovery"
+        )
+        return resumed
+
     async def wait(self) -> None:
         if self._task is not None:
             await asyncio.shield(self._task)
@@ -576,6 +607,8 @@ class MemoryGraphBackfill:
     async def _run(self, users: tuple[str, ...]) -> None:
         state = self.state.graph_build()
         for user_id in users:
+            while not self.lifecycle_open():
+                await asyncio.sleep(0.2)
             state.users[user_id] = GraphBuildUser(state="running")
             await asyncio.to_thread(self.state.set_graph_build, state.model_copy(deep=True))
             try:

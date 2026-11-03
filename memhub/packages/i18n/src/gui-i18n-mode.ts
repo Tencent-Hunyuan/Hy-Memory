@@ -6,6 +6,9 @@ const modeChineseMessages = {
   返回导入: "返回导入",
   继续: "继续",
   "正在保存…": "正在保存…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "当前模型已经启用，可以继续完成首次设置。",
+  继续使用当前模型: "继续使用当前模型",
   "你希望 MemHub 如何形成记忆？": "你希望 MemHub 如何形成记忆？",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "需要明确选择一种方式；之后仍可在设置中更改。",
@@ -85,6 +88,9 @@ export const modeEnglishMessages: ModeMessages = {
   返回导入: "Back to import",
   继续: "Continue",
   "正在保存…": "Saving…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "The current model is already enabled. Continue to finish setup.",
+  继续使用当前模型: "Continue with current model",
   "你希望 MemHub 如何形成记忆？": "How should MemHub create memories?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Choose one option. You can change it later in Settings.",
@@ -166,6 +172,9 @@ export const modeSpanishMessages: ModeMessages = {
   返回导入: "Volver a la importación",
   继续: "Continuar",
   "正在保存…": "Guardando…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "El modelo actual ya está activo. Continúa para terminar la configuración.",
+  继续使用当前模型: "Continuar con el modelo actual",
   "你希望 MemHub 如何形成记忆？": "¿Cómo quieres que MemHub cree memorias?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Elige una opción. Podrás cambiarla después en Configuración.",
@@ -247,6 +256,9 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   返回导入: "返回匯入",
   继续: "繼續",
   "正在保存…": "儲存中…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "目前模型已啟用，可以繼續完成首次設定。",
+  继续使用当前模型: "繼續使用目前模型",
   "你希望 MemHub 如何形成记忆？": "你希望 MemHub 如何形成記憶？",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "請選擇一種方式；之後仍可在設定中更改。",
@@ -322,6 +334,9 @@ export const modeJapaneseMessages: ModeMessages = {
   返回导入: "インポートに戻る",
   继续: "続ける",
   "正在保存…": "保存中…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "現在のモデルはすでに有効です。このまま初期設定を完了できます。",
+  继续使用当前模型: "現在のモデルで続ける",
   "你希望 MemHub 如何形成记忆？": "MemHub でどのように記憶を作成しますか？",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "いずれかを選択してください。後から設定で変更できます。",
@@ -403,6 +418,9 @@ export const modeGermanMessages: ModeMessages = {
   返回导入: "Zurück zum Import",
   继续: "Weiter",
   "正在保存…": "Wird gespeichert…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "Das aktuelle Modell ist bereits aktiviert. Fahre fort, um die Einrichtung abzuschließen.",
+  继续使用当前模型: "Mit aktuellem Modell fortfahren",
   "你希望 MemHub 如何形成记忆？": "Wie soll MemHub Erinnerungen erstellen?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Wählen Sie eine Option. Sie können sie später in den Einstellungen ändern.",
@@ -485,6 +503,9 @@ export const modePortugueseMessages: ModeMessages = {
   返回导入: "Voltar à importação",
   继续: "Continuar",
   "正在保存…": "A guardar…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "O modelo atual já está ativo. Continua para concluir a configuração.",
+  继续使用当前模型: "Continuar com o modelo atual",
   "你希望 MemHub 如何形成记忆？": "Como deve o MemHub criar memórias?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Escolha uma opção. Pode alterá-la mais tarde nas Definições.",
@@ -567,6 +588,9 @@ export const modeFrenchMessages: ModeMessages = {
   返回导入: "Retour à l’importation",
   继续: "Continuer",
   "正在保存…": "Enregistrement…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "Le modèle actuel est déjà activé. Continuez pour terminer la configuration.",
+  继续使用当前模型: "Continuer avec le modèle actuel",
   "你希望 MemHub 如何形成记忆？": "Comment MemHub doit-il créer des mémoires ?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Choisissez une option. Vous pourrez la modifier plus tard dans les réglages.",
@@ -648,6 +672,9 @@ export const modeKoreanMessages: ModeMessages = {
   返回导入: "가져오기로 돌아가기",
   继续: "계속",
   "正在保存…": "저장 중…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "현재 모델이 이미 활성화되어 있습니다. 계속해서 초기 설정을 완료하세요.",
+  继续使用当前模型: "현재 모델로 계속",
   "你希望 MemHub 如何形成记忆？": "MemHub가 메모리를 어떻게 만들까요?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "한 가지 방식을 선택하세요. 나중에 설정에서 변경할 수 있습니다.",
@@ -729,6 +756,9 @@ export const modeRussianMessages: ModeMessages = {
   返回导入: "Назад к импорту",
   继续: "Продолжить",
   "正在保存…": "Сохранение…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "Текущая модель уже включена. Продолжите, чтобы завершить настройку.",
+  继续使用当前模型: "Продолжить с текущей моделью",
   "你希望 MemHub 如何形成记忆？": "Как MemHub должен создавать воспоминания?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Выберите один вариант. Его можно изменить позже в настройках.",
@@ -811,6 +841,9 @@ export const modeIndonesianMessages: ModeMessages = {
   返回导入: "Kembali ke impor",
   继续: "Lanjutkan",
   "正在保存…": "Menyimpan…",
+  "当前模型已经启用，可以继续完成首次设置。":
+    "Model saat ini sudah aktif. Lanjutkan untuk menyelesaikan penyiapan.",
+  继续使用当前模型: "Lanjutkan dengan model saat ini",
   "你希望 MemHub 如何形成记忆？": "Bagaimana MemHub membuat memori?",
   "需要明确选择一种方式；之后仍可在设置中更改。":
     "Pilih satu opsi. Anda dapat mengubahnya nanti di Pengaturan.",
