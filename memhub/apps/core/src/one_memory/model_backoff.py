@@ -247,15 +247,17 @@ class ModelBackoff:
                 and self._clock() < self._until
             )
 
-    def allowance(self) -> int | None:
-        """How many model jobs may be claimed now: None for no limit.
+    def allowance(self, *, kind: str | None = None) -> int | None:
+        """How many matching provider jobs may be claimed now.
 
         0 while paused; once the pause is over, one probe at a time until it
-        reports or `PROBE_HOLD_SECONDS` pass.
+        reports or `PROBE_HOLD_SECONDS` pass. ``kind`` keeps a failed chat
+        model from pausing raw-only work that needs embeddings, while an
+        embedding outage still paces that work.
         """
         now = self._clock()
         with self._lock:
-            if self._failures == 0:
+            if self._failures == 0 or (kind is not None and kind not in self._failing):
                 return None
             if now < self._until or now < self._probe_until:
                 return 0

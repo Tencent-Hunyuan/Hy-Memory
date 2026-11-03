@@ -419,6 +419,15 @@ export function MemoryMap(props: Props) {
             )),
       ) ?? null)
     : null;
+  const projectedMemoryIds = useMemo(
+    () =>
+      new Set(
+        projection.nodes.flatMap((node) =>
+          node.memory_id ? [node.memory_id] : [],
+        ),
+      ),
+    [projection.nodes],
+  );
   const selectedSource =
     visibleGroupNode?.node_type === "source"
       ? sources.find(
@@ -436,9 +445,12 @@ export function MemoryMap(props: Props) {
     }
   }, [groupNode, visibleGroupNode]);
   const requestedId = selectedId ?? detail?.memory.memory_id ?? null;
-  const activeId = active.some((memory) => memory.memory_id === requestedId)
-    ? requestedId
-    : null;
+  const activeId =
+    requestedId &&
+    (active.some((memory) => memory.memory_id === requestedId) ||
+      projectedMemoryIds.has(requestedId))
+      ? requestedId
+      : null;
   const inspectorIdentity = activeId
     ? `memory:${activeId}`
     : selectedSource
@@ -448,7 +460,8 @@ export function MemoryMap(props: Props) {
   const visibleDetail =
     detail &&
     (!activeId || activeId === detail.memory.memory_id) &&
-    filtered.some((m) => m.memory_id === detail.memory.memory_id)
+    (filtered.some((m) => m.memory_id === detail.memory.memory_id) ||
+      projectedMemoryIds.has(detail.memory.memory_id))
       ? detail
       : null;
   const lastDetail = useRef(visibleDetail);
@@ -466,7 +479,8 @@ export function MemoryMap(props: Props) {
     props.detailLoad.status === "failed";
   const pick = useCallback(
     (memoryId: string, scroll = true) => {
-      if (!active.some((memory) => memory.memory_id === memoryId)) return;
+      const listed = active.some((memory) => memory.memory_id === memoryId);
+      if (!listed && !projectedMemoryIds.has(memoryId)) return;
       if (pendingPageOffset !== null && library?.failed && library.page)
         library.onPage(library.page.offset);
       setPendingSourceSelection(null);
@@ -475,7 +489,7 @@ export function MemoryMap(props: Props) {
       pageRetrySawLoading.current = false;
       setDetailResetRevision((current) => current + 1);
       scrollSelection.current = scroll;
-      if (!filtered.some((memory) => memory.memory_id === memoryId)) {
+      if (listed && !filtered.some((memory) => memory.memory_id === memoryId)) {
         setGroupKey("");
         setSearch("");
         setFilterNotice("已清除筛选，定位到关联记忆。");
@@ -485,7 +499,14 @@ export function MemoryMap(props: Props) {
       setInspectorOpen(true);
       onOpenMemory(memoryId);
     },
-    [active, filtered, library, onOpenMemory, pendingPageOffset],
+    [
+      active,
+      filtered,
+      library,
+      onOpenMemory,
+      pendingPageOffset,
+      projectedMemoryIds,
+    ],
   );
   useEffect(() => {
     if (
@@ -605,7 +626,8 @@ export function MemoryMap(props: Props) {
       return;
     if (
       requestedId &&
-      !active.some((memory) => memory.memory_id === requestedId)
+      !active.some((memory) => memory.memory_id === requestedId) &&
+      !projectedMemoryIds.has(requestedId)
     ) {
       clear();
       return;
@@ -623,6 +645,7 @@ export function MemoryMap(props: Props) {
     overlaysSuspended,
     library?.loading,
     pendingPageOffset,
+    projectedMemoryIds,
   ]);
   function closeInspector() {
     if (!compact) {
@@ -1359,7 +1382,13 @@ export function MemoryMap(props: Props) {
                 : selectedSource
                   ? text("记忆详情")
                   : visibleGroupNode
-                    ? text("关联节点")
+                    ? text(
+                        visibleGroupNode.node_type === "topic"
+                          ? "主题"
+                          : visibleGroupNode.node_type === "schema"
+                            ? "关系归纳"
+                            : "关联节点",
+                      )
                     : text("记忆详情")}
           </h2>
           {(activeId || visibleGroupNode) && (
@@ -1499,6 +1528,7 @@ export function MemoryMap(props: Props) {
               onDraft={props.onDraft}
               onSave={props.onSave}
               onDelete={props.onDelete}
+              onOpenMemory={pick}
               requestIds={props.requestIds}
               onClose={closeInspector}
             />

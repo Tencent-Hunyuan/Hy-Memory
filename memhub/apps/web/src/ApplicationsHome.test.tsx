@@ -944,6 +944,32 @@ it("shows a paused switch immediately even when task rows still say running", as
   expect(screen.queryByText("新的对话正在整理")).toBeNull();
 });
 
+it("shows lite raw ingestion as running even when model sedimentation is paused", async () => {
+  processing.mockResolvedValue({
+    running: 0,
+    pending: 10,
+    pipeline: { mode: "lite" },
+  });
+  sedimentation.mockResolvedValue({
+    enabled: false,
+    pending_retained: true,
+    imports_unaffected: true,
+  });
+
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+
+  expect(await screen.findAllByText("整理中")).toHaveLength(2);
+  expect(screen.getByText("新的对话正在整理")).toBeTruthy();
+  expect(screen.queryByText("已暂停")).toBeNull();
+});
+
 it("keeps the import-in-progress empty state stable without a progress link", async () => {
   summary.mockResolvedValue({
     memory_count: 0,

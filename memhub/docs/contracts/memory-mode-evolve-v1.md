@@ -356,6 +356,9 @@ The App's product rules are:
 - A new installation explicitly chooses lite or pro. Choosing lite persists
   the mode and completes onboarding without a generation model. Choosing pro
   opens model setup and completes onboarding only after activation succeeds.
+- Lite always ingests authorized imported and live conversations into L1 raw,
+  even when model sedimentation is paused. That pause controls generation-model
+  work in pro/ultra; it never turns raw conversation storage off.
 - Existing installations keep the default pro behaviour; an absent
   `memory_mode` is never inferred from model availability.
 - Ultra is enabled only from Settings. Its nightly schedule is on by default

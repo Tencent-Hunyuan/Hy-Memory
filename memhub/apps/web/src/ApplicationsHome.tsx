@@ -644,14 +644,17 @@ export function ApplicationsHome({
   const apps = imports.sources.filter(
     (s) => s.authorized || s.detected === true || s.location_state === "found",
   );
-  const stateLabel =
-    sedimentation?.enabled === true
+  const rawOnly = processing?.pipeline?.mode === "lite";
+  const stateLabel = rawOnly
+    ? t("apps.running")
+    : sedimentation?.enabled === true
       ? t("apps.running")
       : sedimentation?.enabled === false
         ? t("apps.paused")
         : t("apps.checkingStatus");
-  const stateDetail =
-    sedimentation?.enabled === false
+  const stateDetail = rawOnly
+    ? t("apps.organizingNew")
+    : sedimentation?.enabled === false
       ? t("apps.stoppedNew")
       : sedimentation?.enabled === true
         ? t("apps.organizingNew")

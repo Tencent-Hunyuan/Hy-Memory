@@ -682,7 +682,7 @@ export function MemorySpace({
     setDetail(null);
     setSelectedRaw(null);
     if (lite) {
-      const record = rawRecords.current.get(memoryId);
+      let record = rawRecords.current.get(memoryId);
       if (!record) {
         setDetailLoad({
           memoryId,
@@ -690,6 +690,38 @@ export function MemorySpace({
           error: t("sdk.raw.loadFailed"),
         });
         return;
+      }
+      if ("kind" in record) {
+        setDetailLoad({ memoryId, status: "loading" });
+        try {
+          let offset = 0;
+          while (true) {
+            const page = await getSdkRaw({
+              source: record.source || undefined,
+              sessionId: record.session_id || undefined,
+              offset,
+              limit: 500,
+            });
+            const full = page.items.find((item) => item.raw_id === memoryId);
+            if (full) {
+              record = full;
+              rawRecords.current.set(memoryId, full);
+              break;
+            }
+            offset += page.items.length;
+            if (!page.items.length || offset >= page.total)
+              throw new Error("raw_not_found");
+          }
+        } catch {
+          if (epoch === detailEpoch.current)
+            setDetailLoad({
+              memoryId,
+              status: "failed",
+              error: t("sdk.raw.loadFailed"),
+            });
+          return;
+        }
+        if (epoch !== detailEpoch.current) return;
       }
       setSelectedRaw(record);
       setDetail(rawDetail(record));
@@ -831,9 +863,14 @@ export function MemorySpace({
       </div>
       <header className="memory-instrument-header">
         <div>
-          <h1 id="memory-title">
-            {simplified ? t("memory:记忆") : t("memory:记忆空间")}
-          </h1>
+          <div className="memory-title-line">
+            <h1 id="memory-title">
+              {simplified ? t("memory:记忆") : t("memory:记忆空间")}
+            </h1>
+            {simplified && pipelineMode ? (
+              <span className="memory-mode-label">{pipelineMode}</span>
+            ) : null}
+          </div>
           <span className="memory-loaded-count">
             {simplified && !management
               ? pipelineMode === null
@@ -952,19 +989,6 @@ export function MemorySpace({
           </div>
         )}
       </header>
-      {simplified && pipelineMode ? (
-        <p className="memory-mode-notice" role="status">
-          {lite
-            ? t(
-                "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。",
-              )
-            : pipelineMode === "ultra"
-              ? t(
-                  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。",
-                )
-              : t("memory:当前使用智能记忆。新对话会由模型整理为高级记忆。")}
-        </p>
-      ) : null}
       {processing && (!simplified || managementOpen) ? (
         <details className="memory-processing-details">
           <summary>

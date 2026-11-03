@@ -149,6 +149,77 @@ it("OBS-22: the graph inspector has no editing entry and never says changes cann
   expect(screen.queryByText(/暂不能保存更改/)).toBeNull();
 });
 
+it("replaces a topic detail with an off-page graph memory detail", async () => {
+  const onOpen = vi.fn();
+  const topicGraph = {
+    total_memories: 2,
+    projected_memories: 2,
+    hy_graph_available: true,
+    nodes: [
+      {
+        node_id: "memory:m0",
+        node_type: "memory",
+        memory_id: "m0",
+        label: "第一条",
+      },
+      {
+        node_id: "memory:outside",
+        node_type: "memory",
+        memory_id: "outside",
+        label: "图中但不在当前页的记忆",
+      },
+      {
+        node_id: "topic:git",
+        node_type: "topic",
+        memory_id: null,
+        label: "git",
+      },
+    ],
+    edges: [
+      {
+        edge_id: "topic-m0",
+        source_node_id: "topic:git",
+        target_node_id: "memory:m0",
+        relation: "tagged_with",
+        origin: "shared_tag",
+      },
+      {
+        edge_id: "topic-outside",
+        source_node_id: "topic:git",
+        target_node_id: "memory:outside",
+        relation: "tagged_with",
+        origin: "shared_tag",
+      },
+    ],
+  } as MemoryGraphResponse;
+  render(
+    <Host
+      simplified
+      items={[memories[0]]}
+      graphValue={topicGraph}
+      onOpenSpy={onOpen}
+      libraryView={pagedView({
+        items: [memories[0]],
+        total: 2,
+        offset: 0,
+        limit: 1,
+        source_ids_by_memory: { m0: ["codex"] },
+      })}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 git" }));
+  expect(screen.getByText("对应记忆")).toBeTruthy();
+  expect(screen.queryByText("两跳")).toBeNull();
+  await userEvent.click(
+    screen.getByRole("button", {
+      name: "图中选择 图中但不在当前页的记忆",
+    }),
+  );
+
+  expect(onOpen).toHaveBeenLastCalledWith("outside");
+});
+
 it("OBS-19: Enter in the memory filter submits it; submitting it again re-reads", async () => {
   const onRetry = vi.fn();
   const onQuery = vi.fn();
@@ -391,6 +462,7 @@ function Host({
   deferMemoryId,
   failMemoryId,
   graphValue = graph,
+  onOpenSpy,
   onViewHistory,
   onConfigureModel = () => {},
   libraryView,
@@ -408,6 +480,7 @@ function Host({
   deferMemoryId?: string;
   failMemoryId?: string;
   graphValue?: MemoryGraphResponse;
+  onOpenSpy?(memoryId: string): void;
   onViewHistory?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
@@ -445,6 +518,7 @@ function Host({
       streaming={null}
       requestIds={{ current: new Map() }}
       onOpenMemory={(id) => {
+        onOpenSpy?.(id);
         if (failMemoryId && id === failMemoryId) {
           setDetail(null);
           setDetailLoad({ memoryId: id, status: "failed" });

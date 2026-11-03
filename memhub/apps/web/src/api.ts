@@ -793,17 +793,19 @@ function isMemoryNotFound(reason: unknown): boolean {
 
 export async function getSdkRaw({
   source,
+  sessionId,
   offset = 0,
   limit = 100,
   signal,
 }: {
   source?: string;
+  sessionId?: string;
   offset?: number;
   limit?: number;
   signal?: AbortSignal;
 } = {}): Promise<SdkRawPage> {
   const response = await client.get<SdkRawPage>("/api/v2/raw", {
-    params: { source, offset, limit },
+    params: { source, session_id: sessionId, offset, limit },
     signal,
   });
   return response.data;
