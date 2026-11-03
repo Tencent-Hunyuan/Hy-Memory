@@ -25,7 +25,7 @@ from one_memory.hy_runtime_config import HY_MEMORY_READER
 from one_memory.hy_sdk_runtime import SdkClientHandle, sdk_relevance_floor
 from one_memory.hy_sdk_types import HySdkError, parse_sdk_search
 from one_memory.memory_queue import ExtractionWindowPreset, QueueDepths
-from one_memory.memory_server.durable_queue import DurableWriteQueue
+from one_memory.memory_server.durable_queue import WAITING_FOR_MODEL, DurableWriteQueue
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.semantic_deadline import SemanticMemoryHit
 
@@ -309,7 +309,10 @@ class SdkMemoryRuntime:
         return []
 
     async def resume_allowed(self) -> None:
-        await asyncio.to_thread(self.write_queue.readmit_parked)
+        await asyncio.to_thread(
+            self.write_queue.readmit_parked,
+            states=(WAITING_FOR_MODEL,),
+        )
 
     def accepted_backfill_status(self) -> None:
         return None

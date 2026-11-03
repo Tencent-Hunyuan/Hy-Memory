@@ -46,6 +46,7 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 
 const REQUEST_ID = "11111111-2222-4333-8444-555555555555";
+const OLD_REQUEST_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const addition: MemoryAddReceipt = {
   evidence_id: "evidence-1",
   text: "项目周会不排在周五。",
@@ -122,13 +123,14 @@ it("explains source verification failure without retrying or claiming success", 
   expect(screen.queryByRole("button", { name: "重新整理" })).toBeNull();
 });
 
-function page() {
+function page(rawOnly = false) {
   const onSaved = vi.fn(),
     onOpenMemory = vi.fn(),
     onConfigureModel = vi.fn(),
     onPendingChange = vi.fn();
   const view = render(
     <MemoryAddComposer
+      rawOnly={rawOnly}
       {...{ onSaved, onOpenMemory, onConfigureModel, onPendingChange }}
     />,
   );
@@ -196,6 +198,114 @@ it("saves from an empty library with the linked-app scope by default", async () 
   expect(callbacks.onSaved).toHaveBeenCalledOnce();
   expect(screen.queryByRole("dialog", { name: "添加记忆" })).toBeNull();
   expect(screen.queryByRole("button", { name: "查看记忆" })).toBeNull();
+});
+
+it("saves a lite manual addition as original content without model UI", async () => {
+  api.addMemory.mockResolvedValue({
+    ...addition,
+    state: "no_memories",
+  });
+  const callbacks = page(true);
+
+  await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
+  expect(screen.getByRole("dialog", { name: "手动添加" })).toBeTruthy();
+  expect(screen.queryByText(/整理模型：/)).toBeNull();
+  expect(api.getModelProfiles).not.toHaveBeenCalled();
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "记下这件事" }),
+    addition.text,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(await screen.findByText("已保存原文")).toBeTruthy();
+  expect(callbacks.onSaved).toHaveBeenCalledOnce();
+  expect(
+    callbacks.onPendingChange.mock.calls.some(([value]) => value === null),
+  ).toBe(true);
+  expect(screen.queryByRole("dialog", { name: "手动添加" })).toBeNull();
+});
+
+it("refreshes the lite raw page when an asynchronous manual save completes", async () => {
+  api.addMemory.mockResolvedValue({
+    ...addition,
+    state: "running",
+  });
+  api.getMemoryAddStatus.mockResolvedValue({
+    ...addition,
+    state: "no_memories",
+  });
+  const callbacks = page(true);
+
+  await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
+  await userEvent.type(screen.getByRole("textbox"), addition.text);
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => expect(callbacks.onSaved).toHaveBeenCalledTimes(2), {
+    timeout: 2_500,
+  });
+  expect(screen.getByText("已保存原文")).toBeTruthy();
+  expect(callbacks.onPendingChange).toHaveBeenLastCalledWith(null);
+});
+
+it("does not treat an older completed addition as a newly saved raw turn", async () => {
+  localStorage.setItem(
+    RECENT_ADDITIONS_KEY,
+    JSON.stringify([REQUEST_ID, OLD_REQUEST_ID]),
+  );
+  let currentState: MemoryAddReceipt["state"] = "running";
+  const calls = new Map<string, number>();
+  api.getMemoryAddStatus.mockImplementation(async (requestId: string) => {
+    calls.set(requestId, (calls.get(requestId) ?? 0) + 1);
+    return requestId === OLD_REQUEST_ID
+      ? {
+          ...addition,
+          evidence_id: "old-evidence",
+          state: "no_memories",
+        }
+      : { ...addition, state: currentState };
+  });
+  const callbacks = page(true);
+
+  await waitFor(
+    () => expect(calls.get(REQUEST_ID) ?? 0).toBeGreaterThanOrEqual(2),
+    { timeout: 2_500 },
+  );
+  expect(callbacks.onSaved).not.toHaveBeenCalled();
+
+  currentState = "no_memories";
+  await waitFor(() => expect(callbacks.onSaved).toHaveBeenCalledOnce(), {
+    timeout: 2_500,
+  });
+});
+
+it("keeps a failed lite raw write visible after the composer closes", async () => {
+  api.addMemory.mockResolvedValue({
+    ...addition,
+    state: "running",
+  });
+  api.getMemoryAddStatus.mockResolvedValue({
+    ...addition,
+    state: "failed",
+  });
+  const callbacks = page(true);
+
+  await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
+  await userEvent.type(screen.getByRole("textbox"), addition.text);
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+  expect(screen.queryByText("已保存原文")).toBeNull();
+
+  await waitFor(
+    () =>
+      expect(callbacks.onPendingChange).toHaveBeenLastCalledWith({
+        evidenceId: addition.evidence_id,
+        text: addition.text,
+        state: "failed",
+      }),
+    { timeout: 2_500 },
+  );
+  await waitFor(() =>
+    expect(screen.getByText("原话已保存，整理未完成")).toBeTruthy(),
+  );
 });
 
 it("preserves draft and request identity after an uncertain save", async () => {

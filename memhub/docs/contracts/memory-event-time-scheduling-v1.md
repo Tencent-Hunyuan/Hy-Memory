@@ -86,7 +86,9 @@ batch are not held.
 
 ## Pauses and failures
 
-- Global sedimentation off: imports and enqueue continue; no job is claimed.
+- Global sedimentation off: imports and enqueue continue. In pro/ultra no job
+  is claimed because it would call the generation model; in lite the same jobs
+  continue through raw-only ingestion and make no generation-model call.
 - Harness disabled/revoked: its jobs are parked/excluded from the active
   timeline and do not block other Harnesses.
 - Re-enable: old jobs re-enter by their original `event_at`.

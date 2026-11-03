@@ -184,6 +184,17 @@ def test_a_working_embedding_endpoint_does_not_clear_a_broken_chat_model() -> No
     assert backoff.paused()
 
 
+def test_claim_allowance_can_pace_embedding_without_pausing_lite_for_chat() -> None:
+    backoff = ModelBackoff(clock=_Clock())
+    backoff.record_failure("model_not_found", "p:1", "chat")
+    assert backoff.allowance(kind="embedding") is None
+    assert backoff.allowance(kind="chat") == 0
+
+    backoff.reset()
+    backoff.record_failure("embedding_service_failed", "p:1", "embedding")
+    assert backoff.allowance(kind="embedding") == 0
+
+
 def test_an_unreachable_provider_is_paused_like_a_refusing_one() -> None:
     clock = _Clock()
     backoff = ModelBackoff(clock=clock)
@@ -310,7 +321,7 @@ class _FakeSdk:
         self.fail_with: str | None = None
 
     async def process_sdk_job(self, records, *, request_id, before_hy_invocation):
-        await before_hy_invocation()
+        await before_hy_invocation(True)
         self.request_ids.append(request_id)
         if request_id in self.outcomes:
             if self.outcomes[request_id] == "failed":

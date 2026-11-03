@@ -296,11 +296,7 @@ from one_memory.sdk_search_options import (
     SearchLane,
     split_csv,
 )
-from one_memory.sdk_write_processor import (
-    SdkWriteCoordinator,
-    sdk_write_in_flight,
-    sedimentation_allows,
-)
+from one_memory.sdk_write_processor import SdkWriteCoordinator, sdk_write_in_flight
 from one_memory.secrets import (
     KeyringSecretStore,
     SecretStore,
@@ -1501,24 +1497,15 @@ def create_app(
 
             async def admit_hy_invocation(
                 source_id: str,
+                requires_generation: bool,
                 mark_invoked: Callable[[], Awaitable[bool]],
             ) -> bool:
-                """Serialize pause with the last boundary before an HY call."""
-                source_lock = app.state.source_permission_locks.setdefault(
-                    source_id, asyncio.Lock()
+                return await _admit_pipeline_invocation(
+                    app,
+                    source_id,
+                    requires_generation,
+                    mark_invoked,
                 )
-                async with app.state.sedimentation_lock, source_lock:
-                    if not sedimentation_allows(
-                        _memory_mode(app), _config_store(app).sedimentation_enabled()
-                    ):
-                        raise RuntimeError("model_sedimentation_disabled")
-                    if not _embedding_writes_open(app):
-                        # Re-checked at the last boundary: a switch that began
-                        # after the claim keeps this job queued, unsent.
-                        raise RuntimeError("embedding_switch_in_progress")
-                    if not _source_writes_on(app, source_id):
-                        raise RuntimeError("model_content_source_disabled")
-                    return await mark_invoked()
 
             memory_write_drain = DurableWriteDrain(
                 memory_write_queue,
@@ -1567,7 +1554,7 @@ def create_app(
                 # therefore skipped on every drain tick — the note stayed
                 # "saved, waiting" with no task behind it, forever.
                 source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
-                model_claim_allowance=app.state.model_backoff.allowance,
+                model_claim_allowance=lambda: _model_claim_allowance(app),
             )
             app.state.memory_write_drain = memory_write_drain
 
@@ -1980,6 +1967,12 @@ def create_app(
                         await step("embedding_spaces", resume_embedding_spaces)
                         await step("graph_backfill", resume_graph_backfill)
                     await step("write_drain", start_write_drain)
+                    if sdk and _memory_mode(app) == "lite":
+                        # A previous pro run may have parked jobs while model
+                        # sedimentation was off. Lite needs no generation model:
+                        # readmit them in the background so startup can finish
+                        # while raw conversations begin appearing.
+                        _resume_sedimentation(app)
                     if sdk:
                         await step("evolve_schedule", start_evolve_schedule)
                     else:
@@ -4803,6 +4796,8 @@ def create_app(
                     outcome="succeeded",
                     details={"mode": effective, "previous_mode": previous_effective},
                 )
+        if effective == "lite" and effective != previous_effective:
+            _resume_sedimentation(app)
         return MemoryModeChange(
             **_memory_mode_state(app).model_dump(),
             previous_mode=previous_effective,
@@ -5892,10 +5887,19 @@ def _resume_sedimentation(app: FastAPI) -> None:
     """
     running = cast("asyncio.Task[None] | None", getattr(app.state, "sedimentation_resume", None))
     if running is not None and not running.done():
+        app.state.sedimentation_resume_again = True
         return
+
+    async def resume_until_stable() -> None:
+        while True:
+            app.state.sedimentation_resume_again = False
+            await _sdk_memory_runtime(app).resume_allowed()
+            if not app.state.sedimentation_resume_again:
+                return
+
     app.state.sedimentation_resume = watched_task(
         asyncio.get_running_loop(),
-        lambda: _sdk_memory_runtime(app).resume_allowed(),
+        resume_until_stable,
         component="memory.sedimentation",
         name="one-memory-sedimentation-resume",
     )
@@ -6694,13 +6698,47 @@ def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
     """
 
     return (
-        sedimentation_allows(_memory_mode(app), _config_store(app).sedimentation_enabled())
+        _pipeline_writes_enabled(app)
         and _embedding_writes_open(app)
         and (_memory_mode(app) == "lite" or _model_profile_store(app).active_identity() is not None)
         and _history_import_gate_released(app)
         and _source_writes_on(app, source_id)
         and not _user_evolving(app, split_lane(source_id)[0])
     )
+
+
+async def _admit_pipeline_invocation(
+    app: FastAPI,
+    source_id: str,
+    requires_generation: bool,
+    mark_invoked: Callable[[], Awaitable[bool]],
+) -> bool:
+    """Serialize the final source and pipeline checks with the durable mark."""
+
+    source_lock = app.state.source_permission_locks.setdefault(source_id, asyncio.Lock())
+    async with app.state.sedimentation_lock, source_lock:
+        if requires_generation and not _config_store(app).sedimentation_enabled():
+            raise RuntimeError("model_sedimentation_disabled")
+        if not _embedding_writes_open(app):
+            raise RuntimeError("embedding_switch_in_progress")
+        if not _source_writes_on(app, source_id):
+            raise RuntimeError("model_content_source_disabled")
+        return await mark_invoked()
+
+
+def _pipeline_writes_enabled(app: FastAPI) -> bool:
+    """Raw-only lite writes run even when model sedimentation is paused."""
+
+    return _memory_mode(app) == "lite" or _config_store(app).sedimentation_enabled()
+
+
+def _model_claim_allowance(app: FastAPI) -> int | None:
+    """A failed generation model never pauses raw-only lite ingestion."""
+
+    backoff = cast(ModelBackoff, app.state.model_backoff)
+    if _memory_mode(app) == "lite":
+        return backoff.allowance(kind="embedding")
+    return backoff.allowance()
 
 
 def _user_evolving(app: FastAPI, user_id: str) -> bool:

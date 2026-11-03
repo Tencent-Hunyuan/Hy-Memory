@@ -236,6 +236,7 @@
   font-size: 18px;
   line-height: 31px;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .selected-memory-detail {
   display: flex;

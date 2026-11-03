@@ -1613,7 +1613,7 @@ def test_a_completed_sdk_write_does_not_touch_retired_evidence(store) -> None:
     class Supervisor:
         async def process_sdk_job(self, records, *, request_id, before_hy_invocation):
             del records, request_id
-            await before_hy_invocation()
+            await before_hy_invocation(True)
             return SimpleNamespace(raw_ids=("raw-1",), memory_ids=("m-1",))
 
     asyncio.run(

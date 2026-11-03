@@ -298,7 +298,7 @@ def test_hook_job_completes_after_file_identity_adoption(tmp_path) -> None:
                     assert current is not None
                     assert ingest_journal.matches_current(connection, current)
                 connection.rollback()
-            await before_hy_invocation()
+            await before_hy_invocation(True)
             return SdkWriteReceipt()
 
     drain = DurableWriteDrain(queue, execute=lambda _job: None)

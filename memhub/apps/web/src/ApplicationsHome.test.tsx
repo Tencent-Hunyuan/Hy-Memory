@@ -1198,6 +1198,48 @@ it("shows a paused switch immediately even when task rows still say running", as
   expect(screen.queryByText("新的对话正在整理")).toBeNull();
 });
 
+it("shows lite raw ingestion as running even when model sedimentation is paused", async () => {
+  vi.mocked(api.homeProjectionUnsupported).mockReturnValue(false);
+  projection.mockResolvedValue({
+    projection_version: 1,
+    user_id: "local",
+    effective_mode: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    visible_count: 0,
+    display_state: "empty",
+    latest: null,
+    observed_at: "2026-11-04T00:00:00Z",
+  });
+  processing.mockResolvedValue({
+    running: 0,
+    pending: 10,
+    pipeline: { mode: "lite" },
+  });
+  sedimentation.mockResolvedValue({
+    enabled: false,
+    pending_retained: true,
+    imports_unaffected: true,
+  });
+
+  render(
+    <ApplicationsHome
+      imports={imports}
+      onManage={() => {}}
+      onMemories={() => {}}
+      onSettings={() => {}}
+    />,
+  );
+
+  expect(await screen.findAllByText("正在保存原始对话")).toHaveLength(2);
+  expect(screen.getByText("原始对话持续保存，不需要生成模型")).toBeTruthy();
+  expect(screen.queryByText("已暂停")).toBeNull();
+});
+
 it("keeps the import-in-progress empty state stable without a progress link", async () => {
   summary.mockResolvedValue({
     memory_count: 0,

@@ -23,11 +23,12 @@ from one_memory.hy_sdk_runtime import (
     SdkClientHandle,
     builtin_retrieval_snapshot,
     language_kwargs,
+    retrieval_view,
 )
 from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_features import FeatureOverrides
-from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore
+from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 PRODUCT_AGENT_ID = "all-apps"
@@ -37,11 +38,6 @@ PRODUCT_AGENT_ID = "all-apps"
 #: thread; it must not be re-run beside itself (`recover_unknown`).
 _IN_FLIGHT: set[str] = set()
 _IN_FLIGHT_LOCK = threading.Lock()
-
-
-def sedimentation_allows(mode: str, enabled: bool) -> bool:
-    """Lite stores raw turns even when model-based sedimentation is paused."""
-    return mode == "lite" or enabled
 
 
 def sdk_write_in_flight(request_id: str) -> bool:
@@ -117,7 +113,7 @@ class SdkWriteProcessor:
         records: tuple[EvidenceRecord, ...],
         *,
         request_id: str,
-        before_hy_invocation: Callable[[], Awaitable[None]],
+        before_hy_invocation: Callable[[bool], Awaitable[None]],
     ) -> SdkWriteReceipt:
         if not records:
             raise RuntimeError("hy_memory_task_without_inputs")
@@ -144,7 +140,7 @@ class SdkWriteProcessor:
 
         if extracted and not self._lite:
             contents = [sanitize_model_input(record.verbatim) for record in records]
-            await before_hy_invocation()
+            await before_hy_invocation(True)
             result = await _write(
                 request_id,
                 client.add_extracted,
@@ -172,7 +168,7 @@ class SdkWriteProcessor:
             ]
             if not messages:
                 raise RuntimeError("hy_memory_task_without_inputs")
-            await before_hy_invocation()
+            await before_hy_invocation(not self._lite)
             result = await _write(
                 request_id,
                 client.add,
@@ -288,10 +284,8 @@ class SdkWriteCoordinator:
         records: tuple[EvidenceRecord, ...],
         *,
         request_id: str,
-        before_hy_invocation: Callable[[], Awaitable[None]],
+        before_hy_invocation: Callable[[bool], Awaitable[None]],
     ) -> SdkWriteReceipt:
-        if not sedimentation_allows(self.memory_mode(), self.sedimentation_enabled()):
-            raise RuntimeError("model_sedimentation_disabled")
         if not self.writes_open():
             # An embedding switch paused writes: the drain puts the job back.
             raise RuntimeError("embedding_switch_in_progress")
@@ -302,9 +296,8 @@ class SdkWriteCoordinator:
         self._writing[user_id] = self._writing.get(user_id, 0) + 1
         try:
             async with self._active_handle() as handle:
-                return await SdkWriteProcessor(
-                    handle, lite=getattr(handle, "mode", None) == "lite"
-                ).process_sdk_job(
+                lite = getattr(handle, "mode", None) == "lite"
+                return await SdkWriteProcessor(handle, lite=lite).process_sdk_job(
                     records,
                     request_id=request_id,
                     before_hy_invocation=before_hy_invocation,
@@ -471,24 +464,27 @@ class SdkWriteCoordinator:
             return (builtin.profile_id, builtin.revision), builtin, None, space
         identity = (space.profile_id, space.profile_revision)
         profile = self.profiles.snapshot(*identity)
-        try:
-            secret = self.profiles.resolve_snapshot_secret(*identity, self.secrets)
-        except SecretStoreUnavailableError:
-            raise RuntimeError("secure_storage_unavailable") from None
-        if profile.has_api_key and secret is None:
-            raise RuntimeError("model_secret_unavailable")
-        return identity, profile, secret, space
+        view = retrieval_view(profile)
+        secret: str | None = None
+        if view.embedding_provider_kind is ProviderKind.OPENAI_COMPATIBLE:
+            try:
+                secret = self.profiles.resolve_snapshot_secret(*identity, self.secrets)
+            except SecretStoreUnavailableError:
+                raise RuntimeError("secure_storage_unavailable") from None
+            if secret is None:
+                raise RuntimeError("model_secret_unavailable")
+        return identity, view, secret, space
 
     def _read_active_credentials(
         self,
         mode: str = "pro",
     ) -> tuple[tuple[str, int], ModelProfileSnapshot, str | None, EmbeddingSpace | None]:
+        if mode == "lite":
+            # A lite write is an embedding-only view of the live space. Never
+            # resolve or inject the generation model endpoint or its secret.
+            return self._lite_credentials()
         identity = self.profiles.active_identity()
         if identity is None:
-            if mode == "lite":
-                # lite stores raw turns with one embedding and calls no model:
-                # the live space's own, so they land where reads look.
-                return self._lite_credentials()
             raise RuntimeError("model_profile_not_active")
         profile = self.profiles.snapshot(*identity)
         space = self._live_space() if self.spaces is not None else None
