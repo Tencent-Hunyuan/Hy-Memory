@@ -35,6 +35,7 @@ import { OnboardingFlow } from "./OnboardingFlow";
 import { R6Button, R6LocalStorage } from "./R6Controls";
 import { R6Settings } from "./R6Settings";
 import { prefetchDataRuntime } from "./runtime-state";
+import { EmbeddingSwitchProvider } from "./use-embedding-switch";
 import "./styles.css";
 import "./core-visual.css";
 import "./r6-shell.css";
@@ -48,10 +49,12 @@ const rendererStartedAt = Date.now();
 
 export function App() {
   return (
-    <DesktopFrame>
-      <AppContent />
-      <DebugLogPanel />
-    </DesktopFrame>
+    <EmbeddingSwitchProvider>
+      <DesktopFrame>
+        <AppContent />
+        <DebugLogPanel />
+      </DesktopFrame>
+    </EmbeddingSwitchProvider>
   );
 }
 

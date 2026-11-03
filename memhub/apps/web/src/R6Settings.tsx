@@ -20,6 +20,7 @@ import {
 } from "./ModelSettings";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
+import { R6StateRecovery } from "./R6StateRecovery";
 import {
   refreshLoginPreference,
   setLoginPreference,
@@ -446,18 +447,14 @@ export function R6Settings({
               </div>
             </div>
             {modelError && (
-              <div className="r6-state-recovery">
-                <p role="alert" className="r6-settings-error">
-                  {text(
-                    profiles === null
-                      ? "模型状态未能读取，请重试。"
-                      : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
-                  )}
-                </p>
-                <R6Button onClick={() => setModelVersion((value) => value + 1)}>
-                  {t("startupRetry")}
-                </R6Button>
-              </div>
+              <R6StateRecovery
+                message={text(
+                  profiles === null
+                    ? "模型状态未能读取，请重试。"
+                    : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
+                )}
+                onRetry={() => setModelVersion((value) => value + 1)}
+              />
             )}
             {configurationRefusal && (
               <p role="alert" className="r6-settings-error">

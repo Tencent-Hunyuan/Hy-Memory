@@ -44,6 +44,22 @@ const models = {
   activate: vi.fn(),
 };
 vi.mock("./use-model-profiles", () => ({ useModelProfiles: () => models }));
+vi.mock("./use-embedding-switch", () => ({
+  useEmbeddingSwitch: () => ({
+    current: null,
+    plan: null,
+    busy: null,
+    errorCode: null,
+    refreshFailed: false,
+    supported: false,
+    planActivation: vi.fn(),
+    startPlannedSwitch: vi.fn(),
+    cancelCurrentSwitch: vi.fn(),
+    shouldUseLegacyActivation: () => true,
+    clearPlan: vi.fn(),
+    clearError: vi.fn(),
+  }),
+}));
 const source: SourceResponse = {
   source_id: "cursor",
   display_name: "Cursor",

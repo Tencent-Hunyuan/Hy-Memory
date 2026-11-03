@@ -16,6 +16,12 @@ const INTENTIONALLY_EMPTY: Partial<Record<string, readonly string[]>> = {
   es: ["apps.unit"],
 };
 
+/** Locale-independent interpolation-only values that cannot be translated. */
+const ENGLISH_EQUIVALENT_ALLOWED = new Set<MessageKey>([
+  "embeddingSwitch.impact.memoryCount",
+  "embeddingSwitch.rollback.reason",
+]);
+
 const keys = Object.keys(chineseMessages) as MessageKey[];
 
 describe.each(SUPPORTED_LOCALES)("%s catalog", (locale) => {
@@ -58,6 +64,41 @@ describe.each(SUPPORTED_LOCALES)("%s catalog", (locale) => {
 
   it("translates through the shared translator", () => {
     expect(translate(locale, "settings")).toBe(catalog.settings);
+  });
+});
+
+describe("embedding switch catalog", () => {
+  const embeddingKeys = keys.filter((key) =>
+    key.startsWith("embeddingSwitch."),
+  );
+
+  it("is complete in all 11 locales", () => {
+    expect(embeddingKeys.length).toBeGreaterThan(0);
+    for (const locale of SUPPORTED_LOCALES) {
+      for (const key of embeddingKeys)
+        expect(
+          guiMessages[locale][key]?.trim(),
+          `${locale} ${key}`,
+        ).toBeTruthy();
+    }
+  });
+
+  it.each(["en", "es"] as const)("%s has no Chinese leakage", (locale) => {
+    for (const key of embeddingKeys)
+      expect(guiMessages[locale][key], key).not.toMatch(/[一-鿿]/);
+  });
+
+  it("does not silently retain English fallback copy", () => {
+    const untranslated: string[] = [];
+    for (const locale of SUPPORTED_LOCALES) {
+      if (locale === "en") continue;
+      for (const key of embeddingKeys) {
+        if (ENGLISH_EQUIVALENT_ALLOWED.has(key)) continue;
+        if (guiMessages[locale][key] === guiMessages.en[key])
+          untranslated.push(`${locale} ${key}`);
+      }
+    }
+    expect(untranslated).toEqual([]);
   });
 });
 

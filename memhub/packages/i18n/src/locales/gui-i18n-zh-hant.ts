@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchTraditionalChineseMessages } from "../gui-i18n-embedding-switch.js";
 import { modeTraditionalChineseMessages } from "../gui-i18n-mode.js";
 
 /** Traditional Chinese (zh-Hant, Taiwan usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const traditionalChineseMessages: Record<MessageKey, string> = {
   ...modeTraditionalChineseMessages,
+  ...embeddingSwitchTraditionalChineseMessages,
   "connectionFallback.title": "連線其他工具",
   "connectionFallback.desktopOnly": "本機配對僅在桌面 App 中可用。",
   "connectionFallback.description":

@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchRussianMessages } from "../gui-i18n-embedding-switch.js";
 import { modeRussianMessages } from "../gui-i18n-mode.js";
 
 /** Russian (ru) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const russianMessages: Record<MessageKey, string> = {
   ...modeRussianMessages,
+  ...embeddingSwitchRussianMessages,
   "connectionFallback.title": "Подключить другие инструменты",
   "connectionFallback.desktopOnly":
     "Локальное сопряжение доступно только в настольном приложении.",

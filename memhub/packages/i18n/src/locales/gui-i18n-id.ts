@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchIndonesianMessages } from "../gui-i18n-embedding-switch.js";
 import { modeIndonesianMessages } from "../gui-i18n-mode.js";
 
 /** Indonesian (id, Anda) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const indonesianMessages: Record<MessageKey, string> = {
   ...modeIndonesianMessages,
+  ...embeddingSwitchIndonesianMessages,
   "connectionFallback.title": "Hubungkan alat lain",
   "connectionFallback.desktopOnly":
     "Pemasangan lokal hanya tersedia di aplikasi desktop.",

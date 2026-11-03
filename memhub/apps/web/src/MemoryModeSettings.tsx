@@ -19,6 +19,7 @@ import {
 } from "./api";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
+import { R6StateRecovery } from "./R6StateRecovery";
 
 const MODE_COPY: Record<
   MemoryPipelineMode,
@@ -137,7 +138,7 @@ export function MemoryModeSettings({
   onConfigureModel(message?: string): void;
   onModeChange?(mode: MemoryPipelineMode): void;
 }) {
-  const { t, text, locale } = useOnboardingTranslation();
+  const { text, locale } = useOnboardingTranslation();
   const id = useId();
   const [state, setState] = useState<MemoryModeState | null>(null);
   const [schedule, setScheduleState] = useState<EvolveSchedule | null>(null);
@@ -424,16 +425,16 @@ export function MemoryModeSettings({
         </p>
       ) : null}
       {error && !pendingMode ? (
-        <div className="r6-state-recovery">
+        readFailed ? (
+          <R6StateRecovery
+            message={text(error)}
+            onRetry={() => void refresh()}
+          />
+        ) : (
           <p className="r6-settings-error" role="alert">
             {text(error)}
           </p>
-          {readFailed ? (
-            <R6Button onClick={() => void refresh()}>
-              {t("startupRetry")}
-            </R6Button>
-          ) : null}
-        </div>
+        )
       ) : null}
 
       {state?.mode === "ultra" && schedule ? (

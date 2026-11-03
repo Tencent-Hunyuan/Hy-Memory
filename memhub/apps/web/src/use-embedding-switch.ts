@@ -3,7 +3,16 @@ import type {
   EmbeddingSwitchJob,
   EmbeddingSwitchPlan,
 } from "@one-memory/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  createElement,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   cancelEmbeddingSwitch,
   embeddingSwitchRefusal,
@@ -47,7 +56,7 @@ async function readCurrentSequenced(): Promise<SequencedCurrent> {
  * Reusable switch controller. It owns only transport-backed switch state;
  * profile activation and product UI remain outside this module.
  */
-export function useEmbeddingSwitch() {
+export function useEmbeddingSwitchController() {
   const [current, setCurrent] = useState<EmbeddingSwitchCurrent | null>(null);
   const [plan, setPlan] = useState<EmbeddingSwitchPlan | null>(null);
   const [busy, setBusy] = useState<EmbeddingSwitchBusy>(null);
@@ -264,4 +273,27 @@ export function useEmbeddingSwitch() {
     clearPlan: () => setPlan(null),
     clearError: () => setErrorCode(null),
   };
+}
+
+export type EmbeddingSwitchController = ReturnType<
+  typeof useEmbeddingSwitchController
+>;
+
+const EmbeddingSwitchContext = createContext<EmbeddingSwitchController | null>(
+  null,
+);
+
+export function EmbeddingSwitchProvider({ children }: { children: ReactNode }) {
+  const controller = useEmbeddingSwitchController();
+  return createElement(
+    EmbeddingSwitchContext.Provider,
+    { value: controller },
+    children,
+  );
+}
+
+export function useEmbeddingSwitch(): EmbeddingSwitchController {
+  const controller = useContext(EmbeddingSwitchContext);
+  if (!controller) throw new Error("embedding_switch_provider_missing");
+  return controller;
 }

@@ -27,6 +27,7 @@ import {
   EmbeddingSwitchConfirmDialog,
   EmbeddingSwitchGlobalStatus,
 } from "./EmbeddingSwitchExperience";
+import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 
 const NOW = "2026-11-03T09:00:00Z";
 const space = (id: string | null, model: string) => ({
@@ -101,7 +102,57 @@ const job: EmbeddingSwitchJob = {
 afterEach(() => {
   cleanup();
   current = null;
+  localStorage.removeItem(LANGUAGE_STORAGE_KEY);
   vi.clearAllMocks();
+});
+
+it("switches Chinese, Spanish, and English without leaking Chinese", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "zh-Hans");
+  const view = render(
+    <LanguageProvider>
+      <EmbeddingSwitchConfirmDialog
+        plan={{ ...plan, users: 2 }}
+        busy={false}
+        errorCode={null}
+        onCancel={vi.fn()}
+        onStart={vi.fn()}
+      />
+    </LanguageProvider>,
+  );
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole("heading", { name: "更新记忆搜索索引？" }),
+    ).toBeTruthy(),
+  );
+
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("heading", {
+        name: "¿Actualizar el índice de búsqueda de memorias?",
+      }),
+    ).toBeTruthy(),
+  );
+  expect(view.container.textContent).not.toMatch(/[一-鿿]/);
+  expect(view.container.textContent).toContain("8421");
+
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: LANGUAGE_STORAGE_KEY }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole("heading", {
+        name: "Update the memory search index?",
+      }),
+    ).toBeTruthy(),
+  );
+  expect(view.container.textContent).not.toMatch(/[一-鿿]/);
+  expect(view.container.textContent).toContain("8,421");
 });
 
 it("explains the index update in user terms before exposing technical details", async () => {

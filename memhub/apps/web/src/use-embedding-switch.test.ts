@@ -19,7 +19,7 @@ const api = vi.hoisted(() => ({
 vi.mock("./api", () => api);
 
 import { pollNow, resetPollScheduler } from "./poll-scheduler";
-import { useEmbeddingSwitch } from "./use-embedding-switch";
+import { useEmbeddingSwitchController as useEmbeddingSwitch } from "./use-embedding-switch";
 
 const NOW = "2026-11-03T09:00:00Z";
 const summary = (space_id: string | null) => ({

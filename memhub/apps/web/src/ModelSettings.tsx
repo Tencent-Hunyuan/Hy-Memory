@@ -20,6 +20,7 @@ import { EmbeddingSwitchConfirmDialog } from "./EmbeddingSwitchExperience";
 import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
+import { R6StateRecovery } from "./R6StateRecovery";
 import { useEmbeddingSwitch } from "./use-embedding-switch";
 import { useModelProfiles } from "./use-model-profiles";
 import "./model-setup-next.css";
@@ -899,17 +900,12 @@ export function ModelSettings({
         </p>
       )}
       {models.refreshError && (
-        <div className="model-refresh-notice" role="status">
-          <p>{text(models.refreshError)}</p>
-          <button
-            type="button"
-            className="secondary"
-            disabled={locked}
-            onClick={() => void models.refreshProfiles()}
-          >
-            {text("刷新配置列表")}
-          </button>
-        </div>
+        <R6StateRecovery
+          message={text(models.refreshError)}
+          pending={models.refreshing}
+          role="status"
+          onRetry={() => void models.refreshProfiles()}
+        />
       )}
 
       {/* The paste-one-key path goes first when it exists. Behind it sits the

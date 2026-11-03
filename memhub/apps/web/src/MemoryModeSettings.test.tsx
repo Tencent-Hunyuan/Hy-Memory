@@ -331,3 +331,46 @@ it("keeps lite available while model status is unknown", async () => {
     screen.getByRole("radio", { name: /深度记忆（ultra）/ }),
   ).toHaveProperty("disabled", true);
 });
+
+it("blocks mode and Evolve controls during embedding maintenance", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryProcessing).mockResolvedValue({
+    embedding_switch: { phase: "running" },
+  } as never);
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(
+    await screen.findByText(
+      "正在检查或切换向量模型，完成前不能切换模式或手动整合。",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("radio", { name: /基础记忆（lite）/ }),
+  ).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "立即整合" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+});
+
+it("blocks lifecycle controls while the knowledge graph is being built", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_build: {
+      state: "running",
+      started_at: "2026-11-03T09:00:00Z",
+      finished_at: null,
+      users: {},
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(
+    await screen.findByText("正在把已有高级记忆加入知识图谱…"),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "立即整合" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+});

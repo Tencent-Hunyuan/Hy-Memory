@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchKoreanMessages } from "../gui-i18n-embedding-switch.js";
 import { modeKoreanMessages } from "../gui-i18n-mode.js";
 
 /** Korean (ko) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const koreanMessages: Record<MessageKey, string> = {
   ...modeKoreanMessages,
+  ...embeddingSwitchKoreanMessages,
   "connectionFallback.title": "다른 도구 연결",
   "connectionFallback.desktopOnly":
     "로컬 페어링은 데스크톱 앱에서만 사용할 수 있습니다.",

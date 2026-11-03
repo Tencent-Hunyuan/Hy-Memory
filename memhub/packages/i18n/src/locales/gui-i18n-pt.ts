@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchPortugueseMessages } from "../gui-i18n-embedding-switch.js";
 import { modePortugueseMessages } from "../gui-i18n-mode.js";
 
 /** Portuguese (pt, Brazilian usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const portugueseMessages: Record<MessageKey, string> = {
   ...modePortugueseMessages,
+  ...embeddingSwitchPortugueseMessages,
   "connectionFallback.title": "Conectar outras ferramentas",
   "connectionFallback.desktopOnly":
     "O pareamento local só está disponível no app para desktop.",
