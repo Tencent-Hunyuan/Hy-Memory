@@ -199,7 +199,7 @@ it("uses one sidebar hierarchy and explains when a saved model is inactive in li
   await user.click(screen.getByRole("button", { name: "模型配置" }));
   expect(await screen.findByText("当前是基础记忆（lite）")).toBeTruthy();
   expect(
-    screen.getByText(/开启 pro 或 ultra 后，模型将生效并开始整理新对话/),
+    screen.getByText(/是否开始整理取决于.*“用模型沉淀记忆”.*开关/),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "刷新模型状态" })).toBeNull();
 });
@@ -231,6 +231,18 @@ it("carries a missing-model explanation into model configuration and moves focus
   ).toBeTruthy();
   const heading = screen.getByRole("heading", { name: "模型配置" });
   await waitFor(() => expect(document.activeElement).toBe(heading));
+});
+
+it("offers a text recovery action when the model overview cannot be read", async () => {
+  vi.mocked(getModelProfiles).mockRejectedValueOnce(new Error("offline"));
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+
+  expect(await screen.findByText("模型状态未能读取，请重试。")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "重新读取" }));
+
+  expect(await screen.findByText("当前模型")).toBeTruthy();
 });
 
 it("stops model sedimentation on one switch flip without touching the model config", async () => {

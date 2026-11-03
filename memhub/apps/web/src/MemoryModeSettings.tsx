@@ -424,7 +424,7 @@ export function MemoryModeSettings({
         </p>
       ) : null}
       {error && !pendingMode ? (
-        <div className="r6-mode-recovery">
+        <div className="r6-state-recovery">
           <p className="r6-settings-error" role="alert">
             {text(error)}
           </p>

@@ -134,7 +134,7 @@ const modeChineseMessages = {
   "当前是深度记忆（ultra）": "当前是深度记忆（ultra）",
   "正在读取记忆模式…": "正在读取记忆模式…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。",
+    "模型配置已保留，目前不会用于整理新对话。切换到 pro 或 ultra 后，是否开始整理取决于单独的“用模型沉淀记忆”（沉淀）开关。",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -298,7 +298,7 @@ export const modeEnglishMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Current mode: Deep memory (ultra)",
   "正在读取记忆模式…": "Reading memory mode…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "The model configuration is kept but is not currently creating memories. Enable pro or ultra to activate it for new conversations.",
+    "The model configuration is retained and is not currently used to organize new conversations. After switching to pro or ultra, whether it starts organizing them depends on the separate “Create memories with a model” switch.",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "Checking memory creation status. The model configuration and existing memories are unaffected.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -458,7 +458,7 @@ export const modeSpanishMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Modo actual: memoria profunda (ultra)",
   "正在读取记忆模式…": "Leyendo el modo de memoria…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "La configuración del modelo se conserva, pero ahora no crea memorias. Activa pro o ultra para usarla con conversaciones nuevas.",
+    "La configuración del modelo se conserva y actualmente no se usa para organizar conversaciones nuevas. Tras cambiar a pro o ultra, que empiece a organizarlas dependerá del interruptor independiente «Generar memorias con el modelo».",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "Comprobando la creación de memorias. La configuración y las memorias existentes no se ven afectadas.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -608,7 +608,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "目前是深度記憶（ultra）",
   "正在读取记忆模式…": "正在讀取記憶模式…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "模型設定已保留，但目前不會用於建立記憶。開啟 pro 或 ultra 後，模型將生效並開始整理新對話。",
+    "模型設定已保留，目前不會用於整理新對話。切換到 pro 或 ultra 後，是否開始整理取決於獨立的「用模型建立記憶」（沉澱）開關。",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "正在確認模型建立記憶的狀態，模型設定與現有記憶不會受到影響。",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -723,7 +723,7 @@ export const modeJapaneseMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "現在は高度な記憶（ultra）です",
   "正在读取记忆模式…": "記憶モードを読み込み中…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "モデル設定は保持されていますが、現在は記憶の作成に使用されません。pro または ultra を有効にすると、新しい会話の整理に使用されます。",
+    "モデル設定は保持されていますが、現在は新しい会話の整理には使用されません。pro または ultra に切り替えた後、整理を開始するかどうかは、独立した「モデルで記憶を作成」スイッチによって決まります。",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "モデルによる記憶作成の状態を確認中です。モデル設定と既存の記憶には影響しません。",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -884,7 +884,7 @@ export const modeGermanMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Aktueller Modus: Tiefe Erinnerung (ultra)",
   "正在读取记忆模式…": "Erinnerungsmodus wird gelesen…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "Die Modellkonfiguration bleibt erhalten, erstellt derzeit aber keine Erinnerungen. Aktivieren Sie pro oder ultra, um neue Unterhaltungen zu verarbeiten.",
+    "Die Modellkonfiguration bleibt erhalten und wird derzeit nicht zum Ordnen neuer Unterhaltungen verwendet. Ob sie nach dem Wechsel zu pro oder ultra damit beginnt, hängt vom separaten Schalter „Erinnerungen mit Modell erstellen“ ab.",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "Der Status der Erinnerungserstellung wird geprüft. Modellkonfiguration und vorhandene Erinnerungen bleiben unverändert.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -1045,7 +1045,7 @@ export const modePortugueseMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Modo atual: memória profunda (ultra)",
   "正在读取记忆模式…": "A ler o modo de memória…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "A configuração do modelo é mantida, mas não está a criar memórias. Ative pro ou ultra para processar novas conversas.",
+    "A configuração do modelo é mantida e não é atualmente usada para organizar novas conversas. Após mudar para pro ou ultra, o início dessa organização depende do interruptor separado «Criar memórias com um modelo».",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "A verificar o estado da criação de memórias. A configuração do modelo e as memórias existentes não são afetadas.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -1206,7 +1206,7 @@ export const modeFrenchMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Mode actuel : mémoire approfondie (ultra)",
   "正在读取记忆模式…": "Lecture du mode de mémoire…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "La configuration du modèle est conservée, mais ne crée actuellement aucune mémoire. Activez pro ou ultra pour traiter les nouvelles conversations.",
+    "La configuration du modèle est conservée et n’est actuellement pas utilisée pour organiser les nouvelles conversations. Après le passage à pro ou ultra, leur organisation dépend de l’interrupteur distinct « Créer des mémoires avec un modèle ».",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "Vérification de l’état de création des mémoires. La configuration du modèle et les mémoires existantes ne sont pas affectées.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -1363,7 +1363,7 @@ export const modeKoreanMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "현재 모드: 심층 메모리(ultra)",
   "正在读取记忆模式…": "메모리 모드 읽는 중…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "모델 구성은 유지되지만 현재 메모리 생성에는 사용되지 않습니다. pro 또는 ultra를 켜면 새 대화 정리에 사용됩니다.",
+    "모델 구성은 유지되며 현재 새 대화를 정리하는 데 사용되지 않습니다. pro 또는 ultra로 전환한 후 정리를 시작할지는 별도의 ‘모델로 기억 생성’ 스위치에 따라 결정됩니다.",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "모델의 메모리 생성 상태를 확인 중입니다. 모델 구성과 기존 메모리는 영향을 받지 않습니다.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -1523,7 +1523,7 @@ export const modeRussianMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Текущий режим: глубокая память (ultra)",
   "正在读取记忆模式…": "Чтение режима памяти…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "Конфигурация модели сохранена, но сейчас не используется для создания воспоминаний. Включите pro или ultra, чтобы обрабатывать новые диалоги.",
+    "Конфигурация модели сохранена и сейчас не используется для упорядочивания новых диалогов. После переключения на pro или ultra начало обработки зависит от отдельного переключателя «Создавать записи памяти с помощью модели».",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "Проверяется состояние создания воспоминаний. Конфигурация модели и существующие воспоминания не изменятся.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":
@@ -1682,7 +1682,7 @@ export const modeIndonesianMessages: ModeMessages = {
   "当前是深度记忆（ultra）": "Mode saat ini: memori mendalam (ultra)",
   "正在读取记忆模式…": "Membaca mode memori…",
   "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。":
-    "Konfigurasi model tetap disimpan, tetapi saat ini tidak membuat memori. Aktifkan pro atau ultra untuk memproses percakapan baru.",
+    "Konfigurasi model tetap disimpan dan saat ini tidak digunakan untuk menata percakapan baru. Setelah beralih ke pro atau ultra, apakah penataan dimulai bergantung pada sakelar terpisah “Buat memori dengan model”.",
   "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。":
     "Memeriksa status pembuatan memori. Konfigurasi model dan memori yang ada tidak terpengaruh.",
   "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。":

@@ -393,8 +393,8 @@ export function R6Settings({
                         profiles === null
                           ? "正在读取模型…"
                           : modelError
-                            ? "状态暂不可读"
-                            : "尚未配置",
+                            ? "模型状态暂不可读"
+                            : "尚未配置模型",
                       )}
                   </strong>
                   {currentModel && (
@@ -446,13 +446,18 @@ export function R6Settings({
               </div>
             </div>
             {modelError && (
-              <p role="alert" className="r6-settings-error">
-                {text(
-                  profiles === null
-                    ? "模型状态未能读取，请重试。"
-                    : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
-                )}
-              </p>
+              <div className="r6-state-recovery">
+                <p role="alert" className="r6-settings-error">
+                  {text(
+                    profiles === null
+                      ? "模型状态未能读取，请重试。"
+                      : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
+                  )}
+                </p>
+                <R6Button onClick={() => setModelVersion((value) => value + 1)}>
+                  {t("startupRetry")}
+                </R6Button>
+              </div>
             )}
             {configurationRefusal && (
               <p role="alert" className="r6-settings-error">

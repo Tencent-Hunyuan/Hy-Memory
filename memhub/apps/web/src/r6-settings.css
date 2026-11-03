@@ -380,14 +380,14 @@
   outline: 2px solid var(--r6-focus);
   outline-offset: 2px;
 }
-.r6-mode-recovery {
+.r6-state-recovery {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   margin-top: 14px;
 }
-.r6-mode-recovery .r6-settings-error {
+.r6-state-recovery .r6-settings-error {
   margin: 0;
 }
 .r6-mode-confirm-effects {
@@ -635,19 +635,19 @@
 .r6-settings .r6-model-mode-status {
   margin-top: 18px;
   padding: 12px 14px;
-  border-left: 3px solid #7892a6;
-  background: #f1f5f8;
+  border-radius: 8px;
+  background: var(--r6-field-fill);
 }
 .r6-settings .r6-model-mode-status strong {
   display: block;
-  color: #304757;
+  color: var(--r6-text);
   font-size: 13px;
   font-weight: 600;
   line-height: 22px;
 }
 .r6-settings .r6-model-mode-status p {
   margin: 2px 0 0;
-  color: #5e6e7a;
+  color: var(--r6-muted);
   font-size: 13px;
   line-height: 22px;
 }
@@ -697,7 +697,7 @@
 }
 .r6-settings .r6-model-lane small {
   margin-top: 1px;
-  color: #71808b;
+  color: var(--r6-muted);
   font-size: 12px;
   line-height: 20px;
 }
@@ -1086,7 +1086,7 @@
   .r6-evolve-settings input[type="time"] {
     width: min(220px, 100%);
   }
-  .r6-mode-recovery {
+  .r6-state-recovery {
     align-items: flex-start;
     flex-direction: column;
   }
