@@ -257,13 +257,11 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
   render(<MemorySpace simplified />);
 
   expect(await screen.findAllByText("原始对话内容")).toHaveLength(2);
-  expect(document.querySelector(".core-memory-map")?.hasAttribute("hidden")).toBe(
-    false,
-  );
-  expect(screen.getByTestId("graph-owner")).toBeTruthy();
   expect(
-    screen.getByRole("textbox", { name: "搜索原始对话" }),
-  ).toBeTruthy();
+    document.querySelector(".core-memory-map")?.hasAttribute("hidden"),
+  ).toBe(false);
+  expect(screen.getByTestId("graph-owner")).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "搜索原始对话" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "补充记忆" })).toBeNull();
   expect(reads.sdkLibrary).not.toHaveBeenCalled();
   expect(reads.sdkGraph).not.toHaveBeenCalled();

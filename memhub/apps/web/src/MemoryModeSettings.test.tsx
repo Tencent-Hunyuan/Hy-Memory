@@ -169,14 +169,10 @@ it("ignores an older refresh that finishes after a newer mode read", async () =>
   const refresh = screen.getByRole("button", { name: "刷新记忆模式" });
   await user.click(refresh);
   await user.click(refresh);
-  await waitFor(() =>
-    expect((picker as HTMLButtonElement).value).toBe("lite"),
-  );
+  await waitFor(() => expect((picker as HTMLButtonElement).value).toBe("lite"));
   resolveOld(state("pro"));
 
-  await waitFor(() =>
-    expect((picker as HTMLButtonElement).value).toBe("lite"),
-  );
+  await waitFor(() => expect((picker as HTMLButtonElement).value).toBe("lite"));
 });
 
 it("does not let an older refresh undo a saved schedule change", async () => {
@@ -215,9 +211,9 @@ it("keeps the mode usable when an evolve status read fails", async () => {
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
   expect(
-    (
-      await screen.findByRole("combobox", { name: "当前模式" })
-    ) as HTMLButtonElement,
+    (await screen.findByRole("combobox", {
+      name: "当前模式",
+    })) as HTMLButtonElement,
   ).toHaveProperty("disabled", false);
 });
 
@@ -232,9 +228,7 @@ it("keeps lite available while model status is unknown", async () => {
     />,
   );
 
-  await user.click(
-    await screen.findByRole("combobox", { name: "当前模式" }),
-  );
+  await user.click(await screen.findByRole("combobox", { name: "当前模式" }));
   expect(
     screen.getByRole("option", { name: /基础记忆（lite）/ }),
   ).toHaveProperty("disabled", false);

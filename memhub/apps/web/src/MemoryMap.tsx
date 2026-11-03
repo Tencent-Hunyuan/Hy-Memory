@@ -32,10 +32,10 @@ import {
   useRef,
   useState,
 } from "react";
+import { useGuiLanguage } from "./gui-language";
 import { HandoffBar } from "./HandoffBar";
 import { MemoryEvidencePanel } from "./MemoryEvidencePanel";
 import { MemoryGraph3D } from "./MemoryGraph3D";
-import { useGuiLanguage } from "./gui-language";
 import { MemoryArrivalPanel } from "./memory-arrival";
 import {
   type MemoryArrival,
@@ -1246,9 +1246,9 @@ export function MemoryMap(props: Props) {
                               : text("当前筛选没有可显示的记忆")
                             : raw
                               ? t("sdk.raw.empty")
-                            : arrival.importedMessages > 0
-                              ? text("已保存的对话还未生成记忆")
-                              : text("还没有可显示的记忆")}
+                              : arrival.importedMessages > 0
+                                ? text("已保存的对话还未生成记忆")
+                                : text("还没有可显示的记忆")}
               </p>
               {library?.graphFailed ? (
                 <R6Button onClick={library.onRetry}>
@@ -1356,11 +1356,11 @@ export function MemoryMap(props: Props) {
               ? t("memory:原始对话")
               : inspectorDetail
                 ? text("记忆详情")
-              : selectedSource
-                ? text("记忆详情")
-                : visibleGroupNode
-                  ? text("关联节点")
-                  : text("记忆详情")}
+                : selectedSource
+                  ? text("记忆详情")
+                  : visibleGroupNode
+                    ? text("关联节点")
+                    : text("记忆详情")}
           </h2>
           {(activeId || visibleGroupNode) && (
             <button
@@ -1404,9 +1404,7 @@ export function MemoryMap(props: Props) {
                   </p>
                 </>
               ) : (
-                <p>
-                  {raw ? t("sdk.raw.empty") : text("还没有已生成的记忆")}
-                </p>
+                <p>{raw ? t("sdk.raw.empty") : text("还没有已生成的记忆")}</p>
               )}
             </div>
           ) : props.simplified && inspectorDetail ? (
@@ -1471,10 +1469,7 @@ export function MemoryMap(props: Props) {
                   <p role="status">{text("正在读取这条记忆…")}</p>
                 </div>
               ) : raw && props.rawRecord ? (
-                <SelectedRawDetail
-                  record={props.rawRecord}
-                  sources={sources}
-                />
+                <SelectedRawDetail record={props.rawRecord} sources={sources} />
               ) : (
                 <SelectedMemoryDetail
                   detail={inspectorDetail}

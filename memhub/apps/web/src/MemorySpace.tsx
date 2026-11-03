@@ -33,13 +33,13 @@ import {
   deleteSdkMemory,
   getMemoryProcessing,
   getModelProfiles,
-  getSdkRaw,
   getSdkMemory,
   getSdkMemoryGraph,
   getSdkMemoryLibrary,
+  getSdkRaw,
   manualExtract,
-  setExtractionWindow,
   searchSdkRaw,
+  setExtractionWindow,
   updateSdkMemory,
 } from "./api";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
@@ -241,10 +241,7 @@ export function MemorySpace({
   const sdkPageRef = useRef<MemoryLibraryPage | null>(null);
   sdkPageRef.current = sdkPage;
   const sdkMapVisible =
-    simplified &&
-    active &&
-    displayedMode === "map" &&
-    pipelineMode !== null;
+    simplified && active && displayedMode === "map" && pipelineMode !== null;
   useEffect(() => {
     if (!sdkMapVisible) return;
     // A write bumps the revision; reading it here re-runs the read at once
@@ -254,11 +251,7 @@ export function MemorySpace({
     let controller: AbortController | null = null;
     const source = sdkLibrarySource || undefined;
     const query = sdkLibraryQuery.trim() || undefined;
-    const windowKey = JSON.stringify([
-      pipelineMode,
-      query ?? "",
-      source ?? "",
-    ]);
+    const windowKey = JSON.stringify([pipelineMode, query ?? "", source ?? ""]);
     if (sdkSearchWindow.current.key !== windowKey)
       sdkSearchWindow.current = { key: windowKey, id: null };
     const read = async (first: boolean) => {
@@ -284,14 +277,12 @@ export function MemorySpace({
                     rememberRaw(items);
                     return rawSearchPage(items);
                   })
-                : getSdkRaw(
-                    {
-                      source,
-                      offset: sdkLibraryOffset,
-                      limit: SDK_MEMORY_PAGE_SIZE,
-                      signal: request.signal,
-                    },
-                  ).then((rawPage) => {
+                : getSdkRaw({
+                    source,
+                    offset: sdkLibraryOffset,
+                    limit: SDK_MEMORY_PAGE_SIZE,
+                    signal: request.signal,
+                  }).then((rawPage) => {
                     rememberRaw(rawPage.items);
                     return rawLibraryPage(rawPage);
                   }),
@@ -509,10 +500,7 @@ export function MemorySpace({
   }, []);
   const previousPipelineMode = useRef(pipelineMode);
   useEffect(() => {
-    if (
-      pipelineMode === null ||
-      previousPipelineMode.current === pipelineMode
-    )
+    if (pipelineMode === null || previousPipelineMode.current === pipelineMode)
       return;
     previousPipelineMode.current = pipelineMode;
     rawRecords.current.clear();
@@ -1142,7 +1130,7 @@ export function MemorySpace({
 
       {/* Native hiding retains the WebGL owner; its visibility observer pauses drawing. */}
       <MemoryMap
-        key={simplified ? pipelineMode ?? "unknown" : "full"}
+        key={simplified ? (pipelineMode ?? "unknown") : "full"}
         id="memory-mode-panel-map"
         simplified={simplified}
         contentKind={lite ? "raw" : "memory"}
