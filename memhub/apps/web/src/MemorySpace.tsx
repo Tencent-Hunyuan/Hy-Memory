@@ -1494,7 +1494,7 @@ function message(reason: unknown, t: Translate): string {
     reason.message === "memory_answer_context_changed"
       ? reason.message
       : apiErrorCode(reason);
-  const labels: Record<string, Parameters<Translate>[0]> = {
+  const labels: Record<string, string> = {
     memory_answer_context_changed:
       "memory:记忆内容或使用权限已变化，回答已停止。请重新提问。",
     memory_source_revoked: "memory:这条记忆的来源授权已撤回，暂时不能读取。",
@@ -1507,8 +1507,14 @@ function message(reason: unknown, t: Translate): string {
     memory_request_conflict: "memory:这次操作与已完成的请求不一致。",
     request_validation_failed: "memory:输入内容不符合要求。",
     local_store_unavailable: "memory:本地记忆库正忙，请稍后重试。",
+    embedding_unavailable:
+      "memory:搜索服务暂时不可用，无法检索记忆。请到设置中检查记忆搜索配置。",
+    embedding_switch_in_progress:
+      "memory:正在更新记忆索引，完成后才能修改或删除记忆。搜索仍可使用。",
+    embedding_space_profile_missing:
+      "memory:当前搜索模型配置已不存在，请到设置中重新配置记忆搜索。",
   };
-  if (code && labels[code]) return t(labels[code]);
+  if (code && labels[code]) return t(labels[code] as Parameters<Translate>[0]);
   // No code at all means the request never reached the core — usually because
   // it is still starting. Saying only "failed" left the one case that resolves
   // itself looking like the ones that do not.

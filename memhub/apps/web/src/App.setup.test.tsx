@@ -68,6 +68,10 @@ vi.mock("./api", () => ({
   startEvolve: vi.fn(),
   apiErrorCode: vi.fn().mockReturnValue(null),
   getSources: vi.fn().mockResolvedValue(sources),
+  getCurrentEmbeddingSwitch: vi
+    .fn()
+    .mockRejectedValue(new Error("unsupported")),
+  embeddingSwitchUnsupported: vi.fn().mockReturnValue(true),
   ...mutations,
 }));
 vi.mock("./use-import-sources", () => ({

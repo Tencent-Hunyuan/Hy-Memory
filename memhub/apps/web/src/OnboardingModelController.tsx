@@ -5,6 +5,7 @@ import type {
 } from "@one-memory/contracts";
 import { useEffect, useRef, useState } from "react";
 import { getModelProfiles } from "./api";
+import { EmbeddingSwitchConfirmDialog } from "./EmbeddingSwitchExperience";
 import {
   type OnboardingModelDraft,
   OnboardingModelStep,
@@ -12,6 +13,7 @@ import {
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { traceUiAction } from "./ui-trace";
+import { useEmbeddingSwitch } from "./use-embedding-switch";
 import { useModelProfiles } from "./use-model-profiles";
 
 const defaultPreset = PROVIDER_PRESETS.find(
@@ -68,6 +70,7 @@ export function OnboardingModelController({
 }) {
   const { text, t } = useOnboardingTranslation();
   const models = useModelProfiles();
+  const embeddingSwitch = useEmbeddingSwitch();
   const [draft, setDraft] = useState(initial);
   const [advanced, setAdvanced] = useState(false);
   const [saved, setSaved] = useState<ModelProfile | null>(null);
@@ -82,6 +85,9 @@ export function OnboardingModelController({
     state: "passed" | "failed" | "stale";
     message: string;
   } | null>(null);
+  const [switchPendingJobId, setSwitchPendingJobId] = useState<string | null>(
+    null,
+  );
   const flight = useRef(false);
   const draftTouched = useRef(false);
 
@@ -114,6 +120,27 @@ export function OnboardingModelController({
       message: "当前模型已经启用，可以继续完成首次设置。",
     });
   }, [models.profiles, saved]);
+
+  useEffect(() => {
+    const finished = embeddingSwitch.current?.last_finished;
+    if (
+      !switchPendingJobId ||
+      !finished ||
+      finished.job_id !== switchPendingJobId
+    )
+      return;
+    if (finished.state === "done") {
+      flight.current = false;
+      setSwitchPendingJobId(null);
+      setPhase("idle");
+      onEnabled?.();
+    } else if (finished.state === "rolled_back") {
+      flight.current = false;
+      setSwitchPendingJobId(null);
+      setPhase("idle");
+      setError("索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。");
+    }
+  }, [embeddingSwitch.current?.last_finished, onEnabled, switchPendingJobId]);
 
   function edit(patch: Partial<OnboardingModelDraft>) {
     if (flight.current) return;
@@ -273,6 +300,18 @@ export function OnboardingModelController({
     setError(null);
     const trace = traceUiAction("memory", "submit");
     try {
+      const plan = embeddingSwitch.shouldUseLegacyActivation()
+        ? null
+        : await embeddingSwitch.planActivation(
+            saved.profile_id,
+            saved.revision,
+          );
+      if (!plan && !embeddingSwitch.shouldUseLegacyActivation())
+        throw new Error("embedding_switch_plan_unconfirmed");
+      if (plan?.needed) {
+        trace.done("succeeded", { reason: "embedding_switch_confirmation" });
+        return;
+      }
       const active = await models.activate(saved.profile_id);
       if (!active?.is_active) throw new Error("model_activation_unconfirmed");
       trace.done("succeeded");
@@ -287,77 +326,102 @@ export function OnboardingModelController({
   }
 
   return (
-    <OnboardingModelStep
-      draft={draft}
-      providers={[
-        ...PROVIDER_PRESETS.map((preset) => ({
-          id: preset.id,
-          label: preset.label,
-          keyRequired: preset.provider !== "ollama",
-          supported: true,
-        })),
-        {
-          id: "custom",
-          label: "自定义兼容服务",
-          keyRequired: true,
-          supported: true,
-        },
-      ]}
-      advancedOpen={advanced}
-      onAdvancedChange={setAdvanced}
-      onDraftChange={edit}
-      phase={phase}
-      capability={{ saveAndEnable: true }}
-      canSaveAndEnable={probe?.state === "passed" && !!saved}
-      enableActionLabel={saved?.is_active ? "继续使用当前模型" : undefined}
-      canTest={!models.pendingProbe && !models.probeStorageFailed}
-      canSaveDraft={!models.pendingCreation && !models.creationStorageFailed}
-      inputsLocked={flight.current}
-      fieldErrors={Object.fromEntries(
-        Object.entries(fields).map(([key, value]) => [
-          key,
-          value === "onboardingIntegerRange"
-            ? t(
-                "onboardingIntegerRange",
-                key === "timeout_seconds"
-                  ? { min: 1, max: 600 }
-                  : key === "max_concurrency"
-                    ? { min: 1, max: 32 }
-                    : { min: 1024, max: 10_000_000 },
-              )
-            : text(value),
-        ]),
-      )}
-      error={error ?? (models.error ? text(models.error) : null)}
-      probe={probe}
-      profile={
-        saved
-          ? {
-              profile_id: saved.profile_id,
-              revision: saved.revision,
-              has_configured_api_key:
-                saved.has_configured_api_key ?? saved.has_api_key,
-              credential_state: saved.credential_state,
-            }
-          : null
-      }
-      sourceNames={sourceNames}
-      importedConversationCount={importedConversationCount}
-      connectionSummary={
-        connectionAlreadyApplied ? "所选连接已启用" : "本次未选择应用连接"
-      }
-      generationRecipient={draft.base_url || "尚未填写接收方"}
-      embeddingRecipient={
-        draft.embedding_mode === "local"
-          ? "本机内置向量模型"
-          : draft.embedding_base_url || draft.base_url || "尚未填写接收方"
-      }
-      onSaveDraft={() => save(false)}
-      onTest={() => save(true)}
-      onSaveAndEnable={enable}
-      onBack={onBack}
-      onSkip={onSkip}
-      onActionError={() => setError("操作未确认，草稿已保留。")}
-    />
+    <>
+      <OnboardingModelStep
+        draft={draft}
+        providers={[
+          ...PROVIDER_PRESETS.map((preset) => ({
+            id: preset.id,
+            label: preset.label,
+            keyRequired: preset.provider !== "ollama",
+            supported: true,
+          })),
+          {
+            id: "custom",
+            label: "自定义兼容服务",
+            keyRequired: true,
+            supported: true,
+          },
+        ]}
+        advancedOpen={advanced}
+        onAdvancedChange={setAdvanced}
+        onDraftChange={edit}
+        phase={phase}
+        capability={{ saveAndEnable: true }}
+        canSaveAndEnable={probe?.state === "passed" && !!saved}
+        enableActionLabel={saved?.is_active ? "继续使用当前模型" : undefined}
+        canTest={!models.pendingProbe && !models.probeStorageFailed}
+        canSaveDraft={!models.pendingCreation && !models.creationStorageFailed}
+        inputsLocked={flight.current}
+        fieldErrors={Object.fromEntries(
+          Object.entries(fields).map(([key, value]) => [
+            key,
+            value === "onboardingIntegerRange"
+              ? t(
+                  "onboardingIntegerRange",
+                  key === "timeout_seconds"
+                    ? { min: 1, max: 600 }
+                    : key === "max_concurrency"
+                      ? { min: 1, max: 32 }
+                      : { min: 1024, max: 10_000_000 },
+                )
+              : text(value),
+          ]),
+        )}
+        error={error ?? (models.error ? text(models.error) : null)}
+        probe={probe}
+        profile={
+          saved
+            ? {
+                profile_id: saved.profile_id,
+                revision: saved.revision,
+                has_configured_api_key:
+                  saved.has_configured_api_key ?? saved.has_api_key,
+                credential_state: saved.credential_state,
+              }
+            : null
+        }
+        sourceNames={sourceNames}
+        importedConversationCount={importedConversationCount}
+        connectionSummary={
+          connectionAlreadyApplied ? "所选连接已启用" : "本次未选择应用连接"
+        }
+        generationRecipient={draft.base_url || "尚未填写接收方"}
+        embeddingRecipient={
+          draft.embedding_mode === "local"
+            ? "本机内置向量模型"
+            : draft.embedding_base_url || draft.base_url || "尚未填写接收方"
+        }
+        onSaveDraft={() => save(false)}
+        onTest={() => save(true)}
+        onSaveAndEnable={enable}
+        onBack={onBack}
+        onSkip={onSkip}
+        onActionError={() => setError("操作未确认，草稿已保留。")}
+      />
+      {embeddingSwitch.plan?.needed && saved ? (
+        <EmbeddingSwitchConfirmDialog
+          plan={embeddingSwitch.plan}
+          busy={embeddingSwitch.busy === "start"}
+          errorCode={embeddingSwitch.errorCode}
+          onCancel={() => {
+            embeddingSwitch.clearPlan();
+            embeddingSwitch.clearError();
+          }}
+          onStart={() => {
+            flight.current = true;
+            setPhase("enabling");
+            void embeddingSwitch.startPlannedSwitch().then((job) => {
+              if (job) {
+                setSwitchPendingJobId(job.job_id);
+                return;
+              }
+              flight.current = false;
+              setPhase("idle");
+            });
+          }}
+        />
+      ) : null}
+    </>
   );
 }

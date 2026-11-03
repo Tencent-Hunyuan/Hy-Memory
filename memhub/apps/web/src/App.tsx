@@ -25,6 +25,7 @@ import { useApplicationsLanguage } from "./applications-language";
 import { CallHistory } from "./CallHistory";
 import { DebugLogPanel } from "./DebugLogPanel";
 import { DesktopFrame } from "./DesktopFrame";
+import { EmbeddingSwitchGlobalStatus } from "./EmbeddingSwitchExperience";
 import { useGuiLanguage } from "./gui-language";
 import { HealthPanel } from "./HealthPanel";
 import { ImportProgressStrip } from "./ImportProgressStrip";
@@ -309,6 +310,10 @@ function AppContent() {
         ref={content}
         data-view={displayedView}
       >
+        <EmbeddingSwitchGlobalStatus
+          onConfigureSearch={() => navigate("settings")}
+          onDiagnostics={() => navigate("health")}
+        />
         {/* First run hands the user in here while the import is still going.
          * Without this the work would be invisible from every screen except
          * the one they were no longer required to sit on. */}

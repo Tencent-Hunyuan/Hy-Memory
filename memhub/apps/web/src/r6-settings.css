@@ -24,7 +24,7 @@
   padding: 20px 24px;
   border: 1px solid #d5dfe8;
   border-radius: 12px;
-  background: rgb(255 255 255 / 78%);
+  background: #fff;
 }
 .r6-language-setting-title {
   margin: 0 0 14px;
@@ -473,28 +473,75 @@
   font-size: 13px;
   line-height: 24px;
 }
-.r6-settings .r6-model-overview {
-  padding: 26px 0 20px;
-  border-bottom: 0;
+.r6-settings .r6-model-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
-.r6-settings .r6-model-caption {
+.r6-settings .r6-model-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 32px;
+}
+.r6-settings .r6-model-heading p {
+  margin: 2px 0 0;
+  color: #63707b;
   font-size: 13px;
-  line-height: 28px;
+  line-height: 22px;
+}
+.r6-settings .r6-model-overview {
+  margin-top: 18px;
+  border: 1px solid #d8e2ea;
+  border-radius: 10px;
+  background: #fff;
+}
+.r6-settings .r6-model-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  min-height: 108px;
+  padding: 18px 20px;
+}
+.r6-settings .r6-model-lane + .r6-model-lane {
+  border-top: 1px solid #d8e2ea;
+}
+.r6-settings .r6-model-lane-copy {
+  min-width: 0;
+}
+.r6-settings .r6-model-lane h3 {
+  margin: 0;
+  color: #304757;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 25px;
+}
+.r6-settings .r6-model-lane p {
+  margin: 2px 0 9px;
   color: #63707b;
-  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 21px;
 }
-.r6-settings .r6-current-model {
-  font:
-    500 22px / 34px "Noto Sans SC",
-    "PingFang SC",
-    sans-serif;
-  margin: 0 0 7px;
+.r6-settings .r6-model-lane strong,
+.r6-settings .r6-model-lane small {
+  display: block;
+  overflow-wrap: anywhere;
 }
-.r6-settings .r6-model-state {
+.r6-settings .r6-model-lane strong {
+  color: #304757;
   font-size: 14px;
-  line-height: 28px;
-  color: #63707b;
-  margin: 0 0 13px;
+  font-weight: 500;
+  line-height: 23px;
+}
+.r6-settings .r6-model-lane small {
+  margin-top: 1px;
+  color: #71808b;
+  font-size: 12px;
+  line-height: 20px;
+}
+.r6-settings .r6-model-lane > .r6-button {
+  min-width: 72px;
 }
 .r6-settings .r6-model-recipient {
   font-size: 14px;
@@ -534,36 +581,6 @@
   border-color: transparent;
   background: rgb(158 178 194 / 22%);
   color: #0f6e56;
-}
-.r6-settings-dialog-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  background: rgb(46 66 82 / 18%);
-  backdrop-filter: blur(8px);
-}
-.r6-settings-dialog {
-  width: min(420px, calc(100vw - 40px));
-  padding: 28px;
-  border: 1px solid white;
-  border-radius: 16px;
-  background: #f3f7f9;
-  box-shadow: 0 24px 64px rgb(38 59 74 / 18%);
-}
-.r6-settings-dialog h2 {
-  margin: 0 0 10px;
-  font-size: 20px;
-}
-.r6-settings-dialog p {
-  margin: 0 0 24px;
-  color: #63707b;
-}
-.r6-settings-dialog footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
 }
 .r6-settings .r6-model-maintenance {
   margin-top: 24px;
@@ -713,16 +730,60 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  min-height: 54px;
-  border: 1px solid #c0ccd5;
+  min-height: 44px;
+  border: 1px solid var(--r6-control-edge);
   border-radius: 8px;
-  background: #f0f5f6;
-  color: #262a2e;
-  font-size: 15px;
-  padding: 14px 16px;
+  background: #fff;
+  color: var(--r6-text);
+  font-size: 14px;
+  padding: 10px 13px;
+}
+.r6-settings .model-form .om-option-menu-button {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 42px 0 13px;
+  border-color: var(--r6-control-edge);
+  background: #fff;
+  color: var(--r6-text);
+  font-size: 14px;
+}
+.r6-settings .model-form .om-option-menu-button::after {
+  top: 16px;
+  right: 16px;
+}
+.r6-settings .model-form .om-option-menu-button[aria-expanded="true"] {
+  border-color: #7892a6;
+  box-shadow: 0 0 0 3px rgb(85 124 147 / 12%);
+}
+.r6-settings .model-form input:not([type="checkbox"]):hover,
+.r6-settings .model-form select:hover,
+.r6-settings .model-form .om-option-menu-button:hover:not(:disabled) {
+  border-color: #aabcc8;
+  background: #fff;
+}
+.r6-settings .model-form input:not([type="checkbox"]):focus-visible,
+.r6-settings .model-form select:focus-visible,
+.r6-settings .model-form .om-option-menu-button:focus-visible {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: 2px;
 }
 .r6-settings .model-advanced {
   grid-column: 1 / -1;
+}
+.r6-settings .model-search-intro {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-settings .model-search-intro strong {
+  font-size: 15px;
+  line-height: 24px;
+}
+.r6-settings .model-search-intro p {
+  margin: 4px 0 0;
+  color: #63707b;
+  font-size: 13px;
+  line-height: 21px;
 }
 .r6-settings .model-advanced label {
   display: flex;
@@ -827,6 +888,14 @@
     min-height: 0;
     padding: 24px 20px;
     border-radius: 0 0 11px 11px;
+  }
+  .r6-settings .r6-model-lane {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px;
+  }
+  .r6-settings .r6-model-lane > .r6-button {
+    justify-self: start;
   }
   .r6-settings .r6-language-setting-row {
     grid-template-columns: minmax(0, 1fr);

@@ -11,6 +11,41 @@
   --r6-fast: 140ms;
 }
 
+.r6-settings-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgb(46 66 82 / 18%);
+  backdrop-filter: blur(8px);
+}
+
+.r6-settings-dialog {
+  width: min(420px, calc(100vw - 40px));
+  padding: 28px;
+  border: 1px solid white;
+  border-radius: 16px;
+  background: #f3f7f9;
+  box-shadow: 0 24px 64px rgb(38 59 74 / 18%);
+}
+
+.r6-settings-dialog h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.r6-settings-dialog p {
+  margin: 0 0 24px;
+  color: #63707b;
+}
+
+.r6-settings-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 button.r6-button {
   position: relative;
   display: inline-flex;
@@ -317,6 +352,18 @@ button.r6-switch:focus-visible,
 }
 [data-native-reduce-motion="true"] .r6-button-spinner {
   animation: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .r6-settings-dialog-layer {
+    background: rgb(46 66 82 / 28%);
+    backdrop-filter: none;
+  }
+}
+
+[data-native-reduce-transparency="true"] .r6-settings-dialog-layer {
+  background: rgb(46 66 82 / 28%);
+  backdrop-filter: none;
 }
 [data-native-reduce-motion="true"]
   :is(.r6-button, .r6-switch-track, .r6-switch-thumb) {

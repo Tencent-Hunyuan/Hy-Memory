@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -85,14 +85,25 @@ vi.mock("./ModelSettings", async () => {
     // Stands in for the real component at its worst: every mutating action is
     // fenced, and the only way out is the recovery entry that lives inside the
     // same area the fence used to keep shut.
-    ModelSettings: ({ controlsRef }: { controlsRef?: Ref<unknown> }) => {
+    ModelSettings: ({
+      controlsRef,
+      focusSection,
+    }: {
+      controlsRef?: Ref<unknown>;
+      focusSection?: "generation" | "embedding";
+    }) => {
       useImperativeHandle(controlsRef, () => ({
         edit: () => false,
         editProfile: () => false,
         add: () => false,
         test: () => Promise.resolve(undefined),
       }));
-      return createElement("button", { type: "button" }, "核对测试结果");
+      return createElement(
+        "div",
+        null,
+        createElement("span", null, focusSection),
+        createElement("button", { type: "button" }, "核对测试结果"),
+      );
     },
   };
 });
@@ -181,14 +192,20 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
   );
   // The model configuration is a different store: a failed switch must not
   // leave the page claiming the model was removed.
-  expect(screen.getByRole("heading", { name: "当前模型" })).toBeTruthy();
+  expect(screen.getByText("当前模型")).toBeTruthy();
 });
 
 it("opens the model area even when a pending probe fences the editor, so recovery stays reachable", async () => {
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
 
-  await user.click(await screen.findByRole("button", { name: "修改模型" }));
+  const generationLane = (
+    await screen.findByRole("heading", { name: "记忆整理" })
+  ).closest(".r6-model-lane") as HTMLElement | null;
+  if (!generationLane) throw new Error("Missing generation lane");
+  await user.click(
+    within(generationLane).getByRole("button", { name: "配置" }),
+  );
 
   // The fence is still reported: the editor really did refuse.
   const alert = await screen.findByRole("alert");
@@ -203,9 +220,48 @@ it("reaches the same recovery entry when no model has been configured yet", asyn
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
 
-  await user.click(await screen.findByRole("button", { name: "配置模型" }));
+  const generationLane = (
+    await screen.findByRole("heading", { name: "记忆整理" })
+  ).closest(".r6-model-lane") as HTMLElement | null;
+  if (!generationLane) throw new Error("Missing generation lane");
+  await user.click(
+    within(generationLane).getByRole("button", { name: "配置模型" }),
+  );
 
   expect(screen.getByRole("button", { name: "核对测试结果" })).toBeTruthy();
+  const searchLane = screen
+    .getByRole("heading", { name: "记忆搜索" })
+    .closest(".r6-model-lane") as HTMLElement | null;
+  if (!searchLane) throw new Error("Missing search lane");
+  expect(
+    within(searchLane).getByRole("button", { name: "配置" }),
+  ).toHaveProperty("disabled", true);
+  expect(searchLane.textContent).toContain("配置记忆整理后可自定义");
+});
+
+it("shows separate compact lanes and opens the requested presentation", async () => {
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  const generationLane = (
+    await screen.findByRole("heading", { name: "记忆整理" })
+  ).closest(".r6-model-lane") as HTMLElement | null;
+  const embeddingLane = screen
+    .getByRole("heading", { name: "记忆搜索" })
+    .closest(".r6-model-lane") as HTMLElement | null;
+  if (!generationLane || !embeddingLane) throw new Error("Missing model lane");
+
+  expect(generationLane.textContent).toContain("当前模型");
+  expect(generationLane.textContent).toContain("LLM");
+  expect(embeddingLane.textContent).toContain("本地内置（推荐）");
+  expect(embeddingLane.textContent).toContain("Embedding");
+
+  await user.click(within(embeddingLane).getByRole("button", { name: "配置" }));
+  expect(screen.getByText("embedding")).toBeTruthy();
+  await user.click(
+    within(generationLane).getByRole("button", { name: "配置" }),
+  );
+  expect(screen.getByText("generation")).toBeTruthy();
 });
 
 it("leaves the switch unusable when the state cannot be read", async () => {

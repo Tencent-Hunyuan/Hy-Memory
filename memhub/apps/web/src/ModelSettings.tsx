@@ -16,9 +16,11 @@ import {
   useRef,
   useState,
 } from "react";
+import { EmbeddingSwitchConfirmDialog } from "./EmbeddingSwitchExperience";
 import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
+import { useEmbeddingSwitch } from "./use-embedding-switch";
 import { useModelProfiles } from "./use-model-profiles";
 import "./model-setup-next.css";
 
@@ -216,6 +218,8 @@ export interface ModelSettingsActions {
   test(profileId: string): Promise<unknown>;
 }
 
+export type ModelSettingsFocusSection = "generation" | "embedding";
+
 /** What the owner asked for before the fence said no. */
 type ModelOpenIntent =
   | { kind: "add" }
@@ -225,15 +229,18 @@ export function ModelSettings({
   controlsRef,
   onProfilesChanged,
   compactSingle = false,
+  focusSection,
   onSetupComplete,
 }: {
   controlsRef?: Ref<ModelSettingsActions>;
   onProfilesChanged?(): void;
   compactSingle?: boolean;
+  focusSection?: ModelSettingsFocusSection;
   onSetupComplete?(): void;
 } = {}) {
   const { text } = useOnboardingTranslation();
   const models = useModelProfiles();
+  const embeddingSwitch = useEmbeddingSwitch();
   const [provider, setProvider] = useState<ProviderKind>("openai_compatible");
   const [providerPreset, setProviderPreset] = useState("custom");
   const [advancedEmbedding, setAdvancedEmbedding] = useState(false);
@@ -263,6 +270,9 @@ export function ModelSettings({
     null,
   );
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [switchTarget, setSwitchTarget] = useState<ModelProfile | null>(null);
+  const [switchJobId, setSwitchJobId] = useState<string | null>(null);
+  const settledSwitchJob = useRef<string | null>(null);
   const flight = useRef(false);
   const alive = useRef(true);
   const queuedOpen = useRef<ModelOpenIntent | null>(null);
@@ -274,6 +284,41 @@ export function ModelSettings({
       alive.current = false;
     };
   }, []);
+  useEffect(() => {
+    const finished = embeddingSwitch.current?.last_finished;
+    if (
+      !switchTarget ||
+      !switchJobId ||
+      !finished ||
+      finished.job_id !== switchJobId ||
+      settledSwitchJob.current === finished.job_id
+    )
+      return;
+    settledSwitchJob.current = finished.job_id;
+    if (finished.state === "done") {
+      void models.refreshProfiles();
+      setSetupError(null);
+      setSwitchTarget(null);
+      setSwitchJobId(null);
+      onProfilesChanged?.();
+      return;
+    }
+    if (finished.state === "rolled_back") {
+      setSetupError(
+        finished.error_code === "embedding_switch_cancelled"
+          ? "索引更新已取消，仍在使用原来的搜索模型。"
+          : "索引更新没有完成，仍在使用原来的搜索模型，记忆没有丢失。",
+      );
+      setSwitchTarget(null);
+      setSwitchJobId(null);
+    }
+  }, [
+    embeddingSwitch.current?.last_finished,
+    models.refreshProfiles,
+    onProfilesChanged,
+    switchJobId,
+    switchTarget,
+  ]);
   useLayoutEffect(() => {
     if (saved) savedCard.current?.focus({ preventScroll: true });
   }, [saved]);
@@ -452,6 +497,43 @@ export function ModelSettings({
     onProfilesChanged?.();
   }, [profileSnapshot, onProfilesChanged]);
 
+  async function activateWithPlan(
+    profile: ModelProfile,
+    result: ModelProbeResult | null,
+  ): Promise<boolean> {
+    setSetupPhase("activating");
+    const switchPlan = embeddingSwitch.shouldUseLegacyActivation()
+      ? null
+      : await embeddingSwitch.planActivation(
+          profile.profile_id,
+          profile.revision,
+        );
+    if (!alive.current) return false;
+    if (!switchPlan && !embeddingSwitch.shouldUseLegacyActivation()) {
+      setSetupError("暂时无法检查搜索模型更换影响，配置已保存，请稍后重试。");
+      return false;
+    }
+    if (switchPlan?.needed) {
+      setSwitchTarget(profile);
+      setSetupPhase(null);
+      return false;
+    }
+    const active = await models.activate(profile.profile_id);
+    if (!alive.current) return false;
+    if (
+      !active ||
+      active.profile_id !== profile.profile_id ||
+      !active.is_active ||
+      !ready(active, result)
+    ) {
+      setSetupError("配置已保存，尚未确认启用成功。请核对配置后重试。");
+      return false;
+    }
+    if (profile.name !== PRESET_PROFILE_NAME) setSaved(active);
+    onSetupComplete?.();
+    return true;
+  }
+
   async function finishSetup(profile: ModelProfile): Promise<boolean> {
     setSetupPhase("testing");
     const result = await models.probeProfile(profile.profile_id);
@@ -487,21 +569,24 @@ export function ModelSettings({
       setFields(probeFieldErrors(result));
       return false;
     }
-    setSetupPhase("activating");
-    const active = await models.activate(profile.profile_id);
-    if (!alive.current) return false;
-    if (
-      !active ||
-      active.profile_id !== profile.profile_id ||
-      !active.is_active ||
-      !ready(active, result)
-    ) {
-      setSetupError("配置已保存，尚未确认启用成功。请核对配置后重试。");
-      return false;
+    return activateWithPlan(profile, result);
+  }
+
+  async function activateTested(profile: ModelProfile) {
+    const result = models.probeFor(profile);
+    if (!isReady(profile) || flight.current || locked) return;
+    flight.current = true;
+    setSaving(true);
+    setSetupError(null);
+    try {
+      await activateWithPlan(profile, result);
+    } finally {
+      flight.current = false;
+      if (alive.current) {
+        setSaving(false);
+        setSetupPhase(null);
+      }
     }
-    if (profile.name !== PRESET_PROFILE_NAME) setSaved(active);
-    onSetupComplete?.();
-    return true;
   }
 
   async function resumeSetup(profile: ModelProfile, key?: string) {
@@ -572,12 +657,14 @@ export function ModelSettings({
     )
       return;
     const errors: Partial<Record<FieldName, string>> = {};
-    if (!model.trim()) errors.model = "请填写生成模型名。";
-    if (!validEndpoint(baseUrl))
-      errors["base-url"] = "请填写完整的 http:// 或 https:// 接口地址。";
-    const credentialError = keyError(apiKey, keyRequired);
-    if (credentialError) errors["api-key"] = credentialError;
-    if (embeddingMode === "custom") {
+    if (focusSection !== "embedding") {
+      if (!model.trim()) errors.model = "请填写生成模型名。";
+      if (!validEndpoint(baseUrl))
+        errors["base-url"] = "请填写完整的 http:// 或 https:// 接口地址。";
+      const credentialError = keyError(apiKey, keyRequired);
+      if (credentialError) errors["api-key"] = credentialError;
+    }
+    if (focusSection !== "generation" && embeddingMode === "custom") {
       if (!embeddingModel.trim())
         errors["embedding-model"] = "请填写向量模型名。";
       if (!validEndpoint(embeddingBaseUrl))
@@ -619,14 +706,16 @@ export function ModelSettings({
         ? { expected_revision: editing.revision }
         : { expected_revision: 0 };
       if (editing) {
-        if (input.name !== editing.name) patch.name = input.name;
-        if (input.model !== editing.model) patch.model = input.model;
-        if (input.base_url !== editing.base_url)
-          patch.base_url = input.base_url;
-        if (input.disable_thinking !== editing.disable_thinking)
-          patch.disable_thinking = input.disable_thinking;
-        if (apiKey) patch.api_key = apiKey;
-        if (embeddingMode === "custom") {
+        if (focusSection !== "embedding") {
+          if (input.name !== editing.name) patch.name = input.name;
+          if (input.model !== editing.model) patch.model = input.model;
+          if (input.base_url !== editing.base_url)
+            patch.base_url = input.base_url;
+          if (input.disable_thinking !== editing.disable_thinking)
+            patch.disable_thinking = input.disable_thinking;
+          if (apiKey) patch.api_key = apiKey;
+        }
+        if (focusSection !== "generation" && embeddingMode === "custom") {
           if (embeddingModel !== editing.embedding_model)
             patch.embedding_model = embeddingModel;
           if (embeddingProvider !== editing.embedding_provider_kind)
@@ -636,6 +725,7 @@ export function ModelSettings({
           if (embeddingBaseUrl !== (editing.embedding_base_url ?? ""))
             patch.embedding_base_url = embeddingBaseUrl;
         } else if (
+          focusSection !== "generation" &&
           embeddingModeChanged &&
           editing.embedding_provider_kind !== BUILTIN_EMBEDDING_KIND
         ) {
@@ -699,11 +789,23 @@ export function ModelSettings({
       <div className="section-heading">
         <div>
           <p className="section-index">02</p>
-          <h2 id="models-title">{text("记忆模型")}</h2>
+          <h2 id="models-title">
+            {text(
+              focusSection === "generation"
+                ? "记忆整理"
+                : focusSection === "embedding"
+                  ? "记忆搜索"
+                  : "记忆模型",
+            )}
+          </h2>
         </div>
         <p>
           {text(
-            "只需配置生成模型。向量嵌入已内置在本机，不为 System 1、System 2 分开选模型。",
+            focusSection === "generation"
+              ? "配置用于理解会话、整理记忆的模型。"
+              : focusSection === "embedding"
+                ? "推荐使用本地内置搜索；需要连接自定义服务时再展开配置。"
+                : "只需配置生成模型。向量嵌入已内置在本机，不为 System 1、System 2 分开选模型。",
           )}
         </p>
       </div>
@@ -956,326 +1058,359 @@ export function ModelSettings({
               {text("刷新配置列表")}
             </button>
           )}
-          <div className="model-form-field">
-            {text("服务商预设")}
-            <OptionMenu
-              ariaLabel={text("服务商预设")}
-              describedBy="model-preset-help"
-              value={providerPreset}
-              disabled={formLocked}
-              options={[
-                ...PROVIDER_PRESETS.map((item) => ({
-                  value: item.id,
-                  label: item.label,
-                })),
-                { value: "custom", label: text("自定义兼容服务") },
-              ]}
-              onChange={(value) => {
-                const next = PROVIDER_PRESETS.find((item) => item.id === value);
-                setProviderPreset(value);
-                if (!next) return;
-                setProvider(next.provider);
-                setBaseUrl(next.baseUrl);
-                setModel(next.model);
-                setApiKey("");
-                setDisableThinking(true);
-                if (editing) {
-                  setName(next.label);
-                  setNameEdited(true);
-                } else if (!nameEdited) {
-                  setName(suggestedName(next.model, next.provider));
-                }
-                setFields({});
-                setSaveError(null);
-              }}
-            />
-            <small id="model-preset-help">
-              {text(
-                "只是帮你填好接口地址和一个模型名，不代表这个模型当前可用。 请对照服务商的模型列表核对后再保存。",
-              )}
-            </small>
-          </div>
-          <label>
-            {text("协议")}
-            <select
-              name="provider"
-              aria-label={text("协议")}
-              aria-describedby="model-provider-help"
-              value={provider}
-              disabled={formLocked}
-              onChange={(event) => {
-                const next = event.target.value as ProviderKind;
-                setProvider(next);
-                setProviderPreset("custom");
-                if (!nameEdited) setName(suggestedName(model, next));
-              }}
-            >
-              {/* Only what the backend will actually activate. These used to be
-               * listed and disabled, which put two dead ends on screen and made
-               * the reader parse a parenthesis to find out they were dead. */}
-              {PROVIDERS.filter((item) => item.activatable).map((item) => (
-                <option key={item.kind} value={item.kind}>
-                  {text(item.label)}
-                </option>
-              ))}
-            </select>
-            <small id="model-provider-help">
-              {text("与模型服务提供的接口协议保持一致。")}
-            </small>
-          </label>
-          <label>
-            {text("配置名称")}
-            <input
-              name="name"
-              aria-label={text("配置名称")}
-              aria-describedby="model-name-help"
-              autoComplete="off"
-              maxLength={128}
-              value={name}
-              disabled={formLocked}
-              onChange={(event) => {
-                setNameEdited(true);
-                setName(event.target.value);
-              }}
-            />
-            <small id="model-name-help">
-              {text("用于区分配置，不影响模型请求。")}
-            </small>
-          </label>
-          <label>
-            {text("生成模型名")}
-            <input
-              name="model"
-              aria-label={text("生成模型名")}
-              aria-describedby={`model-identifier-help${fields.model ? " model-field-error" : ""}`}
-              aria-invalid={!!fields.model}
-              autoComplete="off"
-              required
-              maxLength={256}
-              value={model}
-              disabled={formLocked}
-              onChange={(event) => {
-                setModel(event.target.value);
-                setProviderPreset("custom");
-                if (!nameEdited) setName(suggestedName(event.target.value));
-              }}
-              placeholder={text("例如：gpt-4o-mini…")}
-            />
-            <small id="model-identifier-help">
-              {text("填写服务方提供的完整模型标识。")}
-            </small>
-            {fields.model && (
-              <small id="model-field-error" className="model-field-error">
-                {text(fields.model)}
-              </small>
-            )}
-          </label>
-          {/* Disclosure only changes visibility; mode determines what is saved. */}
-          <div className="model-advanced">
-            <button
-              type="button"
-              className="quiet"
-              aria-expanded={advancedEmbedding}
-              disabled={formLocked}
-              onClick={() => setAdvancedEmbedding(!advancedEmbedding)}
-            >
-              {text("高级：自行配置向量模型")}
-            </button>
-            {advancedEmbedding ? (
-              <>
-                <label>
-                  {text("向量配置模式")}
-                  <select
-                    name="embedding-mode"
-                    value={embeddingMode}
-                    disabled={formLocked}
-                    onChange={(event) => {
-                      setEmbeddingMode(
-                        event.target.value as "local" | "custom",
-                      );
-                      setEmbeddingModeChanged(true);
-                      setFields((previous) => ({
-                        ...previous,
-                        "embedding-model": undefined,
-                        "embedding-base-url": undefined,
-                      }));
-                    }}
-                  >
-                    <option value="local">{text("本地内置")}</option>
-                    <option value="custom">{text("自定义向量模型")}</option>
-                  </select>
-                </label>
-                {embeddingMode === "custom" ? (
-                  <>
-                    <label>
-                      {text("向量模型名")}
-                      <input
-                        name="embedding-model"
-                        autoComplete="off"
-                        required
-                        maxLength={256}
-                        value={embeddingModel}
-                        disabled={formLocked}
-                        aria-invalid={!!fields["embedding-model"]}
-                        aria-describedby={
-                          fields["embedding-model"]
-                            ? "model-embedding-error"
-                            : undefined
-                        }
-                        onChange={(event) =>
-                          setEmbeddingModel(event.target.value)
-                        }
-                        placeholder={text("例如：text-embedding-3-small…")}
-                      />
-                      {fields["embedding-model"] && (
-                        <small
-                          id="model-embedding-error"
-                          className="model-field-error"
-                        >
-                          {text(fields["embedding-model"])}
-                        </small>
-                      )}
-                    </label>
-                    <label>
-                      {text("向量模型来源")}
-                      <select
-                        name="embedding-provider"
-                        value={embeddingProvider}
-                        disabled={formLocked}
-                        onChange={(event) => {
-                          const next = event.target.value as
-                            | "openai_compatible"
-                            | "ollama";
-                          setEmbeddingProvider(next);
-                        }}
-                      >
-                        <option value="ollama">{text("本机 Ollama")}</option>
-                        <option value="openai_compatible">
-                          {text("同源 OpenAI-compatible（共用 API Key）")}
-                        </option>
-                      </select>
-                    </label>
-                    <label>
-                      {text("向量模型 Base URL")}
-                      <input
-                        name="embedding-base-url"
-                        type="url"
-                        inputMode="url"
-                        autoComplete="off"
-                        required
-                        value={embeddingBaseUrl}
-                        disabled={formLocked}
-                        placeholder={
-                          embeddingProvider === "ollama"
-                            ? "http://127.0.0.1:11434"
-                            : baseUrl
-                        }
-                        aria-invalid={!!fields["embedding-base-url"]}
-                        aria-describedby={
-                          fields["embedding-base-url"]
-                            ? "model-embedding-url-error"
-                            : undefined
-                        }
-                        onChange={(event) =>
-                          setEmbeddingBaseUrl(event.target.value)
-                        }
-                      />
-                      {fields["embedding-base-url"] && (
-                        <small
-                          id="model-embedding-url-error"
-                          className="model-field-error"
-                        >
-                          {text(fields["embedding-base-url"])}
-                        </small>
-                      )}
-                    </label>
-                    {embeddingProvider === "openai_compatible" ? (
-                      <small>
-                        {text("为避免凭据外泄，向量地址必须与生成模型同源。")}
-                      </small>
-                    ) : null}
-                  </>
-                ) : (
-                  <small>
-                    {text("使用内置本地向量模型；不会发送内容给远程向量服务。")}
+          {focusSection !== "embedding" && (
+            <>
+              <div className="model-form-field">
+                {text("服务商预设")}
+                <OptionMenu
+                  ariaLabel={text("服务商预设")}
+                  describedBy="model-preset-help"
+                  value={providerPreset}
+                  disabled={formLocked}
+                  options={[
+                    ...PROVIDER_PRESETS.map((item) => ({
+                      value: item.id,
+                      label: item.label,
+                    })),
+                    { value: "custom", label: text("自定义兼容服务") },
+                  ]}
+                  onChange={(value) => {
+                    const next = PROVIDER_PRESETS.find(
+                      (item) => item.id === value,
+                    );
+                    setProviderPreset(value);
+                    if (!next) return;
+                    setProvider(next.provider);
+                    setBaseUrl(next.baseUrl);
+                    setModel(next.model);
+                    setApiKey("");
+                    setDisableThinking(true);
+                    if (editing) {
+                      setName(next.label);
+                      setNameEdited(true);
+                    } else if (!nameEdited) {
+                      setName(suggestedName(next.model, next.provider));
+                    }
+                    setFields({});
+                    setSaveError(null);
+                  }}
+                />
+                <small id="model-preset-help">
+                  {text(
+                    "只是帮你填好接口地址和一个模型名，不代表这个模型当前可用。 请对照服务商的模型列表核对后再保存。",
+                  )}
+                </small>
+              </div>
+              <label>
+                {text("协议")}
+                <select
+                  name="provider"
+                  aria-label={text("协议")}
+                  aria-describedby="model-provider-help"
+                  value={provider}
+                  disabled={formLocked}
+                  onChange={(event) => {
+                    const next = event.target.value as ProviderKind;
+                    setProvider(next);
+                    setProviderPreset("custom");
+                    if (!nameEdited) setName(suggestedName(model, next));
+                  }}
+                >
+                  {/* Only what the backend will actually activate. These used to be
+                   * listed and disabled, which put two dead ends on screen and made
+                   * the reader parse a parenthesis to find out they were dead. */}
+                  {PROVIDERS.filter((item) => item.activatable).map((item) => (
+                    <option key={item.kind} value={item.kind}>
+                      {text(item.label)}
+                    </option>
+                  ))}
+                </select>
+                <small id="model-provider-help">
+                  {text("与模型服务提供的接口协议保持一致。")}
+                </small>
+              </label>
+              <label>
+                {text("配置名称")}
+                <input
+                  name="name"
+                  aria-label={text("配置名称")}
+                  aria-describedby="model-name-help"
+                  autoComplete="off"
+                  maxLength={128}
+                  value={name}
+                  disabled={formLocked}
+                  onChange={(event) => {
+                    setNameEdited(true);
+                    setName(event.target.value);
+                  }}
+                />
+                <small id="model-name-help">
+                  {text("用于区分配置，不影响模型请求。")}
+                </small>
+              </label>
+              <label>
+                {text("生成模型名")}
+                <input
+                  name="model"
+                  aria-label={text("生成模型名")}
+                  aria-describedby={`model-identifier-help${fields.model ? " model-field-error" : ""}`}
+                  aria-invalid={!!fields.model}
+                  autoComplete="off"
+                  required
+                  maxLength={256}
+                  value={model}
+                  disabled={formLocked}
+                  onChange={(event) => {
+                    setModel(event.target.value);
+                    setProviderPreset("custom");
+                    if (!nameEdited) setName(suggestedName(event.target.value));
+                  }}
+                  placeholder={text("例如：gpt-4o-mini…")}
+                />
+                <small id="model-identifier-help">
+                  {text("填写服务方提供的完整模型标识。")}
+                </small>
+                {fields.model && (
+                  <small id="model-field-error" className="model-field-error">
+                    {text(fields.model)}
                   </small>
                 )}
-              </>
-            ) : null}
-            {!advancedEmbedding && embeddingMode === "custom" ? (
-              <p className="model-help">
-                {text("自定义向量")}: {embeddingModel || text("尚未填写模型")} ·{" "}
-                {embeddingBaseUrl || text("尚未填写地址")}
-              </p>
-            ) : null}
-          </div>
-          <label>
-            Base URL
-            <input
-              name="base-url"
-              aria-label="Base URL"
-              aria-describedby={`model-url-help${fields["base-url"] ? " model-url-error" : ""}`}
-              aria-invalid={!!fields["base-url"]}
-              type="url"
-              inputMode="url"
-              autoComplete="off"
-              required={provider !== "hy_default"}
-              disabled={formLocked || provider === "hy_default"}
-              value={baseUrl}
-              onChange={(event) => {
-                setBaseUrl(event.target.value);
-                setProviderPreset("custom");
-              }}
-            />
-            <small id="model-url-help">
-              {text("填写服务接口地址，不是聊天网页地址。")}
-            </small>
-            {fields["base-url"] && (
-              <small id="model-url-error" className="model-field-error">
-                {text(fields["base-url"])}
-              </small>
-            )}
-          </label>
-          <label>
-            API Key{keyRequired ? "" : text("（可选）")}
-            <input
-              name="api-key"
-              aria-label={`API Key${keyRequired ? "" : text("（可选）")}`}
-              aria-describedby={`model-key-help${fields["api-key"] ? " model-key-error" : ""}`}
-              aria-invalid={!!fields["api-key"]}
-              type="password"
-              autoComplete="off"
-              required={keyRequired}
-              value={apiKey}
-              disabled={formLocked}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={text("保存后不会再次显示…")}
-            />
-            <small id="model-key-help">
-              {text(
-                editing && !endpointMoved
-                  ? "留空保留已保存密钥；填写新密钥后需重新测试和启用。"
-                  : editing && keyRequired
-                    ? "换了服务商后需要填写新的 API Key，已保存的密钥不会带到新地址。"
-                    : "保存在系统安全存储中，不随安装包分发。",
+              </label>
+            </>
+          )}
+          {/* Disclosure only changes visibility; mode determines what is saved. */}
+          {focusSection !== "generation" && (
+            <div className="model-advanced">
+              {focusSection === "embedding" && (
+                <div className="model-search-intro">
+                  <strong>{text("搜索方式")}</strong>
+                  <p>
+                    {text(
+                      "本地内置适合大多数人：无需密钥，内容不会发送到远程向量服务。",
+                    )}
+                  </p>
+                </div>
               )}
-            </small>
-            {fields["api-key"] && (
-              <small id="model-key-error" className="model-field-error">
-                {text(fields["api-key"])}
-              </small>
-            )}
-          </label>
-          <label>
-            <input
-              name="disable-thinking"
-              type="checkbox"
-              checked={disableThinking}
-              disabled={formLocked}
-              onChange={(event) => setDisableThinking(event.target.checked)}
-            />
-            {text("关闭思考链（向支持的厂商下发 thinking-off 参数）")}
-          </label>
+              {focusSection !== "embedding" && (
+                <button
+                  type="button"
+                  className="quiet"
+                  aria-expanded={advancedEmbedding}
+                  disabled={formLocked}
+                  onClick={() => setAdvancedEmbedding(!advancedEmbedding)}
+                >
+                  {text("高级：自行配置向量模型")}
+                </button>
+              )}
+              {focusSection === "embedding" || advancedEmbedding ? (
+                <>
+                  <label>
+                    {text(
+                      focusSection === "embedding"
+                        ? "搜索模型"
+                        : "向量配置模式",
+                    )}
+                    <select
+                      name="embedding-mode"
+                      value={embeddingMode}
+                      disabled={formLocked}
+                      onChange={(event) => {
+                        setEmbeddingMode(
+                          event.target.value as "local" | "custom",
+                        );
+                        setEmbeddingModeChanged(true);
+                        setFields((previous) => ({
+                          ...previous,
+                          "embedding-model": undefined,
+                          "embedding-base-url": undefined,
+                        }));
+                      }}
+                    >
+                      <option value="local">{text("本地内置（推荐）")}</option>
+                      <option value="custom">{text("自定义搜索模型")}</option>
+                    </select>
+                  </label>
+                  <small>{text("技术类型：Embedding")}</small>
+                  {embeddingMode === "custom" ? (
+                    <>
+                      <label>
+                        {text("向量模型名")}
+                        <input
+                          name="embedding-model"
+                          autoComplete="off"
+                          required
+                          maxLength={256}
+                          value={embeddingModel}
+                          disabled={formLocked}
+                          aria-invalid={!!fields["embedding-model"]}
+                          aria-describedby={
+                            fields["embedding-model"]
+                              ? "model-embedding-error"
+                              : undefined
+                          }
+                          onChange={(event) =>
+                            setEmbeddingModel(event.target.value)
+                          }
+                          placeholder={text("例如：text-embedding-3-small…")}
+                        />
+                        {fields["embedding-model"] && (
+                          <small
+                            id="model-embedding-error"
+                            className="model-field-error"
+                          >
+                            {text(fields["embedding-model"])}
+                          </small>
+                        )}
+                      </label>
+                      <label>
+                        {text("向量模型来源")}
+                        <select
+                          name="embedding-provider"
+                          value={embeddingProvider}
+                          disabled={formLocked}
+                          onChange={(event) => {
+                            const next = event.target.value as
+                              | "openai_compatible"
+                              | "ollama";
+                            setEmbeddingProvider(next);
+                          }}
+                        >
+                          <option value="ollama">{text("本机 Ollama")}</option>
+                          <option value="openai_compatible">
+                            {text("同源 OpenAI-compatible（共用 API Key）")}
+                          </option>
+                        </select>
+                      </label>
+                      <label>
+                        {text("向量模型 Base URL")}
+                        <input
+                          name="embedding-base-url"
+                          type="url"
+                          inputMode="url"
+                          autoComplete="off"
+                          required
+                          value={embeddingBaseUrl}
+                          disabled={formLocked}
+                          placeholder={
+                            embeddingProvider === "ollama"
+                              ? "http://127.0.0.1:11434"
+                              : baseUrl
+                          }
+                          aria-invalid={!!fields["embedding-base-url"]}
+                          aria-describedby={
+                            fields["embedding-base-url"]
+                              ? "model-embedding-url-error"
+                              : undefined
+                          }
+                          onChange={(event) =>
+                            setEmbeddingBaseUrl(event.target.value)
+                          }
+                        />
+                        {fields["embedding-base-url"] && (
+                          <small
+                            id="model-embedding-url-error"
+                            className="model-field-error"
+                          >
+                            {text(fields["embedding-base-url"])}
+                          </small>
+                        )}
+                      </label>
+                      {embeddingProvider === "openai_compatible" ? (
+                        <small>
+                          {text("为避免凭据外泄，向量地址必须与生成模型同源。")}
+                        </small>
+                      ) : null}
+                    </>
+                  ) : (
+                    <small>
+                      {text(
+                        "使用内置本地向量模型；不会发送内容给远程向量服务。",
+                      )}
+                    </small>
+                  )}
+                </>
+              ) : null}
+              {focusSection !== "embedding" &&
+              !advancedEmbedding &&
+              embeddingMode === "custom" ? (
+                <p className="model-help">
+                  {text("自定义向量")}: {embeddingModel || text("尚未填写模型")}{" "}
+                  · {embeddingBaseUrl || text("尚未填写地址")}
+                </p>
+              ) : null}
+            </div>
+          )}
+          {focusSection !== "embedding" && (
+            <>
+              <label>
+                Base URL
+                <input
+                  name="base-url"
+                  aria-label="Base URL"
+                  aria-describedby={`model-url-help${fields["base-url"] ? " model-url-error" : ""}`}
+                  aria-invalid={!!fields["base-url"]}
+                  type="url"
+                  inputMode="url"
+                  autoComplete="off"
+                  required={provider !== "hy_default"}
+                  disabled={formLocked || provider === "hy_default"}
+                  value={baseUrl}
+                  onChange={(event) => {
+                    setBaseUrl(event.target.value);
+                    setProviderPreset("custom");
+                  }}
+                />
+                <small id="model-url-help">
+                  {text("填写服务接口地址，不是聊天网页地址。")}
+                </small>
+                {fields["base-url"] && (
+                  <small id="model-url-error" className="model-field-error">
+                    {text(fields["base-url"])}
+                  </small>
+                )}
+              </label>
+              <label>
+                API Key{keyRequired ? "" : text("（可选）")}
+                <input
+                  name="api-key"
+                  aria-label={`API Key${keyRequired ? "" : text("（可选）")}`}
+                  aria-describedby={`model-key-help${fields["api-key"] ? " model-key-error" : ""}`}
+                  aria-invalid={!!fields["api-key"]}
+                  type="password"
+                  autoComplete="off"
+                  required={keyRequired}
+                  value={apiKey}
+                  disabled={formLocked}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={text("保存后不会再次显示…")}
+                />
+                <small id="model-key-help">
+                  {text(
+                    editing && !endpointMoved
+                      ? "留空保留已保存密钥；填写新密钥后需重新测试和启用。"
+                      : editing && keyRequired
+                        ? "换了服务商后需要填写新的 API Key，已保存的密钥不会带到新地址。"
+                        : "保存在系统安全存储中，不随安装包分发。",
+                  )}
+                </small>
+                {fields["api-key"] && (
+                  <small id="model-key-error" className="model-field-error">
+                    {text(fields["api-key"])}
+                  </small>
+                )}
+              </label>
+              <label>
+                <input
+                  name="disable-thinking"
+                  type="checkbox"
+                  checked={disableThinking}
+                  disabled={formLocked}
+                  onChange={(event) => setDisableThinking(event.target.checked)}
+                />
+                {text("关闭思考链（向支持的厂商下发 thinking-off 参数）")}
+              </label>
+            </>
+          )}
           <div className="form-submit">
             {!compactSingle && (
               <button
@@ -1397,7 +1532,7 @@ export function ModelSettings({
                       <button
                         type="button"
                         disabled={locked || !isReady(profile)}
-                        onClick={() => models.activate(profile.profile_id)}
+                        onClick={() => void activateTested(profile)}
                       >
                         {text("设为当前模型")}
                       </button>
@@ -1421,6 +1556,27 @@ export function ModelSettings({
             ))}
         </div>
       )}
+      {embeddingSwitch.plan?.needed && switchTarget ? (
+        <EmbeddingSwitchConfirmDialog
+          plan={embeddingSwitch.plan}
+          busy={embeddingSwitch.busy === "start"}
+          errorCode={embeddingSwitch.errorCode}
+          onCancel={() => {
+            embeddingSwitch.clearPlan();
+            embeddingSwitch.clearError();
+            setSwitchTarget(null);
+            setSwitchJobId(null);
+          }}
+          onStart={() => {
+            void embeddingSwitch.startPlannedSwitch().then((job) => {
+              if (!job || !alive.current) return;
+              setSwitchJobId(job.job_id);
+              setSetupError(null);
+              onSetupComplete?.();
+            });
+          }}
+        />
+      ) : null}
     </section>
   );
 }
