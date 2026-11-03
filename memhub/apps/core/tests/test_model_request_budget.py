@@ -180,3 +180,27 @@ async def test_real_sdk_request_through_budgeted_transport(tmp_path, field):
         assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
             123,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"max_tokens": 3, "max_completion_tokens": 17},
+        {"max_tokens": 17, "max_completion_tokens": 3},
+        {"max_completion_tokens": True},
+    ],
+)
+async def test_invalid_either_field_never_reaches_model(tmp_path, body):
+    sent = []
+    store = budget(tmp_path)
+    async with httpx.AsyncClient(
+        transport=BudgetedModelTransport(
+            store, inner=httpx.MockTransport(lambda req: sent.append(req) or httpx.Response(200))
+        )
+    ) as client:
+        with pytest.raises(ModelRequestBudgetError):
+            await client.post("https://example.test/chat/completions", json=body)
+    assert not sent
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT COUNT(*) FROM model_request_budget_events").fetchone() == (0,)
