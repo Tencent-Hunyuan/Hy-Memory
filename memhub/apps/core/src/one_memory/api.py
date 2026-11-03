@@ -4558,6 +4558,7 @@ def create_app(
                     request,
                     model_ready=lambda: _recall_model_ready(app),
                     recall_memories=target.recall_async,
+                    bounded_sdk_primary=isinstance(target, SdkRecallTarget),
                     has_memories=lambda: _library_has_memories(app, request.user_id),
                     raw_sources=lambda: _recall_raw_sources(app, request, access, started),
                     search_raw=lambda query, limit, sources: _search_sdk_raw(
