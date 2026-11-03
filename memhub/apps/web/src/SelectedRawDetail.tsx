@@ -5,15 +5,10 @@ import type {
 } from "@one-memory/contracts";
 import { clockStamp } from "./clock-stamp";
 import { useGuiLanguage } from "./gui-language";
+import { rawRecordTime } from "./sdk-raw-map";
 import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 
 type RawRecord = SdkRawRecord | SdkRawContextItem;
-
-function recordTime(record: RawRecord): string | null {
-  if (typeof record.memory_at === "number")
-    return new Date(record.memory_at * 1_000).toISOString();
-  return record.memory_at;
-}
 
 function authorLabel(
   role: string,
@@ -67,7 +62,7 @@ export function SelectedRawDetail({
       <p className="selected-memory-source">
         {t("selectedMemory.sourceLine", {
           source,
-          time: clockStamp(recordTime(record), locale),
+          time: clockStamp(rawRecordTime(record), locale),
         })}
       </p>
     </article>

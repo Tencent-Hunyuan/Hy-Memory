@@ -118,6 +118,8 @@ export function MemorySpace({
   };
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [selectedRaw, setSelectedRaw] = useState<RawMapRecord | null>(null);
+  const selectedRawRef = useRef<RawMapRecord | null>(null);
+  selectedRawRef.current = selectedRaw;
   const rawRecords = useRef(new Map<string, RawMapRecord>());
   const [detailLoad, setDetailLoad] = useState<{
     memoryId: string;
@@ -193,12 +195,14 @@ export function MemorySpace({
     /** The filter the shown page was read with, for the count above it. */
     settledSource: string;
     settledQuery: string;
+    settledMode: "lite" | "pro" | "ultra" | null;
   }>({
     page: null,
     loading: false,
     failed: false,
     settledSource: "",
     settledQuery: "",
+    settledMode: null,
   });
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
   const [sdkLibrarySource, setSdkLibrarySource] = useState("");
@@ -212,6 +216,8 @@ export function MemorySpace({
     processing?.pipeline?.mode ??
     (processingResolved && !processingFailed ? "pro" : null);
   const lite = pipelineMode === "lite";
+  const sdkPage =
+    sdkLibrary.settledMode === pipelineMode ? sdkLibrary.page : null;
   const sdkRequestedScope = JSON.stringify([
     pipelineMode,
     sdkLibraryQuery.trim(),
@@ -233,7 +239,7 @@ export function MemorySpace({
   });
   // The page the list shows, for the namespace of a memory being opened.
   const sdkPageRef = useRef<MemoryLibraryPage | null>(null);
-  sdkPageRef.current = sdkLibrary.page;
+  sdkPageRef.current = sdkPage;
   const sdkMapVisible =
     simplified &&
     active &&
@@ -261,6 +267,13 @@ export function MemorySpace({
       controller = request;
       if (first) setSdkLibrary((current) => ({ ...current, loading: true }));
       try {
+        const rememberRaw = (items: RawMapRecord[]) => {
+          const next = new Map<string, RawMapRecord>();
+          if (selectedRawRef.current)
+            next.set(selectedRawRef.current.raw_id, selectedRawRef.current);
+          for (const item of items) next.set(item.raw_id, item);
+          rawRecords.current = next;
+        };
         const [page, graph] = lite
           ? await Promise.all([
               query
@@ -268,8 +281,7 @@ export function MemorySpace({
                     source,
                     signal: request.signal,
                   }).then((items) => {
-                    for (const item of items)
-                      rawRecords.current.set(item.raw_id, item);
+                    rememberRaw(items);
                     return rawSearchPage(items);
                   })
                 : getSdkRaw(
@@ -280,8 +292,7 @@ export function MemorySpace({
                       signal: request.signal,
                     },
                   ).then((rawPage) => {
-                    for (const item of rawPage.items)
-                      rawRecords.current.set(item.raw_id, item);
+                    rememberRaw(rawPage.items);
                     return rawLibraryPage(rawPage);
                   }),
               Promise.resolve({
@@ -332,6 +343,7 @@ export function MemorySpace({
           failed: false,
           settledSource: sdkLibrarySource,
           settledQuery: sdkLibraryQuery,
+          settledMode: pipelineMode,
         });
         setSdkGraph({ scope: windowKey, ...graph });
       } catch {
@@ -504,6 +516,18 @@ export function MemorySpace({
       return;
     previousPipelineMode.current = pipelineMode;
     rawRecords.current.clear();
+    sdkSearchWindow.current = { key: "", id: null };
+    setSdkLibraryOffset(0);
+    setSdkLibraryQuery("");
+    setSdkGraph(null);
+    setSdkLibrary((current) => ({
+      ...current,
+      page: null,
+      loading: true,
+      failed: false,
+      settledQuery: "",
+      settledMode: null,
+    }));
     closeDetail();
   }, [pipelineMode, closeDetail]);
 
@@ -827,18 +851,18 @@ export function MemorySpace({
               ? pipelineMode === null
                 ? t("memory:记忆暂时无法读取")
                 : lite
-                  ? sdkLibrary.page
+                  ? sdkPage
                     ? `${t("memory:原始对话")} · ${tn(
                         "sdk.raw.found",
-                        sdkLibrary.page.total,
+                        sdkPage.total,
                       )}`
                     : sdkLibrary.failed
                       ? null
                       : t("memory:正在读取…")
-                  : sdkLibrary.page
+                  : sdkPage
                     ? tn(
                         "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                        sdkLibrary.page.total,
+                        sdkPage.total,
                         {
                           filter: sdkFilterLabel
                             ? t("memory:（{filter}）", {
@@ -846,7 +870,7 @@ export function MemorySpace({
                               })
                             : "",
                           shown: new Intl.NumberFormat(locale).format(
-                            sdkLibrary.page.items.length,
+                            sdkPage.items.length,
                           ),
                         },
                       )
@@ -1039,15 +1063,19 @@ export function MemorySpace({
         </details>
       ) : null}
 
-      <ModelBackoffBanner
-        processing={processing}
-        onConfigureModel={onConfigureModel}
-      />
-      <ModelPrompt
-        processing={processing}
-        hasMemories={(sdkLibrary.page?.total ?? 0) > 0}
-        onConfigureModel={onConfigureModel}
-      />
+      {!lite ? (
+        <>
+          <ModelBackoffBanner
+            processing={processing}
+            onConfigureModel={onConfigureModel}
+          />
+          <ModelPrompt
+            processing={processing}
+            hasMemories={(sdkPage?.total ?? 0) > 0}
+            onConfigureModel={onConfigureModel}
+          />
+        </>
+      ) : null}
       {simplified && !lite && pendingAdd ? (
         <p className="memory-pending-add" role="status">
           <span>
@@ -1124,7 +1152,7 @@ export function MemorySpace({
             ? {
                 query: sdkLibraryQuery,
                 source: sdkLibrarySource,
-                page: sdkLibrary.page,
+                page: sdkPage,
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
                 graphLoading: !sdkGraphSettled,
@@ -1147,13 +1175,13 @@ export function MemorySpace({
           displayedMode !== "map" ||
           (simplified && pipelineMode === null)
         }
-        memories={sdkLibrary.page?.items ?? []}
+        memories={sdkPage?.items ?? []}
         graph={visibleSdkGraph}
         sources={sources}
         processing={processing}
         arrival={memoryArrival}
         onViewHistory={simplified ? onConnect : () => setMode("history")}
-        loaded={sdkLibrary.page !== null}
+        loaded={sdkPage !== null}
         detail={detail}
         detailLoad={detailLoad}
         overlayBlocked={
@@ -1161,7 +1189,7 @@ export function MemorySpace({
           deleteCount > 0 ||
           // Only the paged map waits for its page; the three-column surface
           // never reads one.
-          (simplified && sdkLibrary.page === null)
+          (simplified && sdkPage === null)
         }
         draft={draft}
         busy={busy}

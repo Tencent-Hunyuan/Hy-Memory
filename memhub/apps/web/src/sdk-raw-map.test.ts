@@ -51,6 +51,23 @@ describe("raw map projection", () => {
     expect(page.items[0].memory_id).toBe("raw-search");
   });
 
+  it("falls back to import time when conversation time is unavailable", () => {
+    const page = rawLibraryPage({
+      items: [{ ...record, memory_at: null }],
+      total: 1,
+      offset: 0,
+      limit: 20,
+    });
+
+    expect(page.source_time_by_memory?.["raw-1"]).toEqual({
+      at: new Date(record.gmt_created * 1_000).toISOString(),
+      basis: "import",
+    });
+    expect(rawDetail({ ...record, memory_at: null }).sdk_memory_at).toBe(
+      new Date(record.gmt_created * 1_000).toISOString(),
+    );
+  });
+
   it("adapts raw only for the shared selection identity", () => {
     expect(rawDetail(record)).toMatchObject({
       memory: { memory_id: "raw-1", content: record.content },

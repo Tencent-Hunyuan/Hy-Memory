@@ -1233,13 +1233,17 @@ export function MemoryMap(props: Props) {
                       ? text("正在读取记忆地图…")
                       : library?.page &&
                           (library.query || library.source || groupKey)
-                        ? text("当前筛选没有可显示的记忆")
+                        ? raw
+                          ? t("sdk.raw.found", { count: 0 })
+                          : text("当前筛选没有可显示的记忆")
                         : !loaded
                           ? raw
                             ? t("sdk.raw.recent")
                             : text("正在读取记忆…")
                           : active.length
-                            ? text("当前筛选没有可显示的记忆")
+                            ? raw
+                              ? t("sdk.raw.found", { count: 0 })
+                              : text("当前筛选没有可显示的记忆")
                             : raw
                               ? t("sdk.raw.empty")
                             : arrival.importedMessages > 0
@@ -1376,7 +1380,9 @@ export function MemoryMap(props: Props) {
               {library?.failed &&
               library.source === selectedSource.source_id ? (
                 <>
-                  <p role="alert">{text("记忆暂时无法读取")}</p>
+                  <p role="alert">
+                    {raw ? t("sdk.raw.loadFailed") : text("记忆暂时无法读取")}
+                  </p>
                   <button
                     type="button"
                     className="secondary"
@@ -1393,10 +1399,14 @@ export function MemoryMap(props: Props) {
                     <i />
                     <i />
                   </div>
-                  <p role="status">{text("正在读取记忆详情…")}</p>
+                  <p role="status">
+                    {raw ? t("sdk.raw.recent") : text("正在读取记忆详情…")}
+                  </p>
                 </>
               ) : (
-                <p>{text("还没有已生成的记忆")}</p>
+                <p>
+                  {raw ? t("sdk.raw.empty") : text("还没有已生成的记忆")}
+                </p>
               )}
             </div>
           ) : props.simplified && inspectorDetail ? (
