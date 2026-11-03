@@ -144,8 +144,6 @@ class LLMConfig:
     omit_temperature: bool = None
     max_tokens: int = None  # 默认 max_tokens（通用）
     agent_max_tokens: int = None  # Agent 场景统一 max_tokens
-    # Chat Completions gateways differ in the name of their output budget.
-    output_token_parameter: Optional[str] = None
 
     # 调用参数
     timeout: int = None  # LLM 请求超时（秒）
@@ -175,6 +173,8 @@ class LLMConfig:
     # OpenAI-compatible 扩展（extra_headers / extra_body 原样透传）
     extra_headers: Optional[Dict[str, str]] = None
     extra_body: Optional[Dict[str, Any]] = None
+    # Append fields to retain positional constructor compatibility.
+    output_token_parameter: Optional[str] = None
 
     def __post_init__(self):
         if self.provider is None:

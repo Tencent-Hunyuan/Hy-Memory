@@ -214,12 +214,12 @@ class LLMConfig:
     # None = **请求里完全不带 temperature**。
     # 有些网关（如 Opus 5）只接受 temperature=1 或干脆不传，传 0/0.1/0.3 会 400。
     temperature: Optional[float] = 0.7
-    output_token_parameter: str = "max_tokens"
     timeout: int = 30
     max_retries: int = 5
     retry_delay: float = 1.0  # 初始 delay，每次递增
     extra_headers: Optional[Dict[str, str]] = None
     extra_body: Optional[Dict[str, Any]] = None
+    output_token_parameter: str = "max_tokens"
 
 
 class LLMProvider:

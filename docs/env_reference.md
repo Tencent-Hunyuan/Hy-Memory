@@ -24,7 +24,7 @@
 | `MEMORY_LLM_MODEL` | `gpt-4.1-nano` | 模型名 |
 | `MEMORY_LLM_API_KEY` | — | 回退：`LLM_API_KEY`、`OPENAI_API_KEY` |
 | `MEMORY_LLM_BASE_URL` | — | 回退到 `LLM_BASE_URL` |
-| `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER` | `max_tokens` | Chat Completions output limit field; set to `max_completion_tokens` for endpoints that require it. Applies to the SDK LLM provider. |
+| `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER` | `max_tokens` | Chat Completions output limit field; set to `max_completion_tokens` for endpoints that require it. Applies to the SDK LLM provider. `MEMORY_LLM_EXTRA_BODY` is merged afterwards and may override or add either limit field; omit those keys when using this setting. |
 | `MEMORY_LLM_TEMPERATURE` | `0.1` | 统一温度；`none` / `omit` / 空值表示不发送 |
 | `MEMORY_LLM_OMIT_TEMPERATURE` | `false` | `true` 时完全不发送 `temperature` |
 | `MEMORY_LLM_MAX_TOKENS` | `1024` | 通用生成上限 |
