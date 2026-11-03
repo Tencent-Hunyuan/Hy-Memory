@@ -26,6 +26,12 @@ vi.mock("./api", () => ({
   getImportJobs: vi.fn(),
   connectSources: vi.fn(),
   completeOnboarding: vi.fn(),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  }),
+  setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
   getSourceConnection: vi.fn(),
   createImportJob: vi.fn(),
   detectSource: vi.fn(),
@@ -161,6 +167,34 @@ beforeEach(() => {
     ...state,
     status: "completed",
   });
+  vi.mocked(api.getMemoryMode).mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  });
+  vi.mocked(api.setMemoryMode).mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+    previous_mode: "pro",
+    effects: [],
+  });
   vi.mocked(api.connectSources).mockImplementation(
     async (ids, _confirmed, options) => ({
       request_id: options?.requestId ?? null,
@@ -267,6 +301,8 @@ it("empty discovery shows zero and allows explicit entry without a connection re
     true,
   );
   fireEvent.click(screen.getByRole("button", { name: "稍后添加，先进入" }));
+  fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(screen.getByRole("button", { name: "继续" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );
@@ -317,6 +353,8 @@ it("partial acceptance preserves the successful job and failure through model-st
   expect(screen.getByLabelText("失败来源").textContent).toBe("cursor");
   expect(api.completeOnboarding).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "进入应用" }));
+  fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(screen.getByRole("button", { name: "继续" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );

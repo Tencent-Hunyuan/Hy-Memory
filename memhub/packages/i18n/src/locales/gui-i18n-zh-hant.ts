@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeTraditionalChineseMessages } from "../gui-i18n-mode.js";
 
 /** Traditional Chinese (zh-Hant, Taiwan usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const traditionalChineseMessages: Record<MessageKey, string> = {
+  ...modeTraditionalChineseMessages,
   "connectionFallback.title": "連線其他工具",
   "connectionFallback.desktopOnly": "本機配對僅在桌面 App 中可用。",
   "connectionFallback.description":
@@ -69,6 +71,13 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "sdk.raw.loadFailed": "原始對話暫時無法讀取。",
   "sdk.raw.searchFailed": "原始對話搜尋失敗，請重試。",
   "sdk.raw.recent": "最近原始對話",
+  "sdk.raw.empty": "還沒有原始對話。連接來源後，對話會顯示在這裡。",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "目前使用基礎記憶。新對話會保留為原始記錄，不會產生進階記憶；過去的進階記憶仍會保留，但目前不會顯示或參與記憶召回。",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "目前使用智慧記憶。模型會把新對話整理為進階記憶。",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "目前使用深度記憶。新對話會產生進階記憶，並由知識圖譜與 evolve 持續整合。",
   "sdk.raw.found": "找到 {count} 則",
   "sdk.raw.found.one": "找到 {count} 則",
   "memoryInspector.emptyHint": "檢視它的來源、內容和修改歷史。",

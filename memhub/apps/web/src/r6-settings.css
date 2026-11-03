@@ -194,6 +194,102 @@
   margin: 0;
   text-wrap: balance;
 }
+.r6-memory-mode-settings {
+  margin: 0 0 32px;
+  padding: 0 0 32px;
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-mode-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.r6-settings .r6-memory-mode-settings .r6-mode-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 32px;
+}
+.r6-mode-heading p {
+  margin: 4px 0 0;
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-mode-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.r6-mode-option {
+  position: relative;
+  min-height: 144px;
+  padding: 18px;
+  border: 1px solid #c9d5de;
+  border-radius: 10px;
+  background: #fff;
+  color: #304757;
+  text-align: left;
+  cursor: pointer;
+}
+.r6-mode-option:hover:not(:disabled) {
+  border-color: #7892a6;
+  background: #f7fafc;
+}
+.r6-mode-option[aria-pressed="true"] {
+  border-color: #557c93;
+  background: #edf3f6;
+  box-shadow: 0 0 0 2px rgb(85 124 147 / 10%);
+}
+.r6-mode-option strong,
+.r6-mode-option span,
+.r6-mode-option small {
+  display: block;
+}
+.r6-mode-option strong {
+  margin-bottom: 8px;
+  font-size: 15px;
+  line-height: 24px;
+}
+.r6-mode-option span {
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 21px;
+}
+.r6-mode-option small {
+  margin-top: 10px;
+  color: #405e75;
+  font-weight: 600;
+}
+.r6-settings-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f1f5f8;
+  color: #405665;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-evolve-settings {
+  margin-top: 20px;
+  border-top: 1px solid #d8e2ea;
+}
+.r6-evolve-settings input[type="time"] {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #c6d2da;
+  border-radius: 8px;
+  color: #304757;
+  background: #fff;
+}
+.r6-settings-dialog ul {
+  margin: 14px 0 20px;
+  padding-left: 20px;
+  color: #4f6373;
+  font-size: 13px;
+  line-height: 22px;
+}
 .r6-settings .r6-setting-row {
   box-sizing: border-box;
   display: flex;
@@ -701,8 +797,21 @@
   .r6-settings .r6-setting-row > div {
     flex-basis: 100%;
   }
+  .r6-mode-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .r6-mode-option:last-child {
+    grid-column: 1 / -1;
+    min-height: 112px;
+  }
 }
 @media (max-width: 700px) {
+  .r6-mode-options {
+    grid-template-columns: 1fr;
+  }
+  .r6-mode-option:last-child {
+    grid-column: auto;
+  }
   .r6-settings {
     padding: 20px 16px;
   }

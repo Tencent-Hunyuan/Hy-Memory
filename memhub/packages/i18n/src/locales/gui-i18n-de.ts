@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeGermanMessages } from "../gui-i18n-mode.js";
 
 /** German (de, formal Sie) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const germanMessages: Record<MessageKey, string> = {
+  ...modeGermanMessages,
   "connectionFallback.title": "Andere Tools verbinden",
   "connectionFallback.desktopOnly":
     "Lokale Kopplung ist nur in der Desktop-App verfügbar.",
@@ -80,6 +82,14 @@ export const germanMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Originalunterhaltungen konnten nicht durchsucht werden. Bitte wiederholen Sie den Vorgang.",
   "sdk.raw.recent": "Letzte Originalunterhaltungen",
+  "sdk.raw.empty":
+    "Noch keine Originalunterhaltungen. Verbinde eine Quelle, damit sie hier erscheinen.",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Der Basisspeicher ist aktiv. Neue Unterhaltungen werden als Originale gespeichert und erzeugen keine erweiterten Erinnerungen. Vorhandene erweiterte Erinnerungen bleiben gespeichert, werden aber nicht angezeigt oder abgerufen.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Der intelligente Speicher ist aktiv. Das Modell verarbeitet neue Unterhaltungen zu erweiterten Erinnerungen.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Der tiefe Speicher ist aktiv. Neue Unterhaltungen erzeugen erweiterte Erinnerungen, die Wissensgraph und evolve weiter zusammenführen.",
   "sdk.raw.found": "{count} Ergebnisse",
   "sdk.raw.found.one": "{count} Ergebnis",
   "memoryInspector.emptyHint":

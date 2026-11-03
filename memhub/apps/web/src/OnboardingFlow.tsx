@@ -15,7 +15,7 @@ import {
   useState,
 } from "react";
 
-import { completeOnboarding } from "./api";
+import { completeOnboarding, getMemoryMode, setMemoryMode } from "./api";
 import { AppMark } from "./app-mark";
 import { saveConnectionPreferences } from "./connection-preferences";
 import {
@@ -38,6 +38,7 @@ import { isDefiniteRefusal } from "./write-outcome";
 import "./cold-start.css";
 
 export type OnboardingDestination = "memory" | "sources" | "settings";
+type OnboardingMemoryMode = "lite" | "pro";
 
 // Cold start neither reads nor writes installation intent.
 export const PLUGIN_CONSENT_KEY = "one-memory.consent.plugins";
@@ -88,7 +89,18 @@ export function OnboardingFlow({
   const [startingImport, setStartingImport] = useState<SourceResponse[] | null>(
     null,
   );
-  const [modelStep, setModelStep] = useState(false);
+  const [setupStep, setSetupStep] = useState<"review" | "mode" | "model">(
+    "review",
+  );
+  const [modeChoice, setModeChoice] = useState<OnboardingMemoryMode | null>(
+    null,
+  );
+  const [modeDestination, setModeDestination] =
+    useState<OnboardingDestination>("sources");
+  const [modeSaving, setModeSaving] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
+  const modeChoiceTouched = useRef(false);
+  const [visitedSetup, setVisitedSetup] = useState(false);
   const [visitedModel, setVisitedModel] = useState(false);
   const [modelSourceIds, setModelSourceIds] = useState<string[]>([]);
   const [connectionDraft, setConnectionDraft] = useState<ImportConnectionDraft>(
@@ -135,7 +147,7 @@ export function OnboardingFlow({
   const consideredSources = useRef(new Set<string>());
   const heading = useRef<HTMLHeadingElement>(null);
   const reviewingImport =
-    visitedModel ||
+    (visitedSetup && !completionFailed) ||
     accepted !== null ||
     startingImport !== null ||
     state.status === "importing";
@@ -307,6 +319,20 @@ export function OnboardingFlow({
 
   useEffect(() => {
     alive.current = true;
+    void getMemoryMode().then(
+      (memoryMode) => {
+        if (
+          alive.current &&
+          !modeChoiceTouched.current &&
+          memoryMode.explicitly_configured &&
+          memoryMode.configured_mode !== "ultra"
+        )
+          setModeChoice(memoryMode.configured_mode);
+      },
+      () => {
+        // The choice screen remains usable; saving rechecks Core.
+      },
+    );
     return () => {
       alive.current = false;
     };
@@ -421,7 +447,7 @@ export function OnboardingFlow({
         });
         if (alive.current) {
           setCompletionFailed(true);
-          setModelStep(false);
+          setSetupStep("review");
           // A definite refusal means it was not saved; anything else (timeout,
           // 5xx, no response) leaves the outcome unknown, and the copy must not
           // assert a failure the UI cannot prove.
@@ -449,6 +475,44 @@ export function OnboardingFlow({
     },
     [persistFinish],
   );
+
+  const requestModeChoice = useCallback(
+    (destination: OnboardingDestination) => {
+      if (finished.current) return;
+      setModeDestination(destination === "settings" ? "sources" : destination);
+      setModeError(null);
+      setError(null);
+      setVisitedSetup(true);
+      setSetupStep("mode");
+    },
+    [],
+  );
+
+  const saveModeChoice = useCallback(async () => {
+    if (
+      !modeChoice ||
+      modeSaving ||
+      finished.current ||
+      (modeChoice === "lite" && flight.current)
+    )
+      return;
+    setModeSaving(true);
+    setModeError(null);
+    try {
+      await setMemoryMode(modeChoice);
+      if (!alive.current) return;
+      if (modeChoice === "lite") {
+        await leave(modeDestination);
+        return;
+      }
+      setVisitedModel(true);
+      setSetupStep("model");
+    } catch {
+      if (alive.current) setModeError("模式未能保存。你的选择已保留，请重试。");
+    } finally {
+      if (alive.current) setModeSaving(false);
+    }
+  }, [leave, modeChoice, modeDestination, modeSaving]);
 
   async function checkLocations() {
     if (flight.current || locked) return;
@@ -636,7 +700,7 @@ export function OnboardingFlow({
     return (
       <>
         <div
-          hidden={modelStep}
+          hidden={setupStep !== "review"}
           data-import-submission={startingImport ? "pending" : "settled"}
         >
           <FirstImportReview
@@ -663,6 +727,10 @@ export function OnboardingFlow({
             error={error && text(error)}
             onContinue={(destination) => {
               if (busy === "leaving") return;
+              if (completionFailed) {
+                void leave(destination);
+                return;
+              }
               const selection = {
                 hostSourceIds: hostConnectionAvailable
                   ? [...activeDraft.hostSourceIds]
@@ -676,9 +744,8 @@ export function OnboardingFlow({
               setApplyTick((value) => value + 1);
               if (destination === "settings") {
                 setModelSourceIds([...sourceIds]);
-                setVisitedModel(true);
-                setModelStep(true);
-              } else void leave(destination);
+              }
+              requestModeChoice(destination);
             }}
             recovery={
               completionFailed && exitDestination
@@ -690,8 +757,116 @@ export function OnboardingFlow({
             }
           />
         </div>
+        {setupStep === "mode" && (
+          <R6ColdStartFrame
+            step={3}
+            title={text("选择记忆方式")}
+            eyebrow={text("最后一步 · 决定如何处理对话")}
+            footer={
+              <>
+                <R6Button
+                  variant="quiet"
+                  disabled={modeSaving || busy === "leaving"}
+                  onClick={() => {
+                    setModeError(null);
+                    setSetupStep("review");
+                  }}
+                >
+                  {text("返回导入")}
+                </R6Button>
+                <R6Button
+                  className="onboarding-r6-submit"
+                  variant="primary"
+                  pending={modeSaving}
+                  disabled={
+                    !modeChoice ||
+                    busy === "leaving" ||
+                    (modeChoice === "lite" && flight.current)
+                  }
+                  onClick={() => void saveModeChoice()}
+                >
+                  {text(modeSaving ? "正在保存…" : "继续")}
+                </R6Button>
+              </>
+            }
+          >
+            <section
+              className="onboarding-r6-mode"
+              aria-labelledby="onboarding-memory-mode-title"
+            >
+              <div className="onboarding-r6-mode-intro">
+                <h2 id="onboarding-memory-mode-title">
+                  {text("你希望 MemHub 如何形成记忆？")}
+                </h2>
+                <p>{text("需要明确选择一种方式；之后仍可在设置中更改。")}</p>
+              </div>
+              <fieldset
+                className="onboarding-r6-mode-options"
+                disabled={modeSaving || busy === "leaving"}
+              >
+                <legend className="onboarding-r6-sr-only">
+                  {text("记忆模式")}
+                </legend>
+                <label
+                  className="onboarding-r6-mode-card"
+                  data-selected={modeChoice === "pro"}
+                >
+                  <input
+                    type="radio"
+                    name="onboarding-memory-mode"
+                    value="pro"
+                    checked={modeChoice === "pro"}
+                    onChange={() => {
+                      modeChoiceTouched.current = true;
+                      setModeChoice("pro");
+                      setModeError(null);
+                    }}
+                  />
+                  <span className="onboarding-r6-mode-copy">
+                    <span className="onboarding-r6-mode-heading">
+                      <strong>pro</strong>
+                      <span>{text("推荐")}</span>
+                    </span>
+                    <span>
+                      {text("使用模型理解对话，提取并整理可持续生长的记忆。")}
+                    </span>
+                  </span>
+                </label>
+                <label
+                  className="onboarding-r6-mode-card"
+                  data-selected={modeChoice === "lite"}
+                >
+                  <input
+                    type="radio"
+                    name="onboarding-memory-mode"
+                    value="lite"
+                    checked={modeChoice === "lite"}
+                    onChange={() => {
+                      modeChoiceTouched.current = true;
+                      setModeChoice("lite");
+                      setModeError(null);
+                    }}
+                  />
+                  <span className="onboarding-r6-mode-copy">
+                    <span className="onboarding-r6-mode-heading">
+                      <strong>lite</strong>
+                    </span>
+                    <span>
+                      {text("无需模型，只保存并检索原始对话，不生成提炼记忆。")}
+                    </span>
+                  </span>
+                </label>
+              </fieldset>
+              {(modeError || error) && (
+                <p className="onboarding-r6-mode-error" role="alert">
+                  {text(modeError ?? error ?? "")}
+                </p>
+              )}
+            </section>
+          </R6ColdStartFrame>
+        )}
         {visitedModel && (
-          <div hidden={!modelStep}>
+          <div hidden={setupStep !== "model"}>
             <OnboardingModelController
               connectionAlreadyApplied={
                 connectionApplication === "applied" ||
@@ -709,8 +884,8 @@ export function OnboardingFlow({
                   (total, source) => total + source.imported_conversations,
                   0,
                 )}
-              onBack={() => setModelStep(false)}
-              onSkip={() => void leave("sources")}
+              onBack={() => setSetupStep("mode")}
+              onSkip={() => setSetupStep("mode")}
             />
           </div>
         )}
@@ -763,7 +938,7 @@ export function OnboardingFlow({
           <R6Button
             variant="quiet"
             disabled={locked}
-            onClick={() => void leave("sources")}
+            onClick={() => requestModeChoice("sources")}
           >
             {text("稍后添加，先进入")}
           </R6Button>

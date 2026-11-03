@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeIndonesianMessages } from "../gui-i18n-mode.js";
 
 /** Indonesian (id, Anda) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const indonesianMessages: Record<MessageKey, string> = {
+  ...modeIndonesianMessages,
   "connectionFallback.title": "Hubungkan alat lain",
   "connectionFallback.desktopOnly":
     "Pemasangan lokal hanya tersedia di aplikasi desktop.",
@@ -75,6 +77,14 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Tidak dapat mencari percakapan asli. Silakan coba lagi.",
   "sdk.raw.recent": "Percakapan asli terbaru",
+  "sdk.raw.empty":
+    "Belum ada percakapan asli. Hubungkan sumber agar percakapan tampil di sini.",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Memori dasar aktif. Percakapan baru disimpan sebagai catatan asli dan tidak membuat memori lanjutan. Memori lanjutan yang ada tetap tersimpan, tetapi tidak ditampilkan atau digunakan untuk recall.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Memori cerdas aktif. Model mengolah percakapan baru menjadi memori lanjutan.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Memori mendalam aktif. Percakapan baru membuat memori lanjutan yang terus dikonsolidasikan oleh knowledge graph dan evolve.",
   "sdk.raw.found": "{count} hasil",
   "sdk.raw.found.one": "{count} hasil",
   "memoryInspector.emptyHint": "Lihat sumber, isi, dan riwayat perubahannya.",

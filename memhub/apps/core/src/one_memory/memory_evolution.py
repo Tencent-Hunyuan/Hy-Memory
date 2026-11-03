@@ -465,12 +465,16 @@ class EvolveScheduler:
         service: EvolveService,
         schedule: Callable[[], EvolveSchedule],
         users_with_memories: Callable[[], Awaitable[Iterable[str]]],
+        lifecycle_lock: asyncio.Lock | None = None,
+        lifecycle_open: Callable[[], bool] = lambda: True,
         now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         check_seconds: float = SCHEDULE_CHECK_SECONDS,
     ) -> None:
         self.service = service
         self.schedule = schedule
         self.users_with_memories = users_with_memories
+        self.lifecycle_lock = lifecycle_lock
+        self.lifecycle_open = lifecycle_open
         self._now = now
         self.check_seconds = check_seconds
         self._task: asyncio.Task[None] | None = None
@@ -492,7 +496,15 @@ class EvolveScheduler:
             if not evolve_due(now, schedule, last, anchor):
                 continue
             try:
-                receipt = self.service.start(user_id, trigger="scheduled")
+                if self.lifecycle_lock is None:
+                    if not self.lifecycle_open():
+                        break
+                    receipt = self.service.start(user_id, trigger="scheduled")
+                else:
+                    async with self.lifecycle_lock:
+                        if not self.lifecycle_open():
+                            break
+                        receipt = self.service.start(user_id, trigger="scheduled")
             except EvolveModeError:
                 break
             await self.service.wait(receipt.run_id)

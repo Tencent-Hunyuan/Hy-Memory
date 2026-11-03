@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeFrenchMessages } from "../gui-i18n-mode.js";
 
 /** French (fr, vous) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const frenchMessages: Record<MessageKey, string> = {
+  ...modeFrenchMessages,
   "connectionFallback.title": "Connecter d’autres outils",
   "connectionFallback.desktopOnly":
     "L’association locale n’est disponible que dans l’application de bureau.",
@@ -81,6 +83,14 @@ export const frenchMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Impossible de rechercher dans les conversations originales. Veuillez réessayer.",
   "sdk.raw.recent": "Conversations originales récentes",
+  "sdk.raw.empty":
+    "Aucune conversation originale pour le moment. Connectez une source pour les afficher ici.",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "La mémoire de base est active. Les nouvelles conversations sont conservées telles quelles et ne créent pas de mémoires avancées. Les mémoires avancées existantes restent enregistrées, mais ne sont ni affichées ni rappelées.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "La mémoire intelligente est active. Le modèle transforme les nouvelles conversations en mémoires avancées.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "La mémoire approfondie est active. Les nouvelles conversations créent des mémoires avancées que le graphe de connaissances et evolve continuent de consolider.",
   "sdk.raw.found": "{count} résultats",
   "sdk.raw.found.one": "{count} résultat",
   "memoryInspector.emptyHint":

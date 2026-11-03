@@ -4,6 +4,7 @@ import {
   type GuiLocale,
   isLanguagePreference,
   isLanguageSnapshot,
+  isMessageKey,
   type LanguagePreference,
   type LanguageSnapshot,
   LOCALE_NAMES,
@@ -226,5 +227,23 @@ describe("GUI messages", () => {
         host: "<img src=x onerror=alert(1)>$&{count}",
       }),
     ).toBe("Provided to <img src=x onerror=alert(1)>$&{count}");
+  });
+
+  it("translates mode copy interpolated before lookup", () => {
+    const cases = [
+      [
+        "每天 03:00 自动运行 evolve，设备休眠错过后会补跑。",
+        "Run evolve daily at 03:00.",
+      ],
+      [
+        "上次整合：11/3/2026, 4:00:00 PM",
+        "Last consolidated: 11/3/2026, 4:00:00 PM",
+      ],
+      ["切换到 ultra？", "Switch to ultra?"],
+    ] as const;
+    for (const [source, expected] of cases) {
+      expect(isMessageKey(source)).toBe(true);
+      expect(translate("en", source as MessageKey)).toContain(expected);
+    }
   });
 });

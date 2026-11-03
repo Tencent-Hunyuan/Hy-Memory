@@ -1,7 +1,7 @@
 # Memory mode, evolve and the nightly schedule v1
 
-Status: Core + CLI implemented (PR B of the SDK-surface batch). The App
-controls are built separately against this contract.
+Status: Core + CLI + App implemented. The App uses this contract for first-run
+mode choice, Settings, the mode-specific memory page and evolve status.
 
 All routes need the Runtime bearer token. Unknown query parameters and body
 fields answer `422 {"detail": "request_validation_failed"}`, like every
@@ -84,6 +84,7 @@ No parameters. `200` response:
 {
   "mode": "pro",
   "configured_mode": "pro",
+  "explicitly_configured": false,
   "forced_by_env": false,
   "modes": ["lite", "pro", "ultra"],
   "graph_build": {
@@ -97,6 +98,9 @@ No parameters. `200` response:
 
 - `mode` is what SDK clients are built with now; `configured_mode` is the
   saved setting.
+- `explicitly_configured` is `true` once the user has chosen a mode, including
+  explicitly choosing the default `pro`. An older or untouched installation
+  with no `memory_mode` key defaults to `pro` and reports `false`.
 - `graph_build.state` is `idle | running | succeeded | failed`. Each entry in
   `graph_build.users[<user_id>]` is
   `{state: pending|running|succeeded|failed, memories_scanned, nodes, error_code}`.
@@ -129,6 +133,11 @@ this order:
 
 Errors:
 
+- `409 {"detail": "embedding_maintenance_in_progress"}`: an embedding switch,
+  startup scan or startup merge has closed the model-write gate. Nothing
+  changed; retry after embedding maintenance finishes. GET remains available.
+- `409 {"detail": "memory_lifecycle_busy"}`: evolve or graph backfill is
+  running. A real mode change waits until that lifecycle task finishes.
 - `409 {"detail": "graph_store_unavailable"}`: `ultra` was asked for, but the
   graph store package is not installed. Nothing changed.
 - `422 request_validation_failed`: an unknown mode or an extra field.
@@ -164,6 +173,12 @@ on in the background.
 
 Errors:
 
+- `409 {"detail": "embedding_maintenance_in_progress"}`: an embedding switch,
+  startup scan or startup merge has closed the model-write gate. No evolve run
+  was started; retry after embedding maintenance finishes. Evolve GET routes
+  remain available.
+- `409 {"detail": "memory_lifecycle_busy"}`: the graph backfill is still
+  running. Start manual evolve after it finishes.
 - `409 {"detail": "memory_mode_not_ultra"}`: the effective mode is not ultra.
 - `422`: a malformed `user_id`, `max_batches` outside its range, or an extra
   field.
@@ -333,6 +348,21 @@ mode. A change rebuilds the SDK handles the same way. Contract:
 `memory-features-v1.md`.
 
 ## 9. Copy the UI can reuse
+
+The App's product rules are:
+
+- A new installation explicitly chooses lite or pro. Choosing lite persists
+  the mode and completes onboarding without a generation model. Choosing pro
+  opens model setup and completes onboarding only after activation succeeds.
+- Existing installations keep the default pro behaviour; an absent
+  `memory_mode` is never inferred from model availability.
+- Ultra is enabled only from Settings. Its nightly schedule is on by default
+  at 03:00 local time, and Settings also exposes a manual evolve action.
+- The memory page shows raw conversations in lite and advanced memories in
+  pro/ultra. Higher-mode memories remain stored while lite is active but are
+  neither shown nor served by lite search.
+- Mode changes and manual evolve are disabled while embedding maintenance has
+  closed the write gate.
 
 | Key | zh-CN | en | es |
 |---|---|---|---|

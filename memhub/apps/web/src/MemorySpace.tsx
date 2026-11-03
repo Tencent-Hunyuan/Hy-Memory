@@ -340,6 +340,12 @@ export function MemorySpace({
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
+  const [processingFailed, setProcessingFailed] = useState(false);
+  const [processingResolved, setProcessingResolved] = useState(false);
+  const pipelineMode =
+    processing?.pipeline?.mode ??
+    (processingResolved && !processingFailed ? "pro" : null);
+  const lite = pipelineMode === "lite";
   const [pendingAdd, setPendingAdd] = useState<PendingMemoryAdd | null>(null);
   const [checkingSetup, setCheckingSetup] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Source authority changes invalidate an in-flight setup snapshot.
@@ -408,7 +414,11 @@ export function MemorySpace({
     const update = async () => {
       try {
         const next = await getMemoryProcessing();
-        if (!stopped) setProcessing(next);
+        if (!stopped) {
+          setProcessing(next);
+          setProcessingFailed(false);
+          setProcessingResolved(true);
+        }
       } catch {
         // Background read failures do not invalidate the last verified state.
       }
@@ -460,14 +470,23 @@ export function MemorySpace({
      * this subscriber and the background arrival poll read the same endpoint,
      * so one `fetch` per tick is the whole point of sharing the key. */
     const consumeProcessing = (value: unknown) => {
-      if (!cancelled) setProcessing(value as MemoryProcessingSummary);
+      if (!cancelled) {
+        setProcessing(value as MemoryProcessingSummary);
+        setProcessingFailed(false);
+        setProcessingResolved(true);
+      }
     };
     // `subscribePoll` only schedules ticks; the first read still has to happen
     // on mount. Do it once through the shared fetch so mount does not double-read
     // with the background arrival subscriber.
     void getMemoryProcessing()
       .then(consumeProcessing)
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) {
+          setProcessingFailed(true);
+          setProcessingResolved(true);
+        }
+      });
     // The processing poll shares one read with the background arrival poll on
     // the same key (3s wins over 12s).
     const stopProcessing = subscribePoll({
@@ -733,23 +752,29 @@ export function MemorySpace({
           </h1>
           <span className="memory-loaded-count">
             {simplified && !management
-              ? sdkLibrary.page
-                ? tn(
-                    "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
-                    sdkLibrary.page.total,
-                    {
-                      filter: sdkFilterLabel
-                        ? t("memory:（{filter}）", { filter: sdkFilterLabel })
-                        : "",
-                      shown: new Intl.NumberFormat(locale).format(
-                        sdkLibrary.page.items.length,
-                      ),
-                    },
-                  )
-                : // The list below says a failed read once, with its retry.
-                  sdkLibrary.failed
-                  ? null
-                  : t("memory:正在读取…")
+              ? pipelineMode === null
+                ? t("memory:记忆暂时无法读取")
+                : lite
+                  ? t("memory:原始对话")
+                  : sdkLibrary.page
+                    ? tn(
+                        "memory:已沉淀 {count} 条{filter} · 当前展示 {shown} 条",
+                        sdkLibrary.page.total,
+                        {
+                          filter: sdkFilterLabel
+                            ? t("memory:（{filter}）", {
+                                filter: sdkFilterLabel,
+                              })
+                            : "",
+                          shown: new Intl.NumberFormat(locale).format(
+                            sdkLibrary.page.items.length,
+                          ),
+                        },
+                      )
+                    : // The list below says a failed read once, with its retry.
+                      sdkLibrary.failed
+                      ? null
+                      : t("memory:正在读取…")
               : null}
           </span>
         </div>
@@ -834,6 +859,19 @@ export function MemorySpace({
           </div>
         )}
       </header>
+      {simplified && pipelineMode ? (
+        <p className="memory-mode-notice" role="status">
+          {lite
+            ? t(
+                "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。",
+              )
+            : pipelineMode === "ultra"
+              ? t(
+                  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。",
+                )
+              : t("memory:当前使用智能记忆。新对话会由模型整理为高级记忆。")}
+        </p>
+      ) : null}
       {processing && (!simplified || managementOpen) ? (
         <details className="memory-processing-details">
           <summary>
@@ -954,9 +992,15 @@ export function MemorySpace({
           id="memory-mode-panel-history"
           hidden={displayedMode !== "history"}
         >
-          <SdkRawHistory />
+          <SdkRawHistory active={active && displayedMode === "history"} />
         </div>
       )}
+
+      {simplified && lite ? (
+        <div className="memory-lite-raw">
+          <SdkRawHistory key={sdkMapRevision} active={active} />
+        </div>
+      ) : null}
 
       <form
         className="memory-query-bar"
@@ -1020,7 +1064,11 @@ export function MemorySpace({
               }
             : undefined
         }
-        hidden={!active || displayedMode !== "map"}
+        hidden={
+          !active ||
+          displayedMode !== "map" ||
+          (simplified && (pipelineMode === null || lite))
+        }
         memories={sdkLibrary.page?.items ?? []}
         graph={visibleSdkGraph}
         sources={sources}

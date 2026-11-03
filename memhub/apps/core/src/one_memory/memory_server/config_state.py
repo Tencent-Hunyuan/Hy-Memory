@@ -153,6 +153,11 @@ class ConfigStore:
         with self._lock:
             return self._document.memory_mode
 
+    def memory_mode_explicitly_configured(self) -> bool:
+        """Whether a person chose the mode, including choosing the default."""
+        with self._lock:
+            return "memory_mode" in self._document.model_fields_set
+
     def set_memory_mode(self, mode: MemoryMode) -> ConfigDocument:
         if mode not in MEMORY_MODES:
             raise ValueError("invalid_memory_mode")

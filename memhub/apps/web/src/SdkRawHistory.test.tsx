@@ -87,3 +87,30 @@ it("lists and searches SDK raw without legacy conversation APIs", async () => {
   expect(await screen.findByText("搜索结果")).toBeTruthy();
   expect(searchSdkRaw).toHaveBeenCalledWith("查询");
 });
+
+it("does not call a zero-result search an empty conversation history", async () => {
+  getSdkRaw.mockResolvedValue({
+    items: [
+      {
+        raw_id: "raw-existing",
+        content: "已有原始对话",
+        session_id: "session-existing",
+        source: "cursor",
+        memory_at: null,
+      },
+    ],
+    total: 1,
+    offset: 0,
+    limit: 100,
+  });
+  searchSdkRaw.mockResolvedValue([]);
+  render(<SdkRawHistory />);
+
+  await userEvent.type(screen.getByLabelText("搜索原始对话"), "没有命中");
+  await userEvent.click(screen.getByRole("button", { name: "搜索" }));
+
+  expect(await screen.findByText("找到 0 条")).toBeTruthy();
+  expect(
+    screen.queryByText("还没有原始对话。连接来源后，对话会显示在这里。"),
+  ).toBeNull();
+});

@@ -72,6 +72,7 @@ export const currentChineseMessages = {
   "sdk.raw.loadFailed": "原始对话暂时无法读取。",
   "sdk.raw.searchFailed": "原始对话搜索失败，请重试。",
   "sdk.raw.recent": "最近原始对话",
+  "sdk.raw.empty": "还没有原始对话。连接来源后，对话会显示在这里。",
   "sdk.raw.found": "找到 {count} 条",
   "sdk.raw.found.one": "找到 {count} 条",
 
@@ -219,6 +220,8 @@ export const currentEnglishMessages: Record<
   "sdk.raw.searchFailed":
     "Could not search original conversations. Please retry.",
   "sdk.raw.recent": "Recent original conversations",
+  "sdk.raw.empty":
+    "No original conversations yet. Connect a source to see conversations here.",
   "sdk.raw.found": "{count} results",
   "sdk.raw.found.one": "{count} result",
 
@@ -379,6 +382,8 @@ export const currentSpanishMessages: Record<
   "sdk.raw.searchFailed":
     "No se pudieron buscar las conversaciones originales. Reinténtalo.",
   "sdk.raw.recent": "Conversaciones originales recientes",
+  "sdk.raw.empty":
+    "Todavía no hay conversaciones originales. Conecta una fuente para verlas aquí.",
   "sdk.raw.found": "{count} resultados",
   "sdk.raw.found.one": "{count} resultado",
 

@@ -26,6 +26,7 @@ import {
   migrationChineseMessages,
   migrationSpanishMessages,
 } from "./gui-i18n-migration.js";
+import { modeChineseMessages, modeSpanishMessages } from "./gui-i18n-mode.js";
 import {
   onboardingChineseMessages,
   onboardingSpanishMessages,
@@ -125,6 +126,11 @@ export const guiCatalogs: readonly Catalog[] = [
     spanish: onboardingSpanishMessages,
   },
   {
+    name: "mode",
+    chinese: modeChineseMessages,
+    spanish: modeSpanishMessages,
+  },
+  {
     name: "applications",
     chinese: applicationsChineseMessages,
     spanish: applicationsSpanishMessages,
@@ -185,6 +191,7 @@ export const chineseMessages = merged.chinese as typeof guideChineseMessages &
   typeof recoveryChineseMessages &
   typeof settingsChineseMessages &
   typeof onboardingChineseMessages &
+  typeof modeChineseMessages &
   typeof applicationsChineseMessages &
   typeof memoryChineseMessages &
   typeof callsChineseMessages &

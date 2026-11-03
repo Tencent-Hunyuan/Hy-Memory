@@ -58,8 +58,10 @@ def test_mode_defaults_to_pro_and_the_env_still_forces_ultra(tmp_path, monkeypat
     monkeypatch.delenv("ONE_MEMORY_GRAPH_STORE", raising=False)
     store = ConfigStore(tmp_path)
     assert store.memory_mode() == "pro"
+    assert store.memory_mode_explicitly_configured() is False
     assert effective_memory_mode(store.memory_mode()) == "pro"
     store.set_memory_mode("lite")
+    assert store.memory_mode_explicitly_configured() is True
     assert ConfigStore(tmp_path).memory_mode() == "lite"
     assert json.loads((tmp_path / "config.json").read_text())["memory_mode"] == "lite"
     monkeypatch.setenv("ONE_MEMORY_GRAPH_STORE", "kuzu")
@@ -68,6 +70,21 @@ def test_mode_defaults_to_pro_and_the_env_still_forces_ultra(tmp_path, monkeypat
     assert effective_memory_mode("lite") == "lite"
     with pytest.raises(ValueError):
         store.set_memory_mode("max")  # type: ignore[arg-type]
+
+
+def test_old_config_defaults_to_implicit_pro_until_pro_is_explicitly_set(tmp_path) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps({"schema_version": 1, "sources": {}}), encoding="utf-8"
+    )
+    store = ConfigStore(tmp_path)
+    assert store.memory_mode() == "pro"
+    assert store.memory_mode_explicitly_configured() is False
+
+    store.set_memory_mode("pro")
+
+    assert store.memory_mode_explicitly_configured() is True
+    assert json.loads((tmp_path / "config.json").read_text())["memory_mode"] == "pro"
+    assert ConfigStore(tmp_path).memory_mode_explicitly_configured() is True
 
 
 def test_an_untouched_install_writes_no_new_settings(tmp_path) -> None:
@@ -624,6 +641,38 @@ def test_the_scheduler_runs_each_due_user_once_in_ultra_only(tmp_path, monkeypat
     assert state.user("wife").last_result["trigger"] == "scheduled"
 
 
+def test_scheduled_evolve_obeys_the_shared_lifecycle_gate(tmp_path, monkeypatch) -> None:
+    sdk = _EvolveSdk(continuing=0)
+    state = EvolveStateStore(tmp_path)
+    state.anchor(_at(1, 12))
+    open_gate = [False]
+    service = EvolveService(
+        coordinator=_Coordinator(sdk, monkeypatch),
+        state=state,
+        memory_mode=lambda: "ultra",
+        now=lambda: _at(2, 3, 2),
+    )
+
+    async def users():
+        return ("local",)
+
+    async def scenario():
+        scheduler = EvolveScheduler(
+            service=service,
+            schedule=EvolveSchedule,
+            users_with_memories=users,
+            lifecycle_lock=asyncio.Lock(),
+            lifecycle_open=lambda: open_gate[0],
+            now=lambda: _at(2, 3, 2),
+        )
+        assert await scheduler.tick() == ()
+        assert sdk.calls == []
+        open_gate[0] = True
+        assert await scheduler.tick() == ("local",)
+
+    asyncio.run(scenario())
+
+
 def test_the_graph_backfill_runs_once_per_user(tmp_path, monkeypatch) -> None:
     sdk = _EvolveSdk()
     state = EvolveStateStore(tmp_path)
@@ -701,6 +750,7 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
     async def scenario(app, sdk, client):
         current = (await client.get("/api/v1/settings/memory-mode")).json()
         assert current["mode"] == current["configured_mode"] == "pro"
+        assert current["explicitly_configured"] is False
         assert current["forced_by_env"] is False
         assert app.state.sdk_write_coordinator.memory_mode() == "pro"
 
@@ -708,6 +758,7 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         assert lite.status_code == 200, lite.text
         body = lite.json()
         assert body["mode"] == "lite" and body["previous_mode"] == "pro"
+        assert body["explicitly_configured"] is True
         assert body["effects"] == ["higher_mode_memories_hidden"]
         assert app.state.sdk_write_coordinator.memory_mode() == "lite"
         assert _sdk_client_handle(app).memory_mode() == "lite"
@@ -737,6 +788,65 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         forced = (await client.get("/api/v1/settings/memory-mode")).json()
         assert forced["mode"] == "ultra" and forced["configured_mode"] == "pro"
         assert forced["forced_by_env"] is True
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_embedding_maintenance_blocks_mode_put_and_evolve_but_not_mode_get(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario(app, _sdk, client):
+        switch = app.state.embedding_switch
+
+        switch._scan_hold = True
+        current = await client.get("/api/v1/settings/memory-mode")
+        assert current.status_code == 200
+        assert current.json()["explicitly_configured"] is False
+        for response in (
+            await client.put("/api/v1/settings/memory-mode", json={"mode": "pro"}),
+            await client.post("/api/v2/evolve", json={}),
+        ):
+            assert response.status_code == 409
+            assert response.json()["detail"] == "embedding_maintenance_in_progress"
+        assert app.state.config_store.memory_mode_explicitly_configured() is False
+
+        switch._scan_hold = False
+        switch._open_cache = True
+        assert (await client.get("/api/v1/settings/memory-mode")).status_code == 200
+        for response in (
+            await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"}),
+            await client.post("/api/v2/evolve", json={}),
+        ):
+            assert response.status_code == 409
+            assert response.json()["detail"] == "embedding_maintenance_in_progress"
+
+        switch._open_cache = False
+        explicitly_pro = await client.put("/api/v1/settings/memory-mode", json={"mode": "pro"})
+        assert explicitly_pro.status_code == 200
+        assert explicitly_pro.json()["explicitly_configured"] is True
+        assert explicitly_pro.json()["effects"] == []
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_graph_backfill_blocks_mode_change_and_manual_evolve(tmp_path, monkeypatch) -> None:
+    async def scenario(app, _sdk, client):
+        hold = asyncio.Event()
+        task = asyncio.create_task(hold.wait())
+        app.state.memory_graph_backfill._task = task
+        try:
+            for response in (
+                await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"}),
+                await client.post("/api/v2/evolve", json={}),
+            ):
+                assert response.status_code == 409
+                assert response.json()["detail"] == "memory_lifecycle_busy"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            app.state.memory_graph_backfill._task = None
 
     run_app(tmp_path, monkeypatch, scenario)
 

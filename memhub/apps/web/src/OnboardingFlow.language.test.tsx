@@ -25,6 +25,12 @@ import type { ImportSourcesController } from "./use-import-sources";
 vi.mock("./api", () => ({
   completeOnboarding: vi.fn(),
   getModelProfiles: vi.fn(),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  }),
+  setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
 }));
 const models = {
   pendingProbe: false,
@@ -393,6 +399,8 @@ it("translates completion recovery live without repeating completion writes", as
   fireEvent.click(
     screen.getByRole("button", { name: "Entrar y añadir más tarde" }),
   );
+  fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Continuar" }));
   expect(
     await screen.findByRole("button", { name: "Reintentar guardar y entrar" }),
   ).toBeTruthy();

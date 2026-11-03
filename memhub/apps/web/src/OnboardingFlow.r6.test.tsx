@@ -13,7 +13,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OnboardingFlow } from "./OnboardingFlow";
 import type { ImportSourcesController } from "./use-import-sources";
 
-vi.mock("./api", () => ({ completeOnboarding: vi.fn() }));
+vi.mock("./api", () => ({
+  completeOnboarding: vi.fn(),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  }),
+  setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+}));
 vi.mock("./FirstImportReview", () => ({
   FirstImportReview: ({ sourceIds }: { sourceIds: string[] }) => (
     <p>已受理 {sourceIds.join(",")}</p>

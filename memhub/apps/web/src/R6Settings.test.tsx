@@ -48,6 +48,36 @@ vi.mock("./api", () => ({
     imports_unaffected: true,
   }),
   setSedimentation: vi.fn(),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  }),
+  setMemoryMode: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  getEvolveOverview: vi.fn().mockResolvedValue({
+    mode: "pro",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  }),
+  startEvolve: vi.fn(),
+  getMemoryProcessing: vi.fn().mockResolvedValue({
+    embedding_switch: null,
+  }),
+  apiErrorCode: vi.fn().mockReturnValue(null),
 }));
 vi.mock("./ModelSettings", async () => {
   const { createElement, useImperativeHandle } = await import("react");

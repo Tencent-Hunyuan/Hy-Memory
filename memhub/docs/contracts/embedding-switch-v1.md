@@ -215,6 +215,7 @@ the startup scan, or null.
 |---|---|---|
 | `embedding_switch_required` | 409 (+ `plan`) | activate with another embedding on a non-empty home |
 | `embedding_switch_running` | 409 | activate / start / embedding edit of the active or target profile while a job is open |
+| `memory_lifecycle_busy` | 409 | start while evolve or graph backfill is running |
 | `embedding_switch_plan_stale` | 409 (+ `plan`) | `plan_token` no longer matches (data or live space changed) |
 | `embedding_switch_not_needed` | 409 (+ `plan`) | start with the same identity, or on an empty home (activate instead) |
 | `embedding_switch_in_progress` | 409 | memory edit/delete, `POST /api/v1/graph-width` while writes are paused |

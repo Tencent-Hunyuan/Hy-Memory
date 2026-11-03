@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modePortugueseMessages } from "../gui-i18n-mode.js";
 
 /** Portuguese (pt, Brazilian usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const portugueseMessages: Record<MessageKey, string> = {
+  ...modePortugueseMessages,
   "connectionFallback.title": "Conectar outras ferramentas",
   "connectionFallback.desktopOnly":
     "O pareamento local só está disponível no app para desktop.",
@@ -80,6 +82,14 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Não foi possível pesquisar as conversas originais. Tente novamente.",
   "sdk.raw.recent": "Conversas originais recentes",
+  "sdk.raw.empty":
+    "Ainda não há conversas originais. Ligue uma origem para as ver aqui.",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "A memória básica está ativa. As novas conversas são guardadas como registos originais e não criam memórias avançadas. As memórias avançadas existentes continuam guardadas, mas não são mostradas nem usadas na recuperação.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "A memória inteligente está ativa. O modelo transforma novas conversas em memórias avançadas.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "A memória profunda está ativa. As novas conversas criam memórias avançadas que o grafo de conhecimento e o evolve continuam a consolidar.",
   "sdk.raw.found": "Resultados: {count}",
   "sdk.raw.found.one": "{count} resultado",
   "memoryInspector.emptyHint":

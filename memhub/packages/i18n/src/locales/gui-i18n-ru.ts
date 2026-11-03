@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeRussianMessages } from "../gui-i18n-mode.js";
 
 /** Russian (ru) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const russianMessages: Record<MessageKey, string> = {
+  ...modeRussianMessages,
   "connectionFallback.title": "Подключить другие инструменты",
   "connectionFallback.desktopOnly":
     "Локальное сопряжение доступно только в настольном приложении.",
@@ -77,6 +79,14 @@ export const russianMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Не удалось выполнить поиск по исходным диалогам. Повторите попытку.",
   "sdk.raw.recent": "Недавние исходные диалоги",
+  "sdk.raw.empty":
+    "Исходных диалогов пока нет. Подключите источник, и они появятся здесь.",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Включена базовая память. Новые диалоги сохраняются в исходном виде и не создают расширенные воспоминания. Существующие расширенные воспоминания сохраняются, но не показываются и не используются при поиске.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Включена интеллектуальная память. Модель преобразует новые диалоги в расширенные воспоминания.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Включена глубокая память. Новые диалоги создают расширенные воспоминания, которые продолжают объединяться графом знаний и evolve.",
   "sdk.raw.found": "Результатов: {count}",
   "sdk.raw.found.one": "{count} результат",
   "memoryInspector.emptyHint":

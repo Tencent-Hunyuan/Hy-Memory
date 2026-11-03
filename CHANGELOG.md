@@ -4,6 +4,14 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub App now exposes the complete memory-mode lifecycle. New installs
+  explicitly choose lite or pro during onboarding; pro completes only after a
+  generation model is active, while ultra remains an advanced Settings choice.
+  Settings shows mode effects, graph backfill, the default 03:00 evolve
+  schedule and manual evolve. The memory page shows original conversations in
+  lite and advanced memories in pro/ultra. Existing installs remain pro unless
+  the user changes them, and embedding maintenance blocks mode/evolve changes.
+
 ## Hy Memory 2.0.13 — 2026-11-02
 
 - A model failure during a write now reports failure and stores

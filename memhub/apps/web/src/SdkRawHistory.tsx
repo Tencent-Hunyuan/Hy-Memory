@@ -2,8 +2,9 @@ import type { SdkRawContextItem, SdkRawRecord } from "@one-memory/contracts";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { getSdkRaw, searchSdkRaw } from "./api";
 import { useGuiLanguage } from "./gui-language";
+import { subscribePoll } from "./poll-scheduler";
 
-export function SdkRawHistory() {
+export function SdkRawHistory({ active = true }: { active?: boolean }) {
   const { locale, t, tn } = useGuiLanguage();
   const translation = useRef(t);
   translation.current = t;
@@ -14,19 +15,27 @@ export function SdkRawHistory() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (!active) return;
     let current = true;
-    void getSdkRaw({ limit: 100 }).then(
-      (page) => {
-        if (current) setRecent(page.items);
-      },
-      () => {
-        if (current) setError(translation.current("sdk.raw.loadFailed"));
-      },
-    );
+    const consume = (value: unknown) => {
+      if (!current) return;
+      setRecent((value as Awaited<ReturnType<typeof getSdkRaw>>).items);
+      setError("");
+    };
+    void getSdkRaw({ limit: 100 }).then(consume, () => {
+      if (current) setError(translation.current("sdk.raw.loadFailed"));
+    });
+    const stop = subscribePoll({
+      key: "sdk-raw-history",
+      intervalMs: 12_000,
+      fetch: () => getSdkRaw({ limit: 100 }),
+      onValue: consume,
+    });
     return () => {
       current = false;
+      stop();
     };
-  }, []);
+  }, [active]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -63,6 +72,9 @@ export function SdkRawHistory() {
           ? t("sdk.raw.recent")
           : tn("sdk.raw.found", items.length)}
       </p>
+      {!error && results === null && items.length === 0 ? (
+        <p>{t("sdk.raw.empty")}</p>
+      ) : null}
       <ol>
         {items.map((item) => (
           <li key={item.raw_id}>

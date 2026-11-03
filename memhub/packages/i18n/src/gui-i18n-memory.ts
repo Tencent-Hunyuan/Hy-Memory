@@ -159,6 +159,12 @@ export const memoryChineseMessages = {
   "memory:来源与主题": "来源与主题",
   "memory:记忆或原始对话": "记忆或原始对话",
   "memory:原始对话": "原始对话",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "当前使用智能记忆。新对话会由模型整理为高级记忆。",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。",
   "memory:地图组织方式": "地图组织方式",
   "memory:筛选地图记忆": "筛选地图记忆",
   "memory:搜索原始对话": "搜索原始对话",
@@ -567,6 +573,12 @@ export const memorySpanishMessages: Record<
   "memory:来源与主题": "Orígenes y temas",
   "memory:记忆或原始对话": "Memorias o conversaciones originales",
   "memory:原始对话": "Conversaciones originales",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Estás usando la memoria básica. Las conversaciones nuevas se guardan como registros originales y no generan memorias avanzadas. Las memorias avanzadas anteriores se conservan, pero no se muestran ni se usan para recuperar recuerdos.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Estás usando la memoria inteligente. El modelo convierte las conversaciones nuevas en memorias avanzadas.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Estás usando la memoria profunda. Las conversaciones nuevas generan memorias avanzadas que el grafo de conocimiento y evolve siguen consolidando.",
   "memory:地图组织方式": "Organización del mapa",
   "memory:筛选地图记忆": "Filtrar memorias del mapa",
   "memory:搜索原始对话": "Buscar conversaciones originales",

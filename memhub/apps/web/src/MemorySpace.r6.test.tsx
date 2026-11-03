@@ -74,6 +74,7 @@ const { reads } = vi.hoisted(() => ({
     sdkGraph: vi.fn(),
     processing: vi.fn(),
     profiles: vi.fn(),
+    raw: vi.fn(),
   },
 }));
 vi.mock("./api", async (importOriginal) => ({
@@ -82,6 +83,7 @@ vi.mock("./api", async (importOriginal) => ({
   getSdkMemoryGraph: reads.sdkGraph,
   getMemoryProcessing: reads.processing,
   getModelProfiles: reads.profiles,
+  getSdkRaw: reads.raw,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryAddComposer", () => ({
@@ -194,7 +196,64 @@ function setup() {
     completed: 1,
   });
   reads.profiles.mockResolvedValue([]);
+  reads.raw.mockResolvedValue({
+    items: [],
+    total: 0,
+    limit: 100,
+    offset: 0,
+  });
 }
+
+it("shows raw conversations instead of advanced memory in lite", async () => {
+  setup();
+  reads.processing.mockResolvedValue({
+    running: 0,
+    pending: 0,
+    blocked_stages: [],
+    completed: 1,
+    pipeline: {
+      mode: "lite",
+      configured_mode: "lite",
+      forced_by_env: false,
+      evolve: {
+        mode: "lite",
+        schedule: { enabled: true, time: "03:00" },
+        users: {},
+        running: [],
+      },
+      last_evolve_at: null,
+      graph_build: {
+        state: "idle",
+        started_at: null,
+        finished_at: null,
+        users: {},
+      },
+      features: {},
+    },
+  });
+  reads.raw.mockResolvedValue({
+    items: [
+      {
+        raw_id: "raw-1",
+        content: "原始对话内容",
+        source: "cursor",
+        session_id: "session-1",
+        memory_at: null,
+      },
+    ],
+    total: 1,
+    limit: 100,
+    offset: 0,
+  });
+
+  render(<MemorySpace simplified />);
+
+  expect(await screen.findByText("原始对话内容")).toBeTruthy();
+  expect(
+    document.querySelector(".core-memory-map")?.hasAttribute("hidden"),
+  ).toBe(true);
+  expect(screen.getByText(/当前使用基础记忆/)).toBeTruthy();
+});
 
 it("keeps an added memory visible while it waits for model processing", async () => {
   setup();

@@ -2,6 +2,9 @@ import {
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type DetectionResponse,
+  type EvolveOverview,
+  type EvolveRunReceipt,
+  type EvolveSchedule,
   type ExtractionSettings,
   type ExtractionWindowPreset,
   type GraphWidthDecision,
@@ -17,6 +20,9 @@ import {
   type MemoryAddInput,
   type MemoryAddReceipt,
   type MemoryGraphResponse,
+  type MemoryModeChange,
+  type MemoryModeState,
+  type MemoryPipelineMode,
   type MemoryProcessingSummary,
   type ModelCreationOperation,
   type ModelProbeOperationReceipt,
@@ -904,6 +910,56 @@ export async function getMemoryProcessing(): Promise<MemoryProcessingSummary> {
   const response = await client.get<MemoryProcessingSummary>(
     "/api/v1/memory-processing",
   );
+  return response.data;
+}
+
+export async function getMemoryMode(): Promise<MemoryModeState> {
+  const response = await client.get<MemoryModeState>(
+    "/api/v1/settings/memory-mode",
+  );
+  return response.data;
+}
+
+export async function setMemoryMode(
+  mode: MemoryPipelineMode,
+): Promise<MemoryModeChange> {
+  const response = await client.put<MemoryModeChange>(
+    "/api/v1/settings/memory-mode",
+    { mode },
+  );
+  return response.data;
+}
+
+export async function getEvolveSchedule(): Promise<EvolveSchedule> {
+  const response = await client.get<EvolveSchedule>(
+    "/api/v1/settings/evolve-schedule",
+  );
+  return response.data;
+}
+
+export async function setEvolveSchedule(
+  update: Partial<EvolveSchedule>,
+): Promise<EvolveSchedule> {
+  const response = await client.put<EvolveSchedule>(
+    "/api/v1/settings/evolve-schedule",
+    update,
+  );
+  return response.data;
+}
+
+export async function getEvolveOverview(
+  userId = "local",
+): Promise<EvolveOverview> {
+  const response = await client.get<EvolveOverview>("/api/v2/evolve", {
+    params: { user_id: userId },
+  });
+  return response.data;
+}
+
+export async function startEvolve(userId = "local"): Promise<EvolveRunReceipt> {
+  const response = await client.post<EvolveRunReceipt>("/api/v2/evolve", {
+    user_id: userId,
+  });
   return response.data;
 }
 

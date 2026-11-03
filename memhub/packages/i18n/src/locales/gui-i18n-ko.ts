@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeKoreanMessages } from "../gui-i18n-mode.js";
 
 /** Korean (ko) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const koreanMessages: Record<MessageKey, string> = {
+  ...modeKoreanMessages,
   "connectionFallback.title": "다른 도구 연결",
   "connectionFallback.desktopOnly":
     "로컬 페어링은 데스크톱 앱에서만 사용할 수 있습니다.",
@@ -74,6 +76,14 @@ export const koreanMessages: Record<MessageKey, string> = {
   "sdk.raw.loadFailed": "원본 대화를 일시적으로 불러올 수 없습니다.",
   "sdk.raw.searchFailed": "원본 대화를 검색하지 못했습니다. 다시 시도하세요.",
   "sdk.raw.recent": "최근 원본 대화",
+  "sdk.raw.empty":
+    "아직 원본 대화가 없습니다. 소스를 연결하면 여기에 표시됩니다.",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "기본 메모리를 사용 중입니다. 새 대화는 원본 기록으로 저장되며 고급 메모리를 만들지 않습니다. 기존 고급 메모리는 보존되지만 현재 표시되거나 회상에 사용되지 않습니다.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "스마트 메모리를 사용 중입니다. 모델이 새 대화를 고급 메모리로 정리합니다.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "심층 메모리를 사용 중입니다. 새 대화에서 고급 메모리를 만들고 지식 그래프와 evolve가 계속 통합합니다.",
   "sdk.raw.found": "결과 {count}개",
   "sdk.raw.found.one": "결과 {count}개",
   "memoryInspector.emptyHint": "출처, 내용, 변경 기록을 확인하세요.",
