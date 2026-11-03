@@ -143,20 +143,29 @@ export function NodeDetail({
     const relatedMemories = direct.filter(
       (step) => step.node.memory_id !== null,
     );
+    const topicNames = compact && node.node_type === "topic";
     return (
       <article className="wb-detail" aria-label={t("wb.node")}>
-        <div className="wb-detail-head">
-          <span className="wb-status">
-            {compact && node.node_type === "schema"
-              ? t("memory:关系归纳")
-              : nodeTypeLabel(node.node_type, t)}
-          </span>
-          <strong>{node.label}</strong>
-        </div>
+        {topicNames ? null : (
+          <div className="wb-detail-head">
+            <span className="wb-status">
+              {compact && node.node_type === "schema"
+                ? t("memory:关系归纳")
+                : nodeTypeLabel(node.node_type, t)}
+            </span>
+            <strong>{node.label}</strong>
+          </div>
+        )}
         {compact ? (
           relatedMemories.length ? (
-            <section className="wb-node-related">
-              <h3>{t("selectedMemory.related")}</h3>
+            <section
+              className={
+                topicNames
+                  ? "wb-node-related wb-node-related--names"
+                  : "wb-node-related"
+              }
+            >
+              {topicNames ? null : <h3>{t("selectedMemory.related")}</h3>}
               <ul>
                 {relatedMemories.slice(0, 8).map((step) => (
                   <li key={step.edge.edge_id}>
@@ -169,7 +178,9 @@ export function NodeDetail({
                       }
                     >
                       <span>{step.node.label}</span>
-                      <small>{relationLabel(step.edge.relation, t)}</small>
+                      {topicNames ? null : (
+                        <small>{relationLabel(step.edge.relation, t)}</small>
+                      )}
                     </button>
                   </li>
                 ))}

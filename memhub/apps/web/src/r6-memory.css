@@ -188,6 +188,12 @@
 .r6-memory .wb-node-related {
   margin-top: 28px;
 }
+.r6-memory .wb-node-related--names {
+  margin-top: 0;
+}
+.r6-memory .wb-node-related--names li:first-child {
+  border-top: 0;
+}
 .r6-memory .wb-node-related h3 {
   margin: 0 0 10px;
   color: #5e6e7a;
@@ -204,8 +210,21 @@
   border-top: 1px solid #d8e2ea;
 }
 .r6-memory .wb-node-related .map-related {
+  min-height: 0;
   padding: 12px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: #384a57;
+  font-weight: 400;
+  box-shadow: none;
+}
+.r6-memory .wb-node-related .map-related:hover:not(:disabled),
+.r6-memory .wb-node-related .map-related:active:not(:disabled) {
+  border: 0;
+  background: transparent;
+  color: #304757;
+  transform: none;
 }
 .r6-memory .wb-node-related .map-related span {
   display: -webkit-box;
@@ -217,6 +236,7 @@
 .r6-memory .wb-node-related .map-related small {
   flex: none;
   color: #637786;
+  white-space: nowrap;
 }
 .r6-memory .map-inspector .wb-detail-actions button {
   min-height: 36px;

@@ -209,7 +209,11 @@ it("replaces a topic detail with an off-page graph memory detail", async () => {
   );
 
   await userEvent.click(screen.getByRole("button", { name: "图中选择 git" }));
-  expect(screen.getByText("对应记忆")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "git" })).toBeTruthy();
+  expect(screen.getAllByText("第一条").length).toBeGreaterThan(0);
+  expect(screen.queryByText("对应记忆")).toBeNull();
+  expect(screen.queryByText("属于主题")).toBeNull();
+  expect(screen.queryByText("主题")).toBeNull();
   expect(screen.queryByText("两跳")).toBeNull();
   await userEvent.click(
     screen.getByRole("button", {

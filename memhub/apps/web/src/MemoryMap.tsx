@@ -1382,13 +1382,13 @@ export function MemoryMap(props: Props) {
                 : selectedSource
                   ? text("记忆详情")
                   : visibleGroupNode
-                    ? text(
-                        visibleGroupNode.node_type === "topic"
-                          ? "主题"
-                          : visibleGroupNode.node_type === "schema"
+                    ? visibleGroupNode.node_type === "topic"
+                      ? visibleGroupNode.label
+                      : text(
+                          visibleGroupNode.node_type === "schema"
                             ? "关系归纳"
                             : "关联节点",
-                      )
+                        )
                     : text("记忆详情")}
           </h2>
           {(activeId || visibleGroupNode) && (
