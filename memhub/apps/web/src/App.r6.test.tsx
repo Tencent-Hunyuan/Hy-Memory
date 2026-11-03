@@ -9,6 +9,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
+import {
+  commitConfirmedMemoryMode,
+  issueConfirmedModeTicket,
+  resetConfirmedMemoryModeForTests,
+} from "./confirmed-memory-mode";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 
 it("localizes shared navigation and footer in Spanish", async () => {
@@ -36,6 +41,7 @@ it("localizes shared navigation and footer in Spanish", async () => {
 });
 
 const memoryProps = vi.hoisted(() => vi.fn());
+const progressProps = vi.hoisted(() => vi.fn());
 
 vi.mock("./api", () => ({
   getOnboarding: vi.fn().mockResolvedValue({ status: "completed" }),
@@ -62,11 +68,21 @@ vi.mock("./MemorySpace", () => ({
 vi.mock("./ModelSettings", () => ({
   ModelSettings: () => <p>模型设置内容</p>,
 }));
-vi.mock("./ImportProgressStrip", () => ({ ImportProgressStrip: () => null }));
+vi.mock("./R6Settings", () => ({
+  R6Settings: () => <p>设置视图内容</p>,
+}));
+vi.mock("./ImportProgressStrip", () => ({
+  ImportProgressStrip: (props: unknown) => {
+    progressProps(props);
+    return null;
+  },
+}));
 vi.mock("./HealthPanel", () => ({ HealthPanel: () => null }));
 vi.mock("./OnboardingFlow", () => ({ OnboardingFlow: () => null }));
 
 beforeEach(() => {
+  resetConfirmedMemoryModeForTests();
+  progressProps.mockClear();
   window.history.replaceState({}, "", "/");
   localStorage.clear();
 });
@@ -103,6 +119,23 @@ it("uses explicit memory deep links and restores the applications default URL", 
       .getByRole("button", { name: "应用" })
       .getAttribute("aria-current"),
   ).toBe("page");
+});
+
+it("passes confirmed mode capabilities to the production progress strip", async () => {
+  commitConfirmedMemoryMode("lite", issueConfirmedModeTicket("settings"));
+  render(<App />);
+  const nav = await screen.findByRole("navigation", { name: "主要导航" });
+  await userEvent.click(within(nav).getByRole("button", { name: "设置" }));
+  await waitFor(() =>
+    expect(progressProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modeCapabilities: expect.objectContaining({
+          content_plane: "raw",
+          generation_required: false,
+        }),
+      }),
+    ),
+  );
 });
 
 it("keeps an independent scroll position for each primary page", async () => {

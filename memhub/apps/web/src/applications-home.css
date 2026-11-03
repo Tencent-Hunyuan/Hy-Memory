@@ -270,6 +270,13 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.r6-home-activity h3.r6-home-raw-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+}
 .r6-home-activity small {
   font-size: 12px;
   color: #637786;
@@ -503,6 +510,9 @@ button.r6-home-expand:focus-visible,
   }
   .r6-home-activity > div {
     flex-wrap: wrap;
+  }
+  .r6-home-activity section {
+    flex-basis: min(100%, 260px);
   }
   .r6-home-metrics {
     grid-template-columns: 1fr;

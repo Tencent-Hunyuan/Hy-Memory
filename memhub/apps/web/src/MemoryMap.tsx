@@ -1,5 +1,6 @@
 import type {
   GovernedMemory,
+  HomeProjectionCapabilities,
   HostAskMemoryResponse,
   MemoryDetail,
   MemoryGraphNode,
@@ -92,6 +93,7 @@ type Props = {
   hidden?: boolean;
   id?: string;
   arrival?: MemoryArrival;
+  modeCapabilities?: HomeProjectionCapabilities | null;
   onViewHistory?(): void;
   contentKind?: "memory" | "raw";
   rawRecord?: SdkRawRecord | SdkRawContextItem | null;
@@ -268,6 +270,7 @@ export function MemoryMap(props: Props) {
     processing: props.processing,
     sources,
     loaded,
+    capabilities: props.modeCapabilities,
   });
   useEffect(() => {
     if (!loaded || library) return;

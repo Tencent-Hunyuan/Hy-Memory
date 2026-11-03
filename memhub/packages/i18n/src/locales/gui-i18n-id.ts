@@ -1507,10 +1507,30 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "apps.back": "Kembali ke beranda",
   "apps.overview": "Ikhtisar memori",
   "apps.memories": "Memori tersimpan",
+  "apps.rawConversations": "Percakapan asli",
+  "apps.rawSaving": "Menyimpan",
+  "apps.rawSavingStatus": "Status penyimpanan",
+  "apps.rawSavingDetail": "Percakapan asli disimpan tanpa model generatif",
+  "apps.rawNoExcerpt": "Tidak ada kutipan pengguna yang dapat ditampilkan",
+  "apps.rawConversation": "Percakapan asli",
+  "apps.rawSaved": "Percakapan asli disimpan",
+  "apps.rawEmpty": "Belum ada percakapan asli yang disimpan",
+  "apps.rawCheckedEmpty":
+    "Diperiksa: tidak ada pembaruan percakapan untuk ditampilkan",
+  "apps.memoryCheckedEmpty":
+    "Diperiksa: tidak ada pembaruan memori untuk ditampilkan",
+  "apps.rawWaiting": "Percakapan asli yang disimpan akan muncul di sini",
+  "apps.checkedRecent": "Konten saat ini telah diperiksa",
+  "apps.currentMode": "Mode saat ini",
+  "apps.mode.lite": "Memori dasar (lite)",
+  "apps.mode.pro": "Memori pintar (pro)",
+  "apps.mode.ultra": "Memori mendalam (ultra)",
   "apps.readingCount": "Memeriksa memori lokal…",
+  "apps.rawReadingCount": "Memeriksa percakapan asli…",
   "apps.startingRetry":
     "Layanan latar belakang sedang dimulai; ini akan diperbarui otomatis",
   "apps.countWillUpdate": "Jumlah memori akan diperbarui otomatis",
+  "apps.rawCountWillUpdate": "Jumlah percakapan asli akan diperbarui otomatis",
   "apps.showingPrevious":
     "Menampilkan data sebelumnya; ini akan diperbarui otomatis",
   "apps.unreadable": "Tidak tersedia",
@@ -1609,6 +1629,8 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "apps.revision": "Versi {count}",
   "apps.conversationTime": "Waktu percakapan",
   "apps.importTime": "Waktu impor",
+  "apps.writeTime": "Waktu penulisan",
+  "apps.updateTime": "Waktu pembaruan",
   "apps.incompleteCalls":
     " · Sebagian panggilan tidak tercatat; daftar mungkin tidak lengkap",
   "apps.timeoutWarning":
@@ -2053,6 +2075,15 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} tidak menemukan memori yang cocok",
   "calls.headline.found": "{host} menemukan {count} item terkait",
   "calls.headline.found.one": "{host} menemukan {count} item terkait",
+  "calls.headline.rawOnly": "{host} menemukan {count} percakapan asli",
+  "calls.headline.rawOnly.one": "{host} menemukan {count} percakapan asli",
+  "calls.headline.memoryOnly": "{host} menemukan {count} memori",
+  "calls.headline.memoryOnly.one": "{host} menemukan {count} memori",
+  "calls.headline.mixed":
+    "{host} menemukan {memories} memori · {raw} percakapan asli",
+  "calls.headline.mixed.one":
+    "{host} menemukan {memories} memori · {raw} percakapan asli",
+  "calls.headline.completed": "Panggilan {host} selesai",
   "calls.detail.timedOut":
     "Memori sedang diproses. Pencarian habis waktu, sehingga jawaban ini tidak menyertakan memori.",
   "calls.detail.unavailable":

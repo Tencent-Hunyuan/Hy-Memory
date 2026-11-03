@@ -29,6 +29,43 @@ it("traduce el progreso conservando mensajes y conversaciones como medidas disti
   localStorage.removeItem(LANGUAGE_STORAGE_KEY);
 });
 
+it("pluralizes each mixed count independently", async () => {
+  localStorage.setItem(LANGUAGE_STORAGE_KEY, "en");
+  render(
+    <LanguageProvider>
+      <MemoryArrivalPanel
+        arrival={{
+          importing: true,
+          importedMessages: 1,
+          importedConversations: 2,
+          phase: "importing",
+        }}
+        onConfigureModel={noop}
+        onConnect={noop}
+      />
+    </LanguageProvider>,
+  );
+  expect(await screen.findByText("1 message saved")).toBeTruthy();
+  expect(screen.getByText("2 conversations")).toBeTruthy();
+});
+
+it("keeps partial import 0/0 explicit", () => {
+  render(
+    <MemoryArrivalPanel
+      arrival={{
+        importing: true,
+        importedMessages: 0,
+        importedConversations: 0,
+        phase: "importing",
+      }}
+      onConfigureModel={noop}
+      onConnect={noop}
+    />,
+  );
+  expect(screen.getByText("已保存 0 条消息")).toBeTruthy();
+  expect(screen.getByText("0 个会话")).toBeTruthy();
+});
+
 import type { MemoryArrivalPhase } from "./memory-arrival-state";
 
 afterEach(() => {

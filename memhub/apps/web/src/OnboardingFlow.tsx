@@ -17,6 +17,10 @@ import {
 
 import { completeOnboarding, getMemoryMode, setMemoryMode } from "./api";
 import { AppMark } from "./app-mark";
+import {
+  commitConfirmedMemoryMode,
+  issueConfirmedModeTicket,
+} from "./confirmed-memory-mode";
 import { saveConnectionPreferences } from "./connection-preferences";
 import {
   defaultHostSourceIds,
@@ -319,8 +323,11 @@ export function OnboardingFlow({
 
   useEffect(() => {
     alive.current = true;
+    const modeTicket = issueConfirmedModeTicket("onboarding");
     void getMemoryMode().then(
       (memoryMode) => {
+        if (alive.current)
+          commitConfirmedMemoryMode(memoryMode.mode, modeTicket);
         if (
           alive.current &&
           !modeChoiceTouched.current &&
@@ -498,9 +505,11 @@ export function OnboardingFlow({
       return;
     setModeSaving(true);
     setModeError(null);
+    const modeTicket = issueConfirmedModeTicket("onboarding");
     try {
-      await setMemoryMode(modeChoice);
+      const changed = await setMemoryMode(modeChoice);
       if (!alive.current) return;
+      commitConfirmedMemoryMode(changed.mode, modeTicket);
       if (modeChoice === "lite") {
         await leave(modeDestination);
         return;

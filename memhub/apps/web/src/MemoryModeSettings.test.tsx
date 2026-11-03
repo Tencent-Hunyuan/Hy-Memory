@@ -15,6 +15,8 @@ import {
   getEvolveSchedule,
   getMemoryMode,
   getMemoryProcessing,
+  memoryModePlanUnsupported,
+  planMemoryMode,
   setEvolveSchedule,
   setMemoryMode,
 } from "./api";
@@ -28,6 +30,8 @@ vi.mock("./api", () => ({
   getEvolveOverview: vi.fn(),
   startEvolve: vi.fn(),
   getMemoryProcessing: vi.fn(),
+  planMemoryMode: vi.fn(),
+  memoryModePlanUnsupported: vi.fn().mockReturnValue(false),
   apiErrorCode: vi.fn().mockReturnValue(null),
 }));
 
@@ -60,6 +64,31 @@ function prepare(mode: "lite" | "pro" | "ultra" = "pro") {
     running: [],
   });
   vi.mocked(getMemoryProcessing).mockResolvedValue({} as never);
+  vi.mocked(planMemoryMode).mockImplementation(async (target) => ({
+    current: mode,
+    target,
+    effective_target: target,
+    capabilities: {
+      content_plane: target === "lite" ? "raw" : "memory",
+      generation_required: target !== "lite",
+      graph_enabled: target === "ultra",
+      evolve_available: target === "ultra",
+    },
+    effects: [
+      ...(target === "lite" ? (["higher_mode_memories_hidden"] as const) : []),
+      ...(mode === "lite" && target !== "lite"
+        ? (["earlier_raw_not_extracted", "lite_search_stops"] as const)
+        : []),
+      ...(target === "ultra" && mode !== "ultra"
+        ? (["existing_memories_added_to_graph"] as const)
+        : []),
+      ...(mode === "ultra" && target !== "ultra"
+        ? (["evolve_stopped"] as const)
+        : []),
+    ],
+    warnings: [],
+    blockers: [],
+  }));
 }
 
 async function chooseMode(
@@ -75,6 +104,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.mocked(apiErrorCode).mockReturnValue(null);
+  vi.mocked(memoryModePlanUnsupported).mockReturnValue(false);
 });
 
 it("confirms the data effects before switching to lite", async () => {
@@ -145,6 +175,20 @@ it("keeps focus inside the modal while the mode change is pending", async () => 
 
 it("routes to model setup instead of switching pro without a model", async () => {
   prepare("lite");
+  vi.mocked(planMemoryMode).mockResolvedValue({
+    current: "lite",
+    target: "pro",
+    effective_target: "pro",
+    capabilities: {
+      content_plane: "memory",
+      generation_required: true,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: ["earlier_raw_not_extracted", "lite_search_stops"],
+    warnings: [],
+    blockers: ["active_model_required"],
+  });
   const configure = vi.fn();
   const user = userEvent.setup();
   render(
@@ -156,6 +200,18 @@ it("routes to model setup instead of switching pro without a model", async () =>
     "使用 pro 或 ultra 前需要先配置并启用生成模型。",
   );
   expect(setMemoryMode).not.toHaveBeenCalled();
+});
+
+it("uses the isolated legacy plan only for a route-level old-Core 404", async () => {
+  prepare("pro");
+  vi.mocked(planMemoryMode).mockRejectedValue(new Error("404"));
+  vi.mocked(memoryModePlanUnsupported).mockReturnValue(true);
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await chooseMode(user, /基础记忆（lite）/);
+  expect(planMemoryMode).toHaveBeenCalledWith("lite");
+  expect(await screen.findByText(/已有记忆继续保留/)).toBeTruthy();
 });
 
 it("explains model cost, search scope and the next step before switching to ultra", async () => {

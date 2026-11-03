@@ -94,6 +94,11 @@ class ActiveProfileReadHandle(SdkClientHandle):
         handle = await self.current_handle()
         return self._guarded(handle, await handle.client())
 
+    async def client_for_mode(self, mode: str) -> Any:
+        """Build/read with the caller's one mode snapshot, without rereading it."""
+        handle = await self.current_handle(mode=mode)
+        return self._guarded(handle, await handle.client())
+
     def _guarded(self, handle: SdkClientHandle, client: Any) -> Any:
         """A remote embedding's searches report `embedding_unavailable` (no fallback)."""
         profile = getattr(handle, "profile", None)
@@ -111,15 +116,15 @@ class ActiveProfileReadHandle(SdkClientHandle):
             ),
         )
 
-    async def current_handle(self) -> SdkClientHandle:
+    async def current_handle(self, *, mode: str | None = None) -> SdkClientHandle:
         """The handle of the live space, held for the asking task."""
         space, identity = await in_sdk_read(self._resolve)
-        mode, features = self.memory_mode(), self.current_features()
+        selected_mode, features = mode or self.memory_mode(), self.current_features()
         language = self.current_language()
         key = (
             space.space_id if space is not None else "",
             *identity,
-            mode,
+            selected_mode,
             features,
             language,
         )
@@ -128,7 +133,9 @@ class ActiveProfileReadHandle(SdkClientHandle):
             if handle is None:
                 # Only on a change of space or profile: resolving a key can
                 # reach the system keychain, so it is not done on every read.
-                handle = await in_sdk_read(self._build, space, identity, mode, features, language)
+                handle = await in_sdk_read(
+                    self._build, space, identity, selected_mode, features, language
+                )
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)
             self._handles = {key: handle}

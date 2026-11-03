@@ -1504,10 +1504,28 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "apps.back": "ホームに戻る",
   "apps.overview": "記憶の概要",
   "apps.memories": "保存済みの記憶",
+  "apps.rawConversations": "元の会話",
+  "apps.rawSaving": "保存中",
+  "apps.rawSavingStatus": "保存状態",
+  "apps.rawSavingDetail": "生成モデルを使わず元の会話を保存します",
+  "apps.rawNoExcerpt": "表示できるユーザーの原文がありません",
+  "apps.rawConversation": "元の会話",
+  "apps.rawSaved": "元の会話を保存しました",
+  "apps.rawEmpty": "保存済みの元の会話はまだありません",
+  "apps.rawCheckedEmpty": "確認済み：表示できる元の会話の更新はありません",
+  "apps.memoryCheckedEmpty": "確認済み：表示できる記憶の更新はありません",
+  "apps.rawWaiting": "保存された元の会話がここに表示されます",
+  "apps.checkedRecent": "現在の内容を確認済み",
+  "apps.currentMode": "現在のモード",
+  "apps.mode.lite": "基本メモリ（lite）",
+  "apps.mode.pro": "スマートメモリ（pro）",
+  "apps.mode.ultra": "深層メモリ（ultra）",
   "apps.readingCount": "ローカルの記憶を確認中…",
+  "apps.rawReadingCount": "元の会話を確認中…",
   "apps.startingRetry":
     "バックグラウンドサービスを起動中です。自動的に更新されます",
   "apps.countWillUpdate": "記憶の件数は自動的に更新されます",
+  "apps.rawCountWillUpdate": "元の会話の件数は自動的に更新されます",
   "apps.showingPrevious": "前回のデータを表示しています。自動的に更新されます",
   "apps.unreadable": "利用できません",
   "apps.unit": "件",
@@ -1604,6 +1622,8 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "apps.revision": "バージョン {count}",
   "apps.conversationTime": "会話日時",
   "apps.importTime": "インポート日時",
+  "apps.writeTime": "書き込み日時",
+  "apps.updateTime": "更新日時",
   "apps.incompleteCalls":
     " · 一部の呼び出しが記録されていないため、一覧が不完全な可能性があります",
   "apps.timeoutWarning":
@@ -2038,6 +2058,15 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} では一致する記憶が見つかりませんでした",
   "calls.headline.found": "{host} が関連する項目を {count} 件見つけました",
   "calls.headline.found.one": "{host} が関連する項目を {count} 件見つけました",
+  "calls.headline.rawOnly": "{host} が元の会話を {count} 件見つけました",
+  "calls.headline.rawOnly.one": "{host} が元の会話を {count} 件見つけました",
+  "calls.headline.memoryOnly": "{host} が記憶を {count} 件見つけました",
+  "calls.headline.memoryOnly.one": "{host} が記憶を {count} 件見つけました",
+  "calls.headline.mixed":
+    "{host} が記憶 {memories} 件 · 元の会話 {raw} 件を見つけました",
+  "calls.headline.mixed.one":
+    "{host} が記憶 {memories} 件 · 元の会話 {raw} 件を見つけました",
+  "calls.headline.completed": "{host} の呼び出しが完了しました",
   "calls.detail.timedOut":
     "記憶を処理中のため照会がタイムアウトし、今回の回答には記憶が含まれていません。",
   "calls.detail.unavailable":

@@ -69,8 +69,18 @@ export type {
   EmbeddingSwitchSummary,
   ScannedEmbeddingSpace,
 } from "./embedding-switch.js";
+export type {
+  HomeProjectionCapabilities,
+  HomeProjectionLatest,
+  HomeProjectionMemoryLatest,
+  HomeProjectionMode,
+  HomeProjectionRawLatest,
+  HomeProjectionTimeBasis,
+  HomeProjectionV1,
+} from "./home-projection.js";
 
 import type { EmbeddingSwitchSummary } from "./embedding-switch.js";
+import type { HomeProjectionCapabilities } from "./home-projection.js";
 
 export interface HealthResponse {
   status: "ok";
@@ -999,6 +1009,21 @@ export interface MemoryModeChange extends MemoryModeState {
     | "evolve_stopped"
     | "lite_search_stops"
     | "graph_backfill_already_running"
+  >;
+}
+
+export interface MemoryModePlan {
+  current: MemoryPipelineMode;
+  target: MemoryPipelineMode;
+  effective_target: MemoryPipelineMode;
+  capabilities: HomeProjectionCapabilities;
+  effects: MemoryModeChange["effects"];
+  warnings: Array<"forced_by_env" | "effective_no_change">;
+  blockers: Array<
+    | "active_model_required"
+    | "embedding_maintenance_in_progress"
+    | "memory_lifecycle_busy"
+    | "graph_store_unavailable"
   >;
 }
 

@@ -3,9 +3,11 @@ import type {
   EvolveRunReceipt,
   EvolveSchedule,
   MemoryModeChange,
+  MemoryModePlan,
   MemoryModeState,
   MemoryPipelineMode,
 } from "@one-memory/contracts";
+import { legacyMemoryModePlan } from "@one-memory/operations";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   apiErrorCode,
@@ -13,10 +15,16 @@ import {
   getEvolveSchedule,
   getMemoryMode,
   getMemoryProcessing,
+  memoryModePlanUnsupported,
+  planMemoryMode,
   setEvolveSchedule,
   setMemoryMode,
   startEvolve,
 } from "./api";
+import {
+  commitConfirmedMemoryMode,
+  issueConfirmedModeTicket,
+} from "./confirmed-memory-mode";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
@@ -39,93 +47,71 @@ const MODE_COPY: Record<
   },
 };
 
-function confirmationRows(
-  current: MemoryPipelineMode,
-  target: MemoryPipelineMode,
-): Array<{ label: string; content: string }> {
-  if (target === "lite") {
-    return [
-      {
-        label: "新对话",
-        content: "之后只保存原始对话，不再生成新记忆。",
-      },
-      {
-        label: "模型调用与费用",
-        content:
-          current === "ultra"
-            ? "停止调用生成模型；每天自动整合也会停止。"
-            : "停止调用生成模型，不再产生这部分费用。",
-      },
-      {
-        label: "搜索范围",
-        content: "立即改为搜索原始对话。",
-      },
-      {
-        label: "已有数据",
-        content:
-          "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。",
-      },
-    ];
-  }
-  if (target === "pro") {
-    return [
-      {
-        label: "新对话",
-        content:
-          current === "lite"
-            ? "排队中和之后的新对话会由模型整理成记忆；已经处理完的旧对话不会补做。"
-            : "仍会由模型整理成记忆；新记忆不再写入知识图谱。",
-      },
-      {
-        label: "模型调用与费用",
-        content:
-          current === "ultra"
-            ? "提取仍会调用生成模型；每天自动整合会停止。"
-            : "开始调用当前生成模型，可能产生服务商费用。",
-      },
-      {
-        label: "搜索范围",
-        content:
-          current === "ultra"
-            ? "改为搜索智能记忆，不再使用知识图谱补充关联。"
-            : "立即改为搜索沉淀后的记忆。",
-      },
-      {
-        label: "已有数据",
-        content:
-          current === "ultra"
-            ? "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。"
-            : "原始对话全部保留，不会删除。",
-      },
-    ];
-  }
-  return [
+function planRows(plan: MemoryModePlan) {
+  const rows = [
     {
       label: "新对话",
       content:
-        current === "lite"
-          ? "排队中和之后的新对话会提取记忆并写入知识图谱；已经处理完的旧对话不会补做。"
-          : "提取方式不变，新记忆会写入知识图谱。",
+        plan.capabilities.content_plane === "raw"
+          ? "之后只保存原始对话，不再生成新记忆。"
+          : plan.capabilities.graph_enabled
+            ? "新对话会整理成记忆并写入知识图谱。"
+            : "新对话会由模型整理成记忆。",
     },
     {
       label: "模型调用与费用",
-      content:
-        "提取会调用生成模型；若每天自动整合已开启，到设定时间还会产生额外调用。切换本身不会立即整合。",
+      content: plan.capabilities.generation_required
+        ? plan.capabilities.evolve_available
+          ? "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。"
+          : "会调用当前生成模型，可能产生服务商费用。"
+        : "不调用生成模型，不再产生这部分费用。",
     },
     {
       label: "搜索范围",
-      content: "搜索沉淀后的记忆，并用知识图谱补充关联。",
-    },
-    {
-      label: "已有数据",
-      content: "已有记忆会在后台加入知识图谱，期间仍可使用；原始对话不会删除。",
-    },
-    {
-      label: "切换后",
-      content: "可设置每天自动整合时间，也可以随时立即整合一次。",
+      content:
+        plan.capabilities.content_plane === "raw"
+          ? "切换后搜索原始对话。"
+          : plan.capabilities.graph_enabled
+            ? "搜索沉淀记忆，并用知识图谱补充关联。"
+            : "搜索沉淀后的记忆。",
     },
   ];
+  if (plan.effects.includes("earlier_raw_not_extracted"))
+    rows.push({
+      label: "已有数据",
+      content: "已经处理完的旧对话不会补做；原始对话全部保留。",
+    });
+  if (plan.effects.includes("higher_mode_memories_hidden"))
+    rows.push({
+      label: "已有数据",
+      content: "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。",
+    });
+  if (plan.effects.includes("existing_memories_added_to_graph"))
+    rows.push({
+      label: "已有数据",
+      content: "已有记忆会在后台加入知识图谱，期间仍可使用。",
+    });
+  if (plan.effects.includes("evolve_stopped"))
+    rows.push({
+      label: "已有数据",
+      content:
+        "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
+    });
+  if (plan.capabilities.evolve_available)
+    rows.push({
+      label: "切换后",
+      content: "可设置每天自动整合时间，也可以随时立即整合一次。",
+    });
+  return rows;
 }
+
+const BLOCKER_COPY: Record<MemoryModePlan["blockers"][number], string> = {
+  active_model_required: "使用 pro 或 ultra 前需要先配置并启用生成模型。",
+  embedding_maintenance_in_progress:
+    "正在检查或切换向量模型，完成后才能切换记忆模式。",
+  memory_lifecycle_busy: "记忆维护正在进行，完成后才能切换模式。",
+  graph_store_unavailable: "当前安装缺少知识图谱组件，无法开启 ultra。",
+};
 
 export function MemoryModeSettings({
   hasActiveModel,
@@ -146,6 +132,7 @@ export function MemoryModeSettings({
   const [pendingMode, setPendingMode] = useState<MemoryPipelineMode | null>(
     null,
   );
+  const [pendingPlan, setPendingPlan] = useState<MemoryModePlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
   const [error, setError] = useState("");
@@ -179,6 +166,7 @@ export function MemoryModeSettings({
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busyRef.current) {
         event.preventDefault();
+        setPendingPlan(null);
         setPendingMode(null);
         return;
       }
@@ -231,6 +219,7 @@ export function MemoryModeSettings({
 
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
+    const modeTicket = issueConfirmedModeTicket("settings");
     const [modeResult, scheduleResult, overviewResult, processingResult] =
       await Promise.allSettled([
         getMemoryMode(),
@@ -240,6 +229,7 @@ export function MemoryModeSettings({
       ]);
     if (version !== refreshVersion.current) return;
     if (modeResult.status === "fulfilled") {
+      commitConfirmedMemoryMode(modeResult.value.mode, modeTicket);
       setState(modeResult.value);
       onModeChange?.(modeResult.value.mode);
       setError("");
@@ -277,16 +267,28 @@ export function MemoryModeSettings({
     run?.state === "running" ||
     state?.graph_build.state === "running";
 
-  function choose(mode: MemoryPipelineMode, opener: HTMLElement) {
+  async function choose(mode: MemoryPipelineMode, opener: HTMLElement) {
     if (!state || mode === state.mode || busy || lifecycleBusy) return;
-    if (mode !== "lite" && !hasActiveModel) {
-      const message = "使用 pro 或 ultra 前需要先配置并启用生成模型。";
-      setError("");
-      onConfigureModel(message);
+    setError("");
+    setBusy(true);
+    let plan: MemoryModePlan;
+    try {
+      plan = await planMemoryMode(mode);
+    } catch (reason) {
+      if (!memoryModePlanUnsupported(reason)) {
+        setError("模式切换影响暂时无法读取，请重试。");
+        setBusy(false);
+        return;
+      }
+      plan = legacyMemoryModePlan(state.mode, mode, { hasActiveModel });
+    }
+    setBusy(false);
+    if (plan.blockers.includes("active_model_required")) {
+      onConfigureModel(BLOCKER_COPY.active_model_required);
       return;
     }
-    setError("");
     dialogOpener.current = opener;
+    setPendingPlan(plan);
     setPendingMode(mode);
   }
 
@@ -294,13 +296,17 @@ export function MemoryModeSettings({
     if (!pendingMode) return;
     const targetMode = pendingMode;
     refreshVersion.current++;
+    const modeTicket = issueConfirmedModeTicket("settings");
     setBusy(true);
     setError("");
     try {
       const changed: MemoryModeChange = await setMemoryMode(pendingMode);
+      commitConfirmedMemoryMode(changed.mode, modeTicket);
       focusEvolveWhenReady.current = targetMode === "ultra";
       focusModeWhenReady.current = targetMode === "ultra" ? null : targetMode;
       setState(changed);
+      onModeChange?.(changed.mode);
+      setPendingPlan(null);
       setPendingMode(null);
       await refresh();
     } catch (reason) {
@@ -396,7 +402,7 @@ export function MemoryModeSettings({
                   (state?.forced_by_env && mode !== state.mode) ||
                   (mode !== "lite" && !modelStateKnown)
                 }
-                onChange={(event) => choose(mode, event.currentTarget)}
+                onChange={(event) => void choose(mode, event.currentTarget)}
               />
               <span className="r6-mode-choice-copy">
                 <strong>{text(MODE_COPY[mode].title)}</strong>
@@ -531,27 +537,37 @@ export function MemoryModeSettings({
               )}
             </h2>
             <dl className="r6-mode-confirm-effects">
-              {confirmationRows(state?.mode ?? "pro", pendingMode).map(
-                (row) => (
-                  <div key={row.label}>
-                    <dt>{text(row.label)}</dt>
-                    <dd>{text(row.content)}</dd>
-                  </div>
-                ),
-              )}
+              {(pendingPlan ? planRows(pendingPlan) : []).map((row) => (
+                <div key={`${row.label}:${row.content}`}>
+                  <dt>{text(row.label)}</dt>
+                  <dd>{text(row.content)}</dd>
+                </div>
+              ))}
             </dl>
+            {(pendingPlan?.blockers ?? []).map((blocker) => (
+              <p className="r6-settings-error" role="alert" key={blocker}>
+                {text(BLOCKER_COPY[blocker])}
+              </p>
+            ))}
             {error ? (
               <p className="r6-settings-error" role="alert">
                 {text(error)}
               </p>
             ) : null}
             <footer>
-              <R6Button disabled={busy} onClick={() => setPendingMode(null)}>
+              <R6Button
+                disabled={busy}
+                onClick={() => {
+                  setPendingPlan(null);
+                  setPendingMode(null);
+                }}
+              >
                 {text("取消")}
               </R6Button>
               <R6Button
                 variant="primary"
                 pending={busy}
+                disabled={Boolean(pendingPlan?.blockers.length)}
                 onClick={() => void commitMode()}
               >
                 {text("切换到 {mode}").replace(

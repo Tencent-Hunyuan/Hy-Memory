@@ -39,6 +39,11 @@ _IN_FLIGHT: set[str] = set()
 _IN_FLIGHT_LOCK = threading.Lock()
 
 
+def sedimentation_allows(mode: str, enabled: bool) -> bool:
+    """Lite stores raw turns even when model-based sedimentation is paused."""
+    return mode == "lite" or enabled
+
+
 def sdk_write_in_flight(request_id: str) -> bool:
     with _IN_FLIGHT_LOCK:
         return request_id in _IN_FLIGHT
@@ -285,7 +290,7 @@ class SdkWriteCoordinator:
         request_id: str,
         before_hy_invocation: Callable[[], Awaitable[None]],
     ) -> SdkWriteReceipt:
-        if not self.sedimentation_enabled():
+        if not sedimentation_allows(self.memory_mode(), self.sedimentation_enabled()):
             raise RuntimeError("model_sedimentation_disabled")
         if not self.writes_open():
             # An embedding switch paused writes: the drain puts the job back.

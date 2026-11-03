@@ -30,6 +30,7 @@ import {
   spanishMessages,
 } from "./gui-i18n-messages.js";
 import {
+  modeChineseMessages,
   modeEnglishMessages,
   modeFrenchMessages,
   modeGermanMessages,
@@ -261,6 +262,33 @@ describe("Mode catalog", () => {
         keyof typeof modeEnglishMessages
       >)
         expect(messages[key], key).not.toBe(modeEnglishMessages[key]);
+  });
+
+  it("keeps new plan and blocker copy in Traditional Chinese", () => {
+    const keys = [
+      "新对话会整理成记忆并写入知识图谱。",
+      "新对话会由模型整理成记忆。",
+      "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。",
+      "会调用当前生成模型，可能产生服务商费用。",
+      "不调用生成模型，不再产生这部分费用。",
+      "切换后搜索原始对话。",
+      "搜索沉淀记忆，并用知识图谱补充关联。",
+      "搜索沉淀后的记忆。",
+      "已经处理完的旧对话不会补做；原始对话全部保留。",
+      "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。",
+      "已有记忆会在后台加入知识图谱，期间仍可使用。",
+      "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
+      "记忆维护正在进行，完成后才能切换模式。",
+      "模式切换影响暂时无法读取，请重试。",
+    ] as const;
+    for (const key of keys) {
+      expect(modeTraditionalChineseMessages[key], key).not.toBe(
+        modeChineseMessages[key],
+      );
+      expect(modeTraditionalChineseMessages[key], key).toMatch(
+        /[記憶對話會圖譜費續讀]/,
+      );
+    }
   });
 });
 

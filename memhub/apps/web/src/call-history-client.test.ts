@@ -151,9 +151,9 @@ it("clear-all uses the dedicated transport and never reuses page IDs", async () 
   await expect(clearAllCallEvents()).rejects.toThrow();
 });
 it("uses one plain-language lookup vocabulary across summary surfaces", () => {
-  expect(callEventHeadline(event)).toBe("Codex 查到 1 条相关内容");
+  expect(callEventHeadline(event)).toBe("Codex 找到 1 条原始会话");
   expect(callDetailHeadline({ ...event, memory_count: 2 })).toBe(
-    "Codex 查到 3 条相关内容",
+    "Codex 找到 2 条记忆 · 1 条原始会话",
   );
   expect(callDetailHeadline({ ...event, state: "empty" })).toBe(
     "Codex 没有查到相关记忆",
@@ -167,13 +167,46 @@ it("uses one plain-language lookup vocabulary across summary surfaces", () => {
   expect(callDetailHeadline({ ...event, state: "denied" })).toBe(
     "Codex 未获准查记忆",
   );
-  expect(callRowHeadline(event)).toBe("Codex 查到 1 条相关内容");
+  expect(callRowHeadline(event)).toBe("Codex 找到 1 条原始会话");
   expect(callRowHeadline({ ...event, state: "unavailable" })).toBe(
     "Codex 暂时无法查记忆",
   );
   expect(callRowDetail({ ...event, state: "timed_out" })).toBe(
     "后台正在整理记忆，查询超时，这次回答没有带上记忆",
   );
+});
+it("classifies successful headlines by returned plane, never by mode or sum", () => {
+  expect(callEventHeadline({ ...event, raw_count: 0, memory_count: 2 })).toBe(
+    "Codex 找到 2 条记忆",
+  );
+  expect(callEventHeadline({ ...event, raw_count: 3, memory_count: 2 })).toBe(
+    "Codex 找到 2 条记忆 · 3 条原始会话",
+  );
+  expect(
+    callEventHeadline({
+      ...event,
+      tool: "om_matters",
+      raw_count: 0,
+      memory_count: 0,
+      references: [],
+    }),
+  ).toBe("Codex 调用已完成");
+  expect(
+    callEventHeadline({
+      ...event,
+      state: "partial",
+      raw_count: 2,
+      memory_count: 0,
+    }),
+  ).toBe("Codex 找到 2 条原始会话");
+  expect(
+    callEventHeadline({
+      ...event,
+      state: "empty",
+      raw_count: 3,
+      memory_count: 2,
+    }),
+  ).toBe("Codex 没有查到相关记忆");
 });
 it("keeps delivery and adoption separate for call history", async () => {
   fake.list.mockResolvedValue({

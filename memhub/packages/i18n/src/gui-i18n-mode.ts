@@ -86,6 +86,29 @@ const modeChineseMessages = {
   切换后: "切换后",
   "之后只保存原始对话，不再生成新记忆。":
     "之后只保存原始对话，不再生成新记忆。",
+  "新对话会整理成记忆并写入知识图谱。": "新对话会整理成记忆并写入知识图谱。",
+  "新对话会由模型整理成记忆。": "新对话会由模型整理成记忆。",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "会调用当前生成模型，可能产生服务商费用。",
+  "不调用生成模型，不再产生这部分费用。":
+    "不调用生成模型，不再产生这部分费用。",
+  "切换后搜索原始对话。": "切换后搜索原始对话。",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "搜索沉淀记忆，并用知识图谱补充关联。",
+  "搜索沉淀后的记忆。": "搜索沉淀后的记忆。",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "已经处理完的旧对话不会补做；原始对话全部保留。",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "已有记忆会在后台加入知识图谱，期间仍可使用。",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "记忆维护正在进行，完成后才能切换模式。",
+  "模式切换影响暂时无法读取，请重试。": "模式切换影响暂时无法读取，请重试。",
   "停止调用生成模型；每天自动整合也会停止。":
     "停止调用生成模型；每天自动整合也会停止。",
   "停止调用生成模型，不再产生这部分费用。":
@@ -246,6 +269,33 @@ export const modeEnglishMessages: ModeMessages = {
   切换后: "After switching",
   "之后只保存原始对话，不再生成新记忆。":
     "New conversations are saved as original text only; no new memories are created.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "New conversations are organized into memories and written to the knowledge graph.",
+  "新对话会由模型整理成记忆。":
+    "New conversations are organized into memories by the model.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "The current generation model is called, and automatic consolidation may add cost. Switching does not consolidate immediately.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "The current generation model is called and may incur provider charges.",
+  "不调用生成模型，不再产生这部分费用。":
+    "The generation model is not called, so these charges stop.",
+  "切换后搜索原始对话。":
+    "After switching, search uses original conversations.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "Search uses created memories with relationships from the knowledge graph.",
+  "搜索沉淀后的记忆。": "Search uses created memories.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Completed older conversations are not processed again; all original conversations are retained.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "Existing memories are retained, but advanced memories are not shown or recalled in this mode.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "Existing memories are added to the knowledge graph in the background and remain usable.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "Regular memories remain usable. Higher-level memories and graph data are retained but not recalled, and daily consolidation stops.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "Memory maintenance is running. Wait for it to finish before switching modes.",
+  "模式切换影响暂时无法读取，请重试。":
+    "The effects of switching modes are temporarily unavailable. Please retry.",
   "停止调用生成模型；每天自动整合也会停止。":
     "Generation model calls stop, and daily consolidation stops too.",
   "停止调用生成模型，不再产生这部分费用。":
@@ -406,6 +456,33 @@ export const modeSpanishMessages: ModeMessages = {
   切换后: "Después del cambio",
   "之后只保存原始对话，不再生成新记忆。":
     "Las conversaciones nuevas se guardan solo como texto original; no se crean memorias nuevas.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "Las conversaciones nuevas se organizan como memorias y se escriben en el grafo de conocimiento.",
+  "新对话会由模型整理成记忆。":
+    "El modelo organiza las conversaciones nuevas como memorias.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "Se usa el modelo generativo actual y la consolidación automática puede añadir costes. El cambio no consolida de inmediato.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "Se usa el modelo generativo actual y puede generar costes del proveedor.",
+  "不调用生成模型，不再产生这部分费用。":
+    "No se usa el modelo generativo, por lo que estos costes se detienen.",
+  "切换后搜索原始对话。":
+    "Tras el cambio, la búsqueda usa las conversaciones originales.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "La búsqueda usa las memorias creadas y las relaciones del grafo de conocimiento.",
+  "搜索沉淀后的记忆。": "La búsqueda usa las memorias creadas.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Las conversaciones antiguas ya completadas no se vuelven a procesar; todas las originales se conservan.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "Las memorias existentes se conservan, pero las avanzadas no se muestran ni recuperan en este modo.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "Las memorias existentes se añaden al grafo en segundo plano y siguen disponibles.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "Las memorias normales siguen disponibles. Las de nivel superior y los datos del grafo se conservan sin recuperarse, y la consolidación diaria se detiene.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "El mantenimiento de memoria está en curso. Espera para cambiar de modo.",
+  "模式切换影响暂时无法读取，请重试。":
+    "No se pueden leer los efectos del cambio de modo. Reinténtalo.",
   "停止调用生成模型；每天自动整合也会停止。":
     "Se detienen las llamadas al modelo generativo y la consolidación diaria.",
   "停止调用生成模型，不再产生这部分费用。":
@@ -617,6 +694,29 @@ export const modeTraditionalChineseMessages: ModeMessages = {
     "模型已在目前模式下生效，會用於整理新對話並建立記憶。",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "模型設定已保留，確認記憶模式後會顯示是否生效。",
+  "新对话会整理成记忆并写入知识图谱。": "新對話會整理成記憶並寫入知識圖譜。",
+  "新对话会由模型整理成记忆。": "新對話會由模型整理成記憶。",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "會呼叫目前的生成模型；自動整合可能產生額外費用。切換本身不會立即整合。",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "會呼叫目前的生成模型，可能產生服務供應商費用。",
+  "不调用生成模型，不再产生这部分费用。":
+    "不呼叫生成模型，不再產生這部分費用。",
+  "切换后搜索原始对话。": "切換後搜尋原始對話。",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "搜尋已建立的記憶，並用知識圖譜補充關聯。",
+  "搜索沉淀后的记忆。": "搜尋已建立的記憶。",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "已處理完成的舊對話不會補做；原始對話全部保留。",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "現有記憶會繼續保留，但進階記憶在目前模式下不顯示、不參與召回。",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "現有記憶會在背景加入知識圖譜，期間仍可使用。",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "一般記憶仍可使用；更高層記憶和圖譜資料會繼續保留，但不參與目前召回；每日自動整合會停止。",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "記憶維護正在進行，完成後才能切換模式。",
+  "模式切换影响暂时无法读取，请重试。": "暫時無法讀取模式切換影響，請重試。",
 };
 
 export const modeJapaneseMessages: ModeMessages = {
@@ -774,6 +874,31 @@ export const modeJapaneseMessages: ModeMessages = {
     "既存の高度な記憶を知識グラフに追加しています…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "毎日 {time} に evolve を実行します。スリープ中に実行できなかった場合は、復帰後に実行します。",
+  "新对话会整理成记忆并写入知识图谱。":
+    "新しい会話を記憶に整理し、知識グラフへ書き込みます。",
+  "新对话会由模型整理成记忆。": "モデルが新しい会話を記憶に整理します。",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "現在の生成モデルを呼び出し、自動統合で追加料金が発生する場合があります。切り替えだけでは統合しません。",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "現在の生成モデルを呼び出し、料金が発生する場合があります。",
+  "不调用生成模型，不再产生这部分费用。":
+    "生成モデルを呼び出さないため、この料金は発生しません。",
+  "切换后搜索原始对话。": "切り替え後は元の会話を検索します。",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "作成済みの記憶を検索し、知識グラフの関連情報で補完します。",
+  "搜索沉淀后的记忆。": "作成済みの記憶を検索します。",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "処理済みの会話は再処理せず、元の会話はすべて保持します。",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "既存の記憶は保持しますが、高度な記憶はこのモードでは表示・想起されません。",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "既存の記憶をバックグラウンドで知識グラフへ追加し、その間も利用できます。",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "通常の記憶は利用でき、上位記憶とグラフは保持されますが想起には使われません。毎日の統合は停止します。",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "記憶の保守処理中です。完了後にモードを切り替えてください。",
+  "模式切换影响暂时无法读取，请重试。":
+    "モード変更の影響を読み取れません。もう一度お試しください。",
 };
 
 export const modeGermanMessages: ModeMessages = {
@@ -935,6 +1060,33 @@ export const modeGermanMessages: ModeMessages = {
     "Vorhandene erweiterte Erinnerungen werden dem Wissensgraphen hinzugefügt…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "evolve wird täglich um {time} ausgeführt. Verpasste Läufe starten nach dem Aufwachen des Geräts.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "Neue Unterhaltungen werden zu Erinnerungen verarbeitet und in den Wissensgraphen geschrieben.",
+  "新对话会由模型整理成记忆。":
+    "Neue Unterhaltungen werden vom Modell zu Erinnerungen verarbeitet.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "Das aktuelle generative Modell wird aufgerufen; automatische Konsolidierung kann Zusatzkosten verursachen. Der Wechsel konsolidiert nicht sofort.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "Das aktuelle generative Modell wird aufgerufen und kann Anbieterkosten verursachen.",
+  "不调用生成模型，不再产生这部分费用。":
+    "Das generative Modell wird nicht aufgerufen; diese Kosten entfallen.",
+  "切换后搜索原始对话。":
+    "Nach dem Wechsel werden Originalunterhaltungen durchsucht.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "Erstellte Erinnerungen werden mit Beziehungen aus dem Wissensgraphen durchsucht.",
+  "搜索沉淀后的记忆。": "Erstellte Erinnerungen werden durchsucht.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Abgeschlossene ältere Unterhaltungen werden nicht erneut verarbeitet; alle Originale bleiben erhalten.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "Bestehende Erinnerungen bleiben erhalten; erweiterte werden in diesem Modus weder angezeigt noch abgerufen.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "Bestehende Erinnerungen werden im Hintergrund dem Wissensgraphen hinzugefügt und bleiben nutzbar.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "Normale Erinnerungen bleiben nutzbar. Höhere Erinnerungen und Graphdaten bleiben erhalten, werden aber nicht abgerufen; die tägliche Konsolidierung stoppt.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "Die Speicherwartung läuft. Wechseln Sie den Modus nach Abschluss.",
+  "模式切换影响暂时无法读取，请重试。":
+    "Die Auswirkungen des Moduswechsels sind nicht verfügbar. Bitte erneut versuchen.",
 };
 
 export const modePortugueseMessages: ModeMessages = {
@@ -1096,6 +1248,33 @@ export const modePortugueseMessages: ModeMessages = {
     "A adicionar memórias avançadas ao grafo de conhecimento…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "Executa evolve diariamente às {time}. Se o dispositivo estiver suspenso, será executado ao reativar.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "As novas conversas são organizadas em memórias e escritas no grafo de conhecimento.",
+  "新对话会由模型整理成记忆。":
+    "O modelo organiza as novas conversas em memórias.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "O modelo generativo atual é chamado e a consolidação automática pode gerar custos adicionais. A mudança não consolida de imediato.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "O modelo generativo atual é chamado e pode gerar custos do fornecedor.",
+  "不调用生成模型，不再产生这部分费用。":
+    "O modelo generativo não é chamado, eliminando estes custos.",
+  "切换后搜索原始对话。":
+    "Após a mudança, a pesquisa usa as conversas originais.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "A pesquisa usa memórias criadas e relações do grafo de conhecimento.",
+  "搜索沉淀后的记忆。": "A pesquisa usa as memórias criadas.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Conversas antigas já concluídas não são refeitas; todas as originais são mantidas.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "As memórias existentes são mantidas, mas as avançadas não são mostradas nem recuperadas neste modo.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "As memórias existentes são adicionadas ao grafo em segundo plano e continuam disponíveis.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "As memórias normais continuam disponíveis. As memórias superiores e os dados do grafo são mantidos sem serem recuperados, e a consolidação diária para.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "A manutenção da memória está em curso. Aguarde antes de mudar de modo.",
+  "模式切换影响暂时无法读取，请重试。":
+    "Não é possível ler os efeitos da mudança de modo. Tente novamente.",
 };
 
 export const modeFrenchMessages: ModeMessages = {
@@ -1257,6 +1436,33 @@ export const modeFrenchMessages: ModeMessages = {
     "Ajout des mémoires avancées au graphe de connaissances…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "Exécute evolve chaque jour à {time}. Les exécutions manquées démarrent au réveil de l’appareil.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "Les nouvelles conversations sont organisées en mémoires et ajoutées au graphe de connaissances.",
+  "新对话会由模型整理成记忆。":
+    "Le modèle organise les nouvelles conversations en mémoires.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "Le modèle génératif actuel est appelé et la consolidation automatique peut ajouter des frais. Le changement ne consolide pas immédiatement.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "Le modèle génératif actuel est appelé et peut entraîner des frais.",
+  "不调用生成模型，不再产生这部分费用。":
+    "Le modèle génératif n’est pas appelé, ce qui supprime ces frais.",
+  "切换后搜索原始对话。":
+    "Après le changement, la recherche utilise les conversations originales.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "La recherche utilise les mémoires créées et les relations du graphe de connaissances.",
+  "搜索沉淀后的记忆。": "La recherche utilise les mémoires créées.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Les anciennes conversations terminées ne sont pas retraitées ; toutes les originales sont conservées.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "Les mémoires existantes sont conservées, mais les avancées ne sont ni affichées ni rappelées dans ce mode.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "Les mémoires existantes sont ajoutées au graphe en arrière-plan et restent utilisables.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "Les mémoires ordinaires restent utilisables. Les mémoires supérieures et le graphe sont conservés sans être rappelés, et la consolidation quotidienne s’arrête.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "La maintenance de la mémoire est en cours. Attendez avant de changer de mode.",
+  "模式切换影响暂时无法读取，请重试。":
+    "Les effets du changement de mode sont indisponibles. Réessayez.",
 };
 
 export const modeKoreanMessages: ModeMessages = {
@@ -1414,6 +1620,31 @@ export const modeKoreanMessages: ModeMessages = {
     "기존 고급 메모리를 지식 그래프에 추가하는 중…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "매일 {time}에 evolve를 실행합니다. 절전 중 놓친 실행은 기기가 깨어난 후 시작됩니다.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "새 대화를 메모리로 정리해 지식 그래프에 기록합니다.",
+  "新对话会由模型整理成记忆。": "모델이 새 대화를 메모리로 정리합니다.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "현재 생성 모델을 호출하며 자동 통합에 추가 비용이 들 수 있습니다. 전환만으로 즉시 통합되지는 않습니다.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "현재 생성 모델을 호출하며 제공업체 비용이 발생할 수 있습니다.",
+  "不调用生成模型，不再产生这部分费用。":
+    "생성 모델을 호출하지 않아 이 비용이 발생하지 않습니다.",
+  "切换后搜索原始对话。": "전환 후 원본 대화를 검색합니다.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "생성된 메모리를 검색하고 지식 그래프 관계로 보완합니다.",
+  "搜索沉淀后的记忆。": "생성된 메모리를 검색합니다.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "처리가 끝난 이전 대화는 다시 처리하지 않으며 원본은 모두 유지합니다.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "기존 메모리는 유지하지만 고급 메모리는 이 모드에서 표시되거나 검색되지 않습니다.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "기존 메모리를 백그라운드에서 지식 그래프에 추가하며 계속 사용할 수 있습니다.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "일반 메모리는 계속 사용할 수 있습니다. 상위 메모리와 그래프는 유지되지만 검색에는 쓰이지 않으며 매일 통합은 중지됩니다.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "메모리 유지 관리 중입니다. 완료 후 모드를 전환하세요.",
+  "模式切换影响暂时无法读取，请重试。":
+    "모드 전환 영향을 읽을 수 없습니다. 다시 시도하세요.",
 };
 
 export const modeRussianMessages: ModeMessages = {
@@ -1574,6 +1805,33 @@ export const modeRussianMessages: ModeMessages = {
     "Расширенные воспоминания добавляются в граф знаний…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "evolve запускается ежедневно в {time}. Пропущенный запуск начнётся после выхода устройства из сна.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "Новые диалоги преобразуются в воспоминания и записываются в граф знаний.",
+  "新对话会由模型整理成记忆。":
+    "Модель преобразует новые диалоги в воспоминания.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "Вызывается текущая генеративная модель; автообъединение может увеличить расходы. Переключение не запускает объединение сразу.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "Вызывается текущая генеративная модель, за что поставщик может взимать плату.",
+  "不调用生成模型，不再产生这部分费用。":
+    "Генеративная модель не вызывается, поэтому эти расходы прекращаются.",
+  "切换后搜索原始对话。":
+    "После переключения поиск выполняется по исходным диалогам.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "Поиск использует созданные воспоминания и связи из графа знаний.",
+  "搜索沉淀后的记忆。": "Поиск использует созданные воспоминания.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Завершённые старые диалоги не обрабатываются повторно; все оригиналы сохраняются.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "Существующие воспоминания сохраняются, но расширенные не показываются и не находятся в этом режиме.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "Существующие воспоминания добавляются в граф в фоне и остаются доступными.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "Обычные воспоминания остаются доступны. Верхние уровни и граф сохраняются без участия в поиске; ежедневное объединение прекращается.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "Идёт обслуживание памяти. Дождитесь завершения перед сменой режима.",
+  "模式切换影响暂时无法读取，请重试。":
+    "Не удалось прочитать последствия смены режима. Повторите попытку.",
 };
 
 export const modeIndonesianMessages: ModeMessages = {
@@ -1733,4 +1991,30 @@ export const modeIndonesianMessages: ModeMessages = {
     "Menambahkan memori lanjutan ke knowledge graph…",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
     "Jalankan evolve setiap hari pukul {time}. Proses yang terlewat akan dimulai setelah perangkat aktif kembali.",
+  "新对话会整理成记忆并写入知识图谱。":
+    "Percakapan baru ditata menjadi memori dan ditulis ke knowledge graph.",
+  "新对话会由模型整理成记忆。": "Model menata percakapan baru menjadi memori.",
+  "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
+    "Model generatif saat ini dipanggil dan konsolidasi otomatis dapat menambah biaya. Peralihan tidak langsung menjalankan konsolidasi.",
+  "会调用当前生成模型，可能产生服务商费用。":
+    "Model generatif saat ini dipanggil dan dapat menimbulkan biaya penyedia.",
+  "不调用生成模型，不再产生这部分费用。":
+    "Model generatif tidak dipanggil sehingga biaya ini berhenti.",
+  "切换后搜索原始对话。":
+    "Setelah beralih, pencarian menggunakan percakapan asli.",
+  "搜索沉淀记忆，并用知识图谱补充关联。":
+    "Pencarian menggunakan memori yang dibuat dan relasi knowledge graph.",
+  "搜索沉淀后的记忆。": "Pencarian menggunakan memori yang dibuat.",
+  "已经处理完的旧对话不会补做；原始对话全部保留。":
+    "Percakapan lama yang selesai tidak diproses ulang; semua percakapan asli disimpan.",
+  "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。":
+    "Memori yang ada disimpan, tetapi memori lanjutan tidak ditampilkan atau diambil dalam mode ini.",
+  "已有记忆会在后台加入知识图谱，期间仍可使用。":
+    "Memori yang ada ditambahkan ke knowledge graph di latar belakang dan tetap dapat digunakan.",
+  "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
+    "Memori biasa tetap tersedia. Memori tingkat tinggi dan graf disimpan tanpa digunakan dalam pencarian; konsolidasi harian berhenti.",
+  "记忆维护正在进行，完成后才能切换模式。":
+    "Pemeliharaan memori sedang berjalan. Tunggu sebelum mengganti mode.",
+  "模式切换影响暂时无法读取，请重试。":
+    "Dampak perubahan mode tidak dapat dibaca. Coba lagi.",
 };

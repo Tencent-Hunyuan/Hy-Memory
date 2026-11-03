@@ -23,6 +23,7 @@ import {
 import { getOnboarding } from "./api";
 import { useApplicationsLanguage } from "./applications-language";
 import { CallHistory } from "./CallHistory";
+import { useConfirmedMemoryMode } from "./confirmed-memory-mode";
 import { DebugLogPanel } from "./DebugLogPanel";
 import { DesktopFrame } from "./DesktopFrame";
 import { EmbeddingSwitchGlobalStatus } from "./EmbeddingSwitchExperience";
@@ -61,6 +62,7 @@ export function App() {
 function AppContent() {
   const { t } = useGuiLanguage();
   const { a } = useApplicationsLanguage();
+  const confirmedMode = useConfirmedMemoryMode();
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [startupRead, setStartupRead] = useState<"loading" | "ready" | "error">(
     "loading",
@@ -330,6 +332,9 @@ function AppContent() {
             sourceSnapshot={imports.sourceSnapshot}
             onRefresh={imports.refresh}
             arrival={memoryArrival}
+            modeCapabilities={
+              confirmedMode.capabilities ?? memoryArrival?.capabilities
+            }
             onConfigureModel={() => navigate("settings")}
             onJobAction={imports.changeJob}
             showSourceLink={displayedView !== "settings"}

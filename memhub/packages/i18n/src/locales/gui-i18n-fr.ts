@@ -1553,11 +1553,34 @@ export const frenchMessages: Record<MessageKey, string> = {
   "apps.back": "Retour à l’accueil",
   "apps.overview": "Aperçu des mémoires",
   "apps.memories": "Mémoires enregistrées",
+  "apps.rawConversations": "Conversations d’origine",
+  "apps.rawSaving": "Enregistrement",
+  "apps.rawSavingStatus": "État de l’enregistrement",
+  "apps.rawSavingDetail":
+    "Les conversations d’origine sont enregistrées sans modèle génératif",
+  "apps.rawNoExcerpt": "Aucun extrait utilisateur affichable",
+  "apps.rawConversation": "Conversation d’origine",
+  "apps.rawSaved": "Conversation d’origine enregistrée",
+  "apps.rawEmpty": "Aucune conversation d’origine enregistrée",
+  "apps.rawCheckedEmpty":
+    "Vérifié : aucune mise à jour de conversation à afficher",
+  "apps.memoryCheckedEmpty":
+    "Vérifié : aucune mise à jour de mémoire à afficher",
+  "apps.rawWaiting":
+    "Les conversations d’origine enregistrées apparaîtront ici",
+  "apps.checkedRecent": "Contenu actuel vérifié",
+  "apps.currentMode": "Mode actuel",
+  "apps.mode.lite": "Mémoire de base (lite)",
+  "apps.mode.pro": "Mémoire intelligente (pro)",
+  "apps.mode.ultra": "Mémoire approfondie (ultra)",
   "apps.readingCount": "Vérification des mémoires locales…",
+  "apps.rawReadingCount": "Vérification des conversations d’origine…",
   "apps.startingRetry":
     "Le service en arrière-plan démarre ; l’affichage se mettra à jour automatiquement",
   "apps.countWillUpdate":
     "Le nombre de mémoires se mettra à jour automatiquement",
+  "apps.rawCountWillUpdate":
+    "Le nombre de conversations d’origine se mettra à jour automatiquement",
   "apps.showingPrevious":
     "Affichage des données précédentes ; mise à jour automatique à venir",
   "apps.unreadable": "Indisponible",
@@ -1659,6 +1682,8 @@ export const frenchMessages: Record<MessageKey, string> = {
   "apps.revision": "Version {count}",
   "apps.conversationTime": "Date de la conversation",
   "apps.importTime": "Date d’importation",
+  "apps.writeTime": "Date d’écriture",
+  "apps.updateTime": "Date de mise à jour",
   "apps.incompleteCalls":
     " · Certains appels n’ont pas été enregistrés ; la liste peut être incomplète",
   "apps.timeoutWarning":
@@ -2114,6 +2139,16 @@ export const frenchMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} n’a trouvé aucune mémoire correspondante",
   "calls.headline.found": "{host} a trouvé {count} éléments associés",
   "calls.headline.found.one": "{host} a trouvé {count} élément associé",
+  "calls.headline.rawOnly": "{host} a trouvé {count} conversations d’origine",
+  "calls.headline.rawOnly.one":
+    "{host} a trouvé {count} conversation d’origine",
+  "calls.headline.memoryOnly": "{host} a trouvé {count} mémoires",
+  "calls.headline.memoryOnly.one": "{host} a trouvé {count} mémoire",
+  "calls.headline.mixed":
+    "{host} a trouvé {memories} mémoires · {raw} conversations d’origine",
+  "calls.headline.mixed.one":
+    "{host} a trouvé {memories} mémoire · {raw} conversations d’origine",
+  "calls.headline.completed": "L’appel de {host} est terminé",
   "calls.detail.timedOut":
     "Les mémoires sont en cours de traitement. La recherche a expiré ; cette réponse n’inclut donc pas de mémoires.",
   "calls.detail.unavailable":
