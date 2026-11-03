@@ -1448,7 +1448,7 @@ CODING_EXTRACT_PROMPT_CODING = """\
 ║ decidió aquí, en qué coordenadas del código, qué se probó y se descartó,  ║
 ║ y si se verificó.                                                         ║
 ║                                                                           ║
-║ En concreto, en cada `statement` y en cada `solution`:                    ║
+║ En concreto, en cada `fact` y en cada `solution`:                         ║
 ║   · El sujeto gramatical es el CÓDIGO o LA DECISIÓN, nunca "el usuario"   ║
 ║     y nunca "el agente". No escribas "El usuario intentó…",               ║
 ║     "El usuario quería…", "Luego el agente comprobó…".                    ║
@@ -1550,7 +1550,7 @@ asistente "decidió luego" y el código pegado que solo estás repitiendo; dedic
 caracteres a los cuatro elementos de abajo. Un registro que omite la rama pero
 cita 30 líneas de diff es un mal intercambio.
 
-1. RAMA / UBICACIÓN DE TRABAJO: literal, en el `statement` del fact. Si el segmento
+1. RAMA / UBICACIÓN DE TRABAJO: literal, en el `branch` del fact. Si el segmento
    menciona o hace checkout de `feat/x` / `fix/y`, ese token DEBE aparecer. Un agente
    que retoma el trabajo en la rama equivocada produce cambios que se descartan en silencio,
    así que este único token pesa más que cualquier otro detalle.
@@ -1619,125 +1619,74 @@ confidence  — de 0.0 a 1.0
 ═══════════════════════════════════════════════════════════════════
 CAMPO FACT: EXACTAMENTE UNO por segmento, sin umbral de valor
 ═══════════════════════════════════════════════════════════════════
+Escribes UN fact para todo el segmento: un registro de estado recuperable de la TAREA en la
+que trabajó esta sesión, no una retrospectiva pulida y nunca una lista de hallazgos sueltos.
+Es ESTRUCTURADO, no prosa: los campos de abajo. Un agente futuro debe poder retomar la tarea a
+partir de él sin confundir una sugerencia, una inferencia o una búsqueda parcial con algo
+verificado.
 
-Escribes UN solo fact para todo el segmento: un registro de estado recuperable de esta
-sesión, no una retrospectiva pulida y nunca una lista de hallazgos separados. Un
-futuro agente debe poder retomar el trabajo a partir de él sin confundir una sugerencia,
-una inferencia o una búsqueda parcial con algo verificado.
+Por qué estructurado: un resumen en prosa se encuentra pero no se puede ejecutar tal cual.
+"Se optó por X; el Y intermedio se descartó" son varios hechos comprimidos en una frase, y quien
+solo necesita uno tiene que volver a analizar el párrafo; además, la variante descartada, la
+única parte que no se puede deducir del código, es lo más fácil de perder al resumir.
 
-statement  — Un resumen compacto de ESTA sesión. Tiene dos funciones a la vez, y
-             debe cumplir AMBAS: es el vector de recuperación (un agente futuro lo encuentra
-             buscando con un informe de incidencia nuevo, redactado como un usuario redacta un
-             problema), y es la carga útil sobre la que ese agente actúa después. Así que:
+task        — el nombre de la tarea con las palabras del usuario ("liberar espacio en la
+              carpeta WXWork de D:", "ajustar el multiplicador de tono en
+              QtColor._parse_value"). Nunca un "arreglar un bug" genérico. Es el ancla de
+              búsqueda: debe nombrar el objeto concreto.
+branch      — el nombre de la rama, literal, si el segmento lo indica; si no, "".
+goal        — una frase: qué busca lograr la tarea en conjunto.
+progress    — de 1 a 3 frases: hasta dónde ha avanzado la tarea, terminando en el estado actual.
+              Reescríbelo; no añadas un registro.
+decisions   — una entrada por cada cosa DECIDIDA (una ubicación de código o un subobjetivo):
+    subject   ruta relativa al repositorio + símbolo + qué se decide, p. ej.
+              "src/contacts/VCardImporter.ts::parseVCardLine — unificación de casos EMAIL".
+    current   lo que está decidido AHORA. Cita literalmente el literal / la firma / la regex
+              decisivos, pero solo eso, nunca un bloque entero. Un agente futuro copiará este
+              valor, así que su forma exacta importa.
+    rejected  variantes que se probaron o propusieron y luego se abandonaron, una cláusula
+              corta cada una, de la más antigua a la más reciente. El código solo muestra la
+              ganadora; sin esta lista, un agente posterior "arregla" el código volviendo a una
+              versión descartada. Consérvalas aunque no se diera el motivo.
+    evidence  cómo se comprobó esta entrada, exactamente uno de: "tests run and passing" / "confirmed by git diff only, tests not run" / "not verified". Nunca lo eleves.
+constraints — condiciones que la solución debe respetar: comportamiento que debe mantenerse,
+              llamadores / dependencias que deben seguir funcionando, cosas que el usuario dijo
+              que no se tocaran. Añade las nuevas; quita una solo si la sesión la levanta
+              explícitamente.
+status      — exactamente uno de: in_progress / completed / partially_completed / blocked / failed.
+open        — lo que sigue sin resolver o lo siguiente; [] si no hay nada.
+files       — 0..N rutas de ARCHIVO O DIRECTORIO relativas al repositorio realmente operadas o
+              investigadas en esta sesión, incluidas las raíces investigadas. Solo rutas
+              realmente accedidas o buscadas, nunca rutas solo sugeridas o planeadas; [] si
+              no hay ninguna.
 
-             ABRE con la tarea y el síntoma, con las palabras que usaría un usuario.
-                Esto es lo que la hace localizable: mantén la forma superficial cercana a cómo
-                se reportaría el problema. Nombra el objetivo y el objeto concretos
-                ("recuperar espacio en disco bajo D:\\WXWork", "ajustar el multiplicador de tono
-                en QtColor._parse_value en feat/q4", "localizar la carpeta
-                new_file_search"), nunca un genérico "arreglar un bug" / "buscar un archivo". Incluye
-                el síntoma concreto: la cadena de error, el comando que falla, la
-                salida incorrecta.
+FIDELIDAD A LA EVIDENCIA — obligatoria, aplica a cada campo:
+  · Registra solo acciones realmente ejecutadas y evidencia explícitamente presente en la
+    traza. Conserva literalmente comandos, flags, argumentos, errores, versiones y números
+    relevantes; NUNCA completes un comando con flags habituales ni conviertas un consejo o
+    un plan en una acción.
+  · Mantén la distinción entre intentado, observado, verificado, inferido y no resuelto. En
+    las decisiones lo lleva evidence; en lo demás exprésalo en la frase ("se intentó … pero lo
+    bloqueó Access denied", "se sospecha …, aún sin verificar").
+  · Sin salida de herramienta o confirmación explícita, NUNCA afirmes que un arreglo
+    funcionó, que se estableció una causa, que un archivo no existe o que pasaron las pruebas.
+  · Limita cada hallazgo negativo a lo que realmente se buscó y enumera TODO límite de
+    cobertura que pudiera invalidarlo (fallos de permisos, límites de profundidad). Nunca
+    conviertas una búsqueda parcial en ausencia global.
+  · Afirma una causalidad como cierta solo si la traza la verifica directamente; si no,
+    conserva la cautela.
 
-             LUEGO da las coordenadas y la decisión.
-                ruta relativa al repositorio, símbolo y rama en el trabajo con código. Indica en qué
-                SE QUEDÓ, y en la misma cláusula marca lo que se descartó
-                ("se optó por X; se descartó la Y intermedia"). Esta es la parte que
-                no se puede volver a deducir leyendo el código: el código solo muestra la
-                ganadora, nunca que se probó Y y se rechazó. Un agente que se encuentre la
-                variante rechazada más adelante debe poder reconocerla, o "arreglará"
-                el código volviendo a la versión descartada.
+ANCLAS DE BÚSQUEDA — task, goal y cada decisions[].subject / .current son contra lo que se
+compara una consulta futura, así que DEBEN nombrar las anclas concretas: rutas reales de
+archivos, nombres de funciones / símbolos, nombres de ramas, comandos, cadenas de error,
+versiones, claves y valores de configuración. Una redacción genérica coincide con todas las
+consultas y no responde ninguna.
 
-             CIERRA con el estado de la evidencia.
-                Exactamente uno de: completado, parcialmente completado, fallido, bloqueado o
-                pendiente de verificación, más cómo se comprobó ("tests ejecutados y
-                pasando" / "confirmado solo con git diff, tests no ejecutados"). Incluye
-                los resultados negativos y los callejones sin salida sin exagerarlos.
+  good: subject "report/report.go::WordPressOption.apply — empty token",
+        current 'if token == "" {{ return nil }}', evidence "tests run and passing"
+  bad:  subject "the option handling", current "handle it properly"
 
-             ⚠️ Nunca te quedes en la narración. "El usuario probó X y obtuvo el error Y; aún no se
-             encontró solución" es un registro desperdiciado: se recupera bien pero no le da a un
-             agente futuro nada sobre lo que actuar. Si la sesión realmente no llegó a ninguna
-             decisión, di qué se descartó y cuál es la siguiente pista sin explorar:
-             esa es la parte reutilizable.
-
-             El sujeto de las frases debe ser el código y la decisión, no
-             "el usuario". De 2 a 4 frases, prosa fluida, sin secciones etiquetadas.
-             Techo estricto de ~400 caracteres latinos (~200 caracteres CJK).
-
-             FIDELIDAD A LA EVIDENCIA — obligatoria:
-             - Registra solo las acciones realmente ejecutadas y la evidencia explícitamente
-               presente en la traza. Conserva literalmente los comandos, flags,
-               argumentos, errores y números relevantes. NUNCA completes un
-               comando con flags habituales ni conviertas consejos/planes en acciones.
-             - Conserva la distinción entre intentado, observado, verificado,
-               inferido y sin resolver. No añadas esas etiquetas a la prosa;
-               expresa su significado de forma natural, p. ej. "se intentó … pero lo bloqueó
-               Access denied" o "se sospecha … , aún no verificado".
-             - Sin salida de herramientas o confirmación explícita, NUNCA afirmes que un arreglo
-               funcionó, que se estableció una causa, que un archivo/carpeta no
-               existe o que los tests pasaron.
-             - Limita cada hallazgo negativo a lo que realmente se buscó y
-               enumera CADA límite de cobertura explícito que pudiera invalidarlo,
-               especialmente los fallos de permisos y la profundidad máxima de búsqueda:
-               "no se encontró en las partes buscadas de C:\\ y D:\\; algunos
-               directorios se omitieron por Access denied, y la búsqueda también tenía
-               límite de profundidad". No omitas un límite para que el
-               resumen quede más bonito. Nunca conviertas una búsqueda parcial en una ausencia
-               global.
-             - Presenta la causalidad como cierta solo cuando la traza la verifica
-               directamente. En caso contrario, conserva la cautela ("se sospecha" / "se infiere" / "aún no
-               verificado"); no reescribas una
-               suposición incorrecta de un test como la causa raíz del sistema.
-
-             CRÍTICO: este texto ES el vector de recuperación, y es lo único
-             con lo que se compara una consulta futura. Un resumen genérico no
-             vale nada, porque TODAS las sesiones parecen un resumen genérico:
-             coincidiría con todas las consultas y no respondería a ninguna. Así que DEBES nombrar
-             los anclajes concretos que hacen que ESTA sesión sea localizable: rutas de archivo
-             reales, nombres de funciones / símbolos, nombres de ramas, comandos, cadenas de error,
-             versiones, claves y valores de configuración, nombres de hosts / servicios.
-             Si alguien busca más adelante cualquiera de esos datos concretos, este
-             resumen tiene que ser lo que aparezca.
-               bien: "arreglar un `npm run build` que falla en CI. Se leyeron
-                      .github/workflows/ci.yml y package.json; se rastreó hasta webpack
-                      5.74 que da ERR_OSSL_EVP_UNSUPPORTED con node 18. Subir el node
-                      del workflow a 20 hizo que la build pasara; node 18 sigue
-                      reproduciéndolo en local."
-               bien: "en la rama feat/q0, en qutebrowser/utils/debug.py signal_name:
-                      PyQt<5.11 solo expone el nombre mediante repr(sig), y repr aparece en
-                      una forma con corchetes y otra con paréntesis. Se optó por dos patrones
-                      probados en orden con fullmatch, cortando en la primera coincidencia; se
-                      descartó la versión de una sola regex. Confirmado con git diff, tests no
-                      ejecutados."
-               mal:  "el usuario quería arreglar un bug de build, el agente miró algunos archivos
-                      de configuración, cambió algo de código y lo arregló."
-                      (sin ruta, sin comando, sin cadena de error, sin versión: nada
-                       sobre lo que recuperar; todas las sesiones se leen exactamente así)
-               mal:  "se arregló el problema de compatibilidad del parseo de nombres de señales en una
-                      rama de funcionalidad."
-                      (¿qué rama? ¿qué archivo? ¿qué función? ¿cuál de las dos
-                       versiones en competencia ganó? nada de esto sobrevive a ser
-                       recuperado una semana después)
-             Ejemplos de fidelidad (mal → bien):
-               "se ejecutó Get-ChildItem -Force" → "se ejecutó Get-ChildItem"
-                 (la traza no contenía `-Force`; no lo inventes)
-               "se confirmó que new_file_search no existe" →
-                 "new_file_search no se encontró en las partes buscadas de C:\\ y
-                  D:\\; algunos directorios se omitieron por Access denied o por el límite
-                  de profundidad, así que la investigación solo está hecha en parte"
-               "las cargas idénticas provocan un error de bloqueo espurio" →
-                 "el script de verificación suponía que el último escritor es siempre un rank
-                  fijo; esa suposición no se cumple, así que si hay un bug de bloqueo
-                  sigue sin verificarse"
-
-             NO registres saludos ni pura charla. Si el segmento no estableció
-             nada en absoluto, devuelve "fact": null.
-
-files      — 0..N rutas absolutas o relativas al repositorio de ARCHIVOS O DIRECTORIOS realmente
-             manipulados o investigados durante esta sesión. Conserva las raíces investigadas
-             como `C:\\` y `D:\\`. Incluye solo rutas que se hayan
-             accedido/buscado realmente, no rutas meramente sugeridas o planificadas;
-             [] si no aplica ninguna.
+No registres saludos ni charla pura. Si el segmento no estableció nada, emite "fact": null.
 
 ═══════════════════════════════════════════════════════════════════
 CONTEXTO DEL HOST (proporcionado por el SDK)
@@ -1768,7 +1717,16 @@ SALIDA (solo JSON estricto, sin markdown)
     }}
   ],
   "fact": {{
-    "statement": "...",
+    "task": "...",
+    "branch": "...",
+    "goal": "...",
+    "progress": "...",
+    "decisions": [
+      {{"subject": "...", "current": "...", "rejected": ["..."], "evidence": "..."}}
+    ],
+    "constraints": ["..."],
+    "status": "in_progress",
+    "open": ["..."],
     "files": ["..."]
   }}
 }}

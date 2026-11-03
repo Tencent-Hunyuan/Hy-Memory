@@ -632,7 +632,7 @@ class HyCodeMem:
 
     # ────────────────────────────── 读取 ──────────────────────────────
 
-    def decorate(self, facts, instruction="", scope=None):
+    def decorate(self, facts, instruction="", scope=None, selection=None):
         """核心接口: 给向量层选出的 facts 挂上 round。
 
         facts: [{"statement": str, "branch": str, "files": [str], "status": str}, ...]
@@ -645,6 +645,12 @@ class HyCodeMem:
 
         scope 用于防止共享索引中的跨仓污染。不同仓的语义相似事实可能同时进入
         top-k，但它们的 diff 对当前工作区不可能有用，因此挂链前必须做同仓过滤。
+
+        selection: 可选的**逐链展开策略**，形如
+            {thread_id: {"versions": [1, 3] | None, "no_body": bool}}
+        None = 用本类的启发式（按与指令的 token 重叠选版本）。给了就以它为准，
+        渲染层不再自行挑选 —— 那是调用方（见 coding/selection.py，search(agentic=True)）
+        已经问过模型的结果。未知的 thread id 忽略。
         """
         facts = facts or []
         # 高级消融开关: HCM_BLOCK_OFF=1 → 完全不出块, 也不从 bullet 删任何 fact。
@@ -652,6 +658,18 @@ class HyCodeMem:
         # MEMORY_CODING_CHAIN_BLOCK_ENABLED（默认关；客户端在调用 decorate 前拦截）。
         if os.environ.get("HCM_BLOCK_OFF") == "1":
             return "", []
+        picked, used = self.collect_threads(facts, instruction=instruction, scope=scope)
+        if not picked:
+            return "", []
+        return self._render(picked, instruction, selection), used
+
+    def collect_threads(self, facts, instruction="", scope=None):
+        """facts → [(fact, threads)]，并给出哪些 fact 挂上了链。
+
+        公开出来是因为两步筛选（coding/selection.py）要拿同一批 thread 去问模型
+        "哪一版要展开"，不能自己再实现一遍挂链逻辑 —— 两份实现迟早会分叉。
+        """
+        facts = facts or []
         picked, used = [], []
         seen_tid = set()
         for i, fa in enumerate(facts):
@@ -670,9 +688,12 @@ class HyCodeMem:
             seen_tid.update(t[0] for t in th)
             picked.append((fa, th))
             used.append(i)
-        if not picked:
-            return "", []
-        return self._render(picked, instruction), used
+        return picked, used
+
+    def thread_saids(self, tid: str):
+        """一条链历代的原话（顺序 = observe 顺序）。给两步筛选的第 2 步用。"""
+        return [r[0] for r in self.db.execute(
+            "SELECT said FROM round WHERE thread_id=? ORDER BY seq", (tid,))]
 
     def _rank_threads(self, th, instruction):
         """按与指令的 token 重叠给 thread 排序, 只留前 TOPN_THREADS 条。
@@ -764,7 +785,7 @@ class HyCodeMem:
             return named + _rest
         return cand
 
-    def _render(self, picked, instruction):
+    def _render(self, picked, instruction, selection=None):
         """渲染注入块。
 
         预算按 fact **均分**, 不是先到先得，避免第一条长链挤掉后续 facts。
@@ -797,7 +818,15 @@ class HyCodeMem:
                     "SELECT seq,said,patch,created_at,adds FROM round WHERE thread_id=? ORDER BY seq",
                     (tid,)).fetchall()
                 t0 = rs[0][3] if rs else 0
-                full = self._pick_versions([(r[0], r[1], r[2]) for r in rs], want)
+                _sel = (selection or {}).get(tid) or {}
+                if _sel.get("no_body"):
+                    # 模型判定"一句话够了"：所有版本都只留一行原话
+                    full = set()
+                elif _sel.get("versions") is not None:
+                    # 模型指定了要看哪几版；空列表 = 都不看
+                    full = {int(v) for v in _sel["versions"]}
+                else:
+                    full = self._pick_versions([(r[0], r[1], r[2]) for r in rs], want)
                 # 替换对 + 撤销关系, 一次算完整条链(见 _rev_lines)
                 _rv = self._rev_lines([(r[0], r[1], r[2]) for r in rs])
                 for seq, said, patch, ct, adds_j in rs:
@@ -843,7 +872,8 @@ class HyCodeMem:
                 # 的全文, 模型就能自己 全文 − 各版diff = 任意一版。
                 _bd = self.db.execute("SELECT body FROM thread WHERE id=?", (tid,)).fetchone()
                 _bd = (_bd[0] if _bd else "") or ""
-                if _bd:
+                # 模型说"这条链只要一句描述"时连最后一版全文也不给，否则"不看代码"落不实
+                if _bd and not ((selection or {}).get(tid) or {}).get("no_body"):
                     if len(_bd) > BODY_MAX_CHARS:
                         _bd = _bd[:BODY_MAX_CHARS] + "\n…(截断)"
                     seg.append(f"       ── 最后一版({n})落地后, 这段代码的完整样子 "

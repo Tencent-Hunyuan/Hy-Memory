@@ -33,6 +33,7 @@ from .preproc import (
     prepare_extractor_messages,
 )
 from .judge import _store_coding_log
+from .fact_state import normalize_state, render_state
 from .types import CodingMemoryDraft, CodingWriteError, WorkingFactDraft
 
 
@@ -376,6 +377,9 @@ class CodingMemoryExtractor:
                     files=f.files,
                     subject=f.subject,
                     details=verbatim_details,
+                    # 结构化状态必须原样带过去：这里只替换 details 的来源，
+                    # 掉了 task_state 会让覆盖时拿不到上一版的 rejected。
+                    task_state=f.task_state,
                 )
                 for f in fact_drafts
             ]
@@ -662,10 +666,29 @@ class CodingMemoryExtractor:
 
     @staticmethod
     def _normalize_fact_draft(raw: Dict[str, Any]) -> Optional[WorkingFactDraft]:
-        """把 LLM 输出的单条 fact 规范化。返回 None 表示 statement 为空。"""
+        """把 LLM 输出的单条 fact 规范化。返回 None 表示既没有 state 也没有 statement。
+
+        结构化优先：模型给了 `state` 就渲染成 statement（检索向量 + 注入内容），
+        并把 JSON 原样留给 store；没给（老提示词、模型自由发挥）就退回散文 statement。
+        两者都没有才丢。
+        """
+        # 兼容两种形状：新提示词把状态字段平铺在 fact 对象里；也接受显式的 state 子对象
+        # （自定义提示词 / 老版本可能这么给）。normalize_state 在缺 task 名时返回 None。
+        _state_raw = raw.get("state") if isinstance(raw.get("state"), dict) else raw
+        state = normalize_state(_state_raw)
         statement = (raw.get("statement") or "").strip()
+        task_state = ""
+        if state is not None:
+            task_state = json.dumps(state, ensure_ascii=False)
+            rendered = render_state(state)
+            if rendered:
+                if statement and statement != rendered:
+                    # 结构化是权威：散文视图与它不一致时以结构为准，但留一行日志，
+                    # 免得"模型两处说法不同"这种缺陷被静默吞掉。
+                    logger.debug("[coding-extract] statement overridden by state render")
+                statement = rendered
         if not statement:
-            logger.debug(f"[coding-extract] drop fact missing statement: {raw}")
+            logger.debug(f"[coding-extract] drop fact missing statement and state: {raw}")
             return None
 
         files_raw = raw.get("files") or []
@@ -693,7 +716,8 @@ class CodingMemoryExtractor:
             details = details[:_MAX_DETAILS_CHARS] + "\n…(truncated)"
 
         return WorkingFactDraft(
-            statement=statement, files=files, subject=subject, details=details
+            statement=statement, files=files, subject=subject, details=details,
+            task_state=task_state,
         )
 
 

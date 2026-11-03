@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS working_fact (
     derived_experience_ids TEXT NOT NULL DEFAULT '[]',
     status                 TEXT NOT NULL DEFAULT 'active',
     fact_chain_summary     TEXT NOT NULL DEFAULT '',
+    -- 结构化任务状态(JSON, 见 coding/fact_state.py)。statement 是它的渲染视图。
+    task_state             TEXT NOT NULL DEFAULT '',
     memory_at              INTEGER,
     created_at             TEXT NOT NULL
 );
@@ -173,6 +175,8 @@ _ADDED_COLUMNS = {
     # fact_link 反查就有。老库里那一列留着不管，有默认值不影响插入。
     "working_fact": {
         "fact_chain_summary": "TEXT NOT NULL DEFAULT ''",
+        # 结构化任务状态。老库的行是空串 → 读出来当作"没有状态"，行为与改动前一致。
+        "task_state": "TEXT NOT NULL DEFAULT ''",
         # 事实层比经验层晚补这一列，老库里已有的行会是 NULL。作用域过滤按
         # "NULL = 没记录分支"处理，不当成"记录了别的分支"，见 _scope_where。
         "branch": "TEXT",
@@ -363,6 +367,8 @@ def _row_to_fact(row: sqlite3.Row) -> WorkingFact:
         # 老库刚 ADD COLUMN 时可能取不到这一列，用 keys() 兜一下
         fact_chain_summary=(row["fact_chain_summary"] or ""
                             if "fact_chain_summary" in row.keys() else ""),
+        # 老库刚 ADD COLUMN 时可能取不到这一列
+        task_state=(row["task_state"] or "" if "task_state" in row.keys() else ""),
         memory_at=_from_epoch(row["memory_at"]),
         created_at=_parse_dt(row["created_at"]),
     )
@@ -1422,8 +1428,8 @@ class CodingMemoryStore:
                     fact_id, user_id, agent_id, session_id, workspace_id, branch,
                     source, statement, files, subject, details,
                     fact_link, derived_experience_ids,
-                    status, fact_chain_summary, memory_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, fact_chain_summary, task_state, memory_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fact_id) DO UPDATE SET
                     user_id                = excluded.user_id,
                     agent_id               = excluded.agent_id,
@@ -1439,6 +1445,7 @@ class CodingMemoryStore:
                     derived_experience_ids = excluded.derived_experience_ids,
                     status                 = excluded.status,
                     fact_chain_summary     = excluded.fact_chain_summary,
+                    task_state             = excluded.task_state,
                     memory_at              = excluded.memory_at
                 """,
                 (
@@ -1452,6 +1459,7 @@ class CodingMemoryStore:
                     json.dumps(fact.derived_experience_ids, ensure_ascii=False),
                     fact.status,
                     fact.fact_chain_summary or "",
+                    fact.task_state or "",
                     _to_epoch(fact.memory_at),
                     (fact.created_at or datetime.utcnow()).isoformat(),
                 ),

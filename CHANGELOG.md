@@ -4,6 +4,25 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- **Coding facts are now a structured task state** (`scene="coding"` extraction).
+  The extract prompt asks for `task / branch / goal / progress /
+  decisions[{subject, current, rejected, evidence}] / constraints / status /
+  open / files` instead of a prose `statement`; `statement` is rendered from it,
+  so retrieval and injection keep working unchanged. The JSON is stored in the
+  new `working_fact.task_state` column (added in place on existing DBs, `''` for
+  old rows). On supersede, decisions are carried over by `subject`: a changed
+  `current` moves the previous value into `rejected`, so abandoned variants are
+  not lost. Facts without a parseable state fall back to the previous prose
+  path. Applies to every supported prompt language. **Behaviour change**: the
+  stored text of new coding facts changes shape.
+- `search(scene="coding", agentic=True)`: opt-in two-step LLM selection between
+  recall and rendering — drop facts that do not help the query, then choose
+  which thread versions to expand (only when the chain block is enabled). Any
+  failure falls back to no selection. Default off; per-call `agentic=` overrides
+  `CodingConfig.agentic_selection` / `MEMORY_CODING_AGENTIC_SELECTION`. Not
+  related to `search_mode="agentic"` (pre-retrieval query rewrite). Not exposed
+  on `search_all`.
+
 ## Hy Memory 2.0.13 — 2026-11-02
 
 - A model failure during a write now reports failure and stores

@@ -228,6 +228,10 @@ class WorkingFactDraft:
     # 而那正是下游唯一需要的东西。
     details: str = ""
 
+    # 结构化任务状态（JSON，见 coding/fact_state.py）。有它时 statement 是渲染出来的
+    # 视图；没有（老提示词 / 模型没按结构输出）就退回纯散文，行为与改动前一致。
+    task_state: str = ""
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "statement": self.statement,
@@ -279,6 +283,12 @@ class WorkingFact:
     # 作废的措辞重新具备召回力。
     fact_chain_summary: str = ""
 
+    # 结构化任务状态（JSON，见 coding/fact_state.py）。statement 是它渲染出来的
+    # 可读视图 + 检索向量，本列是权威副本：覆盖时按 subject 机械地把旧 current 搬进
+    # rejected（fact_state.carry_over），不依赖模型记得。
+    # 空串 = 老库的行，或抽取时没能结构化（此时退回散文 statement，行为同改动前）。
+    task_state: str = ""
+
     # 时间
     memory_at: Optional[datetime] = None   # 对话时间（同 chat），没传时是收到请求的时间
     created_at: Optional[datetime] = None  # 产生时间，新的优先
@@ -304,6 +314,7 @@ class WorkingFact:
             "derived_experience_ids": list(self.derived_experience_ids),
             "status": self.status,
             "fact_chain_summary": self.fact_chain_summary,
+            "task_state": self.task_state,
             "memory_at": _epoch(self.memory_at),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

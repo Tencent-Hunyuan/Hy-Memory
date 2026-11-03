@@ -1450,7 +1450,7 @@ CODING_EXTRACT_PROMPT_CODING = """\
 ║ Code-Koordinaten, was versucht und verworfen wurde und ob es verifiziert  ║
 ║ wurde.                                                                    ║
 ║                                                                           ║
-║ Konkret gilt in jedem `statement` und jeder `solution`:                   ║
+║ Konkret gilt in jedem `fact` und jeder `solution`:                        ║
 ║   · Das grammatische Subjekt ist der CODE oder DIE ENTSCHEIDUNG — niemals ║
 ║     „der Nutzer“ und niemals „der Agent“. Schreib nicht                   ║
 ║     „Der Nutzer versuchte …“, „Der Nutzer wollte …“,                      ║
@@ -1555,7 +1555,7 @@ Assistent „dann beschloss“, und eingefügten Code, den du nur wiedergibst; v
 Zeichen stattdessen für die vier folgenden Punkte. Ein Datensatz, der den Branch weglässt, aber
 30 Zeilen Diff zitiert, ist ein schlechter Tausch.
 
-1. BRANCH / ARBEITSORT — im Wortlaut, im `statement` des Facts. Wenn der Abschnitt
+1. BRANCH / ARBEITSORT — im Wortlaut, im `branch` des Facts. Wenn der Abschnitt
    `feat/x` / `fix/y` erwähnt oder auscheckt, MUSS dieses Token erscheinen. Ein Agent,
    der auf dem falschen Branch weitermacht, erzeugt Änderungen, die stillschweigend verworfen werden,
    daher wiegt dieses eine Token schwerer als jedes andere Detail.
@@ -1625,124 +1625,75 @@ confidence  — 0.0 bis 1.0
 ═══════════════════════════════════════════════════════════════════
 FACT-FELD — GENAU EINER pro Abschnitt, keine Wertschwelle
 ═══════════════════════════════════════════════════════════════════
+Du schreibst EINEN Fact für den ganzen Abschnitt — einen wiederaufnehmbaren Zustands-
+datensatz der TASK, an der diese Sitzung gearbeitet hat, keinen polierten Rückblick und
+niemals eine Liste einzelner Befunde. Er ist STRUKTURIERT, keine Prosa: die Felder unten.
+Ein künftiger Agent muss die Aufgabe daraus fortsetzen können, ohne einen Vorschlag, eine
+Vermutung oder eine unvollständige Suche für etwas Verifiziertes zu halten.
 
-Du schreibst EINEN Fact für den gesamten Abschnitt — einen wiederherstellbaren Zustandsdatensatz für diese
-Session, keinen polierten Rückblick und niemals eine Liste getrennter Befunde. Ein
-künftiger Agent muss daraus weitermachen können, ohne einen Vorschlag, eine
-Schlussfolgerung oder eine Teilsuche mit etwas Verifiziertem zu verwechseln.
+Warum strukturiert: Eine Prosa-Zusammenfassung wird gefunden, lässt sich aber nicht direkt
+umsetzen. „Auf X festgelegt; das zwischenzeitliche Y wurde verworfen" sind mehrere Fakten in
+einem Satz, und wer nur einen davon braucht, muss den Absatz neu zerlegen — während die
+verworfene Variante, der einzige Teil, der sich nicht aus dem Code ableiten lässt, beim
+Zusammenfassen am leichtesten verloren geht.
 
-statement  — Eine kompakte Zusammenfassung DIESER Session. Sie hat zwei Aufgaben zugleich und
-             muss BEIDE erfüllen: Sie ist der Abrufvektor (ein künftiger Agent findet sie, indem er
-             mit einer neuen Problemmeldung sucht, formuliert so, wie ein Nutzer ein
-             Problem formuliert), und sie ist die Nutzlast, auf deren Grundlage dieser Agent dann handelt. Also:
+task        — Name der Aufgabe in den Worten des Nutzers („Speicherplatz im WXWork-Ordner
+              auf D: freigeben", „Hue-Faktor in QtColor._parse_value anpassen"). Nie ein
+              generisches „Bug fixen". Das ist der Suchanker, also das konkrete Objekt nennen.
+branch      — der Branch-Name im Wortlaut, wenn der Abschnitt ihn nennt; sonst "".
+goal        — ein Satz: was die Aufgabe insgesamt erreichen soll.
+progress    — 1 bis 3 Sätze: wie weit die Aufgabe bisher gekommen ist, endend beim aktuellen
+              Stand. Neu schreiben, kein angehängtes Protokoll.
+decisions   — ein Eintrag pro Sache, die ENTSCHIEDEN wurde (eine Codestelle oder ein Teilziel):
+    subject   repo-relativer Pfad + Symbol + was entschieden wird, z. B.
+              "src/contacts/VCardImporter.ts::parseVCardLine — EMAIL-Fälle zusammengelegt".
+    current   was JETZT feststeht. Das entscheidende Literal / die Signatur / die Regex
+              wörtlich zitieren, aber nur das — nie einen ganzen Block. Ein künftiger Agent
+              übernimmt diesen Wert, die genaue Form zählt.
+    rejected  Varianten, die versucht oder vorgeschlagen und dann verworfen wurden, je ein
+              kurzer Satzteil, älteste zuerst. Der Code zeigt nur den Gewinner; ohne diese
+              Liste „repariert" ein späterer Agent den Code zurück zu einer verworfenen
+              Version. Auch ohne genannten Grund behalten.
+    evidence  wie dieser Eintrag geprüft wurde, genau eines von: "tests run and passing" / "confirmed by git diff only, tests not run" / "not verified". Nie aufwerten.
+constraints — Bedingungen, die die Lösung einhalten muss: Verhalten, das bleiben muss,
+              Aufrufer / Abhängigkeiten, die weiter funktionieren müssen, Dinge, die der Nutzer
+              nicht anfassen lassen wollte. Neue ergänzen; nur entfernen, wenn die Sitzung sie
+              ausdrücklich aufhebt.
+status      — genau eines von: in_progress / completed / partially_completed / blocked / failed.
+open        — was noch offen ist oder als Nächstes ansteht; [] wenn nichts.
+files       — 0..N repo-relative DATEI- ODER VERZEICHNIS-Pfade, die in dieser Sitzung
+              tatsächlich bearbeitet oder untersucht wurden, einschließlich untersuchter
+              Wurzeln. Nur tatsächlich zugegriffene oder durchsuchte Pfade, nie bloß
+              vorgeschlagene oder geplante; [] wenn keine.
 
-             BEGINNE mit der Aufgabe und dem Symptom, in den Worten, die ein Nutzer verwenden würde.
-                Das macht sie auffindbar — halte die Oberflächenform nah daran, wie das
-                Problem gemeldet würde. Nenne das konkrete Ziel und Objekt
-                („Speicherplatz unter D:\\WXWork zurückgewinnen“, „den Farbton-Multiplikator
-                in QtColor._parse_value auf feat/q4 anpassen“, „den Ordner new_file_search
-                finden“), niemals ein allgemeines „einen Bug beheben“ / „nach einer Datei suchen“. Nenne
-                das konkrete Symptom: den Fehlerstring, den fehlschlagenden Befehl, die
-                falsche Ausgabe.
+BELEGTREUE — verpflichtend, gilt für jedes Feld:
+  · Nur tatsächlich ausgeführte Aktionen und im Trace ausdrücklich vorhandene Belege
+    festhalten. Wesentliche Befehle, Flags, Argumente, Fehler, Versionen und Zahlen wörtlich
+    erhalten; einen Befehl NIE mit üblichen Flags ergänzen und nie Rat oder Plan zur Aktion
+    machen.
+  · Die Unterscheidung zwischen versucht, beobachtet, verifiziert, vermutet und ungelöst
+    beibehalten. Bei Entscheidungen trägt evidence das; sonst im Satz ausdrücken („versucht,
+    aber an Access denied gescheitert", „vermutet …, noch nicht verifiziert").
+  · Ohne Tool-Ausgabe oder ausdrückliche Bestätigung NIE behaupten, ein Fix sei erfolgreich,
+    eine Ursache festgestellt, eine Datei existiere nicht oder Tests seien bestanden.
+  · Jeden negativen Befund auf das tatsächlich Durchsuchte begrenzen und JEDE Einschränkung
+    der Abdeckung nennen, die ihn entkräften könnte (Rechtefehler, Tiefenlimits). Eine
+    Teilsuche nie zur globalen Abwesenheit erklären.
+  · Kausalität nur dann als sicher darstellen, wenn der Trace sie direkt belegt; sonst die
+    Einschränkung behalten.
 
-             DANN nenne die Koordinaten und die Entscheidung.
-                Repo-relativer Pfad, Symbol und Branch bei Code-Arbeit. Gib an, worauf
-                man sich FESTGELEGT hat, und markiere im selben Satzteil, was verworfen wurde
-                („festgelegt auf X; die Zwischenversion Y wurde verworfen“). Das ist der Teil, der
-                sich nicht durch Lesen des Codes neu herleiten lässt — der Code zeigt nur den
-                Gewinner, niemals, dass Y versucht und verworfen wurde. Ein Agent, der später auf die
-                verworfene Variante stößt, muss sie erkennen können, sonst
-                „repariert“ er den Code zurück zur verworfenen Version.
+SUCHANKER — task, goal und jedes decisions[].subject / .current sind das, womit künftige
+Anfragen abgeglichen werden; sie MÜSSEN die konkreten Anker nennen: echte Dateipfade,
+Funktions- / Symbolnamen, Branch-Namen, Befehle, Fehlermeldungen, Versionen,
+Konfigurationsschlüssel und -werte. Eine generische Formulierung passt auf jede Anfrage und
+beantwortet keine.
 
-             SCHLIESSE mit dem Belegstatus.
-                Genau eines von: abgeschlossen, teilweise abgeschlossen, fehlgeschlagen, blockiert oder
-                noch zu verifizieren — plus wie es geprüft wurde („Tests ausgeführt und
-                bestanden“ / „nur per git diff bestätigt, Tests nicht ausgeführt“). Nenne
-                negative Ergebnisse und Sackgassen, ohne sie zu übertreiben.
+  good: subject "report/report.go::WordPressOption.apply — empty token",
+        current 'if token == "" {{ return nil }}', evidence "tests run and passing"
+  bad:  subject "the option handling", current "handle it properly"
 
-             ⚠️ Hör niemals bei der Erzählung auf. „Der Nutzer versuchte X und stieß auf Fehler Y; noch
-             keine Lösung gefunden“ ist ein verschwendeter Datensatz: Er wird problemlos abgerufen, gibt einem
-             künftigen Agenten aber nichts, womit er handeln kann. Wenn die Session wirklich zu keiner
-             Entscheidung gekommen ist, nenne, was ausgeschlossen wurde und was die nächste unerforschte Spur ist —
-             das ist der wiederverwendbare Teil.
-
-             Das Subjekt der Sätze sollte der Code und die Entscheidung sein, nicht
-             „der Nutzer“. 2 bis 4 Sätze, fließende Prosa, keine beschrifteten Abschnitte.
-             Harte Obergrenze ~400 lateinische Zeichen (~200 CJK-Zeichen).
-
-             TREUE ZU DEN BELEGEN — verpflichtend:
-             - Halte nur tatsächlich ausgeführte Aktionen und explizit im Trace
-               vorhandene Belege fest. Bewahre wesentliche Befehle, Flags,
-               Argumente, Fehler und Zahlen im Wortlaut. Ergänze NIEMALS einen
-               Befehl um übliche Flags und mache aus Ratschlägen/Plänen keine Aktionen.
-             - Bewahre die Unterscheidung zwischen versucht, beobachtet, verifiziert,
-               erschlossen und ungelöst. Füge diese Labels nicht in die Prosa ein;
-               drücke ihre Bedeutung natürlich aus, z. B. „versuchte …, wurde aber durch
-               Access denied blockiert“ oder „vermutlich … , noch nicht verifiziert“.
-             - Ohne Tool-Ausgabe oder ausdrückliche Bestätigung behaupte NIEMALS, eine Korrektur
-               sei erfolgreich gewesen, eine Ursache sei festgestellt, eine Datei / ein Ordner existiere
-               nicht oder Tests seien bestanden.
-             - Begrenze jeden negativen Befund auf das, was tatsächlich durchsucht wurde, und
-               zähle JEDE explizite Abdeckungsgrenze auf, die ihn entkräften könnte,
-               insbesondere fehlende Berechtigungen und die maximale Suchtiefe:
-               „nicht gefunden in den durchsuchten Teilen von C:\\ und D:\\; einige
-               Verzeichnisse wurden wegen Access denied übersprungen, und die Suche war zudem
-               tiefenbegrenzt“. Lass keine Grenze weg, um die
-               Zusammenfassung hübscher zu machen. Mache aus einer Teilsuche niemals eine globale
-               Abwesenheit.
-             - Stelle Kausalität nur dann als sicher dar, wenn der Trace sie direkt verifiziert.
-               Andernfalls behalte die Einschränkung bei („vermutet“ / „erschlossen“ / „noch nicht
-               verifiziert“); schreib eine
-               falsche Testannahme nicht in die Grundursache des Systems um.
-
-             ENTSCHEIDEND — dieser Text IST der Abrufvektor, und er ist das Einzige,
-             womit eine künftige Anfrage abgeglichen wird. Eine allgemeine Zusammenfassung ist
-             wertlos, denn JEDE Session sieht aus wie eine allgemeine Zusammenfassung: Sie
-             würde auf jede Anfrage passen und keine beantworten. Daher MUSST du
-             die konkreten Anker nennen, die DIESE Session auffindbar machen — echte Datei-
-             pfade, Funktions- / Symbolnamen, Branch-Namen, Befehle, Fehler-
-             strings, Versionen, Konfigurationsschlüssel und -werte, Host- / Dienstnamen.
-             Wenn später jemand nach einem dieser Details sucht, muss diese
-             Zusammenfassung das sein, was zurückkommt.
-               gut:      „Behebung eines fehlschlagenden `npm run build` in CI. .github/workflows/ci.yml
-                          und package.json gelesen; zurückgeführt auf webpack 5.74, das unter node 18
-                          auf ERR_OSSL_EVP_UNSUPPORTED stößt. Das Anheben von node im Workflow auf 20
-                          ließ den Build durchlaufen; mit node 18 lässt sich der Fehler lokal weiterhin reproduzieren.“
-               gut:      „auf Branch feat/q0, in qutebrowser/utils/debug.py signal_name:
-                          PyQt<5.11 gibt den Namen nur über repr(sig) preis, und repr kommt sowohl
-                          in einer Form mit eckigen als auch mit runden Klammern. Festgelegt auf zwei Muster,
-                          die nacheinander mit fullmatch geprüft werden, Abbruch beim ersten Treffer; die
-                          Variante mit einem einzigen Regex wurde verworfen. Per git diff bestätigt, Tests
-                          nicht ausgeführt.“
-               schlecht: „Nutzer wollte einen Build-Bug behoben haben, der Agent hat sich ein paar Konfigurations-
-                          dateien angesehen, etwas Code geändert und es behoben.“
-                          (kein Pfad, kein Befehl, kein Fehlerstring, keine Version — nichts,
-                           worauf ein Abruf greifen könnte; jede Session liest sich genau so)
-               schlecht: „Kompatibilitätsproblem beim Parsen von Signalnamen auf einem Feature-
-                          Branch behoben.“
-                          (welcher Branch? welche Datei? welche Funktion? welche der beiden
-                           konkurrierenden Versionen hat gewonnen? nichts davon übersteht einen
-                           Abruf eine Woche später)
-             Beispiele zur Belegtreue (schlecht → gut):
-               "ran Get-ChildItem -Force" → "ran Get-ChildItem"
-                 (der Trace enthielt kein `-Force`; erfinde es nicht)
-               „bestätigt, dass new_file_search nicht existiert“ →
-                 „new_file_search wurde in den durchsuchten Teilen von C:\\ und
-                  D:\\ nicht gefunden; einige Verzeichnisse wurden wegen Access denied oder durch die Tiefen-
-                  begrenzung übersprungen, die Untersuchung ist also nur teilweise abgeschlossen“
-               „identische Payloads verursachen einen fälschlichen Lock-Fehler“ →
-                 „das Verifikationsskript nahm an, der letzte Schreiber sei immer ein fester
-                  Rang; diese Annahme gilt nicht, ob es also einen Lock-Bug gibt,
-                  ist noch nicht verifiziert“
-
-             Halte KEINE Begrüßungen oder reines Geplauder fest. Wenn der Abschnitt
-             überhaupt nichts festgelegt hat, gib "fact": null aus.
-
-files      — 0..N absolute oder repo-relative DATEI- ODER VERZEICHNIS-Pfade, die in dieser Session
-             tatsächlich bearbeitet oder untersucht wurden. Behalte untersuchte
-             Wurzeln wie `C:\\` und `D:\\`. Nimm nur Pfade auf, auf die
-             tatsächlich zugegriffen bzw. die tatsächlich durchsucht wurden, keine lediglich vorgeschlagenen oder geplanten Pfade;
-             [] wenn keine zutreffen.
+Keine Begrüßungen oder reinen Smalltalk festhalten. Wenn der Abschnitt nichts festgestellt
+hat, "fact": null ausgeben.
 
 ═══════════════════════════════════════════════════════════════════
 HOST-KONTEXT (vom SDK übergeben)
@@ -1773,7 +1724,16 @@ AUSGABE (ausschließlich striktes JSON, kein Markdown)
     }}
   ],
   "fact": {{
-    "statement": "...",
+    "task": "...",
+    "branch": "...",
+    "goal": "...",
+    "progress": "...",
+    "decisions": [
+      {{"subject": "...", "current": "...", "rejected": ["..."], "evidence": "..."}}
+    ],
+    "constraints": ["..."],
+    "status": "in_progress",
+    "open": ["..."],
     "files": ["..."]
   }}
 }}

@@ -1447,7 +1447,7 @@ CODING_EXTRACT_PROMPT_CODING = """\
 ║ ce qui a été décidé ici, à quelles coordonnées dans le code, ce qui a     ║
 ║ été essayé et rejeté, et si cela a été vérifié.                           ║
 ║                                                                           ║
-║ Concrètement, dans chaque `statement` et chaque `solution` :              ║
+║ Concrètement, dans chaque `fact` et chaque `solution` :                   ║
 ║   · Le sujet grammatical est le CODE ou LA DÉCISION — jamais              ║
 ║     « l'utilisateur » ni « l'agent ». N'écris pas « L'utilisateur a       ║
 ║     tenté de… », « L'utilisateur voulait… », « L'agent a ensuite… ».      ║
@@ -1552,7 +1552,7 @@ l'assistant « a ensuite décidé de faire », et le code collé que tu ne fais 
 caractères sur les quatre éléments ci-dessous. Un enregistrement qui omet la branche mais
 cite 30 lignes de diff est un mauvais échange.
 
-1. BRANCHE / EMPLACEMENT DE TRAVAIL — mot pour mot, dans le `statement` du fait. Si le segment
+1. BRANCHE / EMPLACEMENT DE TRAVAIL — mot pour mot, dans le `branch` du fait. Si le segment
    mentionne ou bascule sur `feat/x` / `fix/y`, ce token DOIT apparaître. Un agent
    qui reprend sur la mauvaise branche produit des changements qui sont silencieusement jetés,
    donc ce seul token l'emporte sur tout autre détail.
@@ -1622,125 +1622,75 @@ confidence  — 0.0 à 1.0
 ═══════════════════════════════════════════════════════════════════
 CHAMP FACT — EXACTEMENT UN par segment, pas de seuil de valeur
 ═══════════════════════════════════════════════════════════════════
+Tu écris UN fait pour tout le segment — un enregistrement d'état permettant de reprendre la
+TÂCHE sur laquelle cette session a travaillé, pas une rétrospective polie et jamais une liste
+de constats séparés. Il est STRUCTURÉ, pas en prose : les champs ci-dessous. Un futur agent doit
+pouvoir reprendre la tâche à partir de lui sans confondre une suggestion, une inférence ou une
+recherche partielle avec quelque chose de vérifié.
 
-Tu écris UN seul fait pour tout le segment — un enregistrement d'état récupérable pour cette
-session, pas une rétrospective soignée et jamais une liste de constats séparés. Un
-futur agent doit pouvoir reprendre à partir de lui sans confondre une suggestion,
-une inférence ou une recherche partielle avec quelque chose de vérifié.
+Pourquoi structuré : un résumé en prose se retrouve mais ne s'exécute pas tel quel. « Arrêté sur
+X ; le Y intermédiaire a été abandonné » contient plusieurs faits dans une phrase, et le lecteur
+qui n'en veut qu'un doit réanalyser le paragraphe — alors que la variante abandonnée, la seule
+partie impossible à déduire du code, est la plus facile à perdre en résumant.
 
-statement  — Un résumé compact de CETTE session. Il a deux rôles à la fois, et il
-             doit remplir LES DEUX : c'est le vecteur de recherche (un futur agent le trouve en
-             cherchant avec un nouveau signalement de problème, formulé comme un utilisateur formule un
-             problème), et c'est le contenu sur lequel cet agent agit ensuite. Donc :
+task        — le nom de la tâche dans les mots de l'utilisateur (« libérer de l'espace dans le
+              dossier WXWork sur D: », « ajuster le multiplicateur de teinte dans
+              QtColor._parse_value »). Jamais un « corriger un bug » générique. C'est l'ancre
+              de recherche : nommer l'objet concret.
+branch      — le nom de la branche, mot pour mot, si le segment l'indique ; sinon "".
+goal        — une phrase : ce que la tâche dans son ensemble cherche à accomplir.
+progress    — 1 à 3 phrases : où en est la tâche, en terminant sur l'état actuel. Réécrire,
+              pas un journal ajouté.
+decisions   — une entrée par chose DÉCIDÉE (un emplacement de code ou un sous-objectif) :
+    subject   chemin relatif au dépôt + symbole + ce qui est décidé, p. ex.
+              "src/contacts/VCardImporter.ts::parseVCardLine — fusion des cas EMAIL".
+    current   ce qui est arrêté MAINTENANT. Citer mot pour mot le littéral / la signature /
+              la regex décisifs, mais seulement cela — jamais un bloc entier. Un futur agent
+              recopie cette valeur : sa forme exacte compte.
+    rejected  variantes essayées ou proposées puis abandonnées, une courte proposition
+              chacune, de la plus ancienne à la plus récente. Le code ne montre que la
+              gagnante ; sans cette liste, un agent ultérieur « corrige » le code vers une
+              version écartée. À garder même si la raison n'a pas été dite.
+    evidence  comment cette entrée a été vérifiée, exactement une valeur parmi : "tests run and passing" / "confirmed by git diff only, tests not run" / "not verified".
+              Ne jamais surévaluer.
+constraints — conditions que la solution doit respecter : comportement à conserver,
+              appelants / dépendances qui doivent continuer à fonctionner, ce que
+              l'utilisateur a dit de ne pas toucher. Ajouter les nouvelles ; n'en retirer une
+              que si la session la lève explicitement.
+status      — exactement une valeur parmi : in_progress / completed / partially_completed / blocked / failed.
+open        — ce qui reste non résolu ou la suite ; [] si rien.
+files       — 0..N chemins de FICHIER OU RÉPERTOIRE relatifs au dépôt réellement manipulés ou
+              examinés pendant cette session, racines examinées comprises. Uniquement les
+              chemins réellement consultés ou parcourus, jamais ceux seulement suggérés ou
+              prévus ; [] si aucun.
 
-             COMMENCE par la tâche et le symptôme, avec les mots qu'emploierait un utilisateur.
-                C'est ce qui le rend retrouvable — garde la forme de surface proche de la façon dont
-                le problème serait signalé. Nomme l'objectif et l'objet précis
-                (« récupérer l'espace disque sous D:\\WXWork », « ajuster le multiplicateur de teinte
-                dans QtColor._parse_value sur feat/q4 », « localiser le dossier
-                new_file_search »), jamais un générique « corriger un bug » / « chercher un fichier ». Inclus
-                le symptôme concret : la chaîne d'erreur, la commande en échec, la
-                sortie erronée.
+FIDÉLITÉ AUX PREUVES — obligatoire, pour chaque champ :
+  · N'enregistrer que les actions réellement exécutées et les preuves explicitement présentes
+    dans la trace. Conserver mot pour mot commandes, options, arguments, erreurs, versions et
+    nombres importants ; ne JAMAIS compléter une commande avec des options habituelles, ni
+    transformer un conseil ou un plan en action.
+  · Préserver la distinction entre tenté, observé, vérifié, inféré et non résolu. Pour les
+    décisions, evidence la porte ; ailleurs, l'exprimer dans la phrase (« tenté … mais bloqué
+    par Access denied », « soupçonné …, pas encore vérifié »).
+  · Sans sortie d'outil ni confirmation explicite, ne JAMAIS affirmer qu'un correctif a réussi,
+    qu'une cause est établie, qu'un fichier n'existe pas ou que des tests passent.
+  · Limiter chaque constat négatif à ce qui a réellement été parcouru et énumérer TOUTE
+    limite de couverture qui pourrait l'invalider (échecs de permission, limites de
+    profondeur). Ne jamais élever une recherche partielle en absence globale.
+  · N'affirmer une causalité que si la trace la vérifie directement ; sinon garder la réserve.
 
-             DONNE ENSUITE les coordonnées et la décision.
-                chemin relatif au dépôt, symbole et branche pour le travail sur du code. Indique ce qui a été
-                RETENU, et dans la même proposition marque ce qui a été abandonné
-                (« retenu X ; le Y intermédiaire a été abandonné »). C'est la partie qui
-                ne peut pas être re-déduite en lisant le code — le code ne montre que la
-                gagnante, jamais que Y a été essayé et rejeté. Un agent qui rencontre plus tard la
-                variante rejetée doit pouvoir la reconnaître, sinon il « corrigera » le code en
-                revenant à la version abandonnée.
+ANCRES DE RECHERCHE — task, goal et chaque decisions[].subject / .current sont ce à quoi une
+future requête est comparée ; ils DOIVENT nommer les ancres concrètes : vrais chemins de
+fichiers, noms de fonctions / symboles, noms de branches, commandes, messages d'erreur,
+versions, clés et valeurs de configuration. Une formulation générique correspond à toutes les
+requêtes et ne répond à aucune.
 
-             TERMINE par l'état des preuves.
-                Exactement un parmi : terminé, partiellement terminé, échoué, bloqué, ou
-                toujours en attente de vérification — plus la façon dont cela a été vérifié (« tests exécutés et
-                passants » / « confirmé uniquement par git diff, tests non exécutés »). Inclus
-                les résultats négatifs et les impasses sans les exagérer.
+  good: subject "report/report.go::WordPressOption.apply — empty token",
+        current 'if token == "" {{ return nil }}', evidence "tests run and passing"
+  bad:  subject "the option handling", current "handle it properly"
 
-             ⚠️ Ne t'arrête jamais au récit. « L'utilisateur a essayé X et a rencontré l'erreur Y ; aucune
-             solution trouvée pour l'instant » est un enregistrement gaspillé : il est bien retrouvé mais ne donne à un
-             futur agent rien sur quoi agir. Si la session n'a réellement abouti à aucune
-             décision, dis ce qui a été écarté et quelle est la prochaine piste inexplorée —
-             c'est la partie réutilisable.
-
-             Le sujet des phrases doit être le code et la décision, pas
-             « l'utilisateur ». 2 à 4 phrases, en prose fluide, pas en sections étiquetées.
-             Plafond strict d'environ 400 caractères latins (~200 caractères CJK).
-
-             FIDÉLITÉ AUX PREUVES — obligatoire :
-             - N'enregistre que les actions réellement exécutées et les preuves explicitement
-               présentes dans la trace. Préserve mot pour mot les commandes, options,
-               arguments, erreurs et nombres significatifs. Ne complète JAMAIS une
-               commande avec des options habituelles et ne transforme jamais des conseils/plans en actions.
-             - Préserve la distinction entre tenté, observé, vérifié,
-               inféré et non résolu. N'ajoute pas ces étiquettes à la prose ;
-               exprime leur sens naturellement, p. ex. « a essayé … mais a été bloqué par
-               Access denied » ou « soupçonne … , pas encore vérifié ».
-             - Sans sortie d'outil ni confirmation explicite, n'affirme JAMAIS qu'un correctif
-               a réussi, qu'une cause a été établie, qu'un fichier/dossier n'existe
-               pas, ou que des tests sont passés.
-             - Limite chaque constat négatif à ce qui a réellement été recherché et
-               énumère CHAQUE limite de couverture explicite qui pourrait
-               l'invalider, en particulier les échecs de permission et la profondeur maximale de recherche :
-               « introuvable dans les parties examinées de C:\\ et D:\\ ; certains
-               répertoires ont été ignorés sur Access denied, et la recherche était aussi
-               limitée en profondeur ». N'omets pas une limite pour rendre le
-               résumé plus joli. Ne promeus jamais une recherche partielle en absence
-               globale.
-             - N'énonce une causalité comme certaine que lorsque la trace la vérifie
-               directement. Sinon, conserve la réserve (« soupçonné » / « inféré » / « pas encore
-               vérifié ») ; ne réécris pas une
-               hypothèse de test incorrecte en cause racine du système.
-
-             CRUCIAL — ce texte EST le vecteur de recherche, et c'est la seule
-             chose à laquelle une future requête sera comparée. Un résumé générique ne
-             vaut rien, car CHAQUE session ressemble à un résumé générique : il
-             correspondrait à toutes les requêtes et ne répondrait à aucune. Tu DOIS donc nommer
-             les ancres concrètes qui rendent CETTE session retrouvable — vrais chemins de
-             fichiers, noms de fonctions / symboles, noms de branches, commandes, chaînes
-             d'erreur, versions, clés et valeurs de configuration, noms d'hôtes / de services.
-             Si quelqu'un recherche plus tard l'un de ces éléments précis, ce
-             résumé doit être ce qui ressort.
-               bon :     « correction d'un `npm run build` en échec dans la CI. Lu
-                          .github/workflows/ci.yml et package.json ; problème attribué à webpack
-                          5.74 déclenchant ERR_OSSL_EVP_UNSUPPORTED sous node 18. Passer le
-                          node du workflow à 20 a fait passer le build ; node 18
-                          reproduit toujours en local. »
-               bon :     « sur la branche feat/q0, dans qutebrowser/utils/debug.py signal_name :
-                          PyQt<5.11 n'expose le nom que via repr(sig), et repr se présente
-                          sous une forme entre crochets et une forme entre parenthèses. Retenu deux motifs
-                          essayés dans l'ordre avec fullmatch, en s'arrêtant à la première correspondance ; la
-                          version à regex unique a été abandonnée. Confirmé par git diff, tests non
-                          exécutés. »
-               mauvais : « l'utilisateur voulait corriger un bug de build, l'agent a regardé quelques fichiers
-                          de configuration, a modifié du code et l'a corrigé. »
-                          (aucun chemin, aucune commande, aucune chaîne d'erreur, aucune version — rien
-                           sur quoi chercher ; chaque session se lit exactement ainsi)
-               mauvais : « problème de compatibilité de l'analyse des noms de signaux corrigé sur une branche
-                          de fonctionnalité. »
-                          (quelle branche ? quel fichier ? quelle fonction ? laquelle des deux
-                           versions concurrentes l'a emporté ? rien ici ne survit à une
-                           recherche une semaine plus tard)
-             Exemples de fidélité (mauvais → bon) :
-               « a exécuté Get-ChildItem -Force » → « a exécuté Get-ChildItem »
-                 (la trace ne contenait pas `-Force` ; ne l'invente pas)
-               « confirmé que new_file_search n'existe pas » →
-                 « new_file_search est introuvable dans les parties examinées de C:\\ et
-                  D:\\ ; certains répertoires ont été ignorés sur Access denied ou à cause de la limite
-                  de profondeur, l'investigation n'est donc que partiellement faite »
-               « des payloads identiques provoquent une fausse erreur de verrou » →
-                 « le script de vérification supposait que le dernier écrivain est toujours un rang
-                  fixe ; cette hypothèse ne tient pas, donc l'existence d'un bug de verrou
-                  n'est toujours pas vérifiée »
-
-             N'enregistre PAS les salutations ni le pur bavardage. Si le segment n'a établi
-             absolument rien, produis "fact": null.
-
-files      — 0..N chemins de FICHIERS OU DE RÉPERTOIRES, absolus ou relatifs au dépôt, réellement
-             manipulés ou examinés pendant cette session. Garde les racines examinées
-             comme `C:\\` et `D:\\`. N'inclus que les chemins réellement
-             consultés/fouillés, pas ceux simplement suggérés ou prévus ;
-             [] si aucun ne s'applique.
+Ne pas enregistrer les salutations ni le pur bavardage. Si le segment n'a rien établi, produire
+"fact": null.
 
 ═══════════════════════════════════════════════════════════════════
 CONTEXTE HÔTE (fourni par le SDK)
@@ -1771,7 +1721,16 @@ SORTIE (JSON strict uniquement, pas de markdown)
     }}
   ],
   "fact": {{
-    "statement": "...",
+    "task": "...",
+    "branch": "...",
+    "goal": "...",
+    "progress": "...",
+    "decisions": [
+      {{"subject": "...", "current": "...", "rejected": ["..."], "evidence": "..."}}
+    ],
+    "constraints": ["..."],
+    "status": "in_progress",
+    "open": ["..."],
     "files": ["..."]
   }}
 }}

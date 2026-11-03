@@ -1495,7 +1495,7 @@ CODING_EXTRACT_PROMPT_CODING = """\
 ║ 的資訊。該 agent 已有自己的任務；它不關心這個使用者想要什麼。它需要知道：此處 ║
 ║ 做出了什麼決定、位於哪些程式碼座標、嘗試並否決了什麼，以及是否經過驗證。     ║
 ║                                                                           ║
-║ 具體來說，每個 `statement` 和每個 `solution` 都必須遵守：                 ║
+║ 具體來說，每個 `fact` 和每個 `solution` 都必須遵守：                      ║
 ║   · 語法主詞必須是 CODE 或 THE DECISION——絕不能是「the user」，也絕不能是 ║
 ║     「the agent」。不要寫「The user attempted to…」、「The user wanted…」、 ║
 ║     「The agent then checked…」。                                         ║
@@ -1579,7 +1579,7 @@ CODE WORK——未來的 agent 無法重新推導的資訊，因此必須擷取
 assistant「隨後決定」做什麼的敘事，以及只是複述的貼上程式碼；把這些字元用於下面四項。
 一條遺漏 branch、卻引用 30 行 diff 的記錄是糟糕的取捨。
 
-1. BRANCH / WORKING LOCATION——逐字寫入 fact `statement`。如果該段提到或 checkout
+1. BRANCH / WORKING LOCATION——逐字寫入 fact `branch`。如果該段提到或 checkout
    了 `feat/x` / `fix/y`，這個 token 必須出現。在錯誤的 branch 上恢復工作的 agent
    會產生隨後被悄悄丟棄的改動，因此這一個 token 的優先順序高於其他任何細節。
 
@@ -1643,105 +1643,55 @@ confidence  — 0.0 到 1.0
 ═══════════════════════════════════════════════════════════════════
 FACT 欄位——每段會話恰好一條，無價值門檻
 ═══════════════════════════════════════════════════════════════════
+整段只寫一條 fact——這次會話所推進的 TASK 的可恢復狀態記錄，不是事後回顧，也絕不是
+若干條獨立發現的清單。它是**結構化**的，不是散文：按下面的欄位填寫。未來的 agent 必須能
+憑它把任務接著做下去，而不會把建議、推斷或不完整的搜尋誤當成已驗證的事實。
 
-你要為整段會話寫一條 FACT——它是本次會話可據以恢復的狀態記錄，不是精心潤飾的回顧，也
-絕不是零散發現的清單。未來的 agent 必須能夠從中繼續推進，且不會把建議、推斷或局部搜尋
-誤認為已經驗證的事實。
+為什麼要結構化：散文摘要能被檢索到，卻沒法直接照著做。「最終定為 X，中途的 Y 被放棄」
+是壓在一句話裡的好幾個事實，只需要其中一個的讀者得重新解析整段；而被放棄的那一版——
+唯一無法從程式碼反推的部分——恰恰是摘要時最容易丟的。
 
-statement  — 本次會話的緊湊摘要。它同時承擔兩項職責，且兩者都必須完成：它既是
-             retrieval vector（未來的 agent 用一份新的 issue report 搜尋它；措辭方式
-             與使用者回報問題的方式一致），也是該 agent 找到後要據以行動的 payload。
-             因此：
+task        — 用使用者會用的說法給任務命名（「清理 D 槽 WXWork 目錄釋放空間」、
+              「調整 QtColor._parse_value 裡的色相倍率」）。不要寫「修個 bug」這種泛稱。
+              它是檢索錨點，必須點出具體對象。
+branch      — 分支名，逐字照抄；該段沒有提到時寫 ""。
+goal        — 一句話：整個任務要達成什麼。
+progress    — 1 到 3 句：任務推進到哪一步了，以當前狀態收尾。重寫，不要追加流水帳。
+decisions   — 每個**已定下來**的事項一條（一個程式碼位置或一個子目標）：
+    subject   儲存庫相對路徑 + 符號 + 要定的事，例如
+              "src/contacts/VCardImporter.ts::parseVCardLine — EMAIL 分支合併"。
+    current   現在定下的做法。決定性的字面量 / 簽名 / 正規表示式逐字引用，但只引那一處，
+              不要貼整段程式碼。未來的 agent 會照抄這個值，所以寫法本身就重要。
+    rejected  試過或提過、隨後放棄的方案，每條一短句，按時間從早到晚。程式碼裡只留下
+              勝出的那版；沒有這張表，後來的 agent 會把程式碼「修」回已被放棄的版本。
+              即使沒說放棄原因也要保留。
+    evidence  這一項是怎麼核實的，只能取其一："tests run and passing" / "confirmed by git diff only, tests not run" / "not verified"。不得往高了寫。
+constraints — 方案必須遵守的條件：必須保持的行為、必須繼續能用的呼叫方 / 依賴、
+              使用者說過不許動的東西。新出現的就補上；只有會話明確解除時才刪。
+status      — 只能取其一：in_progress / completed / partially_completed / blocked / failed。
+open        — 仍未解決或下一步要做的事；沒有就寫 []。
+files       — 本次會話實際操作或調查過的 0..N 個儲存庫相對的檔案或目錄路徑，包括調查過的
+              根目錄。只寫真正存取或搜尋過的路徑，絕不寫僅僅建議或計畫過的；沒有就寫 []。
 
-             開頭寫任務和症狀，使用使用者會用的措辭。
-                這是確保可檢索性的關鍵——表述應盡量貼近問題被回報時的表面形式。
-                點明具體目標和對象（「reclaim disk space under D:\\WXWork」、
-                「adjust the hue multiplier in QtColor._parse_value on feat/q4」、
-                「locate the new_file_search folder」），絕不要寫籠統的「fix a bug」/
-                「look for a file」。包含具體症狀：error string、failing command、
-                wrong output。
+證據忠實度——強制，適用於每個欄位：
+  · 只記錄真正執行過的動作、軌跡裡明確出現的證據。關鍵的命令、參數、錯誤、版本和數字
+    逐字保留；絕不給命令補上慣用參數，也絕不把建議或計畫寫成已執行的動作。
+  · 區分「嘗試過 / 觀察到 / 已驗證 / 推斷 / 未解決」。決策項靠 evidence 表達；其餘欄位在
+    句子裡自然表達（「嘗試了……但被 Access denied 擋下」、「懷疑……，尚未驗證」）。
+  · 沒有工具輸出或明確確認，絕不聲稱修復成功、原因已確定、檔案不存在或測試通過。
+  · 每個否定性結論都限定在實際搜尋過的範圍內，並列出所有可能推翻它的覆蓋限制（權限
+    失敗、深度限制）。絕不把局部搜尋升級為「全域不存在」。
+  · 只有軌跡直接證實時才把因果寫成確定的；否則保留限定語。
 
-             然後給出座標和決定。
-                對程式碼工作寫 repo-relative path、symbol 和 branch。說明最終 SETTLED ON
-                什麼，並在同一子句標記捨棄了什麼（「settled on X; the interim Y was
-                dropped」）。這部分無法透過閱讀程式碼重新推導——程式碼只呈現勝出者，從不
-                呈現 Y 曾被嘗試後否決。以後遇到被否決變體的 agent 必須能識別它，
-                否則會把程式碼「修復」回已捨棄的版本。
+檢索錨點——task、goal 以及每個 decisions[].subject / .current 是未來查詢要比對的對象，
+所以必須點出具體錨點：真實的檔案路徑、函式 / 符號名、分支名、命令、錯誤字串、版本、
+設定鍵和值。泛泛的寫法能比對所有查詢，卻回答不了任何一個。
 
-             結尾寫證據狀態。
-                必須精確對應以下之一：completed、partially completed、failed、blocked、
-                still awaiting verification；還要寫明如何檢查（「tests run and passing」/
-                「confirmed by git diff only, tests not run」）。納入否定結果和死路，
-                但不要誇大。
+  good: subject "report/report.go::WordPressOption.apply — empty token",
+        current 'if token == "" {{ return nil }}', evidence "tests run and passing"
+  bad:  subject "the option handling", current "handle it properly"
 
-             ⚠️ 絕不要停留在敘事層。「The user tried X and hit error Y; no solution found
-             yet」是一條浪費的記錄：它容易被檢索到，卻無法指導未來的 agent 行動。如果
-             本次確實沒有得出決定，就說明排除了什麼、下一條尚未探索的線索是什麼——
-             這才是可重複使用的部分。
-
-             句子的主詞應是 code 和 decision，而不是「the user」。使用 2 到 4 個連貫的
-             句子，不要寫帶標籤的小節。硬性上限約 400 個拉丁字元（約 200 個 CJK 字元）。
-
-             EVIDENCE FIDELITY——強制要求：
-             - 只記錄 trace 中實際執行的操作和明確存在的證據。對關鍵 commands、flags、
-               arguments、errors、numbers 保持原樣。絕不要按慣例補全 command flags，
-               也不要把 advice/plans 寫成已執行的動作。
-             - 保留 attempted、observed、verified、inferred、unresolved 之間的區別。
-               不要把這些詞當作標籤寫進正文；自然地表達其含義，例如「tried … but was
-               blocked by Access denied」或「suspect …, not yet verified」。
-             - 沒有工具輸出或明確確認時，絕不要聲稱修復成功、原因已經確定、file/folder
-               不存在或 tests passed。
-             - 每個否定發現都必須限定在實際搜尋範圍內，並逐一列出可能使其失效的所有
-               明確涵蓋限制，尤其是 permission failures 和 maximum search depth：
-               「not found within the searched parts of C:\\ and D:\\; some directories
-               were skipped on Access denied, and the search was also depth-limited」。
-               不要為了讓摘要更漂亮而漏掉任何限制。絕不要把局部搜尋提升為全域不存在。
-             - 只有 trace 直接驗證了因果關係時，才能確定地陳述因果。否則保留限定詞
-               （「suspected」/「inferred」/「not yet verified」）；不要把錯誤的測試假設
-               改寫成系統的 root cause。
-
-             關鍵——這段文字就是 retrieval vector，也是未來 query 唯一會比對的內容。
-             籠統的摘要毫無價值，因為每次會話看起來都像籠統的摘要：它會比對到所有查詢，
-             卻無法回答任何一個。因此必須寫出使本次會話可被檢索的具體 anchors——真實的
-             file paths、function / symbol names、branch names、commands、error strings、
-             versions、config keys and values、host / service names。以後有人搜尋其中任一
-             具體項目時，本摘要必須能被回傳。
-               good: “fixing a failing `npm run build` in CI. Read
-                      .github/workflows/ci.yml and package.json; traced it to webpack
-                      5.74 hitting ERR_OSSL_EVP_UNSUPPORTED under node 18. Bumping the
-                      workflow's node to 20 made the build pass; node 18 still
-                      reproduces locally.”
-               good: “on branch feat/q0, in qutebrowser/utils/debug.py signal_name:
-                      PyQt<5.11 only exposes the name via repr(sig), and repr comes in
-                      both a bracketed and a parenthesised form. Settled on two patterns
-                      tried in order with fullmatch, breaking on the first hit; the
-                      single-regex version was dropped. Confirmed by git diff, tests not
-                      run.”
-               bad:  “user wanted a build bug fixed, the agent looked at some config
-                      files, changed some code, and fixed it.”
-                      （沒有 path、command、error string、version——沒有任何可檢索的錨點；
-                       每次會話都可以寫成這樣）
-               bad:  “fixed the signal-name parsing compatibility issue on a feature
-                      branch.”
-                      （哪個 branch？哪個 file？哪個 function？兩個競爭版本中誰勝出？
-                       一週後檢索到它時，沒有任何資訊仍然有用）
-             忠實度範例（bad → good）：
-               「ran Get-ChildItem -Force」 → 「ran Get-ChildItem」
-                 （trace 中沒有 `-Force`，不要杜撰）
-               「confirmed new_file_search does not exist」 →
-                 「new_file_search was not found within the searched parts of C:\\ and
-                  D:\\; some directories were skipped on Access denied or by the depth
-                  limit, so the investigation is only partly done」
-               「identical payloads cause a spurious lock error」 →
-                 「the verification script assumed the last writer is always a fixed
-                  rank; that assumption does not hold, so whether there is a lock bug
-                  is still unverified」
-
-             不要記錄問候或純閒聊。如果該段完全沒有建立任何資訊，輸出 "fact": null。
-
-files      — 0..N 個本次會話中實際操作或調查過的絕對或 repo-relative FILE OR
-             DIRECTORY paths。保留調查過的 roots，例如 `C:\\` 和 `D:\\`。只包含
-             實際存取／搜尋過的路徑，不包含僅建議或計畫存取的路徑；不適用時填寫 []。
+不要記錄寒暄或純閒聊。如果該段什麼都沒確立，輸出 "fact": null。
 
 ═══════════════════════════════════════════════════════════════════
 HOST CONTEXT（由 SDK 提供）
@@ -1771,7 +1721,16 @@ OUTPUT（僅輸出嚴格的 JSON，不要 markdown）
     }}
   ],
   "fact": {{
-    "statement": "...",
+    "task": "...",
+    "branch": "...",
+    "goal": "...",
+    "progress": "...",
+    "decisions": [
+      {{"subject": "...", "current": "...", "rejected": ["..."], "evidence": "..."}}
+    ],
+    "constraints": ["..."],
+    "status": "in_progress",
+    "open": ["..."],
     "files": ["..."]
   }}
 }}
