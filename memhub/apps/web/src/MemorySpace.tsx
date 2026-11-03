@@ -214,7 +214,21 @@ export function MemorySpace({
   // The page the list shows, for the namespace of a memory being opened.
   const sdkPageRef = useRef<MemoryLibraryPage | null>(null);
   sdkPageRef.current = sdkLibrary.page;
-  const sdkMapVisible = simplified && active && displayedMode === "map";
+  const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
+    null,
+  );
+  const [processingFailed, setProcessingFailed] = useState(false);
+  const [processingResolved, setProcessingResolved] = useState(false);
+  const pipelineMode =
+    processing?.pipeline?.mode ??
+    (processingResolved && !processingFailed ? "pro" : null);
+  const lite = pipelineMode === "lite";
+  const sdkMapVisible =
+    simplified &&
+    active &&
+    displayedMode === "map" &&
+    pipelineMode !== null &&
+    !lite;
   useEffect(() => {
     if (!sdkMapVisible) return;
     // A write bumps the revision; reading it here re-runs the read at once
@@ -337,15 +351,6 @@ export function MemorySpace({
   }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
-    null,
-  );
-  const [processingFailed, setProcessingFailed] = useState(false);
-  const [processingResolved, setProcessingResolved] = useState(false);
-  const pipelineMode =
-    processing?.pipeline?.mode ??
-    (processingResolved && !processingFailed ? "pro" : null);
-  const lite = pipelineMode === "lite";
   const [pendingAdd, setPendingAdd] = useState<PendingMemoryAdd | null>(null);
   const [checkingSetup, setCheckingSetup] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Source authority changes invalidate an in-flight setup snapshot.
@@ -1176,10 +1181,12 @@ export function MemorySpace({
         className="memory-library-layout"
         hidden={displayedMode !== "library"}
       >
-        <SdkMemoryLibrary
-          active={active}
-          focusedMemoryId={sdkFocusedMemoryId}
-        />
+        {!simplified || (pipelineMode !== null && !lite) ? (
+          <SdkMemoryLibrary
+            active={active}
+            focusedMemoryId={sdkFocusedMemoryId}
+          />
+        ) : null}
       </div>
     </section>
   );

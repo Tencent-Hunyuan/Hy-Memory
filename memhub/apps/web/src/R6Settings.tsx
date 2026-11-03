@@ -307,6 +307,7 @@ export function R6Settings({
           >
             <MemoryModeSettings
               hasActiveModel={currentModel !== null}
+              modelStateKnown={profiles !== null && !modelError}
               onConfigureModel={() => openConfiguration("generation")}
               onModeChange={setMemoryModeState}
             />

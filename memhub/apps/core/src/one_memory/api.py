@@ -1450,6 +1450,7 @@ def create_app(
             app.state.memory_graph_backfill = MemoryGraphBackfill(
                 coordinator=app.state.sdk_write_coordinator,
                 state=app.state.evolve_state_store,
+                lifecycle_open=lambda: _embedding_writes_open(app),
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -1848,6 +1849,16 @@ def create_app(
                         name="one-memory-durable-write-drain",
                     )
 
+                async def resume_graph_backfill() -> None:
+                    saved = app.state.evolve_state_store.graph_build()
+                    if saved.state != "running":
+                        return
+                    if _memory_mode(app) != "ultra":
+                        app.state.evolve_state_store.set_graph_build(GraphBuildState())
+                        return
+                    users = await asyncio.to_thread(_known_user_ids, app)
+                    app.state.memory_graph_backfill.recover(users)
+
                 async def start_evolve_schedule() -> None:
                     # Idle outside ultra: each tick asks the mode first.
                     app.state.evolve_scheduler.start()
@@ -1936,6 +1947,7 @@ def create_app(
                     # served from the live space throughout.
                     if sdk:
                         await step("embedding_spaces", resume_embedding_spaces)
+                        await step("graph_backfill", resume_graph_backfill)
                     await step("write_drain", start_write_drain)
                     if sdk:
                         await step("evolve_schedule", start_evolve_schedule)

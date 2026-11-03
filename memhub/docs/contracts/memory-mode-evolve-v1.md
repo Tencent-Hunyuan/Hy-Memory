@@ -72,6 +72,8 @@ and they are the owner's:
     (`build_memory_graph(user_id, limit=10000, clear_first=False)`);
   - this runs in the background, one user at a time, never beside that
     user's write;
+  - after a crash or App update, startup resumes users that did not finish
+    and does not repeat users already recorded as succeeded;
   - progress is reported in `graph_build`.
 - Vector collection names never depend on the mode. The mode is a separate
   client parameter, not part of the embedding-space identity.

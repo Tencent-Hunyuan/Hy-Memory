@@ -80,6 +80,43 @@ it("confirms the data effects before switching to lite", async () => {
   await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("lite"));
 });
 
+it("traps modal focus, closes on Escape and restores the mode-card focus", async () => {
+  prepare("pro");
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  const lite = await screen.findByRole("button", {
+    name: /基础记忆（lite）/,
+  });
+  await user.click(lite);
+
+  const cancel = screen.getByRole("button", { name: "取消" });
+  await waitFor(() => expect(document.activeElement).toBe(cancel));
+  await user.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: "切换模式" }),
+  );
+  await user.keyboard("{Escape}");
+
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(lite);
+});
+
+it("keeps focus inside the modal while the mode change is pending", async () => {
+  prepare("pro");
+  vi.mocked(setMemoryMode).mockReturnValue(new Promise(() => {}));
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  await user.click(
+    await screen.findByRole("button", { name: /基础记忆（lite）/ }),
+  );
+  await user.click(screen.getByRole("button", { name: "切换模式" }));
+
+  const modal = screen.getByRole("dialog");
+  await waitFor(() => expect(document.activeElement).toBe(modal));
+  await user.keyboard("{Tab}");
+  expect(document.activeElement).toBe(modal);
+});
+
 it("routes to model setup instead of switching pro without a model", async () => {
   prepare("lite");
   const configure = vi.fn();
@@ -177,4 +214,23 @@ it("does not let an older refresh undo a saved schedule change", async () => {
   await waitFor(() =>
     expect(toggle.getAttribute("aria-checked")).toBe("false"),
   );
+});
+
+it("keeps the mode usable when an evolve status read fails", async () => {
+  prepare("pro");
+  vi.mocked(getEvolveSchedule).mockRejectedValueOnce(new Error("offline"));
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(
+    (
+      await screen.findByRole("button", { name: /智能记忆（pro）/ })
+    ).getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(
+    (
+      screen.getByRole("button", {
+        name: /基础记忆（lite）/,
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
 });

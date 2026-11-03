@@ -67,10 +67,12 @@ function plannedEffects(
 
 export function MemoryModeSettings({
   hasActiveModel,
+  modelStateKnown = true,
   onConfigureModel,
   onModeChange,
 }: {
   hasActiveModel: boolean;
+  modelStateKnown?: boolean;
   onConfigureModel(): void;
   onModeChange?(mode: MemoryPipelineMode): void;
 }) {
@@ -86,29 +88,76 @@ export function MemoryModeSettings({
   const [error, setError] = useState("");
   const [run, setRun] = useState<EvolveRunReceipt | null>(null);
   const refreshVersion = useRef(0);
+  const dialog = useRef<HTMLElement>(null);
+  const dialogOpener = useRef<HTMLElement | null>(null);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
+
+  useEffect(() => {
+    if (!pendingMode || !dialog.current) return;
+    const panel = dialog.current;
+    const controls = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>("button:not(:disabled)"));
+    controls()[0]?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busyRef.current) {
+        event.preventDefault();
+        setPendingMode(null);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = controls();
+      const first = items[0];
+      const last = items.at(-1);
+      if (!first || !last) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    panel.addEventListener("keydown", handleKey);
+    return () => {
+      panel.removeEventListener("keydown", handleKey);
+      if (dialogOpener.current?.isConnected) dialogOpener.current.focus();
+    };
+  }, [pendingMode]);
+
+  useEffect(() => {
+    if (pendingMode && busy) dialog.current?.focus();
+  }, [busy, pendingMode]);
 
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
-    try {
-      const [nextMode, nextSchedule, nextOverview, processing] =
-        await Promise.all([
-          getMemoryMode(),
-          getEvolveSchedule(),
-          getEvolveOverview(),
-          getMemoryProcessing(),
-        ]);
-      if (version !== refreshVersion.current) return;
-      setState(nextMode);
-      onModeChange?.(nextMode.mode);
-      setScheduleState(nextSchedule);
-      setOverview(nextOverview);
-      setMaintenance(Boolean(processing.embedding_switch));
-      setRun(nextOverview.running[0] ?? null);
+    const [modeResult, scheduleResult, overviewResult, processingResult] =
+      await Promise.allSettled([
+        getMemoryMode(),
+        getEvolveSchedule(),
+        getEvolveOverview(),
+        getMemoryProcessing(),
+      ]);
+    if (version !== refreshVersion.current) return;
+    if (modeResult.status === "fulfilled") {
+      setState(modeResult.value);
+      onModeChange?.(modeResult.value.mode);
       setError("");
-    } catch {
-      if (version !== refreshVersion.current) return;
+    } else {
       setError("记忆模式状态暂时无法读取，请重试。");
     }
+    if (scheduleResult.status === "fulfilled")
+      setScheduleState(scheduleResult.value);
+    if (overviewResult.status === "fulfilled") {
+      setOverview(overviewResult.value);
+      setRun(overviewResult.value.running[0] ?? null);
+    }
+    if (processingResult.status === "fulfilled")
+      setMaintenance(Boolean(processingResult.value.embedding_switch));
   }, [onModeChange]);
 
   useEffect(() => {
@@ -138,6 +187,10 @@ export function MemoryModeSettings({
       return;
     }
     setError("");
+    dialogOpener.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setPendingMode(mode);
   }
 
@@ -226,7 +279,12 @@ export function MemoryModeSettings({
             type="button"
             className="r6-mode-option"
             aria-pressed={state?.mode === mode}
-            disabled={!state || busy || lifecycleBusy}
+            disabled={
+              !state ||
+              busy ||
+              lifecycleBusy ||
+              (mode !== "lite" && !modelStateKnown)
+            }
             onClick={() => choose(mode)}
           >
             <strong>{text(MODE_COPY[mode].title)}</strong>
@@ -320,10 +378,12 @@ export function MemoryModeSettings({
       {pendingMode ? (
         <div className="r6-settings-dialog-layer" role="presentation">
           <section
+            ref={dialog}
             className="r6-settings-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="memory-mode-confirm-title"
+            tabIndex={-1}
           >
             <h2 id="memory-mode-confirm-title">
               {text("切换到 {mode}？").replace("{mode}", pendingMode)}

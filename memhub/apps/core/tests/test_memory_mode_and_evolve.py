@@ -41,6 +41,8 @@ from one_memory.memory_evolution import (
     EvolveScheduler,
     EvolveService,
     EvolveStateStore,
+    GraphBuildState,
+    GraphBuildUser,
     MemoryGraphBackfill,
     evolve_due,
 )
@@ -690,6 +692,63 @@ def test_the_graph_backfill_runs_once_per_user(tmp_path, monkeypatch) -> None:
         "local": "succeeded",
         "wife": "succeeded",
     }
+
+
+def test_an_interrupted_graph_backfill_resumes_only_unfinished_users(tmp_path, monkeypatch) -> None:
+    sdk = _EvolveSdk()
+    state = EvolveStateStore(tmp_path)
+    state.set_graph_build(
+        GraphBuildState(
+            state="running",
+            started_at=_at(1, 3),
+            users={
+                "local": GraphBuildUser(state="succeeded", memories_scanned=4, nodes=4),
+                "wife": GraphBuildUser(state="running"),
+            },
+        )
+    )
+    backfill = MemoryGraphBackfill(coordinator=_Coordinator(sdk, monkeypatch), state=state)
+
+    async def scenario():
+        resumed = backfill.recover(["local", "wife"])
+        assert resumed.state == "running"
+        assert resumed.users["local"].state == "succeeded"
+        assert resumed.users["wife"].state == "pending"
+        await backfill.wait()
+
+    asyncio.run(scenario())
+    assert sdk.graph_builds == ["wife"]
+    assert state.graph_build().state == "succeeded"
+
+
+def test_graph_backfill_waits_for_embedding_maintenance_to_finish(tmp_path, monkeypatch) -> None:
+    sdk = _EvolveSdk()
+    state = EvolveStateStore(tmp_path)
+    gate = [False]
+    checked = asyncio.Event()
+
+    def lifecycle_open() -> bool:
+        checked.set()
+        return gate[0]
+
+    backfill = MemoryGraphBackfill(
+        coordinator=_Coordinator(sdk, monkeypatch),
+        state=state,
+        lifecycle_open=lifecycle_open,
+    )
+
+    async def scenario():
+        backfill.start(["local"])
+        await checked.wait()
+        assert sdk.graph_builds == []
+        assert state.graph_build().state == "running"
+        assert state.graph_build().users["local"].state == "pending"
+        gate[0] = True
+        await backfill.wait()
+
+    asyncio.run(scenario())
+    assert sdk.graph_builds == ["local"]
+    assert state.graph_build().state == "succeeded"
 
 
 # --- the HTTP surface -----------------------------------------------------------
