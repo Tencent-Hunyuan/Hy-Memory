@@ -96,3 +96,87 @@ def test_runtime_limit_is_opt_in_and_bounds_are_validated():
     assert Settings(_env_file=None).model_request_limit is None
     with pytest.raises(ValueError):
         Settings(_env_file=None, model_request_limit=0)
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+def test_token_field_variants_are_budgeted(tmp_path, field):
+    store = budget(tmp_path)
+    store.reserve(json.dumps({field: 12}).encode())
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
+            12,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"max_completion_tokens": True},
+        {"max_completion_tokens": 0},
+        {"max_completion_tokens": 17},
+        {"max_tokens": 5, "max_completion_tokens": 17},
+        {"max_tokens": 17, "max_completion_tokens": 5},
+        {"max_tokens": 5, "max_completion_tokens": None},
+    ],
+)
+def test_either_token_field_must_be_valid_and_within_budget(tmp_path, body):
+    with pytest.raises(ModelRequestBudgetError):
+        budget(tmp_path).reserve(json.dumps(body).encode())
+
+
+def test_both_fields_account_for_the_largest_limit(tmp_path):
+    store = budget(tmp_path)
+    store.reserve(b'{"max_tokens":5,"max_completion_tokens":12}')
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
+            12,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+async def test_real_sdk_request_through_budgeted_transport(tmp_path, field):
+    from hy_memory.agent.llm_provider import LLMProvider
+    from hy_memory.config import LLMConfig, MemoryConfig
+
+    seen = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "test",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok"},
+                    }
+                ],
+            },
+        )
+
+    store = ModelRequestBudget(
+        tmp_path / "budget.sqlite3", request_limit=2, body_byte_limit=4096, output_token_limit=200
+    )
+    config = MemoryConfig()
+    config.llm = LLMConfig(
+        api_key="test",
+        base_url="https://example.test/v1",
+        output_token_parameter=field,
+        max_retries=1,
+    )
+    config.http_transport_factory = lambda: BudgetedModelTransport(
+        store, inner=httpx.MockTransport(handle)
+    )
+    assert (await LLMProvider(config).complete("hello", max_tokens=123)).content == "ok"
+    assert seen[0][field] == 123
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
+            123,
+        )
