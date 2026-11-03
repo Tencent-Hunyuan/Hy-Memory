@@ -30,6 +30,7 @@ from ..prompts import (
     resolve_language,
     with_output_language,
 )
+from .fact_state import decode as _decode_state, merge_retired, render_state
 from .store import CodingMemoryStore
 from .types import (
 
@@ -780,6 +781,7 @@ class WorkingFactReconciler:
                 files=list(draft.files),
                 subject=draft.subject,
                 details=draft.details,
+                task_state=draft.task_state,
                 status="active",
                 memory_at=memory_at,
             )
@@ -845,6 +847,43 @@ class WorkingFactReconciler:
 
             new_fact.derived_experience_ids = inherited
             if retired:
+                # 结构化状态的机械继承：旧版的 current 变成新版的 rejected。
+                # 为什么必须有这一步：模型每次只看到"新的一段会话"，让它自己把旧
+                # current 搬进 rejected 不可靠，漏一次就意味着"被放弃的版本"永久消失，
+                # 后来的 agent 会把代码改回那个版本。按 subject 精确匹配兜底。
+                #
+                # ⚠️ 必须在 insert 之前做，而且 statement 一旦重渲染就要重算向量 ——
+                # 上面的 new_embedding 是按旧 statement 算的，两者不一致等于库里存了
+                # 一段文字却用另一段文字检索。
+                _cur_state = _decode_state(new_fact.task_state)
+                if _cur_state:
+                    _prev_states = [
+                        _decode_state(f.task_state)
+                        for f in sorted(retired, key=lambda x: x.created_at or datetime.min)
+                    ]
+                    if any(_prev_states):
+                        _merged = merge_retired(_prev_states, _cur_state)
+                        _rendered = render_state(_merged)
+                        if _rendered and _rendered != new_fact.statement:
+                            _old = (new_fact.statement, new_fact.task_state)
+                            new_fact.statement = _rendered
+                            new_fact.task_state = json.dumps(_merged, ensure_ascii=False)
+                            # 旧事实此时**已经**被软删了。上面"先向量化再覆盖"的不变量要求
+                            # 新事实一定落得了库，所以这里重算向量失败时不能抛：退回继承前的
+                            # 文本和向量，宁可这一代少继承几条 rejected，也不能让结论凭空消失。
+                            try:
+                                new_embedding = await self.store.embed_fact(new_fact)
+                            except Exception as e:  # noqa: BLE001
+                                new_fact.statement, new_fact.task_state = _old
+                                logger.warning(
+                                    f"[fact-reconcile] carry-over re-embed failed, "
+                                    f"keeping un-merged state: {e}"
+                                )
+                            else:
+                                logger.info(
+                                    f"[fact-reconcile] carried over decisions from "
+                                    f"{len(retired)} superseded fact(s) into {new_fact.fact_id}"
+                                )
                 history, truncated = await self._collect_history(
                     retired, user_id=user_id
                 )

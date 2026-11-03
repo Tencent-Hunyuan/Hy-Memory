@@ -1447,7 +1447,7 @@ CODING_EXTRACT_PROMPT_CODING = """\
 ║ here, at which code coordinates, what was tried and rejected, and whether  ║
 ║ it was verified.                                                          ║
 ║                                                                           ║
-║ Concretely, in every `statement` and every `solution`:                     ║
+║ Concretely, in every `fact` and every `solution`:                          ║
 ║   · The grammatical subject is the CODE or THE DECISION — never "the user" ║
 ║     and never "the agent". Do not write "The user attempted to…",          ║
 ║     "The user wanted…", "The agent then checked…".                        ║
@@ -1548,7 +1548,7 @@ assistant "then decided to", and pasted code you are only echoing; spend those
 characters on the four items below instead. A record that omits the branch but
 quotes 30 lines of diff is a bad trade.
 
-1. BRANCH / WORKING LOCATION — verbatim, in the fact `statement`. If the segment
+1. BRANCH / WORKING LOCATION — verbatim, in the fact `branch`. If the segment
    mentions or checks out `feat/x` / `fix/y`, that token MUST appear. An agent
    that resumes on the wrong branch produces changes that are silently thrown
    away, so this one token outranks every other detail.
@@ -1618,124 +1618,82 @@ confidence  — 0.0 to 1.0
 FACT FIELD — EXACTLY ONE per segment, no value bar
 ═══════════════════════════════════════════════════════════════════
 
-You write ONE fact for the whole segment — a recoverable state record for this
-session, not a polished retrospective and never a list of separate findings. A
-future agent must be able to resume from it without mistaking a suggestion,
-inference, or partial search for something verified.
+You write ONE fact for the whole segment — a recoverable state record of the TASK
+this session worked on, not a polished retrospective and never a list of separate
+findings. It is STRUCTURED, not prose: the fields below. A future agent must be
+able to resume the task from it without mistaking a suggestion, an inference or a
+partial search for something verified.
 
-statement  — A compact summary of THIS session. It has two jobs at once, and it
-             must do BOTH: it is the retrieval vector (a future agent finds it by
-             searching with a fresh issue report, phrased the way a user phrases a
-             problem), and it is the payload that agent then acts on. So:
+Why structured: a prose summary can be found but not acted on. "Settled on X; the
+interim Y was dropped" is several different facts compressed into one sentence,
+and a reader that needs only one of them has to re-parse the paragraph — while the
+rejected variant, the part that cannot be re-derived from the code, is the easiest
+thing to lose when summarising.
 
-             OPEN with the task and the symptom, in the words a user would use.
-                This is what makes it findable — keep the surface form close to how
-                the problem would be reported. Name the specific goal and object
-                ("reclaim disk space under D:\\WXWork", "adjust the hue multiplier
-                in QtColor._parse_value on feat/q4", "locate the new_file_search
-                folder"), never a generic "fix a bug" / "look for a file". Include
-                the concrete symptom: the error string, the failing command, the
-                wrong output.
+task       — the task's name in the words the user would use ("reclaim disk space
+             under D:\\WXWork", "adjust the hue multiplier in QtColor._parse_value",
+             "locate the new_file_search folder"). Never a generic "fix a bug".
+             This is the retrieval anchor, so it must name the concrete object.
+branch     — the branch name, verbatim, when the segment states or implies one; "".
+goal       — one sentence: what the task as a whole is trying to achieve.
+progress   — 1 to 3 sentences: how the task has advanced up to now, ending at the
+             current point. Rewrite it; do not append a log.
+decisions  — one entry per thing that was DECIDED (a code location or a sub-goal):
+    subject   repo-relative path + symbol + what is being decided, e.g.
+              "src/contacts/VCardImporter.ts::parseVCardLine — EMAIL case folding".
+    current   what is settled NOW. Quote the decisive literal / signature / regex
+              verbatim, but only that — never a whole block. A future agent copies
+              this value, so its exact form matters.
+    rejected  variants that were tried or proposed and then abandoned, one short
+              clause each, oldest first. The code only ever shows the winner;
+              without this list a later agent "fixes" the code back to a discarded
+              version. Keep each one even when the reason was never stated.
+    evidence  how this entry was checked, exactly one of: "tests run and passing" /
+              "confirmed by git diff only, tests not run" / "not verified".
+              Never upgrade it.
+constraints — conditions the solution must respect: behaviour that has to stay,
+             callers / dependencies that must keep working, things the user said
+             not to touch. Add new ones; drop one only when the session lifts it.
+status     — exactly one of: in_progress / completed / partially_completed /
+             blocked / failed.
+open       — what is still unresolved or is next; [] when nothing is.
+files      — 0..N repo-relative FILE OR DIRECTORY paths actually operated on or
+             investigated during this session, including investigated roots such
+             as `C:\\` and `D:\\`. Only paths actually accessed or searched, never
+             paths merely suggested or planned; [] if none apply.
 
-             THEN give the coordinates and the decision.
-                repo-relative path, symbol, and branch for code work. State what was
-                SETTLED ON, and in the same clause mark what was dropped
-                ("settled on X; the interim Y was dropped"). This is the part that
-                cannot be re-derived by reading the code — the code only shows the
-                winner, never that Y was tried and rejected. An agent that meets the
-                rejected variant later must be able to recognize it, or it will
-                "fix" the code back to the discarded version.
+EVIDENCE FIDELITY — mandatory, applies to every field:
+  · Record only actions actually executed, and only evidence explicitly present in
+    the trace. Preserve material commands, flags, arguments,
+    errors, versions and numbers verbatim: NEVER complete a command with customary
+    flags (write "ran Get-ChildItem -Force" as "ran Get-ChildItem"), and never turn
+    advice or a plan into an action.
+  · Preserve the distinction among attempted, observed, verified, inferred, and
+    unresolved. `evidence` carries it for decisions; everywhere else express it in
+    the sentence ("tried … but was blocked by Access denied", "suspect …,
+    not yet verified").
+  · Without tool output or explicit confirmation, NEVER claim a fix succeeded, that
+    a cause was established, that a file does not exist, or that tests passed.
+  · Scope every negative finding to what was actually searched, and enumerate EVERY
+    explicit coverage limit that could invalidate it (permission failures, depth
+    limits): "not found within the searched parts of C:\\ and D:\\; some directories
+    were skipped on Access denied, and the search was depth-limited".
+    Never promote a partial search to global absence.
+  · State causality as certain only when the trace directly verifies it; otherwise
+    keep the hedge.
 
-             CLOSE with the evidence status.
-                Exactly one of: completed, partially completed, failed, blocked, or
-                still awaiting verification — plus how it was checked ("tests run and
-                passing" / "confirmed by git diff only, tests not run"). Include
-                negative results and dead ends without overstating them.
+RETRIEVAL ANCHORS — `task`, `goal` and every `decisions[].subject` / `.current` are
+what a future query is matched against, so they MUST name the concrete anchors:
+real file paths, function / symbol names, branch names, commands, error strings,
+versions, config keys and values. A generic phrasing matches every query and
+answers none of them.
 
-             ⚠️ Never stop at the narrative. "The user tried X and hit error Y; no
-             solution found yet" is a wasted record: it retrieves fine but gives a
-             future agent nothing to act on. If the session genuinely reached no
-             decision, say what was ruled out and what the next unexplored lead is —
-             that is the reusable part.
+  good decision: subject "report/report.go::WordPressOption.apply — token empty branch",
+                 current 'if token == "" {{ return nil }}', evidence "tests run and passing"
+  bad decision:  subject "the option handling", current "handle it properly"
 
-             The subject of the sentences should be the code and the decision, not
-             "the user". 2 to 4 sentences, flowing prose, not labelled sections.
-             Hard ceiling ~400 latin characters (~200 CJK characters).
-
-             EVIDENCE FIDELITY — mandatory:
-             - Record only actions actually executed and evidence explicitly
-               present in the trace. Preserve material commands, flags,
-               arguments, errors, and numbers verbatim. NEVER complete a
-               command with customary flags or turn advice/plans into actions.
-             - Preserve the distinction among attempted, observed, verified,
-               inferred, and unresolved. Do not add those labels to the prose;
-               express their meaning naturally, e.g. "tried … but was blocked by
-               Access denied" or "suspect … , not yet verified".
-             - Without tool output or explicit confirmation, NEVER claim a fix
-               succeeded, a cause was established, a file/folder does not
-               exist, or tests passed.
-             - Scope every negative finding to what was actually searched and
-               enumerate EVERY explicit coverage limit that could invalidate
-               it, especially permission failures and maximum search depth:
-               "not found within the searched parts of C:\\ and D:\\; some
-               directories were skipped on Access denied, and the search was also
-               depth-limited". Do not omit one limit to make the
-               summary prettier. Never promote a partial search to global
-               absence.
-             - State causality as certain only when the trace directly verifies
-               it. Otherwise retain the hedge ("suspected" / "inferred" / "not yet
-               verified"); do not rewrite an
-               incorrect test assumption as the system's root cause.
-
-             CRITICAL — this text IS the retrieval vector, and it is the only
-             thing a future query gets matched against. A generic summary is
-             worthless, because EVERY session looks like a generic summary: it
-             would match every query and answer none of them. So you MUST name
-             the concrete anchors that make THIS session findable — real file
-             paths, function / symbol names, branch names, commands, error
-             strings, versions, config keys and values, host / service names.
-             If someone later searches for any one of those specifics, this
-             summary has to be the thing that comes back.
-               good: "fixing a failing `npm run build` in CI. Read
-                      .github/workflows/ci.yml and package.json; traced it to webpack
-                      5.74 hitting ERR_OSSL_EVP_UNSUPPORTED under node 18. Bumping the
-                      workflow's node to 20 made the build pass; node 18 still
-                      reproduces locally."
-               good: "on branch feat/q0, in qutebrowser/utils/debug.py signal_name:
-                      PyQt<5.11 only exposes the name via repr(sig), and repr comes in
-                      both a bracketed and a parenthesised form. Settled on two patterns
-                      tried in order with fullmatch, breaking on the first hit; the
-                      single-regex version was dropped. Confirmed by git diff, tests not
-                      run."
-               bad:  "user wanted a build bug fixed, the agent looked at some config
-                      files, changed some code, and fixed it."
-                      (no path, no command, no error string, no version — nothing
-                       to retrieve on; every session reads exactly like this)
-               bad:  "fixed the signal-name parsing compatibility issue on a feature
-                      branch."
-                      (which branch? which file? which function? which of the two
-                       competing versions won? nothing here survives being
-                       retrieved a week later)
-             Fidelity examples (bad → good):
-               "ran Get-ChildItem -Force" → "ran Get-ChildItem"
-                 (the trace did not contain `-Force`; do not invent it)
-               "confirmed new_file_search does not exist" →
-                 "new_file_search was not found within the searched parts of C:\\ and
-                  D:\\; some directories were skipped on Access denied or by the depth
-                  limit, so the investigation is only partly done"
-               "identical payloads cause a spurious lock error" →
-                 "the verification script assumed the last writer is always a fixed
-                  rank; that assumption does not hold, so whether there is a lock bug
-                  is still unverified"
-
-             Do NOT record greetings or pure chatter. If the segment established
-             nothing at all, output "fact": null.
-
-files      — 0..N absolute or repo-relative FILE OR DIRECTORY paths actually
-             operated on or investigated during this session. Keep investigated
-             roots such as `C:\\` and `D:\\`. Only include paths that were
-             actually accessed/searched, not paths merely suggested or planned;
-             [] if none apply.
+Do NOT record greetings or pure chatter. If the segment established nothing at
+all, output "fact": null.
 
 ═══════════════════════════════════════════════════════════════════
 HOST CONTEXT (given by SDK)
@@ -1766,7 +1724,19 @@ OUTPUT (strict JSON only, no markdown)
     }}
   ],
   "fact": {{
-    "statement": "...",
+    "task": "...",
+    "branch": "...",
+    "goal": "...",
+    "progress": "...",
+    "decisions": [
+      {{"subject": "path::symbol — what is being decided",
+        "current": "the value settled on, key literals verbatim",
+        "rejected": ["a variant tried and abandoned"],
+        "evidence": "tests run and passing | confirmed by git diff only, tests not run | not verified"}}
+    ],
+    "constraints": ["..."],
+    "status": "in_progress",
+    "open": ["..."],
     "files": ["..."]
   }}
 }}

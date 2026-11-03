@@ -1450,7 +1450,7 @@ CODING_EXTRACT_PROMPT_CODING = """\
 ║ pada koordinat kode mana, apa yang dicoba dan ditolak, dan apakah sudah    ║
 ║ diverifikasi.                                                             ║
 ║                                                                           ║
-║ Secara konkret, di setiap `statement` dan setiap `solution`:               ║
+║ Secara konkret, di setiap `fact` dan setiap `solution`:                    ║
 ║   · Subjek gramatikalnya adalah KODE atau KEPUTUSAN — tidak pernah         ║
 ║     "pengguna" dan tidak pernah "agent". Jangan menulis "Pengguna mencoba…",║
 ║     "Pengguna ingin…", "Agent kemudian memeriksa…".                       ║
@@ -1554,7 +1554,7 @@ asisten "kemudian putuskan untuk", dan kode tempelan yang hanya Anda gemakan; be
 karakter-karakter itu untuk empat butir di bawah ini. Catatan yang menghilangkan branch tetapi
 mengutip 30 baris diff adalah pertukaran yang buruk.
 
-1. BRANCH / LOKASI KERJA — verbatim, di `statement` fact. Jika segmen
+1. BRANCH / LOKASI KERJA — verbatim, di `branch` fact. Jika segmen
    menyebutkan atau melakukan checkout `feat/x` / `fix/y`, token itu WAJIB muncul. Agent
    yang melanjutkan di branch yang salah menghasilkan perubahan yang diam-diam terbuang,
    sehingga satu token ini mengungguli setiap detail lainnya.
@@ -1624,125 +1624,76 @@ confidence  — 0.0 hingga 1.0
 ═══════════════════════════════════════════════════════════════════
 FIELD FACT — TEPAT SATU per segmen, tanpa ambang nilai
 ═══════════════════════════════════════════════════════════════════
+Kamu menulis SATU fact untuk seluruh segmen — catatan status yang bisa dilanjutkan dari TASK
+yang dikerjakan sesi ini, bukan retrospeksi yang dipoles dan tidak pernah berupa daftar temuan
+terpisah. Fact ini TERSTRUKTUR, bukan prosa: field-field di bawah. Agent di masa depan harus
+bisa melanjutkan task dari sini tanpa keliru menganggap saran, dugaan, atau pencarian parsial
+sebagai sesuatu yang terverifikasi.
 
-Anda menulis SATU fact untuk seluruh segmen — catatan keadaan yang dapat dipulihkan untuk sesi
-ini, bukan retrospeksi yang dipoles dan tidak pernah berupa daftar temuan terpisah. Seorang
-agent di masa mendatang harus dapat melanjutkan dari catatan ini tanpa keliru menganggap saran,
-inferensi, atau pencarian parsial sebagai sesuatu yang sudah terverifikasi.
+Mengapa terstruktur: ringkasan prosa bisa ditemukan tetapi tidak bisa langsung dijalankan.
+"Akhirnya memilih X; Y yang sempat dipakai dibuang" adalah beberapa fakta yang dipadatkan dalam
+satu kalimat, dan pembaca yang hanya butuh salah satunya harus mengurai ulang paragrafnya —
+sementara varian yang dibuang, satu-satunya bagian yang tidak bisa diturunkan dari kode, justru
+paling mudah hilang saat diringkas.
 
-statement  — Ringkasan padat tentang sesi INI. Ia memiliki dua tugas sekaligus, dan ia
-             harus menjalankan KEDUANYA: ia adalah vektor retrieval (agent di masa mendatang menemukannya dengan
-             mencari menggunakan laporan masalah baru, yang dirumuskan seperti cara pengguna merumuskan
-             masalah), dan ia adalah muatan yang kemudian ditindaklanjuti oleh agent tersebut. Jadi:
+task        — nama task dengan kata-kata pengguna ("mengosongkan ruang di folder WXWork di
+              D:", "menyesuaikan pengali hue di QtColor._parse_value"). Jangan pernah
+              "memperbaiki bug" yang generik. Ini jangkar pencarian, jadi harus menyebut objek
+              konkretnya.
+branch      — nama branch apa adanya bila segmen menyebutkannya; jika tidak, "".
+goal        — satu kalimat: apa yang ingin dicapai task secara keseluruhan.
+progress    — 1 sampai 3 kalimat: sejauh mana task sudah berjalan, diakhiri dengan keadaan saat
+              ini. Tulis ulang, jangan menambahkan log.
+decisions   — satu entri untuk setiap hal yang SUDAH DIPUTUSKAN (satu lokasi kode atau satu
+              sub-tujuan):
+    subject   path relatif repo + simbol + apa yang diputuskan, misalnya
+              "src/contacts/VCardImporter.ts::parseVCardLine — penggabungan case EMAIL".
+    current   apa yang diputuskan SEKARANG. Kutip literal / signature / regex penentunya apa
+              adanya, tetapi hanya itu — jangan seluruh blok. Agent di masa depan menyalin
+              nilai ini, jadi bentuk persisnya penting.
+    rejected  varian yang dicoba atau diusulkan lalu ditinggalkan, satu klausa pendek masing-
+              masing, dari yang terlama. Kode hanya menunjukkan pemenangnya; tanpa daftar ini
+              agent berikutnya akan "memperbaiki" kode kembali ke versi yang dibuang. Simpan
+              tiap varian walau alasannya tidak disebutkan.
+    evidence  bagaimana entri ini diperiksa, tepat salah satu dari: "tests run and passing" / "confirmed by git diff only, tests not run" / "not verified". Jangan
+              pernah dinaikkan.
+constraints — syarat yang harus dipatuhi solusi: perilaku yang harus tetap, pemanggil /
+              dependensi yang harus tetap berfungsi, hal yang pengguna minta jangan disentuh.
+              Tambahkan yang baru; hapus hanya bila sesi secara eksplisit mencabutnya.
+status      — tepat salah satu dari: in_progress / completed / partially_completed / blocked / failed.
+open        — apa yang masih belum terselesaikan atau langkah berikutnya; [] bila tidak ada.
+files       — 0..N path FILE ATAU DIREKTORI relatif repo yang benar-benar dioperasikan atau
+              diselidiki dalam sesi ini, termasuk root yang diselidiki. Hanya path yang
+              benar-benar diakses atau dicari, bukan yang sekadar disarankan atau
+              direncanakan; [] bila tidak ada.
 
-             BUKA dengan tugas dan gejalanya, dengan kata-kata yang akan dipakai pengguna.
-                Inilah yang membuatnya dapat ditemukan — jaga bentuk permukaannya tetap dekat dengan cara
-                masalah itu akan dilaporkan. Sebutkan tujuan dan objek yang spesifik
-                ("mengosongkan ruang disk di bawah D:\\WXWork", "menyesuaikan pengali hue
-                di QtColor._parse_value pada feat/q4", "menemukan folder
-                new_file_search"), jangan pernah "memperbaiki bug" / "mencari file" yang generik. Sertakan
-                gejala konkretnya: string error, perintah yang gagal,
-                keluaran yang salah.
+KESETIAAN PADA BUKTI — wajib, berlaku untuk setiap field:
+  · Catat hanya tindakan yang benar-benar dijalankan dan bukti yang secara eksplisit ada di
+    trace. Pertahankan perintah, flag, argumen, error, versi, dan angka penting apa adanya;
+    JANGAN PERNAH melengkapi perintah dengan flag yang lazim, dan jangan mengubah saran atau
+    rencana menjadi tindakan.
+  · Pertahankan pembedaan antara dicoba, diamati, terverifikasi, diduga, dan belum
+    terselesaikan. Untuk decisions, evidence yang membawanya; di tempat lain ungkapkan dalam
+    kalimat ("mencoba … tetapi terhalang Access denied", "diduga …, belum diverifikasi").
+  · Tanpa output tool atau konfirmasi eksplisit, JANGAN PERNAH mengklaim perbaikan berhasil,
+    penyebab sudah dipastikan, sebuah file tidak ada, atau tes lulus.
+  · Batasi setiap temuan negatif pada apa yang benar-benar dicari, dan sebutkan SETIAP batas
+    cakupan yang bisa membatalkannya (kegagalan izin, batas kedalaman). Jangan pernah
+    menaikkan pencarian parsial menjadi ketiadaan global.
+  · Nyatakan kausalitas sebagai pasti hanya bila trace memverifikasinya secara langsung; jika
+    tidak, pertahankan kehati-hatiannya.
 
-             LALU berikan koordinat dan keputusannya.
-                path relatif-repo, simbol, dan branch untuk pekerjaan kode. Nyatakan apa yang
-                DITETAPKAN, dan dalam klausa yang sama tandai apa yang dibuang
-                ("ditetapkan X; Y versi sementara dibuang"). Inilah bagian yang
-                tidak dapat diturunkan ulang dengan membaca kode — kode hanya menunjukkan
-                pemenangnya, tidak pernah bahwa Y pernah dicoba dan ditolak. Agent yang menjumpai
-                varian yang ditolak di kemudian hari harus dapat mengenalinya, atau ia akan
-                "memperbaiki" kode kembali ke versi yang dibuang.
+JANGKAR PENCARIAN — task, goal, dan setiap decisions[].subject / .current adalah yang akan
+dicocokkan dengan kueri di masa depan, jadi WAJIB menyebut jangkar konkret: path file nyata,
+nama fungsi / simbol, nama branch, perintah, string error, versi, kunci dan nilai konfigurasi.
+Rumusan yang generik cocok dengan semua kueri dan tidak menjawab satu pun.
 
-             TUTUP dengan status buktinya.
-                Tepat salah satu dari: selesai, selesai sebagian, gagal, terhambat, atau
-                masih menunggu verifikasi — ditambah cara pemeriksaannya ("tes dijalankan dan
-                lulus" / "dikonfirmasi hanya lewat git diff, tes tidak dijalankan"). Sertakan
-                hasil negatif dan jalan buntu tanpa melebih-lebihkannya.
+  good: subject "report/report.go::WordPressOption.apply — empty token",
+        current 'if token == "" {{ return nil }}', evidence "tests run and passing"
+  bad:  subject "the option handling", current "handle it properly"
 
-             ⚠️ Jangan pernah berhenti pada narasi. "Pengguna mencoba X dan mendapat error Y; belum
-             ditemukan solusi" adalah catatan yang sia-sia: ia mudah ditemukan tetapi tidak memberi
-             agent di masa mendatang apa pun untuk ditindaklanjuti. Jika sesi benar-benar tidak mencapai
-             keputusan, sebutkan apa yang sudah disingkirkan dan apa petunjuk berikutnya yang belum dijelajahi —
-             itulah bagian yang dapat digunakan ulang.
-
-             Subjek kalimat-kalimatnya seharusnya kode dan keputusan, bukan
-             "pengguna". 2 hingga 4 kalimat, prosa yang mengalir, bukan bagian berlabel.
-             Batas keras ~400 karakter latin (~200 karakter CJK).
-
-             KESETIAAN BUKTI — wajib:
-             - Catat hanya tindakan yang benar-benar dijalankan dan bukti yang secara eksplisit
-               ada di trace. Pertahankan perintah, flag,
-               argumen, error, dan angka yang material secara verbatim. JANGAN PERNAH melengkapi
-               perintah dengan flag yang lazim atau mengubah saran/rencana menjadi tindakan.
-             - Pertahankan perbedaan antara dicoba, diamati, diverifikasi,
-               disimpulkan, dan belum terselesaikan. Jangan menambahkan label-label itu ke dalam prosa;
-               ungkapkan maknanya secara alami, mis. "mencoba … tetapi terhambat oleh
-               Access denied" atau "diduga … , belum diverifikasi".
-             - Tanpa keluaran tool atau konfirmasi eksplisit, JANGAN PERNAH mengklaim perbaikan
-               berhasil, penyebab telah ditetapkan, sebuah file/folder tidak
-               ada, atau tes lulus.
-             - Batasi setiap temuan negatif pada apa yang benar-benar dicari dan
-               sebutkan SETIAP batas cakupan eksplisit yang dapat membatalkannya,
-               terutama kegagalan izin dan kedalaman pencarian maksimum:
-               "tidak ditemukan di bagian C:\\ dan D:\\ yang telah dicari; beberapa
-               direktori dilewati karena Access denied, dan pencarian juga
-               dibatasi kedalamannya". Jangan menghilangkan satu batas pun agar
-               ringkasan terlihat lebih rapi. Jangan pernah menaikkan pencarian parsial menjadi
-               ketiadaan global.
-             - Nyatakan kausalitas sebagai pasti hanya ketika trace secara langsung memverifikasinya.
-               Jika tidak, pertahankan pembatasnya ("diduga" / "disimpulkan" / "belum
-               diverifikasi"); jangan menulis ulang
-               asumsi tes yang keliru sebagai akar penyebab sistem.
-
-             KRITIS — teks ini ADALAH vektor retrieval, dan satu-satunya
-             hal yang dicocokkan dengan kueri di masa mendatang. Ringkasan generik
-             tidak berguna, karena SETIAP sesi tampak seperti ringkasan generik: ia
-             akan cocok dengan setiap kueri dan tidak menjawab satu pun. Jadi Anda WAJIB menyebutkan
-             jangkar konkret yang membuat sesi INI dapat ditemukan — path file
-             yang nyata, nama fungsi / simbol, nama branch, perintah, string
-             error, versi, key dan nilai konfigurasi, nama host / layanan.
-             Jika seseorang kelak mencari salah satu detail spesifik itu,
-             ringkasan inilah yang harus kembali.
-               baik:  "memperbaiki `npm run build` yang gagal di CI. Membaca
-                      .github/workflows/ci.yml dan package.json; menelusurinya ke webpack
-                      5.74 yang terkena ERR_OSSL_EVP_UNSUPPORTED di node 18. Menaikkan
-                      node pada workflow ke 20 membuat build lulus; node 18 masih
-                      mereproduksi error secara lokal."
-               baik:  "di branch feat/q0, pada qutebrowser/utils/debug.py signal_name:
-                      PyQt<5.11 hanya mengekspos nama melalui repr(sig), dan repr muncul dalam
-                      bentuk berkurung siku maupun berkurung biasa. Ditetapkan dua pola
-                      yang dicoba berurutan dengan fullmatch, berhenti pada kecocokan pertama; versi
-                      satu-regex dibuang. Dikonfirmasi lewat git diff, tes tidak
-                      dijalankan."
-               buruk: "pengguna ingin bug build diperbaiki, agent melihat beberapa file
-                      konfigurasi, mengubah sebagian kode, dan memperbaikinya."
-                      (tanpa path, tanpa perintah, tanpa string error, tanpa versi — tidak ada
-                       yang bisa dijadikan dasar retrieval; setiap sesi terbaca persis seperti ini)
-               buruk: "memperbaiki masalah kompatibilitas parsing nama sinyal di sebuah feature
-                      branch."
-                      (branch yang mana? file yang mana? fungsi yang mana? mana dari dua
-                       versi yang bersaing yang menang? tidak ada di sini yang bertahan ketika
-                       ditemukan kembali seminggu kemudian)
-             Contoh kesetiaan (buruk → baik):
-               "menjalankan Get-ChildItem -Force" → "menjalankan Get-ChildItem"
-                 (trace tidak mengandung `-Force`; jangan mengarangnya)
-               "mengonfirmasi new_file_search tidak ada" →
-                 "new_file_search tidak ditemukan di bagian C:\\ dan
-                  D:\\ yang telah dicari; beberapa direktori dilewati karena Access denied atau oleh batas
-                  kedalaman, sehingga investigasi baru selesai sebagian"
-               "payload yang identik menyebabkan error lock palsu" →
-                 "skrip verifikasi berasumsi bahwa penulis terakhir selalu rank
-                  yang tetap; asumsi itu tidak berlaku, sehingga apakah ada bug lock
-                  masih belum diverifikasi"
-
-             JANGAN catat sapaan atau obrolan murni. Jika segmen tidak menetapkan
-             apa pun sama sekali, keluarkan "fact": null.
-
-files      — 0..N path FILE ATAU DIREKTORI absolut atau relatif-repo yang benar-benar
-             dioperasikan atau diinvestigasi selama sesi ini. Pertahankan root yang diinvestigasi
-             seperti `C:\\` dan `D:\\`. Hanya sertakan path yang
-             benar-benar diakses/dicari, bukan path yang sekadar disarankan atau direncanakan;
-             [] jika tidak ada.
+Jangan mencatat sapaan atau obrolan semata. Jika segmen tidak menetapkan apa pun, keluarkan
+"fact": null.
 
 ═══════════════════════════════════════════════════════════════════
 KONTEKS HOST (diberikan oleh SDK)
@@ -1773,7 +1724,16 @@ KELUARAN (hanya JSON yang ketat, tanpa markdown)
     }}
   ],
   "fact": {{
-    "statement": "...",
+    "task": "...",
+    "branch": "...",
+    "goal": "...",
+    "progress": "...",
+    "decisions": [
+      {{"subject": "...", "current": "...", "rejected": ["..."], "evidence": "..."}}
+    ],
+    "constraints": ["..."],
+    "status": "in_progress",
+    "open": ["..."],
     "files": ["..."]
   }}
 }}
