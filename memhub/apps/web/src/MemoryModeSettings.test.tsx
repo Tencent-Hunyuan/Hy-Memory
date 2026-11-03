@@ -1,0 +1,241 @@
+// @vitest-environment jsdom
+
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  getEvolveOverview,
+  getEvolveSchedule,
+  getMemoryMode,
+  getMemoryProcessing,
+  setEvolveSchedule,
+  setMemoryMode,
+} from "./api";
+import { MemoryModeSettings } from "./MemoryModeSettings";
+
+vi.mock("./api", () => ({
+  getMemoryMode: vi.fn(),
+  setMemoryMode: vi.fn(),
+  getEvolveSchedule: vi.fn(),
+  setEvolveSchedule: vi.fn(),
+  getEvolveOverview: vi.fn(),
+  startEvolve: vi.fn(),
+  getMemoryProcessing: vi.fn(),
+  apiErrorCode: vi.fn().mockReturnValue(null),
+}));
+
+function state(mode: "lite" | "pro" | "ultra" = "pro") {
+  return {
+    mode,
+    configured_mode: mode,
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"] as Array<"lite" | "pro" | "ultra">,
+    graph_build: {
+      state: "idle" as const,
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  };
+}
+
+function prepare(mode: "lite" | "pro" | "ultra" = "pro") {
+  vi.mocked(getMemoryMode).mockResolvedValue(state(mode));
+  vi.mocked(getEvolveSchedule).mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  });
+  vi.mocked(getEvolveOverview).mockResolvedValue({
+    mode,
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  });
+  vi.mocked(getMemoryProcessing).mockResolvedValue({} as never);
+}
+
+async function chooseMode(
+  user: ReturnType<typeof userEvent.setup>,
+  name: RegExp,
+) {
+  const picker = await screen.findByRole("combobox", { name: "当前模式" });
+  await user.click(picker);
+  await user.click(screen.getByRole("option", { name }));
+  return picker;
+}
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+it("confirms the data effects before switching to lite", async () => {
+  prepare("pro");
+  vi.mocked(setMemoryMode).mockResolvedValue({
+    ...state("lite"),
+    previous_mode: "pro",
+    effects: ["higher_mode_memories_hidden"],
+  });
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await chooseMode(user, /基础记忆（lite）/);
+  expect(screen.getByText(/高级记忆会保留/)).toBeTruthy();
+  expect(setMemoryMode).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "切换模式" }));
+  await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("lite"));
+});
+
+it("traps modal focus, closes on Escape and restores the mode-card focus", async () => {
+  prepare("pro");
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  const lite = await chooseMode(user, /基础记忆（lite）/);
+
+  const cancel = screen.getByRole("button", { name: "取消" });
+  await waitFor(() => expect(document.activeElement).toBe(cancel));
+  await user.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: "切换模式" }),
+  );
+  await user.keyboard("{Escape}");
+
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).toBe(lite);
+});
+
+it("keeps focus inside the modal while the mode change is pending", async () => {
+  prepare("pro");
+  vi.mocked(setMemoryMode).mockReturnValue(new Promise(() => {}));
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  await chooseMode(user, /基础记忆（lite）/);
+  await user.click(screen.getByRole("button", { name: "切换模式" }));
+
+  const modal = screen.getByRole("dialog");
+  await waitFor(() => expect(document.activeElement).toBe(modal));
+  await user.keyboard("{Tab}");
+  expect(document.activeElement).toBe(modal);
+});
+
+it("routes to model setup instead of switching pro without a model", async () => {
+  prepare("lite");
+  const configure = vi.fn();
+  const user = userEvent.setup();
+  render(
+    <MemoryModeSettings hasActiveModel={false} onConfigureModel={configure} />,
+  );
+
+  await chooseMode(user, /智能记忆（pro）/);
+  expect(configure).toHaveBeenCalledTimes(1);
+  expect(setMemoryMode).not.toHaveBeenCalled();
+  expect(
+    screen.getByText("使用 pro 或 ultra 前需要先配置并启用生成模型。"),
+  ).toBeTruthy();
+});
+
+it("shows the default nightly evolve controls in ultra", async () => {
+  prepare("ultra");
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(
+    (await screen.findByRole("switch", { name: "每天自动整合" })).getAttribute(
+      "aria-checked",
+    ),
+  ).toBe("true");
+  expect(
+    (screen.getByLabelText("自动整合时间") as HTMLInputElement).value,
+  ).toBe("03:00");
+  expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
+});
+
+it("ignores an older refresh that finishes after a newer mode read", async () => {
+  prepare("pro");
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  const picker = await screen.findByRole("combobox", { name: "当前模式" });
+
+  let resolveOld!: (value: ReturnType<typeof state>) => void;
+  vi.mocked(getMemoryMode)
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    )
+    .mockResolvedValueOnce(state("lite"));
+
+  const refresh = screen.getByRole("button", { name: "刷新记忆模式" });
+  await user.click(refresh);
+  await user.click(refresh);
+  await waitFor(() => expect((picker as HTMLButtonElement).value).toBe("lite"));
+  resolveOld(state("pro"));
+
+  await waitFor(() => expect((picker as HTMLButtonElement).value).toBe("lite"));
+});
+
+it("does not let an older refresh undo a saved schedule change", async () => {
+  prepare("ultra");
+  vi.mocked(setEvolveSchedule).mockResolvedValue({
+    enabled: false,
+    time: "03:00",
+  });
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  const toggle = await screen.findByRole("switch", {
+    name: "每天自动整合",
+  });
+
+  let resolveOld!: (value: { enabled: true; time: string }) => void;
+  vi.mocked(getEvolveSchedule).mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveOld = resolve;
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "刷新记忆模式" }));
+  await user.click(toggle);
+  await waitFor(() =>
+    expect(setEvolveSchedule).toHaveBeenCalledWith({ enabled: false }),
+  );
+  resolveOld({ enabled: true, time: "03:00" });
+
+  await waitFor(() =>
+    expect(toggle.getAttribute("aria-checked")).toBe("false"),
+  );
+});
+
+it("keeps the mode usable when an evolve status read fails", async () => {
+  prepare("pro");
+  vi.mocked(getEvolveSchedule).mockRejectedValueOnce(new Error("offline"));
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(
+    (await screen.findByRole("combobox", {
+      name: "当前模式",
+    })) as HTMLButtonElement,
+  ).toHaveProperty("disabled", false);
+});
+
+it("keeps lite available while model status is unknown", async () => {
+  prepare("pro");
+  const user = userEvent.setup();
+  render(
+    <MemoryModeSettings
+      hasActiveModel={false}
+      modelStateKnown={false}
+      onConfigureModel={vi.fn()}
+    />,
+  );
+
+  await user.click(await screen.findByRole("combobox", { name: "当前模式" }));
+  expect(
+    screen.getByRole("option", { name: /基础记忆（lite）/ }),
+  ).toHaveProperty("disabled", false);
+  expect(
+    screen.getByRole("option", { name: /智能记忆（pro）/ }),
+  ).toHaveProperty("disabled", true);
+  expect(
+    screen.getByRole("option", { name: /深度记忆（ultra）/ }),
+  ).toHaveProperty("disabled", true);
+});

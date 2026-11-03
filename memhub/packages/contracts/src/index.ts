@@ -902,6 +902,98 @@ export interface MemoryProcessingBlock {
   count: number;
 }
 
+export type MemoryPipelineMode = "lite" | "pro" | "ultra";
+
+export interface GraphBuildUser {
+  state: "pending" | "running" | "succeeded" | "failed";
+  memories_scanned: number | null;
+  nodes: number | null;
+  error_code: string | null;
+}
+
+export interface GraphBuildState {
+  state: "idle" | "running" | "succeeded" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  users: Record<string, GraphBuildUser>;
+}
+
+export interface EvolveSchedule {
+  enabled: boolean;
+  time: string;
+}
+
+export interface EvolveRunReceipt {
+  run_id: string;
+  user_id: string;
+  agent_id: string;
+  max_batches: number | null;
+  trigger: "manual" | "scheduled";
+  state: "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  rounds: number;
+  tasks_processed: number;
+  batch_failures: number;
+  cycle_status: string | null;
+  should_continue: boolean | null;
+  continuation_reason: string | null;
+  remaining_clusters: number | null;
+  remaining_actionable_clusters: number | null;
+  remaining_fresh_facts: number | null;
+  capped: boolean;
+  elapsed_ms: number;
+  error_code: string | null;
+  failure_kind: string | null;
+  request_id: string | null;
+}
+
+export interface UserEvolveState {
+  last_run_at: string | null;
+  last_result: EvolveRunReceipt | null;
+  last_error: string | null;
+}
+
+export interface EvolveOverview {
+  mode: MemoryPipelineMode;
+  schedule: EvolveSchedule;
+  users: Record<string, UserEvolveState>;
+  running: EvolveRunReceipt[];
+}
+
+export interface MemoryModeState {
+  mode: MemoryPipelineMode;
+  configured_mode: MemoryPipelineMode;
+  explicitly_configured: boolean;
+  forced_by_env: boolean;
+  modes: MemoryPipelineMode[];
+  graph_build: GraphBuildState;
+}
+
+export interface MemoryModeChange extends MemoryModeState {
+  previous_mode: MemoryPipelineMode;
+  effects: Array<
+    | "earlier_raw_not_extracted"
+    | "higher_mode_memories_hidden"
+    | "existing_memories_added_to_graph"
+    | "evolve_stopped"
+    | "lite_search_stops"
+    | "graph_backfill_already_running"
+  >;
+}
+
+export interface MemoryPipelineStatus {
+  mode: MemoryPipelineMode;
+  configured_mode: MemoryPipelineMode;
+  forced_by_env: boolean;
+  evolve: EvolveOverview;
+  last_evolve_at: string | null;
+  graph_build: GraphBuildState;
+  features: Record<string, boolean | number>;
+  ui_language?: string | null;
+  sdk_language?: string;
+}
+
 export interface MemoryProcessingSummary {
   pending: number;
   /** `pending` split by how recent the evidence is: what arrived today, and
@@ -963,6 +1055,16 @@ export interface MemoryProcessingSummary {
   llm_backoff_until?: string | null;
   /** The provider failure behind the pause, as a stable code. */
   llm_backoff_error?: string | null;
+  /** The active memory pipeline and its graph/evolve status. */
+  pipeline?: MemoryPipelineStatus | null;
+  /** A running embedding switch or startup merge pauses mode mutations. */
+  embedding_switch?: {
+    job_id?: string;
+    kind: "switch" | "merge";
+    state: string;
+    percent?: number | null;
+    eta_s?: number | null;
+  } | null;
   metrics?: {
     raw_evidence: number;
     complete_turns: number;

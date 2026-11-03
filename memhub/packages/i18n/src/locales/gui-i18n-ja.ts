@@ -1,7 +1,9 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { modeJapaneseMessages } from "../gui-i18n-mode.js";
 
 /** Japanese (ja) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const japaneseMessages: Record<MessageKey, string> = {
+  ...modeJapaneseMessages,
   "connectionFallback.title": "ほかのツールを接続",
   "connectionFallback.desktopOnly":
     "ローカルのペアリングはデスクトップアプリでのみ利用できます。",
@@ -77,6 +79,14 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "元の会話を検索できませんでした。もう一度お試しください。",
   "sdk.raw.recent": "最近の元の会話",
+  "sdk.raw.empty":
+    "元の会話はまだありません。ソースを接続すると、ここに表示されます。",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "基本メモリを使用中です。新しい会話は原文として保存され、高度なメモリは生成されません。既存の高度なメモリは保持されますが、現在は表示も呼び出しもされません。",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "スマートメモリを使用中です。モデルが新しい会話を高度なメモリに整理します。",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "ディープメモリを使用中です。新しい会話から高度なメモリを生成し、知識グラフと evolve が統合を続けます。",
   "sdk.raw.found": "{count} 件見つかりました",
   "sdk.raw.found.one": "{count} 件見つかりました",
   "memoryInspector.emptyHint": "ソース、内容、変更履歴を確認できます。",

@@ -194,6 +194,105 @@
   margin: 0;
   text-wrap: balance;
 }
+.r6-memory-mode-settings {
+  margin: 0 0 32px;
+  padding: 0 0 32px;
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-mode-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.r6-settings .r6-memory-mode-settings .r6-mode-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 32px;
+}
+.r6-mode-heading p {
+  margin: 4px 0 0;
+  color: #5e6e7a;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-settings .r6-mode-setting-row {
+  max-width: none;
+  margin-top: 4px;
+}
+.r6-settings .r6-mode-option-menu {
+  width: 100%;
+  max-width: 760px;
+}
+.r6-settings
+  .r6-mode-option-menu.r6-language-option-menu
+  .om-option-menu-button {
+  height: auto;
+  min-height: 68px;
+  padding: 10px 44px 10px 14px;
+  white-space: normal;
+}
+.r6-settings
+  .r6-mode-option-menu.r6-language-option-menu
+  .om-option-menu-button::after {
+  top: 27px;
+}
+.r6-mode-option-menu .om-option-menu-copy,
+.r6-mode-option-menu-panel .om-option-menu-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.r6-mode-option-menu .om-option-menu-copy > span,
+.r6-mode-option-menu-panel .om-option-menu-copy > span {
+  color: #304757;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+}
+.r6-mode-option-menu .om-option-menu-copy > small,
+.r6-mode-option-menu-panel .om-option-menu-copy > small {
+  color: #5e6e7a;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+.r6-language-option-menu-panel--settings.r6-mode-option-menu-panel
+  [role="option"] {
+  min-height: 62px;
+  padding: 9px 10px;
+  white-space: normal;
+}
+.r6-settings-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f1f5f8;
+  color: #405665;
+  font-size: 13px;
+  line-height: 22px;
+}
+.r6-evolve-settings {
+  margin-top: 20px;
+  border-top: 1px solid #d8e2ea;
+}
+.r6-evolve-settings input[type="time"] {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #c6d2da;
+  border-radius: 8px;
+  color: #304757;
+  background: #fff;
+}
+.r6-settings-dialog ul {
+  margin: 14px 0 20px;
+  padding-left: 20px;
+  color: #4f6373;
+  font-size: 13px;
+  line-height: 22px;
+}
 .r6-settings .r6-setting-row {
   box-sizing: border-box;
   display: flex;

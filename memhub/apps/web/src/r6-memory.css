@@ -22,6 +22,16 @@
   font-size: 13px;
   color: #637786;
 }
+.r6-memory .memory-mode-notice {
+  margin: -8px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid #d5dfe8;
+  border-radius: 8px;
+  background: #f1f5f8;
+  color: #405665;
+  font-size: 13px;
+  line-height: 22px;
+}
 .r6-memory .memory-pending-add {
   display: flex;
   align-items: center;

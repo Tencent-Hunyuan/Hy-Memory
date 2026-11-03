@@ -2,8 +2,9 @@ import type { SdkRawContextItem, SdkRawRecord } from "@one-memory/contracts";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { getSdkRaw, searchSdkRaw } from "./api";
 import { useGuiLanguage } from "./gui-language";
+import { subscribePoll } from "./poll-scheduler";
 
-export function SdkRawHistory() {
+export function SdkRawHistory({ active = true }: { active?: boolean }) {
   const { locale, t, tn } = useGuiLanguage();
   const translation = useRef(t);
   translation.current = t;
@@ -11,35 +12,67 @@ export function SdkRawHistory() {
   const [results, setResults] = useState<SdkRawContextItem[] | null>(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
+  const [errorKind, setErrorKind] = useState<"load" | "search" | null>(null);
+  const errorKindRef = useRef<"load" | "search" | null>(null);
+  const searchEpoch = useRef(0);
   const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision is the explicit retry trigger.
   useEffect(() => {
+    if (!active) return;
     let current = true;
-    void getSdkRaw({ limit: 100 }).then(
-      (page) => {
-        if (current) setRecent(page.items);
-      },
-      () => {
-        if (current) setError(translation.current("sdk.raw.loadFailed"));
-      },
-    );
+    const startedBeforeSearch = searchEpoch.current;
+    const consume = (value: unknown) => {
+      if (!current) return;
+      setRecent((value as Awaited<ReturnType<typeof getSdkRaw>>).items);
+      if (errorKindRef.current !== "search") {
+        errorKindRef.current = null;
+        setError("");
+        setErrorKind(null);
+      }
+    };
+    void getSdkRaw({ limit: 100 }).then(consume, () => {
+      if (current && startedBeforeSearch === searchEpoch.current) {
+        setError(translation.current("sdk.raw.loadFailed"));
+        errorKindRef.current = "load";
+        setErrorKind("load");
+      }
+    });
+    const stop = subscribePoll({
+      key: "sdk-raw-history",
+      intervalMs: 12_000,
+      fetch: () => getSdkRaw({ limit: 100 }),
+      onValue: consume,
+    });
     return () => {
       current = false;
+      stop();
     };
-  }, []);
+  }, [active, revision]);
+
+  async function runSearch(value: string) {
+    searchEpoch.current += 1;
+    setBusy(true);
+    setResults(null);
+    setError("");
+    errorKindRef.current = null;
+    setErrorKind(null);
+    try {
+      setResults(await searchSdkRaw(value));
+    } catch {
+      setError(t("sdk.raw.searchFailed"));
+      errorKindRef.current = "search";
+      setErrorKind("search");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!query.trim()) return;
-    setBusy(true);
-    setError("");
-    try {
-      setResults(await searchSdkRaw(query.trim()));
-    } catch {
-      setError(t("sdk.raw.searchFailed"));
-    } finally {
-      setBusy(false);
-    }
+    await runSearch(query.trim());
   }
 
   const items = results ?? recent.map(asContextItem);
@@ -57,12 +90,35 @@ export function SdkRawHistory() {
           {busy ? t("sdk.raw.searching") : t("sdk.raw.search")}
         </button>
       </form>
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? (
+        <p role="alert">
+          {error}{" "}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (errorKind === "search" && query.trim()) {
+                void runSearch(query.trim());
+              } else {
+                setError("");
+                errorKindRef.current = null;
+                setErrorKind(null);
+                setRevision((value) => value + 1);
+              }
+            }}
+          >
+            {t("connectionFallback.retry")}
+          </button>
+        </p>
+      ) : null}
       <p aria-live="polite">
         {results === null
           ? t("sdk.raw.recent")
           : tn("sdk.raw.found", items.length)}
       </p>
+      {!error && results === null && items.length === 0 ? (
+        <p>{t("sdk.raw.empty")}</p>
+      ) : null}
       <ol>
         {items.map((item) => (
           <li key={item.raw_id}>

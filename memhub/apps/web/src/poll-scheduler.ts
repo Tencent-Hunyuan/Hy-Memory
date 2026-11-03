@@ -29,6 +29,7 @@ export type PollKey =
   | "calls"
   | "model-profiles"
   | "memory-add-processing"
+  | "sdk-raw-history"
   | "health";
 
 export interface PollTask {

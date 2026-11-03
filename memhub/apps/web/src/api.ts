@@ -2,6 +2,9 @@ import {
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type DetectionResponse,
+  type EvolveOverview,
+  type EvolveRunReceipt,
+  type EvolveSchedule,
   type ExtractionSettings,
   type ExtractionWindowPreset,
   type GraphWidthDecision,
@@ -17,6 +20,9 @@ import {
   type MemoryAddInput,
   type MemoryAddReceipt,
   type MemoryGraphResponse,
+  type MemoryModeChange,
+  type MemoryModeState,
+  type MemoryPipelineMode,
   type MemoryProcessingSummary,
   type ModelCreationOperation,
   type ModelProbeOperationReceipt,
@@ -789,30 +795,34 @@ export async function getSdkRaw({
   source,
   offset = 0,
   limit = 100,
+  signal,
 }: {
   source?: string;
   offset?: number;
   limit?: number;
+  signal?: AbortSignal;
 } = {}): Promise<SdkRawPage> {
   const response = await client.get<SdkRawPage>("/api/v2/raw", {
     params: { source, offset, limit },
+    signal,
   });
   return response.data;
 }
 
 export async function searchSdkRaw(
   query: string,
-  signal?: AbortSignal,
+  options: { source?: string; signal?: AbortSignal } = {},
 ): Promise<SdkRawContextItem[]> {
   const response = await client.post(
     "/api/v2/context/search",
     {
       query,
       kinds: ["raw"],
+      ...(options.source ? { include_sources: [options.source] } : {}),
       limit: 20,
       character_budget: 12_000,
     },
-    { signal, timeout: 10_000 },
+    { signal: options.signal, timeout: 10_000 },
   );
   const items = response.data?.items;
   return Array.isArray(items)
@@ -904,6 +914,56 @@ export async function getMemoryProcessing(): Promise<MemoryProcessingSummary> {
   const response = await client.get<MemoryProcessingSummary>(
     "/api/v1/memory-processing",
   );
+  return response.data;
+}
+
+export async function getMemoryMode(): Promise<MemoryModeState> {
+  const response = await client.get<MemoryModeState>(
+    "/api/v1/settings/memory-mode",
+  );
+  return response.data;
+}
+
+export async function setMemoryMode(
+  mode: MemoryPipelineMode,
+): Promise<MemoryModeChange> {
+  const response = await client.put<MemoryModeChange>(
+    "/api/v1/settings/memory-mode",
+    { mode },
+  );
+  return response.data;
+}
+
+export async function getEvolveSchedule(): Promise<EvolveSchedule> {
+  const response = await client.get<EvolveSchedule>(
+    "/api/v1/settings/evolve-schedule",
+  );
+  return response.data;
+}
+
+export async function setEvolveSchedule(
+  update: Partial<EvolveSchedule>,
+): Promise<EvolveSchedule> {
+  const response = await client.put<EvolveSchedule>(
+    "/api/v1/settings/evolve-schedule",
+    update,
+  );
+  return response.data;
+}
+
+export async function getEvolveOverview(
+  userId = "local",
+): Promise<EvolveOverview> {
+  const response = await client.get<EvolveOverview>("/api/v2/evolve", {
+    params: { user_id: userId },
+  });
+  return response.data;
+}
+
+export async function startEvolve(userId = "local"): Promise<EvolveRunReceipt> {
+  const response = await client.post<EvolveRunReceipt>("/api/v2/evolve", {
+    user_id: userId,
+  });
   return response.data;
 }
 

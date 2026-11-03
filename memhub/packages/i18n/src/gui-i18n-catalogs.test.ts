@@ -29,6 +29,18 @@ import {
   mergeCatalogs,
   spanishMessages,
 } from "./gui-i18n-messages.js";
+import {
+  modeEnglishMessages,
+  modeFrenchMessages,
+  modeGermanMessages,
+  modeIndonesianMessages,
+  modeJapaneseMessages,
+  modeKoreanMessages,
+  modePortugueseMessages,
+  modeRussianMessages,
+  modeSpanishMessages,
+  modeTraditionalChineseMessages,
+} from "./gui-i18n-mode.js";
 
 const placeholders = (text: string) =>
   [...text.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]).sort();
@@ -228,6 +240,27 @@ describe("English catalog", () => {
         count: 2,
       }),
     ).toContain("2");
+  });
+});
+
+describe("Mode catalog", () => {
+  it("does not leave non-English locales on English fallback copy", () => {
+    const locales = [
+      modeSpanishMessages,
+      modeTraditionalChineseMessages,
+      modeJapaneseMessages,
+      modeGermanMessages,
+      modePortugueseMessages,
+      modeFrenchMessages,
+      modeKoreanMessages,
+      modeRussianMessages,
+      modeIndonesianMessages,
+    ];
+    for (const messages of locales)
+      for (const key of Object.keys(modeEnglishMessages) as Array<
+        keyof typeof modeEnglishMessages
+      >)
+        expect(messages[key], key).not.toBe(modeEnglishMessages[key]);
   });
 });
 

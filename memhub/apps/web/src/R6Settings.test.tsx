@@ -27,7 +27,7 @@ it("changes settings copy live without rereading profiles or changing permission
     }),
   ).toBeNull();
   const reads = vi.mocked(getModelProfiles).mock.calls.length;
-  await user.click(screen.getByRole("combobox"));
+  await user.click(screen.getByRole("combobox", { name: "Idioma" }));
   await user.click(screen.getByRole("option", { name: "简体中文" }));
   expect(await screen.findByRole("heading", { name: "记忆模型" })).toBeTruthy();
   expect(vi.mocked(getModelProfiles).mock.calls).toHaveLength(reads);
@@ -48,6 +48,36 @@ vi.mock("./api", () => ({
     imports_unaffected: true,
   }),
   setSedimentation: vi.fn(),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  }),
+  setMemoryMode: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  getEvolveOverview: vi.fn().mockResolvedValue({
+    mode: "pro",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  }),
+  startEvolve: vi.fn(),
+  getMemoryProcessing: vi.fn().mockResolvedValue({
+    embedding_switch: null,
+  }),
+  apiErrorCode: vi.fn().mockReturnValue(null),
 }));
 vi.mock("./ModelSettings", async () => {
   const { createElement, useImperativeHandle } = await import("react");
@@ -97,8 +127,8 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   } as NonNullable<typeof window.oneMemory>;
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
-  expect(screen.getByRole("combobox")).toBeTruthy();
-  await user.click(screen.getByRole("combobox"));
+  expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
+  await user.click(screen.getByRole("combobox", { name: "语言" }));
   expect(screen.getAllByRole("option")).toHaveLength(12);
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "连接其他应用" }));

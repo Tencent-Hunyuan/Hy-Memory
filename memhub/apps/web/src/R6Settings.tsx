@@ -1,4 +1,4 @@
-import type { ModelProfile } from "@one-memory/contracts";
+import type { MemoryPipelineMode, ModelProfile } from "@one-memory/contracts";
 import { Download, RefreshCw } from "lucide-react";
 import {
   useCallback,
@@ -12,6 +12,7 @@ import { getModelProfiles, setSedimentation } from "./api";
 import { ConnectionFallback } from "./ConnectionFallback";
 import { exportDiagnosticsFile } from "./diagnostics-export";
 import { LanguageSelector } from "./LanguageSelector";
+import { MemoryModeSettings } from "./MemoryModeSettings";
 import { ModelSettings, type ModelSettingsActions } from "./ModelSettings";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
@@ -30,7 +31,7 @@ import "./r6-settings.css";
 type Group = "model" | "connections" | "help";
 
 const labels: Record<Group, string> = {
-  model: "模型",
+  model: "记忆模式与模型",
   connections: "连接其他应用",
   help: "帮助与诊断",
 };
@@ -67,6 +68,9 @@ export function R6Settings({
   const [configurationRefusal, setConfigurationRefusal] = useState(false);
   const [modelVersion, setModelVersion] = useState(0);
   const [configurationOpen, setConfigurationOpen] = useState(false);
+  const [memoryMode, setMemoryModeState] = useState<MemoryPipelineMode | null>(
+    null,
+  );
   const [quitOpen, setQuitOpen] = useState(false);
   const [quitting, setQuitting] = useState(false);
   const [quitError, setQuitError] = useState("");
@@ -292,6 +296,12 @@ export function R6Settings({
             hidden={group !== "model"}
             className="r6-settings-model"
           >
+            <MemoryModeSettings
+              hasActiveModel={currentModel !== null}
+              modelStateKnown={profiles !== null && !modelError}
+              onConfigureModel={openConfiguration}
+              onModeChange={setMemoryModeState}
+            />
             <h2>{text("记忆模型")}</h2>
             <div className="r6-model-overview">
               <p className="r6-model-caption">{text("当前模型")}</p>
@@ -344,7 +354,7 @@ export function R6Settings({
                   )}
                 </p>
               )}
-              {currentModel && (
+              {currentModel && memoryMode !== "lite" && (
                 <div className="r6-setting-row">
                   <div>
                     <h3>{text("用模型沉淀记忆")}</h3>

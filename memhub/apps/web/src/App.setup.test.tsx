@@ -37,6 +37,36 @@ const { getOnboarding, sources, modelProps, mutations } = vi.hoisted(() => ({
 vi.mock("./api", () => ({
   getOnboarding,
   getModelProfiles: vi.fn().mockResolvedValue([]),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  }),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  getEvolveOverview: vi.fn().mockResolvedValue({
+    mode: "pro",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  }),
+  getMemoryProcessing: vi.fn().mockResolvedValue({
+    embedding_switch: null,
+  }),
+  setMemoryMode: vi.fn(),
+  setEvolveSchedule: vi.fn(),
+  startEvolve: vi.fn(),
+  apiErrorCode: vi.fn().mockReturnValue(null),
   getSources: vi.fn().mockResolvedValue(sources),
   ...mutations,
 }));
@@ -119,7 +149,7 @@ it("enters D47 settings without a tour or mandatory second scope-confirmation fl
   ).toBeNull();
   noModelWrites();
   expect(screen.queryByRole("button", { name: "管理已有授权" })).toBeNull();
-  expect(screen.getByRole("button", { name: "模型" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "记忆模式与模型" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "连接其他应用" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "帮助与诊断" })).toBeTruthy();
   noModelWrites();
@@ -188,7 +218,7 @@ it("keeps an open model draft while switching settings groups", async () => {
     "unsaved draft",
   );
   await userEvent.click(screen.getByRole("button", { name: "连接其他应用" }));
-  await userEvent.click(screen.getByRole("button", { name: "模型" }));
+  await userEvent.click(screen.getByRole("button", { name: "记忆模式与模型" }));
   expect(window.location.search).toBe("?view=settings");
   expect(screen.getByLabelText("保留的模型草稿")).toHaveProperty(
     "value",

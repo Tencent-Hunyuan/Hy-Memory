@@ -740,6 +740,8 @@ class MemoryModeState(BaseModel):
     mode: MemoryMode
     #: The saved setting (default pro).
     configured_mode: MemoryMode
+    #: True once a person chose a mode, including explicitly choosing pro.
+    explicitly_configured: bool
     #: `ONE_MEMORY_GRAPH_STORE` (dev) forces ultra over the setting.
     forced_by_env: bool
     modes: tuple[MemoryMode, ...] = MEMORY_MODES
@@ -1440,10 +1442,15 @@ def create_app(
                 service=app.state.evolve_service,
                 schedule=lambda: _config_store(app).evolve_schedule(),
                 users_with_memories=lambda: _users_with_memories(app),
+                lifecycle_lock=app.state.memory_mode_lock,
+                lifecycle_open=lambda: (
+                    _embedding_writes_open(app) and not app.state.memory_graph_backfill.running
+                ),
             )
             app.state.memory_graph_backfill = MemoryGraphBackfill(
                 coordinator=app.state.sdk_write_coordinator,
                 state=app.state.evolve_state_store,
+                lifecycle_open=lambda: _embedding_writes_open(app),
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -1842,6 +1849,16 @@ def create_app(
                         name="one-memory-durable-write-drain",
                     )
 
+                async def resume_graph_backfill() -> None:
+                    saved = app.state.evolve_state_store.graph_build()
+                    if saved.state != "running":
+                        return
+                    if _memory_mode(app) != "ultra":
+                        app.state.evolve_state_store.set_graph_build(GraphBuildState())
+                        return
+                    users = await asyncio.to_thread(_known_user_ids, app)
+                    app.state.memory_graph_backfill.recover(users)
+
                 async def start_evolve_schedule() -> None:
                     # Idle outside ultra: each tick asks the mode first.
                     app.state.evolve_scheduler.start()
@@ -1930,6 +1947,7 @@ def create_app(
                     # served from the live space throughout.
                     if sdk:
                         await step("embedding_spaces", resume_embedding_spaces)
+                        await step("graph_backfill", resume_graph_backfill)
                     await step("write_drain", start_write_drain)
                     if sdk:
                         await step("evolve_schedule", start_evolve_schedule)
@@ -4693,13 +4711,19 @@ def create_app(
         added to the graph once, in the background (`graph_build`). No raw is
         ever deleted, in any mode. See docs/contracts/memory-mode-evolve-v1.md.
         """
+        _refuse_pipeline_change_during_embedding_maintenance(app)
         if request.mode == "ultra" and importlib.util.find_spec("kuzu") is None:
             raise HTTPException(status_code=409, detail="graph_store_unavailable")
         store = _config_store(app)
         async with app.state.memory_mode_lock:
+            _refuse_pipeline_change_during_embedding_maintenance(app)
             previous_effective = _memory_mode(app)
+            if request.mode != previous_effective and (
+                _evolve_service(app).running() or app.state.memory_graph_backfill.running
+            ):
+                raise HTTPException(status_code=409, detail="memory_lifecycle_busy")
             previous = store.memory_mode()
-            if previous != request.mode or "memory_mode" not in store.document().model_fields_set:
+            if previous != request.mode or not store.memory_mode_explicitly_configured():
                 await asyncio.to_thread(store.set_memory_mode, request.mode)
             effective = _memory_mode(app)
             backfill: bool | None = None
@@ -4862,14 +4886,18 @@ def create_app(
         in flight and holds their next writes until it ends, and repeats
         while the SDK says there is more to do (up to 20 rounds).
         """
-        try:
-            return _evolve_service(app).start(
-                request.user_id,
-                agent_id=request.agent_id,
-                max_batches=request.max_batches,
-            )
-        except EvolveModeError:
-            raise HTTPException(status_code=409, detail="memory_mode_not_ultra") from None
+        async with app.state.memory_mode_lock:
+            _refuse_pipeline_change_during_embedding_maintenance(app)
+            if app.state.memory_graph_backfill.running:
+                raise HTTPException(status_code=409, detail="memory_lifecycle_busy")
+            try:
+                return _evolve_service(app).start(
+                    request.user_id,
+                    agent_id=request.agent_id,
+                    max_batches=request.max_batches,
+                )
+            except EvolveModeError:
+                raise HTTPException(status_code=409, detail="memory_mode_not_ultra") from None
 
     @app.get(
         "/api/v2/evolve",
@@ -6178,9 +6206,11 @@ def _memory_mode(app: FastAPI) -> MemoryMode:
 
 def _memory_mode_state(app: FastAPI) -> MemoryModeState:
     mode = _memory_mode(app)
+    store = _config_store(app)
     return MemoryModeState(
         mode=mode,
-        configured_mode=_config_store(app).memory_mode(),
+        configured_mode=store.memory_mode(),
+        explicitly_configured=store.memory_mode_explicitly_configured(),
         forced_by_env=graph_store_enabled(),
         graph_build=app.state.evolve_state_store.graph_build(),
     )
@@ -6610,6 +6640,12 @@ def _refuse_write_during_embedding_switch(app: FastAPI) -> None:
     """Direct edits and deletes wait for the switch: 409, never a write into the old space."""
     if not _embedding_writes_open(app):
         raise HTTPException(status_code=409, detail="embedding_switch_in_progress")
+
+
+def _refuse_pipeline_change_during_embedding_maintenance(app: FastAPI) -> None:
+    """Keep mode/evolve lifecycle changes out of embedding maintenance."""
+    if not _embedding_writes_open(app):
+        raise HTTPException(status_code=409, detail="embedding_maintenance_in_progress")
 
 
 _EMBEDDING_PATCH_FIELDS = frozenset(

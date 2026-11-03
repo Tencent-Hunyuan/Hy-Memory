@@ -1,4 +1,5 @@
 import { currentEnglishMessages } from "./gui-i18n-current.js";
+import { modeEnglishMessages } from "./gui-i18n-mode.js";
 
 // English translations integrated from PR #114.
 const baseEnglishMessages = {
@@ -1606,6 +1607,12 @@ const baseEnglishMessages = {
   "memory:来源与主题": "Sources and topics",
   "memory:记忆或原始对话": "Memories or original conversations",
   "memory:原始对话": "Original conversations",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Basic memory is active. New conversations are kept as original records and do not create advanced memories. Existing advanced memories stay saved, but are not shown or used for recall.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Smart memory is active. The model turns new conversations into advanced memories.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Deep memory is active. New conversations create advanced memories that the knowledge graph and evolve continue to consolidate.",
   "memory:地图组织方式": "Map grouping",
   "memory:筛选地图记忆": "Filter map memories",
   "memory:搜索原始对话": "Search original conversations",
@@ -2000,4 +2007,5 @@ const baseEnglishMessages = {
 export const englishMessages = {
   ...baseEnglishMessages,
   ...currentEnglishMessages,
+  ...modeEnglishMessages,
 } as const;

@@ -74,6 +74,8 @@ const { reads } = vi.hoisted(() => ({
     sdkGraph: vi.fn(),
     processing: vi.fn(),
     profiles: vi.fn(),
+    raw: vi.fn(),
+    rawSearch: vi.fn(),
   },
 }));
 vi.mock("./api", async (importOriginal) => ({
@@ -82,6 +84,8 @@ vi.mock("./api", async (importOriginal) => ({
   getSdkMemoryGraph: reads.sdkGraph,
   getMemoryProcessing: reads.processing,
   getModelProfiles: reads.profiles,
+  getSdkRaw: reads.raw,
+  searchSdkRaw: reads.rawSearch,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryAddComposer", () => ({
@@ -194,7 +198,129 @@ function setup() {
     completed: 1,
   });
   reads.profiles.mockResolvedValue([]);
+  reads.raw.mockResolvedValue({
+    items: [],
+    total: 0,
+    limit: 100,
+    offset: 0,
+  });
+  reads.rawSearch.mockResolvedValue([]);
 }
+
+it("shows raw conversations instead of advanced memory in lite", async () => {
+  setup();
+  reads.processing.mockResolvedValue({
+    running: 0,
+    pending: 0,
+    blocked_stages: [],
+    completed: 1,
+    pipeline: {
+      mode: "lite",
+      configured_mode: "lite",
+      forced_by_env: false,
+      evolve: {
+        mode: "lite",
+        schedule: { enabled: true, time: "03:00" },
+        users: {},
+        running: [],
+      },
+      last_evolve_at: null,
+      graph_build: {
+        state: "idle",
+        started_at: null,
+        finished_at: null,
+        users: {},
+      },
+      features: {},
+    },
+  });
+  reads.raw.mockResolvedValue({
+    items: [
+      {
+        raw_id: "raw-1",
+        content: "原始对话内容",
+        user_id: "local",
+        agent_id: "all-apps",
+        source: "cursor",
+        session_id: "session-1",
+        memory_at: null,
+        gmt_created: 1_761_000_000,
+        custom: {},
+        messages: [{ role: "user", content: "原始对话内容" }],
+      },
+    ],
+    total: 1,
+    limit: 20,
+    offset: 0,
+  });
+
+  render(<MemorySpace simplified />);
+
+  expect(await screen.findAllByText("原始对话内容")).toHaveLength(2);
+  expect(
+    document.querySelector(".core-memory-map")?.hasAttribute("hidden"),
+  ).toBe(false);
+  expect(screen.getByTestId("graph-owner")).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "搜索原始对话" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "补充记忆" })).toBeNull();
+  expect(reads.sdkLibrary).not.toHaveBeenCalled();
+  expect(reads.sdkGraph).not.toHaveBeenCalled();
+  expect(reads.raw).toHaveBeenCalledWith(
+    expect.objectContaining({
+      source: undefined,
+      offset: 0,
+      limit: 20,
+      signal: expect.any(AbortSignal),
+    }),
+  );
+  expect(screen.getByText(/当前为 lite/)).toBeTruthy();
+});
+
+it("does not request advanced memories before the pipeline mode is known", async () => {
+  setup();
+  let resolveProcessing!: (value: unknown) => void;
+  reads.processing.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveProcessing = resolve;
+    }),
+  );
+  render(<MemorySpace simplified />);
+
+  await act(async () => Promise.resolve());
+  expect(reads.sdkLibrary).not.toHaveBeenCalled();
+  expect(reads.sdkGraph).not.toHaveBeenCalled();
+
+  await act(async () => {
+    resolveProcessing({
+      running: 0,
+      pending: 0,
+      blocked_stages: [],
+      completed: 0,
+      pipeline: {
+        mode: "lite",
+        configured_mode: "lite",
+        forced_by_env: false,
+        evolve: {
+          mode: "lite",
+          schedule: { enabled: true, time: "03:00" },
+          users: {},
+          running: [],
+        },
+        last_evolve_at: null,
+        graph_build: {
+          state: "idle",
+          started_at: null,
+          finished_at: null,
+          users: {},
+        },
+        features: {},
+      },
+    });
+  });
+  await screen.findByText(/当前为 lite/);
+  expect(reads.sdkLibrary).not.toHaveBeenCalled();
+  expect(reads.sdkGraph).not.toHaveBeenCalled();
+});
 
 it("keeps an added memory visible while it waits for model processing", async () => {
   setup();

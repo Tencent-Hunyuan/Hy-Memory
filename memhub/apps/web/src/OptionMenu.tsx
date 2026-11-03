@@ -13,6 +13,7 @@ import { useGuiLanguage } from "./gui-language";
 export interface OptionMenuItem {
   value: string;
   label: string;
+  description?: string;
   disabled?: boolean;
   lang?: string;
 }
@@ -265,7 +266,14 @@ export function OptionMenu(props: {
           }
         }}
       >
-        {visibleLabel}
+        {selected?.description ? (
+          <span className="om-option-menu-copy">
+            <span>{visibleLabel}</span>
+            <small>{selected.description}</small>
+          </span>
+        ) : (
+          visibleLabel
+        )}
       </button>
       {open &&
         createPortal(
@@ -298,7 +306,14 @@ export function OptionMenu(props: {
                 }}
                 onClick={() => choose(index)}
               >
-                {item.label}
+                {item.description ? (
+                  <span className="om-option-menu-copy">
+                    <span>{item.label}</span>
+                    <small>{item.description}</small>
+                  </span>
+                ) : (
+                  item.label
+                )}
               </button>
             ))}
           </div>,
