@@ -389,7 +389,7 @@ it("hides the previous source graph until the all-applications graph settles", a
     expect(screen.getByTestId("map-graph-loading").textContent).toBe("true"),
   );
   expect(screen.getByTestId("map-nodes").textContent).toBe("none");
-  // Waiting for the graph is not page staleness: the list stays usable.
+  expect(screen.getByTestId("map-memories").textContent).toBe("");
   expect(screen.getByTestId("map-stale").textContent).toBe("false");
 
   await act(async () => {
@@ -419,6 +419,7 @@ it("hides the previous source graph until the all-applications graph settles", a
     expect(screen.getByTestId("map-graph-loading").textContent).toBe("true"),
   );
   expect(screen.getByTestId("map-nodes").textContent).toBe("none");
+  expect(screen.getByTestId("map-memories").textContent).toBe("");
   expect(api.sdkGraph).toHaveBeenCalledTimes(graphCalls);
 
   await act(async () => releaseSearch(searchPage));

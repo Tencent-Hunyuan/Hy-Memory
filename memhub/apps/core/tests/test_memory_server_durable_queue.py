@@ -1045,7 +1045,7 @@ def test_sdk_write_processor_calls_add_once_with_public_scope_and_receipt() -> N
     )
 
     async def run() -> SdkWriteReceipt:
-        async def before() -> None:
+        async def before(_requires_generation: bool) -> None:
             client.events.append("before")
 
         return await processor.process_sdk_job(
@@ -1105,7 +1105,7 @@ def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_additions
     processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
 
     async def run() -> SdkWriteReceipt:
-        async def before() -> None:
+        async def before(_requires_generation: bool) -> None:
             client.events.append("before")
 
         return await processor.process_sdk_job(
@@ -1260,7 +1260,7 @@ def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeyp
 
     async def process(self, records, *, request_id, before_hy_invocation):
         client = await self._client_handle.client()
-        await before_hy_invocation()
+        await before_hy_invocation(getattr(client, "mode", None) != "lite")
         seen.append((client.profile_id, client.closed))
         if client.profile_id == "profile-a":
             await writing.wait()
@@ -1270,7 +1270,7 @@ def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeyp
 
     monkeypatch.setattr(sdk_write_processor.SdkWriteProcessor, "process_sdk_job", process)
 
-    async def noop():
+    async def noop(_requires_generation: bool):
         return None
 
     async def scenario():
@@ -4758,7 +4758,7 @@ def test_sedimentation_pause_releases_claim_without_spending_an_attempt(tmp_path
     drain = DurableWriteDrain(queue, execute=_never_execute, owner="pause-owner")
     assert drain.claim(limit=1) == (record.job_id,)
 
-    async def refuse_before_hy(_source_id, _mark_invoked):
+    async def refuse_before_hy(_source_id, _requires_generation, _mark_invoked):
         raise RuntimeError("model_sedimentation_disabled")
 
     asyncio.run(

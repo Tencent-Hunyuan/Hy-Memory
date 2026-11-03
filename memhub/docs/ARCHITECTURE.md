@@ -102,7 +102,8 @@ Periodic polling / fs watch live in Core. UI does not schedule scans.
 ```text
 authorized harness / user action
   -> (optional) durable job row in MemHub queue  // 调度与租约，不是 memory 实体
-  -> sedimentation / model / source gates         // 管理面门禁
+  -> mode / source / embedding gates              // lite raw 不受生成模型开关影响
+  -> sedimentation / generation-model gate        // 仅 pro / ultra
   -> public HyMemoryClient write (raw / chat / coding / …)
   -> SDK stores (vector, graph, cache, history, coding, …) via SDK config/env
   -> MemHub may persist memory_id only for explicit management receipts / UI keys

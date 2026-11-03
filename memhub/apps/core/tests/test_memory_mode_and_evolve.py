@@ -307,7 +307,7 @@ class _SdkHandle:
         return None
 
 
-async def _noop() -> None:
+async def _noop(_requires_generation: bool) -> None:
     return None
 
 
@@ -330,14 +330,14 @@ def test_a_note_in_lite_is_stored_as_raw_and_never_calls_add_extracted() -> None
     ]
 
 
-def test_a_lite_write_runs_through_the_coordinator_without_a_model(monkeypatch) -> None:
+def test_a_lite_write_ignores_the_model_sedimentation_pause(monkeypatch) -> None:
     sdk = _WritingSdk()
     coordinator = sdk_write_processor.SdkWriteCoordinator(
         profiles=_Profiles(identity=None),  # type: ignore[arg-type]
         secrets=None,  # type: ignore[arg-type]
         data_dir=None,
         transport_factory=lambda _profile: None,
-        sedimentation_enabled=lambda: True,
+        sedimentation_enabled=lambda: False,
         memory_mode=lambda: "lite",
     )
     monkeypatch.setattr(
@@ -812,6 +812,13 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         assert current["explicitly_configured"] is False
         assert current["forced_by_env"] is False
         assert app.state.sdk_write_coordinator.memory_mode() == "pro"
+        assert (
+            await client.put("/api/v1/sedimentation", json={"enabled": False})
+        ).status_code == 200
+        from one_memory.api import _sedimentation_claim_enabled
+
+        app.state.history_import_gate_released = True
+        assert not _sedimentation_claim_enabled(app, "one-memory-manual")
 
         lite = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
         assert lite.status_code == 200, lite.text
@@ -822,10 +829,7 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         assert app.state.sdk_write_coordinator.memory_mode() == "lite"
         assert _sdk_client_handle(app).memory_mode() == "lite"
         # lite claims queued work without a generation model.
-        from one_memory.api import _sedimentation_claim_enabled
-
         assert app.state.model_profile_store.active_identity() is None
-        app.state.history_import_gate_released = True
         assert _sedimentation_claim_enabled(app, "one-memory-manual")
 
         ultra = await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
@@ -847,6 +851,28 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         forced = (await client.get("/api/v1/settings/memory-mode")).json()
         assert forced["mode"] == "ultra" and forced["configured_mode"] == "pro"
         assert forced["forced_by_env"] is True
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_lite_startup_readmits_jobs_while_model_sedimentation_is_off(tmp_path, monkeypatch) -> None:
+    store = ConfigStore(tmp_path / "data")
+    store.set_memory_mode("lite")
+    store.set_sedimentation_enabled(False)
+    resumed = asyncio.Event()
+    original = SdkMemoryRuntime.resume_allowed
+
+    async def resume_allowed(runtime):
+        await original(runtime)
+        resumed.set()
+
+    monkeypatch.setattr(SdkMemoryRuntime, "resume_allowed", resume_allowed)
+
+    async def scenario(app, _sdk, _client):
+        await asyncio.wait_for(resumed.wait(), 5)
+        assert app.state.config_store.sedimentation_enabled() is False
+        assert app.state.config_store.memory_mode() == "lite"
 
     run_app(tmp_path, monkeypatch, scenario)
 
@@ -1031,6 +1057,90 @@ def test_a_job_written_in_lite_stays_done_and_a_pending_job_takes_the_new_mode(
         assert await drain_once(queue) == 0
         assert queue.get("turn-lite").state == queue.get("turn-pro").state == "completed"
         assert seen == ["lite", "pro"]
+        await coordinator.close()
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_paused_model_still_writes_a_lite_job_through_the_durable_boundary(
+    tmp_path, monkeypatch
+) -> None:
+    from one_memory.api import _admit_pipeline_invocation
+    from one_memory.memory_server.durable_queue import DurableWriteDrain, execute_job
+
+    seen: list[str] = []
+
+    class Sdk:
+        mode = "lite"
+
+        def add(self, messages, **kwargs):
+            seen.append("add")
+            return {"success": True, "raw_ids": ["raw-lite"]}
+
+        def add_extracted(self, contents, **kwargs):
+            seen.append("add_extracted")
+            raise AssertionError("lite must never call add_extracted")
+
+    monkeypatch.setattr(
+        sdk_write_processor,
+        "SdkClientHandle",
+        lambda profile, **kwargs: _SdkHandle(Sdk(), "lite"),
+    )
+    coordinator = sdk_write_processor.SdkWriteCoordinator(
+        profiles=_Profiles(identity=None),  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=None,
+        transport_factory=lambda _profile: None,
+        sedimentation_enabled=lambda: False,
+        memory_mode=lambda: "lite",
+    )
+
+    async def never(_job_id):
+        return None
+
+    async def scenario(app, _sdk, client):
+        app.state.memory_write_drain.stop()
+        if app.state.memory_write_drain_task is not None:
+            await app.state.memory_write_drain_task
+            app.state.memory_write_drain_task = None
+        await client.put("/api/v1/sedimentation", json={"enabled": False})
+        await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
+        app.state.history_import_gate_released = True
+        written = await client.post(
+            "/api/v2/memory-writes",
+            json={
+                "request_id": "paused-lite-turn",
+                "session_id": "paused-lite-session",
+                "source_id": "one-memory-manual",
+                "messages": [
+                    {"role": "user", "content": "保留原始会话"},
+                    {"role": "assistant", "content": "已保留"},
+                ],
+            },
+        )
+        assert written.status_code == 202
+        queue = app.state.memory_write_queue
+        drain = DurableWriteDrain(queue, execute=never, lease=timedelta(seconds=30))
+        [job_id] = drain.claim(limit=1)
+        await execute_job(
+            job_id,
+            queue=queue,
+            supervisor=coordinator,
+            evidence=None,  # type: ignore[arg-type]
+            admit_hy_invocation=lambda source_id, requires_generation, mark: (
+                _admit_pipeline_invocation(
+                    app,
+                    source_id,
+                    requires_generation,
+                    mark,
+                )
+            ),
+        )
+        current = queue.get("paused-lite-turn")
+        assert current is not None and current.state == "completed"
+        assert current.sdk_raw_ids == ("raw-lite",)
+        assert seen == ["add"]
         await coordinator.close()
 
     run_app(tmp_path, monkeypatch, scenario)

@@ -2540,7 +2540,7 @@ async def execute_job(
     evidence: EvidenceStore,
     owner: str | None = None,
     source_writes_permitted: Callable[[str], bool] | None = None,
-    admit_hy_invocation: Callable[[str, Callable[[], Awaitable[bool]]], Awaitable[bool]]
+    admit_hy_invocation: Callable[[str, bool, Callable[[], Awaitable[bool]]], Awaitable[bool]]
     | None = None,
     model_failures: Callable[[], AbstractContextManager[ModelAttempt | None]] | None = None,
 ) -> None:
@@ -2593,7 +2593,7 @@ async def execute_job(
 
     hy_invoked = False
 
-    async def mark_hy_invocation() -> None:
+    async def mark_hy_invocation(requires_generation: bool) -> None:
         """Persist the durable boundary immediately before the real HY call."""
         nonlocal hy_invoked
         if hy_invoked:
@@ -2621,7 +2621,7 @@ async def execute_job(
             return await in_the_background(queue.mark_invoked, job_id, owner=owner)
 
         if admit_hy_invocation is not None:
-            admitted = await admit_hy_invocation(source_id, mark)
+            admitted = await admit_hy_invocation(source_id, requires_generation, mark)
         else:
             if source_writes_permitted is not None and not source_writes_permitted(source_id):
                 raise RuntimeError("model_content_source_disabled")

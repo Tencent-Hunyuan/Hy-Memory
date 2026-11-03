@@ -216,8 +216,13 @@ export function MemorySpace({
     processing?.pipeline?.mode ??
     (processingResolved && !processingFailed ? "pro" : null);
   const lite = pipelineMode === "lite";
-  const sdkPage =
-    sdkLibrary.settledMode === pipelineMode ? sdkLibrary.page : null;
+  const requestedQuery = sdkLibraryQuery.trim();
+  const sdkPageSettled =
+    sdkLibrary.settledMode === pipelineMode &&
+    sdkLibrary.settledSource === sdkLibrarySource &&
+    sdkLibrary.settledQuery.trim() === requestedQuery &&
+    sdkLibrary.page?.offset === sdkLibraryOffset;
+  const sdkPage = sdkPageSettled ? sdkLibrary.page : null;
   const sdkRequestedScope = JSON.stringify([
     pipelineMode,
     sdkLibraryQuery.trim(),
@@ -682,7 +687,7 @@ export function MemorySpace({
     setDetail(null);
     setSelectedRaw(null);
     if (lite) {
-      const record = rawRecords.current.get(memoryId);
+      let record = rawRecords.current.get(memoryId);
       if (!record) {
         setDetailLoad({
           memoryId,
@@ -690,6 +695,38 @@ export function MemorySpace({
           error: t("sdk.raw.loadFailed"),
         });
         return;
+      }
+      if ("kind" in record) {
+        setDetailLoad({ memoryId, status: "loading" });
+        try {
+          let offset = 0;
+          while (true) {
+            const page = await getSdkRaw({
+              source: record.source || undefined,
+              sessionId: record.session_id || undefined,
+              offset,
+              limit: 500,
+            });
+            const full = page.items.find((item) => item.raw_id === memoryId);
+            if (full) {
+              record = full;
+              rawRecords.current.set(memoryId, full);
+              break;
+            }
+            offset += page.items.length;
+            if (!page.items.length || offset >= page.total)
+              throw new Error("raw_not_found");
+          }
+        } catch {
+          if (epoch === detailEpoch.current)
+            setDetailLoad({
+              memoryId,
+              status: "failed",
+              error: t("sdk.raw.loadFailed"),
+            });
+          return;
+        }
+        if (epoch !== detailEpoch.current) return;
       }
       setSelectedRaw(record);
       setDetail(rawDetail(record));
@@ -831,9 +868,14 @@ export function MemorySpace({
       </div>
       <header className="memory-instrument-header">
         <div>
-          <h1 id="memory-title">
-            {simplified ? t("memory:记忆") : t("memory:记忆空间")}
-          </h1>
+          <div className="memory-title-line">
+            <h1 id="memory-title">
+              {simplified ? t("memory:记忆") : t("memory:记忆空间")}
+            </h1>
+            {simplified && pipelineMode ? (
+              <span className="memory-mode-label">{pipelineMode}</span>
+            ) : null}
+          </div>
           <span className="memory-loaded-count">
             {simplified && !management
               ? pipelineMode === null
@@ -869,22 +911,21 @@ export function MemorySpace({
               : null}
           </span>
         </div>
-        {!lite ? (
-          <MemoryAddComposer
-            suspended={!active}
-            onPendingChange={setPendingAdd}
-            onSaved={() => {
-              // A finished addition is a new memory: re-read the page now rather
-              // than leave it for the next poll.
-              bumpSdkMap();
-            }}
-            onOpenMemory={(id) => {
-              if (!simplified) setMode("library");
-              void open(id);
-            }}
-            onConfigureModel={onConfigureModel}
-          />
-        ) : null}
+        <MemoryAddComposer
+          suspended={!active}
+          rawOnly={lite}
+          onPendingChange={setPendingAdd}
+          onSaved={() => {
+            // A finished addition is new page content: re-read now rather than
+            // leave it for the next poll.
+            bumpSdkMap();
+          }}
+          onOpenMemory={(id) => {
+            if (!simplified) setMode("library");
+            void open(id);
+          }}
+          onConfigureModel={onConfigureModel}
+        />
         {!simplified && (
           <div
             className="memory-mode-tabs"
@@ -952,19 +993,6 @@ export function MemorySpace({
           </div>
         )}
       </header>
-      {simplified && pipelineMode ? (
-        <p className="memory-mode-notice" role="status">
-          {lite
-            ? t(
-                "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。",
-              )
-            : pipelineMode === "ultra"
-              ? t(
-                  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。",
-                )
-              : t("memory:当前使用智能记忆。新对话会由模型整理为高级记忆。")}
-        </p>
-      ) : null}
       {processing && (!simplified || managementOpen) ? (
         <details className="memory-processing-details">
           <summary>
@@ -1064,13 +1092,20 @@ export function MemorySpace({
           />
         </>
       ) : null}
-      {simplified && !lite && pendingAdd ? (
+      {simplified && pendingAdd ? (
         <p className="memory-pending-add" role="status">
           <span>
-            {t("memory:正在等待整理：")}
+            {lite
+              ? t(
+                  pendingAdd.state === "failed"
+                    ? "memory:原话已保存，整理未完成"
+                    : "memory:正在保存…",
+                )
+              : t("memory:正在等待整理：")}
+            {lite ? " " : null}
             {pendingAdd.text}
           </span>
-          {pendingAdd.state === "waiting_for_model" ? (
+          {!lite && pendingAdd.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
               {t("memory:配置整理模型")}
             </button>
