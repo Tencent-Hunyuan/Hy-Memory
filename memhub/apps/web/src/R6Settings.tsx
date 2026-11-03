@@ -1,5 +1,5 @@
 import type { MemoryPipelineMode, ModelProfile } from "@one-memory/contracts";
-import { Download, RefreshCw } from "lucide-react";
+import { Download } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -32,14 +32,9 @@ import {
 } from "./sedimentation-state";
 import "./r6-settings.css";
 
-type Group = "model" | "connections" | "help";
+type Group = "language" | "mode" | "models" | "connections" | "help";
 
-const labels: Record<Group, string> = {
-  model: "记忆模式与模型",
-  connections: "连接其他应用",
-  help: "帮助与诊断",
-};
-const primaryGroups: Group[] = ["model", "connections"];
+const primaryGroups: Group[] = ["language", "mode", "models", "connections"];
 
 function safeEndpoint(value: string | null) {
   if (!value) return "本机 / 受管端点";
@@ -66,10 +61,18 @@ export function R6Settings({
   const groups = showDiagnostics
     ? [...primaryGroups, "help" as const]
     : primaryGroups;
-  const [group, setGroup] = useState<Group>("model");
+  const groupLabel = (key: Group) => {
+    if (key === "language") return t("languageTitle");
+    if (key === "mode") return text("记忆模式");
+    if (key === "models") return text("模型配置");
+    if (key === "connections") return text("连接其他应用");
+    return text("帮助与诊断");
+  };
+  const [group, setGroup] = useState<Group>("mode");
   const [profiles, setProfiles] = useState<ModelProfile[] | null>(null);
   const [modelError, setModelError] = useState(false);
   const [configurationRefusal, setConfigurationRefusal] = useState(false);
+  const [modeHandoffMessage, setModeHandoffMessage] = useState("");
   const [modelVersion, setModelVersion] = useState(0);
   const [configurationOpen, setConfigurationOpen] = useState(false);
   const [configurationFocus, setConfigurationFocus] =
@@ -132,9 +135,8 @@ export function R6Settings({
   // biome-ignore lint/correctness/useExhaustiveDependencies: modelVersion is the explicit refresh trigger.
   useEffect(() => {
     if (!active) return;
-    if (group !== "model") return;
     void readModels();
-  }, [active, group, modelVersion, readModels]);
+  }, [active, modelVersion, readModels]);
 
   const readSedimentation = useCallback(async () => {
     try {
@@ -149,7 +151,7 @@ export function R6Settings({
 
   useEffect(() => {
     if (!active) return;
-    if (group !== "model") return;
+    if (group !== "models") return;
     void readSedimentation();
   }, [active, group, readSedimentation]);
 
@@ -281,7 +283,6 @@ export function R6Settings({
   return (
     <section className="r6-settings" aria-label={t("settings")}>
       <h1>{t("settings")}</h1>
-      <LanguageSelector />
       <div className="r6-settings-layout">
         <nav aria-label={text("设置分组")}>
           {groups.map((key) => (
@@ -292,39 +293,95 @@ export function R6Settings({
               aria-controls={`${id}-panel-${key}`}
               aria-current={group === key ? "page" : undefined}
               onKeyDown={moveGroupFocus}
-              onClick={() => setGroup(key)}
+              onClick={() => {
+                setModeHandoffMessage("");
+                setGroup(key);
+              }}
             >
-              {text(labels[key])}
+              {groupLabel(key)}
             </button>
           ))}
         </nav>
         <div className="r6-settings-content">
           <section
-            id={`${id}-panel-model`}
-            aria-labelledby={`${id}-nav-model`}
-            hidden={group !== "model"}
-            className="r6-settings-model"
+            id={`${id}-panel-language`}
+            aria-labelledby={`${id}-nav-language`}
+            hidden={group !== "language"}
+            className="r6-settings-language"
+          >
+            <LanguageSelector />
+          </section>
+          <section
+            id={`${id}-panel-mode`}
+            aria-labelledby={`${id}-nav-mode`}
+            hidden={group !== "mode"}
+            className="r6-settings-mode"
           >
             <MemoryModeSettings
               hasActiveModel={currentModel !== null}
               modelStateKnown={profiles !== null && !modelError}
-              onConfigureModel={() => openConfiguration("generation")}
+              onConfigureModel={(message) => {
+                setModeHandoffMessage(message ?? "");
+                setGroup("models");
+                openConfiguration("generation");
+                window.setTimeout(() => {
+                  document.getElementById(`${id}-model-title`)?.focus();
+                }, 0);
+              }}
               onModeChange={setMemoryModeState}
             />
+          </section>
+          <section
+            id={`${id}-panel-models`}
+            aria-labelledby={`${id}-nav-models`}
+            hidden={group !== "models"}
+            className="r6-settings-model"
+          >
             <div className="r6-model-heading">
               <div>
-                <h2 className="r6-model-title">{text("记忆模型")}</h2>
+                <h2
+                  id={`${id}-model-title`}
+                  className="r6-model-title"
+                  tabIndex={-1}
+                >
+                  {text("模型配置")}
+                </h2>
                 <p>{text("分别管理记忆整理与搜索所使用的模型。")}</p>
               </div>
-              <R6Button
-                variant="quiet"
-                aria-label={text("刷新模型状态")}
-                title={text("刷新模型状态")}
-                onClick={() => setModelVersion((value) => value + 1)}
-              >
-                <RefreshCw size={16} aria-hidden="true" />
-              </R6Button>
             </div>
+            {modeHandoffMessage ? (
+              <p className="r6-settings-note" role="status">
+                {text(modeHandoffMessage)}
+              </p>
+            ) : null}
+            {currentModel && (
+              <div className="r6-model-mode-status" role="status">
+                <strong>
+                  {text(
+                    memoryMode === "lite"
+                      ? "当前是基础记忆（lite）"
+                      : memoryMode === "ultra"
+                        ? "当前是深度记忆（ultra）"
+                        : memoryMode === "pro"
+                          ? "当前是智能记忆（pro）"
+                          : "正在读取记忆模式…",
+                  )}
+                </strong>
+                <p>
+                  {text(
+                    memoryMode === "lite"
+                      ? "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。"
+                      : memoryMode === "pro" || memoryMode === "ultra"
+                        ? sedimentation === null
+                          ? "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。"
+                          : sedimentation === false
+                            ? "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。"
+                            : "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。"
+                        : "模型配置已保留，确认记忆模式后会显示是否生效。",
+                  )}
+                </p>
+              </div>
+            )}
             <div className="r6-model-overview">
               <div className="r6-model-lane">
                 <div className="r6-model-lane-copy">

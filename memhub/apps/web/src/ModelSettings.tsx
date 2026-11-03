@@ -6,7 +6,7 @@ import type {
   ProbeCode,
   ProviderKind,
 } from "@one-memory/contracts";
-import { Check, Pencil, Plus, RefreshCw } from "lucide-react";
+import { Check, Pencil, Plus } from "lucide-react";
 import {
   type FormEvent,
   type Ref,
@@ -907,7 +907,6 @@ export function ModelSettings({
             disabled={locked}
             onClick={() => void models.refreshProfiles()}
           >
-            <RefreshCw size={16} aria-hidden="true" />
             {text("刷新配置列表")}
           </button>
         </div>

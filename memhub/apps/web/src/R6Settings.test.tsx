@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Ref } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { getModelProfiles, getSedimentation, setSedimentation } from "./api";
+import {
+  getMemoryMode,
+  getModelProfiles,
+  getSedimentation,
+  setSedimentation,
+} from "./api";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { queryClient, resetClient } from "./query-client";
 import { R6Settings } from "./R6Settings";
@@ -19,7 +30,7 @@ it("changes settings copy live without rereading profiles or changing permission
     </LanguageProvider>,
   );
   expect(
-    await screen.findByRole("heading", { name: "Modelo de memorias" }),
+    await screen.findByRole("heading", { name: "Modo de memoria" }),
   ).toBeTruthy();
   expect(
     screen.queryByRole("switch", {
@@ -27,9 +38,13 @@ it("changes settings copy live without rereading profiles or changing permission
     }),
   ).toBeNull();
   const reads = vi.mocked(getModelProfiles).mock.calls.length;
+  await user.click(
+    screen.getByRole("button", { name: "Idioma de la interfaz" }),
+  );
   await user.click(screen.getByRole("combobox", { name: "Idioma" }));
   await user.click(screen.getByRole("option", { name: "简体中文" }));
-  expect(await screen.findByRole("heading", { name: "记忆模型" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+  expect(await screen.findByRole("heading", { name: "模型配置" })).toBeTruthy();
   expect(vi.mocked(getModelProfiles).mock.calls).toHaveLength(reads);
 });
 vi.mock("./api", () => ({
@@ -138,6 +153,7 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   } as NonNullable<typeof window.oneMemory>;
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "界面语言" }));
   expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
   await user.click(screen.getByRole("combobox", { name: "语言" }));
   expect(screen.getAllByRole("option")).toHaveLength(12);
@@ -156,6 +172,67 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   expect(screen.queryByRole("button", { name: "帮助与诊断" })).toBeNull();
 });
 
+it("uses one sidebar hierarchy and explains when a saved model is inactive in lite", async () => {
+  vi.mocked(getMemoryMode).mockResolvedValueOnce({
+    mode: "lite",
+    configured_mode: "lite",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  });
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  expect(screen.getByRole("button", { name: "界面语言" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "记忆模式" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "模型配置" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "刷新记忆模式" })).toBeNull();
+
+  await user.click(screen.getByRole("button", { name: "界面语言" }));
+  expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
+  expect(await screen.findByText("当前是基础记忆（lite）")).toBeTruthy();
+  expect(
+    screen.getByText(/开启 pro 或 ultra 后，模型将生效并开始整理新对话/),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "刷新模型状态" })).toBeNull();
+});
+
+it("carries a missing-model explanation into model configuration and moves focus", async () => {
+  vi.mocked(getModelProfiles).mockResolvedValueOnce([]);
+  vi.mocked(getMemoryMode).mockResolvedValueOnce({
+    mode: "lite",
+    configured_mode: "lite",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  });
+  const user = userEvent.setup();
+  render(<R6Settings onDiagnostics={vi.fn()} />);
+
+  await user.click(
+    await screen.findByRole("radio", { name: /智能记忆（pro）/ }),
+  );
+
+  expect(
+    await screen.findByText("使用 pro 或 ultra 前需要先配置并启用生成模型。"),
+  ).toBeTruthy();
+  const heading = screen.getByRole("heading", { name: "模型配置" });
+  await waitFor(() => expect(document.activeElement).toBe(heading));
+});
+
 it("stops model sedimentation on one switch flip without touching the model config", async () => {
   const user = userEvent.setup();
   vi.mocked(setSedimentation).mockResolvedValue({
@@ -164,6 +241,7 @@ it("stops model sedimentation on one switch flip without touching the model conf
     imports_unaffected: true,
   });
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const toggle = await screen.findByRole("switch", { name: "用模型沉淀记忆" });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -182,6 +260,7 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
   const user = userEvent.setup();
   vi.mocked(setSedimentation).mockRejectedValue(new Error("offline"));
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const toggle = await screen.findByRole("switch", { name: "用模型沉淀记忆" });
   await user.click(toggle);
@@ -198,6 +277,7 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
 it("opens the model area even when a pending probe fences the editor, so recovery stays reachable", async () => {
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const generationLane = (
     await screen.findByRole("heading", { name: "记忆整理" })
@@ -219,13 +299,14 @@ it("reaches the same recovery entry when no model has been configured yet", asyn
   vi.mocked(getModelProfiles).mockResolvedValueOnce([]);
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const generationLane = (
     await screen.findByRole("heading", { name: "记忆整理" })
   ).closest(".r6-model-lane") as HTMLElement | null;
   if (!generationLane) throw new Error("Missing generation lane");
   await user.click(
-    within(generationLane).getByRole("button", { name: "配置模型" }),
+    await within(generationLane).findByRole("button", { name: "配置模型" }),
   );
 
   expect(screen.getByRole("button", { name: "核对测试结果" })).toBeTruthy();
@@ -242,6 +323,7 @@ it("reaches the same recovery entry when no model has been configured yet", asyn
 it("shows separate compact lanes and opens the requested presentation", async () => {
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "模型配置" }));
 
   const generationLane = (
     await screen.findByRole("heading", { name: "记忆整理" })
@@ -267,6 +349,7 @@ it("shows separate compact lanes and opens the requested presentation", async ()
 it("leaves the switch unusable when the state cannot be read", async () => {
   vi.mocked(getSedimentation).mockRejectedValueOnce(new Error("offline"));
   render(<R6Settings onDiagnostics={vi.fn()} />);
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
 
   const toggle = (await screen.findByRole("switch", {
     name: "用模型沉淀记忆",
