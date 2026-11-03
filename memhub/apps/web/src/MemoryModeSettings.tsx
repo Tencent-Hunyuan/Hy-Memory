@@ -18,8 +18,8 @@ import {
   setMemoryMode,
   startEvolve,
 } from "./api";
-import { useOnboardingTranslation } from "./onboarding-language";
 import { OptionMenu } from "./OptionMenu";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
 
 const MODE_COPY: Record<

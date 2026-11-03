@@ -105,9 +105,7 @@ export function rawLibraryPage(page: SdkRawPage): MemoryLibraryPage {
   return pageFor(page.items, page.total, page.offset, page.limit);
 }
 
-export function rawSearchPage(
-  items: SdkRawContextItem[],
-): MemoryLibraryPage {
+export function rawSearchPage(items: SdkRawContextItem[]): MemoryLibraryPage {
   return pageFor(items, items.length, 0, Math.max(items.length, 1));
 }
 
