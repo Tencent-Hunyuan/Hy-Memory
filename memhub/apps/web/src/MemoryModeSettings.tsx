@@ -7,7 +7,7 @@ import type {
   MemoryPipelineMode,
 } from "@one-memory/contracts";
 import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   apiErrorCode,
   getEvolveOverview,
@@ -19,6 +19,7 @@ import {
   startEvolve,
 } from "./api";
 import { useOnboardingTranslation } from "./onboarding-language";
+import { OptionMenu } from "./OptionMenu";
 import { R6Button, R6Switch } from "./R6Controls";
 
 const MODE_COPY: Record<
@@ -77,6 +78,7 @@ export function MemoryModeSettings({
   onModeChange?(mode: MemoryPipelineMode): void;
 }) {
   const { text } = useOnboardingTranslation();
+  const id = useId();
   const [state, setState] = useState<MemoryModeState | null>(null);
   const [schedule, setScheduleState] = useState<EvolveSchedule | null>(null);
   const [overview, setOverview] = useState<EvolveOverview | null>(null);
@@ -187,10 +189,7 @@ export function MemoryModeSettings({
       return;
     }
     setError("");
-    dialogOpener.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+    dialogOpener.current = document.getElementById(`${id}-select`);
     setPendingMode(mode);
   }
 
@@ -272,26 +271,31 @@ export function MemoryModeSettings({
           <RefreshCw size={16} aria-hidden="true" />
         </R6Button>
       </div>
-      <div className="r6-mode-options" aria-busy={state === null}>
-        {(["lite", "pro", "ultra"] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className="r6-mode-option"
-            aria-pressed={state?.mode === mode}
-            disabled={
-              !state ||
-              busy ||
-              lifecycleBusy ||
-              (mode !== "lite" && !modelStateKnown)
-            }
-            onClick={() => choose(mode)}
-          >
-            <strong>{text(MODE_COPY[mode].title)}</strong>
-            <span>{text(MODE_COPY[mode].description)}</span>
-            {state?.mode === mode ? <small>{text("当前模式")}</small> : null}
-          </button>
-        ))}
+      <div
+        className="r6-language-setting-row r6-mode-setting-row"
+        aria-busy={state === null}
+      >
+        <label id={`${id}-label`} htmlFor={`${id}-select`}>
+          {text("当前模式")}
+        </label>
+        <OptionMenu
+          id={`${id}-select`}
+          labelledBy={`${id}-label`}
+          value={state?.mode ?? ""}
+          disabled={!state || busy || lifecycleBusy}
+          options={(["lite", "pro", "ultra"] as const).map((mode) => ({
+            value: mode,
+            label: text(MODE_COPY[mode].title),
+            description: text(MODE_COPY[mode].description),
+            disabled: mode !== "lite" && !modelStateKnown,
+          }))}
+          className="r6-language-option-menu r6-mode-option-menu"
+          panelClassName="r6-language-option-menu-panel--settings r6-mode-option-menu-panel"
+          onChange={(value) => {
+            if (value === "lite" || value === "pro" || value === "ultra")
+              choose(value);
+          }}
+        />
       </div>
       {state?.forced_by_env ? (
         <p className="r6-settings-note" role="status">
@@ -388,7 +392,6 @@ export function MemoryModeSettings({
             <h2 id="memory-mode-confirm-title">
               {text("切换到 {mode}？").replace("{mode}", pendingMode)}
             </h2>
-            <p>{text(MODE_COPY[pendingMode].description)}</p>
             <ul>
               {plannedEffects(state?.mode ?? "pro", pendingMode).map(
                 (effect) => (

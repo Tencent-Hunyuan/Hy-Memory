@@ -55,6 +55,16 @@ function prepare(mode: "lite" | "pro" | "ultra" = "pro") {
   vi.mocked(getMemoryProcessing).mockResolvedValue({} as never);
 }
 
+async function chooseMode(
+  user: ReturnType<typeof userEvent.setup>,
+  name: RegExp,
+) {
+  const picker = await screen.findByRole("combobox", { name: "当前模式" });
+  await user.click(picker);
+  await user.click(screen.getByRole("option", { name }));
+  return picker;
+}
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -70,10 +80,8 @@ it("confirms the data effects before switching to lite", async () => {
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await user.click(
-    await screen.findByRole("button", { name: /基础记忆（lite）/ }),
-  );
-  expect(screen.getByText(/以前生成的高级记忆会继续保留/)).toBeTruthy();
+  await chooseMode(user, /基础记忆（lite）/);
+  expect(screen.getByText(/高级记忆会保留/)).toBeTruthy();
   expect(setMemoryMode).not.toHaveBeenCalled();
 
   await user.click(screen.getByRole("button", { name: "切换模式" }));
@@ -84,10 +92,7 @@ it("traps modal focus, closes on Escape and restores the mode-card focus", async
   prepare("pro");
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  const lite = await screen.findByRole("button", {
-    name: /基础记忆（lite）/,
-  });
-  await user.click(lite);
+  const lite = await chooseMode(user, /基础记忆（lite）/);
 
   const cancel = screen.getByRole("button", { name: "取消" });
   await waitFor(() => expect(document.activeElement).toBe(cancel));
@@ -106,9 +111,7 @@ it("keeps focus inside the modal while the mode change is pending", async () => 
   vi.mocked(setMemoryMode).mockReturnValue(new Promise(() => {}));
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  await user.click(
-    await screen.findByRole("button", { name: /基础记忆（lite）/ }),
-  );
+  await chooseMode(user, /基础记忆（lite）/);
   await user.click(screen.getByRole("button", { name: "切换模式" }));
 
   const modal = screen.getByRole("dialog");
@@ -125,9 +128,7 @@ it("routes to model setup instead of switching pro without a model", async () =>
     <MemoryModeSettings hasActiveModel={false} onConfigureModel={configure} />,
   );
 
-  await user.click(
-    await screen.findByRole("button", { name: /智能记忆（pro）/ }),
-  );
+  await chooseMode(user, /智能记忆（pro）/);
   expect(configure).toHaveBeenCalledTimes(1);
   expect(setMemoryMode).not.toHaveBeenCalled();
   expect(
@@ -154,7 +155,7 @@ it("ignores an older refresh that finishes after a newer mode read", async () =>
   prepare("pro");
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  await screen.findByRole("button", { name: /基础记忆（lite）/ });
+  const picker = await screen.findByRole("combobox", { name: "当前模式" });
 
   let resolveOld!: (value: ReturnType<typeof state>) => void;
   vi.mocked(getMemoryMode)
@@ -169,20 +170,12 @@ it("ignores an older refresh that finishes after a newer mode read", async () =>
   await user.click(refresh);
   await user.click(refresh);
   await waitFor(() =>
-    expect(
-      screen
-        .getByRole("button", { name: /基础记忆（lite）/ })
-        .getAttribute("aria-pressed"),
-    ).toBe("true"),
+    expect((picker as HTMLButtonElement).value).toBe("lite"),
   );
   resolveOld(state("pro"));
 
   await waitFor(() =>
-    expect(
-      screen
-        .getByRole("button", { name: /基础记忆（lite）/ })
-        .getAttribute("aria-pressed"),
-    ).toBe("true"),
+    expect((picker as HTMLButtonElement).value).toBe("lite"),
   );
 });
 
@@ -223,14 +216,32 @@ it("keeps the mode usable when an evolve status read fails", async () => {
 
   expect(
     (
-      await screen.findByRole("button", { name: /智能记忆（pro）/ })
-    ).getAttribute("aria-pressed"),
-  ).toBe("true");
+      await screen.findByRole("combobox", { name: "当前模式" })
+    ) as HTMLButtonElement,
+  ).toHaveProperty("disabled", false);
+});
+
+it("keeps lite available while model status is unknown", async () => {
+  prepare("pro");
+  const user = userEvent.setup();
+  render(
+    <MemoryModeSettings
+      hasActiveModel={false}
+      modelStateKnown={false}
+      onConfigureModel={vi.fn()}
+    />,
+  );
+
+  await user.click(
+    await screen.findByRole("combobox", { name: "当前模式" }),
+  );
   expect(
-    (
-      screen.getByRole("button", {
-        name: /基础记忆（lite）/,
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(false);
+    screen.getByRole("option", { name: /基础记忆（lite）/ }),
+  ).toHaveProperty("disabled", false);
+  expect(
+    screen.getByRole("option", { name: /智能记忆（pro）/ }),
+  ).toHaveProperty("disabled", true);
+  expect(
+    screen.getByRole("option", { name: /深度记忆（ultra）/ }),
+  ).toHaveProperty("disabled", true);
 });

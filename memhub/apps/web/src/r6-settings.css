@@ -217,50 +217,53 @@
   font-size: 13px;
   line-height: 22px;
 }
-.r6-mode-options {
+.r6-settings .r6-mode-setting-row {
+  max-width: none;
+  margin-top: 4px;
+}
+.r6-settings .r6-mode-option-menu {
+  width: 100%;
+  max-width: 760px;
+}
+.r6-settings
+  .r6-mode-option-menu.r6-language-option-menu
+  .om-option-menu-button {
+  height: auto;
+  min-height: 68px;
+  padding: 10px 44px 10px 14px;
+  white-space: normal;
+}
+.r6-settings
+  .r6-mode-option-menu.r6-language-option-menu
+  .om-option-menu-button::after {
+  top: 27px;
+}
+.r6-mode-option-menu .om-option-menu-copy,
+.r6-mode-option-menu-panel .om-option-menu-copy {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 2px;
+  min-width: 0;
 }
-.r6-mode-option {
-  position: relative;
-  min-height: 144px;
-  padding: 18px;
-  border: 1px solid #c9d5de;
-  border-radius: 10px;
-  background: #fff;
+.r6-mode-option-menu .om-option-menu-copy > span,
+.r6-mode-option-menu-panel .om-option-menu-copy > span {
   color: #304757;
-  text-align: left;
-  cursor: pointer;
-}
-.r6-mode-option:hover:not(:disabled) {
-  border-color: #7892a6;
-  background: #f7fafc;
-}
-.r6-mode-option[aria-pressed="true"] {
-  border-color: #557c93;
-  background: #edf3f6;
-  box-shadow: 0 0 0 2px rgb(85 124 147 / 10%);
-}
-.r6-mode-option strong,
-.r6-mode-option span,
-.r6-mode-option small {
-  display: block;
-}
-.r6-mode-option strong {
-  margin-bottom: 8px;
-  font-size: 15px;
-  line-height: 24px;
-}
-.r6-mode-option span {
-  color: #5e6e7a;
   font-size: 13px;
-  line-height: 21px;
+  font-weight: 500;
+  line-height: 22px;
 }
-.r6-mode-option small {
-  margin-top: 10px;
-  color: #405e75;
-  font-weight: 600;
+.r6-mode-option-menu .om-option-menu-copy > small,
+.r6-mode-option-menu-panel .om-option-menu-copy > small {
+  color: #5e6e7a;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+.r6-language-option-menu-panel--settings.r6-mode-option-menu-panel
+  [role="option"] {
+  min-height: 62px;
+  padding: 9px 10px;
+  white-space: normal;
 }
 .r6-settings-note {
   margin: 14px 0 0;
@@ -797,21 +800,8 @@
   .r6-settings .r6-setting-row > div {
     flex-basis: 100%;
   }
-  .r6-mode-options {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .r6-mode-option:last-child {
-    grid-column: 1 / -1;
-    min-height: 112px;
-  }
 }
 @media (max-width: 700px) {
-  .r6-mode-options {
-    grid-template-columns: 1fr;
-  }
-  .r6-mode-option:last-child {
-    grid-column: auto;
-  }
   .r6-settings {
     padding: 20px 16px;
   }

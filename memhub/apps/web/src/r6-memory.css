@@ -32,50 +32,6 @@
   font-size: 13px;
   line-height: 22px;
 }
-.r6-memory .memory-lite-raw {
-  min-height: 420px;
-  padding: 20px 22px;
-  border: 1px solid #d5dfe8;
-  border-radius: 14px;
-  background: #fff;
-}
-.r6-memory .memory-lite-raw form {
-  display: flex;
-  align-items: end;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-.r6-memory .memory-lite-raw form label {
-  display: grid;
-  flex: 1;
-  gap: 6px;
-  color: #4f6373;
-  font-size: 13px;
-}
-.r6-memory .memory-lite-raw input {
-  min-height: 42px;
-  padding: 0 12px;
-  border: 1px solid #c0ccd5;
-  border-radius: 8px;
-  background: #f7fafc;
-}
-.r6-memory .memory-lite-raw ol {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.r6-memory .memory-lite-raw li {
-  padding: 16px 0;
-  border-bottom: 1px solid #e0e7ec;
-}
-.r6-memory .memory-lite-raw li p {
-  margin: 0 0 6px;
-  white-space: pre-wrap;
-  line-height: 1.7;
-}
-.r6-memory .memory-lite-raw li small {
-  color: #637786;
-}
 .r6-memory .memory-pending-add {
   display: flex;
   align-items: center;

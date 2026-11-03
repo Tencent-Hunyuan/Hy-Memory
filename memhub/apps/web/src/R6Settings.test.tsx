@@ -27,7 +27,7 @@ it("changes settings copy live without rereading profiles or changing permission
     }),
   ).toBeNull();
   const reads = vi.mocked(getModelProfiles).mock.calls.length;
-  await user.click(screen.getByRole("combobox"));
+  await user.click(screen.getByRole("combobox", { name: "Idioma" }));
   await user.click(screen.getByRole("option", { name: "简体中文" }));
   expect(await screen.findByRole("heading", { name: "记忆模型" })).toBeTruthy();
   expect(vi.mocked(getModelProfiles).mock.calls).toHaveLength(reads);
@@ -127,8 +127,8 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   } as NonNullable<typeof window.oneMemory>;
   const user = userEvent.setup();
   const view = render(<R6Settings onDiagnostics={vi.fn()} />);
-  expect(screen.getByRole("combobox")).toBeTruthy();
-  await user.click(screen.getByRole("combobox"));
+  expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
+  await user.click(screen.getByRole("combobox", { name: "语言" }));
   expect(screen.getAllByRole("option")).toHaveLength(12);
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "连接其他应用" }));
