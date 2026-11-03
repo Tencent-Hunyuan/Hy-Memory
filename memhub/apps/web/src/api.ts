@@ -2,6 +2,11 @@ import {
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type DetectionResponse,
+  type EmbeddingSpaceDeleteReceipt,
+  type EmbeddingSpaces,
+  type EmbeddingSwitchCurrent,
+  type EmbeddingSwitchJob,
+  type EmbeddingSwitchPlan,
   type EvolveOverview,
   type EvolveRunReceipt,
   type EvolveSchedule,
@@ -48,20 +53,35 @@ import {
 // stays here is the transport adapter: axios wiring, recovery clients, and the
 // UI-facing error mapping.
 import {
+  buildEmbeddingSwitchPlanRequest,
+  buildEmbeddingSwitchStartRequest,
   buildMemoryAddRequest,
   buildModelProfileCreateRequest,
   buildModelProfileUpdateRequest,
   buildSourceImportRequest,
   buildSourceSyncRequest,
   classifyModelRemove,
+  EMBEDDING_SPACES_PATH,
+  EMBEDDING_SWITCH_CURRENT_PATH,
+  type EmbeddingSwitchRefusal,
+  type EmbeddingSwitchStartInput,
+  embeddingSwitchCancelPath,
   hasSourceSyncTarget,
   memoryAddStatusPath,
   normalizeManualExtractEvidence,
+  parseEmbeddingSpaceDeleteReceipt,
+  parseEmbeddingSpaces,
+  parseEmbeddingSwitchCurrent,
+  parseEmbeddingSwitchJob,
+  parseEmbeddingSwitchPlan,
+  parseEmbeddingSwitchRefusal,
+  parseEmbeddingSwitchSummary,
   parseExtractionSettingsReceipt,
   parseGraphWidthDecisionReceipt,
   parseManualExtractReceipt,
   parseMemoryAddReceipt,
   parseModelProfileReceipt,
+  retiredEmbeddingSpacePath,
   SourceSyncInputError,
 } from "@one-memory/operations";
 import axios from "axios";
@@ -592,6 +612,135 @@ export async function probeModelProfile(
         )
       ).data,
   });
+}
+
+function preserveEmbeddingSwitchRefusal(reason: unknown): never {
+  const refusal = embeddingSwitchRefusal(reason);
+  if (refusal !== null && typeof reason === "object" && reason !== null) {
+    throw Object.assign(reason, {
+      embeddingSwitchRefusal: refusal,
+    });
+  }
+  throw reason;
+}
+
+/** An older Core answers a route-level 404 because switch v1 is not present. */
+export function embeddingSwitchUnsupported(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    embeddingSwitchRefusal(reason) === null
+  );
+}
+
+/** Recover a Core refusal without losing the replacement plan it may carry. */
+export function embeddingSwitchRefusal(
+  reason: unknown,
+): EmbeddingSwitchRefusal | null {
+  if (
+    typeof reason === "object" &&
+    reason !== null &&
+    "embeddingSwitchRefusal" in reason
+  ) {
+    const preserved = (reason as { embeddingSwitchRefusal?: unknown })
+      .embeddingSwitchRefusal;
+    if (
+      preserved !== null &&
+      typeof preserved === "object" &&
+      "code" in preserved
+    )
+      return preserved as EmbeddingSwitchRefusal;
+  }
+  if (!axios.isAxiosError(reason)) return null;
+  return parseEmbeddingSwitchRefusal(reason.response?.data);
+}
+
+export async function planEmbeddingSwitch(
+  profileId: string,
+  expectedRevision?: number,
+  traceId?: string,
+): Promise<EmbeddingSwitchPlan> {
+  const request = buildEmbeddingSwitchPlanRequest(profileId, expectedRevision);
+  try {
+    const response = await client.post<unknown>(
+      request.path,
+      request.body,
+      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+    );
+    const plan = parseEmbeddingSwitchPlan(response.data);
+    if (plan === null) throw new Error("embedding_switch_plan_invalid");
+    return plan;
+  } catch (reason) {
+    preserveEmbeddingSwitchRefusal(reason);
+  }
+}
+
+export async function startEmbeddingSwitch(
+  input: EmbeddingSwitchStartInput,
+  traceId?: string,
+): Promise<EmbeddingSwitchJob> {
+  const request = buildEmbeddingSwitchStartRequest(input);
+  try {
+    const response = await client.post<unknown>(
+      request.path,
+      request.body,
+      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+    );
+    const job = parseEmbeddingSwitchJob(response.data);
+    if (job === null) throw new Error("embedding_switch_job_invalid");
+    return job;
+  } catch (reason) {
+    preserveEmbeddingSwitchRefusal(reason);
+  }
+}
+
+export async function getCurrentEmbeddingSwitch(
+  options: { signal?: AbortSignal } = {},
+): Promise<EmbeddingSwitchCurrent> {
+  const response = await client.get<unknown>(EMBEDDING_SWITCH_CURRENT_PATH, {
+    signal: options.signal,
+  });
+  const current = parseEmbeddingSwitchCurrent(response.data);
+  if (current === null) throw new Error("embedding_switch_current_invalid");
+  return current;
+}
+
+export async function cancelEmbeddingSwitch(
+  jobId: string,
+  traceId?: string,
+): Promise<EmbeddingSwitchJob> {
+  const response = await client.post<unknown>(
+    embeddingSwitchCancelPath(jobId),
+    {},
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+  );
+  const job = parseEmbeddingSwitchJob(response.data);
+  if (job === null) throw new Error("embedding_switch_job_invalid");
+  return job;
+}
+
+export async function listEmbeddingSpaces(
+  options: { signal?: AbortSignal } = {},
+): Promise<EmbeddingSpaces> {
+  const response = await client.get<unknown>(EMBEDDING_SPACES_PATH, {
+    signal: options.signal,
+  });
+  const spaces = parseEmbeddingSpaces(response.data);
+  if (spaces === null) throw new Error("embedding_spaces_invalid");
+  return spaces;
+}
+
+export async function deleteRetiredEmbeddingSpace(
+  spaceId: string,
+  traceId?: string,
+): Promise<EmbeddingSpaceDeleteReceipt> {
+  const response = await client.delete<unknown>(
+    retiredEmbeddingSpacePath(spaceId),
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+  );
+  const receipt = parseEmbeddingSpaceDeleteReceipt(response.data);
+  if (receipt === null) throw new Error("embedding_space_receipt_invalid");
+  return receipt;
 }
 
 export async function activateModelProfile(
@@ -1209,7 +1358,10 @@ export function isHealthResponse(value: unknown): value is HealthResponse {
     (candidate.memory_backfill === undefined ||
       candidate.memory_backfill === "running" ||
       candidate.memory_backfill === "done" ||
-      candidate.memory_backfill === "failed")
+      candidate.memory_backfill === "failed") &&
+    (candidate.embedding_switch === undefined ||
+      candidate.embedding_switch === null ||
+      parseEmbeddingSwitchSummary(candidate.embedding_switch) !== null)
   );
 }
 

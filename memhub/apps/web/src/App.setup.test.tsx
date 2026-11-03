@@ -38,6 +38,10 @@ vi.mock("./api", () => ({
   getOnboarding,
   getModelProfiles: vi.fn().mockResolvedValue([]),
   getSources: vi.fn().mockResolvedValue(sources),
+  getCurrentEmbeddingSwitch: vi
+    .fn()
+    .mockRejectedValue(new Error("unsupported")),
+  embeddingSwitchUnsupported: vi.fn().mockReturnValue(true),
   ...mutations,
 }));
 vi.mock("./use-import-sources", () => ({

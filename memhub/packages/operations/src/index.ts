@@ -8,6 +8,7 @@
  * copies drifting apart.
  */
 
+export * from "./embedding-switch-operation.js";
 export * from "./memory-add-operation.js";
 export * from "./memory-processing-operation.js";
 export * from "./model-operation.js";

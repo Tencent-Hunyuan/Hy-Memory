@@ -24,7 +24,7 @@
   padding: 20px 24px;
   border: 1px solid #d5dfe8;
   border-radius: 12px;
-  background: rgb(255 255 255 / 78%);
+  background: #fff;
 }
 .r6-language-setting-title {
   margin: 0 0 14px;
@@ -470,28 +470,75 @@
   font-size: 13px;
   line-height: 24px;
 }
-.r6-settings .r6-model-overview {
-  padding: 26px 0 20px;
-  border-bottom: 0;
+.r6-settings .r6-model-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
 }
-.r6-settings .r6-model-caption {
+.r6-settings .r6-model-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 32px;
+}
+.r6-settings .r6-model-heading p {
+  margin: 2px 0 0;
+  color: #63707b;
   font-size: 13px;
-  line-height: 28px;
+  line-height: 22px;
+}
+.r6-settings .r6-model-overview {
+  margin-top: 18px;
+  border: 1px solid #d8e2ea;
+  border-radius: 10px;
+  background: #fff;
+}
+.r6-settings .r6-model-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  min-height: 108px;
+  padding: 18px 20px;
+}
+.r6-settings .r6-model-lane + .r6-model-lane {
+  border-top: 1px solid #d8e2ea;
+}
+.r6-settings .r6-model-lane-copy {
+  min-width: 0;
+}
+.r6-settings .r6-model-lane h3 {
+  margin: 0;
+  color: #304757;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 25px;
+}
+.r6-settings .r6-model-lane p {
+  margin: 2px 0 9px;
   color: #63707b;
-  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 21px;
 }
-.r6-settings .r6-current-model {
-  font:
-    500 22px / 34px "Noto Sans SC",
-    "PingFang SC",
-    sans-serif;
-  margin: 0 0 7px;
+.r6-settings .r6-model-lane strong,
+.r6-settings .r6-model-lane small {
+  display: block;
+  overflow-wrap: anywhere;
 }
-.r6-settings .r6-model-state {
+.r6-settings .r6-model-lane strong {
+  color: #304757;
   font-size: 14px;
-  line-height: 28px;
-  color: #63707b;
-  margin: 0 0 13px;
+  font-weight: 500;
+  line-height: 23px;
+}
+.r6-settings .r6-model-lane small {
+  margin-top: 1px;
+  color: #71808b;
+  font-size: 12px;
+  line-height: 20px;
+}
+.r6-settings .r6-model-lane > .r6-button {
+  min-width: 72px;
 }
 .r6-settings .r6-model-recipient {
   font-size: 14px;
@@ -721,6 +768,21 @@
 .r6-settings .model-advanced {
   grid-column: 1 / -1;
 }
+.r6-settings .model-search-intro {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #d8e2ea;
+}
+.r6-settings .model-search-intro strong {
+  font-size: 15px;
+  line-height: 24px;
+}
+.r6-settings .model-search-intro p {
+  margin: 4px 0 0;
+  color: #63707b;
+  font-size: 13px;
+  line-height: 21px;
+}
 .r6-settings .model-advanced label {
   display: flex;
   flex-direction: column;
@@ -837,6 +899,14 @@
     min-height: 0;
     padding: 24px 20px;
     border-radius: 0 0 11px 11px;
+  }
+  .r6-settings .r6-model-lane {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px;
+  }
+  .r6-settings .r6-model-lane > .r6-button {
+    justify-self: start;
   }
   .r6-settings .r6-language-setting-row {
     grid-template-columns: minmax(0, 1fr);

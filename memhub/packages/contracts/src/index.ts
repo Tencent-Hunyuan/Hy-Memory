@@ -52,6 +52,25 @@ export type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "./connection-setup.js";
+export type {
+  EmbeddingSpace,
+  EmbeddingSpaceDeleteReceipt,
+  EmbeddingSpaceState,
+  EmbeddingSpaceSummary,
+  EmbeddingSpaces,
+  EmbeddingSwitchCurrent,
+  EmbeddingSwitchJob,
+  EmbeddingSwitchJobState,
+  EmbeddingSwitchKind,
+  EmbeddingSwitchPlan,
+  EmbeddingSwitchPlannedSource,
+  EmbeddingSwitchProgress,
+  EmbeddingSwitchProgressPhase,
+  EmbeddingSwitchSummary,
+  ScannedEmbeddingSpace,
+} from "./embedding-switch.js";
+
+import type { EmbeddingSwitchSummary } from "./embedding-switch.js";
 
 export interface HealthResponse {
   status: "ok";
@@ -72,6 +91,7 @@ export interface HealthResponse {
    */
   recovery?: "pending" | "running" | "done" | "failed";
   recovery_failed_steps?: string[];
+  embedding_switch?: EmbeddingSwitchSummary | null;
 }
 
 export type ImportStatus =
@@ -1058,13 +1078,7 @@ export interface MemoryProcessingSummary {
   /** The active memory pipeline and its graph/evolve status. */
   pipeline?: MemoryPipelineStatus | null;
   /** A running embedding switch or startup merge pauses mode mutations. */
-  embedding_switch?: {
-    job_id?: string;
-    kind: "switch" | "merge";
-    state: string;
-    percent?: number | null;
-    eta_s?: number | null;
-  } | null;
+  embedding_switch?: EmbeddingSwitchSummary | null;
   metrics?: {
     raw_evidence: number;
     complete_turns: number;
