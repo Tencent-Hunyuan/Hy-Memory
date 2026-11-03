@@ -3,7 +3,7 @@ import type {
   EmbeddingSwitchJob,
   EmbeddingSwitchPlan,
 } from "@one-memory/contracts";
-import { ChevronDown, CircleAlert, Search, X } from "lucide-react";
+import { ChevronDown, CircleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { deleteRetiredEmbeddingSpace } from "./api";
 import { R6Button } from "./R6Controls";
@@ -81,10 +81,13 @@ export function EmbeddingSwitchConfirmDialog({
   }, []);
 
   return (
-    <div className="embedding-switch-dialog-layer" role="presentation">
+    <div
+      className="r6-settings-dialog-layer embedding-switch-dialog-layer"
+      role="presentation"
+    >
       <section
         ref={panel}
-        className="embedding-switch-dialog"
+        className="r6-settings-dialog embedding-switch-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="embedding-switch-title"
@@ -109,9 +112,6 @@ export function EmbeddingSwitchConfirmDialog({
         }}
       >
         <header>
-          <div className="embedding-switch-dialog-icon" aria-hidden="true">
-            <Search size={20} />
-          </div>
           <div>
             <h2 id="embedding-switch-title">更新记忆搜索索引？</h2>
             <p>
@@ -390,13 +390,13 @@ export function EmbeddingSwitchGlobalStatus({
                 清理旧索引
               </R6Button>
             ) : null}
-            <button
-              type="button"
+            <R6Button
+              variant="quiet"
               aria-label="关闭完成提示"
               onClick={() => setRecent(null)}
             >
               <X size={16} aria-hidden="true" />
-            </button>
+            </R6Button>
           </div>
         </aside>
       ) : null}
@@ -426,13 +426,13 @@ export function EmbeddingSwitchGlobalStatus({
             <R6Button variant="quiet" onClick={onConfigureSearch}>
               检查连接
             </R6Button>
-            <button
-              type="button"
+            <R6Button
+              variant="quiet"
               aria-label="关闭失败提示"
               onClick={() => setRecent(null)}
             >
               <X size={16} aria-hidden="true" />
-            </button>
+            </R6Button>
           </div>
         </aside>
       ) : null}
