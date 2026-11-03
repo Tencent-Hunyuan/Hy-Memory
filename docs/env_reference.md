@@ -221,6 +221,7 @@ client = HyMemoryClient.from_config({
 | `MEMORY_HISTORY_RECORD_SEARCHES` | `false` | 是否记录 Search 操作 |
 | `MEMORY_CODING_CHAIN_REPO_ROOT` | — | coding 版本链读取本地 Git diff 的仓库根目录 |
 | `MEMORY_CODING_CHAIN_BLOCK_ENABLED` | `false` | search(scene=coding) 是否注入版本演进链块（diff / `chain_block`）；默认关 |
+| `MEMORY_CODING_AGENTIC_SELECTION` | `false` | search(scene=coding) 的两步 LLM 筛选默认值（先筛 fact、再定链展开哪几版）；调用参数 `agentic=` 优先；默认关 |
 
 ## HTTP Server
 

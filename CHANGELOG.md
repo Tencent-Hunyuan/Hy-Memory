@@ -15,6 +15,13 @@ Hy Memory and MemHub are versioned and released independently.
   not lost. Facts without a parseable state fall back to the previous prose
   path. Applies to every supported prompt language. **Behaviour change**: the
   stored text of new coding facts changes shape.
+- `search(scene="coding", agentic=True)`: opt-in two-step LLM selection between
+  recall and rendering — drop facts that do not help the query, then choose
+  which thread versions to expand (only when the chain block is enabled). Any
+  failure falls back to no selection. Default off; per-call `agentic=` overrides
+  `CodingConfig.agentic_selection` / `MEMORY_CODING_AGENTIC_SELECTION`. Not
+  related to `search_mode="agentic"` (pre-retrieval query rewrite). Not exposed
+  on `search_all`.
 
 ## Hy Memory 2.0.13 — 2026-11-02
 

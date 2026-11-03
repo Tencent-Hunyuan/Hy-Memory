@@ -1161,6 +1161,11 @@ class CodingConfig:
     # search(scene="coding") 是否注入版本演进链块（diff / chain_block）。
     # 默认关闭（opt-in）：中重度 coding 用户可省下大量 prompt token；写入侧仍可 observe。
     chain_block_enabled: bool = None
+    # search(scene="coding", agentic=True) 的两步 LLM 筛选：先判每条 fact 有没有用，
+    # 再判哪条链要展开哪几版。默认关闭 —— 它用准确率换单次上下文（见 search 的
+    # docstring），要不要付这个代价因场景而异，不该替调用方决定。
+    # 调用参数 agentic=... 优先于本配置。
+    agentic_selection: bool = None
 
     def __post_init__(self):
         if self.enable is None:
@@ -1181,6 +1186,10 @@ class CodingConfig:
         if self.chain_block_enabled is None:
             self.chain_block_enabled = _get_env_bool(
                 "MEMORY_CODING_CHAIN_BLOCK_ENABLED", False
+            )
+        if self.agentic_selection is None:
+            self.agentic_selection = _get_env_bool(
+                "MEMORY_CODING_AGENTIC_SELECTION", False
             )
 
 

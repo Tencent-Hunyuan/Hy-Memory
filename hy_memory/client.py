@@ -687,6 +687,7 @@ class HyMemoryClient:
         self._coding_writer = None       # CodingWriter | None
         self._coding_store = None        # CodingMemoryStore | None
         self._coding_llm_provider = None  # LLMProvider | None
+        self._coding_selector = None      # coding.selection.CodingSelector | None
         self._coding_init_lock = asyncio.Lock()
         # ── 按变体缓存 ────────────────────────────────────────────────────
         # 两个变体的库是**分开**的（见 CodingMemoryStore.__init__ 的 _suffix 注释），
@@ -1318,7 +1319,7 @@ class HyMemoryClient:
         return bool(getattr(coding, "chain_block_enabled", False))
 
     def _decorate_with_chain(self, facts, instruction: str = "", scope=None,
-                             user_id=None, workspace_id=None):
+                             user_id=None, workspace_id=None, selection=None):
         """读取侧：给向量层召回的 facts 挂上版本演进链块。
 
         返回 (block, used_idx)：
@@ -1342,10 +1343,73 @@ class HyMemoryClient:
         if store is None:
             return "", []
         try:
-            return store.decorate(facts, instruction=instruction, scope=scope)
+            return store.decorate(facts, instruction=instruction, scope=scope,
+                                  selection=selection)
         except Exception as e:
             logger.warning("[coding] chain decorate failed: %s", e)
             return "", []
+
+    # ---------------------------------------------------------------- agentic 筛选
+    def _agentic_enabled(self, override: Optional[bool] = None) -> bool:
+        """本次 search 是否做两步 LLM 筛选。显式参数优先于配置。"""
+        if override is not None:
+            return bool(override)
+        coding = getattr(getattr(self, "_config", None), "coding", None)
+        return bool(getattr(coding, "agentic_selection", False))
+
+    def _get_selector(self, user_id=None, workspace_id=None):
+        """按需建 CodingSelector（与 chat 链路共用同一个 LLMProvider）。失败返回 None。"""
+        try:
+            if getattr(self, "_coding_selector", None) is None:
+                from .coding.selection import CodingSelector
+                provider = getattr(self, "_coding_llm_provider", None)
+                if provider is None:
+                    from .agent.llm_provider import LLMProvider
+                    provider = LLMProvider(self._config)
+                    self._coding_llm_provider = provider
+                self._coding_selector = CodingSelector(provider)
+            return self._coding_selector
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[coding-select] selector unavailable: %s", e)
+            return None
+
+    async def _agentic_select(self, instruction, facts, *, user_id, workspace_id):
+        """两步筛选。→ (kept_facts, selection|None, dropped)。
+
+        第 1 步（选 fact）只依赖 LLM，不需要链层；第 2 步（选链）只在链块开启且链层
+        可用时才问 —— 不出块却去问"展开哪几版"，等于白花一次调用。
+
+        任何一步失败都退回"不筛"那一步的结果。绝对不能因为筛选失败而少给内容 ——
+        那样失败会伪装成"记忆本来就没有这条"。
+        """
+        if not facts:
+            return facts, None, 0
+        selector = HyMemoryClient._get_selector(self, user_id, workspace_id)
+        if selector is None:
+            return facts, None, 0
+        keep = await selector.select_facts(instruction, facts)
+        if keep is None:
+            return facts, None, 0
+        kept = [f for i, f in enumerate(facts) if i in keep]
+        if not kept:
+            # 全筛掉更像是模型跑偏，而不是"这些记忆都没用"
+            logger.warning("[coding-select] dropped every fact; disabling selection for this query")
+            return facts, None, 0
+        selection = None
+        if HyMemoryClient._chain_block_enabled(self):
+            store = self._get_chain_store(
+                HyMemoryClient._chain_owner(user_id, workspace_id))
+            if store is not None:
+                try:
+                    picked, _used = store.collect_threads(
+                        kept, instruction=instruction, scope=(workspace_id or None))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[coding-select] collect_threads failed: %s", e)
+                    picked = []
+                if picked:
+                    selection = await selector.choose_chains(
+                        instruction, picked, store.thread_saids)
+        return kept, selection, len(facts) - len(kept)
 
     async def _search_coding(
         self,
@@ -1366,6 +1430,7 @@ class HyMemoryClient:
         exclude_sources: Optional[List[str]] = None,
         rerank: bool = True,
         query_embedding: Optional[List[float]] = None,
+        agentic: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Coding 召回路径（事实主导的双层召回）：
@@ -1708,10 +1773,25 @@ class HyMemoryClient:
         # out_facts 里删掉。不同调用方可能自行拼 prompt，悄悄少给 facts 比多给一个
         # 字段危险得多；需要“块 + 剩余 facts”时可按 chain_used 自行过滤。
         if variant == "coding":
+            _selection = None
+            # 走类而不是 self：测试常把 _search_coding 绑到裸 SimpleNamespace 上，
+            # self 上不一定有这个方法（与 _chain_block_enabled 同一处理）。
+            if HyMemoryClient._agentic_enabled(self, agentic):
+                out_facts, _selection, _dropped = await HyMemoryClient._agentic_select(
+                    self, target_query, out_facts,
+                    user_id=primary_user, workspace_id=workspace_id,
+                )
+                if _dropped:
+                    # 被筛掉的 fact 从返回里真的消失：留在列表里等于没筛（调用方
+                    # 通常把 facts 全塞进 prompt），只是白花了两次 LLM 调用。
+                    resp["facts"] = out_facts
+                resp["agentic"] = {"dropped": _dropped,
+                                   "chains_decided": len(_selection or {})}
             _blk, _used = self._decorate_with_chain(
                 out_facts, instruction=target_query,
                 scope=(workspace_id or None),
                 user_id=primary_user, workspace_id=workspace_id,
+                selection=_selection,
             )
             resp["chain_block"] = _blk
             resp["chain_used"] = _used
@@ -1846,6 +1926,7 @@ class HyMemoryClient:
         queries: Optional[List[str]] = None,
         scene: Optional[str] = None,
         search_mode: str = "default",
+        agentic: Optional[bool] = None,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         session_ids: Optional[List[str]] = None,
@@ -1916,6 +1997,15 @@ class HyMemoryClient:
                                 - "agentic"：scene=None 时，单 query / 多 queries 都用
                                   一次 LLM 完成三分类、query rewrite 和时间范围解析。
                                 显式 scene 始终直接路由，不调用 LLM。
+            agentic:            仅 scene="coding" 生效（其它路径忽略）。召回之后、拼链块之前
+                                多问 LLM 两次：① 每条 fact 对本次 query 有没有用，没用的从
+                                返回的 facts 里删掉；② 留下的 fact 挂的链要不要看代码、看
+                                哪几版（只在 chain_block_enabled 时问）。任何一步失败都退回
+                                "不筛"。None = 跟随 CodingConfig.agentic_selection
+                                （env MEMORY_CODING_AGENTIC_SELECTION，默认关）。
+                                与 search_mode="agentic" 无关：那个是检索**之前**的 query
+                                分类/改写，这个是检索**之后**的注入层筛选。代价：每次多两次
+                                LLM 调用；它压的是单次注入上下文，不保证提升准确率。
             user_ids:           用户 ID 列表（一级隔离 key，支持跨用户搜索）
             agent_ids:          Agent ID 列表（空列表 = 搜索所有 agent）
             session_ids:        Session ID 列表（空列表 = 搜索所有 session）
@@ -1990,6 +2080,7 @@ class HyMemoryClient:
         """
         return self._search_loop_thread.run(self.async_search(
             query, queries=queries, scene=scene, search_mode=search_mode,
+            agentic=agentic,
             user_ids=user_ids, agent_ids=agent_ids, session_ids=session_ids,
             include_sources=include_sources, exclude_sources=exclude_sources,
             limit=limit, min_score=min_score,
@@ -2552,6 +2643,7 @@ class HyMemoryClient:
             self._coding_store = None
             self._coding_writer = None
             self._coding_llm_provider = None
+            self._coding_selector = None
         # 链层：纯 sqlite，没有异步资源
         if getattr(self, "_chain_store", None) is not None:
             try:
@@ -3794,6 +3886,10 @@ class HyMemoryClient:
                 request_id=request_id, t0=t0, variant=variant,
                 include_sources=include_sources, exclude_sources=exclude_sources,
                 rerank=rerank, query_embedding=embedding,
+                # search_all 不开放 agentic：它把多条 lane 并排召回做 RRF，逐条 lane
+                # 再各跑两次 LLM 会把"融合前的候选"改掉，融合结果不再是那几条 lane
+                # 的并集。需要筛选请走单 lane 的 search(agentic=True)。
+                agentic=False,
             )
 
         lanes_to_run: Dict[str, Any] = {"chat": _chat_lane()}
@@ -3846,6 +3942,7 @@ class HyMemoryClient:
         queries: Optional[List[str]] = None,
         scene: Optional[str] = None,
         search_mode: str = "default",
+        agentic: Optional[bool] = None,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         session_ids: Optional[List[str]] = None,
@@ -3884,7 +3981,7 @@ class HyMemoryClient:
             ):
                 return await self._async_search_impl(
                     query, queries=queries, scene=scene, search_mode=search_mode,
-                    user_ids=user_ids,
+                    agentic=agentic, user_ids=user_ids,
                     agent_ids=agent_ids, session_ids=session_ids, limit=limit,
                     include_sources=include_sources, exclude_sources=exclude_sources,
                     min_score=min_score,
@@ -3899,7 +3996,7 @@ class HyMemoryClient:
                 )
         return await self._async_search_impl(
             query, queries=queries, scene=scene, search_mode=search_mode,
-            user_ids=user_ids,
+            agentic=agentic, user_ids=user_ids,
             agent_ids=agent_ids, session_ids=session_ids, limit=limit,
             include_sources=include_sources, exclude_sources=exclude_sources,
             min_score=min_score,
@@ -3920,6 +4017,7 @@ class HyMemoryClient:
         queries: Optional[List[str]] = None,
         scene: Optional[str] = None,
         search_mode: str = "default",
+        agentic: Optional[bool] = None,
         user_ids: Optional[List[str]] = None,
         agent_ids: Optional[List[str]] = None,
         session_ids: Optional[List[str]] = None,
@@ -4315,6 +4413,7 @@ class HyMemoryClient:
                     include_sources=effective_include_sources,
                     exclude_sources=effective_exclude_sources,
                     rerank=rerank,
+                    agentic=agentic,
                 )
 
         # ────────────────────────────────────────────────────────────
