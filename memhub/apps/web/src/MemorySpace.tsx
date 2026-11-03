@@ -911,22 +911,21 @@ export function MemorySpace({
               : null}
           </span>
         </div>
-        {!lite ? (
-          <MemoryAddComposer
-            suspended={!active}
-            onPendingChange={setPendingAdd}
-            onSaved={() => {
-              // A finished addition is a new memory: re-read the page now rather
-              // than leave it for the next poll.
-              bumpSdkMap();
-            }}
-            onOpenMemory={(id) => {
-              if (!simplified) setMode("library");
-              void open(id);
-            }}
-            onConfigureModel={onConfigureModel}
-          />
-        ) : null}
+        <MemoryAddComposer
+          suspended={!active}
+          rawOnly={lite}
+          onPendingChange={setPendingAdd}
+          onSaved={() => {
+            // A finished addition is new page content: re-read now rather than
+            // leave it for the next poll.
+            bumpSdkMap();
+          }}
+          onOpenMemory={(id) => {
+            if (!simplified) setMode("library");
+            void open(id);
+          }}
+          onConfigureModel={onConfigureModel}
+        />
         {!simplified && (
           <div
             className="memory-mode-tabs"
@@ -1093,13 +1092,20 @@ export function MemorySpace({
           />
         </>
       ) : null}
-      {simplified && !lite && pendingAdd ? (
+      {simplified && pendingAdd ? (
         <p className="memory-pending-add" role="status">
           <span>
-            {t("memory:正在等待整理：")}
+            {lite
+              ? t(
+                  pendingAdd.state === "failed"
+                    ? "memory:原话已保存，整理未完成"
+                    : "memory:正在保存…",
+                )
+              : t("memory:正在等待整理：")}
+            {lite ? " " : null}
             {pendingAdd.text}
           </span>
-          {pendingAdd.state === "waiting_for_model" ? (
+          {!lite && pendingAdd.state === "waiting_for_model" ? (
             <button type="button" onClick={onConfigureModel}>
               {t("memory:配置整理模型")}
             </button>

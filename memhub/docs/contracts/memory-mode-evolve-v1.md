@@ -45,6 +45,22 @@ it as `forced_by_env: true`, with `configured_mode` showing the saved choice.
 **Raw is never deleted.** In every mode MemHub keeps every raw turn the SDK
 stored, and the SDK never deletes raw itself. There is no retention window.
 
+### Hand-added content in lite
+
+The lite memory page offers `手动添加`. It uses the existing
+`POST /api/v2/memories` receipt flow, but the lite write processor deliberately
+calls `client.add`, not `add_extracted`: the text is stored as one raw `user`
+turn under source `one-memory-manual`, with no generation-model call. The raw
+page and raw recall can therefore read it immediately after the durable write
+settles. A completed lite addition has raw ids but no generated memory ids, so
+the App presents `no_memories` as “已保存原文”, not as a failed extraction.
+
+This is a minimal compatibility path, not a claim that a hand-written note was
+an observed conversation. `input_mode=direct_memory_note` remains on the
+record so a future first-class manual-memory lane can migrate it without
+guessing. Like every other lite raw turn, switching to pro or ultra does not
+backfill it into a generated memory.
+
 ## 2. Switching mode: what changes and what does not
 
 The SDK migrates nothing when the mode changes. MemHub applies these rules,

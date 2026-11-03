@@ -93,12 +93,14 @@ vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryAddComposer", () => ({
   MemoryAddComposer: ({
     onPendingChange,
+    rawOnly,
   }: {
     onPendingChange?(addition: {
       evidenceId: string;
       text: string;
       state: string;
     }): void;
+    rawOnly?: boolean;
   }) => (
     <button
       type="button"
@@ -110,7 +112,7 @@ vi.mock("./MemoryAddComposer", () => ({
         })
       }
     >
-      补充记忆
+      {rawOnly ? "手动添加" : "补充记忆"}
     </button>
   ),
 }));
@@ -292,7 +294,12 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
   ).toBe(false);
   expect(screen.getByTestId("graph-owner")).toBeTruthy();
   expect(screen.getByRole("textbox", { name: "搜索原始对话" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "补充记忆" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
+  expect(
+    screen.getByText(/正在保存… 项目周会统一安排在周三上午。/),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("combobox", { name: "来源" }));
+  expect(screen.getByRole("option", { name: "手动添加" })).toBeTruthy();
   expect(reads.sdkLibrary).not.toHaveBeenCalled();
   expect(reads.sdkGraph).not.toHaveBeenCalled();
   expect(reads.raw).toHaveBeenCalledWith(
@@ -364,6 +371,19 @@ it("pages and filters the raw conversation data plane in lite", async () => {
   expect(await screen.findAllByText("原始会话 cursor-0")).toHaveLength(2);
   expect(reads.raw).toHaveBeenLastCalledWith(
     expect.objectContaining({ source: "cursor", offset: 0, limit: 20 }),
+  );
+
+  await user.click(screen.getByRole("combobox", { name: "来源" }));
+  await user.click(screen.getByRole("option", { name: "手动添加" }));
+  expect(
+    await screen.findAllByText("原始会话 one-memory-manual-0"),
+  ).toHaveLength(2);
+  expect(reads.raw).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      source: "one-memory-manual",
+      offset: 0,
+      limit: 20,
+    }),
   );
 });
 

@@ -816,6 +816,17 @@ export function MemoryMap(props: Props) {
               value={controlledSource}
               options={[
                 { value: "", label: text("全部应用") },
+                ...(raw &&
+                !sources.some(
+                  (source) => source.source_id === "one-memory-manual",
+                )
+                  ? [
+                      {
+                        value: "source:one-memory-manual",
+                        label: text("手动添加"),
+                      },
+                    ]
+                  : []),
                 ...(library?.source &&
                 library.source !== library.unattributedSource &&
                 !sources.some(
