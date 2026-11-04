@@ -1078,7 +1078,7 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Continuez à synchroniser, traiter et fournir les mémoires sans ouvrir l’application.",
   导出日志: "Exporter les journaux",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Regroupez les journaux de diagnostic locaux dans un fichier à transmettre à l’assistance.",
+    "Regroupe tous les journaux locaux. Ils peuvent contenir des conversations ou des chemins locaux ; partagez-les uniquement avec des développeurs de confiance.",
   "确定退出 One Memory 界面吗？": "Quitter la fenêtre MemHub ?",
   "后台服务会继续同步、整理和提供记忆。":
     "Le service en arrière-plan continuera de synchroniser, traiter et fournir les mémoires.",

@@ -877,7 +877,7 @@ const baseEnglishMessages = {
     "Keep syncing, processing and providing memories without opening the app.",
   导出日志: "Export logs",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Package local diagnostic logs into a file to share with support.",
+    "Package all local logs. They may contain conversation text or local paths; share only with trusted developers.",
   "确定退出 One Memory 界面吗？": "Quit the MemHub window?",
   "后台服务会继续同步、整理和提供记忆。":
     "The background service will continue syncing, processing and providing memories.",

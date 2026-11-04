@@ -1048,7 +1048,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Terus sinkronkan, proses, dan sediakan memori tanpa membuka aplikasi.",
   导出日志: "Ekspor log",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Kemas log diagnostik lokal menjadi satu file untuk dibagikan ke tim dukungan.",
+    "Kemas semua log lokal. Log dapat memuat isi percakapan atau jalur lokal; bagikan hanya kepada pengembang tepercaya.",
   "确定退出 One Memory 界面吗？": "Tutup jendela MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "Layanan latar belakang akan terus menyinkronkan, memproses, dan menyediakan memori.",

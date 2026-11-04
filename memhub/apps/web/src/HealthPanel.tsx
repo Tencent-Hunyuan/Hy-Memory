@@ -298,6 +298,7 @@ export function HealthPanel({ imports }: { imports: ImportState }) {
           <Download size={16} aria-hidden="true" />
           {t("nativeExportLogs")}
         </R6Button>
+        <p>{t("把本机运行日志打包成一个文件，发给开发排查。")}</p>
       </div>
 
       <section className="health-block" aria-label={t("healthLocal")}>
