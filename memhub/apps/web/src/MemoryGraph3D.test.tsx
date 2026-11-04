@@ -61,9 +61,7 @@ describe("MemoryGraph3D", () => {
     expect(isGraphNodeSelectable(topic)).toBe(false);
     expect(graphNodeTooltip(topic, "主题：")).toBe("主题：CI");
     expect(graphNodeTooltip(topic, "Topic: ")).toBe("Topic: CI");
-    expect(
-      isGraphNodeSelectable({ ...topic, node_type: "memory" }),
-    ).toBe(true);
+    expect(isGraphNodeSelectable({ ...topic, node_type: "memory" })).toBe(true);
   });
 
   it("没有 WebGL 时给出可访问降级提示", () => {

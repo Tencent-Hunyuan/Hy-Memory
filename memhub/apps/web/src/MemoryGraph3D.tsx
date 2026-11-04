@@ -36,7 +36,9 @@ export function graphNodeTooltip(
   node: MemoryGraphNode,
   topicPrefix: string,
 ): string {
-  return node.node_type === "topic" ? `${topicPrefix}${node.label}` : node.label;
+  return node.node_type === "topic"
+    ? `${topicPrefix}${node.label}`
+    : node.label;
 }
 
 export function MemoryGraph3D({
