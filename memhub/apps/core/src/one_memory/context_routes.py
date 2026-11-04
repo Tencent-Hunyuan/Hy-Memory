@@ -30,7 +30,7 @@ from one_memory.hy_sdk_types import (
     parse_sdk_search,
 )
 from one_memory.imports.storage import EvidenceStore
-from one_memory.raw_turns import raw_display_turns
+from one_memory.raw_turns import raw_display_turns, turns_for_hit
 from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
 from one_memory.semantic_deadline import SemanticMemoryHit
 from one_memory.user_scope import owns
@@ -69,6 +69,18 @@ def raw_lane_overrides(value: SdkSearchFilters) -> dict[str, object]:
     if floor is not None:
         found["min_score"] = floor
     return found
+
+
+def raw_lane_statuses(*, lite: bool) -> dict[str, list[str]]:
+    """Which raw statuses the raw lane searches.
+
+    Lite extracts nothing, so its search is plain RAG over every raw,
+    including the shadow raws pro already processed before the switch to
+    lite. Pro and ultra keep the SDK default (active only): a shadow raw is
+    already represented by the memories extracted from it, and returning it
+    again would repeat that content in the caller's context budget.
+    """
+    return {"statuses": ["active", "shadow"]} if lite else {}
 
 
 def hit_namespace(hit: SemanticMemoryHit) -> dict[str, str]:
@@ -121,9 +133,9 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             sources = raw_lane_sources(authority.raw_sources, value.include_sources)
             if sources is None:
                 return ()
-            candidate_limit = (
-                min(value.limit * 10, 200) if value.raw_unit == "turn" else value.limit
-            )
+            # Plain RAG: every vector hit over the floor is an answer, ranked
+            # by its score. Each hit yields at least one item, so the SDK
+            # needs to return no more hits than the caller's limit.
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
@@ -131,7 +143,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     "user_ids": [value.user_id],
                     "agent_ids": [],
                     "include_sources": sources,
-                    "limit": candidate_limit,
+                    "limit": value.limit,
                     "min_score": 0.0,
                     "schema_min_score": 0.0,
                     "schema_limit": 0,
@@ -139,59 +151,60 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     "scene": "chat",
                     "reader": HY_MEMORY_READER,
                     "layers": ["l1_raw"],
-                    "statuses": ["active", "shadow"],
+                    **raw_lane_statuses(lite=lite),
                     **raw_lane_overrides(value),
                 },
             )
             hits = tuple(
                 hit for hit in parse_sdk_raw_search(raw) if value.passes_floor("raw", hit.score)
             )
-            items: list[SdkRawContextItem] = []
+            # One item per hit first, so a hit is never crowded out by another
+            # hit's sibling turns; the siblings fill whatever room is left.
+            primary: list[SdkRawContextItem] = []
+            siblings: list[SdkRawContextItem] = []
             for hit in hits:
+                memory_at = (
+                    datetime.fromtimestamp(hit.memory_at, tz=UTC)
+                    if hit.memory_at is not None
+                    else None
+                )
                 turns = raw_display_turns(hit) if value.raw_unit == "turn" else ()
-                if turns:
-                    query = value.query.casefold()
-                    lexical = tuple(turn for turn in turns if query in turn.content.casefold())
-                    # A batch-level embedding cannot identify which contained
-                    # turn matched semantically. Return only turns grounded by
-                    # the query text instead of assigning every sibling the
-                    # batch score and showing unrelated conversations.
-                    for turn in lexical:
-                        items.append(
-                            SdkRawContextItem(
-                                raw_id=hit.raw_id,
-                                turn_id=turn.turn_id,
-                                turn_index=turn.turn_index,
-                                turn_count=turn.turn_count,
-                                content=turn.content,
-                                source=hit.source,
-                                session_id=hit.session_id,
-                                memory_at=(
-                                    datetime.fromtimestamp(hit.memory_at, tz=UTC)
-                                    if hit.memory_at is not None
-                                    else None
-                                ),
-                                score=hit.score,
-                            )
-                        )
-                else:
-                    items.append(
+                if not turns:
+                    primary.append(
                         SdkRawContextItem(
                             raw_id=hit.raw_id,
                             content=hit.content,
                             source=hit.source,
                             session_id=hit.session_id,
-                            memory_at=(
-                                datetime.fromtimestamp(hit.memory_at, tz=UTC)
-                                if hit.memory_at is not None
-                                else None
-                            ),
+                            memory_at=memory_at,
                             score=hit.score,
                         )
                     )
-                if len(items) >= value.limit:
-                    break
-            return tuple(items[: value.limit])
+                    continue
+                # The embedding is the batch's: the hit is shown by the turns
+                # that contain the query, or else by its closest turn, each
+                # with the hit's score.
+                shown = [
+                    SdkRawContextItem(
+                        raw_id=hit.raw_id,
+                        turn_id=turn.turn_id,
+                        turn_index=turn.turn_index,
+                        turn_count=turn.turn_count,
+                        content=turn.content,
+                        source=hit.source,
+                        session_id=hit.session_id,
+                        memory_at=memory_at,
+                        score=hit.score,
+                    )
+                    for turn in turns_for_hit(turns, value.query)
+                ]
+                primary.append(shown[0])
+                siblings.extend(shown[1:])
+            chosen = primary[: value.limit]
+            chosen.extend(siblings[: value.limit - len(chosen)])
+            # Stable: a hit's turns stay together, in hit-score order.
+            chosen.sort(key=lambda item: item.score, reverse=True)
+            return tuple(chosen)
 
         async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
             # lite extracts nothing: its search answers raw turns, which the

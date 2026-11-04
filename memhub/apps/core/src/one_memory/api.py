@@ -270,7 +270,7 @@ from one_memory.onboarding import (
     OnboardingState,
     OnboardingStore,
 )
-from one_memory.raw_turns import RawDisplayTurn, raw_display_turns
+from one_memory.raw_turns import RawDisplayTurn, raw_display_turns, raw_prefix_added
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -610,17 +610,10 @@ class SdkRawItem(HySdkRawRecord):
     turn_count: int | None = Field(default=None, ge=1)
 
     @classmethod
-    def of(
-        cls, record: HySdkRawRecord, turn: RawDisplayTurn | None = None
-    ) -> "SdkRawItem":
+    def of(cls, record: HySdkRawRecord, turn: RawDisplayTurn | None = None) -> "SdkRawItem":
         content = turn.content if turn is not None else record.content
-        raw_messages = (
-            turn.messages if turn is not None else raw_turn_messages(record.content)
-        )
-        messages = tuple(
-            SdkRawMessage(role=role, content=text)
-            for role, text in raw_messages
-        )
+        raw_messages = turn.messages if turn is not None else raw_turn_messages(record.content)
+        messages = tuple(SdkRawMessage(role=role, content=text) for role, text in raw_messages)
         roles = {message.role for message in messages}
         return cls(
             **record.model_dump(exclude={"content"}),
@@ -4532,10 +4525,7 @@ def create_app(
                 )
                 if len(raw_turn_cache_locks) > 64:
                     for stale_key, stale_lock in tuple(raw_turn_cache_locks.items()):
-                        if (
-                            stale_key not in raw_turn_cache
-                            and not stale_lock.locked()
-                        ):
+                        if stale_key not in raw_turn_cache and not stale_lock.locked():
                             raw_turn_cache_locks.pop(stale_key, None)
                 lock = raw_turn_cache_locks.setdefault(cache_key, asyncio.Lock())
                 async with lock:
@@ -4546,9 +4536,7 @@ def create_app(
                             offset=0,
                             limit=500,
                         )
-                        first_page = HySdkRawPage.from_memory_list(
-                            value, limit=500, offset=0
-                        )
+                        first_page = HySdkRawPage.from_memory_list(value, limit=500, offset=0)
                         signature = tuple(
                             (record.raw_id, record.status) for record in first_page.raw
                         )
@@ -4559,6 +4547,29 @@ def create_app(
                             and cached[1] == signature
                         ):
                             projected_turns = cached[2]
+                            break
+                        added = (
+                            None
+                            if cached is None
+                            else raw_prefix_added(cached[1], signature, cached[0], first_page.total)
+                        )
+                        if cached is not None and added is not None:
+                            # A live session only puts new raws on top: project
+                            # those and keep the rest, instead of re-listing the
+                            # whole raw layer on every poll.
+                            projected_turns = (
+                                tuple(
+                                    (record, turn)
+                                    for record in first_page.raw[:added]
+                                    for turn in reversed(raw_display_turns(record))
+                                )
+                                + cached[2]
+                            )
+                            raw_turn_cache[cache_key] = (
+                                first_page.total,
+                                signature,
+                                projected_turns,
+                            )
                             break
 
                         records_list = list(first_page.raw)
@@ -4585,16 +4596,11 @@ def create_app(
                             offset=0,
                             limit=500,
                         )
-                        verify = HySdkRawPage.from_memory_list(
-                            verify_value, limit=500, offset=0
-                        )
+                        verify = HySdkRawPage.from_memory_list(verify_value, limit=500, offset=0)
                         verify_signature = tuple(
                             (record.raw_id, record.status) for record in verify.raw
                         )
-                        if (
-                            verify.total != first_page.total
-                            or verify_signature != signature
-                        ):
+                        if verify.total != first_page.total or verify_signature != signature:
                             continue
                         projected_turns = tuple(
                             (record, turn)
@@ -6372,7 +6378,7 @@ async def _search_sdk_raw(
     `filters` are a caller's pass-through options: its floor and row filters
     apply, and its `include_sources` only narrow `sources`, never widen them.
     """
-    from one_memory.context_routes import raw_lane_overrides
+    from one_memory.context_routes import raw_lane_overrides, raw_lane_statuses
 
     include = sorted(sources) if sources else None
     if filters is not None and filters.include_sources is not None:
@@ -6399,6 +6405,8 @@ async def _search_sdk_raw(
             "scene": "chat",
             "reader": HY_MEMORY_READER,
             "layers": ["l1_raw"],
+            # Lite recall is plain RAG over every raw, shadow included.
+            **raw_lane_statuses(lite=app.state.memory_mode() == "lite"),
             **(raw_lane_overrides(filters) if filters is not None else {}),
         },
     )

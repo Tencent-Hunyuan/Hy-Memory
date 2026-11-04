@@ -213,6 +213,7 @@
 | `test_onboarding_profile.py` | `integration` | R-09：首次安装引导把画像录下来，不问用户一句话。 |
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
+| `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
 | `test_policy_api_wiring.py` | `integration` | 覆盖 global model permission off does not backfill、backfill puts history on write jobs without scheduling memory tasks、source pause skips history until the source is reenabled 场景。 |
 | `test_policy_production_entry.py` | `contract` | 覆盖 production serve passes only supported app options、maintenance serve does not own the runtime 场景。 |
 | `test_precipitation_concurrency_setting.py` | `contract` | Rule 2/9: precipitation concurrency is configurable, not hardcoded to 1. |
@@ -321,4 +322,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 316 个测试文件。
+共 317 个测试文件。
