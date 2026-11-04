@@ -1156,8 +1156,7 @@ export function MemoryMap(props: Props) {
                     onClick={() => {
                       if (axis === "topic") setGroupKey("");
                       if (library.page) {
-                        const offset =
-                          library.page.offset - library.page.limit;
+                        const offset = library.page.offset - library.page.limit;
                         setPageRetrying(false);
                         pageRetrySawLoading.current = false;
                         setPendingPageOffset(offset);
@@ -1198,8 +1197,7 @@ export function MemoryMap(props: Props) {
                     onClick={() => {
                       if (axis === "topic") setGroupKey("");
                       if (library.page) {
-                        const offset =
-                          library.page.offset + library.page.limit;
+                        const offset = library.page.offset + library.page.limit;
                         setPageRetrying(false);
                         pageRetrySawLoading.current = false;
                         setPendingPageOffset(offset);

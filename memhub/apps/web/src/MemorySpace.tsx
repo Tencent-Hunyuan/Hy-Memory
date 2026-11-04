@@ -284,8 +284,8 @@ export function MemorySpace({
         const rememberRaw = (items: RawMapRecord[]) => {
           const next =
             sdkRawCursor && rawRecordsScope.current === windowKey
-            ? new Map(rawRecords.current)
-            : new Map<string, RawMapRecord>();
+              ? new Map(rawRecords.current)
+              : new Map<string, RawMapRecord>();
           if (selectedRawRef.current)
             next.set(
               rawRecordId(selectedRawRef.current),
@@ -424,9 +424,10 @@ export function MemorySpace({
       }
     };
     void read(true);
-    const timer = lite && sdkRawCursor !== null
-      ? undefined
-      : setInterval(() => void read(false), 30_000);
+    const timer =
+      lite && sdkRawCursor !== null
+        ? undefined
+        : setInterval(() => void read(false), 30_000);
     return () => {
       cancelled = true;
       if (timer !== undefined) clearInterval(timer);
@@ -1267,8 +1268,7 @@ export function MemorySpace({
                 settledQuery: sdkLibrary.settledQuery,
                 requestedOffset: sdkLibraryOffset,
                 cursorPaging: lite && !sdkLibraryQuery.trim(),
-                hasMore:
-                  !!sdkPage?.has_more && !!sdkPage?.next_cursor,
+                hasMore: !!sdkPage?.has_more && !!sdkPage?.next_cursor,
                 unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,
                 onSource: setSdkLibrarySource,
