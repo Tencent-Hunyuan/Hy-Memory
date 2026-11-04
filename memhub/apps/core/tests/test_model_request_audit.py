@@ -181,3 +181,244 @@ def test_store_schema_matches_migration_and_supports_parallel_starts(tmp_path):
     assert len(set(ids)) == 8
     with sqlite3.connect(store.database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM model_request_audit").fetchone() == (8,)
+
+
+def test_sdk_write_records_each_retry_across_the_real_sdk_loop(tmp_path):
+    from hy_memory.client import _LoopThread
+
+    from one_memory.sdk_write_processor import _write
+
+    attempts = 0
+
+    def provider(_request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            503 if attempts == 1 else 200,
+            json={"usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}},
+        )
+
+    store, transport = _transport(tmp_path, provider)
+    loop = _LoopThread()
+
+    async def model_calls():
+        async with httpx.AsyncClient(transport=transport) as client:
+            for _ in range(2):
+                await client.post("https://example.test/chat/completions", json={})
+
+    try:
+        asyncio.run(_write("sdk-real-loop", lambda: loop.run(model_calls())))
+    finally:
+        loop.stop()
+    totals = store.report(request_id="sdk-real-loop")["summary"]
+    assert (totals["request_count"], totals["failed"], totals["succeeded"]) == (2, 1, 1)
+    assert totals["total_tokens"] == 30
+
+
+def test_streaming_usage_is_observed_without_buffering_or_saving_answer(tmp_path):
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"private answer"}}]}\n\n'
+            yield b'data: {"id":"stream-id","choices":[],"usage":{"prompt_tokens":10,'
+            yield b'"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":8}}\n\n'
+            yield b"data: [DONE]\n\n"
+
+    store, transport = _transport(
+        tmp_path,
+        lambda _: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Stream(),
+        ),
+    )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=transport) as client:
+            with audit_precipitation_request("stream"):
+                async with client.stream(
+                    "POST", "https://example.test/chat/completions"
+                ) as response:
+                    assert store.report()["summary"]["in_flight"] == 1
+                    chunks = response.aiter_raw()
+                    assert b"private answer" in await anext(chunks)
+                    assert store.report()["summary"]["in_flight"] == 1
+                    async for _ in chunks:
+                        pass
+
+    asyncio.run(scenario())
+    row = store.report()["requests"][0]
+    assert (row["total_tokens"], row["cached_prompt_tokens"], row["outcome"]) == (
+        12,
+        8,
+        "succeeded",
+    )
+    assert b"private answer" not in store.database.read_bytes()
+
+
+def _daily_service(tmp_path):
+    from one_memory.model_usage import ModelUsageService
+
+    store = ModelRequestAuditStore(tmp_path / "one-memory.sqlite3")
+    with sqlite3.connect(store.database) as db:
+        db.execute(
+            "CREATE TABLE model_profile_versions (profile_id TEXT, revision INT, base_url TEXT)"
+        )
+        db.executemany(
+            "INSERT INTO model_profile_versions VALUES (?,1,?)",
+            [
+                ("deepseek", "https://api.deepseek.com"),
+                ("other", "https://other.test/v1"),
+            ],
+        )
+    return store, ModelUsageService(store.database, tmp_path)
+
+
+def _record_daily(store, *, profile="deepseek", model="deepseek-flash", at, usage=True):
+    audit_id = store.start(
+        request_id="r",
+        profile_id=profile,
+        profile_revision=1,
+        provider_kind="openai_compatible",
+        model=model,
+        request_kind="chat_completion",
+        prompt_stage="other",
+    )
+    if usage:
+        store.finish(
+            audit_id,
+            outcome="succeeded",
+            http_status=200,
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            cached_prompt_tokens=80,
+        )
+    with sqlite3.connect(store.database) as db:
+        db.execute("UPDATE model_request_audit SET started_at=? WHERE audit_id=?", (at, audit_id))
+
+
+def test_daily_report_uses_local_calendar_all_rows_and_preserves_unknown_usage(tmp_path):
+    from datetime import datetime
+
+    store, service = _daily_service(tmp_path)
+    for _ in range(205):
+        _record_daily(store, at="2026-11-03T16:01:00+00:00")
+    _record_daily(store, at="2026-11-03T15:59:00+00:00")
+    _record_daily(store, at="2026-11-04T01:00:00+00:00", usage=False)
+    report = service.report(
+        days=7, timezone="Asia/Shanghai", now=datetime.fromisoformat("2026-11-04T04:00:00+00:00")
+    )
+    today, yesterday = report["days"][:2]
+    assert today["request_count"] == 206 and yesterday["request_count"] == 1
+    assert today["total_tokens"] == 205 * 120
+    assert today["unknown_usage_requests"] == today["in_flight"] == 1
+    assert report["days"][-1]["coverage"] == "unrecorded"
+    assert today["costs"][0]["estimated_min"] == "0.02082800"
+    assert today["unpriced_requests"] == 1
+
+
+def test_custom_vendor_prices_currencies_and_links_survive_restart(tmp_path):
+    from datetime import datetime
+
+    from one_memory.model_usage import ModelPricing, ModelUsageService
+
+    store, service = _daily_service(tmp_path)
+    _record_daily(store, at="2026-11-04T02:00:00+00:00")
+    _record_daily(store, profile="other", model="vendor-model", at="2026-11-04T02:00:00+00:00")
+    price = ModelPricing(
+        model="vendor-model",
+        currency="USD",
+        input_per_million="2",
+        cached_input_per_million="0.5",
+        output_per_million="8",
+        billing_url="https://vendor.test/billing",
+    )
+    service.set_pricing("other", price)
+    service = ModelUsageService(store.database, tmp_path)
+    assert service.settings().pricing["other"] == price
+    report = service.report(
+        days=1, timezone="UTC", now=datetime.fromisoformat("2026-11-04T04:00:00+00:00")
+    )
+    assert [cost["currency"] for cost in report["summary"]["costs"]] == ["CNY", "USD"]
+    assert report["summary"]["costs"][1]["estimated_max"] == "0.00024000"
+    deepseek = report["summary"]["costs"][0]
+    assert deepseek["estimated_max"] == str(
+        __import__("decimal").Decimal(deepseek["estimated_min"]) * 2
+    )
+    filtered = service.report(
+        days=1,
+        timezone="UTC",
+        profile_id="other",
+        now=datetime.fromisoformat("2026-11-04T04:00:00+00:00"),
+    )
+    assert filtered["summary"]["request_count"] == 1
+    service.set_pricing("other", price.model_copy(update={"model": "old-model"}))
+    report = service.report(
+        days=1, timezone="UTC", now=datetime.fromisoformat("2026-11-04T04:00:00+00:00")
+    )
+    assert report["summary"]["unpriced_requests"] == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"input_per_million": "NaN"},
+        {"output_per_million": "Infinity"},
+        {"input_per_million": "-1"},
+        {"billing_url": "javascript:alert(1)"},
+        {"billing_url": "https://secret@vendor.test/usage"},
+        {"currency": "usd"},
+    ],
+)
+def test_pricing_rejects_invalid_rates_and_unsafe_links(changes):
+    from pydantic import ValidationError
+
+    from one_memory.model_usage import ModelPricing
+
+    with pytest.raises(ValidationError):
+        ModelPricing(model="model", **changes)
+
+
+def test_application_transport_counts_unscoped_calls_but_not_local_budget_refusals(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from one_memory.api import _usage_transport
+    from one_memory.model_request_budget import ModelRequestBudget, ModelRequestBudgetError
+
+    store = ModelRequestAuditStore(tmp_path / "one-memory.sqlite3")
+    monkeypatch.setattr(
+        httpx,
+        "AsyncHTTPTransport",
+        lambda **_: httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "usage": {
+                        "prompt_tokens": 2,
+                        "completion_tokens": 1,
+                        "total_tokens": 3,
+                    }
+                },
+            )
+        ),
+    )
+    app = SimpleNamespace(state=SimpleNamespace(model_request_audit_store=store))
+    profile = SimpleNamespace(
+        profile_id="p", revision=1, provider_kind="openai_compatible", model="m"
+    )
+    budget = ModelRequestBudget(
+        store.database, request_limit=1, body_byte_limit=1000, output_token_limit=100
+    )
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=_usage_transport(app, profile, budget=budget)
+        ) as client:
+            await client.post("https://example.test/chat/completions", json={"max_tokens": 10})
+            with pytest.raises(ModelRequestBudgetError):
+                await client.post("https://example.test/chat/completions", json={"max_tokens": 10})
+
+    asyncio.run(scenario())
+    assert store.report()["summary"]["request_count"] == 1

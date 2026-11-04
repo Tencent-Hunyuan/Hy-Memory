@@ -1,6 +1,7 @@
 import { currentEnglishMessages } from "./gui-i18n-current.js";
 import { embeddingSwitchEnglishMessages } from "./gui-i18n-embedding-switch.js";
 import { modeEnglishMessages } from "./gui-i18n-mode.js";
+import { usageEnglishMessages } from "./gui-i18n-usage.js";
 
 // English translations integrated from PR #114.
 const baseEnglishMessages = {
@@ -2062,6 +2063,7 @@ const baseEnglishMessages = {
 
 export const englishMessages = {
   ...baseEnglishMessages,
+  ...usageEnglishMessages,
   ...currentEnglishMessages,
   ...embeddingSwitchEnglishMessages,
   ...modeEnglishMessages,

@@ -28,6 +28,7 @@ export type PollKey =
   | "applications"
   | "calls"
   | "model-profiles"
+  | "model-usage"
   | "embedding-switch"
   | "memory-add-processing"
   | "sdk-raw-history"

@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
 import { embeddingSwitchJapaneseMessages } from "../gui-i18n-embedding-switch.js";
 import { modeJapaneseMessages } from "../gui-i18n-mode.js";
+import { usageEnglishMessages } from "../gui-i18n-usage.js";
 
 /** Japanese (ja) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const japaneseMessages: Record<MessageKey, string> = {
+  ...usageEnglishMessages,
   ...modeJapaneseMessages,
   ...embeddingSwitchJapaneseMessages,
   "connectionFallback.title": "ほかのツールを接続",

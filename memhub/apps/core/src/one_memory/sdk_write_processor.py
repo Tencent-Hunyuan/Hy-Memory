@@ -29,6 +29,7 @@ from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, Evide
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_features import FeatureOverrides
 from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
+from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 PRODUCT_AGENT_ID = "all-apps"
@@ -81,7 +82,9 @@ class _Tracked:
 async def _write(tracked_id: str, work: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
     call = _Tracked(tracked_id, work)
     try:
-        return await in_sdk_write(call, *args, **kwargs)
+        # The executor and SDK loop copy this context, including after a caller times out.
+        with audit_precipitation_request(tracked_id):
+            return await in_sdk_write(call, *args, **kwargs)
     except asyncio.CancelledError:
         call.abandon()
         raise

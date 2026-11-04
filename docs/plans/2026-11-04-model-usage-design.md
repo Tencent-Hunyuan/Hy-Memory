@@ -22,5 +22,3 @@ Add a compact expandable usage panel on the Memory page, matching existing contr
 2. Add local pricing settings and daily usage service/API.
 3. Add the Memory page panel, shared API types and translations.
 4. Extend existing relevant tests, verify in isolation, review the diff and open a PR against main.
-
-The optional downstream writing-plans skill referenced by brainstorming is not installed in the supplied skill roots; this document includes the concrete implementation plan instead.

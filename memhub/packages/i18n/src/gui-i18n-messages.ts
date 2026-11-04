@@ -44,6 +44,10 @@ import {
   settingsSpanishMessages,
 } from "./gui-i18n-settings.js";
 import {
+  usageChineseMessages,
+  usageSpanishMessages,
+} from "./gui-i18n-usage.js";
+import {
   workbenchChineseMessages,
   workbenchSpanishMessages,
 } from "./gui-i18n-workbench.js";
@@ -94,6 +98,11 @@ type Catalog = {
 
 /** Every domain catalog, in a fixed order; exported for collision tests. */
 export const guiCatalogs: readonly Catalog[] = [
+  {
+    name: "usage",
+    chinese: usageChineseMessages,
+    spanish: usageSpanishMessages,
+  },
   {
     name: "current",
     chinese: currentChineseMessages,
@@ -195,7 +204,8 @@ export function mergeCatalogs(catalogs: readonly Catalog[]) {
 const merged = mergeCatalogs(guiCatalogs);
 
 /** The complete Chinese GUI catalog defines the supported message keys. */
-export const chineseMessages = merged.chinese as typeof guideChineseMessages &
+export const chineseMessages = merged.chinese as typeof usageChineseMessages &
+  typeof guideChineseMessages &
   typeof embeddingSwitchChineseMessages &
   typeof healthChineseMessages &
   typeof recoveryChineseMessages &

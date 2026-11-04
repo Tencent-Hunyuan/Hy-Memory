@@ -1,9 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
 import { embeddingSwitchFrenchMessages } from "../gui-i18n-embedding-switch.js";
 import { modeFrenchMessages } from "../gui-i18n-mode.js";
+import { usageEnglishMessages } from "../gui-i18n-usage.js";
 
 /** French (fr, vous) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const frenchMessages: Record<MessageKey, string> = {
+  ...usageEnglishMessages,
   ...modeFrenchMessages,
   ...embeddingSwitchFrenchMessages,
   "connectionFallback.title": "Connecter d’autres outils",
