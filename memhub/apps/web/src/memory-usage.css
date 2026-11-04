@@ -48,6 +48,13 @@
 .memory-usage button {
   cursor: pointer;
 }
+/* The shared hover rule darkens the background; keep the text readable. */
+.memory-usage button:hover:not(:disabled),
+.memory-usage button:focus-visible:not(:disabled) {
+  color: #fff;
+  background: var(--ac-strong, #304757);
+  border-color: var(--ac-strong, #304757);
+}
 .memory-usage button:disabled {
   cursor: wait;
   opacity: 0.6;
