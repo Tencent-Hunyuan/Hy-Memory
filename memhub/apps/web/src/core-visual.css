@@ -981,6 +981,14 @@ button.map-tool {
   background: #fff;
   box-shadow: var(--shadow-pop);
 }
+.memory-graph-fallback-topic {
+  display: block;
+  width: 100%;
+  margin-block: 6px;
+  padding: 8px 14px;
+  color: var(--tx2);
+  overflow-wrap: anywhere;
+}
 .graph-labels {
   position: absolute;
   inset: 0;

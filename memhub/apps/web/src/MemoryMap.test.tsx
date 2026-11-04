@@ -149,7 +149,7 @@ it("OBS-22: the graph inspector has no editing entry and never says changes cann
   expect(screen.queryByText(/暂不能保存更改/)).toBeNull();
 });
 
-it("replaces a topic detail with an off-page graph memory detail", async () => {
+it("keeps topic annotations out of the inspector and opens detail-bearing graph nodes", async () => {
   const onOpen = vi.fn();
   const topicGraph = {
     total_memories: 2,
@@ -221,13 +221,13 @@ it("replaces a topic detail with an off-page graph memory detail", async () => {
     />,
   );
 
+  await act(async () => {});
+  onOpen.mockClear();
   await userEvent.click(screen.getByRole("button", { name: "图中选择 git" }));
-  expect(screen.getByRole("heading", { name: "git" })).toBeTruthy();
-  expect(screen.getAllByText("第一条").length).toBeGreaterThan(0);
-  expect(screen.queryByText("对应记忆")).toBeNull();
-  expect(screen.queryByText("属于主题")).toBeNull();
-  expect(screen.queryByText("主题")).toBeNull();
-  expect(screen.queryByText("两跳")).toBeNull();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.queryByRole("heading", { name: "git" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:m0");
   await userEvent.click(
     screen.getByRole("button", { name: "图中选择 先验证，再推送" }),
   );
