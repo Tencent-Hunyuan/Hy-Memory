@@ -111,6 +111,7 @@
 | `test_health.py` | `contract` | 覆盖 a backfill that fails says so rather than disappearing、a failed catch up leaves a traceback behind、configured model without content consent does not start backfill 等 15 个场景。 |
 | `test_hermes_gateway_injection.py` | `contract` | Hermes gateway text in `user` rows: notices are skipped, relayed messages unwrapped. |
 | `test_history_listing_rotation.py` | `contract` | 覆盖 history listing alternates started and untouched files、history listing drains whichever cohort is longer 场景。 |
+| `test_home_projection.py` | `contract` | 覆盖 memory projection covers pro and ultra、memory projection preserves productivity namespace、project raw latest uses import time without conversation time 等 7 个场景。 |
 | `test_host_capabilities.py` | `unit` | A plugin does not become realtime on every host or every unknown version. |
 | `test_hourly_c1_peak_replay_contract.py` | `contract` | Guard the package peak-replay probe's error accounting. |
 | `test_hourly_c1_recall_stage_probe_contract.py` | `contract` | Guard the packaged recall stage probe's command and error semantics. |
@@ -320,4 +321,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 315 个测试文件。
+共 316 个测试文件。

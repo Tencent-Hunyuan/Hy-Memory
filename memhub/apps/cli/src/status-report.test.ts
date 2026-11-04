@@ -147,3 +147,140 @@ describe("status and doctor on an unfinished upgrade migration", () => {
     expect(report.runtime.log_file).toBeUndefined();
   });
 });
+
+describe("mode-aware status content projection", () => {
+  const runtime = {
+    state: "running" as const,
+    code: "runtime_verified",
+    host: "127.0.0.1",
+    port: 30001,
+  };
+  const processing = (mode: "lite" | "pro" | "ultra") => ({
+    pending: 0,
+    fresh_pending: 0,
+    backlog_pending: 0,
+    outside_window_pending: 0,
+    running: 0,
+    waiting_for_model: 0,
+    completed: 0,
+    failed: 0,
+    pipeline: { mode, configured_mode: mode },
+  });
+  const projection = {
+    projection_version: 1,
+    user_id: "local",
+    effective_mode: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    visible_count: 7,
+    display_state: "excerpt",
+    latest: {
+      type: "raw",
+      raw_id: "raw-1",
+      session_id: "session-1",
+      display_state: "excerpt",
+      time: null,
+      time_basis: null,
+      excerpt: "hello",
+      truncated: false,
+      source_id: "cursor",
+    },
+    observed_at: "2026-11-04T00:00:00Z",
+  };
+
+  it("uses the projection without reading either legacy count endpoint", async () => {
+    const calls: string[] = [];
+    const reader: CoreReader = async <T>(path: string) => {
+      calls.push(path);
+      const data =
+        path === "/api/v2/home-projection"
+          ? projection
+          : path === "/api/v1/memory-processing"
+            ? processing("lite")
+            : null;
+      return { state: "ok", data } as ReadOutcome<T>;
+    };
+    const report = await composeStatusReport({
+      dataDir: "/tmp/isolated",
+      runtime,
+      background: null,
+      reader,
+    });
+    expect(report.sections.memories).toEqual({
+      state: "ok",
+      content_plane: "raw",
+      visible_count: 7,
+      effective_mode: "lite",
+      raw_count: 7,
+    });
+    expect(calls).not.toContain("/api/v2/raw");
+    expect(calls).not.toContain("/api/v2/home-summary");
+    expect(renderStatusText(report, "MemHub")).toContain(
+      "原始对话：原始对话 7",
+    );
+  });
+
+  it("falls back to the real raw total only for an old Lite Core", async () => {
+    const reader: CoreReader = async <T>(path: string) => {
+      if (path === "/api/v2/home-projection")
+        return { state: "not_found", code: "http_404" } as ReadOutcome<T>;
+      if (path === "/api/v1/memory-processing")
+        return {
+          state: "ok",
+          data: processing("lite"),
+        } as ReadOutcome<T>;
+      if (path === "/api/v2/raw")
+        return {
+          state: "ok",
+          data: {
+            user_id: "local",
+            items: [],
+            total: 9,
+            offset: 0,
+            limit: 1,
+            time_filtered: false,
+          },
+        } as ReadOutcome<T>;
+      return { state: "unavailable", code: "x" } as ReadOutcome<T>;
+    };
+    const report = await composeStatusReport({
+      dataDir: "/tmp/isolated",
+      runtime,
+      background: null,
+      reader,
+    });
+    expect(report.sections.memories).toMatchObject({
+      state: "ok",
+      content_plane: "raw",
+      visible_count: 9,
+      raw_count: 9,
+    });
+    expect(report.sections.memories).not.toHaveProperty("memory_count");
+  });
+
+  it("rejects extra projection fields instead of falling back or leaking them", async () => {
+    const reader: CoreReader = async <T>(path: string) =>
+      ({
+        state: "ok",
+        data:
+          path === "/api/v2/home-projection"
+            ? { ...projection, secret: "must-not-leak" }
+            : processing("lite"),
+      }) as ReadOutcome<T>;
+    const report = await composeStatusReport({
+      dataDir: "/tmp/isolated",
+      runtime,
+      background: null,
+      reader,
+    });
+    expect(report.sections.memories).toEqual({
+      state: "invalid",
+      code: "response_invalid",
+    });
+    expect(JSON.stringify(report)).not.toContain("must-not-leak");
+  });
+});

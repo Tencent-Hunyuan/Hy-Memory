@@ -1468,10 +1468,28 @@ export const koreanMessages: Record<MessageKey, string> = {
   "apps.back": "홈으로 돌아가기",
   "apps.overview": "기억 개요",
   "apps.memories": "저장된 기억",
+  "apps.rawConversations": "원본 대화",
+  "apps.rawSaving": "저장 중",
+  "apps.rawSavingStatus": "저장 상태",
+  "apps.rawSavingDetail": "생성 모델 없이 원본 대화를 저장합니다",
+  "apps.rawNoExcerpt": "표시할 수 있는 사용자 원문이 없습니다",
+  "apps.rawConversation": "원본 대화",
+  "apps.rawSaved": "원본 대화 저장됨",
+  "apps.rawEmpty": "저장된 원본 대화가 아직 없습니다",
+  "apps.rawCheckedEmpty": "확인됨: 표시할 원본 대화 업데이트가 없습니다",
+  "apps.memoryCheckedEmpty": "확인됨: 표시할 메모리 업데이트가 없습니다",
+  "apps.rawWaiting": "저장된 원본 대화가 여기에 표시됩니다",
+  "apps.checkedRecent": "현재 내용 확인됨",
+  "apps.currentMode": "현재 모드",
+  "apps.mode.lite": "기본 메모리 (lite)",
+  "apps.mode.pro": "스마트 메모리 (pro)",
+  "apps.mode.ultra": "심층 메모리 (ultra)",
   "apps.readingCount": "로컬 기억 확인 중…",
+  "apps.rawReadingCount": "원본 대화 확인 중…",
   "apps.startingRetry":
     "백그라운드 서비스를 시작하는 중입니다. 자동으로 업데이트됩니다",
   "apps.countWillUpdate": "기억 개수는 자동으로 업데이트됩니다",
+  "apps.rawCountWillUpdate": "원본 대화 수는 자동으로 업데이트됩니다",
   "apps.showingPrevious":
     "이전 데이터를 표시하는 중입니다. 자동으로 업데이트됩니다",
   "apps.unreadable": "사용할 수 없음",
@@ -1568,6 +1586,8 @@ export const koreanMessages: Record<MessageKey, string> = {
   "apps.revision": "버전 {count}",
   "apps.conversationTime": "대화 시간",
   "apps.importTime": "가져온 시간",
+  "apps.writeTime": "기록 시간",
+  "apps.updateTime": "업데이트 시간",
   "apps.incompleteCalls":
     " · 일부 호출이 기록되지 않아 목록이 불완전할 수 있습니다",
   "apps.timeoutWarning":
@@ -1999,6 +2019,15 @@ export const koreanMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host}이(가) 일치하는 기억을 찾지 못했습니다",
   "calls.headline.found": "{host}이(가) 관련 항목 {count}개를 찾았습니다",
   "calls.headline.found.one": "{host}이(가) 관련 항목 {count}개를 찾았습니다",
+  "calls.headline.rawOnly": "{host}이(가) 원본 대화 {count}개를 찾았습니다",
+  "calls.headline.rawOnly.one": "{host}이(가) 원본 대화 {count}개를 찾았습니다",
+  "calls.headline.memoryOnly": "{host}이(가) 기억 {count}개를 찾았습니다",
+  "calls.headline.memoryOnly.one": "{host}이(가) 기억 {count}개를 찾았습니다",
+  "calls.headline.mixed":
+    "{host}이(가) 기억 {memories}개 · 원본 대화 {raw}개를 찾았습니다",
+  "calls.headline.mixed.one":
+    "{host}이(가) 기억 {memories}개 · 원본 대화 {raw}개를 찾았습니다",
+  "calls.headline.completed": "{host} 호출이 완료되었습니다",
   "calls.detail.timedOut":
     "기억을 정리하는 중입니다. 조회 시간이 초과되어 이번 답변에는 기억이 포함되지 않았습니다.",
   "calls.detail.unavailable":

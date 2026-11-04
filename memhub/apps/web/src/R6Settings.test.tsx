@@ -14,6 +14,7 @@ import {
   getMemoryMode,
   getModelProfiles,
   getSedimentation,
+  planMemoryMode,
   setSedimentation,
 } from "./api";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
@@ -92,6 +93,8 @@ vi.mock("./api", () => ({
   getMemoryProcessing: vi.fn().mockResolvedValue({
     embedding_switch: null,
   }),
+  planMemoryMode: vi.fn(),
+  memoryModePlanUnsupported: vi.fn().mockReturnValue(false),
   apiErrorCode: vi.fn().mockReturnValue(null),
 }));
 vi.mock("./ModelSettings", async () => {
@@ -218,6 +221,20 @@ it("carries a missing-model explanation into model configuration and moves focus
       finished_at: null,
       users: {},
     },
+  });
+  vi.mocked(planMemoryMode).mockResolvedValueOnce({
+    current: "lite",
+    target: "pro",
+    effective_target: "pro",
+    capabilities: {
+      content_plane: "memory",
+      generation_required: true,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: ["earlier_raw_not_extracted", "lite_search_stops"],
+    warnings: [],
+    blockers: ["active_model_required"],
   });
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);

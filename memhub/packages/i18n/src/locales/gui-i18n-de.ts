@@ -1532,11 +1532,33 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.back": "Zurück zur Startseite",
   "apps.overview": "Erinnerungsübersicht",
   "apps.memories": "Gespeicherte Erinnerungen",
+  "apps.rawConversations": "Originalunterhaltungen",
+  "apps.rawSaving": "Wird gespeichert",
+  "apps.rawSavingStatus": "Speicherstatus",
+  "apps.rawSavingDetail":
+    "Originalunterhaltungen werden ohne generatives Modell gespeichert",
+  "apps.rawNoExcerpt": "Kein anzeigbarer Benutzertext in dieser Unterhaltung",
+  "apps.rawConversation": "Originalunterhaltung",
+  "apps.rawSaved": "Originalunterhaltung gespeichert",
+  "apps.rawEmpty": "Noch keine Originalunterhaltungen gespeichert",
+  "apps.rawCheckedEmpty":
+    "Geprüft: keine anzeigbaren Aktualisierungen der Originalunterhaltungen",
+  "apps.memoryCheckedEmpty":
+    "Geprüft: keine anzeigbaren Erinnerungsaktualisierungen",
+  "apps.rawWaiting": "Gespeicherte Originalunterhaltungen erscheinen hier",
+  "apps.checkedRecent": "Aktueller Inhalt geprüft",
+  "apps.currentMode": "Aktueller Modus",
+  "apps.mode.lite": "Basisspeicher (lite)",
+  "apps.mode.pro": "Intelligenter Speicher (pro)",
+  "apps.mode.ultra": "Tiefenspeicher (ultra)",
   "apps.readingCount": "Lokale Erinnerungen werden geprüft…",
+  "apps.rawReadingCount": "Originalunterhaltungen werden geprüft…",
   "apps.startingRetry":
     "Der Hintergrunddienst startet; die Anzeige wird automatisch aktualisiert",
   "apps.countWillUpdate":
     "Die Anzahl der Erinnerungen wird automatisch aktualisiert",
+  "apps.rawCountWillUpdate":
+    "Die Anzahl der Originalunterhaltungen wird automatisch aktualisiert",
   "apps.showingPrevious":
     "Vorherige Daten werden angezeigt; die Anzeige wird automatisch aktualisiert",
   "apps.unreadable": "Nicht verfügbar",
@@ -1637,6 +1659,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.revision": "Version {count}",
   "apps.conversationTime": "Unterhaltungszeit",
   "apps.importTime": "Importzeit",
+  "apps.writeTime": "Schreibzeit",
+  "apps.updateTime": "Aktualisierungszeit",
   "apps.incompleteCalls":
     " · Einige Aufrufe wurden nicht aufgezeichnet; die Liste ist möglicherweise unvollständig",
   "apps.timeoutWarning":
@@ -2092,6 +2116,17 @@ export const germanMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} hat keine passenden Erinnerungen gefunden",
   "calls.headline.found": "{host} hat {count} verwandte Einträge gefunden",
   "calls.headline.found.one": "{host} hat {count} verwandten Eintrag gefunden",
+  "calls.headline.rawOnly":
+    "{host} hat {count} ursprüngliche Unterhaltungen gefunden",
+  "calls.headline.rawOnly.one":
+    "{host} hat {count} ursprüngliche Unterhaltung gefunden",
+  "calls.headline.memoryOnly": "{host} hat {count} Erinnerungen gefunden",
+  "calls.headline.memoryOnly.one": "{host} hat {count} Erinnerung gefunden",
+  "calls.headline.mixed":
+    "{host} hat {memories} Erinnerungen · {raw} ursprüngliche Unterhaltungen gefunden",
+  "calls.headline.mixed.one":
+    "{host} hat {memories} Erinnerung · {raw} ursprüngliche Unterhaltungen gefunden",
+  "calls.headline.completed": "Aufruf von {host} abgeschlossen",
   "calls.detail.timedOut":
     "Erinnerungen werden verarbeitet. Bei der Abfrage kam es zu einer Zeitüberschreitung, daher enthielt diese Antwort keine Erinnerungen.",
   "calls.detail.unavailable":

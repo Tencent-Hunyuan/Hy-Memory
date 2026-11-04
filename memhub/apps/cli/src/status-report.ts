@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionV1,
   LiveSyncHealth,
   MemoryProcessingSummary,
   ModelProfile,
@@ -12,10 +13,12 @@ import { sdkMigrationLogPath } from "@one-memory/runtime-control";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import {
   type SdkHomeSummary,
+  validateHomeProjection,
   validateHomeSummary,
   validateLiveSync,
   validateModelProfiles,
   validateProcessing,
+  validateRawTotal,
   validateSources,
 } from "./core-responses.js";
 import { describeEmbeddingSwitchSummary } from "./embedding-switch-flow.js";
@@ -211,12 +214,12 @@ export async function composeStatusReport(options: {
     for (const name of SECTION_NAMES) sections[name] = { state, code };
   } else {
     const reader = options.reader;
-    const [sources, sync, processing, model, memories] = await Promise.all([
+    const [sources, sync, processing, model, projection] = await Promise.all([
       reader<unknown>("/api/v1/sources"),
       reader<unknown>("/api/v1/live-sync"),
       reader<unknown>("/api/v1/memory-processing"),
       reader<unknown>("/api/v1/model-profiles"),
-      reader<unknown>("/api/v2/home-summary"),
+      reader<unknown>("/api/v2/home-projection"),
     ]);
     sections.sources = section(sources, validateSources, describeSources);
     sections.sync = section(sync, validateLiveSync, describeSync);
@@ -228,11 +231,7 @@ export async function composeStatusReport(options: {
     pipeline =
       processing.state === "ok" ? describePipeline(processing.data) : null;
     sections.model = section(model, validateModelProfiles, describeModel);
-    sections.memories = section(
-      memories,
-      validateHomeSummary,
-      describeMemories,
-    );
+    sections.memories = await memorySection(reader, projection, pipeline);
   }
   // A bridge we could not inspect is unknown, not broken and not fine.
   const bridge: StatusDocument["bridge"] =
@@ -312,7 +311,9 @@ export function renderStatusText(
   ];
   for (const name of SECTION_NAMES) {
     lines.push(
-      `${SECTION_LABELS[name]}：${sectionLine(report.sections[name])}`,
+      `${sectionLabel(name, report.sections[name])}：${sectionLine(
+        report.sections[name],
+      )}`,
     );
   }
   if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
@@ -409,7 +410,16 @@ const SECTION_LINE_OMITTED = new Set([
   "embedding_switch",
   "llm_backoff_until",
   "llm_backoff_error",
+  "content_plane",
+  "visible_count",
+  "effective_mode",
 ]);
+
+function sectionLabel(name: string, section: Section | undefined): string {
+  return name === "memories" && section?.content_plane === "raw"
+    ? "原始对话"
+    : SECTION_LABELS[name];
+}
 
 function sectionLine(section: Section | undefined): string {
   if (!section) return "未检查";
@@ -462,6 +472,10 @@ function fieldLabel(key: string): string {
     profiles: "配置",
     active: "当前",
     memory_count: "记忆",
+    raw_count: "原始对话",
+    visible_count: "可见",
+    content_plane: "内容层",
+    effective_mode: "模式",
   };
   return labels[key] ?? key;
 }
@@ -592,6 +606,70 @@ function describeModel(profiles: ModelProfile[]): Record<string, unknown> {
 function describeMemories(summary: SdkHomeSummary): Record<string, unknown> {
   return {
     memory_count: summary.memory_count,
+  };
+}
+
+async function memorySection(
+  reader: CoreReader,
+  projection: ReadOutcome<unknown>,
+  pipeline: PipelineSummary | null,
+): Promise<Section> {
+  if (projection.state === "ok") {
+    const parsed = validateHomeProjection(projection.data);
+    return parsed === null
+      ? { state: "invalid", code: "response_invalid" }
+      : { state: "ok", ...describeProjection(parsed) };
+  }
+  if (projection.state !== "not_found") {
+    return {
+      state: projection.state === "denied" ? "denied" : "unavailable",
+      code: projection.code,
+    };
+  }
+  if (pipeline === null) {
+    return { state: "unavailable", code: "effective_mode_unavailable" };
+  }
+  if (pipeline.mode === "lite") {
+    const raw = await reader<unknown>("/api/v2/raw", {
+      limit: 1,
+      offset: 0,
+    });
+    if (raw.state !== "ok") {
+      return {
+        state: raw.state === "denied" ? "denied" : "unavailable",
+        code: raw.code,
+      };
+    }
+    const total = validateRawTotal(raw.data);
+    return total === null
+      ? { state: "invalid", code: "response_invalid" }
+      : {
+          state: "ok",
+          content_plane: "raw",
+          visible_count: total,
+          effective_mode: "lite",
+          raw_count: total,
+        };
+  }
+  const legacy = await reader<unknown>("/api/v2/home-summary");
+  return section(legacy, validateHomeSummary, (summary) => ({
+    content_plane: "memory",
+    visible_count: summary.memory_count,
+    effective_mode: pipeline.mode,
+    ...describeMemories(summary),
+  }));
+}
+
+function describeProjection(
+  projection: HomeProjectionV1,
+): Record<string, unknown> {
+  return {
+    content_plane: projection.capabilities.content_plane,
+    visible_count: projection.visible_count,
+    effective_mode: projection.effective_mode,
+    ...(projection.capabilities.content_plane === "raw"
+      ? { raw_count: projection.visible_count }
+      : { memory_count: projection.visible_count }),
   };
 }
 

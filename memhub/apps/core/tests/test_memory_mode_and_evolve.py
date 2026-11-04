@@ -177,6 +177,37 @@ def test_the_read_handle_rebuilds_on_a_mode_or_profile_change(monkeypatch, tmp_p
     asyncio.run(scenario())
 
 
+def test_read_handle_can_bind_one_caller_mode_snapshot(monkeypatch, tmp_path) -> None:
+    from one_memory import sdk_read_handle
+
+    callback_reads = 0
+
+    def current_mode() -> str:
+        nonlocal callback_reads
+        callback_reads += 1
+        return "pro"
+
+    monkeypatch.setattr(
+        sdk_read_handle,
+        "SdkClientHandle",
+        lambda profile, **kwargs: _FakeHandle(kwargs.get("mode") or "pro", profile.profile_id),
+    )
+    reads = sdk_read_handle.ActiveProfileReadHandle(
+        profiles=_Profiles(identity=None),  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=tmp_path,
+        memory_mode=current_mode,
+    )
+
+    async def scenario():
+        client = await reads.client_for_mode("lite")
+        assert client.mode == "lite"
+        await reads.close()
+
+    asyncio.run(scenario())
+    assert callback_reads == 0
+
+
 class _FakeHandle:
     def __init__(self, mode: str, profile_id: str = "p") -> None:
         self.mode = mode
@@ -351,6 +382,37 @@ def test_a_lite_write_ignores_the_model_sedimentation_pause(monkeypatch) -> None
         coordinator.process_sdk_job(turn, request_id="r-1", before_hy_invocation=_noop)
     )
     assert receipt.raw_ids == ("raw-1",)
+    assert [name for name, _ in sdk.calls] == ["add"]
+
+
+def test_a_lite_write_ignores_the_model_sedimentation_switch(monkeypatch) -> None:
+    sdk = _WritingSdk()
+    coordinator = sdk_write_processor.SdkWriteCoordinator(
+        profiles=_Profiles(identity=None),  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=None,
+        transport_factory=lambda _profile: None,
+        sedimentation_enabled=lambda: False,
+        memory_mode=lambda: "lite",
+    )
+    monkeypatch.setattr(
+        sdk_write_processor, "SdkClientHandle", lambda profile, **kwargs: _SdkHandle(sdk, "lite")
+    )
+    admitted = 0
+
+    async def admit(_requires_generation: bool) -> None:
+        nonlocal admitted
+        admitted += 1
+
+    receipt = asyncio.run(
+        coordinator.process_sdk_job(
+            (_record("still stored as raw", extracted=False),),
+            request_id="r-off-lite",
+            before_hy_invocation=admit,
+        )
+    )
+    assert receipt.raw_ids == ("raw-1",)
+    assert admitted == 1
     assert [name for name, _ in sdk.calls] == ["add"]
 
 
@@ -820,18 +882,27 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         app.state.history_import_gate_released = True
         assert not _sedimentation_claim_enabled(app, "one-memory-manual")
 
+        app.state.config_store.set_sedimentation_enabled(False)
         lite = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
         assert lite.status_code == 200, lite.text
         body = lite.json()
         assert body["mode"] == "lite" and body["previous_mode"] == "pro"
         assert body["explicitly_configured"] is True
         assert body["effects"] == ["higher_mode_memories_hidden"]
+        resume = getattr(app.state, "sedimentation_resume", None)
+        assert resume is not None
+        await asyncio.wait_for(asyncio.shield(resume), 5)
         assert app.state.sdk_write_coordinator.memory_mode() == "lite"
         assert _sdk_client_handle(app).memory_mode() == "lite"
         # lite claims queued work without a generation model.
         assert app.state.model_profile_store.active_identity() is None
         assert _sedimentation_claim_enabled(app, "one-memory-manual")
 
+        monkeypatch.setattr(
+            app.state.model_profile_store,
+            "active_identity",
+            lambda: ("active-profile", 1),
+        )
         ultra = await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
         assert ultra.status_code == 200, ultra.text
         assert "existing_memories_added_to_graph" in ultra.json()["effects"]
@@ -851,6 +922,92 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
         forced = (await client.get("/api/v1/settings/memory-mode")).json()
         assert forced["mode"] == "ultra" and forced["configured_mode"] == "pro"
         assert forced["forced_by_env"] is True
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_mode_plan_and_put_share_validation_and_effects(tmp_path, monkeypatch) -> None:
+    async def scenario(app, _sdk, client):
+        plan = await client.post(
+            "/api/v1/settings/memory-mode/plan",
+            json={"mode": "lite"},
+        )
+        assert plan.status_code == 200
+        body = plan.json()
+        assert body == {
+            "current": "pro",
+            "target": "lite",
+            "effective_target": "lite",
+            "capabilities": {
+                "content_plane": "raw",
+                "generation_required": False,
+                "graph_enabled": False,
+                "evolve_available": False,
+            },
+            "effects": ["higher_mode_memories_hidden"],
+            "warnings": [],
+            "blockers": [],
+        }
+        changed = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
+        assert changed.status_code == 200
+        assert changed.json()["effects"] == body["effects"]
+
+        missing_model = (
+            await client.post(
+                "/api/v1/settings/memory-mode/plan",
+                json={"mode": "pro"},
+            )
+        ).json()
+        assert missing_model["blockers"] == ["active_model_required"]
+        assert missing_model["effects"] == []
+        refused = await client.put("/api/v1/settings/memory-mode", json={"mode": "pro"})
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == missing_model["blockers"][0]
+
+        monkeypatch.setenv("ONE_MEMORY_GRAPH_STORE", "kuzu")
+        forced = (
+            await client.post(
+                "/api/v1/settings/memory-mode/plan",
+                json={"mode": "lite"},
+            )
+        ).json()
+        assert forced["effective_target"] == "ultra"
+        assert forced["warnings"] == ["forced_by_env", "effective_no_change"]
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_mode_plan_reports_all_blockers_without_planned_effects(tmp_path, monkeypatch) -> None:
+    async def scenario(app, _sdk, client):
+        changed = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
+        assert changed.status_code == 200
+        switch = app.state.embedding_switch
+        switch._scan_hold = True
+        hold = asyncio.Event()
+        task = asyncio.create_task(hold.wait())
+        app.state.memory_graph_backfill._task = task
+        monkeypatch.setattr("one_memory.api.importlib.util.find_spec", lambda _name: None)
+        try:
+            plan = (
+                await client.post(
+                    "/api/v1/settings/memory-mode/plan",
+                    json={"mode": "ultra"},
+                )
+            ).json()
+            assert plan["blockers"] == [
+                "embedding_maintenance_in_progress",
+                "active_model_required",
+                "memory_lifecycle_busy",
+                "graph_store_unavailable",
+            ]
+            assert plan["effects"] == []
+        finally:
+            switch._scan_hold = False
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            app.state.memory_graph_backfill._task = None
 
     run_app(tmp_path, monkeypatch, scenario)
 
@@ -943,7 +1100,13 @@ def test_evolve_api_is_ultra_only_async_and_scoped_per_user(tmp_path, monkeypatc
         assert refused.status_code == 409
         assert refused.json()["detail"] == "memory_mode_not_ultra"
 
-        await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
+        monkeypatch.setattr(
+            app.state.model_profile_store,
+            "active_identity",
+            lambda: ("active-profile", 1),
+        )
+        changed = await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
+        assert changed.status_code == 200, changed.text
         await app.state.memory_graph_backfill.wait()
         started = await client.post(
             "/api/v2/evolve", json={"user_id": "wife", "agent_id": "all-apps", "max_batches": 2}

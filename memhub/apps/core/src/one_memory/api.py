@@ -323,6 +323,13 @@ from one_memory.ui_language import (
     UiLanguage,
     sdk_language,
 )
+from one_memory.ui_projection import (
+    HomeProjectionCapabilities,
+    HomeProjectionV1,
+    home_capabilities,
+    raw_list_filters,
+    read_home_projection,
+)
 from one_memory.user_scope import (
     DEFAULT_USER_ID,
     MULTI_USER_SOURCES,
@@ -640,11 +647,6 @@ class SdkLayerCounts(BaseModel):
     statuses: tuple[str, ...] | None = None
 
 
-#: Raw lifecycle states that are still a kept conversation. Pro marks a raw
-#: SHADOW once extraction succeeds; lite leaves it ACTIVE.
-RAW_STATUSES = ("active", "shadow")
-
-
 class MemoryProcessingBlock(BaseModel):
     kind: str
     reason: str
@@ -769,6 +771,29 @@ class MemoryModeChange(MemoryModeState):
 
     previous_mode: MemoryMode
     effects: tuple[MemoryModeEffect, ...] = ()
+
+
+MemoryModeBlocker = Literal[
+    "active_model_required",
+    "embedding_maintenance_in_progress",
+    "memory_lifecycle_busy",
+    "graph_store_unavailable",
+]
+MemoryModeWarning = Literal["forced_by_env", "effective_no_change"]
+
+
+class MemoryModePlan(BaseModel):
+    """Shared validation result used by plan and PUT."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current: MemoryMode
+    target: MemoryMode
+    effective_target: MemoryMode
+    capabilities: HomeProjectionCapabilities
+    effects: tuple[MemoryModeEffect, ...] = ()
+    warnings: tuple[MemoryModeWarning, ...] = ()
+    blockers: tuple[MemoryModeBlocker, ...] = ()
 
 
 class EvolveScheduleUpdate(BaseModel):
@@ -3847,6 +3872,30 @@ def create_app(
         return Response(status_code=204)
 
     @app.get(
+        "/api/v2/home-projection",
+        response_model=HomeProjectionV1,
+        dependencies=strict,
+    )
+    async def home_projection(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> HomeProjectionV1:
+        """The mode-neutral homepage read model owned by Core."""
+        try:
+            mode = _memory_mode(app)
+            handle = _sdk_client_handle(app)
+            if isinstance(handle, ActiveProfileReadHandle):
+                client = await handle.client_for_mode(mode)
+            else:
+                client = await handle.client()
+            return await read_home_projection(
+                client,
+                user_id=user_id,
+                mode=mode,
+            )
+        except Exception as error:
+            raise _sdk_http_error(error, "home_projection_read_failed") from None
+
+    @app.get(
         "/api/v2/home-summary",
         response_model=SdkHomeSummary,
         dependencies=strict,
@@ -4012,7 +4061,9 @@ def create_app(
             client = await _sdk_client_handle(app).client()
 
             def count(layer: str) -> int:
-                layer_statuses = chosen or (list(RAW_STATUSES) if layer == "l1_raw" else ["active"])
+                layer_statuses = chosen or (
+                    raw_list_filters()["statuses"] if layer == "l1_raw" else ["active"]
+                )
                 raw = client.list_memories(
                     user_id=user_id,
                     layers=[layer],
@@ -4397,9 +4448,10 @@ def create_app(
         time, else the stored time) have no SDK list filter: they cut this
         page in Core and mark it `time_filtered`.
         """
-        chosen_statuses = _library_values(
-            statuses or [], MEMORY_STATUSES, "memory_status_unknown"
-        ) or list(RAW_STATUSES)
+        chosen_statuses = (
+            _library_values(statuses or [], MEMORY_STATUSES, "memory_status_unknown")
+            or raw_list_filters()["statuses"]
+        )
         sources = split_csv(source)
         excluded = split_csv(exclude_sources)
         sessions = split_csv(session_id)
@@ -4408,8 +4460,7 @@ def create_app(
             value = await asyncio.to_thread(
                 client.list_memories,
                 user_id=user_id,
-                layers=["l1_raw"],
-                statuses=chosen_statuses,
+                **raw_list_filters(chosen_statuses),
                 include_sources=sources or None,
                 exclude_sources=excluded or None,
                 session_ids=sessions or None,
@@ -4692,6 +4743,15 @@ def create_app(
         """The SDK mode (lite / pro / ultra): configured, effective, and why."""
         return _memory_mode_state(app)
 
+    @app.post(
+        "/api/v1/settings/memory-mode/plan",
+        response_model=MemoryModePlan,
+        dependencies=strict,
+    )
+    def plan_memory_mode(request: MemoryModeUpdate) -> MemoryModePlan:
+        """Validate and explain a mode change without mutating anything."""
+        return _memory_mode_plan(app, request.mode)
+
     @app.put(
         "/api/v1/settings/memory-mode",
         response_model=MemoryModeChange,
@@ -4710,17 +4770,12 @@ def create_app(
         added to the graph once, in the background (`graph_build`). No raw is
         ever deleted, in any mode. See docs/contracts/memory-mode-evolve-v1.md.
         """
-        _refuse_pipeline_change_during_embedding_maintenance(app)
-        if request.mode == "ultra" and importlib.util.find_spec("kuzu") is None:
-            raise HTTPException(status_code=409, detail="graph_store_unavailable")
         store = _config_store(app)
         async with app.state.memory_mode_lock:
-            _refuse_pipeline_change_during_embedding_maintenance(app)
-            previous_effective = _memory_mode(app)
-            if request.mode != previous_effective and (
-                _evolve_service(app).running() or app.state.memory_graph_backfill.running
-            ):
-                raise HTTPException(status_code=409, detail="memory_lifecycle_busy")
+            plan = _memory_mode_plan(app, request.mode)
+            if plan.blockers:
+                raise HTTPException(status_code=409, detail=plan.blockers[0])
+            previous_effective = plan.current
             previous = store.memory_mode()
             if previous != request.mode or not store.memory_mode_explicitly_configured():
                 await asyncio.to_thread(store.set_memory_mode, request.mode)
@@ -5016,16 +5071,16 @@ def create_app(
         """Start or stop model-driven sedimentation, keeping the configuration.
 
         Stopping is the user's cost control: nothing further goes to the model
-        and already queued work waits rather than failing, so starting again
-        resumes it. Importing conversations is not affected either way.
+        and already queued work remains pending rather than failing. Starting
+        again lets the normal claim tick continue it; this route never broadly
+        re-admits permission/model parked jobs. Importing conversations is not
+        affected either way.
         """
         store = _config_store(app)
-        changed = False
         async with app.state.sedimentation_lock:
             previous = store.sedimentation_enabled()
             if previous is not request.enabled:
                 await asyncio.to_thread(store.set_sedimentation_enabled, request.enabled)
-                changed = True
                 diagnostic_event(
                     level="info",
                     component="memory.sedimentation",
@@ -5033,11 +5088,6 @@ def create_app(
                     outcome="succeeded",
                     details={"enabled": request.enabled},
                 )
-        if changed and request.enabled:
-            # Work parked by the stop is picked up again rather than waiting
-            # for the next natural dispatch, but not on this request's time:
-            # see _resume_sedimentation.
-            _resume_sedimentation(app)
         return SedimentationState(enabled=store.sedimentation_enabled())
 
     @app.post(
@@ -6223,6 +6273,55 @@ def _memory_mode_state(app: FastAPI) -> MemoryModeState:
         explicitly_configured=store.memory_mode_explicitly_configured(),
         forced_by_env=graph_store_enabled(),
         graph_build=app.state.evolve_state_store.graph_build(),
+    )
+
+
+def _memory_mode_plan(app: FastAPI, target: MemoryMode) -> MemoryModePlan:
+    """One validator for previews and mutations, in stable blocker order."""
+    current = _memory_mode(app)
+    effective_target = cast(MemoryMode, effective_memory_mode(target))
+    blockers: list[MemoryModeBlocker] = []
+    if not _embedding_writes_open(app):
+        blockers.append("embedding_maintenance_in_progress")
+    if (
+        effective_target != current
+        and effective_target in {"pro", "ultra"}
+        and _model_profile_store(app).active_identity() is None
+    ):
+        blockers.append("active_model_required")
+    if effective_target != current and (
+        _evolve_service(app).running() or app.state.memory_graph_backfill.running
+    ):
+        blockers.append("memory_lifecycle_busy")
+    if (
+        effective_target != current
+        and effective_target == "ultra"
+        and importlib.util.find_spec("kuzu") is None
+    ):
+        blockers.append("graph_store_unavailable")
+
+    warnings: list[MemoryModeWarning] = []
+    if graph_store_enabled():
+        warnings.append("forced_by_env")
+    if effective_target == current:
+        warnings.append("effective_no_change")
+
+    graph_backfill: bool | None = None
+    if effective_target == "ultra" and current != "ultra":
+        graph_backfill = not app.state.memory_graph_backfill.running
+    effects = memory_mode_effects(
+        current,
+        effective_target,
+        graph_backfill=graph_backfill,
+    )
+    return MemoryModePlan(
+        current=current,
+        target=target,
+        effective_target=effective_target,
+        capabilities=home_capabilities(effective_target),
+        effects=() if blockers else effects,
+        warnings=tuple(warnings),
+        blockers=tuple(blockers),
     )
 
 

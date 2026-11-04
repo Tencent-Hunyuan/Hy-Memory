@@ -524,6 +524,11 @@ def test_features_api_get_put_reset_and_status(tmp_path, monkeypatch) -> None:
             "episode_recall": True,
         }
 
+        monkeypatch.setattr(
+            app.state.model_profile_store,
+            "active_identity",
+            lambda: ("active-profile", 1),
+        )
         await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
         await app.state.memory_graph_backfill.wait()
         ultra = _by_name((await client.get("/api/v1/settings/memory-features")).json())

@@ -1529,11 +1529,33 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "apps.back": "Voltar ao início",
   "apps.overview": "Visão geral das memórias",
   "apps.memories": "Memórias salvas",
+  "apps.rawConversations": "Conversas originais",
+  "apps.rawSaving": "Salvando",
+  "apps.rawSavingStatus": "Status de salvamento",
+  "apps.rawSavingDetail":
+    "As conversas originais são salvas sem um modelo generativo",
+  "apps.rawNoExcerpt": "Esta conversa não tem texto do usuário para exibir",
+  "apps.rawConversation": "Conversa original",
+  "apps.rawSaved": "Conversa original salva",
+  "apps.rawEmpty": "Ainda não há conversas originais salvas",
+  "apps.rawCheckedEmpty":
+    "Verificado: não há atualizações de conversas para mostrar",
+  "apps.memoryCheckedEmpty":
+    "Verificado: não há atualizações de memórias para mostrar",
+  "apps.rawWaiting": "As conversas originais salvas aparecerão aqui",
+  "apps.checkedRecent": "Conteúdo atual verificado",
+  "apps.currentMode": "Modo atual",
+  "apps.mode.lite": "Memória básica (lite)",
+  "apps.mode.pro": "Memória inteligente (pro)",
+  "apps.mode.ultra": "Memória profunda (ultra)",
   "apps.readingCount": "Verificando memórias locais…",
+  "apps.rawReadingCount": "Verificando conversas originais…",
   "apps.startingRetry":
     "O serviço em segundo plano está iniciando; isto será atualizado automaticamente",
   "apps.countWillUpdate":
     "A contagem de memórias será atualizada automaticamente",
+  "apps.rawCountWillUpdate":
+    "A contagem de conversas originais será atualizada automaticamente",
   "apps.showingPrevious":
     "Mostrando os dados anteriores; isto será atualizado automaticamente",
   "apps.unreadable": "Indisponível",
@@ -1633,6 +1655,8 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "apps.revision": "Versão {count}",
   "apps.conversationTime": "Hora da conversa",
   "apps.importTime": "Hora da importação",
+  "apps.writeTime": "Hora da escrita",
+  "apps.updateTime": "Hora da atualização",
   "apps.incompleteCalls":
     " · Algumas chamadas não foram registradas; a lista pode estar incompleta",
   "apps.timeoutWarning":
@@ -2084,6 +2108,15 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} não encontrou memórias correspondentes",
   "calls.headline.found": "{host} encontrou itens relacionados: {count}",
   "calls.headline.found.one": "{host} encontrou {count} item relacionado",
+  "calls.headline.rawOnly": "{host} encontrou {count} conversas originais",
+  "calls.headline.rawOnly.one": "{host} encontrou {count} conversa original",
+  "calls.headline.memoryOnly": "{host} encontrou {count} memórias",
+  "calls.headline.memoryOnly.one": "{host} encontrou {count} memória",
+  "calls.headline.mixed":
+    "{host} encontrou {memories} memórias · {raw} conversas originais",
+  "calls.headline.mixed.one":
+    "{host} encontrou {memories} memória · {raw} conversas originais",
+  "calls.headline.completed": "A chamada de {host} foi concluída",
   "calls.detail.timedOut":
     "As memórias estão sendo processadas. A consulta excedeu o tempo limite, então esta resposta não incluiu memórias.",
   "calls.detail.unavailable":

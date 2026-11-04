@@ -94,6 +94,16 @@ and they are the owner's:
 - Vector collection names never depend on the mode. The mode is a separate
   client parameter, not part of the embedding-space identity.
 
+The sedimentation switch pauses model-based extraction, not Lite persistence.
+Claim and both execution gates use the same predicate:
+`effective_mode == lite OR sedimentation_enabled`. Consequently, Lite keeps
+writing raw turns while `PUT /api/v1/sedimentation {"enabled":false}` is in
+force. Source permission, history gate, embedding maintenance and per-user
+evolve gates still apply. Toggling sedimentation or switching to Lite does not
+call the broad parked-job readmission path: sedimentation-refused jobs remain
+pending for the next claim tick, while permission/model parked states retain
+their own reason-specific wakeups.
+
 ## 3. `GET /api/v1/settings/memory-mode`
 
 No parameters. `200` response:
@@ -123,7 +133,39 @@ No parameters. `200` response:
   `graph_build.users[<user_id>]` is
   `{state: pending|running|succeeded|failed, memories_scanned, nodes, error_code}`.
 
-## 4. `PUT /api/v1/settings/memory-mode`
+## 4. Plan and apply a mode change
+
+### `POST /api/v1/settings/memory-mode/plan`
+
+Body: `{"mode": "lite" | "pro" | "ultra"}`. This endpoint changes nothing and
+returns the validator result PUT uses:
+
+```json
+{
+  "current": "lite",
+  "target": "pro",
+  "effective_target": "pro",
+  "capabilities": {
+    "content_plane": "memory",
+    "generation_required": true,
+    "graph_enabled": false,
+    "evolve_available": false
+  },
+  "effects": ["earlier_raw_not_extracted", "lite_search_stops"],
+  "warnings": [],
+  "blockers": []
+}
+```
+
+Blockers are `active_model_required` when changing effectively into Pro/Ultra,
+`embedding_maintenance_in_progress`, `memory_lifecycle_busy`, and
+`graph_store_unavailable`. `forced_by_env` is a warning and changes
+`effective_target` to Ultra. `effective_no_change` warns that the effective
+mode is already the target (including an environment-forced target).
+When `blockers` is non-empty, `effects` is empty: no listed effect is implied
+to execute for a refused plan.
+
+### `PUT /api/v1/settings/memory-mode`
 
 Body: `{"mode": "lite" | "pro" | "ultra"}`. `200` response: the GET shape,
 plus these fields:
@@ -151,6 +193,8 @@ this order:
 
 Errors:
 
+- `409 {"detail": "active_model_required"}`: changing effectively into Pro or
+  Ultra needs an active generation model. An effective no-op remains allowed.
 - `409 {"detail": "embedding_maintenance_in_progress"}`: an embedding switch,
   startup scan or startup merge has closed the model-write gate. Nothing
   changed; retry after embedding maintenance finishes. GET remains available.
@@ -160,9 +204,8 @@ Errors:
   graph store package is not installed. Nothing changed.
 - `422 request_validation_failed`: an unknown mode or an extra field.
 
-Show the planned effects before calling PUT. Clients can compute them with the
-table above: the CLI (`memhub settings mode <m>` without `--yes`) and Core
-(`memory_mode_effects`) use the same rule.
+Show the server plan before calling PUT. Plan and PUT use the same Core
+validator, so clients do not duplicate blocker or effective-mode rules.
 
 ## 5. Evolve
 

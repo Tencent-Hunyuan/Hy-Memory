@@ -1512,10 +1512,30 @@ export const russianMessages: Record<MessageKey, string> = {
   "apps.back": "На главную",
   "apps.overview": "Обзор памяти",
   "apps.memories": "Сохранённые записи памяти",
+  "apps.rawConversations": "Исходные разговоры",
+  "apps.rawSaving": "Сохранение",
+  "apps.rawSavingStatus": "Статус сохранения",
+  "apps.rawSavingDetail":
+    "Исходные разговоры сохраняются без генеративной модели",
+  "apps.rawNoExcerpt": "Нет отображаемого фрагмента текста пользователя",
+  "apps.rawConversation": "Исходный разговор",
+  "apps.rawSaved": "Исходный диалог сохранён",
+  "apps.rawEmpty": "Сохранённых исходных диалогов пока нет",
+  "apps.rawCheckedEmpty":
+    "Проверено: нет обновлений исходных диалогов для показа",
+  "apps.memoryCheckedEmpty": "Проверено: нет обновлений памяти для показа",
+  "apps.rawWaiting": "Сохранённые исходные диалоги появятся здесь",
+  "apps.checkedRecent": "Текущее содержимое проверено",
+  "apps.currentMode": "Текущий режим",
+  "apps.mode.lite": "Базовая память (lite)",
+  "apps.mode.pro": "Умная память (pro)",
+  "apps.mode.ultra": "Глубокая память (ultra)",
   "apps.readingCount": "Проверка локальной памяти…",
+  "apps.rawReadingCount": "Проверка исходных диалогов…",
   "apps.startingRetry":
     "Фоновая служба запускается; данные обновятся автоматически",
   "apps.countWillUpdate": "Число записей памяти обновится автоматически",
+  "apps.rawCountWillUpdate": "Число исходных диалогов обновится автоматически",
   "apps.showingPrevious":
     "Показаны прежние данные; они обновятся автоматически",
   "apps.unreadable": "Недоступно",
@@ -1615,6 +1635,8 @@ export const russianMessages: Record<MessageKey, string> = {
   "apps.revision": "Версия {count}",
   "apps.conversationTime": "Время диалога",
   "apps.importTime": "Время импорта",
+  "apps.writeTime": "Время записи",
+  "apps.updateTime": "Время обновления",
   "apps.incompleteCalls":
     " · Часть вызовов не записана; список может быть неполным",
   "apps.timeoutWarning":
@@ -2057,6 +2079,15 @@ export const russianMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} не нашёл подходящих записей памяти",
   "calls.headline.found": "{host}: найдено связанных элементов — {count}",
   "calls.headline.found.one": "{host}: найден {count} связанный элемент",
+  "calls.headline.rawOnly": "{host}: найдено исходных диалогов — {count}",
+  "calls.headline.rawOnly.one": "{host}: найден {count} исходный диалог",
+  "calls.headline.memoryOnly": "{host}: найдено воспоминаний — {count}",
+  "calls.headline.memoryOnly.one": "{host}: найдено {count} воспоминание",
+  "calls.headline.mixed":
+    "{host}: воспоминаний — {memories} · исходных диалогов — {raw}",
+  "calls.headline.mixed.one":
+    "{host}: воспоминаний — {memories} · исходных диалогов — {raw}",
+  "calls.headline.completed": "Вызов {host} завершён",
   "calls.detail.timedOut":
     "Записи памяти обрабатываются. Время запроса истекло, поэтому в этот ответ память не вошла.",
   "calls.detail.unavailable":

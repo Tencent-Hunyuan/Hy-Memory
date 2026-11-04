@@ -16,6 +16,7 @@ import {
   type GraphWidthDecisionReceipt,
   type GraphWidthStatus,
   type HealthResponse,
+  type HomeProjectionV1,
   type HostAskMemoryEvent,
   type HostHomeSummary,
   type ImportIssue,
@@ -26,6 +27,7 @@ import {
   type MemoryAddReceipt,
   type MemoryGraphResponse,
   type MemoryModeChange,
+  type MemoryModePlan,
   type MemoryModeState,
   type MemoryPipelineMode,
   type MemoryProcessingSummary,
@@ -67,6 +69,7 @@ import {
   type EmbeddingSwitchStartInput,
   embeddingSwitchCancelPath,
   hasSourceSyncTarget,
+  isBareNotFound,
   memoryAddStatusPath,
   normalizeManualExtractEvidence,
   parseEmbeddingSpaceDeleteReceipt,
@@ -80,6 +83,7 @@ import {
   parseGraphWidthDecisionReceipt,
   parseManualExtractReceipt,
   parseMemoryAddReceipt,
+  parseMemoryModePlan,
   parseModelProfileReceipt,
   retiredEmbeddingSpacePath,
   SourceSyncInputError,
@@ -629,7 +633,7 @@ export function embeddingSwitchUnsupported(reason: unknown): boolean {
   return (
     axios.isAxiosError(reason) &&
     reason.response?.status === 404 &&
-    embeddingSwitchRefusal(reason) === null
+    isBareNotFound(reason.response?.data)
   );
 }
 
@@ -812,6 +816,22 @@ export async function deleteModelProfile(
 export async function getHomeSummary(): Promise<HostHomeSummary> {
   const response = await client.get<HostHomeSummary>("/api/v2/home-summary");
   return response.data;
+}
+
+export async function getHomeProjection(): Promise<HomeProjectionV1> {
+  const response = await client.get<unknown>("/api/v2/home-projection");
+  const projection = parseHomeProjection(response.data);
+  if (projection === null) throw new Error("home_projection_invalid");
+  return projection;
+}
+
+/** A route-level 404 only: domain errors must not masquerade as old Core. */
+export function homeProjectionUnsupported(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    isBareNotFound(reason.response?.data)
+  );
 }
 
 export async function getLiveSyncHealth(): Promise<LiveSyncHealth[]> {
@@ -1073,6 +1093,27 @@ export async function getMemoryMode(): Promise<MemoryModeState> {
     "/api/v1/settings/memory-mode",
   );
   return response.data;
+}
+
+export async function planMemoryMode(
+  mode: MemoryPipelineMode,
+): Promise<MemoryModePlan> {
+  const response = await client.post<unknown>(
+    "/api/v1/settings/memory-mode/plan",
+    { mode },
+  );
+  const plan = parseMemoryModePlan(response.data);
+  if (plan === null || plan.target !== mode)
+    throw new Error("memory_mode_plan_invalid");
+  return plan;
+}
+
+export function memoryModePlanUnsupported(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    isBareNotFound(reason.response?.data)
+  );
 }
 
 export async function setMemoryMode(
@@ -1522,6 +1563,132 @@ export function isLiveSyncHealth(value: unknown): value is LiveSyncHealth {
 
 function measuredCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+export function parseHomeProjection(value: unknown): HomeProjectionV1 | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const projection = value as Record<string, unknown>;
+  const allowed = new Set([
+    "projection_version",
+    "user_id",
+    "effective_mode",
+    "capabilities",
+    "visible_count",
+    "display_state",
+    "latest",
+    "observed_at",
+  ]);
+  const capabilities = projection.capabilities as Record<
+    string,
+    unknown
+  > | null;
+  if (
+    Object.keys(projection).some((key) => !allowed.has(key)) ||
+    projection.projection_version !== 1 ||
+    typeof projection.user_id !== "string" ||
+    !["lite", "pro", "ultra"].includes(String(projection.effective_mode)) ||
+    !capabilities ||
+    Object.keys(capabilities).some(
+      (key) =>
+        ![
+          "content_plane",
+          "generation_required",
+          "graph_enabled",
+          "evolve_available",
+        ].includes(key),
+    ) ||
+    !["raw", "memory"].includes(String(capabilities.content_plane)) ||
+    typeof capabilities.generation_required !== "boolean" ||
+    typeof capabilities.graph_enabled !== "boolean" ||
+    typeof capabilities.evolve_available !== "boolean" ||
+    capabilities.content_plane !==
+      (projection.effective_mode === "lite" ? "raw" : "memory") ||
+    capabilities.generation_required !==
+      (projection.effective_mode !== "lite") ||
+    capabilities.graph_enabled !== (projection.effective_mode === "ultra") ||
+    capabilities.evolve_available !== (projection.effective_mode === "ultra") ||
+    !measuredCount(projection.visible_count) ||
+    !["empty", "excerpt", "no_user_excerpt", "no_displayable_memory"].includes(
+      String(projection.display_state),
+    ) ||
+    !validProjectionLatest(projection.latest, projection.effective_mode) ||
+    !projectionLatestDisplayConsistent(
+      projection.latest,
+      projection.display_state,
+    ) ||
+    ((projection.visible_count as number) === 0 &&
+      projection.latest !== null) ||
+    ((projection.visible_count as number) > 0 &&
+      projection.display_state === "empty") ||
+    typeof projection.observed_at !== "string" ||
+    !Number.isFinite(Date.parse(projection.observed_at))
+  )
+    return null;
+  return projection as unknown as HomeProjectionV1;
+}
+
+function projectionLatestDisplayConsistent(
+  value: unknown,
+  displayState: unknown,
+): boolean {
+  if (value === null)
+    return displayState !== "excerpt" && displayState !== "no_user_excerpt";
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const latest = value as Record<string, unknown>;
+  return latest.type === "raw"
+    ? displayState === latest.display_state
+    : latest.type === "memory" && displayState === "excerpt";
+}
+
+function validProjectionLatest(value: unknown, mode: unknown): boolean {
+  if (value === null) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const latest = value as Record<string, unknown>;
+  const base = [
+    "type",
+    "time",
+    "time_basis",
+    "excerpt",
+    "truncated",
+    "source_id",
+  ];
+  const raw = ["raw_id", "session_id", "display_state"];
+  const memory = ["memory_id", "scene", "kind", "variant"];
+  if (
+    Object.keys(latest).some(
+      (key) =>
+        ![...base, ...(latest.type === "raw" ? raw : memory)].includes(key),
+    ) ||
+    !(
+      latest.time === null ||
+      (typeof latest.time === "string" &&
+        Number.isFinite(Date.parse(latest.time)))
+    ) ||
+    ![null, "conversation", "import", "write", "update"].includes(
+      latest.time_basis as never,
+    ) ||
+    typeof latest.excerpt !== "string" ||
+    typeof latest.truncated !== "boolean" ||
+    typeof latest.source_id !== "string"
+  )
+    return false;
+  if (latest.type === "raw")
+    return (
+      mode === "lite" &&
+      typeof latest.raw_id === "string" &&
+      typeof latest.session_id === "string" &&
+      ["excerpt", "no_user_excerpt"].includes(String(latest.display_state))
+    );
+  return (
+    latest.type === "memory" &&
+    mode !== "lite" &&
+    typeof latest.memory_id === "string" &&
+    ["chat", "working", "coding"].includes(String(latest.scene)) &&
+    ["chat", "experience"].includes(String(latest.kind)) &&
+    (latest.variant === null ||
+      latest.variant === "working" ||
+      latest.variant === "coding")
+  );
 }
 
 function isSourceImportExample(value: unknown): boolean {

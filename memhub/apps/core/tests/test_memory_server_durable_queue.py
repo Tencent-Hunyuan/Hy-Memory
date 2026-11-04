@@ -832,7 +832,7 @@ class _Recorder:
     async def process_sdk_job(self, records, **_kwargs):
         self.seen.append(tuple(record.evidence_id for record in records))
         if self.invoke_hy:
-            await _kwargs["before_hy_invocation"]()
+            await _kwargs["before_hy_invocation"](True)
         if self.error is not None:
             raise self.error
         return type("Receipt", (), {"raw_ids": (), "memory_ids": ()})()
@@ -844,10 +844,10 @@ class _TwoInvocationRecorder:
         self.invocations = 0
 
     async def process_sdk_job(self, _records, **kwargs):
-        await kwargs["before_hy_invocation"]()
+        await kwargs["before_hy_invocation"](True)
         self.invocations += 1
         self.pause_after_first()
-        await kwargs["before_hy_invocation"]()
+        await kwargs["before_hy_invocation"](True)
         self.invocations += 1
         return type("Receipt", (), {"raw_ids": (), "memory_ids": ()})()
 
@@ -916,7 +916,7 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
         @classmethod
         async def process_sdk_job(cls, _records, **kwargs):
             cls.calls += 1
-            await kwargs["before_hy_invocation"]()
+            await kwargs["before_hy_invocation"](True)
             return type(
                 "Result",
                 (),
@@ -1728,7 +1728,7 @@ def test_a_failed_job_logs_where_it_failed_but_never_the_message(tmp_path, caplo
 
     class _Failing:
         async def process_sdk_job(self, _records, **kwargs):
-            await kwargs["before_hy_invocation"]()
+            await kwargs["before_hy_invocation"](True)
             try:
                 closed_store(type("Client", (), {"private_store_name": None})())
             except AttributeError as error:

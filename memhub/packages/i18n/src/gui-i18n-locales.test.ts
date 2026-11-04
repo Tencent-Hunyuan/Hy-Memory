@@ -23,6 +23,21 @@ const ENGLISH_EQUIVALENT_ALLOWED = new Set<MessageKey>([
 ]);
 
 const keys = Object.keys(chineseMessages) as MessageKey[];
+const rawSavingStatusKey = "apps.rawSavingStatus" satisfies MessageKey;
+
+const rawSavingStatusTranslations = {
+  en: "Saving status",
+  "zh-Hans": "保存状态",
+  "zh-Hant": "儲存狀態",
+  ja: "保存状態",
+  es: "Estado de guardado",
+  de: "Speicherstatus",
+  pt: "Status de salvamento",
+  fr: "État de l’enregistrement",
+  ko: "저장 상태",
+  ru: "Статус сохранения",
+  id: "Status penyimpanan",
+} as const satisfies Record<(typeof SUPPORTED_LOCALES)[number], string>;
 
 describe.each(SUPPORTED_LOCALES)("%s catalog", (locale) => {
   const catalog = guiMessages[locale];
@@ -64,6 +79,26 @@ describe.each(SUPPORTED_LOCALES)("%s catalog", (locale) => {
 
   it("translates through the shared translator", () => {
     expect(translate(locale, "settings")).toBe(catalog.settings);
+  });
+});
+
+describe("applications catalog", () => {
+  it("includes every application key in all 11 locales", () => {
+    const applicationKeys = keys.filter((key) => key.startsWith("apps."));
+    expect(applicationKeys.length).toBeGreaterThan(0);
+    for (const locale of SUPPORTED_LOCALES)
+      for (const key of applicationKeys)
+        expect(
+          Object.hasOwn(guiMessages[locale], key),
+          `${locale} ${key}`,
+        ).toBe(true);
+  });
+
+  it("localizes the raw saving status in all 11 locales", () => {
+    for (const locale of SUPPORTED_LOCALES)
+      expect(guiMessages[locale][rawSavingStatusKey]).toBe(
+        rawSavingStatusTranslations[locale],
+      );
   });
 });
 

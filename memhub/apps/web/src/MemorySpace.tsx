@@ -1,6 +1,7 @@
 import type {
   ExtractionWindowPreset,
   GovernedMemory,
+  HomeProjectionCapabilities,
   HostAskMemoryResponse,
   ImportJob,
   MemoryDetail,
@@ -216,6 +217,14 @@ export function MemorySpace({
     processing?.pipeline?.mode ??
     (processingResolved && !processingFailed ? "pro" : null);
   const lite = pipelineMode === "lite";
+  const modeCapabilities: HomeProjectionCapabilities | null = pipelineMode
+    ? {
+        content_plane: lite ? "raw" : "memory",
+        generation_required: !lite,
+        graph_enabled: pipelineMode === "ultra",
+        evolve_available: pipelineMode === "ultra",
+      }
+    : null;
   const requestedQuery = sdkLibraryQuery.trim();
   const sdkPageSettled =
     sdkLibrary.settledMode === pipelineMode &&
@@ -452,6 +461,7 @@ export function MemorySpace({
     ),
     refreshing: checkingSetup,
     memoryCount: undefined,
+    capabilities: modeCapabilities,
     blockedStages: processing?.blocked_stages,
     backlogPending: processing?.backlog_pending,
     phase: sourceSnapshotStale ? "unavailable" : "checking",
@@ -1169,6 +1179,7 @@ export function MemorySpace({
         id="memory-mode-panel-map"
         simplified={simplified}
         contentKind={lite ? "raw" : "memory"}
+        modeCapabilities={modeCapabilities}
         rawRecord={selectedRaw}
         libraryView={
           simplified

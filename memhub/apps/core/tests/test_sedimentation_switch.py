@@ -1,13 +1,12 @@
-"""The sedimentation API persists decisions and resumes the SDK queue."""
-
-import asyncio
-import threading
+"""The sedimentation API persists decisions without rewriting parked work."""
 
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from one_memory.api import create_app
 from one_memory.config import Settings
+from one_memory.memory_server.contracts import BatchIdentity, WriteRequest
+from one_memory.memory_server.durable_queue import WAITING_FOR_PERMISSION
 
 
 def _app(tmp_path):
@@ -25,51 +24,62 @@ def _app(tmp_path):
     )
 
 
-def test_sedimentation_route_persists_and_resumes_without_restart(tmp_path) -> None:
+def test_sedimentation_route_persists_without_restart(tmp_path) -> None:
     with TestClient(_app(tmp_path), headers={"Authorization": "Bearer test"}) as client:
         assert client.get("/api/v1/sedimentation").json()["enabled"] is True
-        assert client.put(
-            "/api/v1/sedimentation", json={"enabled": False}
-        ).json()["enabled"] is False
+        assert (
+            client.put("/api/v1/sedimentation", json={"enabled": False}).json()["enabled"] is False
+        )
         assert client.get("/api/v1/sedimentation").json()["enabled"] is False
-        assert client.put(
-            "/api/v1/sedimentation", json={"enabled": True}
-        ).json()["enabled"] is True
+        assert client.put("/api/v1/sedimentation", json={"enabled": True}).json()["enabled"] is True
 
 
-def test_switch_answers_before_sdk_queue_resume_finishes(tmp_path, monkeypatch) -> None:
+def test_switch_does_not_run_the_broad_parked_queue_resume(tmp_path, monkeypatch) -> None:
     app = _app(tmp_path)
-    released = threading.Event()
-    finished = threading.Event()
+    called = False
 
     with TestClient(app, headers={"Authorization": "Bearer test"}) as client:
-        async def slow_resume() -> None:
-            await asyncio.get_running_loop().run_in_executor(None, released.wait, 10.0)
-            finished.set()
 
-        monkeypatch.setattr(app.state.sdk_memory_runtime, "resume_allowed", slow_resume)
-        assert client.put(
-            "/api/v1/sedimentation", json={"enabled": False}
-        ).status_code == 200
+        async def forbidden_resume() -> None:
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(app.state.sdk_memory_runtime, "resume_allowed", forbidden_resume)
+        assert client.put("/api/v1/sedimentation", json={"enabled": False}).status_code == 200
         resumed = client.put("/api/v1/sedimentation", json={"enabled": True})
 
         assert resumed.status_code == 200
         assert resumed.json()["enabled"] is True
-        assert finished.is_set() is False
-        released.set()
+        assert called is False
 
 
-def test_a_failing_sdk_queue_resume_does_not_fail_the_switch(tmp_path, monkeypatch) -> None:
+def test_switch_does_not_rewrite_permission_parked_jobs(tmp_path) -> None:
     app = _app(tmp_path)
     with TestClient(app, headers={"Authorization": "Bearer test"}) as client:
-        async def broken_resume() -> None:
-            raise RuntimeError("sdk_queue_unavailable")
+        queue = app.state.memory_write_queue
+        queue.evidence = None
+        request = WriteRequest(
+            internal_session_id="session-1",
+            source_id="cursor",
+            batch_identity=BatchIdentity(
+                internal_session_id="session-1",
+                first_round=1,
+                last_round=1,
+            ),
+            evidence_ids=["e-1"],
+            idempotency_key="permission-parked",
+        )
+        record = queue.submit(request)
+        queue.settle(
+            record.job_id,
+            state=WAITING_FOR_PERMISSION,
+            error_code="model_content_permission_required",
+            hy_invoked=False,
+        )
 
-        monkeypatch.setattr(app.state.sdk_memory_runtime, "resume_allowed", broken_resume)
-        assert client.put(
-            "/api/v1/sedimentation", json={"enabled": False}
-        ).status_code == 200
-        resumed = client.put("/api/v1/sedimentation", json={"enabled": True})
+        assert client.put("/api/v1/sedimentation", json={"enabled": False}).status_code == 200
+        assert client.put("/api/v1/sedimentation", json={"enabled": True}).status_code == 200
 
-        assert resumed.status_code == 200
-        assert resumed.json()["enabled"] is True
+        parked = queue.get("permission-parked")
+        assert parked.state == WAITING_FOR_PERMISSION
+        assert parked.detail == "model_content_permission_required"

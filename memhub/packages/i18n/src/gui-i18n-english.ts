@@ -227,7 +227,7 @@ const baseEnglishMessages = {
   "arrival.region": "Memory processing status",
   "arrival.importing": "Originals are still importing",
   "arrival.messages": "{count} messages saved",
-  "arrival.messages.one": "{count} messages saved",
+  "arrival.messages.one": "{count} message saved",
   "arrival.conversations": "{count} conversations",
   "arrival.conversations.one": "{count} conversation",
   "arrival.details": "View progress and details",
@@ -1333,10 +1333,31 @@ const baseEnglishMessages = {
   "apps.back": "Back to home",
   "apps.overview": "Memory overview",
   "apps.memories": "Saved memories",
+  "apps.rawConversations": "Original conversations",
+  "apps.rawSaving": "Saving",
+  "apps.rawSavingStatus": "Saving status",
+  "apps.rawSavingDetail":
+    "Original conversations are saved without a generation model",
+  "apps.rawNoExcerpt": "This conversation has no displayable user excerpt",
+  "apps.rawConversation": "Original conversation",
+  "apps.rawSaved": "Original conversation saved",
+  "apps.rawEmpty": "No original conversations saved yet",
+  "apps.rawCheckedEmpty":
+    "Checked: no original-conversation updates to display",
+  "apps.memoryCheckedEmpty": "Checked: no memory updates to display",
+  "apps.rawWaiting": "Original conversations will appear here when saved",
+  "apps.checkedRecent": "Current content checked",
+  "apps.currentMode": "Current mode",
+  "apps.mode.lite": "Basic memory (lite)",
+  "apps.mode.pro": "Smart memory (pro)",
+  "apps.mode.ultra": "Deep memory (ultra)",
   "apps.readingCount": "Checking local memories…",
+  "apps.rawReadingCount": "Checking original conversations…",
   "apps.startingRetry":
     "The background service is starting; this will update automatically",
   "apps.countWillUpdate": "The memory count will update automatically",
+  "apps.rawCountWillUpdate":
+    "The original-conversation count will update automatically",
   "apps.showingPrevious":
     "Showing the previous data; this will update automatically",
   "apps.unreadable": "Unavailable",
@@ -1434,6 +1455,8 @@ const baseEnglishMessages = {
   "apps.revision": "Version {count}",
   "apps.conversationTime": "Conversation time",
   "apps.importTime": "Import time",
+  "apps.writeTime": "Write time",
+  "apps.updateTime": "Update time",
   "apps.incompleteCalls":
     " · Some calls were not recorded; the list may be incomplete",
   "apps.timeoutWarning":
@@ -1876,6 +1899,15 @@ const baseEnglishMessages = {
   "calls.headline.empty": "{host} found no matching memories",
   "calls.headline.found": "{host} found {count} related items",
   "calls.headline.found.one": "{host} found {count} related items",
+  "calls.headline.rawOnly": "{host} found {count} original conversations",
+  "calls.headline.rawOnly.one": "{host} found {count} original conversation",
+  "calls.headline.memoryOnly": "{host} found {count} memories",
+  "calls.headline.memoryOnly.one": "{host} found {count} memory",
+  "calls.headline.mixed":
+    "{host} found {memories} memories · {raw} original conversations",
+  "calls.headline.mixed.one":
+    "{host} found {memories} memory · {raw} original conversations",
+  "calls.headline.completed": "{host} call completed",
   "calls.detail.timedOut":
     "Memories are being processed. The lookup timed out, so this answer did not include memories.",
   "calls.detail.unavailable":

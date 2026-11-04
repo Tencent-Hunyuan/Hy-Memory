@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { CORE_SERVICE, type RecallReceipt } from "./index";
+import {
+  CORE_SERVICE,
+  type HomeProjectionV1,
+  type RecallReceipt,
+} from "./index";
 
 describe("Core contract", () => {
   it("has one stable service identity", () => {
@@ -36,5 +40,34 @@ describe("Core contract", () => {
     };
     expect(receipt.mode).toBe("raw");
     expect(receipt.hits[0].evidence_ids).toEqual([]);
+  });
+
+  it("types the discriminated home projection without raw payload fields", () => {
+    const projection: HomeProjectionV1 = {
+      projection_version: 1,
+      user_id: "local",
+      effective_mode: "lite",
+      capabilities: {
+        content_plane: "raw",
+        generation_required: false,
+        graph_enabled: false,
+        evolve_available: false,
+      },
+      visible_count: 1,
+      display_state: "excerpt",
+      latest: {
+        type: "raw",
+        raw_id: "raw-1",
+        session_id: "session-1",
+        display_state: "excerpt",
+        time: null,
+        time_basis: null,
+        excerpt: "ship Friday",
+        truncated: false,
+        source_id: "cursor",
+      },
+      observed_at: "2026-11-03T00:00:00Z",
+    };
+    expect(projection.latest?.type).toBe("raw");
   });
 });
