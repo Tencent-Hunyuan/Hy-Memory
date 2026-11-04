@@ -106,12 +106,15 @@ export function legacyMemoryModePlan(
   options: { hasActiveModel: boolean },
 ): MemoryModePlan {
   const effects: MemoryModeChange["effects"] = [];
-  if (target === "lite") {
-    effects.push("higher_mode_memories_hidden");
-    if (current === "ultra") effects.push("evolve_stopped");
-  } else if (current === "lite") {
+  const rank: Record<MemoryPipelineMode, number> = {
+    lite: 0,
+    pro: 1,
+    ultra: 2,
+  };
+  if (current !== target && current === "lite")
     effects.push("earlier_raw_not_extracted", "lite_search_stops");
-  }
+  if (rank[target] < rank[current]) effects.push("higher_mode_memories_hidden");
+  if (current !== target && current === "ultra") effects.push("evolve_stopped");
   if (target === "ultra" && current !== "ultra")
     effects.push("existing_memories_added_to_graph");
   return {

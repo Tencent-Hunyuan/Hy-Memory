@@ -32,7 +32,31 @@ describe("memory mode plan", () => {
     expect(parseMemoryModePlan({ ...valid, blockers: ["unknown"] })).toBeNull();
   });
 
-  it("isolates the old-Core matrix in one helper", () => {
+  it.each([
+    ["lite", "pro", ["earlier_raw_not_extracted", "lite_search_stops"]],
+    [
+      "lite",
+      "ultra",
+      [
+        "earlier_raw_not_extracted",
+        "lite_search_stops",
+        "existing_memories_added_to_graph",
+      ],
+    ],
+    ["pro", "lite", ["higher_mode_memories_hidden"]],
+    ["pro", "ultra", ["existing_memories_added_to_graph"]],
+    ["ultra", "lite", ["higher_mode_memories_hidden", "evolve_stopped"]],
+    ["ultra", "pro", ["higher_mode_memories_hidden", "evolve_stopped"]],
+  ] as const)(
+    "keeps the old-Core %s to %s effects aligned with the plan route",
+    (current, target, effects) => {
+      expect(
+        legacyMemoryModePlan(current, target, { hasActiveModel: true }).effects,
+      ).toEqual(effects);
+    },
+  );
+
+  it("keeps the old-Core model blocker and target capabilities", () => {
     expect(
       legacyMemoryModePlan("lite", "ultra", { hasActiveModel: false }),
     ).toMatchObject({
@@ -42,10 +66,6 @@ describe("memory mode plan", () => {
         graph_enabled: true,
       },
       blockers: ["active_model_required"],
-      effects: expect.arrayContaining([
-        "earlier_raw_not_extracted",
-        "existing_memories_added_to_graph",
-      ]),
     });
   });
 });
