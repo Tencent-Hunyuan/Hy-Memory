@@ -295,7 +295,7 @@
   padding-top: 16px;
   border-top: 1px solid #e1e8ed;
 }
-.r6-settings .r6-evolve-time label {
+.r6-settings .r6-evolve-time > div > label {
   color: #304757;
   font-size: 13px;
   font-weight: 600;
@@ -304,19 +304,145 @@
 .r6-evolve-time p {
   margin-top: 1px;
 }
-.r6-evolve-settings input[type="time"] {
+.r6-time-picker {
+  position: relative;
+  width: 180px;
+}
+.r6-time-picker-trigger {
   box-sizing: border-box;
   width: 180px;
-  min-height: 44px;
-  padding: 0 10px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px 0 14px;
   border: 1px solid #c6d2da;
   border-radius: 8px;
   color: #304757;
   background: #fff;
+  font:
+    500 14px / 22px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease-out,
+    background-color 140ms ease-out,
+    box-shadow 140ms ease-out;
 }
-.r6-evolve-settings input[type="time"]:focus-visible {
+.r6-time-picker-trigger:hover:not(:disabled) {
+  border-color: #9eafbb;
+  background: #f8fafb;
+}
+.r6-time-picker-trigger[aria-expanded="true"] {
+  border-color: #7892a6;
+  box-shadow: 0 0 0 3px rgb(85 124 147 / 12%);
+}
+.r6-time-picker-trigger:focus-visible {
   outline: 2px solid var(--r6-focus);
   outline-offset: 2px;
+}
+.r6-time-picker-trigger:disabled {
+  color: #71808b;
+  background: #edf0f3;
+  cursor: default;
+}
+.r6-time-picker-trigger:active:not(:disabled) {
+  transform: none;
+}
+.r6-time-picker-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #607888;
+}
+.r6-time-picker-trigger[aria-expanded="true"]
+  .r6-time-picker-icons
+  svg:last-child {
+  transform: rotate(180deg);
+}
+.r6-time-picker-panel {
+  box-sizing: border-box;
+  position: absolute;
+  z-index: 1200;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(280px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid #c6d2da;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 36px rgb(48 71 87 / 16%);
+}
+.r6-time-picker-panel[data-placement="below"] {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+.r6-time-picker-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+}
+.r6-time-picker-column {
+  display: grid;
+  gap: 6px;
+  color: #5e6e7a;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.r6-time-picker-columns select {
+  box-sizing: border-box;
+  width: 100%;
+  height: 174px;
+  padding: 4px;
+  border: 1px solid #d5dfe8;
+  border-radius: 7px;
+  color: #304757;
+  background: #f8fafb;
+  font:
+    500 14px / 24px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  scrollbar-width: thin;
+  scrollbar-color: #b6c3cc transparent;
+}
+.r6-time-picker-columns select:focus-visible {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: 1px;
+}
+.r6-time-picker-columns option {
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 5px;
+}
+.r6-time-picker-columns option:checked {
+  color: #304757;
+  background: #dfe9ef;
+}
+.r6-time-picker-separator {
+  align-self: center;
+  margin-top: 22px;
+  color: #7892a6;
+  font-size: 18px;
+  font-weight: 600;
+}
+.r6-time-picker-panel footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e1e8ed;
+  flex-wrap: wrap;
+}
+.r6-time-picker-panel footer .r6-button {
+  min-width: 68px;
 }
 .r6-state-recovery {
   display: flex;
@@ -1059,8 +1185,13 @@
   .r6-evolve-time {
     gap: 8px;
   }
-  .r6-evolve-settings input[type="time"] {
+  .r6-time-picker,
+  .r6-time-picker-trigger {
     width: min(220px, 100%);
+  }
+  .r6-time-picker-panel {
+    right: auto;
+    left: 0;
   }
   .r6-state-recovery {
     align-items: flex-start;

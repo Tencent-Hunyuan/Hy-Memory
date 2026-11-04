@@ -29,6 +29,7 @@ import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
+import { TimePicker } from "./TimePicker";
 
 const MODE_COPY: Record<
   MemoryPipelineMode,
@@ -332,8 +333,10 @@ export function MemoryModeSettings({
     setError("");
     try {
       setScheduleState(await setEvolveSchedule(update));
+      return true;
     } catch {
       setError("自动整合设置未能保存，请重试。");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -455,14 +458,12 @@ export function MemoryModeSettings({
                   </label>
                   <p>{text("使用这台设备的本地时间。")}</p>
                 </div>
-                <input
+                <TimePicker
                   id={`${id}-evolve-time`}
-                  type="time"
+                  label={text("执行时间")}
                   value={schedule.time}
                   disabled={busy || maintenance}
-                  onChange={(event) =>
-                    void changeSchedule({ time: event.target.value })
-                  }
+                  onChange={(time) => changeSchedule({ time })}
                 />
               </div>
             ) : null}
