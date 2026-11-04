@@ -9,6 +9,7 @@ import type {
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -17,6 +18,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
+import {
+  confirmedMemoryModeSnapshot,
+  resetConfirmedMemoryModeForTests,
+} from "./confirmed-memory-mode";
 import { readConnectionPreferences } from "./connection-preferences";
 import { OnboardingFlow, PLUGIN_CONSENT_KEY } from "./OnboardingFlow";
 import {
@@ -27,6 +32,9 @@ import {
 const completeOnboarding = vi.fn();
 const setMemoryMode = vi.fn();
 const getMemoryMode = vi.fn();
+const planMemoryMode = vi.fn();
+const putOnboardingProgress = vi.fn();
+const patchOnboardingProgress = vi.fn();
 const getModelProfiles = vi.fn();
 const getMemoryProcessing = vi.fn();
 const previewSourceDirectory = vi.fn();
@@ -48,6 +56,10 @@ vi.mock("./api", () => ({
   completeOnboarding: (...args: unknown[]) => completeOnboarding(...args),
   setMemoryMode: (...args: unknown[]) => setMemoryMode(...args),
   getMemoryMode: (...args: unknown[]) => getMemoryMode(...args),
+  planMemoryMode: (...args: unknown[]) => planMemoryMode(...args),
+  putOnboardingProgress: (...args: unknown[]) => putOnboardingProgress(...args),
+  patchOnboardingProgress: (...args: unknown[]) =>
+    patchOnboardingProgress(...args),
   getModelProfiles: (...args: unknown[]) => getModelProfiles(...args),
   getMemoryProcessing: (...args: unknown[]) => getMemoryProcessing(...args),
   previewSourceDirectory: (...args: unknown[]) =>
@@ -62,20 +74,33 @@ vi.mock("./OnboardingModelController", () => ({
   OnboardingModelController: ({
     onBack,
     onSkip,
-    onEnabled,
+    onProfilePersisted,
+    onModelActiveConfirmed,
+    generationToken,
   }: {
     onBack(): void;
-    onSkip(): void;
-    onEnabled(): void;
+    onSkip?(): void;
+    onProfilePersisted(profileId: string): void;
+    onModelActiveConfirmed(token: number, profileId: string): void;
+    generationToken: number;
   }) => (
     <section aria-label="模型步骤边界">
       <button type="button" onClick={onBack}>
         返回导入
       </button>
-      <button type="button" onClick={onEnabled}>
+      <button
+        type="button"
+        onClick={() => {
+          onProfilePersisted("9be6d465-4cf2-4c72-93f7-15f3c012bc80");
+          onModelActiveConfirmed(
+            generationToken,
+            "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+          );
+        }}
+      >
         模型启用回执已确认
       </button>
-      <button type="button" onClick={onSkip}>
+      <button type="button" onClick={onSkip ?? onBack}>
         跳过模型进入应用
       </button>
     </section>
@@ -87,6 +112,9 @@ const onboarding: OnboardingState = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 };
 const health = {
   status: "ok" as const,
@@ -184,13 +212,13 @@ async function continueImport(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "模型启用回执已确认" }));
 }
 async function openModelStep(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "配置模型，沉淀记忆" }));
+  await user.click(screen.getByRole("button", { name: "选择记忆模式" }));
   await user.click(screen.getByRole("radio", { name: /pro/i }));
-  await user.click(screen.getByRole("button", { name: "继续" }));
+  await user.click(screen.getByRole("button", { name: "继续配置模型" }));
 }
 async function chooseLiteAndContinue(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("radio", { name: /lite/i }));
-  await user.click(screen.getByRole("button", { name: "继续" }));
+  await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
 }
 function choice(name = "Claude Code") {
   return screen.getByRole<HTMLInputElement>("checkbox", {
@@ -225,6 +253,7 @@ async function approve(user: ReturnType<typeof userEvent.setup>) {
 describe("OnboardingFlow S1.3", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    resetConfirmedMemoryModeForTests();
     window.localStorage.clear();
     window.oneMemory = undefined;
     completeOnboarding.mockResolvedValue({
@@ -232,6 +261,27 @@ describe("OnboardingFlow S1.3", () => {
       status: "completed",
     });
     setMemoryMode.mockResolvedValue({ mode: "pro" });
+    planMemoryMode.mockResolvedValue({
+      current: "lite",
+      target: "pro",
+      effective_target: "pro",
+      capabilities: {},
+      effects: [],
+      warnings: [],
+      blockers: [],
+    });
+    putOnboardingProgress.mockImplementation(
+      async (update: Partial<OnboardingState>) => ({
+        ...onboarding,
+        ...update,
+      }),
+    );
+    patchOnboardingProgress.mockImplementation(
+      async (update: Partial<OnboardingState>) => ({
+        ...onboarding,
+        ...update,
+      }),
+    );
     getMemoryMode.mockResolvedValue({
       mode: "pro",
       configured_mode: "pro",
@@ -371,7 +421,7 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: START }));
 
     const continueButton = await screen.findByRole("button", {
-      name: "配置模型，沉淀记忆",
+      name: "选择记忆模式",
     });
     expect(continueButton).toHaveProperty("disabled", false);
     await openModelStep(user);
@@ -695,11 +745,45 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await user.click(screen.getByRole("radio", { name: /lite/i }));
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(completeOnboarding).toHaveBeenCalledOnce();
     expect(controller.refresh).toHaveBeenCalledOnce();
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("shows the compact Lite and Pro mode step with contextual actions", async () => {
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
+    expect(screen.getByText("之后可在设置中更改。")).toBeTruthy();
+    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    expect(screen.queryByRole("radio", { name: /ultra/i })).toBeNull();
+    expect(screen.getByText("推荐").closest("label")?.textContent).toContain(
+      "Pro",
+    );
+    expect(
+      screen.getByText("Ultra 可在完成首次设置后到设置页开启。"),
+    ).toBeTruthy();
+    const modeStep = screen
+      .getByRole("navigation", { name: "首次设置进度" })
+      .querySelector('[aria-current="step"]');
+    expect(modeStep?.getAttribute("aria-current")).toBe("step");
+
+    await user.click(screen.getByRole("radio", { name: /lite/i }));
+    expect(screen.getByRole("button", { name: "使用 Lite 进入" })).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    expect(screen.getByRole("button", { name: "继续配置模型" })).toBeTruthy();
   });
 
   it("does not let a late saved-mode read overwrite the user's new choice", async () => {
@@ -735,7 +819,7 @@ describe("OnboardingFlow S1.3", () => {
     });
 
     expect(lite.checked).toBe(true);
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     expect(setMemoryMode).toHaveBeenLastCalledWith("lite");
   });
 
@@ -760,7 +844,7 @@ describe("OnboardingFlow S1.3", () => {
       true,
     );
     await user.click(lite);
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain(
       "模式未能保存。你的选择已保留，请重试。",
@@ -769,11 +853,275 @@ describe("OnboardingFlow S1.3", () => {
     expect(completeOnboarding).not.toHaveBeenCalled();
     expect(onFinish).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
     expect(setMemoryMode).toHaveBeenLastCalledWith("lite");
     expect(completeOnboarding).toHaveBeenCalledOnce();
     expect(onFinish).toHaveBeenCalledWith("sources");
+  });
+
+  it("serializes an in-flight Pro PUT before a later Lite choice so Lite wins", async () => {
+    let resolvePro!: (value: { mode: "pro" }) => void;
+    setMemoryMode
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePro = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ mode: "lite" });
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("pro"));
+
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    await user.click(screen.getByRole("radio", { name: /lite/i }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+    expect(setMemoryMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolvePro({ mode: "pro" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(setMemoryMode.mock.calls.map(([mode]) => mode)).toEqual([
+      "pro",
+      "lite",
+    ]);
+    await waitFor(() => expect(finish).toHaveBeenCalledWith("sources"));
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("drops an in-flight Pro response after returning to mode without confirming or completing", async () => {
+    let resolvePro!: (value: { mode: "pro" }) => void;
+    setMemoryMode.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePro = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    const revisionBeforePut = confirmedMemoryModeSnapshot().revision;
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("pro"));
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+
+    await act(async () => resolvePro({ mode: "pro" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "选择记忆模式" }),
+      ).toBeTruthy(),
+    );
+    expect(confirmedMemoryModeSnapshot().revision).toBe(revisionBeforePut);
+    expect(completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("serializes model and back progress writes so setup mode wins", async () => {
+    let resolveModelProgress!: (value: OnboardingState) => void;
+    putOnboardingProgress
+      .mockResolvedValueOnce({
+        ...onboarding,
+        mode_intent: "pro",
+        setup_step: "model",
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveModelProgress = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        ...onboarding,
+        mode_intent: "pro",
+        setup_step: "mode",
+      });
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(putOnboardingProgress).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    expect(putOnboardingProgress).toHaveBeenCalledTimes(2);
+
+    await act(async () =>
+      resolveModelProgress({
+        ...onboarding,
+        mode_intent: "pro",
+        setup_step: "model",
+      }),
+    );
+    await waitFor(() => expect(putOnboardingProgress).toHaveBeenCalledTimes(3));
+    expect(putOnboardingProgress).toHaveBeenLastCalledWith({
+      mode_intent: "pro",
+      setup_step: "mode",
+      model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+    });
+    expect(completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("moves focus to the mode title on entry and after returning from model", async () => {
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const firstTitle = screen.getByRole("heading", { name: "选择记忆模式" });
+    await waitFor(() => expect(document.activeElement).toBe(firstTitle));
+
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    const returnedTitle = screen.getByRole("heading", {
+      name: "选择记忆模式",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(returnedTitle));
+  });
+
+  it("treats completed progress conflicts as terminal instead of retryable failures", async () => {
+    putOnboardingProgress.mockRejectedValueOnce(
+      Object.assign(new Error("completed"), {
+        response: {
+          status: 409,
+          data: { detail: "onboarding_completed" },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await waitFor(() => expect(finish).toHaveBeenCalledWith("sources"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(setMemoryMode).not.toHaveBeenCalled();
+  });
+
+  it("persists a late profile receipt after leaving model but fences late activation", async () => {
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    const lateReceipt = screen.getByRole("button", {
+      name: "模型启用回执已确认",
+    });
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    fireEvent.click(lateReceipt);
+
+    await waitFor(() =>
+      expect(patchOnboardingProgress).toHaveBeenCalledWith({
+        model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+      }),
+    );
+    expect(setMemoryMode).not.toHaveBeenCalled();
+    expect(completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("restores a persisted Pro model step directly after restart", async () => {
+    render(
+      <OnboardingFlow
+        state={{
+          ...onboarding,
+          mode_intent: "pro",
+          setup_step: "model",
+          model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+        }}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "选择记忆模式" })).toBeNull();
+  });
+
+  it("keeps the Pro choice retryable when progress persistence fails", async () => {
+    putOnboardingProgress.mockRejectedValueOnce(new Error("offline"));
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const pro = screen.getByRole<HTMLInputElement>("radio", { name: /pro/i });
+    await user.click(pro);
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "模式未能保存",
+    );
+    expect(pro.checked).toBe(true);
+    expect(screen.queryByRole("region", { name: "模型步骤边界" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    expect(
+      await screen.findByRole("region", { name: "模型步骤边界" }),
+    ).toBeTruthy();
   });
 
   it("returns from skipped pro setup to an explicit mode choice", async () => {
@@ -792,11 +1140,11 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: START }));
     await openModelStep(user);
     await user.click(screen.getByRole("button", { name: "跳过模型进入应用" }));
-    expect(screen.getByRole("heading", { name: "选择记忆方式" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
     expect(completeOnboarding).not.toHaveBeenCalled();
     expect(onFinish).not.toHaveBeenCalled();
     await user.click(screen.getByRole("radio", { name: /lite/i }));
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     expect(completeOnboarding).toHaveBeenCalledOnce();
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(getModelProfiles).not.toHaveBeenCalled();
@@ -1749,7 +2097,7 @@ describe("OnboardingFlow S1.3", () => {
     });
     await openApps();
     await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("button", { name: "配置模型，沉淀记忆" });
+    await screen.findByRole("button", { name: "选择记忆模式" });
     await continueImport(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(api.connectSources).toHaveBeenCalledOnce();
@@ -2336,9 +2684,7 @@ describe("OnboardingFlow S1.3", () => {
     });
     expect(host.disabled).toBe(true);
     expect(host.checked).toBe(false);
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await user.click(screen.getByRole("button", { name: "选择记忆模式" }));
     expect(controller.setSync).not.toHaveBeenCalled();
     expect(previewRecallInstall).not.toHaveBeenCalled();
   });

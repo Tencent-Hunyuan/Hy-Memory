@@ -264,7 +264,12 @@ from one_memory.model_request_audit import (
     ModelRequestAuditStore,
 )
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
-from one_memory.onboarding import OnboardingState, OnboardingStore
+from one_memory.onboarding import (
+    OnboardingCompletedError,
+    OnboardingProgressUpdate,
+    OnboardingState,
+    OnboardingStore,
+)
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -2525,6 +2530,21 @@ def create_app(
     )
     def get_onboarding() -> OnboardingState:
         return _onboarding_store(app).get()
+
+    @app.api_route(
+        "/api/v1/onboarding/progress",
+        methods=["PATCH", "PUT"],
+        response_model=OnboardingState,
+        dependencies=protected,
+    )
+    async def update_onboarding_progress(
+        update: OnboardingProgressUpdate,
+    ) -> OnboardingState:
+        """Persist only resumable onboarding choices; secrets are never accepted."""
+        try:
+            return await asyncio.to_thread(_onboarding_store(app).update_progress, update)
+        except OnboardingCompletedError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post(
         "/api/v1/onboarding/complete",

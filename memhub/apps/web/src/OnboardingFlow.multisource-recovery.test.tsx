@@ -32,6 +32,9 @@ vi.mock("./api", () => ({
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
+  patchOnboardingProgress: vi.fn().mockResolvedValue({}),
   getSourceConnection: vi.fn(),
   createImportJob: vi.fn(),
   detectSource: vi.fn(),
@@ -74,6 +77,9 @@ const state: OnboardingState = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 };
 let sources: SourceResponse[];
 let jobs: ImportJob[];
@@ -146,6 +152,17 @@ function noUnrequestedWrites() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(api.getMemoryMode).mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  } as never);
+  vi.mocked(api.setMemoryMode).mockResolvedValue({ mode: "pro" } as never);
+  vi.mocked(api.planMemoryMode).mockResolvedValue({
+    blockers: [],
+  } as never);
+  vi.mocked(api.putOnboardingProgress).mockResolvedValue(state);
+  vi.mocked(api.patchOnboardingProgress).mockResolvedValue(state);
   localStorage.clear();
   vi.stubGlobal("crypto", webcrypto);
   delete window.oneMemory;
@@ -302,7 +319,7 @@ it("empty discovery shows zero and allows explicit entry without a connection re
   );
   fireEvent.click(screen.getByRole("button", { name: "稍后添加，先进入" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  fireEvent.click(screen.getByRole("button", { name: "继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );
@@ -354,7 +371,7 @@ it("partial acceptance preserves the successful job and failure through model-st
   expect(api.completeOnboarding).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "进入应用" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  fireEvent.click(screen.getByRole("button", { name: "继续" }));
+  fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );

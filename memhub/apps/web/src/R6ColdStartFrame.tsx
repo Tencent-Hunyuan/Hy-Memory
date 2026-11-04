@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { LanguageSelector } from "./LanguageSelector";
 import { R6LocalStorage, R6Stepper } from "./R6Controls";
 import "./onboarding-r6.css";
@@ -9,13 +9,20 @@ export function R6ColdStartFrame({
   eyebrow,
   children,
   footer,
+  focusToken,
 }: {
   step: 1 | 2 | 3;
   title: string;
   eyebrow: string;
   children: ReactNode;
   footer: ReactNode;
+  focusToken?: number;
 }) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusToken === undefined) return;
+    titleRef.current?.focus({ preventScroll: true });
+  }, [focusToken]);
   return (
     <main className="onboarding-r6" aria-label={title}>
       {/* The source (143:3007 / 143:3008) puts a mark + "MemHub" on the
@@ -33,7 +40,12 @@ export function R6ColdStartFrame({
           <header className="onboarding-r6-head">
             <div>
               <p>{eyebrow}</p>
-              <h1>{title}</h1>
+              <h1
+                ref={titleRef}
+                tabIndex={focusToken === undefined ? undefined : -1}
+              >
+                {title}
+              </h1>
             </div>
             <R6Stepper active={step} />
           </header>

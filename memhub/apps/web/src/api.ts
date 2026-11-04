@@ -37,6 +37,7 @@ import {
   type ModelProfile,
   type ModelProfileInput,
   type ModelProfilePatch,
+  type OnboardingProgressUpdate,
   type OnboardingState,
   type SdkMemoryKind,
   type SdkMemoryPage,
@@ -475,6 +476,26 @@ export async function getSourceConnection(
 
 export async function getOnboarding(): Promise<OnboardingState> {
   const response = await client.get<OnboardingState>("/api/v1/onboarding");
+  return response.data;
+}
+
+export async function patchOnboardingProgress(
+  update: OnboardingProgressUpdate,
+): Promise<OnboardingState> {
+  const response = await client.patch<OnboardingState>(
+    "/api/v1/onboarding/progress",
+    update,
+  );
+  return response.data;
+}
+
+export async function putOnboardingProgress(
+  update: OnboardingProgressUpdate,
+): Promise<OnboardingState> {
+  const response = await client.put<OnboardingState>(
+    "/api/v1/onboarding/progress",
+    update,
+  );
   return response.data;
 }
 

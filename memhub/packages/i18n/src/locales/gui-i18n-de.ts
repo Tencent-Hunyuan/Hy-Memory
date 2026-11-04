@@ -1473,6 +1473,16 @@ export const germanMessages: Record<MessageKey, string> = {
     "Verbindung fehlgeschlagen. Prüfen Sie Modell, Schlüssel und Empfänger.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Konfiguration oder Testergebnis konnte nicht bestätigt werden. Prüfen Sie sie vor dem erneuten Versuch.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "Die Indexaktualisierung wurde nicht abgeschlossen. Das bisherige Suchmodell wird weiterhin verwendet. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "Das Ergebnis des letzten Modelltests muss noch geprüft werden. Versuchen Sie es später erneut.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "Modellschreibvorgänge sind vorübergehend pausiert. Warten Sie, bis die Indexwartung abgeschlossen ist, und versuchen Sie es erneut.",
+  "模型未能确认启用，请在设置中核对。":
+    "Die Aktivierung des Modells konnte nicht bestätigt werden. Prüfen Sie dies in den Einstellungen.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "Die gespeicherte Modellkonfiguration kann vorübergehend nicht gelesen werden. Es wird kein Duplikat erstellt. Aktualisieren Sie erneut.",
   所选连接已启用: "Ausgewählte App-Verbindungen sind aktiviert",
   本次未选择应用连接: "Diesmal keine App-Verbindung ausgewählt",
   尚未填写接收方: "Kein Empfänger eingegeben",

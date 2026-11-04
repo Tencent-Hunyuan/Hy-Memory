@@ -16,6 +16,9 @@ vi.mock("./api", () => ({
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
+  patchOnboardingProgress: vi.fn().mockResolvedValue({}),
 }));
 vi.mock("./FirstImportReview", () => ({
   defaultHostSourceIds: () => [],
@@ -49,6 +52,9 @@ const state = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 } as const;
 function source(
   id: string,
@@ -130,7 +136,7 @@ it("moves from import to the actual third step without completing onboarding", a
   );
   await userEvent.click(screen.getByRole("button", { name: "进入第三步" }));
   await userEvent.click(screen.getByRole("radio", { name: /pro/i }));
-  await userEvent.click(screen.getByRole("button", { name: "继续" }));
+  await userEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
   expect(screen.getByRole("heading", { name: "第三步模型页面" })).toBeTruthy();
   expect(completeOnboarding).not.toHaveBeenCalled();
   expect(finish).not.toHaveBeenCalled();
@@ -159,7 +165,7 @@ it("lets an empty first-time user enter without granting or importing a source",
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  await userEvent.click(screen.getByRole("button", { name: "继续" }));
+  await userEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );
@@ -182,7 +188,7 @@ it("retains explicit retry or enter when saving the skipped onboarding fails", a
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  await userEvent.click(screen.getByRole("button", { name: "继续" }));
+  await userEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await screen.findByRole("button", { name: "重试保存并进入" });
   expect(finish).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "仍进入应用页" }));

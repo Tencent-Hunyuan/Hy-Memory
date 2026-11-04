@@ -40,7 +40,7 @@ export function R6Stepper({ active }: { active: 1 | 2 | 3 }) {
   return (
     <nav className="r6-stepper" aria-label={text("首次设置进度")}>
       <ol>
-        {["导入历史", "连接应用", "沉淀记忆"].map((label, index) => (
+        {["导入历史", "连接应用", "记忆模式"].map((label, index) => (
           <li
             key={label}
             aria-current={active === index + 1 ? "step" : undefined}

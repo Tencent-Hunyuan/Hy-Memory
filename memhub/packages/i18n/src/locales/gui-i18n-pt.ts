@@ -1470,6 +1470,16 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Falha na conexão. Verifique o modelo, a chave e o destinatário.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Não foi possível confirmar a configuração ou o resultado do teste. Verifique antes de tentar novamente.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "A atualização do índice não foi concluída. O modelo de busca anterior continua em uso. Verifique a conexão e tente novamente.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "O resultado do último teste do modelo ainda precisa ser verificado. Tente novamente mais tarde.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "As gravações do modelo estão temporariamente pausadas. Aguarde a conclusão da manutenção do índice e tente novamente.",
+  "模型未能确认启用，请在设置中核对。":
+    "Não foi possível confirmar que o modelo foi ativado. Verifique nas Configurações.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "A configuração de modelo salva está temporariamente indisponível. Nenhuma duplicata será criada. Tente atualizar novamente.",
   所选连接已启用: "As conexões dos apps selecionados estão ativadas",
   本次未选择应用连接: "Nenhuma conexão de app selecionada desta vez",
   尚未填写接收方: "Nenhum destinatário informado",

@@ -900,6 +900,51 @@ describe("ModelSettings", () => {
     );
   });
 
+  it("keeps required generation fields mounted when technical details collapse", async () => {
+    render(<ModelSettings />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "配置详情与高级设置" }),
+    );
+    const modelField =
+      document.querySelector<HTMLInputElement>('[name="model"]');
+    const baseUrlField =
+      document.querySelector<HTMLInputElement>('[name="base_url"]');
+    expect(modelField).toBeTruthy();
+    expect(baseUrlField).toBeTruthy();
+    expect(modelField?.closest("[hidden]")).toBeTruthy();
+    expect(baseUrlField?.closest("[hidden]")).toBeTruthy();
+  });
+
+  it("reopens collapsed generation details and focuses the first invalid field", async () => {
+    render(<ModelSettings />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "配置详情与高级设置" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    const modelField = await screen.findByLabelText("生成模型名");
+    expect(
+      screen
+        .getByRole("button", { name: "配置详情与高级设置" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    await waitFor(() => expect(document.activeElement).toBe(modelField));
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("clears inherited runtime values when an edit changes protocol and creates with Core defaults", async () => {
+    render(<ModelSettings />);
+    await userEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    expect(screen.getByLabelText("超时（秒）")).toHaveProperty("value", "60");
+    await userEvent.selectOptions(screen.getByLabelText("协议"), "ollama");
+    expect(screen.getByLabelText("超时（秒）")).toHaveProperty("value", "");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0]).not.toHaveProperty("timeout_seconds");
+    expect(create.mock.calls[0][0]).not.toHaveProperty("max_concurrency");
+    expect(create.mock.calls[0][0]).not.toHaveProperty("context_window");
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("shows field-local Chinese required errors for mouse and keyboard submission", async () => {
     const user = userEvent.setup();
     render(<ModelSettings />);
@@ -1022,7 +1067,7 @@ describe("ModelSettings", () => {
     );
   });
 
-  it("后端激活不了的协议根本不出现在下拉里", () => {
+  it("后端激活不了的协议显示但不可选择", () => {
     render(<ModelSettings />);
 
     const providerSelect = screen.getByLabelText("协议") as HTMLSelectElement;
@@ -1035,12 +1080,16 @@ describe("ModelSettings", () => {
     );
     expect(labels.some((text) => text.startsWith("Ollama（本机）"))).toBe(true);
 
-    // ModelProfileStore.activate() 对这两个 provider 抛
-    // model_provider_not_supported。之前它们以 disabled 的形态留在下拉里，
-    // 等于把两条死路摆在明面上让人去读懂括号里的「暂不支持」。
-    expect(labels.some((text) => text.includes("Anthropic"))).toBe(false);
-    expect(labels.some((text) => text.includes("HY Memory"))).toBe(false);
-    expect(providerSelect.options.length).toBe(2);
+    expect(
+      Array.from(providerSelect.options).find((option) =>
+        option.textContent?.includes("Anthropic"),
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      Array.from(providerSelect.options).find((option) =>
+        option.textContent?.includes("HY 托管"),
+      )?.disabled,
+    ).toBe(true);
   });
 
   it("已保存的配置不印内置向量模型", () => {

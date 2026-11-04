@@ -107,6 +107,19 @@ afterEach(() => {
   vi.mocked(memoryModePlanUnsupported).mockReturnValue(false);
 });
 
+it("renders all settings modes as one grouped shared choice list", async () => {
+  prepare("pro");
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  const group = await screen.findByRole("radiogroup", {
+    name: "当前模式",
+  });
+  expect(within(group).getAllByRole("radio")).toHaveLength(3);
+  expect(
+    within(group).getByText("当前模式").closest("label")?.textContent,
+  ).toContain("智能记忆（pro）");
+});
+
 it("confirms the data effects before switching to lite", async () => {
   prepare("pro");
   vi.mocked(setMemoryMode).mockResolvedValue({

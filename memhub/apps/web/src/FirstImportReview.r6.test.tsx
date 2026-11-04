@@ -239,7 +239,7 @@ it("emits controlled connection drafts only and passes continuation without comp
     screen.getByRole<HTMLInputElement>("checkbox", { name: "一键接入应用" })
       .checked,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "配置模型，沉淀记忆" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择记忆模式" }));
   expect(next).toHaveBeenCalledWith("settings");
 });
 
@@ -379,8 +379,8 @@ it("uses user-facing connection confirmation copy without implementation narrati
   expect(
     screen.queryByText(/选择草稿|按各应用回执|本页任务控制尚未接通/),
   ).toBeNull();
-  expect(screen.getByText(/不会自动开放应用读取权限/)).toBeTruthy();
-  expect(screen.getByText(/配置模型后，才会开始生成记忆/)).toBeTruthy();
+  expect(screen.getByText(/下一步选择记忆模式/)).toBeTruthy();
+  expect(screen.getByText(/之后仍可在设置中更改/)).toBeTruthy();
 });
 
 it.each(["paused", "failed", "cancelled", "interrupted"] as const)(

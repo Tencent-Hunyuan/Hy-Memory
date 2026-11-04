@@ -582,89 +582,36 @@
 .onboarding-r6-mode-intro {
   text-align: center;
 }
-.onboarding-r6-mode-intro h2 {
-  margin: 0;
-  color: #263947;
-  font-size: 20px;
-  line-height: 30px;
-}
 .onboarding-r6-mode-intro p {
-  margin: 8px 0 0;
+  margin: 0;
   color: #637381;
   font-size: 14px;
   line-height: 22px;
 }
-.onboarding-r6-mode-options {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-.onboarding-r6-mode-card {
-  min-height: 136px;
-  padding: 20px;
-  border: 1px solid #c9d5de;
-  border-radius: 10px;
+.onboarding-r6-mode .memory-mode-choice-list {
   background: rgb(255 255 255 / 72%);
-  cursor: pointer;
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  transition:
-    border-color var(--r6-fast, 140ms),
-    background var(--r6-fast, 140ms),
-    box-shadow var(--r6-fast, 140ms);
 }
-.onboarding-r6-mode-card:hover {
-  border-color: #8299aa;
-  background: rgb(255 255 255 / 76%);
+.onboarding-r6-mode .memory-mode-choice {
+  min-height: 82px;
+  padding: 15px 18px;
 }
-.onboarding-r6-mode-card[data-selected="true"] {
-  border-color: #557c93;
-  background: #edf3f6;
-  box-shadow: 0 0 0 2px rgb(85 124 147 / 10%);
+.onboarding-r6-mode .memory-mode-choice-copy {
+  gap: 4px;
 }
-.onboarding-r6-mode-card:has(input:focus-visible) {
-  outline: 2px solid #557c93;
-  outline-offset: 3px;
+.onboarding-r6-mode .memory-mode-choice-copy strong {
+  font-size: 16px;
+  line-height: 25px;
 }
-.onboarding-r6-mode-card input {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  margin: 4px 0 0;
-  accent-color: #557c93;
+.onboarding-r6-mode .memory-mode-choice-copy small {
+  font-size: 13px;
+  line-height: 22px;
 }
-.onboarding-r6-mode-copy {
-  min-width: 0;
-  color: #5f6e79;
-  font-size: 14px;
-  line-height: 23px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.onboarding-r6-mode-heading {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.onboarding-r6-mode-heading strong {
-  color: #263947;
-  font-size: 17px;
-  line-height: 26px;
-}
-.onboarding-r6-mode-heading > span {
-  padding: 2px 8px;
-  border-radius: 999px;
-  color: #41677e;
-  background: #dceaf2;
-  font-size: 11px;
-  line-height: 18px;
-  font-weight: 600;
+.onboarding-r6-mode-ultra-note {
+  margin: -6px 0 0;
+  color: #637381;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
 }
 .onboarding-r6-mode-error {
   min-height: 20px;
@@ -810,12 +757,6 @@
   }
   .onboarding-r6-body {
     padding: 24px 20px;
-  }
-  .onboarding-r6-mode-options {
-    grid-template-columns: 1fr;
-  }
-  .onboarding-r6-mode-card {
-    min-height: 0;
   }
   .onboarding-r6-discovery {
     height: auto;
