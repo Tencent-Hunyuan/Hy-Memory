@@ -34,10 +34,10 @@ def test_resume_during_cleanup_returns_conflict_without_internal_error(tmp_path,
             job = supervisor.job_store.create(user_id="local", source_id="fixture")
             supervisor.job_store.transition(job.job_id, ImportStatus.PAUSED)
 
-            def draining(_job_id):
+            async def draining(_job_id):
                 raise InvalidJobTransitionError("import_cleanup_in_progress")
 
-            monkeypatch.setattr(supervisor, "resume", draining)
+            monkeypatch.setattr(supervisor, "resume_off_loop", draining)
             response = await client.post(f"/api/v1/import-jobs/{job.job_id}/resume")
             assert response.status_code == 409
             assert response.json() == {"detail": "invalid_job_transition"}

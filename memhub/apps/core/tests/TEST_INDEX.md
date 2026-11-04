@@ -123,6 +123,7 @@
 | `test_import_api.py` | `integration` | 覆盖 resume during cleanup returns conflict without internal error、authorize detect import and revoke api flow、protected api rejects missing token and foreign origin 等 5 个场景。 |
 | `test_import_control_races_review.py` | `contract` | Read-only review repro: real runner/store, synthetic delayed adapter cleanup. |
 | `test_import_evidence_atomicity.py` | `contract` | 覆盖 counter failure rolls back evidence versions and cursor、same identity cursor rewind is blocked and logged、replaced identity may reset checkpoint 等 20 个场景。 |
+| `test_import_job_retention.py` | `integration` | `import_jobs` stays bounded, and the questions asked of it are SQL, not scans. |
 | `test_import_oversized_verbatim.py` | `contract` | 覆盖 normal verbatim is unchanged、oversized verbatim is truncated instead of rejected 场景。 |
 | `test_import_runner.py` | `contract` | 覆盖 job transitions are explicit、runner keeps per record errors and continues、sync slices reuse the same source listing 等 22 个场景。 |
 | `test_import_skip_batching.py` | `contract` | 覆盖 batch limit and tail use fewer commits、batched skips keep their order against the next write、flushes before every nonmatching event 等 14 个场景。 |
@@ -322,4 +323,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 317 个测试文件。
+共 318 个测试文件。

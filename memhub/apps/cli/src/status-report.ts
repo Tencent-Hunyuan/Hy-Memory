@@ -323,6 +323,8 @@ export function renderStatusText(
   if (embeddingSwitch !== null) lines.push(`向量模型：${embeddingSwitch}`);
   const backoff = modelBackoffLine(report.sections.processing);
   if (backoff !== null) lines.push(backoff);
+  const drain = writeDrainLine(report.sections.processing);
+  if (drain !== null) lines.push(drain);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -351,6 +353,20 @@ function modelBackoffLine(section: Section | undefined): string | null {
       ? `将于 ${until} 自动重试`
       : "稍后自动重试"
   }`;
+}
+
+/** The durable write drain, when it is not simply running: it exited on an
+ * error and is coming back (`restarting`), or it is not running at all. */
+function writeDrainLine(section: Section | undefined): string | null {
+  if (section?.state !== "ok") return null;
+  const state = section.write_drain;
+  if (state !== "restarting" && state !== "stopped") return null;
+  const error = section.write_drain_error;
+  const reason =
+    typeof error === "string" && error.length > 0 ? `（${error}）` : "";
+  return state === "restarting"
+    ? `写入队列：异常退出${reason}，正在自动重启`
+    : `写入队列：已停止${reason}`;
 }
 
 export function pipelineLine(pipeline: PipelineSummary): string {
@@ -410,6 +426,8 @@ const SECTION_LINE_OMITTED = new Set([
   "embedding_switch",
   "llm_backoff_until",
   "llm_backoff_error",
+  "write_drain",
+  "write_drain_error",
   "content_plane",
   "visible_count",
   "effective_mode",
@@ -549,6 +567,7 @@ function describeProcessing(
     })),
     suspended: typeof summary.suspended === "number" ? summary.suspended : 0,
     ...llmBackoffFields(summary),
+    ...writeDrainFields(summary),
     ...embeddingSwitchField(summary),
   };
 }
@@ -565,6 +584,24 @@ function llmBackoffFields(summary: MemoryProcessingSummary): {
     llm_backoff_until:
       typeof until === "string" && until.length <= 64 ? until : null,
     llm_backoff_error:
+      typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
+  };
+}
+
+/** Durable write drain liveness. Null when Core does not report it (older
+ * Core, or recovery has not started the drain yet). */
+function writeDrainFields(summary: MemoryProcessingSummary): {
+  write_drain: "running" | "restarting" | "stopped" | null;
+  write_drain_error: string | null;
+} {
+  const state = summary.write_drain;
+  const error = summary.write_drain_error;
+  return {
+    write_drain:
+      state === "running" || state === "restarting" || state === "stopped"
+        ? state
+        : null,
+    write_drain_error:
       typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
   };
 }

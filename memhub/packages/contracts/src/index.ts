@@ -1118,6 +1118,11 @@ export interface MemoryProcessingSummary {
   llm_backoff_until?: string | null;
   /** The provider failure behind the pause, as a stable code. */
   llm_backoff_error?: string | null;
+  /** The durable write drain: `restarting` after an unexpected exit, until it
+   * runs again. Null before startup recovery started it. */
+  write_drain?: "running" | "restarting" | "stopped" | null;
+  /** Why the drain last exited unexpectedly, as a stable code. */
+  write_drain_error?: string | null;
   /** The active memory pipeline and its graph/evolve status. */
   pipeline?: MemoryPipelineStatus | null;
   /** A running embedding switch or startup merge pauses mode mutations. */

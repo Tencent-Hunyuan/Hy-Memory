@@ -28,7 +28,7 @@ from one_memory.imports.adapters import (
 )
 from one_memory.imports.jobs import ImportJob, ImportJobStore, ImportStatus
 from one_memory.imports.supervisor import ImportSupervisor
-from one_memory.user_scope import DEFAULT_USER_ID, lane_key, split_lane
+from one_memory.user_scope import DEFAULT_USER_ID, split_lane
 
 #: How long an automatic retry will wait for a wedged worker to notice cancel.
 ABANDON_TIMEOUT_SECONDS = 5.0
@@ -249,13 +249,15 @@ class PollingLiveSyncSupervisor:
                     ),
                 )
                 return None
-            source_jobs = await in_the_background(self.job_store.list_jobs)
+            # This lane's unfinished jobs only: the newest unfinished sync, and
+            # whatever history shares its cursor. Asked in SQL; listing every
+            # job ever run and filtering here was the poll's biggest read.
+            source_jobs = await in_the_background(self._lane_jobs, source_id)
             active_sync = next(
                 (
                     job
                     for job in reversed(source_jobs)
-                    if lane_key(job.user_id, job.source_id) == source_id
-                    and job.operation == "sync"
+                    if job.operation == "sync"
                     and job.status
                     in {
                         ImportStatus.PENDING,
@@ -275,7 +277,9 @@ class PollingLiveSyncSupervisor:
                     active_sync.job_id
                 ):
                     attempted_at = datetime.now(UTC)
-                    self.import_supervisor.enqueue(active_sync.job_id)
+                    await self.import_supervisor.enqueue_off_loop(
+                        active_sync.job_id, job=active_sync
+                    )
                     if not wait_for_completion:
                         self._observe_sync(source_id, attempted_at, active_sync.job_id)
                         return active_sync
@@ -295,22 +299,20 @@ class PollingLiveSyncSupervisor:
                 # by a process restart between yield and claim.  Enqueue is
                 # the operation that actually creates the task.
                 attempted_at = datetime.now(UTC)
-                self.import_supervisor.resume(active_sync.job_id)
-                self.import_supervisor.enqueue(active_sync.job_id)
+                resumed = await self.import_supervisor.resume_off_loop(active_sync.job_id)
+                await self.import_supervisor.enqueue_off_loop(active_sync.job_id, job=resumed)
                 completed = await self.import_supervisor.wait(active_sync.job_id)
                 self._record_outcome(source_id, attempted_at, completed)
                 return completed
             competing = [
                 job
                 for job in source_jobs
-                if lane_key(job.user_id, job.source_id) == source_id
-                and job.operation != "sync"
+                if job.operation != "sync"
                 and job.status
                 in {ImportStatus.PENDING, ImportStatus.RUNNING, ImportStatus.INTERRUPTED}
             ]
             bounded_history_incomplete = any(
-                lane_key(job.user_id, job.source_id) == source_id
-                and job.operation == "history"
+                job.operation == "history"
                 and job.history_after is not None
                 and job.status is not ImportStatus.COMPLETED
                 for job in source_jobs
@@ -353,6 +355,38 @@ class PollingLiveSyncSupervisor:
             # status rewrite is needed: history remains pending and resumes
             # automatically after the realtime slice completes.
             return await self._run_sync(source_id, wait_for_completion=wait_for_completion)
+
+    def _lane_jobs(self, source_id: str) -> list[ImportJob]:
+        """The lane's jobs `_sync` decides on, oldest first.
+
+        Everything not completed, of either operation: an unfinished sync to
+        pick up, a history that competes for the cursor, and a bounded history
+        that has not completed yet (which includes a cancelled one). Finished
+        syncs, the rows that grow without end, are never read.
+        """
+        user_id, bare_source_id = split_lane(source_id)
+        unfinished = tuple(
+            status for status in ImportStatus if status is not ImportStatus.COMPLETED
+        )
+        return [
+            *self.job_store.find_jobs(
+                user_id=user_id,
+                source_id=bare_source_id,
+                operation="history",
+                statuses=unfinished,
+            ),
+            *self.job_store.find_jobs(
+                user_id=user_id,
+                source_id=bare_source_id,
+                operation="sync",
+                statuses=(
+                    ImportStatus.PENDING,
+                    ImportStatus.RUNNING,
+                    ImportStatus.PAUSED,
+                    ImportStatus.INTERRUPTED,
+                ),
+            ),
+        ]
 
     async def _has_work(self, source_id: str) -> bool:
         """Ask the source whether a scan would write anything, before taking a job out.
@@ -452,7 +486,7 @@ class PollingLiveSyncSupervisor:
             ),
         )
         self._active_jobs[source_id] = job.job_id
-        self.import_supervisor.enqueue(job.job_id)
+        await self.import_supervisor.enqueue_off_loop(job.job_id, job=job)
         if not wait_for_completion:
             self._observe_sync(source_id, attempted_at, job.job_id)
             return job

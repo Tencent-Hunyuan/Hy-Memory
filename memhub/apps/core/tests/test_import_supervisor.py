@@ -415,15 +415,15 @@ def test_shutdown_preserves_a_job_that_finished_after_the_running_snapshot(
         task = asyncio.create_task(waiting())
         supervisor._tasks[job.job_id] = task
         await asyncio.sleep(0)
-        original = jobs.list_jobs
+        original = jobs.find_jobs
 
         def finish_after_snapshot(*args, **kwargs):
             found = original(*args, **kwargs)
-            if kwargs.get("status") is ImportStatus.RUNNING:
+            if tuple(kwargs.get("statuses") or ()) == (ImportStatus.RUNNING,):
                 jobs.finish_owned(job.job_id, runner_token=token, target=terminal)
             return found
 
-        monkeypatch.setattr(jobs, "list_jobs", finish_after_snapshot)
+        monkeypatch.setattr(jobs, "find_jobs", finish_after_snapshot)
         try:
             await supervisor.shutdown()
             assert jobs.require(job.job_id).status is terminal
@@ -431,5 +431,47 @@ def test_shutdown_preserves_a_job_that_finished_after_the_running_snapshot(
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_abandon_makes_its_database_calls_off_the_event_loop(tmp_path, monkeypatch) -> None:
+    """Live sync abandons from its poll; a writer wait there froze the whole Core."""
+    import threading
+
+    async def scenario() -> None:
+        evidence, jobs = stores(tmp_path)
+        supervisor = ImportSupervisor(adapters={}, evidence_store=evidence, job_store=jobs)
+        job = jobs.create(user_id="local", source_id="fixture", operation="sync")
+        job, _token = jobs.claim(job.job_id)
+        loop_thread = threading.current_thread()
+        calls: list[tuple[str, threading.Thread]] = []
+        for name in ("require", "interrupt_running"):
+            original = getattr(jobs, name)
+
+            def recorded(*args, _name=name, _original=original, **kwargs):
+                calls.append((_name, threading.current_thread()))
+                return _original(*args, **kwargs)
+
+            monkeypatch.setattr(jobs, name, recorded)
+
+        async def wedged() -> None:
+            # Ignores the first cancel, like a runner stuck in a thread.
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.2)
+
+        task = asyncio.create_task(wedged())
+        supervisor._tasks[job.job_id] = task
+        await asyncio.sleep(0)
+        try:
+            assert await supervisor.abandon(job.job_id, timeout=0.01) is False
+        finally:
+            await asyncio.gather(task, return_exceptions=True)
+
+        assert {name for name, _thread in calls} == {"require", "interrupt_running"}
+        assert all(thread is not loop_thread for _name, thread in calls)
+        assert jobs.require(job.job_id).status is ImportStatus.INTERRUPTED
 
     asyncio.run(scenario())
