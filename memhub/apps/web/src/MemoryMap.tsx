@@ -684,6 +684,9 @@ export function MemoryMap(props: Props) {
     setGroupKey(key);
   }
   function pickNode(node: MemoryGraphNode) {
+    // Topics are graph annotations, not detail-bearing records. They remain
+    // hoverable in the canvas but must not replace the memory inspector.
+    if (node.node_type === "topic") return;
     if (node.memory_id) {
       pick(node.memory_id);
       return;
@@ -707,11 +710,6 @@ export function MemoryMap(props: Props) {
           );
         if (first) pick(first, false);
       }
-    }
-    if (node.node_type === "topic") {
-      if (props.simplified) return;
-      setAxis("topic");
-      setGroupKey(`topic:${node.label}`);
     }
   }
   const label =
