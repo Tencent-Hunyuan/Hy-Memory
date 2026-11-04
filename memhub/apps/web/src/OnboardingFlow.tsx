@@ -112,9 +112,8 @@ export function OnboardingFlow({
   const [locationCheck, setLocationCheck] = useState<LocationCheck>("checking");
   const [selected, setSelected] = useState<SourceResponse[]>([]);
   const [custom, setCustom] = useState<SourceResponse | null>(null);
-  const [busy, setBusy] = useState<
-    "checking" | "submitting" | "leaving" | null
-  >(null);
+  const [busy, setBusy] = useState<"checking" | "submitting" | null>(null);
+  const [completionBusy, setCompletionBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
   const [exitDestination, setExitDestination] =
@@ -138,7 +137,10 @@ export function OnboardingFlow({
   );
   const [modeDestination, setModeDestination] =
     useState<OnboardingDestination>("sources");
-  const [modeSaving, setModeSaving] = useState(false);
+  const [modePhase, setModePhase] = useState<"idle" | "saving" | "completing">(
+    "idle",
+  );
+  const modeSaving = modePhase !== "idle";
   const [modeError, setModeError] = useState<string | null>(null);
   const [modeFocusToken, setModeFocusToken] = useState(
     resumedStep === "mode" ? 1 : 0,
@@ -181,7 +183,10 @@ export function OnboardingFlow({
             )
             .join("、"),
         });
-  const flight = useRef(false);
+  const sourceFlight = useRef(false);
+  const modeOperation = useRef(0);
+  const proConfirmationOwner = useRef<string | null>(null);
+  const completionFlight = useRef(false);
   const connectionAttempt = useRef<string | null>(null);
   const connectionQueue = useRef(Promise.resolve());
   const connectionQueueDepth = useRef(0);
@@ -368,7 +373,10 @@ export function OnboardingFlow({
       selected.some((chosen) => chosen.source_id === item.source_id),
     );
   const locked =
-    busy !== null || exitDestination !== null || state.status === "importing";
+    busy !== null ||
+    completionBusy ||
+    exitDestination !== null ||
+    state.status === "importing";
 
   useEffect(() => {
     alive.current = true;
@@ -456,7 +464,7 @@ export function OnboardingFlow({
       locationCheck !== "ready" ||
       locked ||
       reviewingImport ||
-      flight.current
+      sourceFlight.current
     )
       return;
     if (!scopeMatches(selected, sources)) return;
@@ -493,7 +501,11 @@ export function OnboardingFlow({
   }, []);
 
   const leaveModelStep = useCallback(
-    (nextIntent: OnboardingMemoryMode, nextStep: "review" | "mode") => {
+    (
+      nextIntent: OnboardingMemoryMode,
+      nextStep: "review" | "mode",
+      resetModePhase = true,
+    ) => {
       // This fence is synchronous: hidden model work must observe invalidation
       // before React renders the replacement step.
       modelGeneration.current += 1;
@@ -502,7 +514,10 @@ export function OnboardingFlow({
       setModeChoice(nextIntent);
       setSetupStep(nextStep);
       if (nextStep === "mode") setModeFocusToken((value) => value + 1);
-      setModeSaving(false);
+      if (resetModePhase) {
+        modeOperation.current += 1;
+        setModePhase("idle");
+      }
     },
     [],
   );
@@ -611,12 +626,15 @@ export function OnboardingFlow({
 
   const leave = useCallback(
     async (destination: OnboardingDestination) => {
-      if (flight.current || finished.current) return;
-      flight.current = true;
-      setBusy("leaving");
-      await persistFinish(destination);
-      flight.current = false;
-      if (alive.current) setBusy(null);
+      if (completionFlight.current || finished.current) return;
+      completionFlight.current = true;
+      setCompletionBusy(true);
+      try {
+        await persistFinish(destination);
+      } finally {
+        completionFlight.current = false;
+        if (alive.current) setCompletionBusy(false);
+      }
     },
     [persistFinish],
   );
@@ -640,14 +658,11 @@ export function OnboardingFlow({
   );
 
   const saveModeChoice = useCallback(async () => {
-    if (
-      !modeChoice ||
-      modeSaving ||
-      finished.current ||
-      (modeChoice === "lite" && flight.current)
-    )
-      return;
-    setModeSaving(true);
+    if (!modeChoice || modeSaving || finished.current || completionBusy) return;
+    const operation = ++modeOperation.current;
+    const ownsModeOperation = () =>
+      alive.current && !finished.current && modeOperation.current === operation;
+    setModePhase("saving");
     setModeError(null);
     const modeTicket = issueConfirmedModeTicket("onboarding");
     try {
@@ -655,8 +670,7 @@ export function OnboardingFlow({
         intentRef.current = "pro";
         setupStepRef.current = "mode";
         const selectionStillCurrent = () =>
-          alive.current &&
-          !finished.current &&
+          ownsModeOperation() &&
           intentRef.current === "pro" &&
           setupStepRef.current === "mode";
         const savedProgress = await queueProgressWrite(
@@ -673,10 +687,9 @@ export function OnboardingFlow({
         enterModelStep();
         return;
       }
-      leaveModelStep("lite", "mode");
+      leaveModelStep("lite", "mode", false);
       const liteStillCurrent = () =>
-        alive.current &&
-        !finished.current &&
+        ownsModeOperation() &&
         intentRef.current === "lite" &&
         setupStepRef.current === "mode";
       await queueProgressWrite(
@@ -688,19 +701,20 @@ export function OnboardingFlow({
           }),
         liteStillCurrent,
       );
-      if (!alive.current) return;
-      const changed = await queueModeWrite("lite");
-      if (!alive.current) return;
+      if (!liteStillCurrent()) return;
+      const changed = await queueModeWrite("lite", liteStillCurrent);
+      if (!liteStillCurrent()) return;
       commitConfirmedMemoryMode(changed.mode, modeTicket);
+      setModePhase("completing");
       await leave(modeDestination);
     } catch (reason) {
       if (isCompletedProgressConflict(reason)) {
         finishOnce(modeDestination);
-      } else if (alive.current) {
+      } else if (ownsModeOperation() && !isGenerationInvalid(reason)) {
         setModeError("模式未能保存。你的选择已保留，请重试。");
       }
     } finally {
-      if (alive.current) setModeSaving(false);
+      if (ownsModeOperation()) setModePhase("idle");
     }
   }, [
     enterModelStep,
@@ -709,6 +723,7 @@ export function OnboardingFlow({
     modeChoice,
     modeDestination,
     modeSaving,
+    completionBusy,
     finishOnce,
     queueModeWrite,
     queueProgressWrite,
@@ -731,6 +746,7 @@ export function OnboardingFlow({
 
   const confirmProMode = useCallback(
     async (token: number, ownerProfileId: string) => {
+      const confirmationOwner = `${token}:${ownerProfileId}`;
       const ownsModelStep = () =>
         alive.current &&
         !finished.current &&
@@ -738,16 +754,25 @@ export function OnboardingFlow({
         intentRef.current === "pro" &&
         setupStepRef.current === "model" &&
         modelProfileId.current === ownerProfileId;
-      if (!ownsModelStep()) return;
-      setModeSaving(true);
+      if (
+        !ownsModelStep() ||
+        proConfirmationOwner.current === confirmationOwner ||
+        completionBusy
+      )
+        return;
+      proConfirmationOwner.current = confirmationOwner;
+      const operation = ++modeOperation.current;
+      const ownsConfirmation = () =>
+        ownsModelStep() && modeOperation.current === operation;
+      setModePhase("saving");
       setModeError(null);
       const modeTicket = issueConfirmedModeTicket("onboarding");
       try {
         const plan = await planMemoryMode("pro");
-        if (!ownsModelStep()) return;
+        if (!ownsConfirmation()) return;
         if (plan.blockers.length > 0) throw new Error(plan.blockers.join(","));
-        const changed = await queueModeWrite("pro", ownsModelStep);
-        if (!ownsModelStep()) return;
+        const changed = await queueModeWrite("pro", ownsConfirmation);
+        if (!ownsConfirmation()) return;
         commitConfirmedMemoryMode(changed.mode, modeTicket);
         await queueProgressWrite(
           () =>
@@ -756,31 +781,35 @@ export function OnboardingFlow({
               setup_step: "model",
               model_profile_id: ownerProfileId,
             }),
-          ownsModelStep,
+          ownsConfirmation,
         );
-        if (!ownsModelStep()) return;
-        await persistFinish(modeDestination);
+        if (!ownsConfirmation()) return;
+        setModePhase("completing");
+        await leave(modeDestination);
       } catch (reason) {
         if (isCompletedProgressConflict(reason)) {
           finishOnce(modeDestination);
-        } else if (alive.current && !isGenerationInvalid(reason))
+        } else if (ownsConfirmation() && !isGenerationInvalid(reason))
           setModeError("Pro 模式未能确认保存。模型配置已保留，请重试。");
       } finally {
-        if (alive.current) setModeSaving(false);
+        if (proConfirmationOwner.current === confirmationOwner)
+          proConfirmationOwner.current = null;
+        if (ownsConfirmation()) setModePhase("idle");
       }
     },
     [
+      completionBusy,
       finishOnce,
+      leave,
       modeDestination,
-      persistFinish,
       queueModeWrite,
       queueProgressWrite,
     ],
   );
 
   async function checkLocations() {
-    if (flight.current || locked) return;
-    flight.current = true;
+    if (sourceFlight.current || locked) return;
+    sourceFlight.current = true;
     scopeVersion.current += 1;
     setBusy("checking");
     setLocationCheck("checking");
@@ -805,7 +834,7 @@ export function OnboardingFlow({
       setLocationCheck("failed");
       setError("位置检测未完成，尚未读取历史。可以重新检测，或先进入工作台。");
     } finally {
-      flight.current = false;
+      sourceFlight.current = false;
       if (alive.current) setBusy(null);
     }
   }
@@ -813,7 +842,7 @@ export function OnboardingFlow({
 
   function toggleSource(source: SourceResponse, checked: boolean) {
     if (
-      flight.current ||
+      sourceFlight.current ||
       locked ||
       locationCheck !== "ready" ||
       !isAppSource(source) ||
@@ -836,7 +865,7 @@ export function OnboardingFlow({
   }
 
   function selectAllSources() {
-    if (flight.current || locked || locationCheck !== "ready") return;
+    if (sourceFlight.current || locked || locationCheck !== "ready") return;
     scopeVersion.current += 1;
     setError(null);
     setItemErrors({});
@@ -849,7 +878,7 @@ export function OnboardingFlow({
 
   async function startImport() {
     if (
-      flight.current ||
+      sourceFlight.current ||
       locked ||
       locationCheck !== "ready" ||
       !selected.length
@@ -863,7 +892,7 @@ export function OnboardingFlow({
   }
 
   async function submitImport(approved: SourceResponse[]) {
-    flight.current = true;
+    sourceFlight.current = true;
     if (window.oneMemory) setStartingImport(approved);
     const version = scopeVersion.current;
     const retryFailed = Object.keys(itemErrors).length > 0;
@@ -917,7 +946,7 @@ export function OnboardingFlow({
       }
     } finally {
       connectSent.current = false;
-      flight.current = false;
+      sourceFlight.current = false;
       if (alive.current) setBusy(null);
     }
   }
@@ -987,10 +1016,10 @@ export function OnboardingFlow({
             jobs={reviewJobs}
             failedSources={accepted?.failed_sources}
             sourceSnapshot={imports.sourceSnapshot}
-            busy={busy === "leaving"}
+            busy={completionBusy}
             error={error && text(error)}
             onContinue={(destination) => {
-              if (busy === "leaving") return;
+              if (completionBusy) return;
               if (completionFailed) {
                 void leave(destination);
                 return;
@@ -1031,7 +1060,7 @@ export function OnboardingFlow({
               <>
                 <R6Button
                   variant="quiet"
-                  disabled={modeSaving || busy === "leaving"}
+                  disabled={modeSaving || completionBusy}
                   onClick={() => {
                     setModeError(null);
                     intentRef.current = modeChoice;
@@ -1056,21 +1085,19 @@ export function OnboardingFlow({
                   className="onboarding-r6-submit"
                   variant="primary"
                   pending={modeSaving}
-                  disabled={
-                    !modeChoice ||
-                    busy === "leaving" ||
-                    (modeChoice === "lite" && flight.current)
-                  }
+                  disabled={!modeChoice || completionBusy}
                   onClick={() => void saveModeChoice()}
                 >
                   {text(
-                    modeSaving
-                      ? "正在保存…"
-                      : modeChoice === "lite"
-                        ? "使用 Lite 进入"
-                        : modeChoice === "pro"
-                          ? "继续配置模型"
-                          : "继续",
+                    modePhase === "saving"
+                      ? "正在保存模式…"
+                      : modePhase === "completing"
+                        ? "正在完成首次设置…"
+                        : modeChoice === "lite"
+                          ? "使用 Lite 进入"
+                          : modeChoice === "pro"
+                            ? "继续配置模型"
+                            : "继续",
                   )}
                 </R6Button>
               </>
@@ -1104,7 +1131,7 @@ export function OnboardingFlow({
                   },
                 ]}
                 selected={modeChoice}
-                disabled={modeSaving || busy === "leaving"}
+                disabled={modeSaving || completionBusy}
                 recommended={{ mode: "pro", badge: text("推荐") }}
                 onChange={(mode) => {
                   modeChoiceTouched.current = true;
@@ -1188,7 +1215,7 @@ export function OnboardingFlow({
           <>
             <R6Button
               variant="quiet"
-              disabled={busy !== null}
+              disabled={busy !== null || completionBusy}
               onClick={() => finishOnce(exitDestination)}
             >
               {text(
@@ -1197,7 +1224,7 @@ export function OnboardingFlow({
             </R6Button>
             <R6Button
               variant="primary"
-              disabled={busy !== null}
+              disabled={busy !== null || completionBusy}
               onClick={() => void leave(exitDestination)}
             >
               {text("重试保存并进入")}
