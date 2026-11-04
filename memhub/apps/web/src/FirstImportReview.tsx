@@ -373,7 +373,7 @@ export function FirstImportReview({
                 disabled={busy}
                 onClick={() => leave("settings")}
               >
-                {text("配置模型，沉淀记忆")}
+                {text("选择记忆模式")}
               </R6Button>
             )}
           </div>
@@ -393,9 +393,7 @@ export function FirstImportReview({
             )}
           </p>
           <p className="first-import-r6-subintro">
-            {text(
-              "导入不会自动开放应用读取权限。配置模型后，才会开始生成记忆。",
-            )}
+            {text("下一步选择记忆模式；之后仍可在设置中更改。")}
           </p>
           {historyWindowLimited && (
             <p className="first-import-r6-history-window" role="status">

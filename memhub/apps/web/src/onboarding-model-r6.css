@@ -587,3 +587,192 @@
   ) {
   transition: none;
 }
+
+/* Generation-only cold start. Embedding remains a separate settings lane. */
+.onboarding-model-r6 .onboarding-r6-head > div {
+  width: min(760px, 100%);
+}
+.onboarding-model-layout {
+  display: block;
+  width: min(760px, 100%);
+  height: auto;
+  margin-inline: auto;
+}
+.onboarding-model-form {
+  overflow: visible;
+}
+.onboarding-model-group {
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+  border: 1px solid #d8e2e8;
+  border-radius: 14px;
+  background: #fff;
+}
+.onboarding-model-provider,
+.onboarding-model-key {
+  margin-top: 0;
+}
+.onboarding-model-field {
+  gap: 7px;
+}
+.onboarding-model-field :is(input, select),
+.onboarding-model-field .om-option-menu-button,
+.generation-model-field :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 9px 12px;
+  border: 1px solid #c8d3db;
+  border-radius: 8px;
+  background: #fff;
+  color: #262a2e;
+  font:
+    400 14px / 22px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+}
+.onboarding-model-field small,
+.generation-model-field small {
+  color: #63707b;
+  font-size: 12px;
+  line-height: 19px;
+}
+.onboarding-model-default-summary {
+  display: grid;
+  gap: 6px;
+  padding: 14px 0;
+  border-block: 1px solid #e4eaee;
+}
+.onboarding-model-default-summary span,
+.onboarding-model-disclosure {
+  color: #63707b;
+  font-size: 12px;
+  line-height: 20px;
+}
+.onboarding-model-default-summary strong {
+  color: #33424d;
+  font-size: 14px;
+  font-weight: 600;
+}
+.onboarding-model-disclosure {
+  display: grid;
+  gap: 6px;
+}
+.generation-technical-disclosure {
+  border-top: 1px solid #e4eaee;
+  padding-top: 4px;
+}
+.generation-technical-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: #4e6478;
+  font:
+    500 13px / 21px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+}
+.generation-technical-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding-top: 12px;
+}
+.generation-model-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #63707b;
+  font-size: 12px;
+  line-height: 20px;
+}
+.generation-model-field:has([name="base-url"]),
+.generation-runtime-fields,
+.generation-thinking {
+  grid-column: 1 / -1;
+}
+.generation-runtime-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.generation-technical-fields[hidden] {
+  display: none;
+}
+.generation-runtime-note {
+  grid-column: 1 / -1;
+  color: #63707b;
+  font-size: 12px;
+  line-height: 19px;
+}
+.generation-thinking {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 9px;
+  color: #416e5c;
+  font-size: 13px;
+}
+.generation-model-error {
+  color: #a24646 !important;
+}
+.onboarding-model-recovery-actions {
+  margin-top: 12px;
+}
+.onboarding-model-feedback {
+  margin-top: 8px;
+}
+@media (min-width: 761px) {
+  .onboarding-model-r6 .onboarding-r6-body {
+    overflow-y: auto;
+  }
+  .onboarding-model-form {
+    display: block;
+    overflow: visible;
+  }
+}
+@media (max-width: 600px) {
+  .onboarding-model-layout--single-column-600 .onboarding-model-group {
+    padding: 16px;
+    border-radius: 10px;
+  }
+  .onboarding-model-layout--single-column-600 .generation-technical-fields,
+  .onboarding-model-layout--single-column-600 .generation-runtime-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .onboarding-model-footer-actions .r6-button,
+  .onboarding-model-footer-actions .r6-button[data-variant="primary"] {
+    flex-basis: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .generation-technical-toggle,
+  .generation-model-field :is(input, select) {
+    transition: none;
+  }
+}
+[data-native-reduce-motion="true"]
+  :is(
+    .generation-technical-toggle,
+    .generation-model-field input,
+    .generation-model-field select
+  ) {
+  transition: none;
+}
+.onboarding-model-r6
+  :is(
+    .om-option-menu-button,
+    .generation-technical-toggle,
+    .generation-model-field input,
+    .generation-model-field select,
+    .onboarding-model-field input
+  ):focus-visible {
+  outline: 2px solid #557c93;
+  outline-offset: 3px;
+}

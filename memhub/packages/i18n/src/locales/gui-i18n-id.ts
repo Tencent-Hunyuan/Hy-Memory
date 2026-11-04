@@ -1451,6 +1451,16 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Koneksi gagal. Periksa model, kunci, dan penerima.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Hasil konfigurasi atau pengujian belum terkonfirmasi. Periksa sebelum mencoba lagi.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "Pembaruan indeks belum selesai. Model pencarian sebelumnya masih digunakan. Periksa koneksi lalu coba lagi.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "Hasil pengujian model sebelumnya masih perlu diperiksa. Coba lagi nanti.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "Penulisan model dijeda sementara. Tunggu hingga pemeliharaan indeks selesai, lalu coba lagi.",
+  "模型未能确认启用，请在设置中核对。":
+    "Tidak dapat memastikan bahwa model telah diaktifkan. Periksa di Pengaturan.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "Konfigurasi model yang tersimpan untuk sementara tidak dapat dibaca. Duplikat tidak akan dibuat. Coba muat ulang lagi.",
   所选连接已启用: "Koneksi aplikasi terpilih diaktifkan",
   本次未选择应用连接: "Tidak ada koneksi aplikasi yang dipilih kali ini",
   尚未填写接收方: "Penerima belum diisi",

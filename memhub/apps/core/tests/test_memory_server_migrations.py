@@ -17,6 +17,7 @@ from one_memory.memory_server.migration_runner import (
     InMemoryMigrationStore,
     MigrationResult,
     MigrationSchemaMismatchError,
+    SqliteMigrationStore,
     ledger_sql,
     migrate,
 )
@@ -136,6 +137,76 @@ def test_sdk_write_receipts_are_owned_by_migration_56() -> None:
         assert "sdk_raw_ids_json" in ddl
         assert "sdk_memory_ids_json" in ddl
         assert "CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts" in ddl
+
+
+def test_onboarding_progress_migrates_old_sqlite_columns_in_append_order(tmp_path) -> None:
+    path = tmp_path / "old-onboarding.sqlite3"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            """
+            CREATE TABLE onboarding_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                status TEXT NOT NULL,
+                selected_source_ids_json TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        database.execute(
+            "INSERT INTO onboarding_state VALUES "
+            "(1,'importing','[\"cursor\"]',NULL,NULL,'2026-11-04T00:00:00+00:00')"
+        )
+
+    migration = next(item for item in MIGRATIONS if item.version == 62)
+    result = asyncio.run(migrate(SqliteMigrationStore(path), (migration,)))
+
+    assert result.applied == (62,)
+    with sqlite3.connect(path) as database:
+        columns = [str(row[1]) for row in database.execute("PRAGMA table_info(onboarding_state)")]
+        row = database.execute(
+            "SELECT mode_intent, setup_step, model_profile_id FROM onboarding_state"
+        ).fetchone()
+    assert columns == [
+        "singleton",
+        "status",
+        "selected_source_ids_json",
+        "started_at",
+        "completed_at",
+        "updated_at",
+        "mode_intent",
+        "setup_step",
+        "model_profile_id",
+    ]
+    assert row == (None, None, None)
+
+
+def test_onboarding_progress_mysql_retries_each_duplicate_column() -> None:
+    class DuplicateColumnError(Exception):
+        pass
+
+    class Cursor:
+        dialect = "mysql"
+
+        def __init__(self) -> None:
+            self.attempted: list[str] = []
+            self.applied: list[str] = []
+
+        async def execute(self, statement: str) -> None:
+            self.attempted.append(statement)
+            if "ADD COLUMN mode_intent" in statement or "ADD COLUMN setup_step" in statement:
+                raise DuplicateColumnError(1060, "duplicate column")
+            self.applied.append(statement)
+
+    cursor = Cursor()
+    migration = next(item for item in MIGRATIONS if item.version == 62)
+
+    asyncio.run(migration.apply(cursor))
+
+    assert len(cursor.attempted) == 3
+    assert len(cursor.applied) == 1
+    assert "model_profile_id" in cursor.applied[0]
 
 
 def test_sdk_matter_references_are_owned_by_migration_57() -> None:

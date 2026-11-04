@@ -15,7 +15,15 @@ import {
   useState,
 } from "react";
 
-import { completeOnboarding, getMemoryMode, setMemoryMode } from "./api";
+import {
+  apiErrorCode,
+  completeOnboarding,
+  getMemoryMode,
+  patchOnboardingProgress,
+  planMemoryMode,
+  putOnboardingProgress,
+  setMemoryMode,
+} from "./api";
 import { AppMark } from "./app-mark";
 import {
   commitConfirmedMemoryMode,
@@ -32,6 +40,7 @@ import {
   hostCapabilities,
   hostWriteReason,
 } from "./host-state";
+import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
 import { OnboardingModelController } from "./OnboardingModelController";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6ColdStartFrame } from "./R6ColdStartFrame";
@@ -50,6 +59,28 @@ export const PLUGIN_CONSENT_KEY = "one-memory.consent.plugins";
 const SCOPE_CHANGED =
   "来源位置、身份或状态已变化，请重新选择并核对。尚未提交本次授权。";
 type LocationCheck = "idle" | "checking" | "ready" | "failed";
+
+function isCompletedProgressConflict(reason: unknown): boolean {
+  if (apiErrorCode(reason) === "onboarding_completed") return true;
+  if (!reason || typeof reason !== "object" || !("response" in reason))
+    return false;
+  const response = (
+    reason as {
+      response?: { status?: unknown; data?: { detail?: unknown } };
+    }
+  ).response;
+  return (
+    response?.status === 409 && response.data?.detail === "onboarding_completed"
+  );
+}
+
+function isGenerationInvalid(reason: unknown): boolean {
+  return (
+    reason instanceof Error &&
+    (reason.message === "onboarding_generation_invalid" ||
+      reason.message === "onboarding_progress_generation_invalid")
+  );
+}
 
 function defaultConnectionDraft(
   sources: SourceResponse[],
@@ -93,19 +124,37 @@ export function OnboardingFlow({
   const [startingImport, setStartingImport] = useState<SourceResponse[] | null>(
     null,
   );
+  const resumedStep =
+    state.mode_intent === "pro" && state.setup_step === "model"
+      ? "model"
+      : state.mode_intent
+        ? "mode"
+        : "review";
   const [setupStep, setSetupStep] = useState<"review" | "mode" | "model">(
-    "review",
+    resumedStep,
   );
   const [modeChoice, setModeChoice] = useState<OnboardingMemoryMode | null>(
-    null,
+    state.mode_intent,
   );
   const [modeDestination, setModeDestination] =
     useState<OnboardingDestination>("sources");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
-  const modeChoiceTouched = useRef(false);
-  const [visitedSetup, setVisitedSetup] = useState(false);
-  const [visitedModel, setVisitedModel] = useState(false);
+  const [modeFocusToken, setModeFocusToken] = useState(
+    resumedStep === "mode" ? 1 : 0,
+  );
+  const modeChoiceTouched = useRef(state.mode_intent !== null);
+  const [visitedSetup, setVisitedSetup] = useState(resumedStep !== "review");
+  const [visitedModel, setVisitedModel] = useState(resumedStep === "model");
+  const [modelGenerationToken, setModelGenerationToken] = useState(
+    resumedStep === "model" ? 1 : 0,
+  );
+  const modelGeneration = useRef(resumedStep === "model" ? 1 : 0);
+  const intentRef = useRef<OnboardingMemoryMode | null>(state.mode_intent);
+  const setupStepRef = useRef<"review" | "mode" | "model">(resumedStep);
+  const modelProfileId = useRef<string | null>(state.model_profile_id);
+  const modeWriteQueue = useRef<Promise<void>>(Promise.resolve());
+  const progressWriteQueue = useRef<Promise<void>>(Promise.resolve());
   const [modelSourceIds, setModelSourceIds] = useState<string[]>([]);
   const [connectionDraft, setConnectionDraft] = useState<ImportConnectionDraft>(
     { hostSourceIds: [] },
@@ -434,6 +483,93 @@ export function OnboardingFlow({
     [onFinish],
   );
 
+  const enterModelStep = useCallback(() => {
+    intentRef.current = "pro";
+    setupStepRef.current = "model";
+    const token = ++modelGeneration.current;
+    setModelGenerationToken(token);
+    setVisitedModel(true);
+    setSetupStep("model");
+  }, []);
+
+  const leaveModelStep = useCallback(
+    (nextIntent: OnboardingMemoryMode, nextStep: "review" | "mode") => {
+      // This fence is synchronous: hidden model work must observe invalidation
+      // before React renders the replacement step.
+      modelGeneration.current += 1;
+      intentRef.current = nextIntent;
+      setupStepRef.current = nextStep;
+      setModeChoice(nextIntent);
+      setSetupStep(nextStep);
+      if (nextStep === "mode") setModeFocusToken((value) => value + 1);
+      setModeSaving(false);
+    },
+    [],
+  );
+
+  const queueModeWrite = useCallback(
+    (mode: OnboardingMemoryMode, allowed: () => boolean = () => true) => {
+      let resolveResult!: (
+        value: Awaited<ReturnType<typeof setMemoryMode>>,
+      ) => void;
+      let rejectResult!: (reason?: unknown) => void;
+      const result = new Promise<Awaited<ReturnType<typeof setMemoryMode>>>(
+        (resolve, reject) => {
+          resolveResult = resolve;
+          rejectResult = reject;
+        },
+      );
+      modeWriteQueue.current = modeWriteQueue.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (!allowed()) {
+            rejectResult(new Error("onboarding_generation_invalid"));
+            return;
+          }
+          try {
+            resolveResult(await setMemoryMode(mode));
+          } catch (reason) {
+            rejectResult(reason);
+          }
+        });
+      return result;
+    },
+    [],
+  );
+
+  const queueProgressWrite = useCallback(
+    (
+      operation: () => ReturnType<typeof putOnboardingProgress>,
+      allowed: () => boolean = () => true,
+    ) => {
+      let resolveResult!: (
+        value: Awaited<ReturnType<typeof putOnboardingProgress>>,
+      ) => void;
+      let rejectResult!: (reason?: unknown) => void;
+      const result = new Promise<
+        Awaited<ReturnType<typeof putOnboardingProgress>>
+      >((resolve, reject) => {
+        resolveResult = resolve;
+        rejectResult = reject;
+      });
+      progressWriteQueue.current = progressWriteQueue.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (!allowed()) {
+            rejectResult(new Error("onboarding_progress_generation_invalid"));
+            return;
+          }
+          try {
+            resolveResult(await operation());
+          } catch (reason) {
+            rejectResult(reason);
+          }
+        });
+      return result;
+    },
+    [],
+  );
+
   const persistFinish = useCallback(
     async (destination: OnboardingDestination) => {
       setExitDestination(destination);
@@ -453,6 +589,8 @@ export function OnboardingFlow({
             : "onboarding_complete_result_unknown",
         });
         if (alive.current) {
+          modelGeneration.current += 1;
+          setupStepRef.current = "review";
           setCompletionFailed(true);
           setSetupStep("review");
           // A definite refusal means it was not saved; anything else (timeout,
@@ -486,13 +624,19 @@ export function OnboardingFlow({
   const requestModeChoice = useCallback(
     (destination: OnboardingDestination) => {
       if (finished.current) return;
+      if (setupStepRef.current === "model") leaveModelStep("pro", "mode");
+      else {
+        intentRef.current = modeChoice;
+        setupStepRef.current = "mode";
+        setSetupStep("mode");
+        setModeFocusToken((value) => value + 1);
+      }
       setModeDestination(destination === "settings" ? "sources" : destination);
       setModeError(null);
       setError(null);
       setVisitedSetup(true);
-      setSetupStep("mode");
     },
-    [],
+    [leaveModelStep, modeChoice],
   );
 
   const saveModeChoice = useCallback(async () => {
@@ -507,21 +651,132 @@ export function OnboardingFlow({
     setModeError(null);
     const modeTicket = issueConfirmedModeTicket("onboarding");
     try {
-      const changed = await setMemoryMode(modeChoice);
-      if (!alive.current) return;
-      commitConfirmedMemoryMode(changed.mode, modeTicket);
-      if (modeChoice === "lite") {
-        await leave(modeDestination);
+      if (modeChoice === "pro") {
+        intentRef.current = "pro";
+        setupStepRef.current = "mode";
+        const selectionStillCurrent = () =>
+          alive.current &&
+          !finished.current &&
+          intentRef.current === "pro" &&
+          setupStepRef.current === "mode";
+        const savedProgress = await queueProgressWrite(
+          () =>
+            putOnboardingProgress({
+              mode_intent: "pro",
+              setup_step: "model",
+              model_profile_id: modelProfileId.current,
+            }),
+          selectionStillCurrent,
+        );
+        if (!selectionStillCurrent()) return;
+        modelProfileId.current = savedProgress.model_profile_id;
+        enterModelStep();
         return;
       }
-      setVisitedModel(true);
-      setSetupStep("model");
-    } catch {
-      if (alive.current) setModeError("模式未能保存。你的选择已保留，请重试。");
+      leaveModelStep("lite", "mode");
+      const liteStillCurrent = () =>
+        alive.current &&
+        !finished.current &&
+        intentRef.current === "lite" &&
+        setupStepRef.current === "mode";
+      await queueProgressWrite(
+        () =>
+          putOnboardingProgress({
+            mode_intent: "lite",
+            setup_step: "mode",
+            model_profile_id: null,
+          }),
+        liteStillCurrent,
+      );
+      if (!alive.current) return;
+      const changed = await queueModeWrite("lite");
+      if (!alive.current) return;
+      commitConfirmedMemoryMode(changed.mode, modeTicket);
+      await leave(modeDestination);
+    } catch (reason) {
+      if (isCompletedProgressConflict(reason)) {
+        finishOnce(modeDestination);
+      } else if (alive.current) {
+        setModeError("模式未能保存。你的选择已保留，请重试。");
+      }
     } finally {
       if (alive.current) setModeSaving(false);
     }
-  }, [leave, modeChoice, modeDestination, modeSaving]);
+  }, [
+    enterModelStep,
+    leave,
+    leaveModelStep,
+    modeChoice,
+    modeDestination,
+    modeSaving,
+    finishOnce,
+    queueModeWrite,
+    queueProgressWrite,
+  ]);
+
+  const persistModelProfile = useCallback(
+    async (profileId: string) => {
+      modelProfileId.current = profileId;
+      try {
+        await queueProgressWrite(() =>
+          patchOnboardingProgress({ model_profile_id: profileId }),
+        );
+      } catch (reason) {
+        if (!isCompletedProgressConflict(reason) && alive.current)
+          setModeError("模型配置已保存，但恢复进度未能保存。请重试当前步骤。");
+      }
+    },
+    [queueProgressWrite],
+  );
+
+  const confirmProMode = useCallback(
+    async (token: number, ownerProfileId: string) => {
+      const ownsModelStep = () =>
+        alive.current &&
+        !finished.current &&
+        modelGeneration.current === token &&
+        intentRef.current === "pro" &&
+        setupStepRef.current === "model" &&
+        modelProfileId.current === ownerProfileId;
+      if (!ownsModelStep()) return;
+      setModeSaving(true);
+      setModeError(null);
+      const modeTicket = issueConfirmedModeTicket("onboarding");
+      try {
+        const plan = await planMemoryMode("pro");
+        if (!ownsModelStep()) return;
+        if (plan.blockers.length > 0) throw new Error(plan.blockers.join(","));
+        const changed = await queueModeWrite("pro", ownsModelStep);
+        if (!ownsModelStep()) return;
+        commitConfirmedMemoryMode(changed.mode, modeTicket);
+        await queueProgressWrite(
+          () =>
+            putOnboardingProgress({
+              mode_intent: "pro",
+              setup_step: "model",
+              model_profile_id: ownerProfileId,
+            }),
+          ownsModelStep,
+        );
+        if (!ownsModelStep()) return;
+        await persistFinish(modeDestination);
+      } catch (reason) {
+        if (isCompletedProgressConflict(reason)) {
+          finishOnce(modeDestination);
+        } else if (alive.current && !isGenerationInvalid(reason))
+          setModeError("Pro 模式未能确认保存。模型配置已保留，请重试。");
+      } finally {
+        if (alive.current) setModeSaving(false);
+      }
+    },
+    [
+      finishOnce,
+      modeDestination,
+      persistFinish,
+      queueModeWrite,
+      queueProgressWrite,
+    ],
+  );
 
   async function checkLocations() {
     if (flight.current || locked) return;
@@ -769,8 +1024,9 @@ export function OnboardingFlow({
         {setupStep === "mode" && (
           <R6ColdStartFrame
             step={3}
-            title={text("选择记忆方式")}
+            title={text("选择记忆模式")}
             eyebrow={text("最后一步 · 决定如何处理对话")}
+            focusToken={modeFocusToken}
             footer={
               <>
                 <R6Button
@@ -778,7 +1034,20 @@ export function OnboardingFlow({
                   disabled={modeSaving || busy === "leaving"}
                   onClick={() => {
                     setModeError(null);
+                    intentRef.current = modeChoice;
+                    setupStepRef.current = "review";
                     setSetupStep("review");
+                    void queueProgressWrite(() =>
+                      patchOnboardingProgress({
+                        mode_intent: modeChoice,
+                        setup_step: "review",
+                      }),
+                    ).catch((reason) => {
+                      if (!isCompletedProgressConflict(reason) && alive.current)
+                        setModeError(
+                          "恢复进度未能保存。你的选择已保留，请重试。",
+                        );
+                    });
                   }}
                 >
                   {text("返回导入")}
@@ -794,7 +1063,15 @@ export function OnboardingFlow({
                   }
                   onClick={() => void saveModeChoice()}
                 >
-                  {text(modeSaving ? "正在保存…" : "继续")}
+                  {text(
+                    modeSaving
+                      ? "正在保存…"
+                      : modeChoice === "lite"
+                        ? "使用 Lite 进入"
+                        : modeChoice === "pro"
+                          ? "继续配置模型"
+                          : "继续",
+                  )}
                 </R6Button>
               </>
             }
@@ -804,68 +1081,40 @@ export function OnboardingFlow({
               aria-labelledby="onboarding-memory-mode-title"
             >
               <div className="onboarding-r6-mode-intro">
-                <h2 id="onboarding-memory-mode-title">
-                  {text("你希望 MemHub 如何形成记忆？")}
-                </h2>
-                <p>{text("需要明确选择一种方式；之后仍可在设置中更改。")}</p>
+                <p id="onboarding-memory-mode-title">
+                  {text("之后可在设置中更改。")}
+                </p>
               </div>
-              <fieldset
-                className="onboarding-r6-mode-options"
+              <MemoryModeChoiceList
+                aria-label={text("记忆模式")}
+                modes={[
+                  {
+                    mode: "lite",
+                    title: "Lite",
+                    description: text(
+                      "无需模型，只保存并检索原始对话，不生成提炼记忆。",
+                    ),
+                  },
+                  {
+                    mode: "pro",
+                    title: "Pro",
+                    description: text(
+                      "使用模型理解对话，提取并整理可持续生长的记忆。",
+                    ),
+                  },
+                ]}
+                selected={modeChoice}
                 disabled={modeSaving || busy === "leaving"}
-              >
-                <legend className="onboarding-r6-sr-only">
-                  {text("记忆模式")}
-                </legend>
-                <label
-                  className="onboarding-r6-mode-card"
-                  data-selected={modeChoice === "pro"}
-                >
-                  <input
-                    type="radio"
-                    name="onboarding-memory-mode"
-                    value="pro"
-                    checked={modeChoice === "pro"}
-                    onChange={() => {
-                      modeChoiceTouched.current = true;
-                      setModeChoice("pro");
-                      setModeError(null);
-                    }}
-                  />
-                  <span className="onboarding-r6-mode-copy">
-                    <span className="onboarding-r6-mode-heading">
-                      <strong>pro</strong>
-                      <span>{text("推荐")}</span>
-                    </span>
-                    <span>
-                      {text("使用模型理解对话，提取并整理可持续生长的记忆。")}
-                    </span>
-                  </span>
-                </label>
-                <label
-                  className="onboarding-r6-mode-card"
-                  data-selected={modeChoice === "lite"}
-                >
-                  <input
-                    type="radio"
-                    name="onboarding-memory-mode"
-                    value="lite"
-                    checked={modeChoice === "lite"}
-                    onChange={() => {
-                      modeChoiceTouched.current = true;
-                      setModeChoice("lite");
-                      setModeError(null);
-                    }}
-                  />
-                  <span className="onboarding-r6-mode-copy">
-                    <span className="onboarding-r6-mode-heading">
-                      <strong>lite</strong>
-                    </span>
-                    <span>
-                      {text("无需模型，只保存并检索原始对话，不生成提炼记忆。")}
-                    </span>
-                  </span>
-                </label>
-              </fieldset>
+                recommended={{ mode: "pro", badge: text("推荐") }}
+                onChange={(mode) => {
+                  modeChoiceTouched.current = true;
+                  setModeChoice(mode as OnboardingMemoryMode);
+                  setModeError(null);
+                }}
+              />
+              <p className="onboarding-r6-mode-ultra-note">
+                {text("Ultra 可在完成首次设置后到设置页开启。")}
+              </p>
               {(modeError || error) && (
                 <p className="onboarding-r6-mode-error" role="alert">
                   {text(modeError ?? error ?? "")}
@@ -877,11 +1126,24 @@ export function OnboardingFlow({
         {visitedModel && (
           <div hidden={setupStep !== "model"}>
             <OnboardingModelController
+              generationToken={modelGenerationToken}
+              isGenerationCurrent={(token) =>
+                modelGeneration.current === token &&
+                intentRef.current === "pro" &&
+                setupStepRef.current === "model"
+              }
+              initialProfileId={modelProfileId.current}
+              flowError={modeError}
               connectionAlreadyApplied={
                 connectionApplication === "applied" ||
                 connectionApplication === "partial"
               }
-              onEnabled={() => void leave("sources")}
+              onProfilePersisted={(profileId) =>
+                void persistModelProfile(profileId)
+              }
+              onModelActiveConfirmed={(token, ownerProfileId) =>
+                void confirmProMode(token, ownerProfileId)
+              }
               sourceNames={sourceIds.map(
                 (id) =>
                   imports.sources.find((source) => source.source_id === id)
@@ -893,8 +1155,20 @@ export function OnboardingFlow({
                   (total, source) => total + source.imported_conversations,
                   0,
                 )}
-              onBack={() => setSetupStep("mode")}
-              onSkip={() => setSetupStep("mode")}
+              onBack={() => {
+                setModeError(null);
+                leaveModelStep("pro", "mode");
+                void queueProgressWrite(() =>
+                  putOnboardingProgress({
+                    mode_intent: "pro",
+                    setup_step: "mode",
+                    model_profile_id: modelProfileId.current,
+                  }),
+                ).catch((reason) => {
+                  if (!isCompletedProgressConflict(reason) && alive.current)
+                    setModeError("恢复进度未能保存。你的选择已保留，请重试。");
+                });
+              }}
             />
           </div>
         )}

@@ -25,6 +25,7 @@ import {
   commitConfirmedMemoryMode,
   issueConfirmedModeTicket,
 } from "./confirmed-memory-mode";
+import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
@@ -212,10 +213,10 @@ export function MemoryModeSettings({
     focusModeWhenReady.current = null;
     document
       .querySelector<HTMLInputElement>(
-        `input[name="${id}-mode"][value="${target}"]`,
+        `.r6-memory-mode-settings input[type="radio"][value="${target}"]`,
       )
       ?.focus();
-  }, [busy, id, pendingMode, state?.mode]);
+  }, [busy, pendingMode, state?.mode]);
 
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
@@ -368,53 +369,26 @@ export function MemoryModeSettings({
           <p>{text("模式决定新对话如何保存，以及记忆页面展示什么。")}</p>
         </div>
       </div>
-      <div
-        className="r6-mode-choice-list"
-        role="radiogroup"
+      <MemoryModeChoiceList
         aria-label={text("当前模式")}
         aria-busy={state === null}
-      >
-        {(["lite", "pro", "ultra"] as const).map((mode) => {
-          const checked = state?.mode === mode;
-          return (
-            <label
-              key={mode}
-              className="r6-mode-choice"
-              data-current={checked || undefined}
-              data-disabled={
-                !state ||
-                busy ||
-                lifecycleBusy ||
-                (state?.forced_by_env && mode !== state.mode) ||
-                (mode !== "lite" && !modelStateKnown) ||
-                undefined
-              }
-            >
-              <input
-                type="radio"
-                name={`${id}-mode`}
-                value={mode}
-                checked={checked}
-                disabled={
-                  !state ||
-                  busy ||
-                  lifecycleBusy ||
-                  (state?.forced_by_env && mode !== state.mode) ||
-                  (mode !== "lite" && !modelStateKnown)
-                }
-                onChange={(event) => void choose(mode, event.currentTarget)}
-              />
-              <span className="r6-mode-choice-copy">
-                <strong>{text(MODE_COPY[mode].title)}</strong>
-                <small>{text(MODE_COPY[mode].description)}</small>
-              </span>
-              {checked ? (
-                <span className="r6-mode-current">{text("当前模式")}</span>
-              ) : null}
-            </label>
-          );
-        })}
-      </div>
+        modes={(["lite", "pro", "ultra"] as const).map((mode) => ({
+          mode,
+          title: text(MODE_COPY[mode].title),
+          description: text(MODE_COPY[mode].description),
+        }))}
+        current={state?.mode}
+        selected={state?.mode ?? null}
+        currentBadge={text("当前模式")}
+        disabled={(mode) =>
+          !state ||
+          busy ||
+          lifecycleBusy ||
+          Boolean(state.forced_by_env && mode !== state.mode) ||
+          (mode !== "lite" && !modelStateKnown)
+        }
+        onChange={(mode, control) => void choose(mode, control)}
+      />
       {state?.forced_by_env ? (
         <p className="r6-settings-note" role="status">
           {text("开发环境当前强制使用 ultra，保存的选择暂不会生效。")}

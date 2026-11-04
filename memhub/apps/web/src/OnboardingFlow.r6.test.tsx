@@ -21,6 +21,9 @@ vi.mock("./api", () => ({
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
+  patchOnboardingProgress: vi.fn().mockResolvedValue({}),
 }));
 vi.mock("./FirstImportReview", () => ({
   FirstImportReview: ({ sourceIds }: { sourceIds: string[] }) => (
@@ -41,6 +44,9 @@ const state = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 } as const;
 function source(
   id: string,

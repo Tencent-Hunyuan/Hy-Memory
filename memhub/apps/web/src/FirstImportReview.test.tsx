@@ -147,7 +147,7 @@ it("explains that one large harness limits every first-import source to three da
 it("continues to step3 while sample GET is pending without calling completion APIs", () => {
   api.receipt.mockReturnValue(new Promise(() => {}));
   const { props } = setup();
-  fireEvent.click(screen.getByRole("button", { name: "配置模型，沉淀记忆" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择记忆模式" }));
   expect(props.onContinue).toHaveBeenCalledWith("settings");
   expect(screen.queryByText(/^已生成.*记忆/)).toBeNull();
 });

@@ -259,11 +259,23 @@ export interface ConnectSourcesResponse {
   request_id?: string | null;
 }
 
+export type OnboardingModeIntent = "lite" | "pro";
+export type OnboardingSetupStep = "review" | "mode" | "model";
+
+export interface OnboardingProgressUpdate {
+  mode_intent?: OnboardingModeIntent | null;
+  setup_step?: OnboardingSetupStep | null;
+  model_profile_id?: string | null;
+}
+
 export interface OnboardingState {
   status: "not_started" | "importing" | "completed";
   selected_source_ids: string[];
   started_at: string | null;
   completed_at: string | null;
+  mode_intent: OnboardingModeIntent | null;
+  setup_step: OnboardingSetupStep | null;
+  model_profile_id: string | null;
 }
 
 export interface ImportJob {

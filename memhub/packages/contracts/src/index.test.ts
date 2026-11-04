@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   CORE_SERVICE,
   type HomeProjectionV1,
+  type ModelProfileInput,
+  type OnboardingProgressUpdate,
+  type OnboardingState,
   type RecallReceipt,
 } from "./index";
 
@@ -69,5 +72,41 @@ describe("Core contract", () => {
       observed_at: "2026-11-03T00:00:00Z",
     };
     expect(projection.latest?.type).toBe("raw");
+  });
+
+  it("types resumable onboarding progress without secret fields", () => {
+    const update: OnboardingProgressUpdate = {
+      mode_intent: "pro",
+      setup_step: "model",
+      model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+    };
+    const state: OnboardingState = {
+      status: "not_started",
+      selected_source_ids: [],
+      started_at: null,
+      completed_at: null,
+      ...update,
+      mode_intent: update.mode_intent ?? null,
+      setup_step: update.setup_step ?? null,
+      model_profile_id: update.model_profile_id ?? null,
+    };
+    // @ts-expect-error onboarding progress does not carry credentials.
+    const secret: OnboardingProgressUpdate = { api_key: "must-not-compile" };
+
+    expect(state.setup_step).toBe("model");
+    expect(secret).toEqual({ api_key: "must-not-compile" });
+  });
+
+  it("allows Core to own omitted embedding and runtime defaults", () => {
+    const input: ModelProfileInput = {
+      name: "DeepSeek",
+      provider_kind: "openai_compatible",
+      base_url: "https://api.deepseek.com",
+      model: "deepseek-flash",
+    };
+    expect(input.embedding_model).toBeUndefined();
+    expect(input.timeout_seconds).toBeUndefined();
+    expect(input.max_concurrency).toBeUndefined();
+    expect(input.context_window).toBeUndefined();
   });
 });

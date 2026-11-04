@@ -1,7 +1,21 @@
 const modeChineseMessages = {
+  "智能记忆 Pro · 配置记忆整理": "智能记忆 Pro · 配置记忆整理",
+  配置记忆整理模型: "配置记忆整理模型",
+  返回选择模式: "返回选择模式",
+  启用并进入: "启用并进入",
+  默认模型: "默认模型",
+  "留空使用 Core 默认值。": "留空使用 Core 默认值。",
   "模式未能保存。你的选择已保留，请重试。":
     "模式未能保存。你的选择已保留，请重试。",
   选择记忆方式: "选择记忆方式",
+  选择记忆模式: "选择记忆模式",
+  "之后可在设置中更改。": "之后可在设置中更改。",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Ultra 可在完成首次设置后到设置页开启。",
+  "使用 Lite 进入": "使用 Lite 进入",
+  继续配置模型: "继续配置模型",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "下一步选择记忆模式；之后仍可在设置中更改。",
   "最后一步 · 决定如何处理对话": "最后一步 · 选择记忆模式",
   返回导入: "返回导入",
   继续: "继续",
@@ -173,9 +187,24 @@ export type ModeMessageKey = keyof typeof modeChineseMessages;
 type ModeMessages = Record<ModeMessageKey, string>;
 
 export const modeEnglishMessages: ModeMessages = {
+  "智能记忆 Pro · 配置记忆整理":
+    "Smart memory Pro · Configure memory organization",
+  配置记忆整理模型: "Configure the memory organization model",
+  返回选择模式: "Back to mode selection",
+  启用并进入: "Enable and continue",
+  默认模型: "Default model",
+  "留空使用 Core 默认值。": "Leave blank to use Core defaults.",
   "模式未能保存。你的选择已保留，请重试。":
     "Could not save the mode. Your selection is retained; please retry.",
   选择记忆方式: "Choose how memory works",
+  选择记忆模式: "Choose memory mode",
+  "之后可在设置中更改。": "You can change this later in Settings.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Ultra can be enabled in Settings after initial setup.",
+  "使用 Lite 进入": "Enter with Lite",
+  继续配置模型: "Continue to model setup",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "Next, choose a memory mode. You can change it later in Settings.",
   "最后一步 · 决定如何处理对话":
     "Final step · Choose how conversations are handled",
   返回导入: "Back to import",
@@ -360,9 +389,25 @@ export const modeEnglishMessages: ModeMessages = {
 };
 
 export const modeSpanishMessages: ModeMessages = {
+  "智能记忆 Pro · 配置记忆整理":
+    "Memoria inteligente Pro · Configurar la organización",
+  配置记忆整理模型: "Configurar el modelo de organización de recuerdos",
+  返回选择模式: "Volver a elegir el modo",
+  启用并进入: "Habilitar y continuar",
+  默认模型: "Modelo predeterminado",
+  "留空使用 Core 默认值。":
+    "Déjalo vacío para usar los valores predeterminados de Core.",
   "模式未能保存。你的选择已保留，请重试。":
     "No se pudo guardar el modo. Tu selección se conserva; reinténtalo.",
   选择记忆方式: "Elegir cómo funciona la memoria",
+  选择记忆模式: "Elegir el modo de memoria",
+  "之后可在设置中更改。": "Puedes cambiarlo más adelante en Configuración.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Puedes activar Ultra en Configuración después de completar la configuración inicial.",
+  "使用 Lite 进入": "Entrar con Lite",
+  继续配置模型: "Continuar con la configuración del modelo",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "A continuación, elige un modo de memoria. Podrás cambiarlo más adelante en Configuración.",
   "最后一步 · 决定如何处理对话":
     "Último paso · Decide cómo tratar las conversaciones",
   返回导入: "Volver a la importación",
@@ -548,9 +593,23 @@ export const modeSpanishMessages: ModeMessages = {
 
 export const modeTraditionalChineseMessages: ModeMessages = {
   ...modeChineseMessages,
+  "智能记忆 Pro · 配置记忆整理": "智慧記憶 Pro · 設定記憶整理",
+  配置记忆整理模型: "設定記憶整理模型",
+  返回选择模式: "返回選擇模式",
+  启用并进入: "啟用並繼續",
+  默认模型: "預設模型",
+  "留空使用 Core 默认值。": "留空以使用 Core 預設值。",
   "模式未能保存。你的选择已保留，请重试。":
     "模式無法儲存。你的選擇已保留，請重試。",
   选择记忆方式: "選擇記憶方式",
+  选择记忆模式: "選擇記憶模式",
+  "之后可在设置中更改。": "之後可在設定中更改。",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "完成首次設定後，可到設定頁開啟 Ultra。",
+  "使用 Lite 进入": "使用 Lite 進入",
+  继续配置模型: "繼續設定模型",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "下一步選擇記憶模式；之後仍可在設定中更改。",
   "最后一步 · 决定如何处理对话": "最後一步 · 決定如何處理對話",
   返回导入: "返回匯入",
   继续: "繼續",
@@ -721,9 +780,23 @@ export const modeTraditionalChineseMessages: ModeMessages = {
 
 export const modeJapaneseMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理": "スマートメモリ Pro · 記憶の整理を設定",
+  配置记忆整理模型: "記憶整理モデルを設定",
+  返回选择模式: "モード選択に戻る",
+  启用并进入: "有効にして続行",
+  默认模型: "デフォルトモデル",
+  "留空使用 Core 默认值。": "空欄の場合は Core の既定値を使用します。",
   "模式未能保存。你的选择已保留，请重试。":
     "モードを保存できませんでした。選択内容は保持されています。もう一度お試しください。",
   选择记忆方式: "記憶方法を選択",
+  选择记忆模式: "記憶モードを選択",
+  "之后可在设置中更改。": "後から設定で変更できます。",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "初期設定の完了後、設定画面で Ultra を有効にできます。",
+  "使用 Lite 进入": "Lite で開始",
+  继续配置模型: "モデル設定に進む",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "次に記憶モードを選択します。後から設定で変更できます。",
   "最后一步 · 决定如何处理对话": "最後のステップ · 会話の処理方法を選択",
   返回导入: "インポートに戻る",
   继续: "続ける",
@@ -903,9 +976,25 @@ export const modeJapaneseMessages: ModeMessages = {
 
 export const modeGermanMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理":
+    "Smart Memory Pro · Erinnerungsorganisation konfigurieren",
+  配置记忆整理模型: "Modell zur Erinnerungsorganisation konfigurieren",
+  返回选择模式: "Zurück zur Modusauswahl",
+  启用并进入: "Aktivieren und fortfahren",
+  默认模型: "Standardmodell",
+  "留空使用 Core 默认值。":
+    "Leer lassen, um die Core-Standardwerte zu verwenden.",
   "模式未能保存。你的选择已保留，请重试。":
     "Der Modus konnte nicht gespeichert werden. Ihre Auswahl bleibt erhalten. Bitte erneut versuchen.",
   选择记忆方式: "Erinnerungsmodus wählen",
+  选择记忆模式: "Erinnerungsmodus auswählen",
+  "之后可在设置中更改。": "Sie können dies später in den Einstellungen ändern.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Ultra kann nach der Ersteinrichtung in den Einstellungen aktiviert werden.",
+  "使用 Lite 进入": "Mit Lite starten",
+  继续配置模型: "Weiter zur Modelleinrichtung",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "Wählen Sie als Nächstes einen Erinnerungsmodus. Sie können ihn später in den Einstellungen ändern.",
   "最后一步 · 决定如何处理对话":
     "Letzter Schritt · Verarbeitung der Unterhaltungen wählen",
   返回导入: "Zurück zum Import",
@@ -1091,9 +1180,24 @@ export const modeGermanMessages: ModeMessages = {
 
 export const modePortugueseMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理":
+    "Memória inteligente Pro · Configurar organização",
+  配置记忆整理模型: "Configurar o modelo de organização de memórias",
+  返回选择模式: "Voltar à seleção de modo",
+  启用并进入: "Ativar e continuar",
+  默认模型: "Modelo padrão",
+  "留空使用 Core 默认值。": "Deixe em branco para usar os padrões do Core.",
   "模式未能保存。你的选择已保留，请重试。":
     "Não foi possível guardar o modo. A sua escolha foi mantida; tente novamente.",
   选择记忆方式: "Escolher o modo de memória",
+  选择记忆模式: "Escolher o modo de memória",
+  "之后可在设置中更改。": "Pode alterar esta opção mais tarde nas Definições.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Pode ativar o Ultra nas Definições depois da configuração inicial.",
+  "使用 Lite 进入": "Entrar com Lite",
+  继续配置模型: "Continuar para configurar o modelo",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "Em seguida, escolha um modo de memória. Pode alterá-lo mais tarde nas Definições.",
   "最后一步 · 决定如何处理对话":
     "Último passo · Decida como tratar as conversas",
   返回导入: "Voltar à importação",
@@ -1279,9 +1383,26 @@ export const modePortugueseMessages: ModeMessages = {
 
 export const modeFrenchMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理":
+    "Mémoire intelligente Pro · Configurer l’organisation",
+  配置记忆整理模型: "Configurer le modèle d’organisation des mémoires",
+  返回选择模式: "Retour au choix du mode",
+  启用并进入: "Activer et continuer",
+  默认模型: "Modèle par défaut",
+  "留空使用 Core 默认值。":
+    "Laissez vide pour utiliser les valeurs par défaut du Core.",
   "模式未能保存。你的选择已保留，请重试。":
     "Impossible d’enregistrer le mode. Votre choix est conservé. Réessayez.",
   选择记忆方式: "Choisir le mode de mémoire",
+  选择记忆模式: "Choisir le mode de mémoire",
+  "之后可在设置中更改。":
+    "Vous pourrez le modifier plus tard dans les réglages.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Vous pourrez activer Ultra dans les réglages après la configuration initiale.",
+  "使用 Lite 进入": "Entrer avec Lite",
+  继续配置模型: "Continuer vers la configuration du modèle",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "Choisissez ensuite un mode de mémoire. Vous pourrez le modifier plus tard dans les réglages.",
   "最后一步 · 决定如何处理对话":
     "Dernière étape · Choisissez le traitement des conversations",
   返回导入: "Retour à l’importation",
@@ -1467,9 +1588,23 @@ export const modeFrenchMessages: ModeMessages = {
 
 export const modeKoreanMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理": "스마트 메모리 Pro · 메모리 정리 구성",
+  配置记忆整理模型: "메모리 정리 모델 구성",
+  返回选择模式: "모드 선택으로 돌아가기",
+  启用并进入: "활성화하고 계속",
+  默认模型: "기본 모델",
+  "留空使用 Core 默认值。": "비워 두면 Core 기본값을 사용합니다.",
   "模式未能保存。你的选择已保留，请重试。":
     "모드를 저장하지 못했습니다. 선택은 유지됩니다. 다시 시도하세요.",
   选择记忆方式: "메모리 방식 선택",
+  选择记忆模式: "메모리 모드 선택",
+  "之后可在设置中更改。": "나중에 설정에서 변경할 수 있습니다.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "초기 설정을 마친 후 설정에서 Ultra를 켤 수 있습니다.",
+  "使用 Lite 进入": "Lite로 시작",
+  继续配置模型: "모델 설정 계속",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "다음으로 메모리 모드를 선택하세요. 나중에 설정에서 변경할 수 있습니다.",
   "最后一步 · 决定如何处理对话": "마지막 단계 · 대화 처리 방식 선택",
   返回导入: "가져오기로 돌아가기",
   继续: "계속",
@@ -1649,9 +1784,24 @@ export const modeKoreanMessages: ModeMessages = {
 
 export const modeRussianMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理": "Умная память Pro · Настройка организации",
+  配置记忆整理模型: "Настроить модель организации памяти",
+  返回选择模式: "Назад к выбору режима",
+  启用并进入: "Включить и продолжить",
+  默认模型: "Модель по умолчанию",
+  "留空使用 Core 默认值。":
+    "Оставьте пустым, чтобы использовать значения Core по умолчанию.",
   "模式未能保存。你的选择已保留，请重试。":
     "Не удалось сохранить режим. Ваш выбор сохранён. Повторите попытку.",
   选择记忆方式: "Выберите режим памяти",
+  选择记忆模式: "Выберите режим памяти",
+  "之后可在设置中更改。": "Позже режим можно изменить в настройках.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Ultra можно включить в настройках после завершения первоначальной настройки.",
+  "使用 Lite 进入": "Войти с Lite",
+  继续配置模型: "Перейти к настройке модели",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "Далее выберите режим памяти. Позже его можно изменить в настройках.",
   "最后一步 · 决定如何处理对话":
     "Последний шаг · Выберите способ обработки диалогов",
   返回导入: "Назад к импорту",
@@ -1836,9 +1986,25 @@ export const modeRussianMessages: ModeMessages = {
 
 export const modeIndonesianMessages: ModeMessages = {
   ...modeEnglishMessages,
+  "智能记忆 Pro · 配置记忆整理":
+    "Memori cerdas Pro · Konfigurasi pengorganisasian",
+  配置记忆整理模型: "Konfigurasikan model pengorganisasian memori",
+  返回选择模式: "Kembali ke pilihan mode",
+  启用并进入: "Aktifkan dan lanjutkan",
+  默认模型: "Model bawaan",
+  "留空使用 Core 默认值。":
+    "Biarkan kosong untuk menggunakan nilai bawaan Core.",
   "模式未能保存。你的选择已保留，请重试。":
     "Mode tidak dapat disimpan. Pilihan Anda tetap tersimpan; coba lagi.",
   选择记忆方式: "Pilih cara kerja memori",
+  选择记忆模式: "Pilih mode memori",
+  "之后可在设置中更改。": "Anda dapat mengubahnya nanti di Pengaturan.",
+  "Ultra 可在完成首次设置后到设置页开启。":
+    "Ultra dapat diaktifkan di Pengaturan setelah penyiapan awal selesai.",
+  "使用 Lite 进入": "Masuk dengan Lite",
+  继续配置模型: "Lanjutkan ke konfigurasi model",
+  "下一步选择记忆模式；之后仍可在设置中更改。":
+    "Selanjutnya, pilih mode memori. Anda dapat mengubahnya nanti di Pengaturan.",
   "最后一步 · 决定如何处理对话":
     "Langkah terakhir · Tentukan cara memproses percakapan",
   返回导入: "Kembali ke impor",

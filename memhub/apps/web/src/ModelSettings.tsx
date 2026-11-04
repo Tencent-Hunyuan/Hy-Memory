@@ -17,7 +17,15 @@ import {
   useState,
 } from "react";
 import { EmbeddingSwitchConfirmDialog } from "./EmbeddingSwitchExperience";
-import { OptionMenu } from "./OptionMenu";
+import {
+  type GenerationModelValues,
+  GenerationTechnicalDisclosure,
+  GenerationTechnicalFields,
+  generationSummary,
+  ProviderPresetField,
+  presetForGeneration,
+  validateGenerationModel,
+} from "./GenerationModelPrimitives";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { R6StateRecovery } from "./R6StateRecovery";
@@ -95,8 +103,11 @@ const PROVIDERS: Array<{
 
 type FieldName =
   | "model"
-  | "base-url"
-  | "api-key"
+  | "base_url"
+  | "api_key"
+  | "timeout_seconds"
+  | "max_concurrency"
+  | "context_window"
   | "embedding-model"
   | "embedding-base-url";
 
@@ -127,11 +138,11 @@ function probeFieldErrors(
       : undefined;
   };
   if (!result.capabilities.endpoint_reachable) {
-    errors["base-url"] = text("endpoint") ?? FIELD_PROBE_TEXT.unreachable;
+    errors.base_url = text("endpoint") ?? FIELD_PROBE_TEXT.unreachable;
   }
   if (!result.capabilities.model_available) {
     if (stages.get("model")?.code === "unauthorized") {
-      errors["api-key"] = FIELD_PROBE_TEXT.unauthorized;
+      errors.api_key = FIELD_PROBE_TEXT.unauthorized;
     } else {
       errors.model = text("model") ?? FIELD_PROBE_TEXT.model_not_found;
     }
@@ -145,19 +156,6 @@ function probeFieldErrors(
 
 function endpointKey(value: string): string {
   return value.trim().replace(/\/+$/, "").toLowerCase();
-}
-
-function presetForProfile(profile: {
-  provider_kind: string;
-  base_url: string | null;
-}): string {
-  return (
-    PROVIDER_PRESETS.find(
-      (item) =>
-        item.provider === profile.provider_kind &&
-        endpointKey(item.baseUrl) === endpointKey(profile.base_url ?? ""),
-    )?.id ?? "custom"
-  );
 }
 
 function validEndpoint(value: string): boolean {
@@ -239,7 +237,7 @@ export function ModelSettings({
   focusSection?: ModelSettingsFocusSection;
   onSetupComplete?(): void;
 } = {}) {
-  const { text } = useOnboardingTranslation();
+  const { text, t } = useOnboardingTranslation();
   const models = useModelProfiles();
   const embeddingSwitch = useEmbeddingSwitch();
   const [provider, setProvider] = useState<ProviderKind>("openai_compatible");
@@ -260,6 +258,10 @@ export function ModelSettings({
   const [embeddingModel, setEmbeddingModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [disableThinking, setDisableThinking] = useState(true);
+  const [technicalOpen, setTechnicalOpen] = useState(true);
+  const [timeoutSeconds, setTimeoutSeconds] = useState("");
+  const [maxConcurrency, setMaxConcurrency] = useState("");
+  const [contextWindow, setContextWindow] = useState("");
   const [customOpen, setCustomOpen] = useState(false);
   const [saved, setSaved] = useState<ModelProfile | null>(null);
   const [editing, setEditing] = useState<ModelProfile | null>(null);
@@ -279,6 +281,15 @@ export function ModelSettings({
   const queuedOpen = useRef<ModelOpenIntent | null>(null);
   const savedCard = useRef<HTMLElement>(null);
   const formEl = useRef<HTMLFormElement>(null);
+  const modelInput = useRef<HTMLInputElement>(null);
+  const technicalTouched = useRef(
+    new Set<
+      | "timeout_seconds"
+      | "max_concurrency"
+      | "context_window"
+      | "disable_thinking"
+    >(),
+  );
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -325,12 +336,34 @@ export function ModelSettings({
   }, [saved]);
   useLayoutEffect(() => {
     const first = Object.keys(fields).find((key) => fields[key as FieldName]);
-    if (advancedEmbedding && first?.startsWith("embedding-")) {
+    if (!first) return;
+    if (
+      [
+        "model",
+        "base_url",
+        "api_key",
+        "timeout_seconds",
+        "max_concurrency",
+        "context_window",
+      ].includes(first)
+    ) {
+      if (!technicalOpen && first !== "api_key") {
+        setTechnicalOpen(true);
+        return;
+      }
       formEl.current
         ?.querySelector<HTMLInputElement>(`[name="${first}"]`)
-        ?.focus();
+        ?.focus({ preventScroll: true });
+    } else if (advancedEmbedding && first.startsWith("embedding-")) {
+      formEl.current
+        ?.querySelector<HTMLInputElement>(`[name="${first}"]`)
+        ?.focus({ preventScroll: true });
     }
-  }, [advancedEmbedding, fields]);
+  }, [advancedEmbedding, fields, technicalOpen]);
+  useEffect(() => {
+    if (technicalOpen && !model.trim())
+      modelInput.current?.focus({ preventScroll: true });
+  }, [technicalOpen, model]);
   const selected =
     PROVIDERS.find((item) => item.kind === provider) ?? PROVIDERS[0];
   const presetProfiles = models.profiles.filter(
@@ -377,6 +410,14 @@ export function ModelSettings({
     nextModel.trim()
       ? `${providerLabel(nextProvider)} · ${nextModel.trim()}`.slice(0, 128)
       : "";
+  const clearInheritedRuntimeForNewProfile = (nextProvider: ProviderKind) => {
+    if (!editing || nextProvider === editing.provider_kind) return;
+    setTimeoutSeconds("");
+    setMaxConcurrency("");
+    setContextWindow("");
+    setDisableThinking(true);
+    technicalTouched.current.clear();
+  };
   const isReady = (profile: ModelProfile) =>
     ready(profile, models.probeFor(profile), models.probeErrorFor(profile));
 
@@ -389,10 +430,17 @@ export function ModelSettings({
     setName(profile.name);
     setNameEdited(true);
     setProvider(profile.provider_kind);
-    setProviderPreset(presetForProfile(profile));
+    setProviderPreset(presetForGeneration(profile));
     setBaseUrl(profile.base_url ?? "");
     setModel(profile.model);
     setDisableThinking(profile.disable_thinking);
+    setTimeoutSeconds(String(profile.timeout_seconds));
+    setMaxConcurrency(String(profile.max_concurrency));
+    setContextWindow(
+      profile.context_window === null ? "" : String(profile.context_window),
+    );
+    setTechnicalOpen(true);
+    technicalTouched.current.clear();
     setApiKey("");
     setAdvancedEmbedding(
       profile.embedding_provider_kind !== BUILTIN_EMBEDDING_KIND &&
@@ -430,6 +478,11 @@ export function ModelSettings({
     setModel("");
     setApiKey("");
     setDisableThinking(true);
+    setTimeoutSeconds("");
+    setMaxConcurrency("");
+    setContextWindow("");
+    setTechnicalOpen(true);
+    technicalTouched.current.clear();
     setAdvancedEmbedding(false);
     setEmbeddingMode("local");
     setEmbeddingModel("");
@@ -659,11 +712,37 @@ export function ModelSettings({
       return;
     const errors: Partial<Record<FieldName, string>> = {};
     if (focusSection !== "embedding") {
-      if (!model.trim()) errors.model = "请填写生成模型名。";
-      if (!validEndpoint(baseUrl))
-        errors["base-url"] = "请填写完整的 http:// 或 https:// 接口地址。";
-      const credentialError = keyError(apiKey, keyRequired);
-      if (credentialError) errors["api-key"] = credentialError;
+      const generationErrors = validateGenerationModel(
+        {
+          provider_kind: provider,
+          model,
+          base_url: baseUrl,
+          timeout_seconds: timeoutSeconds,
+          max_concurrency: maxConcurrency,
+          context_window: contextWindow,
+          disable_thinking: disableThinking,
+        },
+        { apiKey, keyRequired },
+      );
+      if (generationErrors.model) errors.model = "请填写生成模型名。";
+      if (generationErrors.base_url)
+        errors.base_url = "请填写完整的 http:// 或 https:// 接口地址。";
+      if (generationErrors.api_key) errors.api_key = generationErrors.api_key;
+      if (generationErrors.timeout_seconds)
+        errors.timeout_seconds = t("onboardingIntegerRange", {
+          min: 1,
+          max: 600,
+        });
+      if (generationErrors.max_concurrency)
+        errors.max_concurrency = t("onboardingIntegerRange", {
+          min: 1,
+          max: 32,
+        });
+      if (generationErrors.context_window)
+        errors.context_window = t("onboardingIntegerRange", {
+          min: 1024,
+          max: 10_000_000,
+        });
     }
     if (focusSection !== "generation" && embeddingMode === "custom") {
       if (!embeddingModel.trim())
@@ -676,6 +755,19 @@ export function ModelSettings({
     setSetupError(null);
     const first = Object.keys(errors)[0];
     if (first) {
+      if (
+        [
+          "model",
+          "base_url",
+          "timeout_seconds",
+          "max_concurrency",
+          "context_window",
+        ].includes(first) &&
+        !technicalOpen
+      ) {
+        setTechnicalOpen(true);
+        return;
+      }
       if (first.startsWith("embedding-") && !advancedEmbedding) {
         setAdvancedEmbedding(true);
         return;
@@ -702,6 +794,20 @@ export function ModelSettings({
       ...(provider === "hy_default" ? {} : { base_url: baseUrl }),
       ...(apiKey ? { api_key: apiKey } : {}),
     };
+    if (
+      technicalTouched.current.has("timeout_seconds") &&
+      timeoutSeconds.trim()
+    )
+      input.timeout_seconds = Number(timeoutSeconds);
+    if (
+      technicalTouched.current.has("max_concurrency") &&
+      maxConcurrency.trim()
+    )
+      input.max_concurrency = Number(maxConcurrency);
+    if (technicalTouched.current.has("context_window"))
+      input.context_window = contextWindow.trim()
+        ? Number(contextWindow)
+        : null;
     try {
       const patch: ModelProfilePatch = editing
         ? { expected_revision: editing.revision }
@@ -715,6 +821,21 @@ export function ModelSettings({
           if (input.disable_thinking !== editing.disable_thinking)
             patch.disable_thinking = input.disable_thinking;
           if (apiKey) patch.api_key = apiKey;
+          if (
+            technicalTouched.current.has("timeout_seconds") &&
+            input.timeout_seconds !== editing.timeout_seconds
+          )
+            patch.timeout_seconds = input.timeout_seconds;
+          if (
+            technicalTouched.current.has("max_concurrency") &&
+            input.max_concurrency !== editing.max_concurrency
+          )
+            patch.max_concurrency = input.max_concurrency;
+          if (
+            technicalTouched.current.has("context_window") &&
+            input.context_window !== editing.context_window
+          )
+            patch.context_window = input.context_window;
         }
         if (focusSection !== "generation" && embeddingMode === "custom") {
           if (embeddingModel !== editing.embedding_model)
@@ -971,8 +1092,14 @@ export function ModelSettings({
           </div>
           <h3>{savedProfile.name}</h3>
           <p>
-            {savedProfile.model} · {text(endpointLabel(savedProfile.base_url))}{" "}
-            · {text("版本")} {savedProfile.revision}
+            {generationSummary(
+              presetForGeneration(savedProfile),
+              savedProfile.provider_kind,
+              savedProfile.model,
+              text,
+            )}{" "}
+            · {text(endpointLabel(savedProfile.base_url))} · {text("版本")}{" "}
+            {savedProfile.revision}
           </p>
           {savedProfile.credential_state === "unavailable" && (
             <p role="status">
@@ -1057,29 +1184,34 @@ export function ModelSettings({
             <>
               <div className="model-form-field">
                 {text("服务商预设")}
-                <OptionMenu
+                <ProviderPresetField
                   ariaLabel={text("服务商预设")}
                   describedBy="model-preset-help"
                   value={providerPreset}
                   disabled={formLocked}
-                  options={[
-                    ...PROVIDER_PRESETS.map((item) => ({
-                      value: item.id,
-                      label: item.label,
-                    })),
-                    { value: "custom", label: text("自定义兼容服务") },
-                  ]}
+                  text={text}
                   onChange={(value) => {
                     const next = PROVIDER_PRESETS.find(
                       (item) => item.id === value,
                     );
                     setProviderPreset(value);
-                    if (!next) return;
+                    if (!next) {
+                      clearInheritedRuntimeForNewProfile("openai_compatible");
+                      setProvider("openai_compatible");
+                      setBaseUrl("");
+                      setModel("");
+                      setApiKey("");
+                      setTechnicalOpen(true);
+                      if (!nameEdited) setName("");
+                      return;
+                    }
+                    clearInheritedRuntimeForNewProfile(next.provider);
                     setProvider(next.provider);
                     setBaseUrl(next.baseUrl);
                     setModel(next.model);
                     setApiKey("");
                     setDisableThinking(true);
+                    setTechnicalOpen(true);
                     if (editing) {
                       setName(next.label);
                       setNameEdited(true);
@@ -1096,34 +1228,6 @@ export function ModelSettings({
                   )}
                 </small>
               </div>
-              <label>
-                {text("协议")}
-                <select
-                  name="provider"
-                  aria-label={text("协议")}
-                  aria-describedby="model-provider-help"
-                  value={provider}
-                  disabled={formLocked}
-                  onChange={(event) => {
-                    const next = event.target.value as ProviderKind;
-                    setProvider(next);
-                    setProviderPreset("custom");
-                    if (!nameEdited) setName(suggestedName(model, next));
-                  }}
-                >
-                  {/* Only what the backend will actually activate. These used to be
-                   * listed and disabled, which put two dead ends on screen and made
-                   * the reader parse a parenthesis to find out they were dead. */}
-                  {PROVIDERS.filter((item) => item.activatable).map((item) => (
-                    <option key={item.kind} value={item.kind}>
-                      {text(item.label)}
-                    </option>
-                  ))}
-                </select>
-                <small id="model-provider-help">
-                  {text("与模型服务提供的接口协议保持一致。")}
-                </small>
-              </label>
               <label>
                 {text("配置名称")}
                 <input
@@ -1143,34 +1247,70 @@ export function ModelSettings({
                   {text("用于区分配置，不影响模型请求。")}
                 </small>
               </label>
-              <label>
-                {text("生成模型名")}
-                <input
-                  name="model"
-                  aria-label={text("生成模型名")}
-                  aria-describedby={`model-identifier-help${fields.model ? " model-field-error" : ""}`}
-                  aria-invalid={!!fields.model}
-                  autoComplete="off"
-                  required
-                  maxLength={256}
-                  value={model}
-                  disabled={formLocked}
-                  onChange={(event) => {
-                    setModel(event.target.value);
-                    setProviderPreset("custom");
-                    if (!nameEdited) setName(suggestedName(event.target.value));
+              <GenerationTechnicalDisclosure
+                open={technicalOpen}
+                disabled={formLocked}
+                controls="model-generation-technical"
+                text={text}
+                onChange={setTechnicalOpen}
+              >
+                <GenerationTechnicalFields
+                  idPrefix="model-generation"
+                  values={{
+                    provider_kind: provider,
+                    model,
+                    base_url: baseUrl,
+                    timeout_seconds: timeoutSeconds,
+                    max_concurrency: maxConcurrency,
+                    context_window: contextWindow,
+                    disable_thinking: disableThinking,
                   }}
-                  placeholder={text("例如：gpt-4o-mini…")}
+                  errors={{
+                    model: fields.model,
+                    base_url: fields.base_url,
+                    timeout_seconds: fields.timeout_seconds,
+                    max_concurrency: fields.max_concurrency,
+                    context_window: fields.context_window,
+                  }}
+                  disabled={formLocked}
+                  text={text}
+                  modelRef={modelInput}
+                  onChange={(patch: Partial<GenerationModelValues>) => {
+                    if (patch.provider_kind !== undefined) {
+                      clearInheritedRuntimeForNewProfile(patch.provider_kind);
+                      setProvider(patch.provider_kind);
+                      setProviderPreset("custom");
+                      if (!nameEdited)
+                        setName(suggestedName(model, patch.provider_kind));
+                    }
+                    if (patch.model !== undefined) {
+                      setModel(patch.model);
+                      setProviderPreset("custom");
+                      if (!nameEdited) setName(suggestedName(patch.model));
+                    }
+                    if (patch.base_url !== undefined) {
+                      setBaseUrl(patch.base_url);
+                      setProviderPreset("custom");
+                    }
+                    if (patch.timeout_seconds !== undefined) {
+                      setTimeoutSeconds(patch.timeout_seconds);
+                      technicalTouched.current.add("timeout_seconds");
+                    }
+                    if (patch.max_concurrency !== undefined) {
+                      setMaxConcurrency(patch.max_concurrency);
+                      technicalTouched.current.add("max_concurrency");
+                    }
+                    if (patch.context_window !== undefined) {
+                      setContextWindow(patch.context_window);
+                      technicalTouched.current.add("context_window");
+                    }
+                    if (patch.disable_thinking !== undefined) {
+                      setDisableThinking(patch.disable_thinking);
+                      technicalTouched.current.add("disable_thinking");
+                    }
+                  }}
                 />
-                <small id="model-identifier-help">
-                  {text("填写服务方提供的完整模型标识。")}
-                </small>
-                {fields.model && (
-                  <small id="model-field-error" className="model-field-error">
-                    {text(fields.model)}
-                  </small>
-                )}
-              </label>
+              </GenerationTechnicalDisclosure>
             </>
           )}
           {/* Disclosure only changes visibility; mode determines what is saved. */}
@@ -1338,39 +1478,12 @@ export function ModelSettings({
           {focusSection !== "embedding" && (
             <>
               <label>
-                Base URL
-                <input
-                  name="base-url"
-                  aria-label="Base URL"
-                  aria-describedby={`model-url-help${fields["base-url"] ? " model-url-error" : ""}`}
-                  aria-invalid={!!fields["base-url"]}
-                  type="url"
-                  inputMode="url"
-                  autoComplete="off"
-                  required={provider !== "hy_default"}
-                  disabled={formLocked || provider === "hy_default"}
-                  value={baseUrl}
-                  onChange={(event) => {
-                    setBaseUrl(event.target.value);
-                    setProviderPreset("custom");
-                  }}
-                />
-                <small id="model-url-help">
-                  {text("填写服务接口地址，不是聊天网页地址。")}
-                </small>
-                {fields["base-url"] && (
-                  <small id="model-url-error" className="model-field-error">
-                    {text(fields["base-url"])}
-                  </small>
-                )}
-              </label>
-              <label>
                 API Key{keyRequired ? "" : text("（可选）")}
                 <input
-                  name="api-key"
+                  name="api_key"
                   aria-label={`API Key${keyRequired ? "" : text("（可选）")}`}
-                  aria-describedby={`model-key-help${fields["api-key"] ? " model-key-error" : ""}`}
-                  aria-invalid={!!fields["api-key"]}
+                  aria-describedby={`model-key-help${fields.api_key ? " model-key-error" : ""}`}
+                  aria-invalid={!!fields.api_key}
                   type="password"
                   autoComplete="off"
                   required={keyRequired}
@@ -1388,21 +1501,11 @@ export function ModelSettings({
                         : "保存在系统安全存储中，不随安装包分发。",
                   )}
                 </small>
-                {fields["api-key"] && (
+                {fields.api_key && (
                   <small id="model-key-error" className="model-field-error">
-                    {text(fields["api-key"])}
+                    {text(fields.api_key)}
                   </small>
                 )}
-              </label>
-              <label>
-                <input
-                  name="disable-thinking"
-                  type="checkbox"
-                  checked={disableThinking}
-                  disabled={formLocked}
-                  onChange={(event) => setDisableThinking(event.target.checked)}
-                />
-                {text("关闭思考链（向支持的厂商下发 thinking-off 参数）")}
               </label>
             </>
           )}
@@ -1475,8 +1578,13 @@ export function ModelSettings({
                 <div>
                   <strong>{profile.name}</strong>
                   <p>
-                    {text(providerLabel(profile.provider_kind))} ·{" "}
-                    {profile.model} ·
+                    {generationSummary(
+                      presetForGeneration(profile),
+                      profile.provider_kind,
+                      profile.model,
+                      text,
+                    )}{" "}
+                    ·
                     {/* Core fills in the built-in vector model on every profile,
                      * so printing it unconditionally put a line about
                      * bge-small-zh-v1.5 under a profile whose owner never chose

@@ -1277,6 +1277,16 @@ const baseEnglishMessages = {
     "Connection failed. Check the model, key, and recipient.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Could not confirm the configuration or test result. Check before retrying.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "The index update did not complete. The previous search model is still in use. Check the connection and try again.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "The previous model test result still needs review. Try again later.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "Model writes are temporarily paused. Wait for index maintenance to finish, then try again.",
+  "模型未能确认启用，请在设置中核对。":
+    "Could not confirm that the model was enabled. Check it in Settings.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "The saved model configuration is temporarily unavailable. No duplicate will be created. Try refreshing again.",
   所选连接已启用: "Selected app connections are enabled",
   本次未选择应用连接: "No app connection selected this time",
   尚未填写接收方: "No recipient entered",

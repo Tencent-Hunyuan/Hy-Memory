@@ -16,7 +16,7 @@ from one_memory.imports.connections import SourceConnectionStore
 from one_memory.imports.grants import SourceGrantStore
 from one_memory.imports.jobs import ImportJobStore
 from one_memory.imports.sources.registry import build_source_catalog
-from one_memory.onboarding import OnboardingStore
+from one_memory.onboarding import OnboardingProgressUpdate, OnboardingStore
 
 
 @pytest.mark.parametrize("entry", ["connect", "authorize"])
@@ -371,7 +371,14 @@ def test_onboarding_persists_one_history_window_on_every_accepted_source(tmp_pat
     database = tmp_path / "data.sqlite"
     grants = SourceGrantStore(database, home=home)
     jobs = ImportJobStore(database)
-    OnboardingStore(database)
+    onboarding = OnboardingStore(database)
+    onboarding.update_progress(
+        OnboardingProgressUpdate(
+            mode_intent="pro",
+            setup_step="model",
+            model_profile_id="9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+        )
+    )
     store = SourceConnectionStore(grants, jobs, home=home)
     catalog = build_source_catalog(home=home, environment={})
     cutoff = datetime(2026, 10, 13, 5, 0, tzinfo=UTC)
@@ -391,3 +398,7 @@ def test_onboarding_persists_one_history_window_on_every_accepted_source(tmp_pat
     assert receipt.accepted_source_ids == ("claude-code", "codex")
     assert {job.history_after for job in receipt.jobs} == {cutoff}
     assert store.get("bounded-first-import") == receipt
+    state = onboarding.get()
+    assert state.mode_intent == "pro"
+    assert state.setup_step == "model"
+    assert state.model_profile_id == "9be6d465-4cf2-4c72-93f7-15f3c012bc80"

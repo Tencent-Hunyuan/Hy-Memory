@@ -137,6 +137,34 @@ describe("embedding switch catalog", () => {
   });
 });
 
+describe("onboarding model controller catalog", () => {
+  const controllerKeys = [
+    "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。",
+    "上次模型测试结果仍待核对，请稍后重试。",
+    "模型写入暂时关闭。请等待索引维护完成后重试。",
+    "模型未能确认启用，请在设置中核对。",
+    "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。",
+  ] as const satisfies readonly MessageKey[];
+
+  it("is complete in all 11 locales", () => {
+    for (const locale of SUPPORTED_LOCALES)
+      for (const key of controllerKeys)
+        expect(
+          Object.hasOwn(guiMessages[locale], key) &&
+            Boolean(guiMessages[locale][key]?.trim()),
+          `${locale} ${key}`,
+        ).toBe(true);
+  });
+
+  it("has no Simplified Chinese fallback outside zh-Hans", () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      if (locale === "zh-Hans") continue;
+      for (const key of controllerKeys)
+        expect(guiMessages[locale][key], `${locale} ${key}`).not.toBe(key);
+    }
+  });
+});
+
 describe("fallback", () => {
   it("falls back to English when a locale lacks a key", () => {
     const key = "languageTitle";

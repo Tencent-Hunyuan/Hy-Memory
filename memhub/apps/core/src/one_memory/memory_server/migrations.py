@@ -3190,6 +3190,51 @@ async def _061_write_job_retries(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+ONBOARDING_PROGRESS_MIGRATION_VERSION = 62
+
+
+def onboarding_progress_ddl(dialect: str = "mysql") -> str:
+    """Append resumable onboarding choices without rewriting migration 12."""
+    if dialect == "sqlite":
+        return """
+ALTER TABLE onboarding_state
+ADD COLUMN mode_intent TEXT NULL;
+ALTER TABLE onboarding_state
+ADD COLUMN setup_step TEXT NULL;
+ALTER TABLE onboarding_state
+ADD COLUMN model_profile_id TEXT NULL;
+"""
+    return """
+ALTER TABLE onboarding_state
+ADD COLUMN mode_intent VARCHAR(16) NULL AFTER updated_at;
+ALTER TABLE onboarding_state
+ADD COLUMN setup_step VARCHAR(16) NULL AFTER mode_intent;
+ALTER TABLE onboarding_state
+ADD COLUMN model_profile_id VARCHAR(36) NULL AFTER setup_step;
+"""
+
+
+async def _062_onboarding_progress(cursor: Any) -> None:
+    if _dialect(cursor) == "sqlite":
+        existing = await cursor.columns("onboarding_state")
+        statements = _split_statements(onboarding_progress_ddl("sqlite"))
+        for column, statement in zip(
+            ("mode_intent", "setup_step", "model_profile_id"),
+            statements,
+            strict=True,
+        ):
+            if column not in existing:
+                await cursor.execute(statement)
+        return
+    for statement in _split_statements(onboarding_progress_ddl("mysql")):
+        try:
+            await cursor.execute(statement)
+        except Exception as error:  # noqa: BLE001 - MySQL driver error type varies
+            if _is_duplicate_column(error):
+                continue
+            raise
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3490,4 +3535,10 @@ MIGRATIONS: tuple[Migration, ...] = (
         ("memory_note_requests",),
     ),
     Migration(61, "write_job_retries", _061_write_job_retries),
+    Migration(
+        ONBOARDING_PROGRESS_MIGRATION_VERSION,
+        "onboarding_progress",
+        _062_onboarding_progress,
+        ("onboarding_state",),
+    ),
 )

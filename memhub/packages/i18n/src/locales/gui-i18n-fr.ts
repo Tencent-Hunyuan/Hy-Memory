@@ -1493,6 +1493,16 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Échec de la connexion. Vérifiez le modèle, la clé et le destinataire.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Impossible de confirmer la configuration ou le résultat du test. Vérifiez avant de réessayer.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "La mise à jour de l’index ne s’est pas terminée. Le modèle de recherche précédent reste utilisé. Vérifiez la connexion et réessayez.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "Le résultat du dernier test du modèle doit encore être vérifié. Réessayez plus tard.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "Les écritures du modèle sont temporairement suspendues. Attendez la fin de la maintenance de l’index, puis réessayez.",
+  "模型未能确认启用，请在设置中核对。":
+    "Impossible de confirmer que le modèle a été activé. Vérifiez dans les Paramètres.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "La configuration de modèle enregistrée est temporairement inaccessible. Aucun doublon ne sera créé. Réessayez d’actualiser.",
   所选连接已启用: "Les connexions des applications sélectionnées sont activées",
   本次未选择应用连接:
     "Aucune connexion d’application sélectionnée cette fois-ci",
