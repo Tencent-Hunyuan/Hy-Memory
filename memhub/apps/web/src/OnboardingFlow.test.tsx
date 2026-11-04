@@ -100,6 +100,18 @@ vi.mock("./OnboardingModelController", () => ({
       >
         模型启用回执已确认
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          onProfilePersisted("8be6d465-4cf2-4c72-93f7-15f3c012bc80");
+          onModelActiveConfirmed(
+            generationToken,
+            "8be6d465-4cf2-4c72-93f7-15f3c012bc80",
+          );
+        }}
+      >
+        第二个模型启用回执已确认
+      </button>
       <button type="button" onClick={onSkip ?? onBack}>
         跳过模型进入应用
       </button>
@@ -443,6 +455,155 @@ describe("OnboardingFlow S1.3", () => {
     expect(
       screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
     ).toBeTruthy();
+  });
+
+  it("accepts Lite once while the import submission is still in flight", async () => {
+    const user = userEvent.setup();
+    let resolveImport!: (
+      value: Awaited<
+        ReturnType<ImportSourcesController["connectForOnboarding"]>
+      >,
+    ) => void;
+    const controller = imports({
+      connectForOnboarding: vi.fn(
+        () =>
+          new Promise<
+            Awaited<ReturnType<ImportSourcesController["connectForOnboarding"]>>
+          >((resolve) => {
+            resolveImport = resolve;
+          }),
+      ),
+    });
+    const finish = vi.fn();
+    setMemoryMode.mockResolvedValueOnce({ mode: "lite" });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={finish}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+    await user.click(
+      await screen.findByRole("button", { name: "选择记忆模式" }),
+    );
+    await user.click(screen.getByRole("radio", { name: /lite/i }));
+    const enter = screen.getByRole("button", { name: "使用 Lite 进入" });
+    expect(enter).toHaveProperty("disabled", false);
+
+    await user.click(enter);
+    await user.click(enter);
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(setMemoryMode).toHaveBeenCalledExactlyOnceWith("lite");
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+
+    await act(async () =>
+      resolveImport({
+        accepted_source_ids: ["claude"],
+        failed_sources: {},
+        jobs: [],
+      }),
+    );
+    expect(finish).toHaveBeenCalledOnce();
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("shows distinct saving and completion feedback after one Lite click", async () => {
+    const user = userEvent.setup();
+    let resolveMode!: (value: { mode: "lite" }) => void;
+    let resolveCompletion!: (value: OnboardingState) => void;
+    setMemoryMode.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveMode = resolve;
+      }),
+    );
+    completeOnboarding.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    );
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /lite/i }));
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+    expect(
+      screen.getByRole("button", { name: "正在保存模式…" }),
+    ).toHaveProperty("disabled", true);
+
+    await act(async () => resolveMode({ mode: "lite" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "正在完成首次设置…" }),
+      ).toHaveProperty("disabled", true),
+    );
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () =>
+      resolveCompletion({
+        ...onboarding,
+        status: "completed",
+      }),
+    );
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+  });
+
+  it("fences duplicate Pro activation receipts while completion is pending", async () => {
+    const user = userEvent.setup();
+    let resolveCompletion!: (value: OnboardingState) => void;
+    completeOnboarding.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    );
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    const receipt = screen.getByRole("button", {
+      name: "模型启用回执已确认",
+    });
+    fireEvent.click(receipt);
+    fireEvent.click(receipt);
+
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledOnce());
+    expect(setMemoryMode).toHaveBeenCalledExactlyOnceWith("pro");
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () =>
+      resolveCompletion({
+        ...onboarding,
+        status: "completed",
+      }),
+    );
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
   });
 
   it("D47 entering the same-page model step does not finish setup or grant processing", async () => {
@@ -862,6 +1023,7 @@ describe("OnboardingFlow S1.3", () => {
 
   it("serializes an in-flight Pro PUT before a later Lite choice so Lite wins", async () => {
     let resolvePro!: (value: { mode: "pro" }) => void;
+    let resolveLite!: (value: { mode: "lite" }) => void;
     setMemoryMode
       .mockImplementationOnce(
         () =>
@@ -869,7 +1031,12 @@ describe("OnboardingFlow S1.3", () => {
             resolvePro = resolve;
           }),
       )
-      .mockResolvedValueOnce({ mode: "lite" });
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveLite = resolve;
+          }),
+      );
     const user = userEvent.setup();
     const finish = vi.fn();
     render(
@@ -900,7 +1067,115 @@ describe("OnboardingFlow S1.3", () => {
       "pro",
       "lite",
     ]);
+    expect(
+      screen.getByRole("button", { name: "正在保存模式…" }),
+    ).toHaveProperty("disabled", true);
+    await act(async () => resolveLite({ mode: "lite" }));
     await waitFor(() => expect(finish).toHaveBeenCalledWith("sources"));
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a new Pro generation while an older Pro write is pending", async () => {
+    let resolveFirst!: (value: { mode: "pro" }) => void;
+    let resolveSecond!: (value: { mode: "pro" }) => void;
+    setMemoryMode
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    expect(setMemoryMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveFirst({ mode: "pro" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () => resolveSecond({ mode: "pro" }));
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a new profile receipt within the same Pro generation", async () => {
+    let resolveFirst!: (value: { mode: "pro" }) => void;
+    let resolveSecond!: (value: { mode: "pro" }) => void;
+    setMemoryMode
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /pro/i }));
+    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(1));
+
+    await user.click(
+      screen.getByRole("button", { name: "第二个模型启用回执已确认" }),
+    );
+    expect(setMemoryMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveFirst({ mode: "pro" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () => resolveSecond({ mode: "pro" }));
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
     expect(completeOnboarding).toHaveBeenCalledOnce();
   });
 
