@@ -123,6 +123,7 @@ export function MemorySpace({
   const selectedRawRef = useRef<RawMapRecord | null>(null);
   selectedRawRef.current = selectedRaw;
   const rawRecords = useRef(new Map<string, RawMapRecord>());
+  const rawRecordsScope = useRef("");
   const [detailLoad, setDetailLoad] = useState<{
     memoryId: string;
     status: "loading" | "failed";
@@ -209,6 +210,7 @@ export function MemorySpace({
   const [sdkLibraryQuery, setSdkLibraryQuery] = useState("");
   const [sdkLibrarySource, setSdkLibrarySource] = useState("");
   const [sdkLibraryOffset, setSdkLibraryOffset] = useState(0);
+  const [sdkRawCursor, setSdkRawCursor] = useState<string | null>(null);
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
   );
@@ -226,6 +228,10 @@ export function MemorySpace({
         evolve_available: pipelineMode === "ultra",
       }
     : null;
+  const refreshSdkMap = useCallback(() => {
+    if (lite) setSdkRawCursor(null);
+    bumpSdkMap();
+  }, [bumpSdkMap, lite]);
   const requestedQuery = sdkLibraryQuery.trim();
   const sdkPageSettled =
     sdkLibrary.settledMode === pipelineMode &&
@@ -276,7 +282,10 @@ export function MemorySpace({
       if (first) setSdkLibrary((current) => ({ ...current, loading: true }));
       try {
         const rememberRaw = (items: RawMapRecord[]) => {
-          const next = new Map<string, RawMapRecord>();
+          const next =
+            sdkRawCursor && rawRecordsScope.current === windowKey
+            ? new Map(rawRecords.current)
+            : new Map<string, RawMapRecord>();
           if (selectedRawRef.current)
             next.set(
               rawRecordId(selectedRawRef.current),
@@ -284,6 +293,7 @@ export function MemorySpace({
             );
           for (const item of items) next.set(rawRecordId(item), item);
           rawRecords.current = next;
+          rawRecordsScope.current = windowKey;
         };
         const [page, graph] = lite
           ? await Promise.all([
@@ -297,8 +307,10 @@ export function MemorySpace({
                   })
                 : getSdkRaw({
                     source,
-                    offset: sdkLibraryOffset,
+                    offset: 0,
                     limit: SDK_MEMORY_PAGE_SIZE,
+                    paging: "cursor",
+                    cursor: sdkRawCursor,
                     signal: request.signal,
                   }).then((rawPage) => {
                     rememberRaw(rawPage.items);
@@ -346,17 +358,64 @@ export function MemorySpace({
           };
         // The window expired: the server searched again and answered page 1.
         if (page.window_reset && sdkLibraryOffset !== 0) setSdkLibraryOffset(0);
-        setSdkLibrary({
-          page,
-          loading: false,
-          failed: false,
-          settledSource: sdkLibrarySource,
-          settledQuery: sdkLibraryQuery,
-          settledMode: pipelineMode,
+        setSdkLibrary((current) => {
+          const currentPage = current.page;
+          const append =
+            lite &&
+            sdkRawCursor !== null &&
+            currentPage !== null &&
+            current.settledSource === sdkLibrarySource &&
+            current.settledQuery === sdkLibraryQuery &&
+            current.settledMode === pipelineMode;
+          if (!append)
+            return {
+              page,
+              loading: false,
+              failed: false,
+              settledSource: sdkLibrarySource,
+              settledQuery: sdkLibraryQuery,
+              settledMode: pipelineMode,
+            };
+          const items = [...currentPage.items];
+          const known = new Set(items.map((item) => item.memory_id));
+          for (const item of page.items)
+            if (!known.has(item.memory_id)) {
+              known.add(item.memory_id);
+              items.push(item);
+            }
+          return {
+            page: {
+              ...page,
+              items,
+              total: items.length + (page.has_more ? 1 : 0),
+              offset: 0,
+              source_ids_by_memory: {
+                ...currentPage.source_ids_by_memory,
+                ...page.source_ids_by_memory,
+              },
+              source_time_by_memory: {
+                ...currentPage.source_time_by_memory,
+                ...page.source_time_by_memory,
+              },
+            },
+            loading: false,
+            failed: false,
+            settledSource: sdkLibrarySource,
+            settledQuery: sdkLibraryQuery,
+            settledMode: pipelineMode,
+          };
         });
         setSdkGraph({ scope: windowKey, ...graph });
-      } catch {
+      } catch (reason) {
         if (cancelled || request.signal.aborted) return;
+        if (
+          lite &&
+          sdkRawCursor !== null &&
+          apiErrorCode(reason) === "raw_cursor_stale"
+        ) {
+          setSdkRawCursor(null);
+          return;
+        }
         setSdkLibrary((current) => ({
           ...current,
           loading: false,
@@ -365,10 +424,12 @@ export function MemorySpace({
       }
     };
     void read(true);
-    const timer = setInterval(() => void read(false), 30_000);
+    const timer = lite && sdkRawCursor !== null
+      ? undefined
+      : setInterval(() => void read(false), 30_000);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer !== undefined) clearInterval(timer);
       controller?.abort();
     };
   }, [
@@ -377,6 +438,7 @@ export function MemorySpace({
     sdkLibraryOffset,
     sdkLibraryQuery,
     sdkLibrarySource,
+    sdkRawCursor,
     lite,
     pipelineMode,
   ]);
@@ -525,6 +587,7 @@ export function MemorySpace({
     rawRecords.current.clear();
     sdkSearchWindow.current = { key: "", id: null };
     setSdkLibraryOffset(0);
+    setSdkRawCursor(null);
     setSdkLibraryQuery("");
     setSdkGraph(null);
     setSdkLibrary((current) => ({
@@ -804,7 +867,7 @@ export function MemorySpace({
       );
       trace.done("succeeded");
       closeDetail();
-      bumpSdkMap();
+      refreshSdkMap();
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
         reason: "memory_action_failed",
@@ -833,7 +896,7 @@ export function MemorySpace({
       trace.done("succeeded");
       setDetail(sdkDetail(saved));
       setDraft(sdkEditableText(saved));
-      bumpSdkMap();
+      refreshSdkMap();
     } catch (reason) {
       trace.done(writeTraceStatus(reason), {
         reason: isDefiniteRefusal(reason)
@@ -898,10 +961,12 @@ export function MemorySpace({
                 ? t("memory:记忆暂时无法读取")
                 : lite
                   ? sdkPage
-                    ? `${t("memory:原始对话")} · ${tn(
-                        "sdk.raw.found",
-                        sdkPage.total,
-                      )}`
+                    ? sdkPage.total_exact === false
+                      ? t("memory:原始对话")
+                      : `${t("memory:原始对话")} · ${tn(
+                          "sdk.raw.found",
+                          sdkPage.total,
+                        )}`
                     : sdkLibrary.failed
                       ? null
                       : t("memory:正在读取…")
@@ -934,7 +999,7 @@ export function MemorySpace({
           onSaved={() => {
             // A finished addition is new page content: re-read now rather than
             // leave it for the next poll.
-            bumpSdkMap();
+            refreshSdkMap();
           }}
           onOpenMemory={(id) => {
             if (!simplified) setMode("library");
@@ -1201,12 +1266,22 @@ export function MemorySpace({
                 settledSource: sdkLibrary.settledSource,
                 settledQuery: sdkLibrary.settledQuery,
                 requestedOffset: sdkLibraryOffset,
+                cursorPaging: lite && !sdkLibraryQuery.trim(),
+                hasMore:
+                  !!sdkPage?.has_more && !!sdkPage?.next_cursor,
                 unattributedSource: UNATTRIBUTED_SOURCE_ID,
                 onQuery: setSdkLibraryQuery,
                 onSource: setSdkLibrarySource,
-                resetPage: () => setSdkLibraryOffset(0),
+                resetPage: () => {
+                  setSdkLibraryOffset(0);
+                  setSdkRawCursor(null);
+                },
                 onPage: (offset) => setSdkLibraryOffset(offset),
-                onRetry: bumpSdkMap,
+                onMore: () => {
+                  if (sdkPage?.next_cursor)
+                    setSdkRawCursor(sdkPage.next_cursor);
+                },
+                onRetry: refreshSdkMap,
               }
             : undefined
         }

@@ -644,6 +644,9 @@ class SdkRawPage(BaseModel):
     offset: int = Field(ge=0)
     limit: int = Field(ge=1, le=500)
     unit: Literal["raw", "turn"] = "raw"
+    next_cursor: str | None = None
+    has_more: bool = False
+    total_exact: bool = True
     #: Set when a time filter was applied in Core. For storage `raw`, `total`
     #: remains the SDK count; for product `turn`, it is the filtered turn count.
     time_filtered: bool = False
@@ -4491,6 +4494,8 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
         unit: Literal["raw", "turn"] = Query(default="raw"),
+        paging: Literal["offset", "cursor"] = Query(default="offset"),
+        cursor: str | None = Query(default=None, max_length=160),
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
         exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
         session_id: list[str] | None = Query(default=None),  # noqa: B008
@@ -4516,9 +4521,52 @@ def create_app(
             _library_values(statuses or [], MEMORY_STATUSES, "memory_status_unknown")
             or raw_list_filters()["statuses"]
         )
+        if paging == "cursor" and unit != "turn":
+            raise HTTPException(status_code=422, detail="raw_cursor_requires_turn_unit")
+        if cursor is not None and paging != "cursor":
+            raise HTTPException(status_code=422, detail="raw_cursor_requires_cursor_paging")
+        if paging == "cursor" and (offset or after is not None or before is not None):
+            raise HTTPException(status_code=422, detail="raw_cursor_filter_unsupported")
+        raw_cursor = (0, 0, 0, 0, "", "")
+        if cursor:
+            parts = cursor.split(":")
+            if (
+                len(parts) != 7
+                or parts[0] != "turn"
+                or any(re.fullmatch(r"[0-9]+", part) is None for part in parts[1:5])
+                or re.fullmatch(r"(?:p?[0-9a-f]{16})?", parts[5]) is None
+                or re.fullmatch(r"[0-9a-f]{16}", parts[6]) is None
+            ):
+                raise HTTPException(status_code=422, detail="raw_cursor_invalid")
+            raw_cursor = (
+                int(parts[1]),
+                int(parts[2]),
+                int(parts[3]),
+                int(parts[4]),
+                parts[5],
+                parts[6],
+            )
+            if any(value > 100_000_000 for value in raw_cursor[:4]):
+                raise HTTPException(status_code=422, detail="raw_cursor_invalid")
         sources = split_csv(source)
         excluded = split_csv(exclude_sources)
         sessions = split_csv(session_id)
+        cursor_scope = hashlib.sha256(
+            json.dumps(
+                {
+                    "user_id": user_id,
+                    "statuses": sorted(chosen_statuses),
+                    "sources": sorted(sources),
+                    "excluded": sorted(excluded),
+                    "sessions": sorted(sessions),
+                    "order": order,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:16]
+        if cursor and raw_cursor[5] != cursor_scope:
+            raise HTTPException(status_code=422, detail="raw_cursor_scope_mismatch")
         try:
             client = await _sdk_client_handle(app).client()
             query = {
@@ -4527,8 +4575,154 @@ def create_app(
                 "include_sources": sources or None,
                 "exclude_sources": excluded or None,
                 "session_ids": sessions or None,
-                "order": order if unit == "raw" else "desc",
+                "order": order if unit == "raw" or paging == "cursor" else "desc",
             }
+            if unit == "turn" and paging == "cursor":
+                (
+                    raw_offset,
+                    turn_offset,
+                    emitted,
+                    previous_total,
+                    expected_raw,
+                    _scope,
+                ) = raw_cursor
+                value = await asyncio.to_thread(
+                    client.list_memories,
+                    **query,
+                    offset=raw_offset,
+                    limit=min(limit + 1, 500),
+                )
+                raw_page = HySdkRawPage.from_memory_list(
+                    value, limit=min(limit + 1, 500), offset=raw_offset
+                )
+
+                def raw_anchor(record: HySdkRawRecord) -> str:
+                    return hashlib.sha256(
+                        f"{record.raw_id}\0{record.content}".encode()
+                    ).hexdigest()[:16]
+
+                if cursor:
+                    if raw_page.total < previous_total:
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
+                    observed_total = raw_page.total
+                    added = raw_page.total - previous_total
+                    if added and order == "desc":
+                        raw_offset += added
+                        value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=raw_offset,
+                            limit=min(limit + 1, 500),
+                        )
+                        raw_page = HySdkRawPage.from_memory_list(
+                            value,
+                            limit=min(limit + 1, 500),
+                            offset=raw_offset,
+                        )
+                        if raw_page.total != observed_total:
+                            raise HTTPException(
+                                status_code=409, detail="raw_cursor_stale"
+                            )
+
+                    if expected_raw.startswith("p"):
+                        if raw_offset == 0:
+                            raise HTTPException(
+                                status_code=409, detail="raw_cursor_stale"
+                            )
+                        previous_value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=raw_offset - 1,
+                            limit=1,
+                        )
+                        previous_page = HySdkRawPage.from_memory_list(
+                            previous_value, limit=1, offset=raw_offset - 1
+                        )
+                        valid_anchor = (
+                            previous_page.total == raw_page.total
+                            and bool(previous_page.raw)
+                            and raw_anchor(previous_page.raw[0])
+                            == expected_raw[1:]
+                        )
+                    else:
+                        valid_anchor = (
+                            bool(raw_page.raw)
+                            and raw_anchor(raw_page.raw[0]) == expected_raw
+                        )
+                    if expected_raw and not valid_anchor:
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
+                selected_turns: list[tuple[HySdkRawRecord, RawDisplayTurn]] = []
+                next_cursor: str | None = None
+                for record_index, record in enumerate(raw_page.raw):
+                    turns = raw_display_turns(record)
+                    ordered_turns = (
+                        tuple(reversed(turns)) if order == "desc" else turns
+                    )
+                    start = turn_offset if record_index == 0 else 0
+                    for index in range(start, len(ordered_turns)):
+                        selected_turns.append((record, ordered_turns[index]))
+                        if len(selected_turns) < limit:
+                            continue
+                        absolute_raw = raw_offset + record_index
+                        next_raw = absolute_raw
+                        next_turn = index + 1
+                        if next_turn >= len(ordered_turns):
+                            next_raw += 1
+                            next_turn = 0
+                        if next_raw < raw_page.total:
+                            if next_turn:
+                                anchor_record = record
+                            else:
+                                next_index = record_index + 1
+                                anchor_record = (
+                                    raw_page.raw[next_index]
+                                    if next_index < len(raw_page.raw)
+                                    else None
+                                )
+                            anchor = (
+                                raw_anchor(anchor_record)
+                                if anchor_record is not None
+                                else f"p{raw_anchor(record)}"
+                            )
+                            next_cursor = (
+                                f"turn:{next_raw}:{next_turn}:"
+                                f"{emitted + len(selected_turns)}:{raw_page.total}:"
+                                f"{anchor}:{cursor_scope}"
+                            )
+                        break
+                    if len(selected_turns) >= limit:
+                        break
+                if (
+                    next_cursor is None
+                    and raw_offset + len(raw_page.raw) < raw_page.total
+                ):
+                    if not raw_page.raw:
+                        raise HTTPException(
+                            status_code=409, detail="raw_cursor_stale"
+                        )
+                    next_raw = raw_offset + len(raw_page.raw)
+                    previous_anchor = raw_anchor(raw_page.raw[-1])
+                    next_cursor = (
+                        f"turn:{next_raw}:0:{emitted + len(selected_turns)}:"
+                        f"{raw_page.total}:p{previous_anchor}:{cursor_scope}"
+                    )
+                return SdkRawPage(
+                    user_id=user_id,
+                    items=tuple(
+                        SdkRawItem.of(record, turn)
+                        for record, turn in selected_turns
+                    ),
+                    # Cursor consumers do not use a precise total. This lower
+                    # bound preserves the legacy numeric field without forcing
+                    # a full scan merely to count variable-size turn batches.
+                    total=emitted + len(selected_turns) + (1 if next_cursor else 0),
+                    offset=emitted,
+                    limit=limit,
+                    unit="turn",
+                    next_cursor=next_cursor,
+                    has_more=next_cursor is not None,
+                    total_exact=False,
+                )
             if unit == "raw":
                 value = await asyncio.to_thread(
                     client.list_memories,

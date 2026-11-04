@@ -33,6 +33,8 @@ it("lists raw conversations for the selected application", async () => {
       offset: 20,
       limit: 20,
       unit: "turn",
+      paging: undefined,
+      cursor: undefined,
     },
     signal,
   });
