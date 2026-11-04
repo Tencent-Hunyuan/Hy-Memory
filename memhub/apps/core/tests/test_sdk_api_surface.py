@@ -91,6 +91,40 @@ def _chat(user_id: str, memory_id: str, content: str, layer: str, source: str) -
     }
 
 
+#: The keyword parameters of the pinned `HyMemoryClient.search`, which takes
+#: no **kwargs. `test_pinned_sdk_raw_search` checks this set against the
+#: installed wheel, so the stand-in below rejects what the release rejects.
+SDK_SEARCH_PARAMETERS = frozenset(
+    {
+        "queries",
+        "scene",
+        "search_mode",
+        "user_ids",
+        "agent_ids",
+        "session_ids",
+        "include_sources",
+        "exclude_sources",
+        "limit",
+        "min_score",
+        "working_fact_min_score",
+        "working_experience_min_score",
+        "schema_min_score",
+        "schema_limit",
+        "intention_limit",
+        "created_after",
+        "reader",
+        "workspace_id",
+        "branch",
+        "request_id",
+        "layers",
+        "statuses",
+        "embed_override",
+        "query_embedding",
+        "rerank",
+    }
+)
+
+
 class RecordingSdk:
     """The public client surface, recording every call's keyword arguments."""
 
@@ -109,6 +143,10 @@ class RecordingSdk:
     # The SDK answers rows below a caller's floor in some lanes (a schema
     # floor, a fused rank score), so Core must filter what it returns.
     def search(self, query, **kwargs):
+        unknown = set(kwargs) - SDK_SEARCH_PARAMETERS
+        if unknown:
+            # The pinned `HyMemoryClient.search` takes no **kwargs.
+            raise TypeError(f"search() got unexpected keyword arguments {sorted(unknown)}")
         self._record("search", {"query": query, **kwargs})
         [user_id] = kwargs["user_ids"]
         if kwargs.get("layers") == ["l1_raw"]:
@@ -274,6 +312,10 @@ async def _model_ready(_app) -> bool:
     return True
 
 
+async def _model_not_ready(_app) -> bool:
+    return False
+
+
 def run_with_sdk(tmp_path, monkeypatch, scenario) -> None:
     async def main() -> None:
         app = application(tmp_path)
@@ -365,14 +407,56 @@ def test_raw_context_search_can_return_turns_instead_of_storage_batches(
             },
         )
         assert response.status_code == 200, response.text
-        raw_one = [
-            item for item in response.json()["items"] if item["raw_id"] == "raw-1"
-        ]
+        raw_one = [item for item in response.json()["items"] if item["raw_id"] == "raw-1"]
         assert len(raw_one) == 1
         assert raw_one[0]["turn_index"] == 1
         assert "我喜欢绿茶" in raw_one[0]["content"]
         assert "我叫费天翔" not in raw_one[0]["content"]
+        # pro/ultra: a shadow raw is already in its extracted memories.
+        assert "statuses" not in sdk.last("search")
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_lite_raw_search_is_plain_rag_over_active_and_shadow_raws(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        app.state.memory_mode = lambda: "lite"
+        response = await client.post(
+            "/api/v2/context/search",
+            json={"query": "喜欢喝绿茶的人", "kinds": ["raw"], "raw_unit": "turn", "limit": 5},
+        )
+        assert response.status_code == 200, response.text
+        sent = sdk.last("search")
+        assert sent["statuses"] == ["active", "shadow"] and sent["limit"] == 5
+        items = response.json()["items"]
+        # No turn contains the query, yet every vector hit is returned, in
+        # score order: raw-1 by its closest turn, raw-2 by its only one.
+        assert [(item["raw_id"], item["turn_index"]) for item in items] == [
+            ("raw-1", 1),
+            ("raw-2", 0),
+        ]
+        assert [item["score"] for item in items] == [0.97, 0.3]
+        assert "我喜欢绿茶" in items[0]["content"]
+
+        floored = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "喜欢喝绿茶的人",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "min_score": 0.5,
+            },
+        )
+        assert [item["raw_id"] for item in floored.json()["items"]] == ["raw-1"]
+
+        # Lite has no model, so recall answers from the raw layer.
+        monkeypatch.setattr("one_memory.api._recall_model_ready", _model_not_ready)
+        recall = await client.post("/api/v1/recall", json={"query": "喜欢喝绿茶的人"})
+        assert recall.status_code == 200, recall.text
+        assert recall.json()["mode"] == "raw"
         assert sdk.last("search")["statuses"] == ["active", "shadow"]
+        assert [hit["memory_id"] for hit in recall.json()["hits"]][:1] == ["raw-1"]
 
     run_with_sdk(tmp_path, monkeypatch, scenario)
 
@@ -632,12 +716,39 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         await client.get("/api/v2/raw", params={"unit": "turn"})
         assert len(sdk.all("list_memories")) == calls_before_refresh + 1
 
+        # A live session puts a new raw on top: one listing call, not a rescan.
+        newest = {
+            **RAW_ROWS["local"][1],
+            "memory_id": "raw-new",
+            "content": "[user]: 刚刚说的",
+            "status": "active",
+        }
+        original = RAW_ROWS["local"]
+        monkeypatch.setitem(RAW_ROWS, "local", [newest, *original])
+        calls_before_append = len(sdk.all("list_memories"))
+        appended = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert len(sdk.all("list_memories")) == calls_before_append + 1
+        assert appended["total"] == 4
+        assert [item["raw_id"] for item in appended["items"]][:1] == ["raw-new"]
+        assert [item["turn_id"] for item in appended["items"][1:]] == [
+            item["turn_id"] for item in turns["items"]
+        ]
+        # Anything else (here a raw going away) lists the raw layer again.
+        monkeypatch.setitem(RAW_ROWS, "local", [newest, original[1]])
+        calls_before_delete = len(sdk.all("list_memories"))
+        shrunk = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert len(sdk.all("list_memories")) > calls_before_delete + 1
+        assert shrunk["total"] == 2
+        monkeypatch.setitem(RAW_ROWS, "local", original)
+        calls_before_restore = len(sdk.all("list_memories"))
+        restored = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert len(sdk.all("list_memories")) > calls_before_restore + 1
+        assert restored["total"] == 3
+
         ascending = (
             await client.get("/api/v2/raw", params={"unit": "turn", "order": "asc"})
         ).json()
-        ascending_first = [
-            item for item in ascending["items"] if item["raw_id"] == "raw-1"
-        ]
+        ascending_first = [item for item in ascending["items"] if item["raw_id"] == "raw-1"]
         assert [item["turn_index"] for item in ascending_first] == [0, 1]
 
         await client.get(

@@ -11,6 +11,17 @@ Hy Memory and MemHub are versioned and released independently.
   schedule and manual evolve. The memory page shows original conversations in
   lite and advanced memories in pro/ultra. Existing installs remain pro unless
   the user changes them, and embedding maintenance blocks mode/evolve changes.
+- MemHub pins `hy-memory==2.0.14`. Lite search is plain RAG over raw: the
+  App's lite search, CLI context search, `/api/v1/recall` and the Host Bridge
+  (`MemHub_recall`, context search) return every vector hit above the floor,
+  ranked by score, over active and shadow raws, so history pro already
+  processed is still found after switching to lite. The turn view no longer
+  drops a hit whose turns do not literally contain the query; it shows the
+  hit's closest turn instead. Pro and ultra raw search stays active-only.
+  Fixes every raw search failing in packaged builds since #316, which passed
+  `statuses` to an SDK (2.0.13) that did not accept it. The lite raw-turn
+  page also stops re-listing the whole raw layer on each poll when a live
+  session only adds new raws.
 
 ## Hy Memory 2.0.14 — 2026-11-04
 
@@ -92,7 +103,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.6 — 2026-11-02
 
-Build 40, on `hy-memory==2.0.13`. Linux x64/arm64 Runtime and macOS arm64
+Build 40, on `hy-memory==2.0.14`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - Interfaces in 11 languages: English, Simplified and Traditional Chinese,
