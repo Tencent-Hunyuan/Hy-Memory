@@ -12,6 +12,15 @@ Hy Memory and MemHub are versioned and released independently.
   lite and advanced memories in pro/ultra. Existing installs remain pro unless
   the user changes them, and embedding maintenance blocks mode/evolve changes.
 
+## Hy Memory 2.0.14 — 2026-11-04
+
+- `search()` / `async_search()` take an optional `statuses` for explicit
+  L1_RAW search (`layers=["l1_raw"]`, or any search in lite mode), e.g.
+  `statuses=["active", "shadow"]`, so raw turns a pro extraction already
+  shadowed can still be searched. Default stays active-only. Raw hits now
+  report their real `status`. Passing `statuses` to a non-raw search or to
+  `scene="all"` raises `ValueError` instead of being ignored.
+
 ## Hy Memory 2.0.13 — 2026-11-02
 
 - A model failure during a write now reports failure and stores
