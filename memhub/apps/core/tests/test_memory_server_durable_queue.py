@@ -4138,6 +4138,71 @@ def test_a_failing_renewal_does_not_kill_the_drain(tmp_path) -> None:
     assert queue.get("idem-1").state == COMPLETED
 
 
+def test_a_locked_fallback_settlement_does_not_kill_the_drain(tmp_path, monkeypatch) -> None:
+    """The incident shape: executor and its fallback both lose the writer.
+
+    The first row keeps its lease for normal reclaim; an unrelated row must
+    still run instead of being stranded behind a dead drain task.
+    """
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    first = queue.submit(_request(key="first", source="cursor"))
+    second = queue.submit(_request(key="second", source="codex"))
+    executed: list[str] = []
+
+    async def execute(job_id: str) -> None:
+        executed.append(job_id)
+        if job_id == first.job_id:
+            raise RuntimeError("executor failed")
+        queue.settle(job_id, state=COMPLETED)
+        drain.stop()
+
+    drain = DurableWriteDrain(queue, execute=execute, max_concurrent_sources=1)
+
+    def locked_settlement(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(queue, "settle_worker_error", locked_settlement)
+
+    asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
+
+    assert executed == [first.job_id, second.job_id]
+    assert queue.get("first").state == RUNNING
+    assert queue.get("second").state == COMPLETED
+
+
+def test_an_unexpected_job_task_failure_is_contained_by_the_drain(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A programming error stays visible without taking down the consumer."""
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    first = queue.submit(_request(key="first", source="cursor"))
+    second = queue.submit(_request(key="second", source="codex"))
+    executed: list[str] = []
+
+    async def run_job(job_id: str) -> None:
+        executed.append(job_id)
+        if job_id == first.job_id:
+            raise RuntimeError("unexpected job task failure")
+        drain.stop()
+
+    drain = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        max_concurrent_sources=1,
+    )
+    monkeypatch.setattr(drain, "_run_claimed_job", run_job)
+
+    with caplog.at_level(logging.ERROR, logger="one_memory.memory_server.durable_queue"):
+        asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
+
+    assert executed == [first.job_id, second.job_id]
+    assert any(
+        "durable_write_drain_job_task_failed" in message.getMessage()
+        and "error_type=RuntimeError" in message.getMessage()
+        for message in caplog.records
+    )
+
+
 @pytest.mark.parametrize("terminal", [COMPLETED, FAILED, DEAD])
 def test_a_terminal_row_is_sticky_against_a_late_settle(tmp_path, terminal: str) -> None:
     """A late settle must not overwrite an outcome that already happened.
@@ -4978,6 +5043,27 @@ def test_permanent_renewal_error_stops_the_worker(tmp_path, monkeypatch) -> None
 
     with pytest.raises(RuntimeError):
         asyncio.run(drain.run_one())
+
+
+def test_permanent_renewal_error_stops_the_long_lived_drain(tmp_path, monkeypatch) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    queue.submit(_request())
+    drain = DurableWriteDrain(
+        queue,
+        execute=lambda _job_id: asyncio.sleep(0.03),
+        lease=timedelta(seconds=1),
+        renew_every=timedelta(milliseconds=10),
+    )
+    monkeypatch.setattr(
+        drain,
+        "renew",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            sqlite3.OperationalError("database schema is corrupt")
+        ),
+    )
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
 
 
 def test_lost_renewal_waits_for_execution_before_releasing_source(tmp_path, monkeypatch) -> None:
