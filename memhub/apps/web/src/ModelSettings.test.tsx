@@ -1482,7 +1482,12 @@ describe("ModelSettings", () => {
       ...profile,
       profile_id: "created",
       revision: 1,
-      capabilities,
+      capabilities: {
+        ...capabilities,
+        endpoint_reachable: false,
+        model_available: false,
+        embedding_available: false,
+      },
     };
     profiles = [];
     create.mockImplementation(async () => {
@@ -1491,11 +1496,17 @@ describe("ModelSettings", () => {
     });
     probeProfile.mockResolvedValue({
       profile_id: created.profile_id,
-      profile_revision: created.revision,
+      input_profile_revision: created.revision,
+      profile_revision: 2,
       stages: [],
       capabilities,
     });
-    activate.mockResolvedValue({ ...created, is_active: true });
+    activate.mockResolvedValue({
+      ...created,
+      revision: 2,
+      capabilities,
+      is_active: true,
+    });
     render(<ModelSettings compactSingle onSetupComplete={onSetupComplete} />);
 
     await user.type(screen.getByLabelText("配置名称"), "Current model");
@@ -1504,10 +1515,7 @@ describe("ModelSettings", () => {
     await user.click(screen.getByRole("button", { name: "测试并完成配置" }));
 
     await waitFor(() => expect(onSetupComplete).toHaveBeenCalledOnce());
-    expect(planActivation).toHaveBeenCalledWith(
-      created.profile_id,
-      created.revision,
-    );
+    expect(planActivation).toHaveBeenCalledWith(created.profile_id, 2);
     expect(activate).toHaveBeenCalledWith(created.profile_id);
   });
 
