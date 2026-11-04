@@ -26,13 +26,32 @@ vi.mock("./api", () => ({
   getImportJobs: vi.fn(),
   connectSources: vi.fn(),
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
   getMemoryMode: vi.fn().mockResolvedValue({
     mode: "pro",
     configured_mode: "pro",
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
-  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  planMemoryMode: vi.fn().mockResolvedValue({
+    current: "pro",
+    target: "lite",
+    effective_target: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
+    blockers: [],
+  }),
   putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
   patchOnboardingProgress: vi.fn().mockResolvedValue({}),
   getSourceConnection: vi.fn(),
@@ -159,8 +178,23 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.setMemoryMode).mockResolvedValue({ mode: "pro" } as never);
   vi.mocked(api.planMemoryMode).mockResolvedValue({
+    current: "pro",
+    target: "lite",
+    effective_target: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
     blockers: [],
   } as never);
+  vi.mocked(api.getEvolveSchedule).mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  });
   vi.mocked(api.putOnboardingProgress).mockResolvedValue(state);
   vi.mocked(api.patchOnboardingProgress).mockResolvedValue(state);
   localStorage.clear();
@@ -319,6 +353,7 @@ it("empty discovery shows zero and allows explicit entry without a connection re
   );
   fireEvent.click(screen.getByRole("button", { name: "稍后添加，先进入" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(await screen.findByRole("button", { name: "确认选择" }));
   fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
@@ -371,6 +406,7 @@ it("partial acceptance preserves the successful job and failure through model-st
   expect(api.completeOnboarding).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "进入应用" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(await screen.findByRole("button", { name: "确认选择" }));
   fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),

@@ -15,6 +15,12 @@ import type { ImportSourcesController } from "./use-import-sources";
 
 vi.mock("./api", () => ({
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
   getMemoryMode: vi.fn().mockResolvedValue({
     mode: "pro",
     configured_mode: "pro",

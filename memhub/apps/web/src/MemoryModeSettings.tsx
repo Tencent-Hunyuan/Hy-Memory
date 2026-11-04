@@ -26,96 +26,15 @@ import {
   issueConfirmedModeTicket,
 } from "./confirmed-memory-mode";
 import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
+import {
+  BLOCKER_COPY,
+  MemoryModeConfirmDialog,
+  MODE_COPY,
+} from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
-import { R6Button, R6Switch } from "./R6Controls";
+import { R6Button } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
-import { TimePicker } from "./TimePicker";
-
-const MODE_COPY: Record<
-  MemoryPipelineMode,
-  { title: string; description: string }
-> = {
-  lite: {
-    title: "基础记忆（lite）",
-    description: "保存原始对话 · 不调用生成模型 · 搜索原始会话",
-  },
-  pro: {
-    title: "智能记忆（pro）",
-    description: "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆",
-  },
-  ultra: {
-    title: "深度记忆（ultra）",
-    description: "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回",
-  },
-};
-
-function planRows(plan: MemoryModePlan) {
-  const rows = [
-    {
-      label: "新对话",
-      content:
-        plan.capabilities.content_plane === "raw"
-          ? "之后只保存原始对话，不再生成新记忆。"
-          : plan.capabilities.graph_enabled
-            ? "新对话会整理成记忆并写入知识图谱。"
-            : "新对话会由模型整理成记忆。",
-    },
-    {
-      label: "模型调用与费用",
-      content: plan.capabilities.generation_required
-        ? plan.capabilities.evolve_available
-          ? "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。"
-          : "会调用当前生成模型，可能产生服务商费用。"
-        : "不调用生成模型，不再产生这部分费用。",
-    },
-    {
-      label: "搜索范围",
-      content:
-        plan.capabilities.content_plane === "raw"
-          ? "切换后搜索原始对话。"
-          : plan.capabilities.graph_enabled
-            ? "搜索沉淀记忆，并用知识图谱补充关联。"
-            : "搜索沉淀后的记忆。",
-    },
-  ];
-  if (plan.effects.includes("earlier_raw_not_extracted"))
-    rows.push({
-      label: "已有数据",
-      content: "已经处理完的旧对话不会补做；原始对话全部保留。",
-    });
-  if (plan.effects.includes("higher_mode_memories_hidden"))
-    rows.push({
-      label: "已有数据",
-      content:
-        plan.effective_target === "pro"
-          ? "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。"
-          : "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。",
-    });
-  if (plan.effects.includes("existing_memories_added_to_graph"))
-    rows.push({
-      label: "知识图谱",
-      content: "已有记忆会在后台加入知识图谱，期间仍可使用。",
-    });
-  if (plan.effects.includes("evolve_stopped"))
-    rows.push({
-      label: "每天自动整合",
-      content: "每天自动整合会停止，已经生成的数据不会删除。",
-    });
-  if (plan.capabilities.evolve_available)
-    rows.push({
-      label: "切换后",
-      content: "可设置每天自动整合时间，也可以随时立即整合一次。",
-    });
-  return rows;
-}
-
-const BLOCKER_COPY: Record<MemoryModePlan["blockers"][number], string> = {
-  active_model_required: "使用 pro 或 ultra 前需要先配置并启用生成模型。",
-  embedding_maintenance_in_progress:
-    "正在检查或切换向量模型，完成后才能切换记忆模式。",
-  memory_lifecycle_busy: "记忆维护正在进行，完成后才能切换模式。",
-  graph_store_unavailable: "当前安装缺少知识图谱组件，无法开启 ultra。",
-};
+import { UltraEvolveScheduleFields } from "./UltraEvolveScheduleFields";
 
 export function MemoryModeSettings({
   hasActiveModel,
@@ -143,65 +62,9 @@ export function MemoryModeSettings({
   const [readFailed, setReadFailed] = useState(false);
   const [run, setRun] = useState<EvolveRunReceipt | null>(null);
   const refreshVersion = useRef(0);
-  const dialog = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
   const focusEvolveWhenReady = useRef(false);
   const focusModeWhenReady = useRef<MemoryPipelineMode | null>(null);
-  const busyRef = useRef(false);
-  busyRef.current = busy;
-
-  useEffect(() => {
-    if (!pendingMode || !dialog.current) return;
-    const panel = dialog.current;
-    const inertSiblings = new Map<HTMLElement, boolean>();
-    let branch: HTMLElement = panel.parentElement ?? panel;
-    while (branch.parentElement) {
-      for (const sibling of branch.parentElement.children) {
-        if (!(sibling instanceof HTMLElement) || sibling === branch) continue;
-        inertSiblings.set(sibling, sibling.inert);
-        sibling.inert = true;
-      }
-      branch = branch.parentElement;
-      if (branch === document.body) break;
-    }
-    const controls = () =>
-      Array.from(panel.querySelectorAll<HTMLElement>("button:not(:disabled)"));
-    controls()[0]?.focus();
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busyRef.current) {
-        event.preventDefault();
-        setPendingPlan(null);
-        setPendingMode(null);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = controls();
-      const first = items[0];
-      const last = items.at(-1);
-      if (!first || !last) {
-        event.preventDefault();
-        panel.focus();
-        return;
-      }
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    panel.addEventListener("keydown", handleKey);
-    return () => {
-      panel.removeEventListener("keydown", handleKey);
-      for (const [sibling, wasInert] of inertSiblings) sibling.inert = wasInert;
-      if (dialogOpener.current?.isConnected) dialogOpener.current.focus();
-    };
-  }, [pendingMode]);
-
-  useEffect(() => {
-    if (pendingMode && busy) dialog.current?.focus();
-  }, [busy, pendingMode]);
 
   useEffect(() => {
     if (!focusEvolveWhenReady.current || pendingMode || state?.mode !== "ultra")
@@ -429,45 +292,13 @@ export function MemoryModeSettings({
           aria-labelledby={`${id}-evolve-title`}
           tabIndex={-1}
         >
-          <div className="r6-evolve-heading">
-            <h3 id={`${id}-evolve-title`}>{text("记忆整合（Evolve）")}</h3>
-            <p>{text("定期重新整理已有记忆，补充更稳定的关联和结论。")}</p>
-          </div>
-          <div className="r6-evolve-setting">
-            <div className="r6-evolve-setting-copy">
-              <h3>{text("每天自动整合")}</h3>
-              <p>
-                {text(
-                  schedule.enabled
-                    ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
-                    : "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
-                ).replace("{time}", schedule.time)}
-              </p>
-            </div>
-            <R6Switch
-              label={text("每天自动整合")}
-              checked={schedule.enabled}
-              disabled={busy || maintenance}
-              onCheckedChange={(enabled) => void changeSchedule({ enabled })}
-            />
-            {schedule.enabled ? (
-              <div className="r6-evolve-time">
-                <div>
-                  <label htmlFor={`${id}-evolve-time`}>
-                    {text("执行时间")}
-                  </label>
-                  <p>{text("使用这台设备的本地时间。")}</p>
-                </div>
-                <TimePicker
-                  id={`${id}-evolve-time`}
-                  label={text("执行时间")}
-                  value={schedule.time}
-                  disabled={busy || maintenance}
-                  onChange={(time) => changeSchedule({ time })}
-                />
-              </div>
-            ) : null}
-          </div>
+          <UltraEvolveScheduleFields
+            schedule={schedule}
+            headingId={`${id}-evolve-title`}
+            disabled={busy || maintenance}
+            onEnabledChange={(enabled) => void changeSchedule({ enabled })}
+            onTimeChange={(time) => changeSchedule({ time })}
+          />
           <div className="r6-evolve-setting r6-evolve-setting--manual">
             <div className="r6-evolve-setting-copy">
               <h3>{text("立即整合一次")}</h3>
@@ -497,64 +328,19 @@ export function MemoryModeSettings({
         </section>
       ) : null}
 
-      {pendingMode ? (
-        <div className="r6-settings-dialog-layer" role="presentation">
-          <section
-            ref={dialog}
-            className="r6-settings-dialog r6-mode-confirm-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="memory-mode-confirm-title"
-            tabIndex={-1}
-          >
-            <h2 id="memory-mode-confirm-title">
-              {text("切换到 {mode}？").replace(
-                "{mode}",
-                text(MODE_COPY[pendingMode].title),
-              )}
-            </h2>
-            <dl className="r6-mode-confirm-effects">
-              {(pendingPlan ? planRows(pendingPlan) : []).map((row) => (
-                <div key={`${row.label}:${row.content}`}>
-                  <dt>{text(row.label)}</dt>
-                  <dd>{text(row.content)}</dd>
-                </div>
-              ))}
-            </dl>
-            {(pendingPlan?.blockers ?? []).map((blocker) => (
-              <p className="r6-settings-error" role="alert" key={blocker}>
-                {text(BLOCKER_COPY[blocker])}
-              </p>
-            ))}
-            {error ? (
-              <p className="r6-settings-error" role="alert">
-                {text(error)}
-              </p>
-            ) : null}
-            <footer>
-              <R6Button
-                disabled={busy}
-                onClick={() => {
-                  setPendingPlan(null);
-                  setPendingMode(null);
-                }}
-              >
-                {text("取消")}
-              </R6Button>
-              <R6Button
-                variant="primary"
-                pending={busy}
-                disabled={Boolean(pendingPlan?.blockers.length)}
-                onClick={() => void commitMode()}
-              >
-                {text("切换到 {mode}").replace(
-                  "{mode}",
-                  text(MODE_COPY[pendingMode].title),
-                )}
-              </R6Button>
-            </footer>
-          </section>
-        </div>
+      {pendingMode && pendingPlan ? (
+        <MemoryModeConfirmDialog
+          mode={pendingMode}
+          plan={pendingPlan}
+          busy={busy}
+          error={error}
+          opener={dialogOpener.current}
+          onCancel={() => {
+            setPendingPlan(null);
+            setPendingMode(null);
+          }}
+          onConfirm={() => void commitMode()}
+        />
       ) : null}
     </section>
   );

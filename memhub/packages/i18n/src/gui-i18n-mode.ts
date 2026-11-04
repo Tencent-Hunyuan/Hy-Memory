@@ -55,11 +55,11 @@ const modeChineseMessages = {
   "使用 pro 或 ultra 前需要先配置并启用生成模型。":
     "使用 pro 或 ultra 前需要先配置并启用生成模型。",
   "正在检查或切换向量模型，完成后才能切换记忆模式。":
-    "正在检查或切换向量模型，完成后才能切换记忆模式。",
+    "正在检查或切换向量模型，完成后才能选择记忆模式。",
   "当前安装缺少知识图谱组件，无法开启 ultra。":
-    "当前安装缺少知识图谱组件，无法开启 ultra。",
+    "当前安装缺少知识图谱组件，无法选择 ultra。",
   "模式切换未能确认，仍显示上次确认的模式。":
-    "模式切换未能确认，仍显示上次确认的模式。",
+    "模式选择未能确认，仍显示上次确认的模式。",
   "自动整合设置未能保存，请重试。": "自动整合设置未能保存，请重试。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在检查或切换向量模型，完成后才能整合记忆。",
@@ -71,7 +71,7 @@ const modeChineseMessages = {
   "开发环境当前强制使用 ultra，保存的选择暂不会生效。":
     "开发环境当前强制使用 ultra，保存的选择暂不会生效。",
   "正在检查或切换向量模型，完成前不能切换模式或手动整合。":
-    "正在检查或切换向量模型，完成前不能切换模式或手动整合。",
+    "正在检查或切换向量模型，完成前不能选择模式或手动整合。",
   "正在把已有高级记忆加入知识图谱…": "正在把已有高级记忆加入知识图谱…",
   每天自动整合: "每天自动整合",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
@@ -83,10 +83,10 @@ const modeChineseMessages = {
   "上次整合：{time}": "上次整合：{time}",
   尚未整合: "尚未整合",
   立即整合: "立即整合",
-  "切换到 {mode}？": "切换到{mode}？",
-  "切换到 {mode}": "切换到{mode}",
+  "切换到 {mode}？": "选择{mode}？",
+  "切换到 {mode}": "选择{mode}",
   "原始对话在所有模式下都会保留。": "原始对话在所有模式下都会保留。",
-  切换模式: "切换模式",
+  切换模式: "确认选择",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "保存原始对话 · 不调用生成模型 · 搜索原始会话",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -98,18 +98,18 @@ const modeChineseMessages = {
   搜索范围: "搜索范围",
   已有数据: "已有数据",
   知识图谱: "知识图谱",
-  切换后: "切换后",
+  切换后: "选择后",
   "之后只保存原始对话，不再生成新记忆。":
     "之后只保存原始对话，不再生成新记忆。",
   "新对话会整理成记忆并写入知识图谱。": "新对话会整理成记忆并写入知识图谱。",
   "新对话会由模型整理成记忆。": "新对话会由模型整理成记忆。",
   "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
-    "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。",
+    "会调用当前生成模型；自动整合可能产生额外费用。选择模式本身不会立即整合。",
   "会调用当前生成模型，可能产生服务商费用。":
     "会调用当前生成模型，可能产生服务商费用。",
   "不调用生成模型，不再产生这部分费用。":
     "不调用生成模型，不再产生这部分费用。",
-  "切换后搜索原始对话。": "切换后搜索原始对话。",
+  "切换后搜索原始对话。": "选择后搜索原始对话。",
   "搜索沉淀记忆，并用知识图谱补充关联。":
     "搜索沉淀记忆，并用知识图谱补充关联。",
   "搜索沉淀后的记忆。": "搜索沉淀后的记忆。",
@@ -122,8 +122,8 @@ const modeChineseMessages = {
   "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
     "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
   "记忆维护正在进行，完成后才能切换模式。":
-    "记忆维护正在进行，完成后才能切换模式。",
-  "模式切换影响暂时无法读取，请重试。": "模式切换影响暂时无法读取，请重试。",
+    "记忆维护正在进行，完成后才能选择模式。",
+  "模式切换影响暂时无法读取，请重试。": "模式选择影响暂时无法读取，请重试。",
   "停止调用生成模型；每天自动整合也会停止。":
     "停止调用生成模型；每天自动整合也会停止。",
   "停止调用生成模型，不再产生这部分费用。":
@@ -281,11 +281,11 @@ export const modeEnglishMessages: ModeMessages = {
   "上次整合：{time}": "Last consolidated: {time}",
   尚未整合: "Not yet consolidated",
   立即整合: "Consolidate now",
-  "切换到 {mode}？": "Switch to {mode}?",
-  "切换到 {mode}": "Switch to {mode}",
+  "切换到 {mode}？": "Choose {mode}?",
+  "切换到 {mode}": "Choose {mode}",
   "原始对话在所有模式下都会保留。":
     "Original conversations are kept in every mode.",
-  切换模式: "Switch mode",
+  切换模式: "Confirm choice",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Save original conversations · No generation model calls · Search original conversations",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -485,11 +485,11 @@ export const modeSpanishMessages: ModeMessages = {
   "上次整合：{time}": "Última consolidación: {time}",
   尚未整合: "Aún sin consolidar",
   立即整合: "Consolidar ahora",
-  "切换到 {mode}？": "¿Cambiar a {mode}?",
-  "切换到 {mode}": "Cambiar a {mode}",
+  "切换到 {mode}？": "¿Elegir {mode}?",
+  "切换到 {mode}": "Elegir {mode}",
   "原始对话在所有模式下都会保留。":
     "Las conversaciones originales se conservan en todos los modos.",
-  切换模式: "Cambiar modo",
+  切换模式: "Confirmar selección",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Guarda conversaciones originales · Sin llamadas al modelo generativo · Busca conversaciones originales",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -682,10 +682,10 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "上次整合：{time}": "上次整合：{time}",
   尚未整合: "尚未整合",
   立即整合: "立即整合",
-  "切换到 {mode}？": "切換到{mode}？",
-  "切换到 {mode}": "切換到{mode}",
+  "切换到 {mode}？": "選擇{mode}？",
+  "切换到 {mode}": "選擇{mode}",
   "原始对话在所有模式下都会保留。": "原始對話會在所有模式下保留。",
-  切换模式: "切換模式",
+  切换模式: "確認選擇",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "儲存原始對話 · 不呼叫生成模型 · 搜尋原始對話",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -833,10 +833,10 @@ export const modeJapaneseMessages: ModeMessages = {
   "上次整合：{time}": "前回の統合：{time}",
   尚未整合: "まだ統合されていません",
   立即整合: "今すぐ統合",
-  "切换到 {mode}？": "{mode} に切り替えますか？",
-  "切换到 {mode}": "{mode} に切り替える",
+  "切换到 {mode}？": "{mode} を選択しますか？",
+  "切换到 {mode}": "{mode} を選択",
   "原始对话在所有模式下都会保留。": "元の会話はどのモードでも保持されます。",
-  切换模式: "モードを切り替える",
+  切换模式: "選択を確定",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "元の会話を保存 · 生成モデルを呼び出さない · 元の会話を検索",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1033,11 +1033,11 @@ export const modeGermanMessages: ModeMessages = {
   "上次整合：{time}": "Zuletzt konsolidiert: {time}",
   尚未整合: "Noch nicht konsolidiert",
   立即整合: "Jetzt konsolidieren",
-  "切换到 {mode}？": "Zu {mode} wechseln?",
-  "切换到 {mode}": "Zu {mode} wechseln",
+  "切换到 {mode}？": "{mode} auswählen?",
+  "切换到 {mode}": "{mode} auswählen",
   "原始对话在所有模式下都会保留。":
     "Originalunterhaltungen bleiben in jedem Modus erhalten.",
-  切换模式: "Modus wechseln",
+  切换模式: "Auswahl bestätigen",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Originalunterhaltungen speichern · Keine Aufrufe des generativen Modells · Originalunterhaltungen durchsuchen",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1237,11 +1237,11 @@ export const modePortugueseMessages: ModeMessages = {
   "上次整合：{time}": "Última consolidação: {time}",
   尚未整合: "Ainda não consolidado",
   立即整合: "Consolidar agora",
-  "切换到 {mode}？": "Mudar para {mode}?",
-  "切换到 {mode}": "Mudar para {mode}",
+  "切换到 {mode}？": "Escolher {mode}?",
+  "切换到 {mode}": "Escolher {mode}",
   "原始对话在所有模式下都会保留。":
     "As conversas originais são mantidas em todos os modos.",
-  切换模式: "Mudar de modo",
+  切换模式: "Confirmar escolha",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Guardar conversas originais · Sem chamadas ao modelo generativo · Pesquisar conversas originais",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1443,11 +1443,11 @@ export const modeFrenchMessages: ModeMessages = {
   "上次整合：{time}": "Dernière consolidation : {time}",
   尚未整合: "Pas encore consolidé",
   立即整合: "Consolider maintenant",
-  "切换到 {mode}？": "Passer à {mode} ?",
-  "切换到 {mode}": "Passer à {mode}",
+  "切换到 {mode}？": "Choisir {mode} ?",
+  "切换到 {mode}": "Choisir {mode}",
   "原始对话在所有模式下都会保留。":
     "Les conversations originales sont conservées dans tous les modes.",
-  切换模式: "Changer de mode",
+  切换模式: "Confirmer le choix",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Enregistrer les conversations originales · Aucun appel au modèle génératif · Rechercher les conversations originales",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1645,10 +1645,10 @@ export const modeKoreanMessages: ModeMessages = {
   "上次整合：{time}": "마지막 통합: {time}",
   尚未整合: "아직 통합되지 않음",
   立即整合: "지금 통합",
-  "切换到 {mode}？": "{mode}(으)로 전환할까요?",
-  "切换到 {mode}": "{mode}(으)로 전환",
+  "切换到 {mode}？": "{mode}을(를) 선택할까요?",
+  "切换到 {mode}": "{mode} 선택",
   "原始对话在所有模式下都会保留。": "원본 대화는 모든 모드에서 유지됩니다.",
-  切换模式: "모드 전환",
+  切换模式: "선택 확인",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "원본 대화 저장 · 생성 모델 호출 없음 · 원본 대화 검색",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1844,11 +1844,11 @@ export const modeRussianMessages: ModeMessages = {
   "上次整合：{time}": "Последнее объединение: {time}",
   尚未整合: "Ещё не объединялись",
   立即整合: "Объединить сейчас",
-  "切换到 {mode}？": "Переключиться на {mode}?",
-  "切换到 {mode}": "Переключиться на {mode}",
+  "切换到 {mode}？": "Выбрать {mode}?",
+  "切换到 {mode}": "Выбрать {mode}",
   "原始对话在所有模式下都会保留。":
     "Исходные диалоги сохраняются во всех режимах.",
-  切换模式: "Переключить режим",
+  切换模式: "Подтвердить выбор",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Сохранять исходные диалоги · Не вызывать генеративную модель · Искать в исходных диалогах",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -2048,10 +2048,10 @@ export const modeIndonesianMessages: ModeMessages = {
   "上次整合：{time}": "Terakhir dikonsolidasikan: {time}",
   尚未整合: "Belum dikonsolidasikan",
   立即整合: "Konsolidasikan sekarang",
-  "切换到 {mode}？": "Beralih ke {mode}?",
-  "切换到 {mode}": "Beralih ke {mode}",
+  "切换到 {mode}？": "Pilih {mode}?",
+  "切换到 {mode}": "Pilih {mode}",
   "原始对话在所有模式下都会保留。": "Percakapan asli disimpan di semua mode.",
-  切换模式: "Beralih mode",
+  切换模式: "Konfirmasi pilihan",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Simpan percakapan asli · Tanpa panggilan model generatif · Cari percakapan asli",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":

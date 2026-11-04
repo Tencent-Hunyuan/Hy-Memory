@@ -412,16 +412,18 @@ mode. A change rebuilds the SDK handles the same way. Contract:
 
 The App's product rules are:
 
-- A new installation explicitly chooses lite or pro. Choosing lite persists
-  the mode and completes onboarding without a generation model. Choosing pro
-  opens model setup and completes onboarding only after activation succeeds.
+- A new installation explicitly chooses lite, pro or ultra. Choosing lite
+  persists the mode and completes onboarding without a generation model.
+  Choosing pro or ultra opens model setup when no model is active and completes
+  onboarding only after activation succeeds.
 - Lite always ingests authorized imported and live conversations into L1 raw,
   even when model sedimentation is paused. That pause controls generation-model
   work in pro/ultra; it never turns raw conversation storage off.
 - Existing installations keep the default pro behaviour; an absent
   `memory_mode` is never inferred from model availability.
-- Ultra is enabled only from Settings. Its nightly schedule is on by default
-  at 03:00 local time, and Settings also exposes a manual evolve action.
+- Ultra's nightly schedule is configured during first-run selection or later
+  from Settings. It is on by default at 03:00 local time. Settings also exposes
+  a manual evolve action; onboarding does not run evolve immediately.
 - The memory page shows raw conversations in lite and advanced memories in
   pro/ultra. Higher-mode memories remain stored while lite is active but are
   neither shown nor served by lite search.

@@ -612,6 +612,44 @@
   line-height: 20px;
   text-align: center;
 }
+.onboarding-r6-evolve-settings {
+  margin-top: 0;
+  padding: 18px 20px 4px;
+  border: 1px solid #cfdae2;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 58%);
+}
+.onboarding-r6-evolve-settings .r6-evolve-heading {
+  margin-bottom: 2px;
+}
+.onboarding-r6-evolve-settings .r6-evolve-setting {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-bottom: 12px;
+  border-bottom: 0;
+}
+.onboarding-r6-evolve-settings .r6-evolve-setting-copy {
+  min-width: 0;
+}
+.onboarding-r6-evolve-settings .r6-evolve-time {
+  grid-template-columns: minmax(0, 1fr) 180px;
+}
+.onboarding-r6-evolve-settings .r6-evolve-time label {
+  color: #304757;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.onboarding-r6-schedule-recovery {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  color: #944242;
+  font-size: 13px;
+  line-height: 20px;
+}
+.onboarding-r6-schedule-recovery p {
+  margin: 0;
+}
 .onboarding-r6-mode-error {
   min-height: 20px;
   margin: -6px 0 0;

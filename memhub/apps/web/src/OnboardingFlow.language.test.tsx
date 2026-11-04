@@ -24,6 +24,12 @@ import type { ImportSourcesController } from "./use-import-sources";
 
 vi.mock("./api", () => ({
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
   getModelProfiles: vi.fn(),
   getMemoryMode: vi.fn().mockResolvedValue({
     mode: "pro",
@@ -31,7 +37,20 @@ vi.mock("./api", () => ({
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
-  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  planMemoryMode: vi.fn().mockResolvedValue({
+    current: "pro",
+    target: "lite",
+    effective_target: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
+    blockers: [],
+  }),
   putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
   patchOnboardingProgress: vi.fn().mockResolvedValue({}),
 }));
@@ -422,6 +441,9 @@ it("translates completion recovery live without repeating completion writes", as
     screen.getByRole("button", { name: "Entrar y añadir más tarde" }),
   );
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Confirmar selección" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Entrar con Lite" }));
   expect(
     await screen.findByRole("button", { name: "Reintentar guardar y entrar" }),
