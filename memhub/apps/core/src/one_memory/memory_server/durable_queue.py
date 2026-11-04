@@ -3261,11 +3261,9 @@ class DurableWriteDrain:
                 "durable_write_drain_job_ceiling_exceeded job_id=%s",
                 job_id,
             )
-            await in_the_background(
-                self.queue.settle_worker_error,
+            await self._settle_worker_error(
                 job_id,
                 error_code="durable_work_ceiling_exceeded",
-                owner=self.owner,
             )
         except Exception as error:
             logger.error(
@@ -3274,11 +3272,9 @@ class DurableWriteDrain:
                 type(error).__name__,
             )
             self._record_database_error(error)
-            await in_the_background(
-                self.queue.settle_worker_error,
+            await self._settle_worker_error(
                 job_id,
                 error_code="durable_executor_error",
-                owner=self.owner,
             )
         finally:
             execution.cancel()
@@ -3286,6 +3282,36 @@ class DurableWriteDrain:
             for task in (execution, renewal):
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
+
+    async def _settle_worker_error(self, job_id: str, *, error_code: str) -> None:
+        """Best-effort settlement must not kill the long-lived drain.
+
+        The row still has a durable lease when this fallback runs. If the
+        single SQLite writer is busy, waiting and retrying here only extends
+        the same contention that made the executor fail. Leave the row where
+        it is instead: lease recovery later moves a never-invoked job back to
+        pending and a possibly-invoked job to unknown, preserving the
+        no-blind-retry boundary.
+
+        Only transient lock/busy refusals are deferred. A malformed query or
+        other programming error still escapes to the outer per-job fence.
+        """
+        try:
+            await in_the_background(
+                self.queue.settle_worker_error,
+                job_id,
+                error_code=error_code,
+                owner=self.owner,
+            )
+        except sqlite3.OperationalError as error:
+            if "locked" not in str(error).lower() and "busy" not in str(error).lower():
+                raise
+            self._sample_database_failure("settle_worker_error", error)
+            logger.warning(
+                "durable_write_worker_settlement_deferred job_id=%s error_type=%s",
+                job_id,
+                type(error).__name__,
+            )
 
     async def _execute_with_ceiling(self, job_id: str) -> None:
         ceiling = (
@@ -3324,7 +3350,26 @@ class DurableWriteDrain:
                 finished = {task for task in active if task.done()}
                 active.difference_update(finished)
                 for task in finished:
-                    await task
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        raise
+                    except _LeaseRenewalFatalError:
+                        # Renewal is the ownership fence. If it is broken,
+                        # continuing could let another worker reclaim a job
+                        # while this process is still executing it.
+                        raise
+                    except Exception as error:
+                        # A job task is a fault-containment boundary. Its row
+                        # retains the durable lease and is recovered according
+                        # to hy_invoked; killing this only consumer would strand
+                        # every unrelated write behind it.
+                        self._record_database_error(error)
+                        logger.error(
+                            "durable_write_drain_job_task_failed task_name=%s error_type=%s",
+                            task.get_name(),
+                            type(error).__name__,
+                        )
                 if self.budget is not None and work_deadline is not None:
                     now = _time.monotonic()
                     # Always admit the first unit of a cycle even when the
@@ -3349,7 +3394,12 @@ class DurableWriteDrain:
                         else ()
                     )
                     for job_id in ids:
-                        active.add(asyncio.create_task(self._run_claimed_job(job_id)))
+                        active.add(
+                            asyncio.create_task(
+                                self._run_claimed_job(job_id),
+                                name=f"durable-write:{job_id}",
+                            )
+                        )
                     executed = len(ids)
                     self._database_failure_streaks.pop("claim", None)
                 except asyncio.CancelledError:
