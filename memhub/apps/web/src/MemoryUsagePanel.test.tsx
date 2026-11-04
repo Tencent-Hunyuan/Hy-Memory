@@ -16,12 +16,22 @@ const api = vi.hoisted(() => ({
   profiles: vi.fn(),
   settings: vi.fn(),
   save: vi.fn(),
+  balance: vi.fn(async (id: string) => ({
+    schema_version: 1,
+    profile_id: id,
+    state: "unsupported",
+    balances: [],
+    is_available: null,
+    checked_at: null,
+    source_url: null,
+  })),
 }));
 vi.mock("./api", () => ({
   getDailyModelUsage: api.report,
   getModelProfiles: api.profiles,
   getModelUsagePricing: api.settings,
   setModelUsagePricing: api.save,
+  getProviderBalance: api.balance,
 }));
 const totals = {
   request_count: 3,

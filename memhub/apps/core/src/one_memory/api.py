@@ -275,6 +275,7 @@ from one_memory.onboarding import (
     OnboardingState,
     OnboardingStore,
 )
+from one_memory.provider_balance import ProviderBalance, ProviderBalanceService
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -1408,6 +1409,9 @@ def create_app(
             app.state.model_request_budget = model_request_budget
             app.state.model_request_audit_store = ModelRequestAuditStore(database_path)
             app.state.model_usage = ModelUsageService(database_path, runtime_settings.data_dir)
+            app.state.provider_balance = ProviderBalanceService(
+                app.state.model_profile_store, app.state.secret_store
+            )
             #: One pause for every model request while the provider keeps
             #: failing (`model_backoff`); reset when the configuration changes.
             app.state.model_backoff = ModelBackoff()
@@ -2388,6 +2392,19 @@ def create_app(
             raise HTTPException(status_code=422, detail="invalid_usage_timezone") from None
         return cast(ModelUsageService, app.state.model_usage).report(
             days=days, timezone=timezone, profile_id=profile_id
+        )
+
+    @app.get(
+        "/api/v1/model-usage/balance/{profile_id}",
+        response_model=ProviderBalance,
+        dependencies=protected,
+    )
+    def provider_account_balance(profile_id: str, refresh: bool = False) -> ProviderBalance:
+        profile = _model_profile_store(app).get(profile_id, _secret_store(app))
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model_profile_not_found")
+        return cast(ProviderBalanceService, app.state.provider_balance).get(
+            profile, refresh=refresh
         )
 
     @app.get("/api/v1/model-usage/pricing", dependencies=protected)

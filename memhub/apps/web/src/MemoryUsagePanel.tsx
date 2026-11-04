@@ -13,6 +13,7 @@ import {
   setModelUsagePricing,
 } from "./api";
 import { useGuiLanguage } from "./gui-language";
+import { ProviderBalanceCard } from "./ProviderBalanceCard";
 import { subscribePoll } from "./poll-scheduler";
 import "./memory-usage.css";
 
@@ -157,6 +158,11 @@ export function MemoryUsagePanel({ active }: { active: boolean }) {
               {t("dailyUsage.pricing")}
             </button>
           </div>
+          <ProviderBalanceCard
+            profiles={profiles}
+            selectedProfileId={profileId}
+            active={active && expanded}
+          />
           {failed && <p role="alert">{t("usageReadError")}</p>}
           {!report && !failed && <p role="status">{t("usageLoading")}</p>}
           {report && (

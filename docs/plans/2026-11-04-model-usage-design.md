@@ -22,3 +22,13 @@ Add a compact expandable usage panel on the Memory page, matching existing contr
 2. Add local pricing settings and daily usage service/API.
 3. Add the Memory page panel, shared API types and translations.
 4. Extend existing relevant tests, verify in isolation, review the diff and open a PR against main.
+
+## Official balance query
+
+Read DeepSeek's documented `GET https://api.deepseek.com/user/balance` from Core
+using the configured secure credential. Display official available, granted and
+top-up amounts separately from local cost estimates. Restrict the adapter to
+the official HTTPS host/port, reject redirects, cache successful reads for 60s
+and failures for 10s, and rate-limit manual refresh to 5s. Bind cache entries to
+profile revision, never persist keys or error bodies, and show unknown on error.
+The balance is account-wide; do not label its changes as daily MemHub charges.

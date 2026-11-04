@@ -422,3 +422,112 @@ def test_application_transport_counts_unscoped_calls_but_not_local_budget_refusa
 
     asyncio.run(scenario())
     assert store.report()["summary"]["request_count"] == 1
+
+
+def _balance_service(
+    handler, *, base_url="https://api.deepseek.com/v1", secret="test-provider-key"
+):
+    from types import SimpleNamespace
+
+    from one_memory.provider_balance import ProviderBalanceService
+
+    profile = SimpleNamespace(
+        profile_id="profile", revision=1, provider_kind="openai_compatible", base_url=base_url
+    )
+
+    class Profiles:
+        def resolve_snapshot_secret(self, *_args):
+            return secret
+
+    clock = [0.0]
+    service = ProviderBalanceService(
+        Profiles(), object(), transport=httpx.MockTransport(handler), clock=lambda: clock[0]
+    )
+    return service, profile, clock
+
+
+def test_official_balance_reads_real_fields_caches_and_does_not_enter_token_audit():
+    calls = []
+
+    def provider(request):
+        calls.append(request)
+        assert str(request.url) == "https://api.deepseek.com/user/balance"
+        assert request.headers["Authorization"] == "Bearer test-provider-key"
+        return httpx.Response(
+            200,
+            json={
+                "is_available": True,
+                "balance_infos": [
+                    {
+                        "currency": "CNY",
+                        "total_balance": "100.123456",
+                        "granted_balance": "10.12",
+                        "topped_up_balance": "90.003456",
+                    }
+                ],
+            },
+        )
+
+    service, profile, clock = _balance_service(provider)
+    balance = service.get(profile)
+    assert balance.state == "ready" and balance.is_available is True
+    assert balance.model_dump(mode="json")["balances"][0]["total_balance"] == "100.123456"
+    assert "test-provider-key" not in balance.model_dump_json()
+    assert balance.checked_at is not None
+    assert service.get(profile) is balance
+    assert service.get(profile, refresh=True) is balance
+    assert len(calls) == 1
+    clock[0] = 6
+    service.get(profile, refresh=True)
+    assert len(calls) == 2
+    profile.revision = 2
+    service.get(profile)
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://proxy.example/v1",
+        "https://api.deepseek.com.attacker.example",
+        "http://api.deepseek.com",
+        "https://user@api.deepseek.com",
+        "https://api.deepseek.com:1234",
+        "https://api.deepseek.com:bad",
+    ],
+)
+def test_balance_never_sends_credentials_to_custom_or_unsafe_endpoints(base_url):
+    def forbidden(_request):
+        raise AssertionError("credentials must not be sent")
+
+    service, profile, _clock = _balance_service(forbidden, base_url=base_url)
+    assert service.get(profile).state == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(401, json={"error": "provider-private-detail"}),
+        httpx.Response(429, json={"error": "provider-private-detail"}),
+        httpx.Response(302, headers={"location": "https://attacker.example"}),
+        httpx.Response(
+            200,
+            json={
+                "is_available": True,
+                "balance_infos": [{"currency": "CNY", "total_balance": "NaN"}],
+            },
+        ),
+        httpx.Response(200, content=b"not json"),
+    ],
+)
+def test_balance_failures_remain_unknown_and_do_not_leak_provider_details(response):
+    service, profile, _clock = _balance_service(lambda _: response)
+    balance = service.get(profile)
+    assert balance.state == "unavailable"
+    assert balance.is_available is None and not balance.balances
+    assert "provider-private-detail" not in balance.model_dump_json()
+
+
+def test_balance_missing_key_does_not_attempt_a_provider_request():
+    service, profile, _clock = _balance_service(lambda _: pytest.fail("no key"), secret=None)
+    assert service.get(profile).state == "credentials_unavailable"

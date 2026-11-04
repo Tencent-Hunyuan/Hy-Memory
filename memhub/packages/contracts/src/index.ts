@@ -1404,3 +1404,18 @@ export interface ModelUsageSettings {
   recording_started_at: string;
   pricing: Record<string, ModelUsagePricing>;
 }
+
+export interface ProviderAccountBalance {
+  schema_version: 1;
+  profile_id: string;
+  state: "ready" | "unsupported" | "credentials_unavailable" | "unavailable";
+  is_available: boolean | null;
+  balances: Array<{
+    currency: "CNY" | "USD";
+    total_balance: string;
+    granted_balance: string;
+    topped_up_balance: string;
+  }>;
+  checked_at: string | null;
+  source_url: string | null;
+}

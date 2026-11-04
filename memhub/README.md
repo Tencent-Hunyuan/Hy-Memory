@@ -158,3 +158,16 @@ Built-in DeepSeek CNY prices were checked on 2026-11-04 against the
 A range is shown when cache usage is missing or a weekday peak period could be a
 Chinese statutory holiday. Partial pricing never appears as zero cost. Actual
 charges and remaining balance always come from the provider's bill.
+
+For a model configured at the official DeepSeek HTTPS endpoint, the panel also
+reads **Official account balance** from
+[`GET /user/balance`](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/).
+Available, granted and top-up balances come directly from DeepSeek, with the
+query time shown. Reads are cached for 60 seconds; manual refresh is rate-limited
+to once per 5 seconds. A failed query is unknown, never a zero balance.
+The API key stays in Core and is sent only to the fixed official endpoint,
+without following redirects. Custom billing URLs never receive credentials.
+This is the whole account's balance, which may include other applications;
+it cannot establish MemHub's exact daily charges. Other providers continue to
+use their configured billing-console links until a supported balance adapter is
+available.

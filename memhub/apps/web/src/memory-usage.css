@@ -131,3 +131,32 @@
     margin-top: 6px;
   }
 }
+.provider-balance {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border, #ddd8cf);
+  border-radius: 8px;
+}
+.provider-balance-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.provider-balance-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.provider-balance-values > div {
+  display: grid;
+  gap: 6px;
+}
+.provider-balance-values span {
+  color: var(--text-muted, #69716c);
+}
+.provider-balance-values strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}

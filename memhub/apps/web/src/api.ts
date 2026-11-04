@@ -1816,3 +1816,21 @@ export async function setModelUsagePricing(
   >(`/api/v1/model-usage/pricing/${encodeURIComponent(profileId)}`, pricing);
   return data;
 }
+
+export async function getProviderBalance(
+  profileId: string,
+  refresh = false,
+): Promise<import("@one-memory/contracts").ProviderAccountBalance> {
+  const { data } = await client.get<
+    import("@one-memory/contracts").ProviderAccountBalance
+  >(`/api/v1/model-usage/balance/${encodeURIComponent(profileId)}`, {
+    params: { refresh },
+  });
+  if (
+    data.schema_version !== 1 ||
+    data.profile_id !== profileId ||
+    !Array.isArray(data.balances)
+  )
+    throw new Error("provider_balance_invalid");
+  return data;
+}

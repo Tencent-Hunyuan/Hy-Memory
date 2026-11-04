@@ -1,4 +1,19 @@
 export const usageChineseMessages = {
+  "dailyUsage.balanceTitle": "官方账户余额",
+  "dailyUsage.refreshBalance": "刷新余额",
+  "dailyUsage.totalBalance": "可用余额",
+  "dailyUsage.grantedBalance": "赠金余额",
+  "dailyUsage.toppedUpBalance": "充值余额",
+  "dailyUsage.balanceLoading": "正在查询官方余额…",
+  "dailyUsage.noBalanceInfo": "厂商未返回余额明细。",
+  "dailyUsage.balanceCheckedAt": "查询时间：{time}",
+  "dailyUsage.balanceUnsupported":
+    "此厂商暂未接入余额 API，可通过账单链接查看。",
+  "dailyUsage.balanceCredentials": "无法读取模型凭证，请检查模型设置。",
+  "dailyUsage.balanceUnavailable":
+    "官方余额查询失败，请稍后刷新；这不代表余额为零。",
+  "dailyUsage.balanceNote":
+    "余额由厂商 API 返回，属于整个账户，可能包含其他应用的消耗；每日项目费用仍按 token 和单价估算。",
   "dailyUsage.title": "记忆模型用量",
   "dailyUsage.today": "今日",
   "dailyUsage.sevenDays": "近 7 天",
@@ -32,6 +47,22 @@ export const usageChineseMessages = {
 
 type Copy = Record<keyof typeof usageChineseMessages, string>;
 export const usageEnglishMessages: Copy = {
+  "dailyUsage.balanceTitle": "Official account balance",
+  "dailyUsage.refreshBalance": "Refresh balance",
+  "dailyUsage.totalBalance": "Available balance",
+  "dailyUsage.grantedBalance": "Granted balance",
+  "dailyUsage.toppedUpBalance": "Top-up balance",
+  "dailyUsage.balanceLoading": "Reading provider balance…",
+  "dailyUsage.noBalanceInfo": "The provider returned no balance details.",
+  "dailyUsage.balanceCheckedAt": "Checked at: {time}",
+  "dailyUsage.balanceUnsupported":
+    "Balance API is not integrated for this provider. Use its billing link.",
+  "dailyUsage.balanceCredentials":
+    "Could not read model credentials. Check model settings.",
+  "dailyUsage.balanceUnavailable":
+    "Provider balance is unavailable. Refresh later; this does not mean zero balance.",
+  "dailyUsage.balanceNote":
+    "The provider API reports the entire account balance, which may include other apps. Daily project costs still use tokens and prices.",
   "dailyUsage.title": "Memory model usage",
   "dailyUsage.today": "Today",
   "dailyUsage.sevenDays": "Last 7 days",
@@ -63,6 +94,22 @@ export const usageEnglishMessages: Copy = {
     "Leave blank for built-in prices on supported models, otherwise costs stay unknown. Enter 0 for free. Blank cached pricing uses the input rate.",
 };
 export const usageSpanishMessages: Copy = {
+  "dailyUsage.balanceTitle": "Saldo oficial de la cuenta",
+  "dailyUsage.refreshBalance": "Actualizar saldo",
+  "dailyUsage.totalBalance": "Saldo disponible",
+  "dailyUsage.grantedBalance": "Saldo promocional",
+  "dailyUsage.toppedUpBalance": "Saldo recargado",
+  "dailyUsage.balanceLoading": "Consultando el saldo oficial…",
+  "dailyUsage.noBalanceInfo": "El proveedor no devolvió detalles del saldo.",
+  "dailyUsage.balanceCheckedAt": "Consultado: {time}",
+  "dailyUsage.balanceUnsupported":
+    "La API de saldo no está integrada para este proveedor. Usa el enlace de facturación.",
+  "dailyUsage.balanceCredentials":
+    "No se pudieron leer las credenciales. Revisa el modelo.",
+  "dailyUsage.balanceUnavailable":
+    "No se pudo consultar el saldo. Inténtalo de nuevo; no significa saldo cero.",
+  "dailyUsage.balanceNote":
+    "La API informa del saldo de toda la cuenta y puede incluir otras aplicaciones. El coste diario del proyecto sigue calculándose con tokens y precios.",
   "dailyUsage.title": "Uso del modelo de memoria",
   "dailyUsage.today": "Hoy",
   "dailyUsage.sevenDays": "Últimos 7 días",
