@@ -47,7 +47,7 @@ const modeChineseMessages = {
   "以前生成的高级记忆会继续保留，但在 lite 下不会显示或参与记忆召回。":
     "高级记忆会保留，但在 lite 下不显示、不参与召回。",
   "每天自动整合会停止，已经生成的数据不会删除。":
-    "自动整合会停止，已有数据保留。",
+    "每天自动整合会停止；已生成的整合结果继续保留。",
   "已有高级记忆会在后台加入知识图谱，期间可以继续使用 MemHub。":
     "已有高级记忆将在后台加入知识图谱。",
   "知识图谱仍在补建，不会重复启动。": "知识图谱仍在补建，不会重复启动。",
@@ -97,6 +97,7 @@ const modeChineseMessages = {
   模型调用与费用: "模型调用与费用",
   搜索范围: "搜索范围",
   已有数据: "已有数据",
+  知识图谱: "知识图谱",
   切换后: "切换后",
   "之后只保存原始对话，不再生成新记忆。":
     "之后只保存原始对话，不再生成新记忆。",
@@ -295,6 +296,7 @@ export const modeEnglishMessages: ModeMessages = {
   模型调用与费用: "Model calls and cost",
   搜索范围: "Search scope",
   已有数据: "Existing data",
+  知识图谱: "Knowledge graph",
   切换后: "After switching",
   "之后只保存原始对话，不再生成新记忆。":
     "New conversations are saved as original text only; no new memories are created.",
@@ -498,6 +500,7 @@ export const modeSpanishMessages: ModeMessages = {
   模型调用与费用: "Llamadas al modelo y coste",
   搜索范围: "Ámbito de búsqueda",
   已有数据: "Datos existentes",
+  知识图谱: "Grafo de conocimiento",
   切换后: "Después del cambio",
   "之后只保存原始对话，不再生成新记忆。":
     "Las conversaciones nuevas se guardan solo como texto original; no se crean memorias nuevas.",
@@ -693,6 +696,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   模型调用与费用: "模型呼叫與費用",
   搜索范围: "搜尋範圍",
   已有数据: "現有資料",
+  知识图谱: "知識圖譜",
   切换后: "切換後",
   "之后只保存原始对话，不再生成新记忆。":
     "之後只儲存原始對話，不再產生新記憶。",
@@ -843,6 +847,7 @@ export const modeJapaneseMessages: ModeMessages = {
   模型调用与费用: "モデル呼び出しと料金",
   搜索范围: "検索範囲",
   已有数据: "既存データ",
+  知识图谱: "ナレッジグラフ",
   切换后: "切り替え後",
   "之后只保存原始对话，不再生成新记忆。":
     "以降は元の会話のみを保存し、新しい記憶は生成しません。",
@@ -1043,6 +1048,7 @@ export const modeGermanMessages: ModeMessages = {
   模型调用与费用: "Modellaufrufe und Kosten",
   搜索范围: "Suchbereich",
   已有数据: "Vorhandene Daten",
+  知识图谱: "Wissensgraph",
   切换后: "Nach dem Wechsel",
   "之后只保存原始对话，不再生成新记忆。":
     "Neue Unterhaltungen werden nur noch im Original gespeichert; es werden keine neuen Erinnerungen erstellt.",
@@ -1246,6 +1252,7 @@ export const modePortugueseMessages: ModeMessages = {
   模型调用与费用: "Chamadas ao modelo e custos",
   搜索范围: "Âmbito da pesquisa",
   已有数据: "Dados existentes",
+  知识图谱: "Grafo de conhecimento",
   切换后: "Após a mudança",
   "之后只保存原始对话，不再生成新记忆。":
     "As novas conversas passam a ser guardadas apenas como texto original; não são criadas novas memórias.",
@@ -1451,6 +1458,7 @@ export const modeFrenchMessages: ModeMessages = {
   模型调用与费用: "Appels au modèle et coût",
   搜索范围: "Périmètre de recherche",
   已有数据: "Données existantes",
+  知识图谱: "Graphe de connaissances",
   切换后: "Après le changement",
   "之后只保存原始对话，不再生成新记忆。":
     "Les nouvelles conversations sont uniquement enregistrées dans leur forme originale ; aucune nouvelle mémoire n’est créée.",
@@ -1651,6 +1659,7 @@ export const modeKoreanMessages: ModeMessages = {
   模型调用与费用: "모델 호출 및 비용",
   搜索范围: "검색 범위",
   已有数据: "기존 데이터",
+  知识图谱: "지식 그래프",
   切换后: "전환 후",
   "之后只保存原始对话，不再生成新记忆。":
     "이후 새 대화는 원본만 저장되며 새 메모리는 생성되지 않습니다.",
@@ -1850,6 +1859,7 @@ export const modeRussianMessages: ModeMessages = {
   模型调用与费用: "Вызовы модели и расходы",
   搜索范围: "Область поиска",
   已有数据: "Существующие данные",
+  知识图谱: "Граф знаний",
   切换后: "После переключения",
   "之后只保存原始对话，不再生成新记忆。":
     "Новые диалоги будут сохраняться только в исходном виде; новые воспоминания создаваться не будут.",
@@ -2052,6 +2062,7 @@ export const modeIndonesianMessages: ModeMessages = {
   模型调用与费用: "Panggilan model dan biaya",
   搜索范围: "Cakupan pencarian",
   已有数据: "Data yang ada",
+  知识图谱: "Graf pengetahuan",
   切换后: "Setelah beralih",
   "之后只保存原始对话，不再生成新记忆。":
     "Percakapan baru hanya disimpan sebagai teks asli; tidak ada memori baru yang dibuat.",

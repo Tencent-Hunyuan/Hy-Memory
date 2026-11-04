@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { legacyMemoryModePlan } from "@one-memory/operations";
 import {
   cleanup,
   render,
@@ -64,31 +65,9 @@ function prepare(mode: "lite" | "pro" | "ultra" = "pro") {
     running: [],
   });
   vi.mocked(getMemoryProcessing).mockResolvedValue({} as never);
-  vi.mocked(planMemoryMode).mockImplementation(async (target) => ({
-    current: mode,
-    target,
-    effective_target: target,
-    capabilities: {
-      content_plane: target === "lite" ? "raw" : "memory",
-      generation_required: target !== "lite",
-      graph_enabled: target === "ultra",
-      evolve_available: target === "ultra",
-    },
-    effects: [
-      ...(target === "lite" ? (["higher_mode_memories_hidden"] as const) : []),
-      ...(mode === "lite" && target !== "lite"
-        ? (["earlier_raw_not_extracted", "lite_search_stops"] as const)
-        : []),
-      ...(target === "ultra" && mode !== "ultra"
-        ? (["existing_memories_added_to_graph"] as const)
-        : []),
-      ...(mode === "ultra" && target !== "ultra"
-        ? (["evolve_stopped"] as const)
-        : []),
-    ],
-    warnings: [],
-    blockers: [],
-  }));
+  vi.mocked(planMemoryMode).mockImplementation(async (target) =>
+    legacyMemoryModePlan(mode, target, { hasActiveModel: true }),
+  );
 }
 
 async function chooseMode(
@@ -227,6 +206,20 @@ it("uses the isolated legacy plan only for a route-level old-Core 404", async ()
   expect(await screen.findByText(/已有记忆继续保留/)).toBeTruthy();
 });
 
+it("keeps downgrade effects when an old Core falls back from ultra to pro", async () => {
+  prepare("ultra");
+  vi.mocked(planMemoryMode).mockRejectedValue(new Error("404"));
+  vi.mocked(memoryModePlanUnsupported).mockReturnValue(true);
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await chooseMode(user, /智能记忆（pro）/);
+
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getAllByText("已有数据")).toHaveLength(1);
+  expect(within(dialog).getByText("每天自动整合")).toBeTruthy();
+});
+
 it("explains model cost, search scope and the next step before switching to ultra", async () => {
   prepare("lite");
   const user = userEvent.setup();
@@ -238,6 +231,8 @@ it("explains model cost, search scope and the next step before switching to ultr
   expect(screen.getByText("搜索范围")).toBeTruthy();
   expect(screen.getByText("切换后")).toBeTruthy();
   expect(screen.getByText(/已经处理完的旧对话不会补做/)).toBeTruthy();
+  expect(screen.getByText("知识图谱")).toBeTruthy();
+  expect(screen.getAllByText("已有数据")).toHaveLength(1);
   expect(screen.getByText(/切换本身不会立即整合/)).toBeTruthy();
 });
 
@@ -248,9 +243,27 @@ it("distinguishes regular memories from higher-level Ultra data when switching t
 
   await chooseMode(user, /智能记忆（pro）/);
 
-  expect(screen.getByText(/普通沉淀记忆仍可使用/)).toBeTruthy();
-  expect(screen.getByText(/更高层记忆和图谱数据继续保留/)).toBeTruthy();
-  expect(screen.getByText(/每天自动整合会停止/)).toBeTruthy();
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getAllByText("已有数据")).toHaveLength(1);
+  expect(within(dialog).getByText(/普通沉淀记忆仍可使用/)).toBeTruthy();
+  expect(within(dialog).getByText(/更高层记忆和图谱数据继续保留/)).toBeTruthy();
+  expect(within(dialog).getByText("每天自动整合")).toBeTruthy();
+  expect(
+    within(dialog).getByText("每天自动整合会停止；已生成的整合结果继续保留。"),
+  ).toBeTruthy();
+});
+
+it("does not show automatic consolidation when switching from lite to pro", async () => {
+  prepare("lite");
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await chooseMode(user, /智能记忆（pro）/);
+
+  const dialog = screen.getByRole("dialog");
+  expect(within(dialog).getAllByText("已有数据")).toHaveLength(1);
+  expect(within(dialog).getByText(/已经处理完的旧对话不会补做/)).toBeTruthy();
+  expect(within(dialog).queryByText("每天自动整合")).toBeNull();
 });
 
 it("focuses the Evolve settings after switching to ultra", async () => {

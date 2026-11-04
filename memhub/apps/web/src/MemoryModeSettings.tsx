@@ -85,18 +85,20 @@ function planRows(plan: MemoryModePlan) {
   if (plan.effects.includes("higher_mode_memories_hidden"))
     rows.push({
       label: "已有数据",
-      content: "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。",
+      content:
+        plan.effective_target === "pro"
+          ? "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。"
+          : "已有记忆继续保留，但在基础记忆下不显示、不参与召回；原始对话不会删除。",
     });
   if (plan.effects.includes("existing_memories_added_to_graph"))
     rows.push({
-      label: "已有数据",
+      label: "知识图谱",
       content: "已有记忆会在后台加入知识图谱，期间仍可使用。",
     });
   if (plan.effects.includes("evolve_stopped"))
     rows.push({
-      label: "已有数据",
-      content:
-        "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
+      label: "每天自动整合",
+      content: "每天自动整合会停止，已经生成的数据不会删除。",
     });
   if (plan.capabilities.evolve_available)
     rows.push({
