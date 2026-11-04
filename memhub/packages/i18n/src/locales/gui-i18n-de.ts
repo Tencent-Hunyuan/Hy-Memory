@@ -1544,6 +1544,7 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.memories": "Gespeicherte Erinnerungen",
   "apps.rawConversations": "Originalunterhaltungen",
   "apps.rawSaving": "Wird gespeichert",
+  "apps.rawSavingCompact": "Wird gespeichert",
   "apps.rawSavingStatus": "Speicherstatus",
   "apps.rawSavingDetail":
     "Originalunterhaltungen werden ohne generatives Modell gespeichert",
@@ -1555,6 +1556,7 @@ export const germanMessages: Record<MessageKey, string> = {
     "Geprüft: keine anzeigbaren Aktualisierungen der Originalunterhaltungen",
   "apps.memoryCheckedEmpty":
     "Geprüft: keine anzeigbaren Erinnerungsaktualisierungen",
+  "apps.recentEmptyCompact": "Keine Updates",
   "apps.rawWaiting": "Gespeicherte Originalunterhaltungen erscheinen hier",
   "apps.checkedRecent": "Aktueller Inhalt geprüft",
   "apps.currentMode": "Aktueller Modus",

@@ -1235,7 +1235,9 @@ it("shows lite raw ingestion as running even when model sedimentation is paused"
     />,
   );
 
-  expect(await screen.findAllByText("正在保存原始对话")).toHaveLength(2);
+  expect(await screen.findAllByText("正在保存")).toHaveLength(2);
+  expect(screen.getByText("暂无更新")).toBeTruthy();
+  expect(screen.getByText("已核对，暂无可显示的原始对话更新")).toBeTruthy();
   expect(screen.getByText("原始对话持续保存，不需要生成模型")).toBeTruthy();
   expect(screen.queryByText("已暂停")).toBeNull();
 });

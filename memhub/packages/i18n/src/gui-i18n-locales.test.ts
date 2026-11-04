@@ -24,6 +24,8 @@ const ENGLISH_EQUIVALENT_ALLOWED = new Set<MessageKey>([
 
 const keys = Object.keys(chineseMessages) as MessageKey[];
 const rawSavingStatusKey = "apps.rawSavingStatus" satisfies MessageKey;
+const rawSavingCompactKey = "apps.rawSavingCompact" satisfies MessageKey;
+const recentEmptyCompactKey = "apps.recentEmptyCompact" satisfies MessageKey;
 
 const rawSavingStatusTranslations = {
   en: "Saving status",
@@ -38,6 +40,23 @@ const rawSavingStatusTranslations = {
   ru: "Статус сохранения",
   id: "Status penyimpanan",
 } as const satisfies Record<(typeof SUPPORTED_LOCALES)[number], string>;
+
+const compactHomeTranslations = {
+  en: ["Saving", "No updates"],
+  "zh-Hans": ["正在保存", "暂无更新"],
+  "zh-Hant": ["儲存中", "暫無更新"],
+  ja: ["保存中", "更新なし"],
+  es: ["Guardando", "Sin novedades"],
+  de: ["Wird gespeichert", "Keine Updates"],
+  pt: ["Salvando", "Sem atualizações"],
+  fr: ["Enregistrement", "Aucune mise à jour"],
+  ko: ["저장 중", "업데이트 없음"],
+  ru: ["Сохранение", "Нет обновлений"],
+  id: ["Menyimpan", "Belum ada pembaruan"],
+} as const satisfies Record<
+  (typeof SUPPORTED_LOCALES)[number],
+  readonly [string, string]
+>;
 
 describe.each(SUPPORTED_LOCALES)("%s catalog", (locale) => {
   const catalog = guiMessages[locale];
@@ -99,6 +118,14 @@ describe("applications catalog", () => {
       expect(guiMessages[locale][rawSavingStatusKey]).toBe(
         rawSavingStatusTranslations[locale],
       );
+  });
+
+  it("keeps large home metric copy compact in all 11 locales", () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      const [saving, empty] = compactHomeTranslations[locale];
+      expect(guiMessages[locale][rawSavingCompactKey]).toBe(saving);
+      expect(guiMessages[locale][recentEmptyCompactKey]).toBe(empty);
+    }
   });
 });
 

@@ -1541,6 +1541,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "apps.memories": "Memórias salvas",
   "apps.rawConversations": "Conversas originais",
   "apps.rawSaving": "Salvando",
+  "apps.rawSavingCompact": "Salvando",
   "apps.rawSavingStatus": "Status de salvamento",
   "apps.rawSavingDetail":
     "As conversas originais são salvas sem um modelo generativo",
@@ -1552,6 +1553,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Verificado: não há atualizações de conversas para mostrar",
   "apps.memoryCheckedEmpty":
     "Verificado: não há atualizações de memórias para mostrar",
+  "apps.recentEmptyCompact": "Sem atualizações",
   "apps.rawWaiting": "As conversas originais salvas aparecerão aqui",
   "apps.checkedRecent": "Conteúdo atual verificado",
   "apps.currentMode": "Modo atual",

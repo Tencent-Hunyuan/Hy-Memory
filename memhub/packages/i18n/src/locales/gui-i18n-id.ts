@@ -1519,6 +1519,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "apps.memories": "Memori tersimpan",
   "apps.rawConversations": "Percakapan asli",
   "apps.rawSaving": "Menyimpan",
+  "apps.rawSavingCompact": "Menyimpan",
   "apps.rawSavingStatus": "Status penyimpanan",
   "apps.rawSavingDetail": "Percakapan asli disimpan tanpa model generatif",
   "apps.rawNoExcerpt": "Tidak ada kutipan pengguna yang dapat ditampilkan",
@@ -1529,6 +1530,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Diperiksa: tidak ada pembaruan percakapan untuk ditampilkan",
   "apps.memoryCheckedEmpty":
     "Diperiksa: tidak ada pembaruan memori untuk ditampilkan",
+  "apps.recentEmptyCompact": "Belum ada pembaruan",
   "apps.rawWaiting": "Percakapan asli yang disimpan akan muncul di sini",
   "apps.checkedRecent": "Konten saat ini telah diperiksa",
   "apps.currentMode": "Mode saat ini",

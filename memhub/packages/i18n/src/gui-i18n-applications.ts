@@ -9,6 +9,7 @@ export const applicationsChineseMessages = {
   "apps.memories": "已沉淀记忆",
   "apps.rawConversations": "原始对话",
   "apps.rawSaving": "正在保存原始对话",
+  "apps.rawSavingCompact": "正在保存",
   "apps.rawSavingStatus": "保存状态",
   "apps.rawSavingDetail": "原始对话持续保存，不需要生成模型",
   "apps.rawNoExcerpt": "这条对话没有可显示的用户原文",
@@ -17,6 +18,7 @@ export const applicationsChineseMessages = {
   "apps.rawEmpty": "还没有保存的原始对话",
   "apps.rawCheckedEmpty": "已核对，暂无可显示的原始对话更新",
   "apps.memoryCheckedEmpty": "已核对，暂无可显示的记忆更新",
+  "apps.recentEmptyCompact": "暂无更新",
   "apps.rawWaiting": "原始对话保存后会显示在这里",
   "apps.checkedRecent": "已核对当前内容",
   "apps.currentMode": "当前模式",
@@ -149,6 +151,7 @@ export const applicationsSpanishMessages: Record<
   "apps.memories": "Memorias guardadas",
   "apps.rawConversations": "Conversaciones originales",
   "apps.rawSaving": "Guardando",
+  "apps.rawSavingCompact": "Guardando",
   "apps.rawSavingStatus": "Estado de guardado",
   "apps.rawSavingDetail":
     "Las conversaciones originales se guardan sin un modelo generativo",
@@ -160,6 +163,7 @@ export const applicationsSpanishMessages: Record<
     "Comprobado: no hay actualizaciones de conversaciones para mostrar",
   "apps.memoryCheckedEmpty":
     "Comprobado: no hay actualizaciones de memorias para mostrar",
+  "apps.recentEmptyCompact": "Sin novedades",
   "apps.rawWaiting":
     "Las conversaciones originales aparecerán aquí cuando se guarden",
   "apps.checkedRecent": "Contenido actual comprobado",

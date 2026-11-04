@@ -1524,6 +1524,7 @@ export const russianMessages: Record<MessageKey, string> = {
   "apps.memories": "Сохранённые записи памяти",
   "apps.rawConversations": "Исходные разговоры",
   "apps.rawSaving": "Сохранение",
+  "apps.rawSavingCompact": "Сохранение",
   "apps.rawSavingStatus": "Статус сохранения",
   "apps.rawSavingDetail":
     "Исходные разговоры сохраняются без генеративной модели",
@@ -1534,6 +1535,7 @@ export const russianMessages: Record<MessageKey, string> = {
   "apps.rawCheckedEmpty":
     "Проверено: нет обновлений исходных диалогов для показа",
   "apps.memoryCheckedEmpty": "Проверено: нет обновлений памяти для показа",
+  "apps.recentEmptyCompact": "Нет обновлений",
   "apps.rawWaiting": "Сохранённые исходные диалоги появятся здесь",
   "apps.checkedRecent": "Текущее содержимое проверено",
   "apps.currentMode": "Текущий режим",
