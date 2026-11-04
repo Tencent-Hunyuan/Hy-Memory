@@ -30,6 +30,7 @@ from one_memory.hy_sdk_types import (
     parse_sdk_search,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.raw_turns import raw_display_turns
 from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
 from one_memory.semantic_deadline import SemanticMemoryHit
 from one_memory.user_scope import owns
@@ -120,6 +121,9 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             sources = raw_lane_sources(authority.raw_sources, value.include_sources)
             if sources is None:
                 return ()
+            candidate_limit = (
+                min(value.limit * 10, 200) if value.raw_unit == "turn" else value.limit
+            )
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
@@ -127,7 +131,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     "user_ids": [value.user_id],
                     "agent_ids": [],
                     "include_sources": sources,
-                    "limit": value.limit,
+                    "limit": candidate_limit,
                     "min_score": 0.0,
                     "schema_min_score": 0.0,
                     "schema_limit": 0,
@@ -135,27 +139,59 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     "scene": "chat",
                     "reader": HY_MEMORY_READER,
                     "layers": ["l1_raw"],
+                    "statuses": ["active", "shadow"],
                     **raw_lane_overrides(value),
                 },
             )
             hits = tuple(
                 hit for hit in parse_sdk_raw_search(raw) if value.passes_floor("raw", hit.score)
             )
-            return tuple(
-                SdkRawContextItem(
-                    raw_id=hit.raw_id,
-                    content=hit.content,
-                    source=hit.source,
-                    session_id=hit.session_id,
-                    memory_at=(
-                        datetime.fromtimestamp(hit.memory_at, tz=UTC)
-                        if hit.memory_at is not None
-                        else None
-                    ),
-                    score=hit.score,
-                )
-                for hit in hits
-            )
+            items: list[SdkRawContextItem] = []
+            for hit in hits:
+                turns = raw_display_turns(hit) if value.raw_unit == "turn" else ()
+                if turns:
+                    query = value.query.casefold()
+                    lexical = tuple(turn for turn in turns if query in turn.content.casefold())
+                    # A batch-level embedding cannot identify which contained
+                    # turn matched semantically. Return only turns grounded by
+                    # the query text instead of assigning every sibling the
+                    # batch score and showing unrelated conversations.
+                    for turn in lexical:
+                        items.append(
+                            SdkRawContextItem(
+                                raw_id=hit.raw_id,
+                                turn_id=turn.turn_id,
+                                turn_index=turn.turn_index,
+                                turn_count=turn.turn_count,
+                                content=turn.content,
+                                source=hit.source,
+                                session_id=hit.session_id,
+                                memory_at=(
+                                    datetime.fromtimestamp(hit.memory_at, tz=UTC)
+                                    if hit.memory_at is not None
+                                    else None
+                                ),
+                                score=hit.score,
+                            )
+                        )
+                else:
+                    items.append(
+                        SdkRawContextItem(
+                            raw_id=hit.raw_id,
+                            content=hit.content,
+                            source=hit.source,
+                            session_id=hit.session_id,
+                            memory_at=(
+                                datetime.fromtimestamp(hit.memory_at, tz=UTC)
+                                if hit.memory_at is not None
+                                else None
+                            ),
+                            score=hit.score,
+                        )
+                    )
+                if len(items) >= value.limit:
+                    break
+            return tuple(items[: value.limit])
 
         async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
             # lite extracts nothing: its search answers raw turns, which the

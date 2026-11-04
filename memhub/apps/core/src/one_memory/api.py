@@ -270,6 +270,7 @@ from one_memory.onboarding import (
     OnboardingState,
     OnboardingStore,
 )
+from one_memory.raw_turns import RawDisplayTurn, raw_display_turns
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -604,24 +605,37 @@ class SdkRawItem(HySdkRawRecord):
     role: str | None = None
     content_hash: str
     created: datetime | None = None
+    turn_id: str | None = Field(default=None, min_length=1, max_length=96)
+    turn_index: int | None = Field(default=None, ge=0)
+    turn_count: int | None = Field(default=None, ge=1)
 
     @classmethod
-    def of(cls, record: HySdkRawRecord) -> "SdkRawItem":
+    def of(
+        cls, record: HySdkRawRecord, turn: RawDisplayTurn | None = None
+    ) -> "SdkRawItem":
+        content = turn.content if turn is not None else record.content
+        raw_messages = (
+            turn.messages if turn is not None else raw_turn_messages(record.content)
+        )
         messages = tuple(
             SdkRawMessage(role=role, content=text)
-            for role, text in raw_turn_messages(record.content)
+            for role, text in raw_messages
         )
         roles = {message.role for message in messages}
         return cls(
-            **record.model_dump(),
+            **record.model_dump(exclude={"content"}),
+            content=content,
             messages=messages,
             role=next(iter(roles)) if len(roles) == 1 and "" not in roles else None,
-            content_hash="sha256:" + hashlib.sha256(record.content.encode("utf-8")).hexdigest(),
+            content_hash="sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
             created=(
                 datetime.fromtimestamp(record.gmt_created, tz=UTC)
                 if record.gmt_created is not None
                 else None
             ),
+            turn_id=turn.turn_id if turn is not None else None,
+            turn_index=turn.turn_index if turn is not None else None,
+            turn_count=turn.turn_count if turn is not None else None,
         )
 
 
@@ -634,9 +648,9 @@ class SdkRawPage(BaseModel):
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1, le=500)
-    #: Set when a time filter was applied to this page in Core (the SDK list
-    #: has none): `items` is the page's rows inside the range, `total` stays
-    #: the SDK's count before that filter.
+    unit: Literal["raw", "turn"] = "raw"
+    #: Set when a time filter was applied in Core. For storage `raw`, `total`
+    #: remains the SDK count; for product `turn`, it is the filtered turn count.
     time_filtered: bool = False
 
 
@@ -4441,6 +4455,16 @@ def create_app(
             raise _sdk_http_error(error, "hy_memory_delete_failed") from None
         return Response(status_code=204)
 
+    raw_turn_cache: dict[
+        tuple[object, ...],
+        tuple[
+            int,
+            tuple[tuple[str, str | None], ...],
+            tuple[tuple[HySdkRawRecord, RawDisplayTurn], ...],
+        ],
+    ] = {}
+    raw_turn_cache_locks: dict[tuple[object, ...], asyncio.Lock] = {}
+
     @app.get(
         "/api/v2/raw",
         response_model=SdkRawPage,
@@ -4450,6 +4474,7 @@ def create_app(
         source: list[str] | None = Query(default=None),  # noqa: B008
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
+        unit: Literal["raw", "turn"] = Query(default="raw"),
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
         exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
         session_id: list[str] | None = Query(default=None),  # noqa: B008
@@ -4463,7 +4488,10 @@ def create_app(
         The SDK lists raw only when asked for `layers=["l1_raw"]`, and only
         active rows unless told otherwise. Pro shadows a raw once extraction
         succeeds, so a raw page reads active and shadow (`statuses` narrows
-        it). `source` and `session_id` (a conversation) may repeat or be comma
+        it). `unit=turn` projects storage batches into stable product turns;
+        the first read builds an append-only in-memory index and later polls
+        only probe the latest SDK page unless it changed. `source` and
+        `session_id` (a conversation) may repeat or be comma
         separated. `after`/`before` (unix seconds, against the conversation
         time, else the stored time) have no SDK list filter: they cut this
         page in Core and mark it `time_filtered`.
@@ -4477,24 +4505,145 @@ def create_app(
         sessions = split_csv(session_id)
         try:
             client = await _sdk_client_handle(app).client()
-            value = await asyncio.to_thread(
-                client.list_memories,
-                user_id=user_id,
+            query = {
+                "user_id": user_id,
                 **raw_list_filters(chosen_statuses),
-                include_sources=sources or None,
-                exclude_sources=excluded or None,
-                session_ids=sessions or None,
-                offset=offset,
-                limit=limit,
-                order=order,
-            )
-            page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
+                "include_sources": sources or None,
+                "exclude_sources": excluded or None,
+                "session_ids": sessions or None,
+                "order": order if unit == "raw" else "desc",
+            }
+            if unit == "raw":
+                value = await asyncio.to_thread(
+                    client.list_memories,
+                    **query,
+                    offset=offset,
+                    limit=limit,
+                )
+                page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
+                records = page.raw
+            else:
+                cache_key = (
+                    user_id,
+                    tuple(sorted(chosen_statuses)),
+                    tuple(sorted(sources)),
+                    tuple(sorted(excluded)),
+                    tuple(sorted(sessions)),
+                )
+                if len(raw_turn_cache_locks) > 64:
+                    for stale_key, stale_lock in tuple(raw_turn_cache_locks.items()):
+                        if (
+                            stale_key not in raw_turn_cache
+                            and not stale_lock.locked()
+                        ):
+                            raw_turn_cache_locks.pop(stale_key, None)
+                lock = raw_turn_cache_locks.setdefault(cache_key, asyncio.Lock())
+                async with lock:
+                    for _attempt in range(3):
+                        value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=0,
+                            limit=500,
+                        )
+                        first_page = HySdkRawPage.from_memory_list(
+                            value, limit=500, offset=0
+                        )
+                        signature = tuple(
+                            (record.raw_id, record.status) for record in first_page.raw
+                        )
+                        cached = raw_turn_cache.get(cache_key)
+                        if (
+                            cached is not None
+                            and cached[0] == first_page.total
+                            and cached[1] == signature
+                        ):
+                            projected_turns = cached[2]
+                            break
+
+                        records_list = list(first_page.raw)
+                        raw_offset = len(first_page.raw)
+                        raw_total = first_page.total
+                        while first_page.raw and raw_offset < raw_total:
+                            value = await asyncio.to_thread(
+                                client.list_memories,
+                                **query,
+                                offset=raw_offset,
+                                limit=500,
+                            )
+                            raw_page = HySdkRawPage.from_memory_list(
+                                value, limit=500, offset=raw_offset
+                            )
+                            records_list.extend(raw_page.raw)
+                            raw_offset += len(raw_page.raw)
+                            if not raw_page.raw:
+                                break
+
+                        verify_value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=0,
+                            limit=500,
+                        )
+                        verify = HySdkRawPage.from_memory_list(
+                            verify_value, limit=500, offset=0
+                        )
+                        verify_signature = tuple(
+                            (record.raw_id, record.status) for record in verify.raw
+                        )
+                        if (
+                            verify.total != first_page.total
+                            or verify_signature != signature
+                        ):
+                            continue
+                        projected_turns = tuple(
+                            (record, turn)
+                            for record in records_list
+                            for turn in reversed(raw_display_turns(record))
+                        )
+                        raw_turn_cache[cache_key] = (
+                            first_page.total,
+                            signature,
+                            projected_turns,
+                        )
+                        while len(raw_turn_cache) > 32:
+                            oldest = next(iter(raw_turn_cache))
+                            raw_turn_cache.pop(oldest)
+                            old_lock = raw_turn_cache_locks.get(oldest)
+                            if old_lock is not None and not old_lock.locked():
+                                raw_turn_cache_locks.pop(oldest, None)
+                        break
+                    else:
+                        raise RuntimeError("hy_memory_raw_snapshot_busy")
+                if cache_key not in raw_turn_cache and not lock.locked():
+                    raw_turn_cache_locks.pop(cache_key, None)
         except HTTPException:
             raise
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_raw_list_failed") from None
-        records = page.raw
         time_filtered = after is not None or before is not None
+        if unit == "turn":
+            turns = projected_turns
+            if time_filtered:
+                turns = tuple(
+                    (record, turn)
+                    for record, turn in turns
+                    if (at := record.memory_at or record.gmt_created) is not None
+                    and (after is None or at >= after)
+                    and (before is None or at < before)
+                )
+            if order == "asc":
+                turns = tuple(reversed(turns))
+            selected = turns[offset : offset + limit]
+            return SdkRawPage(
+                user_id=user_id,
+                items=tuple(SdkRawItem.of(record, turn) for record, turn in selected),
+                total=len(turns),
+                offset=offset,
+                limit=limit,
+                unit="turn",
+                time_filtered=time_filtered,
+            )
         if time_filtered:
             records = tuple(
                 record
@@ -4509,6 +4658,7 @@ def create_app(
             total=page.total,
             offset=offset,
             limit=limit,
+            unit="raw",
             time_filtered=time_filtered,
         )
 

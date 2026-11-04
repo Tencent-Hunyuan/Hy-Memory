@@ -9,6 +9,10 @@ import type {
 
 export type RawMapRecord = SdkRawRecord | SdkRawContextItem;
 
+export function rawRecordId(record: RawMapRecord): string {
+  return record.turn_id || record.raw_id;
+}
+
 const EARLIEST_PLAUSIBLE = Date.UTC(2000, 0, 1);
 const LATEST_PLAUSIBLE = () => Date.now() + 86_400_000;
 
@@ -43,7 +47,7 @@ function sourceOf(record: RawMapRecord): string {
 export function rawMapMemory(record: RawMapRecord): GovernedMemory {
   const created = rawRecordTime(record) ?? "";
   return {
-    memory_id: record.raw_id,
+    memory_id: rawRecordId(record),
     user_id: "user_id" in record ? record.user_id : "local",
     kind: "chat",
     status: "confirmed",
@@ -75,17 +79,18 @@ function pageFor(
     { at: string; basis: "conversation" | "import" }
   > = {};
   for (const record of records) {
-    sourceIds[record.raw_id] = [sourceOf(record)];
+    const recordId = rawRecordId(record);
+    sourceIds[recordId] = [sourceOf(record)];
     const conversationAt = isoTime(record.memory_at);
     const importedAt =
       "gmt_created" in record ? isoTime(record.gmt_created) : "";
     if (conversationAt)
-      sourceTime[record.raw_id] = {
+      sourceTime[recordId] = {
         at: conversationAt,
         basis: "conversation",
       };
     else if (importedAt)
-      sourceTime[record.raw_id] = { at: importedAt, basis: "import" };
+      sourceTime[recordId] = { at: importedAt, basis: "import" };
   }
   return {
     items: records.map(rawMapMemory),

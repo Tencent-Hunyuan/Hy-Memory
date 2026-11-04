@@ -675,7 +675,12 @@ export interface SdkUserProfileResponse {
 }
 
 export interface SdkRawRecord {
+  /** Parent SDK L1 raw storage batch. */
   raw_id: string;
+  /** Stable product identity of one turn inside `raw_id`, when unit=turn. */
+  turn_id?: string | null;
+  turn_index?: number | null;
+  turn_count?: number | null;
   content: string;
   user_id: string;
   agent_id: string;
@@ -703,6 +708,7 @@ export interface SdkRawPage {
   total: number;
   limit: number;
   offset: number;
+  unit?: "raw" | "turn";
   /** A time range was applied to this page in Core (the SDK list has none). */
   time_filtered?: boolean;
 }

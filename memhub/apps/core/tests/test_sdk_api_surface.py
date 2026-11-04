@@ -42,7 +42,10 @@ RAW_ROWS = {
     "local": [
         {
             "memory_id": "raw-1",
-            "content": "[user]: 我叫费天翔\n[assistant]: 好的，记住了。",
+            "content": (
+                "[user]: 我叫费天翔\n[assistant]: 好的，记住了。"
+                "\n[user]: 我喜欢绿茶\n[assistant]: 也记住了。"
+            ),
             "status": "shadow",
             "session_id": "s-1",
             "source": "hermes",
@@ -348,6 +351,33 @@ def test_every_context_search_option_reaches_the_sdk_and_absent_ones_keep_the_ol
 
 
 @pytest.mark.fresh_sdk
+def test_raw_context_search_can_return_turns_instead_of_storage_batches(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario(app, sdk, client):
+        response = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "绿茶",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "limit": 20,
+            },
+        )
+        assert response.status_code == 200, response.text
+        raw_one = [
+            item for item in response.json()["items"] if item["raw_id"] == "raw-1"
+        ]
+        assert len(raw_one) == 1
+        assert raw_one[0]["turn_index"] == 1
+        assert "我喜欢绿茶" in raw_one[0]["content"]
+        assert "我叫费天翔" not in raw_one[0]["content"]
+        assert sdk.last("search")["statuses"] == ["active", "shadow"]
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
 def test_every_recall_and_ask_option_reaches_the_sdk(tmp_path, monkeypatch) -> None:
     async def scenario(app, sdk, client):
         recalled = await client.post(
@@ -574,7 +604,12 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         assert sent["layers"] == ["l1_raw"] and sent["statuses"] == ["active", "shadow"]
         first = next(item for item in body["items"] if item["raw_id"] == "raw-1")
         assert first["status"] == "shadow"
-        assert [message["role"] for message in first["messages"]] == ["user", "assistant"]
+        assert [message["role"] for message in first["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
         assert first["messages"][0]["content"] == "我叫费天翔"
         assert first["role"] is None
         expected = hashlib.sha256(first["content"].encode()).hexdigest()
@@ -583,6 +618,27 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         assert first["created"].startswith("2026-")
         second = next(item for item in body["items"] if item["raw_id"] == "raw-2")
         assert second["role"] == "user"
+
+        turns = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert turns["unit"] == "turn" and turns["total"] == 3
+        first_turns = [item for item in turns["items"] if item["raw_id"] == "raw-1"]
+        assert [item["turn_index"] for item in first_turns] == [1, 0]
+        assert len({item["turn_id"] for item in first_turns}) == 2
+        assert [[message["content"] for message in item["messages"]] for item in first_turns] == [
+            ["我喜欢绿茶", "也记住了。"],
+            ["我叫费天翔", "好的，记住了。"],
+        ]
+        calls_before_refresh = len(sdk.all("list_memories"))
+        await client.get("/api/v2/raw", params={"unit": "turn"})
+        assert len(sdk.all("list_memories")) == calls_before_refresh + 1
+
+        ascending = (
+            await client.get("/api/v2/raw", params={"unit": "turn", "order": "asc"})
+        ).json()
+        ascending_first = [
+            item for item in ascending["items"] if item["raw_id"] == "raw-1"
+        ]
+        assert [item["turn_index"] for item in ascending_first] == [0, 1]
 
         await client.get(
             "/api/v2/raw",

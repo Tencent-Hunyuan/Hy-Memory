@@ -5,7 +5,7 @@ import type {
 } from "@one-memory/contracts";
 import { clockStamp } from "./clock-stamp";
 import { useGuiLanguage } from "./gui-language";
-import { rawRecordTime } from "./sdk-raw-map";
+import { rawRecordId, rawRecordTime } from "./sdk-raw-map";
 import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 
 type RawRecord = SdkRawRecord | SdkRawContextItem;
@@ -50,7 +50,7 @@ export function SelectedRawDetail({
       <p className="selected-memory-status">{t("memory:原始对话")}</p>
       <ul className="map-transcript">
         {messages.map((message) => (
-          <li key={`${record.raw_id}:${message.role}:${message.content}`}>
+          <li key={`${rawRecordId(record)}:${message.role}:${message.content}`}>
             <small>{authorLabel(message.role, t)}</small>
             <p>{message.content}</p>
           </li>

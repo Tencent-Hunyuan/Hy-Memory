@@ -66,6 +66,8 @@ class SdkContextSearchRequest(ContextSearchRequest, SdkSearchOptions):
     limit: int = Field(default=10, ge=1, le=20, strict=True)
     schema_limit: int = Field(default=3, ge=0, le=20, strict=True)
     intention_limit: int = Field(default=1, ge=0, le=20, strict=True)
+    #: Product callers can request one item per turn instead of SDK raw batches.
+    raw_unit: Literal["raw", "turn"] = "raw"
     #: Whose memories to search. The App never sends it and reads `local`.
     user_id: UserId = DEFAULT_USER_ID
 
@@ -123,6 +125,9 @@ class SdkRawContextItem(BaseModel):
     memory_at: datetime | None = None
     score: float = Field(ge=0, le=1)
     truncated: bool = False
+    turn_id: str | None = Field(default=None, min_length=1, max_length=96)
+    turn_index: int | None = Field(default=None, ge=0)
+    turn_count: int | None = Field(default=None, ge=1)
 
 
 class SdkMemoryContextItem(BaseModel):
