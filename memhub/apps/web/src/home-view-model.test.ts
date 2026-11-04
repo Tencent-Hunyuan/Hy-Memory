@@ -38,7 +38,7 @@ const base = {
 
 describe("home view model", () => {
   it.each([
-    ["lite", "raw", "apps.rawConversations", "apps.rawSaving"],
+    ["lite", "raw", "apps.rawConversations", "apps.rawSavingCompact"],
     ["pro", "memory", "apps.memories", "apps.running"],
     ["ultra", "memory", "apps.memories", "apps.running"],
   ] as const)(
@@ -109,7 +109,7 @@ describe("home view model", () => {
       } as never,
     });
     expect(result.recentMetric).toEqual({
-      valueKey: "apps.rawCheckedEmpty",
+      valueKey: "apps.recentEmptyCompact",
       detailKey: "apps.checkedRecent",
     });
     expect(result.activity).toMatchObject({
@@ -158,9 +158,10 @@ describe("home view model", () => {
       projectionState: "ready",
     });
     expect(result.recentMetric).toEqual({
-      valueKey: "apps.memoryCheckedEmpty",
+      valueKey: "apps.recentEmptyCompact",
       detailKey: "apps.checkedRecent",
     });
+    expect(result.activity.titleKey).toBe("apps.memoryCheckedEmpty");
     expect(result.activity.kind).toBe("empty");
   });
 

@@ -1345,6 +1345,7 @@ const baseEnglishMessages = {
   "apps.memories": "Saved memories",
   "apps.rawConversations": "Original conversations",
   "apps.rawSaving": "Saving",
+  "apps.rawSavingCompact": "Saving",
   "apps.rawSavingStatus": "Saving status",
   "apps.rawSavingDetail":
     "Original conversations are saved without a generation model",
@@ -1355,6 +1356,7 @@ const baseEnglishMessages = {
   "apps.rawCheckedEmpty":
     "Checked: no original-conversation updates to display",
   "apps.memoryCheckedEmpty": "Checked: no memory updates to display",
+  "apps.recentEmptyCompact": "No updates",
   "apps.rawWaiting": "Original conversations will appear here when saved",
   "apps.checkedRecent": "Current content checked",
   "apps.currentMode": "Current mode",

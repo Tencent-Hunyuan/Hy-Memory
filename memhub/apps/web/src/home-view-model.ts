@@ -40,11 +40,7 @@ export interface HomeViewModel {
     emptyExcerpt: boolean;
   } | null;
   recentMetric: {
-    valueKey:
-      | "apps.checkingRecent"
-      | "apps.rawCheckedEmpty"
-      | "apps.memoryCheckedEmpty"
-      | null;
+    valueKey: "apps.checkingRecent" | "apps.recentEmptyCompact" | null;
     detailKey:
       | "apps.rawSaved"
       | "apps.saved"
@@ -120,7 +116,7 @@ export function buildHomeViewModel(input: {
   const sedimenting = input.sedimentation?.enabled;
   const processingLabel =
     !generationRequired || mode === "lite"
-      ? "apps.rawSaving"
+      ? "apps.rawSavingCompact"
       : sedimenting === true
         ? "apps.running"
         : sedimenting === false
@@ -179,10 +175,7 @@ export function buildHomeViewModel(input: {
         }
       : state === "ready" || state === "stale"
         ? {
-            valueKey:
-              plane === "raw"
-                ? ("apps.rawCheckedEmpty" as const)
-                : ("apps.memoryCheckedEmpty" as const),
+            valueKey: "apps.recentEmptyCompact" as const,
             detailKey: "apps.checkedRecent" as const,
           }
         : {

@@ -1565,6 +1565,7 @@ export const frenchMessages: Record<MessageKey, string> = {
   "apps.memories": "Mémoires enregistrées",
   "apps.rawConversations": "Conversations d’origine",
   "apps.rawSaving": "Enregistrement",
+  "apps.rawSavingCompact": "Enregistrement",
   "apps.rawSavingStatus": "État de l’enregistrement",
   "apps.rawSavingDetail":
     "Les conversations d’origine sont enregistrées sans modèle génératif",
@@ -1576,6 +1577,7 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Vérifié : aucune mise à jour de conversation à afficher",
   "apps.memoryCheckedEmpty":
     "Vérifié : aucune mise à jour de mémoire à afficher",
+  "apps.recentEmptyCompact": "Aucune mise à jour",
   "apps.rawWaiting":
     "Les conversations d’origine enregistrées apparaîtront ici",
   "apps.checkedRecent": "Contenu actuel vérifié",
