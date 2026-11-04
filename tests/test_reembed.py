@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import random
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -461,6 +462,10 @@ async def _two_spaces(path):
     """A live 1024 space and a stray 512 space sharing some ids."""
     from hy_memory.data.vector_store_chroma import ChromaVectorStore
 
+    # Shared records must have identical metadata even if creating the two
+    # stores crosses a wall-clock second (payload timestamps use integer seconds).
+    timestamp = datetime(2024, 1, 1)
+
     async def _store(base, dims, model, contents):
         cfg = MemoryConfig()
         cfg.vector_store.provider = "chroma"
@@ -475,6 +480,7 @@ async def _two_spaces(path):
             node = MemoryNode(
                 node_id=node_id, user_id=user, agent_id="a", session_id="s",
                 layer=MemoryLayer.L2_FACT, content=content, status=status,
+                gmt_created=timestamp, gmt_modified=timestamp, valid_from=timestamp,
             )
             node.embedding = emb.vector(content)
             nodes.append(node)
