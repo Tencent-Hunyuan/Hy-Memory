@@ -169,6 +169,7 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   await user.click(screen.getByRole("button", { name: "帮助与诊断" }));
   expect(screen.getByRole("heading", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "导出日志" })).toBeTruthy();
+  expect(screen.getByText(/可能包含会话正文和本机路径/)).toBeTruthy();
   expect(screen.getByRole("heading", { name: "关于" })).toBeTruthy();
   expect(screen.getByText("1.0.4")).toBeTruthy();
   expect(screen.getByText("8")).toBeTruthy();

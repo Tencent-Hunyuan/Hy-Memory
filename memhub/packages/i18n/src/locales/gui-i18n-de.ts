@@ -1065,7 +1065,7 @@ export const germanMessages: Record<MessageKey, string> = {
     "Erinnerungen weiter synchronisieren, verarbeiten und bereitstellen, ohne die App zu öffnen.",
   导出日志: "Protokolle exportieren",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Packen Sie lokale Diagnoseprotokolle in eine Datei, um sie an den Support zu senden.",
+    "Packt alle lokalen Protokolle. Sie können Gesprächsinhalte oder lokale Pfade enthalten; nur mit vertrauenswürdigen Entwicklern teilen.",
   "确定退出 One Memory 界面吗？": "MemHub-Fenster beenden?",
   "后台服务会继续同步、整理和提供记忆。":
     "Der Hintergrunddienst synchronisiert, verarbeitet und liefert Erinnerungen weiter.",

@@ -226,6 +226,7 @@ describe("HealthPanel", () => {
     });
     vi.spyOn(window, "prompt").mockReturnValue("蓝莓没出来");
     render(<HealthPanel imports={imports()} />);
+    expect(screen.getByText(/可能包含会话正文和本机路径/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "记录问题时间点" }));
     expect(await screen.findByText(/问题编号已复制/)).toBeTruthy();

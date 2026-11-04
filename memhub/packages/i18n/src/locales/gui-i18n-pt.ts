@@ -1069,7 +1069,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Continue sincronizando, processando e fornecendo memórias sem abrir o app.",
   导出日志: "Exportar logs",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Empacote os logs de diagnóstico locais em um arquivo para compartilhar com o suporte.",
+    "Empacota todos os logs locais. Eles podem conter conversas ou caminhos locais; compartilhe apenas com desenvolvedores de confiança.",
   "确定退出 One Memory 界面吗？": "Fechar a janela do MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "O serviço em segundo plano continuará sincronizando, processando e fornecendo memórias.",
