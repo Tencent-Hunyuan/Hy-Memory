@@ -1864,6 +1864,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
         rerank: bool = True,
@@ -1956,6 +1957,8 @@ class HyMemoryClient:
             layers:             可选。pro/ultra 下只召回指定层级（字符串或
                                 MemoryLayer），在召回阶段生效。lite 下忽略该参数并
                                 强制只召回 L1_RAW。
+            statuses:           仅用于 L1_RAW 定向搜索，可显式包含 active / shadow。
+                                非 raw 搜索或 scene="all" 传入时拒绝，避免静默忽略。
             rerank:             默认 True（原行为）。False 时本次调用跳过全部重排阶段：
                                 chat 路的本地 cross-encoder 重排（recall.local_rerank_enabled）
                                 与记忆关系图重排（graph_rerank / episode 扩展），working/
@@ -1999,7 +2002,7 @@ class HyMemoryClient:
             intention_limit=intention_limit, created_after=created_after,
             reader=reader,
             workspace_id=workspace_id, branch=branch,
-            request_id=request_id, layers=layers,
+            request_id=request_id, layers=layers, statuses=statuses,
             embed_override=embed_override,
             query_embedding=query_embedding,
             rerank=rerank,
@@ -3387,12 +3390,14 @@ class HyMemoryClient:
         request_id: str,
         t0: float,
         query_embedding: Optional[List[float]],
+        statuses: Optional[List[Any]],
     ) -> Dict[str, Any]:
         """Implement `search(..., layers=['l1_raw'])` without a second API."""
         from .models.memory import MemoryLayer, MemoryStatus
 
         embedding = query_embedding or await self._embed_service.embed(query)
         fetch = min(max(limit * (10 if session_ids else 2), limit), 10_000)
+        status_filter = self._normalize_statuses(statuses) or [MemoryStatus.ACTIVE]
         hits = await self._vector_store.search(
             query_embedding=embedding,
             user_ids=user_ids,
@@ -3402,7 +3407,7 @@ class HyMemoryClient:
             layers=[MemoryLayer.L1_RAW],
             limit=fetch,
             score_threshold=min_score,
-            status_filter=[MemoryStatus.ACTIVE],
+            status_filter=status_filter,
             only_latest=False,
             created_after=created_after,
         )
@@ -3420,7 +3425,7 @@ class HyMemoryClient:
                     "memory_id": row.pop("raw_id"),
                     **row,
                     "layer": MemoryLayer.L1_RAW.value,
-                    "status": MemoryStatus.ACTIVE.value,
+                    "status": node.status.value,
                     "score": round(float(hit.get("score", 0.0)), 4),
                 }
             )
@@ -3864,6 +3869,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
         rerank: bool = True,
@@ -3893,7 +3899,7 @@ class HyMemoryClient:
                     schema_min_score=schema_min_score, schema_limit=schema_limit,
                     intention_limit=intention_limit, created_after=created_after,
                     reader=reader, workspace_id=workspace_id, branch=branch,
-                    request_id=request_id, layers=layers,
+                    request_id=request_id, layers=layers, statuses=statuses,
                     query_embedding=query_embedding,
                     rerank=rerank,
                 )
@@ -3908,7 +3914,7 @@ class HyMemoryClient:
             schema_min_score=schema_min_score, schema_limit=schema_limit,
             intention_limit=intention_limit, created_after=created_after,
             reader=reader, workspace_id=workspace_id, branch=branch,
-            request_id=request_id, layers=layers,
+            request_id=request_id, layers=layers, statuses=statuses,
             query_embedding=query_embedding,
             rerank=rerank,
         )
@@ -3938,6 +3944,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         query_embedding: Optional[List[float]] = None,
         rerank: bool = True,
     ) -> Dict[str, Any]:
@@ -4022,6 +4029,17 @@ class HyMemoryClient:
                 "Cannot specify multiple agent_ids and multiple session_ids simultaneously. "
                 "Use single agent_id with multiple session_ids, or multiple agent_ids without session_ids."
             )
+
+        if statuses is not None:
+            from .models.memory import MemoryLayer
+
+            requested_layers = self._normalize_layers(layers)
+            if scene_all or (
+                not lite_mode and requested_layers != [MemoryLayer.L1_RAW]
+            ):
+                raise ValueError(
+                    "statuses is supported only for explicit L1_RAW search"
+                )
 
         if scene_all:
             return await self._search_all_scenes(
@@ -4358,6 +4376,7 @@ class HyMemoryClient:
                 request_id=request_id,
                 t0=t0,
                 query_embedding=query_embedding,
+                statuses=statuses,
             )
 
         read_req = ReadRequest(

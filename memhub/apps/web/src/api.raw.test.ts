@@ -32,6 +32,7 @@ it("lists raw conversations for the selected application", async () => {
       session_id: undefined,
       offset: 20,
       limit: 20,
+      unit: "turn",
     },
     signal,
   });
@@ -49,6 +50,7 @@ it("keeps the application filter when searching raw conversations", async () => 
       query: "release plan",
       kinds: ["raw"],
       include_sources: ["claude-code"],
+      raw_unit: "turn",
       limit: 20,
       character_budget: 12_000,
     },

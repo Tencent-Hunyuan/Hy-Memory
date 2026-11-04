@@ -87,7 +87,12 @@ export interface ContextSearchResponse {
 
 export interface SdkRawContextItem {
   kind: "raw";
+  /** Parent SDK L1 raw storage batch. */
   raw_id: string;
+  /** Stable product identity of one turn inside `raw_id`, when requested. */
+  turn_id?: string | null;
+  turn_index?: number | null;
+  turn_count?: number | null;
   content: string;
   source: string;
   session_id: string;

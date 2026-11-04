@@ -61,6 +61,7 @@ import {
   type RawMapRecord,
   rawDetail,
   rawLibraryPage,
+  rawRecordId,
   rawSearchPage,
 } from "./sdk-raw-map";
 import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
@@ -277,8 +278,11 @@ export function MemorySpace({
         const rememberRaw = (items: RawMapRecord[]) => {
           const next = new Map<string, RawMapRecord>();
           if (selectedRawRef.current)
-            next.set(selectedRawRef.current.raw_id, selectedRawRef.current);
-          for (const item of items) next.set(item.raw_id, item);
+            next.set(
+              rawRecordId(selectedRawRef.current),
+              selectedRawRef.current,
+            );
+          for (const item of items) next.set(rawRecordId(item), item);
           rawRecords.current = next;
         };
         const [page, graph] = lite
@@ -717,7 +721,9 @@ export function MemorySpace({
               offset,
               limit: 500,
             });
-            const full = page.items.find((item) => item.raw_id === memoryId);
+            const full = page.items.find(
+              (item) => rawRecordId(item) === memoryId,
+            );
             if (full) {
               record = full;
               rawRecords.current.set(memoryId, full);

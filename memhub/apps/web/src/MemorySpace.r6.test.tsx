@@ -387,6 +387,67 @@ it("pages and filters the raw conversation data plane in lite", async () => {
   );
 });
 
+it("selects and renders one turn when two turns share a raw storage batch", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("lite"));
+  reads.raw.mockResolvedValue({
+    items: [
+      {
+        raw_id: "raw-batch",
+        turn_id: "raw-turn:batch:0",
+        turn_index: 0,
+        turn_count: 2,
+        content: "[user]: 第一问\n[assistant]: 第一答",
+        user_id: "local",
+        agent_id: "all-apps",
+        source: "cursor",
+        session_id: "session-batch",
+        memory_at: null,
+        gmt_created: 1_761_000_000,
+        custom: {},
+        messages: [
+          { role: "user", content: "第一问" },
+          { role: "assistant", content: "第一答" },
+        ],
+      },
+      {
+        raw_id: "raw-batch",
+        turn_id: "raw-turn:batch:1",
+        turn_index: 1,
+        turn_count: 2,
+        content: "[user]: 第二问\n[assistant]: 第二答",
+        user_id: "local",
+        agent_id: "all-apps",
+        source: "cursor",
+        session_id: "session-batch",
+        memory_at: null,
+        gmt_created: 1_761_000_000,
+        custom: {},
+        messages: [
+          { role: "user", content: "第二问" },
+          { role: "assistant", content: "第二答" },
+        ],
+      },
+    ],
+    total: 2,
+    limit: 20,
+    offset: 0,
+    unit: "turn",
+  });
+  const user = userEvent.setup();
+  render(<MemorySpace simplified />);
+
+  await user.click(await screen.findByRole("button", { name: /第二问/ }));
+
+  await waitFor(() => {
+    const detail = document.querySelector(".map-dialogue-reading");
+    expect(detail?.textContent).toContain("第二问");
+    expect(detail?.textContent).toContain("第二答");
+    expect(detail?.textContent).not.toContain("第一问");
+    expect(detail?.textContent).not.toContain("第一答");
+  });
+});
+
 it("switches data planes without keeping rows or details from the prior mode", async () => {
   setup();
   vi.useFakeTimers();
@@ -482,6 +543,27 @@ it("opens a search hit with the complete role transcript", async () => {
           items: [
             {
               raw_id: "raw-search",
+              turn_id: "raw-turn:search:0",
+              turn_index: 0,
+              turn_count: 2,
+              content: "[user]: 第一轮问题\n[assistant]: 第一轮回答",
+              user_id: "local",
+              agent_id: "all-apps",
+              source: "cursor",
+              session_id: "session-search",
+              memory_at: null,
+              gmt_created: 1_761_000_000,
+              custom: {},
+              messages: [
+                { role: "user", content: "第一轮问题" },
+                { role: "assistant", content: "第一轮回答" },
+              ],
+            },
+            {
+              raw_id: "raw-search",
+              turn_id: "raw-turn:search:1",
+              turn_index: 1,
+              turn_count: 2,
               content: "[user]: 完整问题\n[assistant]: 完整回答",
               user_id: "local",
               agent_id: "all-apps",
@@ -496,7 +578,7 @@ it("opens a search hit with the complete role transcript", async () => {
               ],
             },
           ],
-          total: 1,
+          total: 2,
           limit: 500,
           offset: 0,
         }
@@ -506,6 +588,9 @@ it("opens a search hit with the complete role transcript", async () => {
     {
       kind: "raw",
       raw_id: "raw-search",
+      turn_id: "raw-turn:search:1",
+      turn_index: 1,
+      turn_count: 2,
       content: "被截断的搜索摘要",
       source: "cursor",
       session_id: "session-search",
@@ -525,6 +610,9 @@ it("opens a search hit with the complete role transcript", async () => {
 
   expect(await screen.findByText("完整问题")).toBeTruthy();
   expect(screen.getByText("完整回答")).toBeTruthy();
+  expect(
+    document.querySelector(".map-dialogue-reading")?.textContent,
+  ).not.toContain("第一轮问题");
   expect(reads.raw).toHaveBeenCalledWith(
     expect.objectContaining({
       source: "cursor",

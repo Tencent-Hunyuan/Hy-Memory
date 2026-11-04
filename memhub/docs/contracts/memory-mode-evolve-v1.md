@@ -12,7 +12,7 @@ memory route. `user_id` is optional (default `local`) and must match
 
 | Mode | SDK client | What happens to a conversation | What search reads |
 |---|---|---|---|
-| `lite` | `mode="lite"` | Stored as one raw turn with one embedding. No model call; no generation model needs to be configured. | Raw turns only (the SDK forces `L1_RAW`). |
+| `lite` | `mode="lite"` | Stored in embedded L1 raw batches. No model call; no generation model needs to be configured. The product page projects each batch back into individual conversation turns. | Raw turns only (the SDK forces `L1_RAW`). |
 | `pro` (default) | `mode="pro"` | Stored as raw, then a model extracts memories (System 1). The raw becomes SHADOW once extraction succeeds. | Extracted memories (facts, profile, intentions). |
 | `ultra` | `mode="ultra"` | Same as pro, and new facts are also projected into the knowledge graph. Every night, evolve runs System 2 for every user. | Same as pro, plus the graph-backed lanes below. |
 
