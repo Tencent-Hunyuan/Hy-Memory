@@ -4,38 +4,6 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
-- MemHub App now exposes the complete memory-mode lifecycle. New installs
-  explicitly choose lite or pro during onboarding; pro completes only after a
-  generation model is active, while ultra remains an advanced Settings choice.
-  Settings shows mode effects, graph backfill, the default 03:00 evolve
-  schedule and manual evolve. The memory page shows original conversations in
-  lite and advanced memories in pro/ultra. Existing installs remain pro unless
-  the user changes them, and embedding maintenance blocks mode/evolve changes.
-- MemHub pins `hy-memory==2.0.14`. Lite search is plain RAG over raw: the
-  App's lite search, CLI context search, `/api/v1/recall` and the Host Bridge
-  (`MemHub_recall`, context search) return every vector hit above the floor,
-  ranked by score, over active and shadow raws, so history pro already
-  processed is still found after switching to lite. The turn view no longer
-  drops a hit whose turns do not literally contain the query; it shows the
-  hit's closest turn instead. Pro and ultra raw search stays active-only.
-  Fixes every raw search failing in packaged builds since #316, which passed
-  `statuses` to an SDK (2.0.13) that did not accept it. The lite raw-turn
-  page also stops re-listing the whole raw layer on each poll when a live
-  session only adds new raws.
-- MemHub Core no longer stalls writes or freezes the App for tens of seconds
-  on a machine with a long live-sync history. Finished live-sync import jobs
-  are pruned to the newest 20 per source (at startup, in bounded batches, and
-  every 10 minutes); history imports and every unfinished job are kept. Job
-  lookups are filtered in SQL with new indexes (schema migration 63) instead
-  of reading the whole table. The durable write queue runs its claims,
-  settles and lease renewals on its own threads, so import work can no longer
-  starve a lease. Import abandon, resume and enqueue, and the file watcher's
-  path attribution, no longer touch the database or the disk on the event
-  loop, and the WAL cadence checkpoint runs on its own thread instead of on
-  the writer's. The write drain now restarts itself after an unexpected exit,
-  reports the failure with its stack, and shows `write_drain` /
-  `write_drain_error` in memory-processing and `memhub status`.
-
 ## Hy Memory 2.0.14 — 2026-11-04
 
 - `search()` / `async_search()` take an optional `statuses` for explicit
@@ -114,11 +82,63 @@ Hy Memory and MemHub are versioned and released independently.
   like the other feature switches. The API answer gains `parameters`, and
   `pipeline.features` can now carry the threshold as a number. Refs #241.
 
-## MemHub 1.0.6 — 2026-11-02
+## MemHub 1.0.6 — 2026-11-04
 
 Build 41, on `hy-memory==2.0.14`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
+- MemHub App now exposes the complete memory-mode lifecycle. New installs
+  explicitly choose lite or pro during onboarding; pro completes only after a
+  generation model is active, while ultra remains an advanced Settings choice.
+  Settings shows mode effects, graph backfill, the default 03:00 evolve
+  schedule and manual evolve. The memory page shows original conversations in
+  lite and advanced memories in pro/ultra. Existing installs remain pro unless
+  the user changes them, and embedding maintenance blocks mode/evolve changes.
+- MemHub pins `hy-memory==2.0.14`. Lite search is plain RAG over raw: the
+  App's lite search, CLI context search, `/api/v1/recall` and the Host Bridge
+  (`MemHub_recall`, context search) return every vector hit above the floor,
+  ranked by score, over active and shadow raws, so history pro already
+  processed is still found after switching to lite. The turn view no longer
+  drops a hit whose turns do not literally contain the query; it shows the
+  hit's closest turn instead. Pro and ultra raw search stays active-only.
+  Fixes every raw search failing in packaged builds since #316, which passed
+  `statuses` to an SDK (2.0.13) that did not accept it. The lite raw-turn
+  page also stops re-listing the whole raw layer on each poll when a live
+  session only adds new raws.
+- MemHub Core no longer stalls writes or freezes the App for tens of seconds
+  on a machine with a long live-sync history. Finished live-sync import jobs
+  are pruned to the newest 20 per source (at startup, in bounded batches, and
+  every 10 minutes); history imports and every unfinished job are kept. Job
+  lookups are filtered in SQL with new indexes (schema migration 63) instead
+  of reading the whole table. The durable write queue runs its claims,
+  settles and lease renewals on its own threads, so import work can no longer
+  starve a lease. Import abandon, resume and enqueue, and the file watcher's
+  path attribution, no longer touch the database or the disk on the event
+  loop, and the WAL cadence checkpoint runs on its own thread instead of on
+  the writer's. The write drain now restarts itself after an unexpected exit,
+  reports the failure with its stack, and shows `write_drain` /
+  `write_drain_error` in memory-processing and `memhub status`.
+- Model Center (#293, #295): Settings splits into 界面语言 / 记忆模式 /
+  模型配置 pages, with separate 记忆整理 (generation) and 记忆搜索
+  (embedding) lanes. Changing one lane sends only that lane's patch. An
+  embedding change shows the switch plan, confirmation, progress, cancel and
+  rollback, and the search model only changes after the rebuilt index is
+  verified. Model panels open inside the lane that launched them and close
+  only after Core confirms the profile is active (#310).
+- Lite keeps raw conversations (#297): lite raw writes are no longer stopped
+  by the "pause model sedimentation" switch, the memory page lists every
+  imported raw conversation by role (by turn since #316), and lite adds a
+  manual raw input (source `one-memory-manual`) that never calls a
+  generation model.
+- The home page follows the memory mode (#298): lite counts raw
+  conversations and previews the latest one; pro and ultra read memories.
+  Pro and ultra now require an active generation model, in both the mode
+  preview and the switch.
+- Onboarding (#304) asks for lite or pro and resumes after a restart (schema
+  migration 62); pro finishes only once a generation model is active.
+- Smaller App fixes: compact home status copy (#307), clearer mode-switch
+  effects (#312), Ultra topic nodes are hover-only (#315), and settings
+  controls use the content width (#317).
 - Interfaces in 11 languages: English, Simplified and Traditional Chinese,
   Japanese, Spanish, German, Portuguese, French, Korean, Russian and
   Indonesian. Every interface language, Simplified Chinese included, sets the
