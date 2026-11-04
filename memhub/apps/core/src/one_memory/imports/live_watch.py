@@ -23,6 +23,7 @@ from pathlib import Path
 
 from watchfiles import awatch
 
+from one_memory.background_work import in_the_background
 from one_memory.diagnostic_log import diagnostic_event
 from one_memory.imports.jobs import ImportStatus
 from one_memory.imports.live_sync import PollingLiveSyncSupervisor
@@ -90,7 +91,8 @@ class FileWatchLiveSync:
                 # turn that caused setup. The watcher cannot observe a change
                 # from before it existed, so immediately run the same bounded
                 # trigger once instead of waiting for the 60-second backstop.
-                self._queue_changes(set(self.roots.values()))
+                # The roots are this watcher's own sources: nothing to resolve.
+                self._queue_sources(tuple(self.roots), count=len(self.roots))
 
     async def shutdown(self) -> None:
         task = self._task
@@ -139,28 +141,54 @@ class FileWatchLiveSync:
         observed_at: datetime | None = None,
     ) -> tuple[str, ...]:
         """Queue affected sources and wait for their coalesced work to settle."""
-        workers = self._queue_changes(changed, observed_at=observed_at)
+        workers = await self._queue_changes(changed, observed_at=observed_at)
         await asyncio.gather(*(asyncio.shield(worker) for worker in workers.values()))
         return tuple(workers)
 
-    def _queue_changes(
+    def sources_for(self, changed: set[Path]) -> tuple[str, ...]:
+        """The sources owning `changed`, in path order. Resolves every path."""
+        return tuple(
+            dict.fromkeys(
+                source
+                for source in (self.source_for(path) for path in sorted(changed))
+                if source is not None
+            )
+        )
+
+    async def _queue_changes(
         self, changed: set[Path], *, observed_at: datetime | None = None
+    ) -> dict[str, asyncio.Task[None]]:
+        """Attribute a batch of changed paths to sources and queue them.
+
+        Attributing resolves each path, a `stat` per component, and a busy
+        host reports hundreds of paths at once. On the loop that was the main
+        thread inside `source_for` while nothing else was answered, so the
+        resolving happens off it and only the queueing here.
+        """
+        if self._stop.is_set():
+            return {}
+        observed = observed_at or datetime.now(UTC)
+        sources = await in_the_background(self.sources_for, changed)
+        return self._queue_sources(sources, count=len(changed), observed_at=observed)
+
+    def _queue_sources(
+        self,
+        sources: tuple[str, ...],
+        *,
+        count: int,
+        observed_at: datetime | None = None,
     ) -> dict[str, asyncio.Task[None]]:
         if self._stop.is_set():
             return {}
         observed = observed_at or datetime.now(UTC)
         workers: dict[str, asyncio.Task[None]] = {}
-        for source_id in dict.fromkeys(
-            source
-            for source in (self.source_for(path) for path in sorted(changed))
-            if source is not None
-        ):
+        for source_id in sources:
             diagnostic_event(
                 level="debug",
                 component="import.live_watch",
                 event="live_sync.hook_received",
                 outcome="queued",
-                details={"source_id": source_id, "count": len(changed)},
+                details={"source_id": source_id, "count": count},
             )
             self._pending[source_id] = max(self._pending.get(source_id, observed), observed)
             worker = self._workers.get(source_id)
@@ -239,7 +267,7 @@ class FileWatchLiveSync:
                 stop_event=self._stop,
                 ignore_permission_denied=True,
             ):
-                self._queue_changes({Path(path) for _change, path in changes})
+                await self._queue_changes({Path(path) for _change, path in changes})
         except asyncio.CancelledError:
             raise
         except Exception:

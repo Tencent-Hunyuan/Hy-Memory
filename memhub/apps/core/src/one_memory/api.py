@@ -49,6 +49,7 @@ from one_memory.auth import local_api_guard, renderer_origins
 from one_memory.background_work import (
     in_sdk_read,
     in_the_background,
+    in_the_write_queue,
     shutdown_bulk_pool,
     warm_bulk_pool,
 )
@@ -164,6 +165,7 @@ from one_memory.imports.grants import (
 )
 from one_memory.imports.host_packages import CapabilityState, HostPackageCapabilities
 from one_memory.imports.jobs import (
+    PRUNE_BATCH_ROWS,
     ImportIssueRecord,
     ImportJob,
     ImportJobStore,
@@ -743,6 +745,12 @@ class MemoryProcessingSummary(BaseModel):
     #: The last provider failure behind the pause, as a stable code
     #: (`model_auth_failed`, `model_not_found`, `model_unreachable`, ...).
     llm_backoff_error: str | None = None
+    #: The durable write drain, the queue's only consumer: `running`,
+    #: `restarting` (it exited on an error and comes back after a pause) or
+    #: `stopped`; None before startup recovery has started it.
+    write_drain: Literal["running", "restarting", "stopped"] | None = None
+    #: Why the drain last exited unexpectedly, as a stable code; None if never.
+    write_drain_error: str | None = None
 
 
 class MemoryModeState(BaseModel):
@@ -1502,7 +1510,7 @@ def create_app(
                 # under a new SDK request id; the re-run first asks the SDK
                 # whether the old one landed (`execute_job`). Nothing stays
                 # `unknown` waiting for a person.
-                await in_the_background(
+                await in_the_write_queue(
                     memory_write_queue.recover_unknown,
                     in_flight=sdk_write_in_flight,
                 )
@@ -1631,6 +1639,7 @@ def create_app(
             # Started by `recover_after_ready`: a running drain claims jobs and
             # holds the single writer, which the rest of startup still needs.
             app.state.memory_write_drain_task = None
+            app.state.import_job_pruning = None
             # D52: every entry that already holds committed Evidence goes
             # through the one durable queue. The intake turns one record into
             # one complete-turn request; the drain stays the only consumer, so
@@ -1873,10 +1882,19 @@ def create_app(
                         app.state.embedding_switch.start_retention()
 
                 async def start_write_drain() -> None:
+                    # Supervised: an unexpected exit is reported and the drain
+                    # restarts, instead of stranding every queued write.
                     app.state.memory_write_drain_task = watched_task(
                         asyncio.get_running_loop(),
-                        lambda: memory_write_drain.run_forever(),
+                        lambda: memory_write_drain.run_supervised(),
                         name="one-memory-durable-write-drain",
+                    )
+
+                async def start_import_job_pruning() -> None:
+                    app.state.import_job_pruning = watched_task(
+                        asyncio.get_running_loop(),
+                        lambda: _prune_finished_import_jobs(app.state.import_job_store),
+                        name="one-memory-import-job-pruning",
                     )
 
                 async def resume_graph_backfill() -> None:
@@ -1949,7 +1967,7 @@ def create_app(
                             )
 
                 async def resume_imports() -> None:
-                    app.state.import_supervisor.resume_interrupted()
+                    await app.state.import_supervisor.resume_interrupted_off_loop()
 
                 async def start_live_sync() -> None:
                     if runtime_settings.live_sync_enabled:
@@ -1989,6 +2007,7 @@ def create_app(
                         await step("evolve_schedule", start_evolve_schedule)
                     else:
                         await step("pending_dispatch_replay", replay_pending_dispatch)
+                    await step("import_job_pruning", start_import_job_pruning)
                     await step("import_resume", resume_imports)
                     await step("live_sync", start_live_sync)
                     await step("source_reconcile", _reconcile_source_sync_from_config)
@@ -2078,6 +2097,10 @@ def create_app(
                     # Recovery never reached the metadata repair step.
                     release_stores(runtime_settings.data_dir)
                     app.state.sdk_stores_held = False
+                if app.state.import_job_pruning is not None:
+                    app.state.import_job_pruning.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await app.state.import_job_pruning
                 await app.state.import_supervisor.shutdown()
                 app.state.memory_write_drain.stop()
                 if app.state.memory_write_drain_task is not None:
@@ -2816,17 +2839,16 @@ def create_app(
         await _refuse_overlapping_root(source_id, registration.candidate.path, DEFAULT_USER_ID)
         root_changed = prior is not None and prior.root_id != request.expected_root_id
         if root_changed:
-            source_jobs = [job for job in _job_store(app).list_jobs() if job.source_id == source_id]
+            source_jobs = await asyncio.to_thread(
+                partial(
+                    _job_store(app).find_jobs,
+                    source_id=source_id,
+                    statuses=_UNFINISHED_IMPORT_STATUSES,
+                )
+            )
             if any(job.status is ImportStatus.RUNNING for job in source_jobs):
                 raise HTTPException(status_code=409, detail="source_import_busy")
             for job in source_jobs:
-                if job.status not in {
-                    ImportStatus.PENDING,
-                    ImportStatus.PAUSED,
-                    ImportStatus.INTERRUPTED,
-                    ImportStatus.FAILED,
-                }:
-                    continue
                 await _supervisor(app).cancel(job.job_id)
         try:
             receipt = await asyncio.to_thread(
@@ -3005,21 +3027,18 @@ def create_app(
         user's own cursors and history job.
         """
         await _live_sync(app).initialize_source(source_id, baseline_missing_files=True)
-        active = {
-            ImportStatus.PENDING,
-            ImportStatus.PAUSED,
-            ImportStatus.INTERRUPTED,
-            ImportStatus.RUNNING,
-            ImportStatus.FAILED,
-        }
-        if any(
-            lane_key(job.user_id, job.source_id) == source_id
-            and job.operation == "history"
-            and job.status in active
-            for job in _job_store(app).list_jobs()
-        ):
-            return
         user_id, bare_source_id = split_lane(source_id)
+        active_history = await asyncio.to_thread(
+            partial(
+                _job_store(app).latest_job,
+                user_id=user_id,
+                source_id=bare_source_id,
+                operation="history",
+                statuses=_UNFINISHED_IMPORT_STATUSES,
+            )
+        )
+        if active_history is not None:
+            return
         await asyncio.to_thread(
             _job_store(app).create,
             user_id=user_id,
@@ -3029,18 +3048,25 @@ def create_app(
 
     async def _activate_source_resume(source_id: str) -> None:
         """Run work prepared for a source after config.json has committed."""
+        user_id, bare_source_id = split_lane(source_id)
         try:
-            for job in _job_store(app).list_jobs():
-                if lane_key(job.user_id, job.source_id) != source_id:
-                    continue
+            for job in await asyncio.to_thread(
+                partial(
+                    _job_store(app).find_jobs,
+                    user_id=user_id,
+                    source_id=bare_source_id,
+                    statuses=(
+                        ImportStatus.PENDING,
+                        ImportStatus.PAUSED,
+                        ImportStatus.INTERRUPTED,
+                        ImportStatus.FAILED,
+                    ),
+                )
+            ):
                 if job.status is ImportStatus.PENDING:
-                    _supervisor(app).enqueue(job.job_id)
-                elif job.status in {
-                    ImportStatus.PAUSED,
-                    ImportStatus.INTERRUPTED,
-                    ImportStatus.FAILED,
-                }:
-                    _supervisor(app).resume(job.job_id)
+                    await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
+                else:
+                    await _supervisor(app).resume_off_loop(job.job_id)
         except SourceAccessError as error:
             raise HTTPException(status_code=409, detail=error.code) from None
         if app.state.settings.automatic_memory_processing:
@@ -3067,22 +3093,19 @@ def create_app(
         _require_registration(app, source_id)
         if user_id != DEFAULT_USER_ID:
             return await _revoke_other_user_grant(source_id, user_id)
-        receipt = _grant_store(app).receipt(
-            user_id="local",
-            source_id=source_id,
+        receipt = await asyncio.to_thread(
+            partial(_grant_store(app).receipt, user_id="local", source_id=source_id)
         )
         if receipt is None:
             raise HTTPException(status_code=404, detail="grant_not_found")
-        active_statuses = {
-            ImportStatus.PENDING,
-            ImportStatus.RUNNING,
-            ImportStatus.PAUSED,
-            ImportStatus.INTERRUPTED,
-            ImportStatus.FAILED,
-        }
-        for job in _job_store(app).list_jobs():
-            if job.source_id == source_id and job.status in active_statuses:
-                await _supervisor(app).cancel(job.job_id)
+        for job in await asyncio.to_thread(
+            partial(
+                _job_store(app).find_jobs,
+                source_id=source_id,
+                statuses=_UNFINISHED_IMPORT_STATUSES,
+            )
+        ):
+            await _supervisor(app).cancel(job.job_id)
         # Revocation is the user's node for "stop using this source" (D73):
         # park unfinished extraction instead of leaving it to fail later, so
         # re-authorizing resumes the same work.
@@ -3094,9 +3117,8 @@ def create_app(
         await _live_sync(app).stop_source(source_id)
         _supervisor(app).unregister_adapter(source_id)
         _detection(app).pop(source_id, None)
-        receipt = _grant_store(app).revoke(
-            user_id="local",
-            source_id=source_id,
+        receipt = await asyncio.to_thread(
+            partial(_grant_store(app).revoke, user_id="local", source_id=source_id)
         )
         await asyncio.to_thread(_config_store(app).set_sync, source_id, False)
         await _refresh_live_watch(app)
@@ -3112,16 +3134,15 @@ def create_app(
         )
         if receipt is None:
             raise HTTPException(status_code=404, detail="grant_not_found")
-        active_statuses = {
-            ImportStatus.PENDING,
-            ImportStatus.RUNNING,
-            ImportStatus.PAUSED,
-            ImportStatus.INTERRUPTED,
-            ImportStatus.FAILED,
-        }
-        for job in _job_store(app).list_jobs():
-            if lane_key(job.user_id, job.source_id) == lane and job.status in active_statuses:
-                await _supervisor(app).cancel(job.job_id)
+        for job in await asyncio.to_thread(
+            partial(
+                _job_store(app).find_jobs,
+                user_id=user_id,
+                source_id=source_id,
+                statuses=_UNFINISHED_IMPORT_STATUSES,
+            )
+        ):
+            await _supervisor(app).cancel(job.job_id)
         await _live_sync(app).stop_source(lane)
         _supervisor(app).unregister_adapter(lane)
         receipt = await asyncio.to_thread(
@@ -3186,7 +3207,7 @@ def create_app(
             )
         except SourceAccessError as error:
             raise HTTPException(status_code=409, detail=error.code) from None
-        _supervisor(app).enqueue(job.job_id)
+        await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
         return job
 
     @app.post(
@@ -3481,8 +3502,10 @@ def create_app(
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> list[ImportJob]:
         # One user's jobs: the App reads `local`'s and must not show another
-        # user's Hermes import as its own.
-        return [job for job in _job_store(app).list_jobs() if job.user_id == user_id]
+        # user's Hermes import as its own. Every one of them, oldest first, as
+        # before; finished live syncs past the newest twenty per source are
+        # pruned (`prune_finished_sync_jobs`), so this list stays short.
+        return _job_store(app).find_jobs(user_id=user_id)
 
     @app.get(
         "/api/v1/live-sync",
@@ -3579,7 +3602,7 @@ def create_app(
         dependencies=protected,
     )
     async def pause_import_job(job_id: str) -> ImportJob:
-        _require_job(app, job_id)
+        await asyncio.to_thread(_require_job, app, job_id)
         return await _translate_transition(_supervisor(app).pause(job_id))
 
     @app.post(
@@ -3588,11 +3611,11 @@ def create_app(
         dependencies=protected,
     )
     async def resume_import_job(job_id: str) -> ImportJob:
-        job = _require_job(app, job_id)
+        job = await asyncio.to_thread(_require_job, app, job_id)
         if job.status in {ImportStatus.COMPLETED, ImportStatus.CANCELLED}:
             raise HTTPException(status_code=409, detail="job_not_resumable")
         try:
-            return _supervisor(app).resume(job_id)
+            return await _supervisor(app).resume_off_loop(job_id)
         except InvalidJobTransitionError:
             raise HTTPException(409, "invalid_job_transition") from None
 
@@ -3602,7 +3625,7 @@ def create_app(
         dependencies=protected,
     )
     async def cancel_import_job(job_id: str) -> ImportJob:
-        _require_job(app, job_id)
+        await asyncio.to_thread(_require_job, app, job_id)
         return await _translate_transition(_supervisor(app).cancel(job_id))
 
     @app.get(
@@ -4861,6 +4884,7 @@ def create_app(
         running_rows = counts.get(MemoryTaskStatus.RUNNING, 0)
         backoff = cast(ModelBackoff | None, getattr(app.state, "model_backoff", None))
         backoff_state = backoff.state() if backoff is not None else None
+        drain = getattr(app.state, "memory_write_drain", None)
         return MemoryProcessingSummary(
             pending=(
                 sdk_counts.get("pending", 0)
@@ -4908,6 +4932,8 @@ def create_app(
                 if backoff_state is not None and backoff_state.until is not None
                 else None
             ),
+            write_drain=getattr(drain, "liveness", None),
+            write_drain_error=getattr(drain, "last_error_code", None),
         )
 
     @app.get(
@@ -5705,6 +5731,16 @@ def _diagnostic_request_details(request: Request, event: str | None) -> dict[str
     return details
 
 
+#: Every state a job can still leave: the ones a revoke or re-root cancels.
+_UNFINISHED_IMPORT_STATUSES = (
+    ImportStatus.PENDING,
+    ImportStatus.RUNNING,
+    ImportStatus.PAUSED,
+    ImportStatus.INTERRUPTED,
+    ImportStatus.FAILED,
+)
+
+
 def _require_job(app: FastAPI, job_id: str) -> ImportJob:
     try:
         return _job_store(app).require(job_id)
@@ -5977,6 +6013,54 @@ def _backfill_state(
     if task is None or task.done():
         return "done"
     return "running"
+
+
+#: How often finished live syncs are pruned while the Core runs, and how many
+#: bounded batches one such pass may take (`prune_finished_sync_jobs`).
+IMPORT_JOB_PRUNE_SECONDS = 600.0
+IMPORT_JOB_PRUNE_PASS_BATCHES = 10
+
+
+async def _prune_finished_import_jobs(
+    store: ImportJobStore,
+    *,
+    interval_seconds: float = IMPORT_JOB_PRUNE_SECONDS,
+    pass_batches: int = IMPORT_JOB_PRUNE_PASS_BATCHES,
+) -> None:
+    """Keep `import_jobs` bounded: at startup down to the keep count, then on a timer.
+
+    Every batch is its own short write transaction, made off the loop, with a
+    pause between batches so the writer's line keeps moving. The first pass
+    runs until nothing is left, which on a home that grew for weeks is the
+    one long pass; after it each pass is at most `pass_batches` batches.
+    A busy database skips the rest of a pass rather than failing it.
+    """
+    first = True
+    while True:
+        removed_total = 0
+        batches = 0
+        while first or batches < pass_batches:
+            try:
+                removed = await in_the_background(store.prune_finished_sync_jobs)
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error).lower() and "busy" not in str(error).lower():
+                    raise
+                logger.info("import_jobs_prune_deferred error_type=%s", type(error).__name__)
+                break
+            batches += 1
+            removed_total += removed
+            if removed < PRUNE_BATCH_ROWS:
+                break
+            await asyncio.sleep(0.05)
+        if removed_total:
+            logger.info(
+                "import_jobs_pruned removed=%d batches=%d startup=%s",
+                removed_total,
+                batches,
+                first,
+            )
+        first = False
+        await asyncio.sleep(interval_seconds)
 
 
 async def _keep_loop_heartbeat(watchdog: LoopWatchdog) -> None:
@@ -7021,12 +7105,12 @@ def _history_import_gate_released(app: FastAPI) -> bool:
         app.state.history_import_gate_released = True
         return True
     selected = set(state.selected_source_ids)
+    # Asked inside the drain's claim, per candidate: history jobs of `local`
+    # only, in SQL, never the whole table.
     matching = [
         job
-        for job in jobs.list_jobs()
-        if job.operation == "history"
-        and job.user_id == DEFAULT_USER_ID
-        and job.source_id in selected
+        for job in jobs.find_jobs(user_id=DEFAULT_USER_ID, operation="history")
+        if job.source_id in selected
         and (state.started_at is None or job.created_at >= state.started_at)
     ]
     if {job.source_id for job in matching} != selected:

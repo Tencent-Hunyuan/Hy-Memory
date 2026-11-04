@@ -28,10 +28,11 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from one_memory.background_work import in_the_background
+from one_memory.background_work import in_lease_renewal, in_the_write_queue
 from one_memory.conversation_processing import TURN_IDLE_FLUSH_SECONDS, turn_batches
 from one_memory.database_access import main_database
 from one_memory.diagnostic_log import diagnostic_event
+from one_memory.exception_reporting import report_exception
 from one_memory.imports.models import EvidenceOrigin, EvidenceRecord
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.contracts import (
@@ -449,6 +450,14 @@ class ReconcileSchemaUnavailableError(RuntimeError):
 
 class _LeaseRenewalFatalError(RuntimeError):
     """A non-transient renewal failure that must stop the worker."""
+
+
+def _drain_exit_code(error: BaseException) -> str:
+    """A stable, lowercase code for why the drain exited; never message text."""
+    if isinstance(error, _LeaseRenewalFatalError):
+        return "lease_renewal_failed"
+    name = re.sub(r"(?<!^)(?=[A-Z])", "_", type(error).__name__).lower()
+    return name if re.fullmatch(r"[a-z_]{1,64}", name) else "drain_error"
 
 
 @dataclass(frozen=True)
@@ -2562,14 +2571,14 @@ async def execute_job(
     # Every store call here is synchronous SQLite work on the single writer or
     # a reader; made from the loop it would block health checks and the API for
     # as long as the write lock is held.
-    request = await in_the_background(queue.payload_for, job_id)
+    request = await in_the_write_queue(queue.payload_for, job_id)
     if request is None:
         # A claimed row whose payload is missing or unreadable (reaped while
         # still claimable, corrupted, or a foreign row) must not be left
         # `running`: nothing was sent, so it is a terminal failure rather than
         # an unknown, and the lease must be released so it is not held until it
         # lapses.
-        await in_the_background(
+        await in_the_write_queue(
             queue.settle,
             job_id,
             state=FAILED,
@@ -2579,9 +2588,9 @@ async def execute_job(
         )
         return
     try:
-        records = await in_the_background(evidence_for_request, evidence, request)
+        records = await in_the_write_queue(evidence_for_request, evidence, request)
     except LookupError as error:
-        await in_the_background(
+        await in_the_write_queue(
             queue.settle,
             job_id,
             state=FAILED,
@@ -2618,7 +2627,7 @@ async def execute_job(
         source_id = lane_key(next(iter(users), DEFAULT_USER_ID), source_id)
 
         async def mark() -> bool:
-            return await in_the_background(queue.mark_invoked, job_id, owner=owner)
+            return await in_the_write_queue(queue.mark_invoked, job_id, owner=owner)
 
         if admit_hy_invocation is not None:
             admitted = await admit_hy_invocation(source_id, requires_generation, mark)
@@ -2633,7 +2642,7 @@ async def execute_job(
             raise RuntimeError("durable_write_lease_lost_before_invocation")
         hy_invoked = True
 
-    attempt = await in_the_background(queue.sdk_attempt, job_id)
+    attempt = await in_the_write_queue(queue.sdk_attempt, job_id)
     window = model_failures() if model_failures is not None else nullcontext(None)
     provider: ModelAttempt | None = None
     try:
@@ -2675,7 +2684,7 @@ async def execute_job(
             }
             and not hy_invoked
         ):
-            await in_the_background(queue.release_unstarted, job_id, owner=owner)
+            await in_the_write_queue(queue.release_unstarted, job_id, owner=owner)
             return
         provider_failure = provider.failure if provider is not None else None
         if hy_invoked and provider_failure is not None:
@@ -2683,7 +2692,7 @@ async def execute_job(
             # gone, a provider that is down): the job is fine and waits for
             # the provider, in its place, without spending a retry. The
             # breaker paces when it is tried again.
-            await in_the_background(
+            await in_the_write_queue(
                 queue.requeue_for_model, job_id, error_code=provider_failure, owner=owner
             )
             logger.info(
@@ -2712,7 +2721,7 @@ async def execute_job(
         elif not hy_invoked and code in MODEL_NOT_READY_CODES:
             state = WAITING_FOR_MODEL
         if state is not None:
-            await in_the_background(
+            await in_the_write_queue(
                 queue.settle,
                 job_id,
                 state=state,
@@ -2724,7 +2733,7 @@ async def execute_job(
             # Anything else is this job's own trouble: content the model or
             # the SDK refused, a reply that did not parse, a check that failed
             # after the write. Retried a few times, then `failed`.
-            state = await in_the_background(
+            state = await in_the_write_queue(
                 queue.retry_or_fail, job_id, error_code=code, owner=owner
             )
         # Never `logger.exception` here: it prints the exception's message,
@@ -2751,7 +2760,7 @@ async def execute_job(
                 error_chain_text(error),
             )
         return
-    await in_the_background(
+    await in_the_write_queue(
         queue.settle,
         job_id,
         state=COMPLETED,
@@ -2760,13 +2769,13 @@ async def execute_job(
         sdk_memory_ids=memory_ids,
     )
     release = getattr(evidence, "release_sdk_staging", None)
-    durable_receipt = await in_the_background(queue.sdk_receipt, job_id)
+    durable_receipt = await in_the_write_queue(queue.sdk_receipt, job_id)
     if (
         callable(release)
         and durable_receipt is not None
         and (durable_receipt.raw_ids or durable_receipt.memory_ids)
     ):
-        await in_the_background(
+        await in_the_write_queue(
             release,
             tuple(record.evidence_id for record in records),
         )
@@ -2891,6 +2900,16 @@ class DurableWriteDrain:
         #: a minute against a provider that refused every one (#245).
         self.model_claim_allowance = model_claim_allowance
         self._last_unknown_reconcile: datetime | None = None
+        #: What `run_supervised` says about the drain: None before it was
+        #: first started, then `running`, `restarting` (it exited on an error
+        #: and waits out its backoff) or `stopped`. Shown by memory-processing.
+        self.liveness: Literal["running", "restarting", "stopped"] | None = None
+        #: The stable code of the last unexpected exit, kept after a restart.
+        self.last_error_code: str | None = None
+        self.restarts = 0
+        self._stop_requested = False
+        #: Wakes a restart backoff, so `stop()` does not wait it out.
+        self._stopping = asyncio.Event()
 
     def claim(
         self,
@@ -3218,7 +3237,7 @@ class DurableWriteDrain:
             # Claim is a blocking SQLite write on the single writer connection.
             # Run it off the loop, like every other DB call in this chain; a
             # busy writer would otherwise stall the whole event loop.
-            ids = await in_the_background(
+            ids = await in_the_write_queue(
                 self.claim,
                 limit=limit,
                 budget_ms=self.claim_budget_ms,
@@ -3231,10 +3250,10 @@ class DurableWriteDrain:
         await asyncio.gather(*(self._run_claimed_job(job_id) for job_id in ids))
 
     async def _run_claimed_job(self, job_id: str) -> None:
-        if not await in_the_background(self.still_owns, job_id):
+        if not await in_the_write_queue(self.still_owns, job_id):
             logger.warning("durable_write_drain_lease_lost_before_execution job_id=%s", job_id)
             return
-        deadline = await in_the_background(self.lease_deadline, job_id)
+        deadline = await in_the_write_queue(self.lease_deadline, job_id)
         if deadline is None:
             return
         renewal = asyncio.create_task(self._renew_loop(job_id, deadline))
@@ -3271,6 +3290,11 @@ class DurableWriteDrain:
                 job_id,
                 type(error).__name__,
             )
+            report_exception(
+                "memory.write_queue",
+                "memory.write_queue.executor_failed",
+                error,
+            )
             self._record_database_error(error)
             await self._settle_worker_error(
                 job_id,
@@ -3297,7 +3321,7 @@ class DurableWriteDrain:
         other programming error still escapes to the outer per-job fence.
         """
         try:
-            await in_the_background(
+            await in_the_write_queue(
                 self.queue.settle_worker_error,
                 job_id,
                 error_code=error_code,
@@ -3315,7 +3339,7 @@ class DurableWriteDrain:
 
     async def _execute_with_ceiling(self, job_id: str) -> None:
         ceiling = (
-            await in_the_background(self.work_ceiling)
+            await in_the_write_queue(self.work_ceiling)
             if callable(self.work_ceiling)
             else self.work_ceiling
         )
@@ -3370,6 +3394,13 @@ class DurableWriteDrain:
                             task.get_name(),
                             type(error).__name__,
                         )
+                        # With its stack: a type name alone cannot tell one
+                        # stray failure from a bug that fails every job.
+                        report_exception(
+                            "memory.write_queue",
+                            "memory.write_queue.job_task_failed",
+                            error,
+                        )
                 if self.budget is not None and work_deadline is not None:
                     now = _time.monotonic()
                     # Always admit the first unit of a cycle even when the
@@ -3385,7 +3416,7 @@ class DurableWriteDrain:
                 try:
                     available = self.max_concurrent_sources - len(active)
                     ids = (
-                        await in_the_background(
+                        await in_the_write_queue(
                             self.claim,
                             limit=available,
                             budget_ms=self.claim_budget_ms,
@@ -3497,7 +3528,79 @@ class DurableWriteDrain:
                 await asyncio.gather(*active, return_exceptions=True)
 
     def stop(self) -> None:
+        self._stop_requested = True
         self.running = False
+        self._stopping.set()
+
+    async def run_supervised(
+        self,
+        *,
+        idle_pause: float = 0.05,
+        restart_backoff: float = 1.0,
+        max_restart_backoff: float = 60.0,
+    ) -> None:
+        """`run_forever`, started again whenever it exits on an error.
+
+        The drain is the queue's only consumer, so a drain that died stranded
+        every write behind it until the next start, and nothing said so: an
+        unexpected SQLite error on the claim path (disk I/O, a vanished file)
+        or an exception from a claim gate ended it for good. Each exit is now
+        reported with its stack, and the drain comes back after a pause that
+        doubles up to `max_restart_backoff`, back to `restart_backoff` once it
+        has run for that long. `stop()` and cancellation end it as before.
+
+        Ownership across a restart: `run_forever` only returns once every job
+        task it started has finished (its `finally`), and a task whose lease
+        renewal broke (`_LeaseRenewalFatalError`) waits for its execution to
+        return first, so nothing of the old drain is still running a job when
+        the new one claims. The new one also takes a new lease owner, so a
+        statement of the old one still in a pool thread can neither renew nor
+        settle a row under the new drain's name, and the old drain's leases
+        are only ever recovered by expiry (`reclaim_expired`), which decides
+        by `hy_invoked` exactly as for a drain that died with its process.
+        """
+        backoff = restart_backoff
+        while not self._stop_requested:
+            started = _time.monotonic()
+            self.liveness = "running"
+            try:
+                await self.run_forever(idle_pause=idle_pause)
+            except asyncio.CancelledError:
+                self.liveness = "stopped"
+                raise
+            except Exception as error:
+                self.last_error_code = _drain_exit_code(error)
+                self.restarts += 1
+                report_exception(
+                    "memory.write_queue",
+                    "memory.write_queue.drain_exited",
+                    error,
+                    context={"restarts": self.restarts},
+                )
+                logger.error(
+                    "durable_write_drain_exited error_code=%s restarts=%d chain=%s",
+                    self.last_error_code,
+                    self.restarts,
+                    error_chain_text(error),
+                )
+            else:
+                if self._stop_requested:
+                    break
+            if self._stop_requested:
+                break
+            self.owner = f"durable-drain:{uuid4()}"
+            if _time.monotonic() - started >= max_restart_backoff:
+                backoff = restart_backoff
+            self.liveness = "restarting"
+            try:
+                await asyncio.wait_for(self._stopping.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                self.liveness = "stopped"
+                raise
+            backoff = min(backoff * 2, max_restart_backoff)
+        self.liveness = "stopped"
 
     async def _run_idle_maintenance(
         self,
@@ -3515,7 +3618,7 @@ class DurableWriteDrain:
         persisting provider or user content.
         """
         try:
-            await in_the_background(operation)
+            await in_the_write_queue(operation)
             self._database_failure_streaks.pop(f"maintenance:{operation_name}", None)
         except asyncio.CancelledError:
             raise
@@ -3543,7 +3646,7 @@ class DurableWriteDrain:
                 renewed_at = datetime.now(UTC)
                 remaining = (deadline - renewed_at).total_seconds()
                 if remaining <= 0 or not await asyncio.wait_for(
-                    in_the_background(self.renew, job_id), timeout=remaining
+                    in_lease_renewal(self.renew, job_id), timeout=remaining
                 ):
                     return False
                 deadline = renewed_at + self.lease

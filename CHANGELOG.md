@@ -22,6 +22,19 @@ Hy Memory and MemHub are versioned and released independently.
   `statuses` to an SDK (2.0.13) that did not accept it. The lite raw-turn
   page also stops re-listing the whole raw layer on each poll when a live
   session only adds new raws.
+- MemHub Core no longer stalls writes or freezes the App for tens of seconds
+  on a machine with a long live-sync history. Finished live-sync import jobs
+  are pruned to the newest 20 per source (at startup, in bounded batches, and
+  every 10 minutes); history imports and every unfinished job are kept. Job
+  lookups are filtered in SQL with new indexes (schema migration 63) instead
+  of reading the whole table. The durable write queue runs its claims,
+  settles and lease renewals on its own threads, so import work can no longer
+  starve a lease. Import abandon, resume and enqueue, and the file watcher's
+  path attribution, no longer touch the database or the disk on the event
+  loop, and the WAL cadence checkpoint runs on its own thread instead of on
+  the writer's. The write drain now restarts itself after an unexpected exit,
+  reports the failure with its stack, and shows `write_drain` /
+  `write_drain_error` in memory-processing and `memhub status`.
 
 ## Hy Memory 2.0.14 — 2026-11-04
 
