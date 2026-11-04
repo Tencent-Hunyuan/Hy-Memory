@@ -87,12 +87,14 @@ class SdkMemoryAnswerer:
         ]
         | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        transport_factory: Callable[[ModelProfile], httpx.AsyncBaseTransport] | None = None,
     ) -> None:
         self.client_handle = client_handle
         self.profiles = profiles
         self.secrets = secrets
         self.authorize_generation = authorize_generation
         self.transport = transport
+        self.transport_factory = transport_factory
 
     async def retrieve(
         self,
@@ -313,7 +315,13 @@ class SdkMemoryAnswerer:
             async with create_async_client(
                 timeout=profile.timeout_seconds,
                 follow_redirects=False,
-                transport=self.transport,
+                transport=(
+                    self.transport
+                    if self.transport is not None
+                    else self.transport_factory(profile)
+                    if self.transport_factory
+                    else None
+                ),
             ) as client:
                 await _recheck_generation(recheck)
                 response = await client.request(
@@ -353,7 +361,13 @@ class SdkMemoryAnswerer:
             async with create_async_client(
                 timeout=profile.timeout_seconds,
                 follow_redirects=False,
-                transport=self.transport,
+                transport=(
+                    self.transport
+                    if self.transport is not None
+                    else self.transport_factory(profile)
+                    if self.transport_factory
+                    else None
+                ),
             ) as client:
                 await _recheck_generation(recheck)
                 async with client.stream(
@@ -494,6 +508,8 @@ def _sdk_answer_request(
                 "schema": schema,
             },
         }
+    if stream:
+        payload["stream_options"] = {"include_usage": True}
     attach_disable_thinking(profile, payload)
     return (
         "POST",

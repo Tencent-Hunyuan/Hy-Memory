@@ -1349,3 +1349,73 @@ export type {
   UISessionFailureCode,
   UISessionLogout,
 } from "./ui-session.js";
+
+/** Provider-reported usage. Missing usage is counted separately, never inferred as free. */
+export interface MemoryUsageCost {
+  currency: string;
+  estimated_min: string;
+  estimated_max: string;
+  priced_requests: number;
+}
+
+export interface MemoryUsageTotals {
+  request_count: number;
+  succeeded: number;
+  failed: number;
+  in_flight: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cached_prompt_tokens: number;
+  reasoning_tokens: number;
+  unknown_usage_requests: number;
+  unpriced_requests: number;
+  costs: MemoryUsageCost[];
+}
+
+export interface DailyMemoryUsage {
+  schema_version: 1;
+  timezone: string;
+  recorded_from: string;
+  generated_at: string;
+  pricing_version: string;
+  pricing_source: string;
+  summary: MemoryUsageTotals;
+  days: Array<
+    MemoryUsageTotals & {
+      date: string;
+      coverage: "unrecorded" | "partial" | "recorded";
+    }
+  >;
+  models: Array<MemoryUsageTotals & { profile_id: string; model: string }>;
+}
+
+export interface ModelUsagePricing {
+  model: string;
+  currency: string;
+  input_per_million: string | null;
+  cached_input_per_million: string | null;
+  output_per_million: string | null;
+  billing_url: string | null;
+}
+
+export interface ModelUsageSettings {
+  schema_version: 1;
+  recording_started_at: string;
+  pricing: Record<string, ModelUsagePricing>;
+}
+
+export interface ProviderAccountBalance {
+  schema_version: 1;
+  profile_id: string;
+  state: "ready" | "unsupported" | "credentials_unavailable" | "unavailable";
+  is_available: boolean | null;
+  balances: Array<{
+    currency: "CNY" | "USD";
+    total_balance: string;
+    granted_balance: string;
+    topped_up_balance: string;
+  }>;
+  checked_at: string | null;
+  source_url: string | null;
+}

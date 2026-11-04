@@ -1,0 +1,162 @@
+.memory-usage {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+  border: 1px solid var(--border, #ddd8cf);
+  border-radius: 12px;
+  background: var(--surface, #fffdf9);
+  color: var(--text, #343b38);
+  font-size: 12px;
+}
+.memory-usage > summary {
+  cursor: pointer;
+  padding: 11px 15px;
+}
+.memory-usage :where(summary) strong {
+  margin-right: 16px;
+}
+.memory-usage :where(summary) span,
+.memory-usage-note,
+.memory-usage-metrics span {
+  color: var(--text-muted, #69716c);
+}
+.memory-usage-body {
+  padding: 4px 15px 14px;
+  max-height: 480px;
+  overflow: auto;
+}
+.memory-usage-toolbar,
+.memory-usage-price-fields {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.memory-usage label {
+  display: grid;
+  gap: 5px;
+}
+.memory-usage select,
+.memory-usage input,
+.memory-usage button {
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--border, #ddd8cf);
+  background: var(--surface, #fffdf9);
+  border-radius: 6px;
+  padding: 6px 9px;
+}
+.memory-usage button {
+  cursor: pointer;
+}
+/* The shared hover rule darkens the background; keep the text readable. */
+.memory-usage button:hover:not(:disabled),
+.memory-usage button:focus-visible:not(:disabled) {
+  color: #fff;
+  background: var(--ac-strong, #304757);
+  border-color: var(--ac-strong, #304757);
+}
+.memory-usage button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.memory-usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: 16px 0 10px;
+}
+.memory-usage-metrics > div {
+  display: grid;
+  gap: 6px;
+}
+.memory-usage-metrics strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.memory-usage-table {
+  overflow: auto;
+}
+.memory-usage table {
+  border-collapse: collapse;
+  width: 100%;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.memory-usage th,
+.memory-usage td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border, #ddd8cf);
+  text-align: right;
+}
+.memory-usage th:first-child {
+  text-align: left;
+}
+.memory-usage-note {
+  line-height: 1.6;
+  margin: 10px 0 0;
+}
+.memory-usage-models {
+  padding-left: 18px;
+  line-height: 1.8;
+}
+.memory-usage-pricing {
+  border-top: 1px solid var(--border, #ddd8cf);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.memory-usage-pricing-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.memory-usage-price-fields > label {
+  flex: 1;
+  min-width: 100px;
+}
+.memory-usage input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.memory-usage a {
+  color: var(--accent, #3b7161);
+}
+@media (max-width: 650px) {
+  .memory-usage-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .memory-usage :where(summary) span {
+    display: block;
+    margin-top: 6px;
+  }
+}
+.provider-balance {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border, #ddd8cf);
+  border-radius: 8px;
+}
+.provider-balance-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.provider-balance-values {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.provider-balance-values > div {
+  display: grid;
+  gap: 6px;
+}
+.provider-balance-values span {
+  color: var(--text-muted, #69716c);
+}
+.provider-balance-values strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}

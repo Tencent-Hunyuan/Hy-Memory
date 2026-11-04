@@ -55,3 +55,21 @@ def _assemble[ClientT: (httpx.Client, httpx.AsyncClient)](
     if mounts:
         kwargs["mounts"] = mounts
     return factory(**kwargs)
+
+
+class ClientAsyncTransport(httpx.AsyncBaseTransport):
+    """Let an observing transport preserve normal environment-proxy and loopback routing.
+
+    Passing a custom transport to httpx disables its automatic proxy mounts.
+    Forwarding through an ordinary client keeps the answerer's existing network
+    policy, while the outer transport can observe usage without buffering SSE.
+    """
+
+    def __init__(self) -> None:
+        self.client = create_async_client(follow_redirects=False)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self.client.send(request, stream=True)
+
+    async def aclose(self) -> None:
+        await self.client.aclose()

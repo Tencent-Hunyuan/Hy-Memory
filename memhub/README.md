@@ -134,3 +134,40 @@ SDK 依赖固定为公开 PyPI 正式版 `hy-memory==2.0.13`。SDK 配置、权�
 MemHub 使用 Apache License 2.0。Tencent 著作权声明见 [`NOTICE`](NOTICE)，第三方
 归属和许可证见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与
 [`SBOM.spdx.json`](SBOM.spdx.json)。
+
+### Daily model usage
+
+Expand **Memory → Memory model usage** to see today's requests and tokens, daily
+rows for the last 7 or 30 calendar days, and a per-model breakdown. Days use the
+device's timezone and the request start time. Counts include outgoing failed
+attempts and retries; provider-reported input, cached input, output and reasoning
+tokens are retained without saving request or answer text. Missing provider usage
+and dates before recording began are shown as incomplete or unrecorded.
+
+**Pricing and balance links** lets each model profile specify its input,
+cached-input and output prices per million tokens, currency, and an HTTPS usage
+or billing-console URL. This works with other model vendors and proxies too.
+The link opens the provider's own balance and bill; MemHub does not infer account
+balance or call a supplied URL with API credentials. Different currencies remain
+separate. Zero prices mean free; blank prices use the built-in rate only for
+recognized models at the official DeepSeek endpoint, otherwise cost is unknown.
+
+Costs are estimates at the currently configured prices, not historical invoices.
+Built-in DeepSeek CNY prices were checked on 2026-11-04 against the
+[official pricing page](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/).
+A range is shown when cache usage is missing or a weekday peak period could be a
+Chinese statutory holiday. Partial pricing never appears as zero cost. Actual
+charges and remaining balance always come from the provider's bill.
+
+For a model configured at the official DeepSeek HTTPS endpoint, the panel also
+reads **Official account balance** from
+[`GET /user/balance`](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/).
+Available, granted and top-up balances come directly from DeepSeek, with the
+query time shown. Reads are cached for 60 seconds; manual refresh is rate-limited
+to once per 5 seconds. A failed query is unknown, never a zero balance.
+The API key stays in Core and is sent only to the fixed official endpoint,
+without following redirects. Custom billing URLs never receive credentials.
+This is the whole account's balance, which may include other applications;
+it cannot establish MemHub's exact daily charges. Other providers continue to
+use their configured billing-console links until a supported balance adapter is
+available.

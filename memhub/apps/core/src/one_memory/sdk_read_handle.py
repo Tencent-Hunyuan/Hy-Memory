@@ -70,6 +70,9 @@ class ActiveProfileReadHandle(SdkClientHandle):
         spaces: EmbeddingSpaceStore | None = None,
         health: EmbeddingHealth | None = None,
         language: Callable[[], str | None] = lambda: None,
+        transport_factory: Callable[[ModelProfileSnapshot], Callable[[], Any] | None] = lambda _p: (
+            None
+        ),
     ) -> None:
         super().__init__(builtin_retrieval_snapshot(), api_key=None, data_dir=data_dir)
         self.profiles = profiles
@@ -78,6 +81,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
         self.memory_mode = memory_mode
         self.current_features = features
         self.current_language = language
+        self.transport_factory = transport_factory
         #: None only for a profile store without a database (test doubles).
         self.spaces = spaces if spaces is not None else registry_for(profiles)
         self.health = health or EmbeddingHealth()
@@ -239,6 +243,9 @@ class ActiveProfileReadHandle(SdkClientHandle):
             )
         profile: ModelProfileSnapshot = self.profiles.snapshot(*identity)
         view = retrieval_view(profile)
+        factory = self.transport_factory(profile)
+        if factory is not None:
+            named["http_transport_factory"] = factory
         secret: str | None = None
         # Only a remote OpenAI-compatible embedding sends the shared key.
         if view.embedding_provider_kind is ProviderKind.OPENAI_COMPATIBLE:

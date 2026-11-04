@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 from uuid import uuid4
 
 import httpx
@@ -45,7 +45,12 @@ def audit_precipitation_request(request_id: str) -> Iterator[None]:
 
 
 def _current_prompt_stage() -> str:
-    return "other"
+    # Older public SDKs do not expose stage metadata; request accounting still works.
+    try:
+        from hy_memory.utils.model_call_context import current_model_call_stage
+    except ImportError:
+        return "other"
+    return str(current_model_call_stage())
 
 
 class ModelRequestAuditStore:
@@ -288,19 +293,26 @@ def _response_usage(content: bytes) -> _ResponseUsage:
         usage = {}
     prompt_details = usage.get("prompt_tokens_details")
     completion_details = usage.get("completion_tokens_details")
-    cached = (
-        prompt_details.get("cached_tokens")
-        if isinstance(prompt_details, dict)
-        else usage.get("prompt_cache_hit_tokens")
-    )
+    cached = prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None
+    if _non_negative_int(cached) is None:
+        cached = usage.get("prompt_cache_hit_tokens")
     reasoning = (
         completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None
     )
+    prompt = _non_negative_int(usage.get("prompt_tokens"))
+    completion = _non_negative_int(usage.get("completion_tokens"))
+    if prompt is None:
+        prompt = _non_negative_int(body.get("prompt_eval_count"))
+    if completion is None:
+        completion = _non_negative_int(body.get("eval_count"))
+    total = _non_negative_int(usage.get("total_tokens"))
+    if total is None and prompt is not None and completion is not None:
+        total = prompt + completion
     return {
         "provider_request_id": body.get("id") if isinstance(body.get("id"), str) else None,
-        "prompt_tokens": _non_negative_int(usage.get("prompt_tokens")),
-        "completion_tokens": _non_negative_int(usage.get("completion_tokens")),
-        "total_tokens": _non_negative_int(usage.get("total_tokens")),
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
         "cached_prompt_tokens": _non_negative_int(cached),
         "reasoning_tokens": _non_negative_int(reasoning),
     }
@@ -336,7 +348,9 @@ class AuditedModelTransport(httpx.AsyncBaseTransport):
         provider_kind: str,
         model: str,
         inner: httpx.AsyncBaseTransport | None = None,
+        record_unscoped: bool = False,
     ) -> None:
+        self.record_unscoped = record_unscoped
         self.store = store
         self.profile_id = profile_id
         self.profile_revision = profile_revision
@@ -346,12 +360,12 @@ class AuditedModelTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         context = _audit_context.get()
-        if context is None:
+        if context is None and not self.record_unscoped:
             return await self.inner.handle_async_request(request)
         content = await request.aread()
         audit_id = await asyncio.to_thread(
             self.store.start,
-            request_id=context.request_id,
+            request_id=context.request_id if context else f"sdk:{uuid4()}",
             profile_id=self.profile_id,
             profile_revision=self.profile_revision,
             provider_kind=self.provider_kind,
@@ -370,7 +384,28 @@ class AuditedModelTransport(httpx.AsyncBaseTransport):
                 error_type=type(error).__name__,
             )
             raise
-        content = await response.aread()
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type or "application/x-ndjson" in content_type:
+            # Observe chunks as the consumer reads them; never buffer an answer before display.
+            response.stream = _AuditedStream(
+                cast(httpx.AsyncByteStream, response.stream),
+                self.store,
+                audit_id,
+                response.status_code,
+                sse="text/event-stream" in content_type,
+            )
+            return response
+        try:
+            content = await response.aread()
+        except BaseException as error:
+            await asyncio.to_thread(
+                self.store.finish,
+                audit_id,
+                outcome="failed",
+                http_status=response.status_code,
+                error_type=type(error).__name__,
+            )
+            raise
         usage = _response_usage(content)
         try:
             await asyncio.to_thread(
@@ -389,3 +424,79 @@ class AuditedModelTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self.inner.aclose()
+
+
+class _AuditedStream(httpx.AsyncByteStream):
+    """Capture only bounded SSE usage metadata; text and credentials are never retained."""
+
+    def __init__(
+        self,
+        inner: httpx.AsyncByteStream,
+        store: ModelRequestAuditStore,
+        audit_id: str,
+        status: int,
+        *,
+        sse: bool = True,
+    ) -> None:
+        self.inner = inner
+        self.sse = sse
+        self.store = store
+        self.audit_id = audit_id
+        self.status = status
+        self.usage = _empty_usage()
+        self.buffer = b""
+        self.finished = False
+        self.overflow = False
+
+    def _observe(self, chunk: bytes) -> None:
+        for fragment in chunk.splitlines(keepends=True):
+            if not self.overflow:
+                if len(self.buffer) + len(fragment) <= 262_144:
+                    self.buffer += fragment
+                else:
+                    self.buffer = b""
+                    self.overflow = True
+            if fragment.endswith((b"\n", b"\r")):
+                line, self.buffer = self.buffer.strip(), b""
+                if not self.overflow and (not self.sse or line.startswith(b"data:")):
+                    usage = _response_usage(line[5:].strip() if self.sse else line)
+                    for key, value in usage.items():
+                        if value is not None:
+                            cast(dict[str, object], self.usage)[key] = value
+                self.overflow = False
+
+    async def _finish(self, outcome: str, error_type: str | None = None) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        try:
+            await asyncio.to_thread(
+                self.store.finish,
+                self.audit_id,
+                outcome=outcome,
+                http_status=self.status,
+                error_type=error_type,
+                **self.usage,
+            )
+        except Exception:
+            logger.exception("model_request_audit_stream_finish_failed audit_id=%s", self.audit_id)
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self.inner:
+                self._observe(chunk)
+                yield chunk
+            if self.buffer:
+                self._observe(b"\n")
+        except BaseException as error:
+            await self._finish("failed", type(error).__name__)
+            raise
+        else:
+            await self._finish("succeeded" if 200 <= self.status < 300 else "failed")
+
+    async def aclose(self) -> None:
+        try:
+            await self.inner.aclose()
+        finally:
+            # A consumer can stop early: absent final usage must remain unknown.
+            await self._finish("failed", "stream_closed_before_completion")

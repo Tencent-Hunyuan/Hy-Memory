@@ -22,7 +22,9 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import httpx
 from fastapi import (
     Depends,
     FastAPI,
@@ -93,6 +95,7 @@ from one_memory.external_memory_access import (
 )
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
+from one_memory.http_client import ClientAsyncTransport
 from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     GraphWidthMismatch,
@@ -255,6 +258,7 @@ from one_memory.model_profiles import (
     ModelProfileConflictError,
     ModelProfileInput,
     ModelProfilePatch,
+    ModelProfileSnapshot,
     ModelProfileStore,
     ModelProfileUnavailableError,
     ProviderKind,
@@ -264,12 +268,14 @@ from one_memory.model_request_audit import (
     ModelRequestAuditStore,
 )
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
+from one_memory.model_usage import ModelPricing, ModelUsageService
 from one_memory.onboarding import (
     OnboardingCompletedError,
     OnboardingProgressUpdate,
     OnboardingState,
     OnboardingStore,
 )
+from one_memory.provider_balance import ProviderBalance, ProviderBalanceService
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -1402,6 +1408,10 @@ def create_app(
             )
             app.state.model_request_budget = model_request_budget
             app.state.model_request_audit_store = ModelRequestAuditStore(database_path)
+            app.state.model_usage = ModelUsageService(database_path, runtime_settings.data_dir)
+            app.state.provider_balance = ProviderBalanceService(
+                app.state.model_profile_store, app.state.secret_store
+            )
             #: One pause for every model request while the provider keeps
             #: failing (`model_backoff`); reset when the configuration changes.
             app.state.model_backoff = ModelBackoff()
@@ -1429,18 +1439,7 @@ def create_app(
                     lambda: BackedOffModelTransport(
                         app.state.model_backoff,
                         profile_id=f"{profile.profile_id}:{profile.revision}",
-                        inner=AuditedModelTransport(
-                            app.state.model_request_audit_store,
-                            profile_id=profile.profile_id,
-                            profile_revision=profile.revision,
-                            provider_kind=str(profile.provider_kind),
-                            model=profile.model,
-                            inner=(
-                                BudgetedModelTransport(model_request_budget)
-                                if model_request_budget is not None
-                                else None
-                            ),
-                        ),
+                        inner=_usage_transport(app, profile, budget=model_request_budget),
                     )
                 ),
                 sedimentation_enabled=lambda: _config_store(app).sedimentation_enabled(),
@@ -2378,6 +2377,48 @@ def create_app(
             "state": "ok" if events else "not_found",
             "events": events,
         }
+
+    @app.get("/api/v1/model-usage", dependencies=protected)
+    def memory_model_usage(
+        days: int = Query(default=7, ge=1, le=30),  # noqa: B008
+        timezone: str = Query(default="UTC", min_length=1, max_length=128),  # noqa: B008
+        profile_id: str | None = Query(default=None, max_length=128),  # noqa: B008
+    ) -> dict[str, Any]:
+        if days not in {1, 7, 30}:
+            raise HTTPException(status_code=422, detail="invalid_usage_days")
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(status_code=422, detail="invalid_usage_timezone") from None
+        return cast(ModelUsageService, app.state.model_usage).report(
+            days=days, timezone=timezone, profile_id=profile_id
+        )
+
+    @app.get(
+        "/api/v1/model-usage/balance/{profile_id}",
+        response_model=ProviderBalance,
+        dependencies=protected,
+    )
+    def provider_account_balance(profile_id: str, refresh: bool = False) -> ProviderBalance:
+        profile = _model_profile_store(app).get(profile_id, _secret_store(app))
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model_profile_not_found")
+        return cast(ProviderBalanceService, app.state.provider_balance).get(
+            profile, refresh=refresh
+        )
+
+    @app.get("/api/v1/model-usage/pricing", dependencies=protected)
+    def memory_model_pricing() -> dict[str, Any]:
+        return cast(ModelUsageService, app.state.model_usage).settings().model_dump(mode="json")
+
+    @app.put("/api/v1/model-usage/pricing/{profile_id}", dependencies=protected)
+    def put_memory_model_pricing(profile_id: str, pricing: ModelPricing) -> ModelPricing:
+        profile = _model_profile_store(app).get(profile_id, _secret_store(app))
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model_profile_not_found")
+        if profile.model != pricing.model:
+            raise HTTPException(status_code=409, detail="model_pricing_model_changed")
+        return cast(ModelUsageService, app.state.model_usage).set_pricing(profile_id, pricing)
 
     @app.get("/api/v1/diagnostics/model-usage", dependencies=protected)
     def diagnostic_model_usage(
@@ -5197,11 +5238,34 @@ def _ask_filters(request: AskMemoryRequest) -> dict[str, SdkSearchFilters]:
     return {"filters": request} if request.search_overrides() else {}
 
 
+def _usage_transport(
+    app: FastAPI,
+    profile: ModelProfile | ModelProfileSnapshot,
+    *,
+    budget: ModelRequestBudget | None = None,
+    preserve_proxy_routing: bool = False,
+) -> httpx.AsyncBaseTransport:
+    transport = AuditedModelTransport(
+        app.state.model_request_audit_store,
+        profile_id=profile.profile_id,
+        profile_revision=profile.revision,
+        provider_kind=str(profile.provider_kind),
+        model=profile.model,
+        record_unscoped=True,
+        inner=ClientAsyncTransport() if preserve_proxy_routing else None,
+    )
+    # Local admission refusals did not reach a provider and must not count as calls.
+    return BudgetedModelTransport(budget, inner=transport) if budget is not None else transport
+
+
 def _sdk_request_answerer(app: FastAPI) -> SdkMemoryAnswerer:
     return SdkMemoryAnswerer(
         client_handle=_sdk_client_handle(app),
         profiles=_model_profile_store(app),
         secrets=_secret_store(app),
+        transport_factory=lambda profile: _usage_transport(
+            app, profile, preserve_proxy_routing=True
+        ),
         authorize_generation=lambda profile, question, grounding: _authorize_sdk_answer_generation(
             app,
             profile,
@@ -6272,6 +6336,7 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
             features=lambda: _memory_features(app),
             spaces=getattr(app.state, "embedding_spaces", None),
             language=lambda: _sdk_language(app),
+            transport_factory=lambda profile: lambda: _usage_transport(app, profile),
         )
         app.state.sdk_client_handle = handle
     return handle

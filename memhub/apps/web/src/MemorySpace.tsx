@@ -47,6 +47,7 @@ import { GraphWidthPrompt } from "./GraphWidthPrompt";
 import { useGuiLanguage } from "./gui-language";
 import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
 import { MemoryMap } from "./MemoryMap";
+import { MemoryUsagePanel } from "./MemoryUsagePanel";
 import { subscribePoll } from "./poll-scheduler";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
@@ -1003,6 +1004,7 @@ export function MemorySpace({
           </div>
         )}
       </header>
+      <MemoryUsagePanel active={active} />
       {processing && (!simplified || managementOpen) ? (
         <details className="memory-processing-details">
           <summary>

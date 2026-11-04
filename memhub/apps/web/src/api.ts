@@ -1778,3 +1778,59 @@ function isModelCreationOperation(
     (operation.created_revision === null || operation.created_revision === 1)
   );
 }
+
+export async function getDailyModelUsage(
+  days: 1 | 7 | 30,
+  timezone: string,
+  profileId?: string,
+): Promise<import("@one-memory/contracts").DailyMemoryUsage> {
+  const { data } = await client.get<
+    import("@one-memory/contracts").DailyMemoryUsage
+  >("/api/v1/model-usage", {
+    params: { days, timezone, profile_id: profileId },
+  });
+  if (
+    data.schema_version !== 1 ||
+    !Array.isArray(data.days) ||
+    !Array.isArray(data.models)
+  )
+    throw new Error("daily_model_usage_invalid");
+  return data;
+}
+
+export async function getModelUsagePricing(): Promise<
+  import("@one-memory/contracts").ModelUsageSettings
+> {
+  const { data } = await client.get<
+    import("@one-memory/contracts").ModelUsageSettings
+  >("/api/v1/model-usage/pricing");
+  return data;
+}
+
+export async function setModelUsagePricing(
+  profileId: string,
+  pricing: import("@one-memory/contracts").ModelUsagePricing,
+): Promise<import("@one-memory/contracts").ModelUsagePricing> {
+  const { data } = await client.put<
+    import("@one-memory/contracts").ModelUsagePricing
+  >(`/api/v1/model-usage/pricing/${encodeURIComponent(profileId)}`, pricing);
+  return data;
+}
+
+export async function getProviderBalance(
+  profileId: string,
+  refresh = false,
+): Promise<import("@one-memory/contracts").ProviderAccountBalance> {
+  const { data } = await client.get<
+    import("@one-memory/contracts").ProviderAccountBalance
+  >(`/api/v1/model-usage/balance/${encodeURIComponent(profileId)}`, {
+    params: { refresh },
+  });
+  if (
+    data.schema_version !== 1 ||
+    data.profile_id !== profileId ||
+    !Array.isArray(data.balances)
+  )
+    throw new Error("provider_balance_invalid");
+  return data;
+}
