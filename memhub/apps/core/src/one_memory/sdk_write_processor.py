@@ -29,6 +29,7 @@ from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, Evide
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_features import FeatureOverrides
 from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
+from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
 PRODUCT_AGENT_ID = "all-apps"
@@ -295,13 +296,17 @@ class SdkWriteCoordinator:
             raise RuntimeError("memory_evolve_in_progress")
         self._writing[user_id] = self._writing.get(user_id, 0) + 1
         try:
-            async with self._active_handle() as handle:
-                lite = getattr(handle, "mode", None) == "lite"
-                return await SdkWriteProcessor(handle, lite=lite).process_sdk_job(
-                    records,
-                    request_id=request_id,
-                    before_hy_invocation=before_hy_invocation,
-                )
+            # `AuditedModelTransport` records only while this context is set;
+            # without it every precipitation request is invisible to the
+            # diagnostics usage report.
+            with audit_precipitation_request(request_id):
+                async with self._active_handle() as handle:
+                    lite = getattr(handle, "mode", None) == "lite"
+                    return await SdkWriteProcessor(handle, lite=lite).process_sdk_job(
+                        records,
+                        request_id=request_id,
+                        before_hy_invocation=before_hy_invocation,
+                    )
         finally:
             remaining = self._writing.get(user_id, 1) - 1
             if remaining > 0:
