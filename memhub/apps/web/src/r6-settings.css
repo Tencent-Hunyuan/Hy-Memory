@@ -228,7 +228,8 @@
   line-height: 22px;
 }
 .r6-memory-mode-settings .memory-mode-choice-list {
-  max-width: 760px;
+  width: 100%;
+  max-width: none;
 }
 .r6-settings-note {
   margin: 14px 0 0;
@@ -481,7 +482,8 @@
   text-wrap: pretty;
 }
 .r6-settings .connection-fallback .custom-harness-name {
-  max-width: 560px;
+  width: 100%;
+  max-width: none;
   gap: 8px;
   margin: 0 0 14px;
   color: #4f6373;
