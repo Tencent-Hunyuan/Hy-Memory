@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 _operation: ContextVar[tuple["ModelProbeOperations", str] | None] = ContextVar(
     "model_probe_operation", default=None
 )
+_dispatch_started: ContextVar[bool] = ContextVar("model_probe_dispatch_started", default=False)
 
 
 class ProbeCode(StrEnum):
@@ -113,16 +114,26 @@ class ModelProber:
         if existing is not None:
             return existing
         token = _operation.set((operations, request.operation_id))
+        dispatch_token = _dispatch_started.set(False)
         try:
             await self._probe(profile_id)
         except ProbeOperationConflict:
             await asyncio.to_thread(
                 operations.fail, request.operation_id, "model_probe_profile_changed"
             )
-        except Exception:
-            # Unknown dispatch/storage outcomes stay reserved, including across restart.
-            raise ProbeOperationUnavailable("model_probe_operation_unavailable") from None
+        except Exception as exc:
+            if _dispatch_started.get():
+                # Once a request may have reached the provider, preserve the
+                # reservation so a retry cannot duplicate a possibly billed call.
+                raise ProbeOperationUnavailable("model_probe_operation_unavailable") from None
+            logging.getLogger(__name__).warning(
+                "model probe failed before dispatch: %s", type(exc).__name__
+            )
+            await asyncio.to_thread(
+                operations.fail, request.operation_id, "model_probe_execution_failed"
+            )
         finally:
+            _dispatch_started.reset(dispatch_token)
             _operation.reset(token)
         return await asyncio.to_thread(operations.lookup, request.operation_id)
 
@@ -317,6 +328,8 @@ class ModelProber:
         listing_optional: bool = False,
     ) -> ProbeStage:
         await self._check_operation()
+        if _operation.get() is not None:
+            _dispatch_started.set(True)
         started = monotonic()
         try:
             response = await client.request(
