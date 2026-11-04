@@ -300,11 +300,129 @@ it("shows the default nightly evolve controls in ultra", async () => {
       "aria-checked",
     ),
   ).toBe("true");
-  expect((screen.getByLabelText("执行时间") as HTMLInputElement).value).toBe(
-    "03:00",
-  );
+  const timePicker = screen.getByRole("button", {
+    name: "执行时间，03:00",
+  });
+  expect(timePicker.tagName).toBe("BUTTON");
+  expect(timePicker.textContent).toContain("03:00");
   expect(screen.getByText(/只运行这一次，不改变每天的计划/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
+});
+
+it("opens the time picker from the whole control and saves a complete time", async () => {
+  prepare("ultra");
+  vi.mocked(setEvolveSchedule).mockResolvedValue({
+    enabled: true,
+    time: "04:30",
+  });
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  const trigger = await screen.findByRole("button", {
+    name: "执行时间，03:00",
+  });
+  await user.click(trigger);
+
+  const picker = screen.getByRole("dialog", { name: "执行时间" });
+  await user.selectOptions(
+    within(picker).getByRole("listbox", { name: "执行时间 HH" }),
+    "04",
+  );
+  await user.selectOptions(
+    within(picker).getByRole("listbox", { name: "执行时间 MM" }),
+    "30",
+  );
+  expect(setEvolveSchedule).not.toHaveBeenCalled();
+
+  await user.click(within(picker).getByRole("button", { name: "保存修改" }));
+  await waitFor(() =>
+    expect(setEvolveSchedule).toHaveBeenCalledExactlyOnceWith({
+      time: "04:30",
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "执行时间，04:30" })).toBe(
+      document.activeElement,
+    ),
+  );
+  expect(screen.queryByRole("dialog", { name: "执行时间" })).toBeNull();
+});
+
+it("keeps Tab inside the time picker and restores focus on Escape", async () => {
+  prepare("ultra");
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  const trigger = await screen.findByRole("button", {
+    name: "执行时间，03:00",
+  });
+  await user.click(trigger);
+  const picker = screen.getByRole("dialog", { name: "执行时间" });
+  const hours = within(picker).getByRole("listbox", {
+    name: "执行时间 HH",
+  });
+  const save = within(picker).getByRole("button", { name: "保存修改" });
+  expect(document.activeElement).toBe(hours);
+  await user.keyboard("{Shift>}{Tab}{/Shift}");
+  expect(document.activeElement).toBe(save);
+  await user.keyboard("{Tab}");
+  expect(document.activeElement).toBe(hours);
+
+  await user.keyboard("{Escape}");
+
+  expect(screen.queryByRole("dialog", { name: "执行时间" })).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
+it("keeps the selected time open for retry when saving fails", async () => {
+  prepare("ultra");
+  vi.mocked(setEvolveSchedule).mockRejectedValue(new Error("offline"));
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await user.click(
+    await screen.findByRole("button", { name: "执行时间，03:00" }),
+  );
+  const picker = screen.getByRole("dialog", { name: "执行时间" });
+  const minutes = within(picker).getByRole("listbox", {
+    name: "执行时间 MM",
+  });
+  await user.selectOptions(minutes, "30");
+  await user.click(within(picker).getByRole("button", { name: "保存修改" }));
+
+  expect(
+    await screen.findByText("自动整合设置未能保存，请重试。"),
+  ).toBeTruthy();
+  expect(screen.getByRole("dialog", { name: "执行时间" })).toBeTruthy();
+  expect((minutes as HTMLSelectElement).value).toBe("30");
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      within(picker).getByRole("button", { name: "保存修改" }),
+    ),
+  );
+});
+
+it("keeps the time dialog and focus stable while saving is pending", async () => {
+  prepare("ultra");
+  vi.mocked(setEvolveSchedule).mockReturnValue(new Promise(() => {}));
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await user.click(
+    await screen.findByRole("button", { name: "执行时间，03:00" }),
+  );
+  const picker = screen.getByRole("dialog", { name: "执行时间" });
+  await user.selectOptions(
+    within(picker).getByRole("listbox", { name: "执行时间 MM" }),
+    "30",
+  );
+  await user.click(within(picker).getByRole("button", { name: "保存修改" }));
+  await waitFor(() => expect(setEvolveSchedule).toHaveBeenCalledTimes(1));
+
+  expect(document.activeElement).toBe(picker);
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "执行时间" })).toBe(picker);
+  expect(document.activeElement).toBe(picker);
 });
 
 it("hides the time field when automatic evolve is off and keeps the saved time visible", async () => {
@@ -322,7 +440,7 @@ it("hides the time field when automatic evolve is off and keeps the saved time v
   await user.click(automatic);
 
   await screen.findByText(/重新开启后仍按 03:00 运行/);
-  expect(screen.queryByLabelText("执行时间")).toBeNull();
+  expect(screen.queryByRole("button", { name: /执行时间/ })).toBeNull();
   expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
 });
 
