@@ -19,6 +19,9 @@ const LAYOUT_ITERATIONS = 90;
 const LAYOUT_BUDGET_MS = 6;
 /** Layout work remains bounded per frame, including reduced-motion mode. */
 const LAYOUT_MAX_STEPS_PER_FRAME = 3;
+/** Keep an accumulated spring force stable when one node has many edges. */
+const LAYOUT_MAX_FULL_STEP_DEGREE = 24;
+const MAX_CACHED_POSITION_RADIUS = 30;
 /** 节点交错入场的单位延迟与时长（毫秒）。 */
 const ENTER_STAGGER_MS = 0;
 const ENTER_DURATION_MS = 240;
@@ -143,6 +146,19 @@ export function MemoryGraph3D({
 
     const layout = createRelationLayout(graph);
     const positions = layout.positions;
+    // A previous layout may have diverged before the graph changed. Reusing
+    // its positions or camera would keep the lines offscreen after the fix.
+    const cacheIsValid = isGraphLayoutCacheValid(
+      graph.nodes,
+      positionsCache.current,
+    );
+    if (!cacheIsValid) {
+      positionsCache.current.clear();
+      cameraPose.current = null;
+      camera.position.set(0, 3.5, 13);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    }
     const cachedCount = graph.nodes.filter((node) =>
       positionsCache.current.has(node.node_id),
     ).length;
@@ -714,6 +730,22 @@ function colorForRelation(relation: string): number {
   return 0xbfc9d2;
 }
 
+/** A graph may be extended, but none of its previously cached nodes may be runaway. */
+export function isGraphLayoutCacheValid(
+  nodes: readonly Pick<MemoryGraphNode, "node_id">[],
+  positions: ReadonlyMap<string, THREE.Vector3>,
+): boolean {
+  return nodes.every((node) => {
+    const position = positions.get(node.node_id);
+    if (!position) return true;
+    const distanceSquared = position.lengthSq();
+    return (
+      Number.isFinite(distanceSquared) &&
+      distanceSquared <= MAX_CACHED_POSITION_RADIUS ** 2
+    );
+  });
+}
+
 type RelationLayout = {
   /** node_id 到位置的映射，值是可变引用，分帧推进时原地更新。 */
   positions: Map<string, THREE.Vector3>;
@@ -749,6 +781,22 @@ export function createRelationLayout(
   });
   const forceList = graph.nodes.map(() => new THREE.Vector3());
   const indexById = new Map(nodeIds.map((id, index) => [id, index]));
+  const degrees = new Array<number>(nodeIds.length).fill(0);
+  let maxDegree = 0;
+  for (const edge of graph.edges) {
+    const source = indexById.get(edge.source_node_id);
+    const target = indexById.get(edge.target_node_id);
+    if (source === undefined || target === undefined) continue;
+    degrees[source] += 1;
+    degrees[target] += 1;
+    maxDegree = Math.max(maxDegree, degrees[source], degrees[target]);
+  }
+  // Spring forces add up at hubs. Reduce the time step for the entire graph
+  // so highly connected nodes cannot overshoot and send their edges offscreen.
+  const stepScale = Math.min(
+    1,
+    LAYOUT_MAX_FULL_STEP_DEGREE / Math.max(1, maxDegree),
+  );
   const positions = new Map(
     nodeIds.map((id, index) => [id, positionList[index]] as const),
   );
@@ -794,7 +842,9 @@ export function createRelationLayout(
     }
 
     for (let i = 0; i < positionList.length; i += 1) {
-      positionList[i].add(forceList[i]).multiplyScalar(0.995);
+      positionList[i]
+        .addScaledVector(forceList[i], stepScale)
+        .multiplyScalar(0.995);
     }
 
     iteration += 1;
