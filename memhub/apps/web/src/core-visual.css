@@ -132,12 +132,17 @@ button svg {
   content: "";
   position: absolute;
   right: 18px;
-  top: 22px;
+  top: 50%;
   width: 8px;
   height: 8px;
   border-right: 1.5px solid #4e6478;
   border-bottom: 1.5px solid #4e6478;
-  transform: rotate(45deg);
+  transform: translateY(-65%) rotate(45deg);
+  transform-origin: 50% 50%;
+  transition: transform 150ms ease-out;
+}
+.om-option-menu-button[aria-expanded="true"]::after {
+  transform: translateY(-35%) rotate(225deg);
 }
 .om-option-menu-button:disabled {
   color: #66727b;

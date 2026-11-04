@@ -66,7 +66,6 @@
   text-overflow: ellipsis;
 }
 .r6-settings .r6-language-option-menu .om-option-menu-button::after {
-  top: 16px;
   right: 16px;
 }
 .r6-settings
@@ -596,6 +595,12 @@
   background: #fff;
 }
 .r6-settings .r6-model-lane {
+  min-height: 108px;
+}
+.r6-settings .r6-model-lane[data-expanded="true"] {
+  background: #f8fafb;
+}
+.r6-settings .r6-model-lane-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -639,7 +644,7 @@
   font-size: 12px;
   line-height: 20px;
 }
-.r6-settings .r6-model-lane > .r6-button {
+.r6-settings .r6-model-lane-header > .r6-button {
   min-width: 72px;
 }
 .r6-settings .r6-model-recipient {
@@ -690,8 +695,9 @@
   line-height: 28px;
 }
 .r6-settings .r6-model-owner {
-  padding-top: 24px;
+  padding: 24px 20px;
   border-top: 1px solid #d8e2ea;
+  background: #f8fafb;
 }
 .r6-settings .r6-model-owner[hidden] {
   display: none;
@@ -847,7 +853,6 @@
   font-size: 14px;
 }
 .r6-settings .model-form .om-option-menu-button::after {
-  top: 16px;
   right: 16px;
 }
 .r6-settings .model-form .om-option-menu-button[aria-expanded="true"] {
@@ -865,6 +870,39 @@
 .r6-settings .model-form .om-option-menu-button:focus-visible {
   outline: 2px solid var(--r6-focus);
   outline-offset: 2px;
+}
+.r6-settings .model-option-label {
+  display: block;
+  margin: 0;
+}
+.model-option-menu-panel {
+  padding: 6px;
+  border-color: var(--r6-control-edge, #c0ccd5);
+  box-shadow: 0 12px 32px rgb(48 71 87 / 13%);
+}
+.model-option-menu-panel [role="option"] {
+  min-height: 40px;
+  padding: 8px 10px;
+  color: #304757;
+  font-size: 14px;
+  line-height: 22px;
+}
+.model-option-menu-panel [role="option"][aria-selected="true"] {
+  background: #dfe9ef;
+  font-weight: 500;
+}
+.om-option-menu-panel.model-option-menu-panel
+  [role="option"][data-active="true"] {
+  color: #304757;
+  background: #e9f0f4;
+}
+.om-option-menu-panel.model-option-menu-panel
+  [role="option"]:hover:not(:disabled) {
+  color: #304757;
+  background: #e9f0f4;
+}
+.model-option-menu-panel [role="option"]:active:not(:disabled) {
+  background: #d4e2ea;
 }
 .r6-settings .model-advanced {
   grid-column: 1 / -1;
@@ -884,7 +922,8 @@
   font-size: 13px;
   line-height: 21px;
 }
-.r6-settings .model-advanced label {
+.r6-settings .model-advanced label,
+.r6-settings .model-advanced .model-form-field {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -988,13 +1027,16 @@
     padding: 24px 20px;
     border-radius: 0 0 11px 11px;
   }
-  .r6-settings .r6-model-lane {
+  .r6-settings .r6-model-lane-header {
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     padding: 16px;
   }
-  .r6-settings .r6-model-lane > .r6-button {
+  .r6-settings .r6-model-lane-header > .r6-button {
     justify-self: start;
+  }
+  .r6-settings .r6-model-owner {
+    padding: 20px 16px;
   }
   .r6-settings .r6-language-setting-row {
     grid-template-columns: minmax(0, 1fr);

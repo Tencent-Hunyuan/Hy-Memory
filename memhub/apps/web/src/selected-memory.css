@@ -97,7 +97,6 @@
   border-color: transparent;
 }
 .selected-source-filter .om-option-menu-button::after {
-  top: 18px;
   right: 4px;
 }
 .selected-source-filter details {

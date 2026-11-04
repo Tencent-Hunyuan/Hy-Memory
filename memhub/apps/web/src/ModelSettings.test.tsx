@@ -72,6 +72,7 @@ const probeProfile = vi.fn();
 const activate = vi.fn();
 const remove = vi.fn();
 const update = vi.fn();
+const refreshProfiles = vi.fn();
 const planActivation = vi.fn();
 const startPlannedSwitch = vi.fn();
 let switchPlan: EmbeddingSwitchPlan | null = null;
@@ -224,6 +225,7 @@ vi.mock("./use-model-profiles", () => ({
     activate,
     remove,
     update,
+    refreshProfiles,
   }),
 }));
 vi.mock("./use-embedding-switch", () => ({
@@ -279,6 +281,7 @@ describe("ModelSettings", () => {
     switchCurrent = null;
     create.mockResolvedValue(profile);
     update.mockResolvedValue({ ...preset, has_api_key: true, revision: 2 });
+    refreshProfiles.mockResolvedValue(undefined);
     planActivation.mockResolvedValue({
       needed: false,
       reason: "same_embedding",
@@ -576,7 +579,8 @@ describe("ModelSettings", () => {
       name: "高级：自行配置向量模型",
     });
     await user.click(disclosure);
-    await user.selectOptions(screen.getByLabelText("向量配置模式"), "custom");
+    await user.click(screen.getByLabelText("向量配置模式"));
+    await user.click(screen.getByRole("option", { name: "自定义搜索模型" }));
     await user.type(screen.getByLabelText("向量模型名"), "custom-vector");
     await user.type(
       screen.getByLabelText("向量模型 Base URL"),
@@ -666,9 +670,9 @@ describe("ModelSettings", () => {
     ];
     render(<ModelSettings />);
     await userEvent.click(screen.getByRole("button", { name: "编辑配置" }));
-    await userEvent.selectOptions(
-      screen.getByLabelText("向量配置模式"),
-      "local",
+    await userEvent.click(screen.getByLabelText("向量配置模式"));
+    await userEvent.click(
+      screen.getByRole("option", { name: "本地内置（推荐）" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
     expect(update).toHaveBeenCalledWith(profile.profile_id, {
@@ -687,9 +691,9 @@ describe("ModelSettings", () => {
       name: "高级：自行配置向量模型",
     });
     await userEvent.click(disclosure);
-    await userEvent.selectOptions(
-      screen.getByLabelText("向量配置模式"),
-      "custom",
+    await userEvent.click(screen.getByLabelText("向量配置模式"));
+    await userEvent.click(
+      screen.getByRole("option", { name: "自定义搜索模型" }),
     );
     await userEvent.click(disclosure);
     await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
@@ -848,6 +852,190 @@ describe("ModelSettings", () => {
       await screen.findByRole("heading", { name: "更新记忆搜索索引？" }),
     ).toBeTruthy();
     expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("completes an embedding change only after the switch commit activates the target", async () => {
+    const onSetupComplete = vi.fn();
+    profiles = [
+      {
+        ...profile,
+        capabilities: {
+          ...profile.capabilities,
+          endpoint_reachable: true,
+          model_available: true,
+          embedding_available: true,
+        },
+      },
+    ];
+    planActivation.mockImplementationOnce(async () => {
+      switchPlan = migrationPlan;
+      return migrationPlan;
+    });
+    const runningJob: EmbeddingSwitchJob = {
+      ...oldFinishedJob,
+      job_id: "switch-job",
+      state: "reembedding",
+      progress: { ...oldFinishedJob.progress, phase: "vectors", done: 0 },
+    };
+    startPlannedSwitch.mockResolvedValue(runningJob);
+    switchCurrent = {
+      schema_version: 1,
+      phase: "idle",
+      writes_paused: false,
+      scan_state: "done",
+      scan_error: null,
+      job: null,
+      last_finished: oldFinishedJob,
+    };
+    const view = render(<ModelSettings onSetupComplete={onSetupComplete} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "设为当前模型" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "开始更新索引" }),
+    );
+
+    await waitFor(() =>
+      expect(startPlannedSwitch).toHaveBeenCalledExactlyOnceWith(),
+    );
+    expect(onSetupComplete).not.toHaveBeenCalled();
+
+    refreshProfiles.mockImplementationOnce(async () => {
+      profiles = [{ ...profiles[0], is_active: true }];
+    });
+    switchCurrent = {
+      ...switchCurrent,
+      phase: "idle",
+      job: null,
+      last_finished: { ...runningJob, state: "done" },
+    };
+    view.rerender(<ModelSettings onSetupComplete={onSetupComplete} />);
+
+    await waitFor(() => expect(onSetupComplete).toHaveBeenCalledOnce());
+  });
+
+  it("does not complete a committed switch until the target revision is active", async () => {
+    const onSetupComplete = vi.fn();
+    profiles = [
+      {
+        ...profile,
+        capabilities: {
+          ...profile.capabilities,
+          endpoint_reachable: true,
+          model_available: true,
+          embedding_available: true,
+        },
+      },
+    ];
+    planActivation.mockImplementationOnce(async () => {
+      switchPlan = migrationPlan;
+      return migrationPlan;
+    });
+    const runningJob: EmbeddingSwitchJob = {
+      ...oldFinishedJob,
+      job_id: "switch-job",
+      state: "reembedding",
+      progress: { ...oldFinishedJob.progress, phase: "vectors", done: 0 },
+    };
+    startPlannedSwitch.mockResolvedValue(runningJob);
+    switchCurrent = {
+      schema_version: 1,
+      phase: "idle",
+      writes_paused: false,
+      scan_state: "done",
+      scan_error: null,
+      job: null,
+      last_finished: oldFinishedJob,
+    };
+    const view = render(<ModelSettings onSetupComplete={onSetupComplete} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "设为当前模型" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "开始更新索引" }),
+    );
+    await waitFor(() => expect(startPlannedSwitch).toHaveBeenCalledOnce());
+
+    switchCurrent = {
+      ...switchCurrent,
+      phase: "idle",
+      job: null,
+      last_finished: { ...runningJob, state: "done" },
+    };
+    view.rerender(<ModelSettings onSetupComplete={onSetupComplete} />);
+
+    expect(
+      await screen.findByText(
+        "配置已保存，尚未确认启用成功。请核对配置后重试。",
+      ),
+    ).toBeTruthy();
+    expect(onSetupComplete).not.toHaveBeenCalled();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "保存并测试启用",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it("keeps embedding configuration open when the switch rolls back", async () => {
+    const onSetupComplete = vi.fn();
+    profiles = [
+      {
+        ...profile,
+        capabilities: {
+          ...profile.capabilities,
+          endpoint_reachable: true,
+          model_available: true,
+          embedding_available: true,
+        },
+      },
+    ];
+    planActivation.mockImplementationOnce(async () => {
+      switchPlan = migrationPlan;
+      return migrationPlan;
+    });
+    const runningJob: EmbeddingSwitchJob = {
+      ...oldFinishedJob,
+      job_id: "switch-job",
+      state: "reembedding",
+      progress: { ...oldFinishedJob.progress, phase: "vectors", done: 0 },
+    };
+    startPlannedSwitch.mockResolvedValue(runningJob);
+    switchCurrent = {
+      schema_version: 1,
+      phase: "idle",
+      writes_paused: false,
+      scan_state: "done",
+      scan_error: null,
+      job: null,
+      last_finished: oldFinishedJob,
+    };
+    const view = render(<ModelSettings onSetupComplete={onSetupComplete} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "设为当前模型" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "开始更新索引" }),
+    );
+    await waitFor(() => expect(startPlannedSwitch).toHaveBeenCalledOnce());
+
+    switchCurrent = {
+      ...switchCurrent,
+      phase: "idle",
+      job: null,
+      last_finished: {
+        ...runningJob,
+        state: "rolled_back",
+        error_code: "embedding_switch_failed",
+      },
+    };
+    view.rerender(<ModelSettings onSetupComplete={onSetupComplete} />);
+
+    expect(
+      await screen.findByText(
+        "索引更新没有完成，仍在使用原来的搜索模型，记忆没有丢失。",
+      ),
+    ).toBeTruthy();
+    expect(onSetupComplete).not.toHaveBeenCalled();
   });
 
   it("hands a successful save to its card, clears only the key, and never tests or activates", async () => {
@@ -1044,14 +1232,16 @@ describe("ModelSettings", () => {
     await user.click(
       screen.getByRole("button", { name: "高级：自行配置向量模型" }),
     );
-    await user.selectOptions(screen.getByLabelText("向量配置模式"), "custom");
+    await user.click(screen.getByLabelText("向量配置模式"));
+    await user.click(screen.getByRole("option", { name: "自定义搜索模型" }));
     await user.type(
       screen.getByLabelText("配置名称"),
       "Remote with local embedding",
     );
     await user.type(screen.getByLabelText("生成模型名"), "remote-model");
     await user.type(screen.getByLabelText("向量模型名"), "nomic-embed-text");
-    await user.selectOptions(screen.getByLabelText("向量模型来源"), "ollama");
+    await user.click(screen.getByLabelText("向量模型来源"));
+    await user.click(screen.getByRole("option", { name: "本机 Ollama" }));
     await user.type(
       screen.getByLabelText("向量模型 Base URL"),
       "http://127.0.0.1:11434",
@@ -1277,6 +1467,87 @@ describe("ModelSettings", () => {
       expect(nameField().value).toBe(profile.name);
       expect(nameField().disabled).toBe(false);
     });
+  });
+
+  it("only completes compact setup after the backend confirms the profile is active", async () => {
+    const user = userEvent.setup();
+    const onSetupComplete = vi.fn();
+    const capabilities = {
+      endpoint_reachable: true,
+      model_available: true,
+      structured_output: false,
+      embedding_available: true,
+    };
+    const created = {
+      ...profile,
+      profile_id: "created",
+      revision: 1,
+      capabilities,
+    };
+    profiles = [];
+    create.mockImplementation(async () => {
+      profiles = [created];
+      return created;
+    });
+    probeProfile.mockResolvedValue({
+      profile_id: created.profile_id,
+      profile_revision: created.revision,
+      stages: [],
+      capabilities,
+    });
+    activate.mockResolvedValue({ ...created, is_active: true });
+    render(<ModelSettings compactSingle onSetupComplete={onSetupComplete} />);
+
+    await user.type(screen.getByLabelText("配置名称"), "Current model");
+    await user.type(screen.getByLabelText("生成模型名"), "model-v1");
+    await user.type(screen.getByLabelText(/^API Key/), "secret-value");
+    await user.click(screen.getByRole("button", { name: "测试并完成配置" }));
+
+    await waitFor(() => expect(onSetupComplete).toHaveBeenCalledOnce());
+    expect(planActivation).toHaveBeenCalledWith(
+      created.profile_id,
+      created.revision,
+    );
+    expect(activate).toHaveBeenCalledWith(created.profile_id);
+  });
+
+  it("keeps compact setup open when activation is not confirmed", async () => {
+    const user = userEvent.setup();
+    const onSetupComplete = vi.fn();
+    const capabilities = {
+      endpoint_reachable: true,
+      model_available: true,
+      structured_output: false,
+      embedding_available: true,
+    };
+    const created = {
+      ...profile,
+      profile_id: "created",
+      revision: 1,
+      capabilities,
+    };
+    profiles = [];
+    create.mockImplementation(async () => {
+      profiles = [created];
+      return created;
+    });
+    probeProfile.mockResolvedValue({
+      profile_id: created.profile_id,
+      profile_revision: created.revision,
+      stages: [],
+      capabilities,
+    });
+    activate.mockResolvedValue({ ...created, is_active: false });
+    render(<ModelSettings compactSingle onSetupComplete={onSetupComplete} />);
+
+    await user.type(screen.getByLabelText("配置名称"), "Inactive model");
+    await user.type(screen.getByLabelText("生成模型名"), "model-v1");
+    await user.type(screen.getByLabelText(/^API Key/), "secret-value");
+    await user.click(screen.getByRole("button", { name: "测试并完成配置" }));
+
+    await screen.findByText("配置已保存，尚未确认启用成功。请核对配置后重试。");
+    expect(onSetupComplete).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "测试并完成配置" })).toBeTruthy();
   });
 });
 
