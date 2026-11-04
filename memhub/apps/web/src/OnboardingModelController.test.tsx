@@ -23,7 +23,17 @@ const { embedding, getModelProfiles, models, step } = vi.hoisted(() => ({
         max_concurrency: 4,
         context_window: null,
         has_api_key: true,
+        credential_state: "available" as
+          | "available"
+          | "missing"
+          | "unavailable",
         is_active: true,
+        capabilities: {
+          endpoint_reachable: true,
+          model_available: true,
+          embedding_available: true,
+          structured_output: false,
+        },
       },
     ],
     pendingProbe: null as null | {
@@ -57,7 +67,7 @@ const { embedding, getModelProfiles, models, step } = vi.hoisted(() => ({
     supported: false as boolean | null,
     planActivation: vi.fn(),
     startPlannedSwitch: vi.fn(),
-    shouldUseLegacyActivation: () => true,
+    shouldUseLegacyActivation: (() => true) as () => boolean,
     clearPlan: vi.fn(),
     clearError: vi.fn(),
   },
@@ -123,6 +133,7 @@ beforeEach(() => {
   models.creationMissing = null;
   embedding.current = null;
   embedding.supported = false;
+  embedding.shouldUseLegacyActivation = () => true;
   step.current = null;
 });
 
@@ -162,6 +173,32 @@ it("resumes and confirms the active profile explicitly owned by onboarding", asy
   ).toBeTruthy();
   await waitFor(() => expect(enabled).toHaveBeenCalledOnce());
   expect(enabled).toHaveBeenCalledWith(1, "active-profile");
+});
+
+it("does not complete with an active profile whose credential is unavailable", async () => {
+  models.profiles = [
+    {
+      ...activeProfile,
+      credential_state: "unavailable",
+    },
+  ];
+  const enabled = vi.fn();
+  render(
+    <OnboardingModelController
+      sourceNames={[]}
+      initialProfileId="active-profile"
+      onBack={vi.fn()}
+      onModelActiveConfirmed={enabled}
+    />,
+  );
+
+  await waitFor(() => expect(step.current).not.toBeNull());
+  expect(enabled).not.toHaveBeenCalled();
+  await userEvent.click(
+    screen.getByRole("button", { name: "继续使用当前模型" }),
+  );
+  expect(enabled).not.toHaveBeenCalled();
+  expect(screen.getByText(/模型凭据或连接状态已变化/)).toBeTruthy();
 });
 
 it("hydrates a persisted inactive profile without creating a duplicate", async () => {
@@ -206,7 +243,7 @@ it("recovers a pending creation and persists its profile id", async () => {
 });
 
 it("reconciles a pending probe instead of saving or creating again", async () => {
-  const inactive = { ...activeProfile, is_active: false };
+  const inactive = { ...activeProfile, revision: 4, is_active: false };
   models.profiles = [inactive];
   models.pendingProbe = {
     operationId: "probe-operation",
@@ -215,7 +252,8 @@ it("reconciles a pending probe instead of saving or creating again", async () =>
   };
   models.probeProfile.mockResolvedValueOnce({
     profile_id: "active-profile",
-    profile_revision: 3,
+    input_profile_revision: 3,
+    profile_revision: 4,
     capabilities: {
       endpoint_reachable: true,
       model_available: true,
@@ -238,8 +276,74 @@ it("reconciles a pending probe instead of saving or creating again", async () =>
   await waitFor(() =>
     expect(models.probeProfile).toHaveBeenCalledWith("active-profile"),
   );
+  await waitFor(() =>
+    expect(screen.getByText("模型连接测试通过，可以启用。")).toBeTruthy(),
+  );
+  expect(currentStep().canSaveAndEnable).toBe(true);
   expect(models.update).not.toHaveBeenCalled();
   expect(models.create).not.toHaveBeenCalled();
+});
+
+it("passes the first test when Core advances the tested profile revision", async () => {
+  const inactive = { ...activeProfile, revision: 1, is_active: false };
+  models.profiles = [inactive];
+  models.update.mockResolvedValueOnce(inactive);
+  models.probeProfile.mockResolvedValueOnce({
+    profile_id: inactive.profile_id,
+    input_profile_revision: 1,
+    profile_revision: 2,
+    capabilities: {
+      endpoint_reachable: true,
+      model_available: true,
+      embedding_available: true,
+    },
+    stages: [{ ok: false }],
+  });
+  models.activate.mockResolvedValueOnce({
+    ...inactive,
+    revision: 2,
+    is_active: true,
+    capabilities: {
+      endpoint_reachable: true,
+      model_available: true,
+      embedding_available: true,
+    },
+  });
+  embedding.supported = true;
+  embedding.current = { writes_paused: false };
+  embedding.shouldUseLegacyActivation = () => false;
+  embedding.planActivation.mockResolvedValueOnce({ needed: false });
+  const confirmed = vi.fn();
+  render(
+    <OnboardingModelController
+      sourceNames={[]}
+      initialProfileId={inactive.profile_id}
+      onBack={vi.fn()}
+      onModelActiveConfirmed={confirmed}
+    />,
+  );
+  await waitFor(() =>
+    expect(
+      (currentStep().profile as { profile_id: string } | null)?.profile_id,
+    ).toBe(inactive.profile_id),
+  );
+
+  await act(async () => {
+    await (currentStep().onTest as () => Promise<void>)();
+  });
+
+  await waitFor(() =>
+    expect(screen.getByText("模型连接测试通过，可以启用。")).toBeTruthy(),
+  );
+  expect(currentStep().canSaveAndEnable).toBe(true);
+  expect(currentStep().profile).toMatchObject({ revision: 2 });
+  expect(getModelProfiles).not.toHaveBeenCalled();
+  await act(async () => {
+    await (currentStep().onSaveAndEnable as () => Promise<void>)();
+  });
+  expect(embedding.planActivation).toHaveBeenCalledWith(inactive.profile_id, 2);
+  expect(models.activate).toHaveBeenCalledWith(inactive.profile_id);
+  expect(confirmed).toHaveBeenCalledWith(1, inactive.profile_id);
 });
 
 it("keeps an active resumed profile on the model step while writes are paused", async () => {

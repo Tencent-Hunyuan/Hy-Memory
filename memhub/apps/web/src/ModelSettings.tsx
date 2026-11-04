@@ -27,6 +27,7 @@ import {
   presetForGeneration,
   validateGenerationModel,
 } from "./GenerationModelPrimitives";
+import { modelProfileReady, profileFromProbe } from "./model-profile-readiness";
 import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
@@ -172,27 +173,6 @@ function validEndpoint(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function ready(
-  profile: ModelProfile,
-  probe: ModelProbeResult | null = null,
-  error: string | null = null,
-): boolean {
-  return (
-    !error &&
-    (!probe ||
-      (probe.profile_id === profile.profile_id &&
-        probe.profile_revision === profile.revision &&
-        probe.capabilities.endpoint_reachable &&
-        probe.capabilities.model_available &&
-        probe.capabilities.embedding_available)) &&
-    profile.credential_state !== "unavailable" &&
-    !(profile.has_configured_api_key && !profile.has_api_key) &&
-    profile.capabilities.endpoint_reachable &&
-    profile.capabilities.model_available &&
-    profile.capabilities.embedding_available
-  );
 }
 
 function endpointLabel(value: string | null): string {
@@ -467,7 +447,11 @@ export function ModelSettings({
     technicalTouched.current.clear();
   };
   const isReady = (profile: ModelProfile) =>
-    ready(profile, models.probeFor(profile), models.probeErrorFor(profile));
+    modelProfileReady(
+      profile,
+      models.probeFor(profile),
+      models.probeErrorFor(profile),
+    );
 
   function editProfile(profile: ModelProfile) {
     if (ownerLocked) return;
@@ -626,7 +610,7 @@ export function ModelSettings({
       !active ||
       active.profile_id !== profile.profile_id ||
       !active.is_active ||
-      !ready(active, result)
+      !modelProfileReady(active, result)
     ) {
       setSetupError("配置已保存，尚未确认启用成功。请核对配置后重试。");
       return false;
@@ -640,38 +624,15 @@ export function ModelSettings({
     setSetupPhase("testing");
     const result = await models.probeProfile(profile.profile_id);
     if (!alive.current) return false;
-    if (
-      result &&
-      result.profile_id === profile.profile_id &&
-      result.profile_revision !== profile.revision
-    ) {
-      // A newer revision used to be accepted here, and then activation turned
-      // on whatever the configuration had become. The user is told the
-      // settings they filled in passed, so this hands them a model they never
-      // tested. `ready` below cannot catch it either: by then the probe and
-      // the activated profile are both on the new revision and agree.
-      setSetupError(
-        result.profile_revision > profile.revision
-          ? "这份配置在测试期间被改过，刚才测的是改动后的版本。配置已保存但未启用，请重新测试并启用。"
-          : "测试结果来自这份配置更早的版本。配置已保存但未启用，请重新测试并启用。",
-      );
-      return false;
-    }
-    if (
-      !result ||
-      result.profile_id !== profile.profile_id ||
-      result.profile_revision !== profile.revision ||
-      !result.capabilities.endpoint_reachable ||
-      !result.capabilities.model_available ||
-      !result.capabilities.embedding_available
-    ) {
+    const testedProfile = profileFromProbe(profile, result);
+    if (!testedProfile || !modelProfileReady(testedProfile, result ?? null)) {
       setSetupError(
         "配置已保存，连接测试未通过。请核对配置后重试，历史对话尚未发送。",
       );
       setFields(probeFieldErrors(result));
       return false;
     }
-    return activateWithPlan(profile, result);
+    return activateWithPlan(testedProfile, result ?? null);
   }
 
   async function activateTested(profile: ModelProfile) {
@@ -1940,7 +1901,11 @@ function PresetProfileCard({
           </button>
           <button
             type="button"
-            disabled={busy || !canEnable || !ready(profile, probe, probeError)}
+            disabled={
+              busy ||
+              !canEnable ||
+              !modelProfileReady(profile, probe, probeError)
+            }
             onClick={onActivate}
           >
             {text("设为当前模型")}

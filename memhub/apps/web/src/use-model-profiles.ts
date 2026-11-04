@@ -19,6 +19,7 @@ import {
   updateModelProfile,
 } from "./api";
 import { modelErrorText } from "./model-error-text";
+import { profileFromProbe } from "./model-profile-readiness";
 import {
   clearPendingModelCreation,
   readPendingModelCreation,
@@ -314,12 +315,7 @@ export function useModelProfiles() {
           })]: result,
         }));
         setProfiles((previous) =>
-          previous.map((item) =>
-            item.profile_id === result.profile_id &&
-            item.revision === result.profile_revision
-              ? { ...item, capabilities: result.capabilities }
-              : item,
-          ),
+          previous.map((item) => profileFromProbe(item, result) ?? item),
         );
       },
       (reason) =>

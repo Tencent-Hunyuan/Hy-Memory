@@ -1,16 +1,15 @@
 import type {
-  ModelProbeResult,
   ModelProfile,
   ModelProfileInput,
   ModelProfilePatch,
 } from "@one-memory/contracts";
-import { useEffect, useRef, useState } from "react";
-import { getModelProfiles } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EmbeddingSwitchConfirmDialog } from "./EmbeddingSwitchExperience";
 import {
   presetForGeneration,
   validateGenerationModel,
 } from "./GenerationModelPrimitives";
+import { modelProfileReady, profileFromProbe } from "./model-profile-readiness";
 import {
   type OnboardingModelDraft,
   OnboardingModelStep,
@@ -40,23 +39,6 @@ const initial: OnboardingModelDraft = {
   max_concurrency: "",
   context_window: "",
 };
-
-export function probeMatchesProfile(
-  original: ModelProfile,
-  current: ModelProfile | undefined,
-  probe: ModelProbeResult | undefined | null,
-): current is ModelProfile {
-  return Boolean(
-    current &&
-      probe &&
-      probe.profile_id === original.profile_id &&
-      probe.profile_revision === current.revision &&
-      probe.capabilities.endpoint_reachable &&
-      probe.capabilities.model_available &&
-      probe.capabilities.embedding_available &&
-      probe.stages.every((stage) => stage.ok),
-  );
-}
 
 export function OnboardingModelController({
   sourceNames,
@@ -112,6 +94,17 @@ export function OnboardingModelController({
     >(),
   );
   const autoConfirmed = useRef<string | null>(null);
+  const confirmReadyProfile = useCallback(
+    (profile: ModelProfile, owner = generationToken) => {
+      if (!isGenerationCurrent(owner) || !modelProfileReady(profile)) {
+        setError("模型凭据或连接状态已变化，请重新测试后再完成首次设置。");
+        return false;
+      }
+      onModelActiveConfirmed?.(owner, profile.profile_id);
+      return true;
+    },
+    [generationToken, isGenerationCurrent, onModelActiveConfirmed],
+  );
 
   useEffect(() => {
     const profile = initialProfileId
@@ -152,21 +145,19 @@ export function OnboardingModelController({
   useEffect(() => {
     if (
       !saved?.is_active ||
-      !isGenerationCurrent(generationToken) ||
       (embeddingSwitch.supported !== false && !embeddingSwitch.current) ||
       embeddingSwitch.current?.writes_paused
     )
       return;
     const key = `${generationToken}:${saved.profile_id}`;
     if (autoConfirmed.current === key) return;
-    autoConfirmed.current = key;
-    onModelActiveConfirmed?.(generationToken, saved.profile_id);
+    if (confirmReadyProfile(saved, generationToken))
+      autoConfirmed.current = key;
   }, [
     embeddingSwitch.current,
     embeddingSwitch.supported,
+    confirmReadyProfile,
     generationToken,
-    isGenerationCurrent,
-    onModelActiveConfirmed,
     saved,
   ]);
 
@@ -182,8 +173,7 @@ export function OnboardingModelController({
       flight.current = false;
       setSwitchPendingJobId(null);
       setPhase("idle");
-      if (saved && isGenerationCurrent(generationToken))
-        onModelActiveConfirmed?.(generationToken, saved.profile_id);
+      if (saved) confirmReadyProfile(saved, generationToken);
     } else if (finished.state === "rolled_back") {
       flight.current = false;
       setSwitchPendingJobId(null);
@@ -192,9 +182,8 @@ export function OnboardingModelController({
     }
   }, [
     embeddingSwitch.current?.last_finished,
+    confirmReadyProfile,
     generationToken,
-    isGenerationCurrent,
-    onModelActiveConfirmed,
     saved,
     switchPendingJobId,
   ]);
@@ -338,11 +327,10 @@ export function OnboardingModelController({
       setPhase("testing");
       const result = await models.probeProfile(profile.profile_id);
       if (!isGenerationCurrent(owner)) return;
-      const current = (await getModelProfiles()).find(
-        (item) => item.profile_id === profile.profile_id,
+      const current = profileFromProbe(profile, result);
+      const passed = Boolean(
+        current && modelProfileReady(current, result ?? null),
       );
-      if (!isGenerationCurrent(owner)) return;
-      const passed = probeMatchesProfile(profile, current, result);
       if (current) setSaved(current);
       setProbe({
         state: passed ? "passed" : "failed",
@@ -378,11 +366,10 @@ export function OnboardingModelController({
     try {
       const result = await models.probeProfile(saved.profile_id);
       if (!isGenerationCurrent(owner)) return;
-      const current = (await getModelProfiles()).find(
-        (item) => item.profile_id === saved.profile_id,
+      const current = profileFromProbe(saved, result);
+      const passed = Boolean(
+        current && modelProfileReady(current, result ?? null),
       );
-      if (!isGenerationCurrent(owner)) return;
-      const passed = probeMatchesProfile(saved, current, result);
       if (current) setSaved(current);
       setProbe({
         state: passed ? "passed" : "failed",
@@ -408,8 +395,7 @@ export function OnboardingModelController({
         setError("模型写入暂时关闭。请等待索引维护完成后重试。");
         return;
       }
-      if (isGenerationCurrent(generationToken))
-        onModelActiveConfirmed?.(generationToken, saved.profile_id);
+      confirmReadyProfile(saved, generationToken);
       return;
     }
     const owner = generationToken;
@@ -433,9 +419,15 @@ export function OnboardingModelController({
       }
       const active = await models.activate(saved.profile_id);
       if (!isGenerationCurrent(owner)) return;
-      if (!active?.is_active) throw new Error("model_activation_unconfirmed");
+      if (
+        !active?.is_active ||
+        active.profile_id !== saved.profile_id ||
+        active.revision !== saved.revision ||
+        !modelProfileReady(active)
+      )
+        throw new Error("model_activation_unconfirmed");
       trace.done("succeeded");
-      onModelActiveConfirmed?.(owner, active.profile_id);
+      confirmReadyProfile(active, owner);
     } catch {
       trace.done("unknown", { reason: "model_enable_unconfirmed" });
       setError("模型未能确认启用，请在设置中核对。");
