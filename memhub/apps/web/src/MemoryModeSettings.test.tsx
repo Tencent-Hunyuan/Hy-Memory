@@ -115,9 +115,7 @@ it("confirms the data effects before switching to lite", async () => {
   expect(screen.getByText("搜索范围")).toBeTruthy();
   expect(setMemoryMode).not.toHaveBeenCalled();
 
-  await user.click(
-    screen.getByRole("button", { name: "切换到基础记忆（lite）" }),
-  );
+  await user.click(screen.getByRole("button", { name: "确认选择" }));
   await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("lite"));
   await waitFor(() =>
     expect(document.activeElement).toBe(
@@ -139,7 +137,7 @@ it("traps modal focus, closes on Escape and restores the mode-card focus", async
   expect(outside.inert).toBe(true);
   await user.keyboard("{Shift>}{Tab}{/Shift}");
   expect(document.activeElement).toBe(
-    screen.getByRole("button", { name: "切换到基础记忆（lite）" }),
+    screen.getByRole("button", { name: "确认选择" }),
   );
   await user.keyboard("{Escape}");
 
@@ -155,9 +153,7 @@ it("keeps focus inside the modal while the mode change is pending", async () => 
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
   await chooseMode(user, /基础记忆（lite）/);
-  await user.click(
-    screen.getByRole("button", { name: "切换到基础记忆（lite）" }),
-  );
+  await user.click(screen.getByRole("button", { name: "确认选择" }));
 
   const modal = screen.getByRole("dialog");
   await waitFor(() => expect(document.activeElement).toBe(modal));
@@ -229,11 +225,11 @@ it("explains model cost, search scope and the next step before switching to ultr
 
   expect(screen.getByText("模型调用与费用")).toBeTruthy();
   expect(screen.getByText("搜索范围")).toBeTruthy();
-  expect(screen.getByText("切换后")).toBeTruthy();
+  expect(screen.getByText("选择后")).toBeTruthy();
   expect(screen.getByText(/已经处理完的旧对话不会补做/)).toBeTruthy();
   expect(screen.getByText("知识图谱")).toBeTruthy();
   expect(screen.getAllByText("已有数据")).toHaveLength(1);
-  expect(screen.getByText(/切换本身不会立即整合/)).toBeTruthy();
+  expect(screen.getByText(/选择模式本身不会立即整合/)).toBeTruthy();
 });
 
 it("distinguishes regular memories from higher-level Ultra data when switching to pro", async () => {
@@ -279,9 +275,7 @@ it("focuses the Evolve settings after switching to ultra", async () => {
   vi.mocked(getMemoryMode).mockResolvedValue(state("ultra"));
 
   await chooseMode(user, /深度记忆（ultra）/);
-  await user.click(
-    screen.getByRole("button", { name: "切换到深度记忆（ultra）" }),
-  );
+  await user.click(screen.getByRole("button", { name: "确认选择" }));
 
   await waitFor(() =>
     expect(document.activeElement?.getAttribute("id")).toContain("-evolve"),
@@ -498,14 +492,12 @@ it("keeps a failed switch explanation inside the open confirmation dialog", asyn
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
   await chooseMode(user, /深度记忆（ultra）/);
-  await user.click(
-    screen.getByRole("button", { name: "切换到深度记忆（ultra）" }),
-  );
+  await user.click(screen.getByRole("button", { name: "确认选择" }));
 
   const dialog = screen.getByRole("dialog");
   expect(
     await within(dialog).findByText(
-      "当前安装缺少知识图谱组件，无法开启 ultra。",
+      "当前安装缺少知识图谱组件，无法选择 ultra。",
     ),
   ).toBeTruthy();
 });
@@ -541,7 +533,7 @@ it("blocks mode and Evolve controls during embedding maintenance", async () => {
 
   expect(
     await screen.findByText(
-      "正在检查或切换向量模型，完成前不能切换模式或手动整合。",
+      "正在检查或切换向量模型，完成前不能选择模式或手动整合。",
     ),
   ).toBeTruthy();
   expect(

@@ -10,13 +10,33 @@ import type { ImportSourcesController } from "./use-import-sources";
 
 vi.mock("./api", () => ({
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  getModelProfiles: vi.fn().mockResolvedValue([]),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
   getMemoryMode: vi.fn().mockResolvedValue({
     mode: "pro",
     configured_mode: "pro",
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
-  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  planMemoryMode: vi.fn().mockResolvedValue({
+    current: "lite",
+    target: "pro",
+    effective_target: "pro",
+    capabilities: {
+      content_plane: "memory",
+      generation_required: true,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
+    blockers: ["active_model_required"],
+  }),
   putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
   patchOnboardingProgress: vi.fn().mockResolvedValue({}),
 }));
@@ -136,6 +156,9 @@ it("moves from import to the actual third step without completing onboarding", a
   );
   await userEvent.click(screen.getByRole("button", { name: "进入第三步" }));
   await userEvent.click(screen.getByRole("radio", { name: /pro/i }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "确认选择" }),
+  );
   await userEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
   expect(screen.getByRole("heading", { name: "第三步模型页面" })).toBeTruthy();
   expect(completeOnboarding).not.toHaveBeenCalled();
@@ -165,6 +188,9 @@ it("lets an empty first-time user enter without granting or importing a source",
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "确认选择" }),
+  );
   await userEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
@@ -188,6 +214,9 @@ it("retains explicit retry or enter when saving the skipped onboarding fails", a
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "确认选择" }),
+  );
   await userEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await screen.findByRole("button", { name: "重试保存并进入" });
   expect(finish).not.toHaveBeenCalled();

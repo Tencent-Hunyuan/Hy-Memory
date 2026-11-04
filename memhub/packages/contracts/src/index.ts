@@ -259,7 +259,7 @@ export interface ConnectSourcesResponse {
   request_id?: string | null;
 }
 
-export type OnboardingModeIntent = "lite" | "pro";
+export type OnboardingModeIntent = "lite" | "pro" | "ultra";
 export type OnboardingSetupStep = "review" | "mode" | "model";
 
 export interface OnboardingProgressUpdate {
