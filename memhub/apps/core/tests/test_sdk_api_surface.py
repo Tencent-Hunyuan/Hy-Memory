@@ -214,7 +214,15 @@ class RecordingSdk:
                 )
                 and (not kwargs.get("session_ids") or row["session_id"] in kwargs["session_ids"])
             ]
-            return {"vdb": {"memories": rows, "total": len(rows)}}
+            total = len(rows)
+            offset = kwargs.get("offset", 0)
+            limit = kwargs.get("limit", 100)
+            return {
+                "vdb": {
+                    "memories": rows[offset : offset + limit],
+                    "total": total,
+                }
+            }
         rows = [_chat(user_id, *row[:2], *row[3:]) for row in CHAT_ROWS.get(user_id, [])]
         if layers:
             rows = [row for row in rows if row["layer"] in layers]
@@ -712,6 +720,75 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
             ["我喜欢绿茶", "也记住了。"],
             ["我叫费天翔", "好的，记住了。"],
         ]
+        cursor = None
+        first_cursor = None
+        cursor_turns = []
+        cursor_calls = len(sdk.all("list_memories"))
+        while True:
+            params = {"unit": "turn", "paging": "cursor", "limit": 1}
+            if cursor is not None:
+                params["cursor"] = cursor
+            response = await client.get("/api/v2/raw", params=params)
+            assert response.status_code == 200, response.text
+            cursor_page = response.json()
+            assert cursor_page["total_exact"] is False
+            assert len(cursor_page["items"]) == 1
+            cursor_turns.append(cursor_page["items"][0]["messages"][0]["content"])
+            cursor = cursor_page["next_cursor"]
+            if first_cursor is None:
+                first_cursor = cursor
+            if cursor is None:
+                assert cursor_page["has_more"] is False
+                break
+            assert cursor_page["has_more"] is True
+        assert cursor_turns == ["我喜欢绿茶", "我叫费天翔", "你好"]
+        assert len(sdk.all("list_memories")) == cursor_calls + 3
+        inserted = {
+            "memory_id": "raw-new",
+            "content": "[user]: 新消息",
+            "status": "active",
+            "session_id": "s-new",
+            "source": "cursor",
+            "memory_at": 1_790_200_000,
+            "gmt_created": 1_790_200_100,
+        }
+        RAW_ROWS["local"].insert(0, inserted)
+        try:
+            continued = await client.get(
+                "/api/v2/raw",
+                params={
+                    "unit": "turn",
+                    "paging": "cursor",
+                    "limit": 1,
+                    "cursor": first_cursor,
+                },
+            )
+            assert continued.status_code == 200, continued.text
+            assert continued.json()["items"][0]["messages"][0]["content"] == "我叫费天翔"
+        finally:
+            RAW_ROWS["local"].remove(inserted)
+        assert (
+            await client.get(
+                "/api/v2/raw",
+                params={
+                    "unit": "turn",
+                    "paging": "cursor",
+                    "cursor": first_cursor,
+                    "source": "hermes",
+                },
+            )
+        ).status_code == 422
+        assert (
+            await client.get(
+                "/api/v2/raw",
+                params={
+                    "unit": "turn",
+                    "paging": "cursor",
+                    "cursor": "turn:²:0:0:2::0000000000000000",
+                },
+            )
+        ).status_code == 422
+
         calls_before_refresh = len(sdk.all("list_memories"))
         await client.get("/api/v2/raw", params={"unit": "turn"})
         assert len(sdk.all("list_memories")) == calls_before_refresh + 1

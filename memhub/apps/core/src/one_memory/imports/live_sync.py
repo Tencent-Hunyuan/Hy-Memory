@@ -591,7 +591,11 @@ class PollingLiveSyncSupervisor:
 
     async def _poll_source(self, source_id: str) -> None:
         while True:
-            await asyncio.sleep(self.interval_seconds)
+            # A watched source is normally triggered by its filesystem event.
+            # Its timer is only a missed-event backstop; recursively walking
+            # every multi-gigabyte host root once a minute starved unrelated
+            # Core reads even when no source had changed.
+            await asyncio.sleep(self._poll_interval(source_id))
             try:
                 await self.trigger(source_id)
             except asyncio.CancelledError:
@@ -607,6 +611,11 @@ class PollingLiveSyncSupervisor:
                     raise
                 except Exception as again:
                     self._note_internal_error(source_id, again)
+
+    def _poll_interval(self, source_id: str) -> float:
+        if source_id in (self._watched_sources or ()):
+            return max(self.interval_seconds, 15 * 60)
+        return self.interval_seconds
 
     def _note_worker_still_running(self, source_id: str) -> None:
         current = self.health(source_id)

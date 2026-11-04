@@ -72,6 +72,11 @@ function pageFor(
   total: number,
   offset: number,
   limit: number,
+  cursor?: {
+    next_cursor?: string | null;
+    has_more?: boolean;
+    total_exact?: boolean;
+  },
 ): MemoryLibraryPage {
   const sourceIds: Record<string, string[]> = {};
   const sourceTime: Record<
@@ -97,6 +102,7 @@ function pageFor(
     total,
     offset,
     limit,
+    ...cursor,
     source_ids_by_memory: sourceIds,
     source_time_by_memory: sourceTime,
     search_window: null,
@@ -107,7 +113,11 @@ function pageFor(
 }
 
 export function rawLibraryPage(page: SdkRawPage): MemoryLibraryPage {
-  return pageFor(page.items, page.total, page.offset, page.limit);
+  return pageFor(page.items, page.total, page.offset, page.limit, {
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
+    total_exact: page.total_exact,
+  });
 }
 
 export function rawSearchPage(items: SdkRawContextItem[]): MemoryLibraryPage {

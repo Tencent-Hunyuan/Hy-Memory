@@ -110,12 +110,15 @@ type Props = {
     settledSource?: string;
     settledQuery?: string;
     requestedOffset?: number;
+    cursorPaging?: boolean;
+    hasMore?: boolean;
     /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
     unattributedSource?: string;
     onQuery(value: string): void;
     onSource(value: string): void;
     resetPage(): void;
     onPage(offset: number): void;
+    onMore?(): void;
     onRetry(): void;
   };
 };
@@ -1131,62 +1134,81 @@ export function MemoryMap(props: Props) {
               aria-busy={pageTransitioning || undefined}
               className="map-pagination"
             >
-              <button
-                type="button"
-                className="quiet map-tool"
-                aria-label={text("上一页记忆")}
-                title={text("上一页记忆")}
-                disabled={pageTransitioning || library.page.offset === 0}
-                onClick={() => {
-                  if (axis === "topic") setGroupKey("");
-                  if (library.page) {
-                    const offset = library.page.offset - library.page.limit;
-                    setPageRetrying(false);
-                    pageRetrySawLoading.current = false;
-                    setPendingPageOffset(offset);
-                    library.onPage(offset);
-                  }
-                }}
-              >
-                <ChevronLeft size={16} aria-hidden="true" />
-              </button>
-              <span>
-                {text(
-                  "共 {count} 条，第 {page} / {pages} 页",
-                  {
-                    count: count(library.page.total),
-                    page:
-                      library.page.total === 0
-                        ? 0
-                        : Math.floor(library.page.offset / library.page.limit) +
-                          1,
-                    pages: Math.ceil(library.page.total / library.page.limit),
-                  },
-                  library.page.total,
-                )}
-              </span>
-              <button
-                type="button"
-                className="quiet map-tool"
-                aria-label={text("下一页记忆")}
-                title={text("下一页记忆")}
-                disabled={
-                  pageTransitioning ||
-                  library.page.offset + library.page.limit >= library.page.total
-                }
-                onClick={() => {
-                  if (axis === "topic") setGroupKey("");
-                  if (library.page) {
-                    const offset = library.page.offset + library.page.limit;
-                    setPageRetrying(false);
-                    pageRetrySawLoading.current = false;
-                    setPendingPageOffset(offset);
-                    library.onPage(offset);
-                  }
-                }}
-              >
-                <ChevronRight size={16} aria-hidden="true" />
-              </button>
+              {library.cursorPaging ? (
+                library.hasMore ? (
+                  <R6Button
+                    disabled={pageTransitioning}
+                    onClick={() => library.onMore?.()}
+                  >
+                    {pageTransitioning ? text("正在读取…") : text("加载更多")}
+                  </R6Button>
+                ) : (
+                  <span>{text("已加载全部")}</span>
+                )
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="quiet map-tool"
+                    aria-label={text("上一页记忆")}
+                    title={text("上一页记忆")}
+                    disabled={pageTransitioning || library.page.offset === 0}
+                    onClick={() => {
+                      if (axis === "topic") setGroupKey("");
+                      if (library.page) {
+                        const offset = library.page.offset - library.page.limit;
+                        setPageRetrying(false);
+                        pageRetrySawLoading.current = false;
+                        setPendingPageOffset(offset);
+                        library.onPage(offset);
+                      }
+                    }}
+                  >
+                    <ChevronLeft size={16} aria-hidden="true" />
+                  </button>
+                  <span>
+                    {text(
+                      "共 {count} 条，第 {page} / {pages} 页",
+                      {
+                        count: count(library.page.total),
+                        page:
+                          library.page.total === 0
+                            ? 0
+                            : Math.floor(
+                                library.page.offset / library.page.limit,
+                              ) + 1,
+                        pages: Math.ceil(
+                          library.page.total / library.page.limit,
+                        ),
+                      },
+                      library.page.total,
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="quiet map-tool"
+                    aria-label={text("下一页记忆")}
+                    title={text("下一页记忆")}
+                    disabled={
+                      pageTransitioning ||
+                      library.page.offset + library.page.limit >=
+                        library.page.total
+                    }
+                    onClick={() => {
+                      if (axis === "topic") setGroupKey("");
+                      if (library.page) {
+                        const offset = library.page.offset + library.page.limit;
+                        setPageRetrying(false);
+                        pageRetrySawLoading.current = false;
+                        setPendingPageOffset(offset);
+                        library.onPage(offset);
+                      }
+                    }}
+                  >
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                </>
+              )}
             </nav>
           )}
         {!library && loaded && !filtered.length && (search || groupKey) && (

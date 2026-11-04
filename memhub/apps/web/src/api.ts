@@ -987,6 +987,8 @@ export async function getSdkRaw({
   offset = 0,
   limit = 100,
   unit = "turn",
+  paging,
+  cursor,
   signal,
 }: {
   source?: string;
@@ -994,10 +996,20 @@ export async function getSdkRaw({
   offset?: number;
   limit?: number;
   unit?: "raw" | "turn";
+  paging?: "offset" | "cursor";
+  cursor?: string | null;
   signal?: AbortSignal;
 } = {}): Promise<SdkRawPage> {
   const response = await client.get<SdkRawPage>("/api/v2/raw", {
-    params: { source, session_id: sessionId, offset, limit, unit },
+    params: {
+      source,
+      session_id: sessionId,
+      offset,
+      limit,
+      unit,
+      paging,
+      cursor: cursor || undefined,
+    },
     signal,
   });
   return response.data;

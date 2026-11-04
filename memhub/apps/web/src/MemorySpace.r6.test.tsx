@@ -320,9 +320,9 @@ it("pages and filters the raw conversation data plane in lite", async () => {
   setup();
   reads.processing.mockResolvedValue(modeProcessing("lite"));
   reads.raw.mockImplementation(async (options = {}) => {
-    const offset = "offset" in options ? (options.offset ?? 0) : 0;
+    const cursor = "cursor" in options ? options.cursor : null;
     const source = "source" in options ? options.source : undefined;
-    const rawId = `${source ?? "all"}-${offset}`;
+    const rawId = `${source ?? "all"}-${cursor ? "more" : "first"}`;
     return {
       items: [
         {
@@ -333,14 +333,17 @@ it("pages and filters the raw conversation data plane in lite", async () => {
           source: source ?? "cursor",
           session_id: `session-${rawId}`,
           memory_at: null,
-          gmt_created: 1_761_000_000 - offset,
+          gmt_created: 1_761_000_000,
           custom: {},
           messages: [{ role: "user", content: `原始会话 ${rawId}` }],
         },
       ],
-      total: source ? 1 : 21,
+      total: cursor ? 2 : 1,
       limit: 20,
-      offset,
+      offset: cursor ? 1 : 0,
+      next_cursor: !source && !cursor ? "turn:1:0:1" : null,
+      has_more: !source && !cursor,
+      total_exact: false,
     };
   });
   const user = userEvent.setup();
@@ -359,30 +362,43 @@ it("pages and filters the raw conversation data plane in lite", async () => {
     />,
   );
 
-  expect(await screen.findAllByText("原始会话 all-0")).toHaveLength(2);
-  await user.click(screen.getByRole("button", { name: "下一页记忆" }));
-  expect(await screen.findAllByText("原始会话 all-20")).toHaveLength(2);
+  expect(await screen.findAllByText("原始会话 all-first")).toHaveLength(2);
+  await user.click(screen.getByRole("button", { name: "加载更多" }));
+  expect(await screen.findAllByText("原始会话 all-more")).toHaveLength(1);
+  expect(screen.getAllByText("原始会话 all-first")).toHaveLength(2);
   expect(reads.raw).toHaveBeenLastCalledWith(
-    expect.objectContaining({ source: undefined, offset: 20, limit: 20 }),
+    expect.objectContaining({
+      source: undefined,
+      cursor: "turn:1:0:1",
+      paging: "cursor",
+      limit: 20,
+    }),
   );
 
   await user.click(screen.getByRole("combobox", { name: "来源" }));
   await user.click(screen.getByRole("option", { name: "Cursor" }));
-  expect(await screen.findAllByText("原始会话 cursor-0")).toHaveLength(2);
+  expect(await screen.findAllByText("原始会话 cursor-first")).toHaveLength(2);
   expect(reads.raw).toHaveBeenLastCalledWith(
-    expect.objectContaining({ source: "cursor", offset: 0, limit: 20 }),
+    expect.objectContaining({
+      source: "cursor",
+      cursor: null,
+      paging: "cursor",
+      limit: 20,
+    }),
   );
 
   await user.click(screen.getByRole("combobox", { name: "来源" }));
   await user.click(screen.getByRole("option", { name: "手动添加" }));
   expect(
-    await screen.findAllByText("原始会话 one-memory-manual-0"),
+    await screen.findAllByText("原始会话 one-memory-manual-first"),
   ).toHaveLength(2);
   expect(reads.raw).toHaveBeenLastCalledWith(
     expect.objectContaining({
       source: "one-memory-manual",
       offset: 0,
       limit: 20,
+      paging: "cursor",
+      cursor: null,
     }),
   );
 });

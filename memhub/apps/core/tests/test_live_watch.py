@@ -293,6 +293,11 @@ def test_health_states_that_watching_is_layered_on_the_timer(tmp_path: Path) -> 
 
         assert live.health(PI_DESCRIPTOR.source_id).mode == "watch_and_polling"
         assert live.health("unknown-source").mode == "watch_and_polling"
+        live.set_watched_sources((PI_DESCRIPTOR.source_id,))
+        assert live._poll_interval(PI_DESCRIPTOR.source_id) == max(
+            live.interval_seconds, 15 * 60
+        )
+        assert live._poll_interval("unknown-source") == live.interval_seconds
         await imports.shutdown()
 
     asyncio.run(scenario())

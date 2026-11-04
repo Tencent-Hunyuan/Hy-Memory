@@ -510,6 +510,10 @@ export interface MemoryLibraryPage {
   total: number;
   offset: number;
   limit: number;
+  /** Cursor paging: opaque continuation for a page whose exact total is not read. */
+  next_cursor?: string | null;
+  has_more?: boolean;
+  total_exact?: boolean;
   /** Active evidence sources for each returned memory, from the same authorized page snapshot. */
   source_ids_by_memory?: Record<string, string[]>;
   /** When each returned memory's cited conversation happened (D96). `import`
@@ -709,6 +713,9 @@ export interface SdkRawPage {
   limit: number;
   offset: number;
   unit?: "raw" | "turn";
+  next_cursor?: string | null;
+  has_more?: boolean;
+  total_exact?: boolean;
   /** A time range was applied to this page in Core (the SDK list has none). */
   time_filtered?: boolean;
 }
