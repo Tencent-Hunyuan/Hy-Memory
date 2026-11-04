@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import random
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -461,6 +462,8 @@ async def _two_spaces(path):
     """A live 1024 space and a stray 512 space sharing some ids."""
     from hy_memory.data.vector_store_chroma import ChromaVectorStore
 
+    stable_time = datetime(2025, 1, 1)
+
     async def _store(base, dims, model, contents):
         cfg = MemoryConfig()
         cfg.vector_store.provider = "chroma"
@@ -475,6 +478,7 @@ async def _two_spaces(path):
             node = MemoryNode(
                 node_id=node_id, user_id=user, agent_id="a", session_id="s",
                 layer=MemoryLayer.L2_FACT, content=content, status=status,
+                gmt_created=stable_time, gmt_modified=stable_time, valid_from=stable_time,
             )
             node.embedding = emb.vector(content)
             nodes.append(node)

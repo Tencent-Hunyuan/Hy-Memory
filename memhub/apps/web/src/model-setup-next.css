@@ -134,6 +134,11 @@
   background: transparent;
   color: #4e6478;
 }
+.model-settings .generation-technical-toggle:hover:not(:disabled) {
+  border-color: transparent;
+  background: #e9f0f4;
+  color: #304757;
+}
 .model-settings .generation-technical-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
