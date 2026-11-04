@@ -111,7 +111,7 @@ export function OptionMenu(props: {
   function choose(index: number) {
     const item = props.options[index];
     if (!item || item.disabled) return;
-    props.onChange(item.value);
+    if (item.value !== props.value) props.onChange(item.value);
     setOpen(false);
     button.current?.focus();
   }
