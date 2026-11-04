@@ -168,6 +168,9 @@ to once per 5 seconds. A failed query is unknown, never a zero balance.
 The API key stays in Core and is sent only to the fixed official endpoint,
 without following redirects. Custom billing URLs never receive credentials.
 This is the whole account's balance, which may include other applications;
-it cannot establish MemHub's exact daily charges. Other providers continue to
-use their configured billing-console links until a supported balance adapter is
-available.
+it cannot establish MemHub's exact daily charges. Additional official financial adapters and separate billing authorization are
+documented in [Provider financial queries](docs/contracts/provider-billing.md).
+Kimi and SiliconFlow read balances; OpenRouter reads key quota or management-key
+credits. OpenAI, Alibaba Cloud, Tencent Cloud and Azure require separate billing
+credentials. MiniMax and Zhipu/Z.ai currently provide console links, not an
+automatic balance adapter.

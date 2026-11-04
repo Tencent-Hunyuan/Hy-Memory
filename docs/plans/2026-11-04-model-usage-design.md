@@ -32,3 +32,12 @@ the official HTTPS host/port, reject redirects, cache successful reads for 60s
 and failures for 10s, and rate-limit manual refresh to 5s. Bind cache entries to
 profile revision, never persist keys or error bodies, and show unknown on error.
 The balance is account-wide; do not label its changes as daily MemHub charges.
+
+## Additional provider adapters
+
+Use a verified-host catalog and separate OS-secret-store billing authorization.
+Retain financial scope and unknown breakdown fields. Add Kimi/SiliconFlow balance,
+OpenRouter key quota or management-key credits, OpenAI Admin costs, Alibaba RPC
+balance, Tencent TC3 balance and resource-filtered Azure costs. Model credentials
+are never interpreted as cloud IAM. Providers without a verified public adapter
+remain explicit console-only entries. See `memhub/docs/contracts/provider-billing.md`.

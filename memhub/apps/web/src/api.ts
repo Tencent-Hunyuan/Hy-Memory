@@ -1834,3 +1834,31 @@ export async function getProviderBalance(
     throw new Error("provider_balance_invalid");
   return data;
 }
+
+export async function getBillingAuthorization(
+  profileId: string,
+): Promise<import("@one-memory/contracts").BillingAuthorizationState> {
+  const { data } = await client.get<
+    import("@one-memory/contracts").BillingAuthorizationState
+  >(`/api/v1/model-usage/billing-auth/${encodeURIComponent(profileId)}`);
+  return data;
+}
+export async function setBillingAuthorization(
+  profileId: string,
+  fields: Record<string, string>,
+): Promise<import("@one-memory/contracts").BillingAuthorizationState> {
+  const { data } = await client.put<
+    import("@one-memory/contracts").BillingAuthorizationState
+  >(`/api/v1/model-usage/billing-auth/${encodeURIComponent(profileId)}`, {
+    fields,
+  });
+  return data;
+}
+export async function deleteBillingAuthorization(
+  profileId: string,
+): Promise<import("@one-memory/contracts").BillingAuthorizationState> {
+  const { data } = await client.delete<
+    import("@one-memory/contracts").BillingAuthorizationState
+  >(`/api/v1/model-usage/billing-auth/${encodeURIComponent(profileId)}`);
+  return data;
+}

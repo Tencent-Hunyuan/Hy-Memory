@@ -50,7 +50,7 @@ it("renders provider amounts separately from project cost and supports manual re
   await screen.findByText("¥98.12");
   expect(screen.getByText("¥8.12")).toBeTruthy();
   expect(screen.getByText("¥90.00")).toBeTruthy();
-  expect(screen.getByText(/属于整个账户/)).toBeTruthy();
+  expect(screen.getByText(/不等同本项目消耗/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "刷新余额" }));
   await waitFor(() => expect(read).toHaveBeenLastCalledWith("deepseek", true));
 });
@@ -112,4 +112,39 @@ it("does not query a hidden page and discards a late reply for the old account",
   await screen.findByText(/此厂商暂未接入/);
   await act(async () => finish?.(ready));
   expect(screen.queryByText("¥98.12")).toBeNull();
+});
+
+it("shows official organization spend without inventing an account balance", async () => {
+  read.mockResolvedValue({
+    ...ready,
+    scope: "organization",
+    balances: [],
+    spending: [{ period: "month_to_date", amount: "12.34", currency: "USD" }],
+  });
+  render(
+    <ProviderBalanceCard profiles={[profile]} selectedProfileId="" active />,
+  );
+  await screen.findByText("官方本月至今费用");
+  expect(screen.getByText(/组织账单/)).toBeTruthy();
+  expect(screen.queryByText("可用余额")).toBeNull();
+});
+it("distinguishes an unlimited key from zero credits", async () => {
+  read.mockResolvedValue({
+    ...ready,
+    scope: "api_key",
+    quota_unlimited: true,
+    balances: [
+      {
+        currency: "USD",
+        total_balance: null,
+        granted_balance: null,
+        topped_up_balance: null,
+      },
+    ],
+  });
+  render(
+    <ProviderBalanceCard profiles={[profile]} selectedProfileId="" active />,
+  );
+  await screen.findByText("未设置 Key 限额");
+  expect(screen.queryByText("$0.00")).toBeNull();
 });

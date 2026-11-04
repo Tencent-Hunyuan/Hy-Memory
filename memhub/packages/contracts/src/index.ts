@@ -1408,14 +1408,40 @@ export interface ModelUsageSettings {
 export interface ProviderAccountBalance {
   schema_version: 1;
   profile_id: string;
-  state: "ready" | "unsupported" | "credentials_unavailable" | "unavailable";
+  state:
+    | "ready"
+    | "unsupported"
+    | "authorization_required"
+    | "credentials_unavailable"
+    | "unavailable";
+  provider?: string | null;
+  scope?: "account" | "api_key" | "organization" | "resource";
+  quota_unlimited?: boolean;
+  billing_url?: string | null;
+  docs_url?: string | null;
+  authorization_supported?: boolean;
+  authorization_configured?: boolean;
+  spending?: Array<{
+    period: "day" | "week" | "month" | "all_time" | "month_to_date";
+    amount: string;
+    currency: string;
+  }>;
   is_available: boolean | null;
   balances: Array<{
-    currency: "CNY" | "USD";
-    total_balance: string;
-    granted_balance: string;
-    topped_up_balance: string;
+    currency: string;
+    total_balance: string | null;
+    granted_balance: string | null;
+    topped_up_balance: string | null;
+    cash_balance?: string | null;
   }>;
   checked_at: string | null;
   source_url: string | null;
+}
+
+export interface BillingAuthorizationState {
+  schema_version: 1;
+  provider: string;
+  configured: boolean;
+  docs_url: string;
+  fields: Array<{ name: string; required: boolean; secret: boolean }>;
 }

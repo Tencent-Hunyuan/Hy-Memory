@@ -54,6 +54,7 @@ from one_memory.background_work import (
     shutdown_bulk_pool,
     warm_bulk_pool,
 )
+from one_memory.billing_authorization import BillingAuthorizationInput, BillingAuthorizationStore
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import sdk_context_router
 from one_memory.conversation_processing import (
@@ -276,6 +277,7 @@ from one_memory.onboarding import (
     OnboardingStore,
 )
 from one_memory.provider_balance import ProviderBalance, ProviderBalanceService
+from one_memory.provider_billing_catalog import BillingProvider, billing_provider
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -1409,8 +1411,13 @@ def create_app(
             app.state.model_request_budget = model_request_budget
             app.state.model_request_audit_store = ModelRequestAuditStore(database_path)
             app.state.model_usage = ModelUsageService(database_path, runtime_settings.data_dir)
+            app.state.billing_authorizations = BillingAuthorizationStore(
+                runtime_settings.data_dir, app.state.secret_store
+            )
             app.state.provider_balance = ProviderBalanceService(
-                app.state.model_profile_store, app.state.secret_store
+                app.state.model_profile_store,
+                app.state.secret_store,
+                authorizations=app.state.billing_authorizations,
             )
             #: One pause for every model request while the provider keeps
             #: failing (`model_backoff`); reset when the configuration changes.
@@ -2406,6 +2413,54 @@ def create_app(
         return cast(ProviderBalanceService, app.state.provider_balance).get(
             profile, refresh=refresh
         )
+
+    def billing_profile(profile_id: str) -> tuple[ModelProfile, BillingProvider]:
+        profile = _model_profile_store(app).get(profile_id, _secret_store(app))
+        if profile is None:
+            raise HTTPException(status_code=404, detail="model_profile_not_found")
+        provider = billing_provider(profile)
+        if provider is None or not provider.fields:
+            raise HTTPException(status_code=422, detail="billing_authorization_not_supported")
+        return profile, provider
+
+    @app.get("/api/v1/model-usage/billing-auth/{profile_id}", dependencies=protected)
+    def get_billing_authorization(profile_id: str) -> dict[str, Any]:
+        _profile, provider = billing_profile(profile_id)
+        store = cast(BillingAuthorizationStore, app.state.billing_authorizations)
+        return {
+            "schema_version": 1,
+            "provider": provider.name,
+            "configured": store.revision(profile_id, provider) is not None,
+            "docs_url": provider.docs_url,
+            "fields": [
+                {"name": f.name, "required": f.required, "secret": f.secret}
+                for f in provider.fields
+            ],
+        }
+
+    @app.put("/api/v1/model-usage/billing-auth/{profile_id}", dependencies=protected)
+    def put_billing_authorization(
+        profile_id: str, value: BillingAuthorizationInput
+    ) -> dict[str, Any]:
+        _profile, provider = billing_profile(profile_id)
+        try:
+            cast(BillingAuthorizationStore, app.state.billing_authorizations).put(
+                profile_id, provider, value
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="invalid_billing_fields") from None
+        except SecretStoreUnavailableError:
+            raise HTTPException(status_code=503, detail="secure_storage_unavailable") from None
+        return get_billing_authorization(profile_id)
+
+    @app.delete("/api/v1/model-usage/billing-auth/{profile_id}", dependencies=protected)
+    def delete_billing_authorization(profile_id: str) -> dict[str, Any]:
+        billing_profile(profile_id)
+        try:
+            cast(BillingAuthorizationStore, app.state.billing_authorizations).delete(profile_id)
+        except SecretStoreUnavailableError:
+            raise HTTPException(status_code=503, detail="secure_storage_unavailable") from None
+        return get_billing_authorization(profile_id)
 
     @app.get("/api/v1/model-usage/pricing", dependencies=protected)
     def memory_model_pricing() -> dict[str, Any]:
@@ -3915,6 +3970,7 @@ def create_app(
     def delete_model_profile(profile_id: str) -> Response:
         try:
             _model_profile_store(app).delete(profile_id, _secret_store(app))
+            cast(BillingAuthorizationStore, app.state.billing_authorizations).delete(profile_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="model_profile_not_found") from None
         except ActiveModelProfileError:

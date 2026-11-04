@@ -4,6 +4,7 @@ import type {
 } from "@one-memory/contracts";
 import { useEffect, useState } from "react";
 import { getProviderBalance } from "./api";
+import { BillingAuthorizationForm } from "./BillingAuthorizationForm";
 import { useGuiLanguage } from "./gui-language";
 import { subscribePoll } from "./poll-scheduler";
 
@@ -26,6 +27,7 @@ export function ProviderBalanceCard({
   const [balance, setBalance] = useState<ProviderAccountBalance | null>(null);
   const [loading, setLoading] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [authorizationOpen, setAuthorizationOpen] = useState(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision changes the credential behind this read.
   useEffect(() => {
@@ -33,6 +35,7 @@ export function ProviderBalanceCard({
     let cancelled = false;
     let inFlight = false;
     setBalance(null);
+
     const load = async (force = false) => {
       if (inFlight) return;
       inFlight = true;
@@ -97,21 +100,72 @@ export function ProviderBalanceCard({
       {loading && !balance && <p>{t("dailyUsage.balanceLoading")}</p>}
       {balance?.state === "ready" && (
         <>
+          <p className="memory-usage-note">
+            {t(
+              balance.scope === "api_key"
+                ? "finance.scopeKey"
+                : balance.scope === "organization"
+                  ? "finance.scopeOrganization"
+                  : balance.scope === "resource"
+                    ? "finance.scopeResource"
+                    : "finance.scopeAccount",
+            )}
+          </p>
           {balance.balances.map((item) => (
             <div className="provider-balance-values" key={item.currency}>
               {[
-                [t("dailyUsage.totalBalance"), item.total_balance],
+                [
+                  balance.scope === "api_key"
+                    ? t("finance.keyRemaining")
+                    : t("dailyUsage.totalBalance"),
+                  item.total_balance,
+                ],
                 [t("dailyUsage.grantedBalance"), item.granted_balance],
                 [t("dailyUsage.toppedUpBalance"), item.topped_up_balance],
-              ].map(([label, amount]) => (
-                <div key={label}>
-                  <span>{label}</span>
-                  <strong>{money(amount, item.currency)}</strong>
+                [t("finance.cashBalance"), item.cash_balance],
+              ]
+                .filter(
+                  ([_label, amount], index) => index === 0 || amount != null,
+                )
+                .map(([label, amount]) => (
+                  <div key={label}>
+                    <span>{label}</span>
+                    <strong>
+                      {amount != null
+                        ? money(amount, item.currency)
+                        : balance.quota_unlimited
+                          ? t("finance.noKeyLimit")
+                          : "—"}
+                    </strong>
+                  </div>
+                ))}
+            </div>
+          ))}
+          {(balance.spending?.length ?? 0) > 0 && (
+            <div className="provider-balance-values">
+              {balance.spending?.map((spend) => (
+                <div key={`${spend.period}:${spend.currency}`}>
+                  <span>
+                    {t(
+                      spend.period === "day"
+                        ? "finance.spendDay"
+                        : spend.period === "week"
+                          ? "finance.spendWeek"
+                          : spend.period === "month"
+                            ? "finance.spendMonth"
+                            : spend.period === "month_to_date"
+                              ? "finance.spendMonthToDate"
+                              : "finance.spendAllTime",
+                    )}
+                  </span>
+                  <strong>{money(spend.amount, spend.currency)}</strong>
                 </div>
               ))}
             </div>
-          ))}
-          {!balance.balances.length && <p>{t("dailyUsage.noBalanceInfo")}</p>}
+          )}
+          {!balance.balances.length && !balance.spending?.length && (
+            <p>{t("dailyUsage.noBalanceInfo")}</p>
+          )}
           {balance.checked_at && (
             <p className="memory-usage-note">
               {t("dailyUsage.balanceCheckedAt", {
@@ -121,6 +175,9 @@ export function ProviderBalanceCard({
           )}
         </>
       )}
+      {balance?.state === "authorization_required" && (
+        <p>{t("finance.authorizationRequired")}</p>
+      )}
       {balance?.state === "unsupported" && (
         <p>{t("dailyUsage.balanceUnsupported")}</p>
       )}
@@ -129,6 +186,27 @@ export function ProviderBalanceCard({
       )}
       {balance?.state === "unavailable" && (
         <p role="alert">{t("dailyUsage.balanceUnavailable")}</p>
+      )}
+      {balance?.billing_url && (
+        <a href={balance.billing_url} target="_blank" rel="noopener noreferrer">
+          {t("dailyUsage.openBilling")}
+        </a>
+      )}
+      {balance?.authorization_supported && (
+        <button
+          type="button"
+          onClick={() => setAuthorizationOpen((value) => !value)}
+          aria-expanded={authorizationOpen}
+        >
+          {t("finance.configureAuthorization")}
+        </button>
+      )}
+      {authorizationOpen && id && (
+        <BillingAuthorizationForm
+          key={id}
+          profileId={id}
+          onSaved={() => setRefresh((value) => value + 1)}
+        />
       )}
       <p className="memory-usage-note">{t("dailyUsage.balanceNote")}</p>
     </section>

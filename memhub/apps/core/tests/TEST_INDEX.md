@@ -220,6 +220,7 @@
 | `test_probe_code_contract_parity.py` | `contract` | 探测码在三处必须同时存在：python 枚举、TS 契约、界面文案表。 |
 | `test_probe_payment_required.py` | `contract` | 覆盖 http 402 without a useful body is still understood as unpaid、a wrong address is still a missing model not an unpaid one 场景。 |
 | `test_processing_requests.py` | `contract` | 覆盖 concurrent claim only one snapshot wins、concurrent create same grant has one id and profile、concurrent different profile never reuses another scope 等 14 个场景。 |
+| `test_provider_billing.py` | `contract` | Provider financial scopes, secure billing authorization and protocol adapters. |
 | `test_quality_acceptance.py` | `contract` | 覆盖 acceptance pack is deterministic and scores personal boundary、acceptance score fails missing personal memory 场景。 |
 | `test_raw_vector_scale_benchmark.py` | `contract` | 覆盖 vector scale probe uses real 512 dimension filtered search 场景。 |
 | `test_read_path_freshness_batch.py` | `contract` | The row-by-row read check must not scale its query count with the page. |
@@ -321,4 +322,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 316 个测试文件。
+共 317 个测试文件。
