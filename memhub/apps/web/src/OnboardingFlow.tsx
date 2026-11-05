@@ -1266,6 +1266,7 @@ export function OnboardingFlow({
               <MemoryModeCards
                 aria-label={text("记忆模式")}
                 value={modeChoice}
+                layout="rows"
                 disabled={modeSaving || completionBusy}
                 onChange={(mode) => {
                   modeChoiceTouched.current = true;
