@@ -184,17 +184,30 @@ function validSdkItem(value: unknown): boolean {
   if (!record(value) || typeof value.truncated !== "boolean") return false;
   if (value.kind === "raw")
     return (
-      exact(value, [
-        "kind",
-        "raw_id",
-        "content",
-        "source",
-        "session_id",
-        "memory_at",
-        "score",
-        "truncated",
-      ]) &&
+      exact(
+        value,
+        [
+          "kind",
+          "raw_id",
+          "content",
+          "source",
+          "session_id",
+          "memory_at",
+          "score",
+          "truncated",
+        ],
+        ["turn_id", "turn_index", "turn_count"],
+      ) &&
       text(value.raw_id, 1, 512) &&
+      (value.turn_id === undefined ||
+        value.turn_id === null ||
+        text(value.turn_id, 1, 96)) &&
+      (value.turn_index === undefined ||
+        value.turn_index === null ||
+        integer(value.turn_index, 0, Number.MAX_SAFE_INTEGER)) &&
+      (value.turn_count === undefined ||
+        value.turn_count === null ||
+        integer(value.turn_count, 1, Number.MAX_SAFE_INTEGER)) &&
       text(value.content, 0, 20000) &&
       text(value.source, 1, 128) &&
       text(value.session_id, 1, 512) &&

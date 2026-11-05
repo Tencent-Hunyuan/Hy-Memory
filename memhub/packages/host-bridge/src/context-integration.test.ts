@@ -272,6 +272,87 @@ it("reads Core's SDK context directly and passes native fields unchanged", async
 });
 
 it.each([
+  ["omitted", raw],
+  ["null", { ...raw, turn_id: null, turn_index: null, turn_count: null }],
+  [
+    "minimum populated",
+    {
+      ...raw,
+      turn_id: "t",
+      turn_index: 0,
+      turn_count: 1,
+    },
+  ],
+  [
+    "maximum populated",
+    {
+      ...raw,
+      turn_id: "t".repeat(96),
+      turn_index: Number.MAX_SAFE_INTEGER,
+      turn_count: Number.MAX_SAFE_INTEGER,
+    },
+  ],
+])("passes through %s optional raw turn metadata", async (_name, item) => {
+  const f = await fixture();
+  const response = receiptFor([item]);
+  f.respond(response);
+
+  const result = await f.post();
+
+  expect(result.status).toBe(200);
+  expect(result.data).toEqual(response);
+  expect(f.diagnostics).not.toContainEqual(
+    expect.objectContaining({ event: "context.response_invalid" }),
+  );
+});
+
+it.each([
+  ["empty turn_id", { turn_id: "" }],
+  ["overlong turn_id", { turn_id: "t".repeat(97) }],
+  ["non-string turn_id", { turn_id: 1 }],
+  ["negative turn_index", { turn_index: -1 }],
+  ["fractional turn_index", { turn_index: 0.5 }],
+  ["non-number turn_index", { turn_index: "0" }],
+  ["unsafe turn_index", { turn_index: 2 ** 53 }],
+  ["zero turn_count", { turn_count: 0 }],
+  ["negative turn_count", { turn_count: -1 }],
+  ["fractional turn_count", { turn_count: 1.5 }],
+  ["non-number turn_count", { turn_count: "1" }],
+  ["unsafe turn_count", { turn_count: 2 ** 53 }],
+  ["unknown field", { revision: 1 }],
+])("rejects raw context with %s", async (_name, fields) => {
+  const f = await fixture();
+  f.respond(receiptFor([{ ...raw, content: "private turn", ...fields }]));
+
+  const result = await f.post();
+
+  expect(result.status).toBe(502);
+  expect(result.data).toEqual({ error: "context_unavailable" });
+  expect(f.diagnostics).toContainEqual(
+    expect.objectContaining({
+      event: "context.response_invalid",
+      error_code: "invalid_context_response",
+      details: { reason: "response" },
+    }),
+  );
+  expect(JSON.stringify(f.diagnostics)).not.toContain("private turn");
+});
+
+it("rejects raw turn metadata on a memory context item", async () => {
+  const f = await fixture();
+  f.respond({
+    ...mixed,
+    items: [{ ...memory, turn_id: "t" }],
+    used_characters: [...memory.content].length,
+  });
+
+  const result = await f.post();
+
+  expect(result.status).toBe(502);
+  expect(result.data).toEqual({ error: "context_unavailable" });
+});
+
+it.each([
   [10, 200],
   [11, 502],
 ])(
