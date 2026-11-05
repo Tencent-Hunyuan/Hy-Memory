@@ -2206,6 +2206,19 @@ def create_app(
     from one_memory.embedding_switch_routes import embedding_switch_router
 
     app.include_router(embedding_switch_router(protected))
+    from one_memory.live_capture import live_capture_router
+
+    def file_polled(request: Request, source_id: str) -> bool:
+        """Whether live sync reads this source's own files, so the hook's copy is redundant."""
+        registration = getattr(request.app.state, "source_catalog", {}).get(source_id)
+        return (
+            runtime_settings.live_sync_enabled
+            and registration is not None
+            and registration.capabilities.live_sync is CapabilityState.IMPLEMENTED
+        )
+
+    # Host hooks hand their turn over here instead of opening the database.
+    app.include_router(live_capture_router(protected, file_polled=file_polled))
 
     app.add_middleware(
         CORSMiddleware,

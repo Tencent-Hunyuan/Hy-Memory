@@ -1,8 +1,9 @@
 /** Register `capture` on the hosts whose one-click install can own a hook file.
  *
  * The command is the packaged core binary. It reads the hook's JSON on stdin
- * and writes visible text into Evidence. Stdout stays empty, so the host does
- * not treat the capture as another instruction.
+ * and hands it to the running Core over loopback; it never opens the
+ * database, and drops the turn when Core is not running. Stdout stays empty,
+ * so the host does not treat the capture as another instruction.
  *
  * WorkBuddy's command lives in its plugin tree. Hermes and OpenClaw deliver
  * the turn through a single memory-provider slot; those are not written here,
