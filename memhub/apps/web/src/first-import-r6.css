@@ -99,12 +99,12 @@
 .first-import-r6-main > .r6-import-progress .r6-import-progress-card h2 {
   align-self: end;
 }
-.first-import-r6-submission-status {
+.first-import-r6-intro .first-import-r6-submission-status {
   min-height: 26px;
   display: flex;
   align-items: center;
   gap: 7px;
-  color: #41697d !important;
+  color: #41697d;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -127,13 +127,13 @@
   flex: 0 0 auto;
   margin: 0;
 }
-.first-import-r6-scroll-hint {
+.first-import-r6-intro .first-import-r6-scroll-hint {
   position: absolute;
   right: 0;
   bottom: 0;
-  color: #6b7e8b !important;
-  font-size: 11px !important;
-  line-height: 20px !important;
+  color: #6b7e8b;
+  font-size: 11px;
+  line-height: 20px;
   white-space: nowrap;
 }
 .first-import-r6-intro:has(.first-import-r6-scroll-hint) {

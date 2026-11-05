@@ -201,7 +201,9 @@ it("centers one to three apps and keeps four or more in a scrolling row", () => 
       ?.getAttribute("data-count"),
   ).toBe("many");
   expect(
-    four.container.querySelector(".r6-import-progress")?.getAttribute("tabindex"),
+    four.container
+      .querySelector(".r6-import-progress")
+      ?.getAttribute("tabindex"),
   ).toBe("0");
 });
 

@@ -1255,8 +1255,7 @@ export const germanMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "Weniger Wiederholung. Mehr Verständnis.",
   onboardingMoreApps: "Für mehr scrollen · {count} Apps verbleibend",
   "onboardingMoreApps.one": "Für mehr scrollen · {count} App verbleibend",
-  onboardingMoreImportApps:
-    "Horizontal scrollen · Noch {count} Apps",
+  onboardingMoreImportApps: "Horizontal scrollen · Noch {count} Apps",
   onboardingImportChecking:
     "Importergebnis wird geprüft; Ihre Auswahl bleibt erhalten",
   onboardingAllApps: "Alle {count} Apps angezeigt",
