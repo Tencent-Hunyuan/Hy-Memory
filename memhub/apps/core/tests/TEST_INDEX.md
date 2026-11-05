@@ -138,7 +138,7 @@
 | `test_internal_preset.py` | `contract` | The optional model preset a configured build carries. |
 | `test_jsonl_snapshot_tail.py` | `contract` | Bounded EOF handling on synthetic files only, never original host history. |
 | `test_library_search_window.py` | `unit` | The library search window store and the unified record/keyword parsing. |
-| `test_live_capture.py` | `integration` | Visible hook text lands in Evidence before the transcript file is flushed. |
+| `test_live_capture.py` | `integration` | Hooks hand visible text to Core, which stages it once, without Evidence. |
 | `test_live_sync.py` | `contract` | 覆盖 live sync preempts a reader batch before it emits work、live sync cuts in front of a running history import、live sync does not resume a history import the user paused 等 24 个场景。 |
 | `test_live_sync_file_incremental.py` | `contract` | 覆盖 unchanged file metadata avoids a job and content read、changed file content is read once by the import job、workbuddy first live poll baselines history then imports only append 等 6 个场景。 |
 | `test_live_sync_job_coalescing.py` | `contract` | A poll that finds nothing must not leave an import job behind. |

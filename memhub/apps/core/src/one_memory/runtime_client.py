@@ -113,6 +113,37 @@ def inspect_runtime(
     )
 
 
+@dataclass(frozen=True)
+class CoreEndpoint:
+    host: Literal["127.0.0.1"]
+    port: int
+    token: str
+
+
+def core_endpoint(
+    data_dir: Path,
+    *,
+    alive: Callable[[int], bool] = process_is_alive,
+) -> CoreEndpoint | None:
+    """Where this home's Core listens and the token it accepts, from files alone.
+
+    The receipt and token checks `inspect_runtime` makes, without its identity
+    round trip: a caller that only has to hand something over quickly lets the
+    authenticated request itself be the proof. None when no live Core is named.
+    """
+    try:
+        raw = (data_dir / "runtime.json").read_text(encoding="utf-8")
+        receipt = _receipt(json.loads(raw))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if receipt is None or not alive(receipt.pid):
+        return None
+    token = _runtime_token(data_dir)
+    if token is None:
+        return None
+    return CoreEndpoint(host=receipt.host, port=receipt.port, token=token)
+
+
 def _receipt(value: object) -> RuntimeReceipt | None:
     if not isinstance(value, dict):
         return None

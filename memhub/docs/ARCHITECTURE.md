@@ -139,6 +139,14 @@ This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 - 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。所有已发布版本都先经 SDK 写入，Governance/Evidence 只是镜像，所以迁移**不复制任何 memory 或 raw**：创建并校验完整 bundle、让写入队列脱离旧表、把旧版命名的 SDK 向量集合接回当前名字、用 Runtime 同样配置的公开 SDK client 按 ID 回读核对，通过后才提交 marker、删除旧表。由一个 Core 命令 `sdk-migrate` 完成；Desktop 启动与 CLI `memhub install`/`upgrade`（macOS、Linux）在启动新 Runtime 前调用它，普通用户不需要另跑命令。App 不得在 migration `deferred` 状态继续启动 Runtime。
 - 迁移期间宿主 capture hook 由 Desktop 活跃 PID marker 静默挡住，不再追加
   Evidence；cutover 后先从宿主 History checkpoint 补齐遗漏 turn，再恢复 live sync。
+- 宿主 capture hook（`one-memory capture <host>`）是短命的独立进程，**不打开主库**：
+  它只读 runtime receipt 与 runtime token，把 hook JSON 经 loopback
+  `POST /api/v1/live-capture/{source}` 交给正在运行的 Core，超时或 Core 未运行即静默丢弃，
+  不回退本地写；迁移 fence 仍在 hook 侧检查。Core 在进程内套用其余的门（grant、sync、
+  拒绝计数、自动化会话、cursor/claude 去重），再按 live file sync 的同一路径
+  （`materialize_write_input` → `stage_sdk_input` → `finalize_sdk_file`，live 优先级）
+  经单一 writer 入队。live sync 已读取其宿主文件的来源，hook 内容交给文件路径，
+  同一 turn 只进 SDK 一次；只有没有文件轮询的来源才从 hook 入队。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
 
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。

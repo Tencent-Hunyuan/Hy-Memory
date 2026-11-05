@@ -4,6 +4,27 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub host capture hooks no longer write the database. `one-memory
+  capture <host>` used to open the main SQLite file from its own short-lived
+  process on every hook, re-create the retired `evidence` / FTS tables on an
+  SDK-authority home and write the write queue outside Core's single writer,
+  contending for the file lock with Core and with other hosts' hooks. It now
+  reads only the runtime receipt and token and posts the hook's JSON to the
+  running Core (`POST /api/v1/live-capture/{source}`, 1.5 s budget). Core
+  applies the same gates (grant, sync switch, rejection counting, automated
+  sessions, the Cursor/Claude Code rule; the migration fence stays on the hook
+  side) and stages the turn in-process through the live file-sync path. When
+  Core is not running the turn is dropped silently; nothing falls back to a
+  local write.
+- MemHub no longer sends one turn to the SDK twice when a host's hook and live
+  file sync both see it. The two lanes gave the same message different
+  identities (the hook carries no workspace and often no message id) and
+  separate assembly rows, so both were written as raws. Hook input for a
+  source that live sync reads from its own files (every hooked host except
+  Qwen Work, while live sync is on) is now left to the file path; only a
+  source without file polling is staged from its hook. Tables an older hook
+  re-created on an SDK home are dropped by the existing startup cleanup.
+
 ## Hy Memory 2.0.14 — 2026-11-04
 
 - `search()` / `async_search()` take an optional `statuses` for explicit

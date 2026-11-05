@@ -119,7 +119,7 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
     if command == "sdk-migration-status":
         return sdk_migration_status(options, stream)
     if command == "capture" and len(options) == 1:
-        from one_memory.live_capture import capture_stdio
+        from one_memory.capture_handoff import capture_stdio
 
         return capture_stdio(options[0], sys.stdin, stream)
     if command not in {"status", "doctor"} or options not in ([], ["--json"]):
