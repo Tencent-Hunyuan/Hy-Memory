@@ -62,6 +62,7 @@ const modeChineseMessages = {
   "模式切换未能确认，仍显示上次确认的模式。":
     "模式选择未能确认，仍显示上次确认的模式。",
   "自动整合设置未能保存，请重试。": "自动整合设置未能保存，请重试。",
+  "自动整合设置暂时无法读取，请重试。": "自动整合设置暂时无法读取，请重试。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在检查或切换向量模型，完成后才能整合记忆。",
   "未能开始整合记忆，请重试。": "未能开始整合记忆，请重试。",
@@ -260,6 +261,8 @@ export const modeEnglishMessages: ModeMessages = {
     "The mode change could not be confirmed. The last confirmed mode is still shown.",
   "自动整合设置未能保存，请重试。":
     "Could not save automatic consolidation settings. Please retry.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Could not load automatic consolidation settings. Please retry.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "The embedding model is being checked or changed. Wait for it to finish before consolidating memories.",
   "未能开始整合记忆，请重试。":
@@ -466,6 +469,8 @@ export const modeSpanishMessages: ModeMessages = {
     "No se pudo confirmar el cambio. Se sigue mostrando el último modo confirmado.",
   "自动整合设置未能保存，请重试。":
     "No se pudo guardar la consolidación automática. Reinténtalo.",
+  "自动整合设置暂时无法读取，请重试。":
+    "No se pudo cargar la configuración de consolidación automática. Reinténtalo.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Se está comprobando o cambiando el modelo de embeddings. Espera para consolidar memorias.",
   "未能开始整合记忆，请重试。":
@@ -666,6 +671,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "模式切换未能确认，仍显示上次确认的模式。":
     "無法確認模式切換，仍顯示上次確認的模式。",
   "自动整合设置未能保存，请重试。": "自動整合設定無法儲存，請重試。",
+  "自动整合设置暂时无法读取，请重试。": "暫時無法讀取自動整合設定，請重試。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在檢查或切換向量模型，完成後才能整合記憶。",
   "未能开始整合记忆，请重试。": "無法開始整合記憶，請重試。",
@@ -948,6 +954,8 @@ export const modeJapaneseMessages: ModeMessages = {
     "モード変更を確認できませんでした。最後に確認されたモードを表示しています。",
   "自动整合设置未能保存，请重试。":
     "自動統合の設定を保存できませんでした。もう一度お試しください。",
+  "自动整合设置暂时无法读取，请重试。":
+    "自動統合の設定を読み込めませんでした。もう一度お試しください。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "埋め込みモデルを確認または切り替えています。完了後に記憶を統合できます。",
   "未能开始整合记忆，请重试。":
@@ -1153,6 +1161,8 @@ export const modeGermanMessages: ModeMessages = {
     "Der Moduswechsel konnte nicht bestätigt werden. Der zuletzt bestätigte Modus wird weiterhin angezeigt.",
   "自动整合设置未能保存，请重试。":
     "Die Einstellungen zur automatischen Konsolidierung konnten nicht gespeichert werden. Bitte erneut versuchen.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Die Einstellungen zur automatischen Konsolidierung konnten nicht geladen werden. Bitte erneut versuchen.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Das Embedding-Modell wird geprüft oder gewechselt. Danach können Erinnerungen konsolidiert werden.",
   "未能开始整合记忆，请重试。":
@@ -1359,6 +1369,8 @@ export const modePortugueseMessages: ModeMessages = {
     "Não foi possível confirmar a mudança. Continua a ser mostrado o último modo confirmado.",
   "自动整合设置未能保存，请重试。":
     "Não foi possível guardar a consolidação automática. Tente novamente.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Não foi possível carregar as configurações de consolidação automática. Tente novamente.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "O modelo de embeddings está a ser verificado ou alterado. Aguarde para consolidar memórias.",
   "未能开始整合记忆，请重试。":
@@ -1567,6 +1579,8 @@ export const modeFrenchMessages: ModeMessages = {
     "Le changement n’a pas pu être confirmé. Le dernier mode confirmé reste affiché.",
   "自动整合设置未能保存，请重试。":
     "Impossible d’enregistrer la consolidation automatique. Réessayez.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Impossible de charger les paramètres de consolidation automatique. Réessayez.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Le modèle d’embeddings est en cours de vérification ou de changement. Patientez avant de consolider les mémoires.",
   "未能开始整合记忆，请重试。":
@@ -1768,6 +1782,8 @@ export const modeKoreanMessages: ModeMessages = {
     "모드 전환을 확인하지 못했습니다. 마지막으로 확인된 모드가 계속 표시됩니다.",
   "自动整合设置未能保存，请重试。":
     "자동 통합 설정을 저장하지 못했습니다. 다시 시도하세요.",
+  "自动整合设置暂时无法读取，请重试。":
+    "자동 통합 설정을 불러오지 못했습니다. 다시 시도하세요.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "임베딩 모델을 확인하거나 전환 중입니다. 완료된 후 메모리를 통합할 수 있습니다.",
   "未能开始整合记忆，请重试。":
@@ -1971,6 +1987,8 @@ export const modeRussianMessages: ModeMessages = {
     "Не удалось подтвердить смену режима. По-прежнему показан последний подтверждённый режим.",
   "自动整合设置未能保存，请重试。":
     "Не удалось сохранить настройки автообъединения. Повторите попытку.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Не удалось загрузить настройки автообъединения. Повторите попытку.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Модель эмбеддингов проверяется или меняется. После завершения можно будет объединить воспоминания.",
   "未能开始整合记忆，请重试。":
@@ -2176,6 +2194,8 @@ export const modeIndonesianMessages: ModeMessages = {
     "Perubahan mode tidak dapat dikonfirmasi. Mode terakhir yang dikonfirmasi tetap ditampilkan.",
   "自动整合设置未能保存，请重试。":
     "Pengaturan konsolidasi otomatis tidak dapat disimpan. Coba lagi.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Pengaturan konsolidasi otomatis tidak dapat dimuat. Coba lagi.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Model embedding sedang diperiksa atau diganti. Tunggu hingga selesai sebelum mengonsolidasikan memori.",
   "未能开始整合记忆，请重试。":

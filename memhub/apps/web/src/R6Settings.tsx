@@ -18,6 +18,7 @@ import {
   type ModelSettingsActions,
   type ModelSettingsFocusSection,
 } from "./ModelSettings";
+import { MODE_TIER, modeDisplayName } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
@@ -394,14 +395,16 @@ export function R6Settings({
             {currentModel && (
               <div className="r6-model-mode-status" role="status">
                 <strong>
-                  {text(
-                    memoryMode === "lite"
-                      ? "当前是基础记忆（lite）"
-                      : memoryMode === "ultra"
-                        ? "当前是深度记忆（ultra）"
-                        : memoryMode === "pro"
-                          ? "当前是智能记忆（pro）"
-                          : "正在读取记忆模式…",
+                  {memoryMode ? (
+                    <>
+                      {modeDisplayName(text, memoryMode)}
+                      <span className="r6-model-mode-tier">
+                        {" "}
+                        · {MODE_TIER[memoryMode]}
+                      </span>
+                    </>
+                  ) : (
+                    text("正在读取记忆模式…")
                   )}
                 </strong>
                 <p>

@@ -1,7 +1,7 @@
 import type { MemoryPipelineMode } from "@one-memory/contracts";
 import { Check, Clock3 } from "lucide-react";
 import { type ReactNode, useId } from "react";
-import { MODE_COPY } from "./memory-mode-ui";
+import { MODE_COPY, MODE_TIER, modeDisplayName } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
 import "./memory-mode-cards.css";
 
@@ -68,11 +68,8 @@ export function MemoryModeCards({
         {MODES.map((mode) => {
           const selected = value === mode.id;
           const modeDisabled = unavailable(mode.id);
-          const localizedTitle = text(MODE_COPY[mode.id].title);
-          const title = localizedTitle.replace(
-            /\s*[（(](?:lite|pro|ultra)[)）]\s*$/i,
-            "",
-          );
+          const title = modeDisplayName(text, mode.id);
+          const tier = MODE_TIER[mode.id];
           const features = text(MODE_COPY[mode.id].description).split(
             /\s*·\s*/,
           );
@@ -90,7 +87,7 @@ export function MemoryModeCards({
                   type="radio"
                   name={name}
                   value={mode.id}
-                  aria-label={localizedTitle}
+                  aria-label={`${title} · ${tier}`}
                   aria-describedby={describedBy?.[mode.id]}
                   checked={selected}
                   disabled={modeDisabled}
@@ -99,9 +96,7 @@ export function MemoryModeCards({
                 <span className="memory-mode-title">
                   <span className="memory-mode-index">{mode.index}</span>
                   <strong>{title}</strong>
-                  <span className="memory-mode-tier">
-                    {mode.id.toUpperCase()}
-                  </span>
+                  <span className="memory-mode-tier">· {tier}</span>
                   {current === mode.id && currentBadge ? (
                     <span className="memory-mode-current">{currentBadge}</span>
                   ) : null}
