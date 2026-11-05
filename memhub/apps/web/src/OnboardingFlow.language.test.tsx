@@ -211,10 +211,10 @@ it("translates discovery, progress and privacy without importing or authorizing 
     }),
   ).toBeTruthy();
   expect(
-    screen.getByText(
+    screen.queryByText(
       "Antes de confirmar, solo se comprueba la información de las aplicaciones. No se leen conversaciones ni se instalan conexiones.",
     ),
-  ).toBeTruthy();
+  ).toBeNull();
   expect(
     screen.getByText("/fixture/cursor · Ubicación predeterminada"),
   ).toBeTruthy();
@@ -289,10 +289,10 @@ it("translates import review and preserves independent permission disclosure", a
     }),
   ).toBeTruthy();
   expect(
-    screen.getByText(
+    screen.queryByText(
       "A continuación, elige un modo de memoria. Podrás cambiarlo más adelante en Configuración.",
     ),
-  ).toBeTruthy();
+  ).toBeNull();
   expect(
     screen.getByRole("region", {
       name: "Progreso de importación de las aplicaciones",
@@ -324,8 +324,8 @@ it("uses compact Spanish actions and preserves Chinese copy and permissions", as
     }),
   ).toBeTruthy();
   expect(
-    screen.getByText(/A continuación, elige un modo de memoria/),
-  ).toBeTruthy();
+    screen.queryByText(/A continuación, elige un modo de memoria/),
+  ).toBeNull();
   expect(
     screen.getByText(/Solo para las apps seleccionadas y compatibles/),
   ).toBeTruthy();
@@ -333,7 +333,7 @@ it("uses compact Spanish actions and preserves Chinese copy and permissions", as
   fireEvent.click(screen.getByText("中文"));
   expect(screen.getByRole("button", { name: "选择记忆模式" })).toBeTruthy();
   expect(navigation.textContent).toContain("连接应用");
-  expect(screen.getByText(/下一步选择记忆模式/)).toBeTruthy();
+  expect(screen.queryByText(/下一步选择记忆模式/)).toBeNull();
   expect(next).not.toHaveBeenCalled();
   expect(draft).not.toHaveBeenCalled();
 });
@@ -425,6 +425,12 @@ it("translates completion recovery live without repeating completion writes", as
     new Error("fixture-offline"),
   );
   const imports = controller();
+  imports.sources = [];
+  vi.mocked(imports.refresh).mockResolvedValue({
+    sources: [],
+    jobs: [],
+    health: null as never,
+  });
   const finish = vi.fn();
   render(
     <LanguageProvider>
@@ -434,11 +440,11 @@ it("translates completion recovery live without repeating completion writes", as
   );
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "Entrar y añadir más tarde" }),
+      screen.getByRole("button", { name: "Elegir el modo de memoria" }),
     ).toHaveProperty("disabled", false),
   );
   fireEvent.click(
-    screen.getByRole("button", { name: "Entrar y añadir más tarde" }),
+    screen.getByRole("button", { name: "Elegir el modo de memoria" }),
   );
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
   fireEvent.click(

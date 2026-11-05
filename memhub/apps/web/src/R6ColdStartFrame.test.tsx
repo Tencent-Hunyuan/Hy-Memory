@@ -48,6 +48,40 @@ it("sizes the import action to its label and wraps footer content", () => {
   );
 });
 
+it("uses content-driven shell, discovery and mode geometry", () => {
+  const stage = declaration("onboarding-r6.css", ".onboarding-r6-stage");
+  const shell = declaration("onboarding-r6.css", ".onboarding-r6-shell");
+  const discovery = declaration(
+    "onboarding-r6.css",
+    ".onboarding-r6-discovery",
+  );
+  const heading = declaration(
+    "onboarding-r6.css",
+    ".onboarding-r6-list-heading",
+  );
+  const mode = declaration("onboarding-r6.css", ".onboarding-r6-mode");
+
+  expect(stage).toMatch(/min-height:\s*0/);
+  expect(stage).not.toMatch(/min-height:\s*852px/);
+  expect(shell).toMatch(/height:\s*100%/);
+  expect(shell).not.toMatch(/(?:^|;)\s*height:\s*820px/);
+  expect(discovery).toMatch(/height:\s*100%/);
+  expect(heading).toMatch(/position:\s*static/);
+  expect(mode).toMatch(/width:\s*100%/);
+});
+
+it("does not reserve an empty eyebrow row", () => {
+  render(
+    <LanguageProvider>
+      <R6ColdStartFrame step={1} title="Fixture" footer={null}>
+        <p>Fixture body</p>
+      </R6ColdStartFrame>
+    </LanguageProvider>,
+  );
+  expect(screen.getByRole("heading", { name: "Fixture" })).toBeTruthy();
+  expect(screen.queryByText("你的记忆，从这里接上")).toBeNull();
+});
+
 it("keeps progress cards content-sized and the step-two footer in normal flow", () => {
   const card = declaration(
     "r6-import-progress.css",
@@ -62,10 +96,10 @@ it("keeps progress cards content-sized and the step-two footer in normal flow", 
     ),
   ).toMatch(/flex:\s*0 0 auto/);
   expect(declaration("first-import-r6.css", ".first-import-r6-layout")).toMatch(
-    /height:\s*auto/,
+    /height:\s*100%/,
   );
   expect(
-    declaration("first-import-r6.css", ".first-import-r6-footer-note"),
+    declaration("first-import-r6.css", ".first-import-r6-feedback"),
   ).not.toMatch(/max-height|overflow/);
   expect(declaration("onboarding-r6.css", ".onboarding-r6-body")).toMatch(
     /overflow-y:\s*auto/,
