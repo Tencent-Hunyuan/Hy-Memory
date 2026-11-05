@@ -1244,6 +1244,10 @@ export const russianMessages: Record<MessageKey, string> = {
     "Прокрутите, чтобы увидеть больше · осталось приложений: {count}",
   "onboardingMoreApps.one":
     "Прокрутите, чтобы увидеть больше · осталось приложений: {count}",
+  onboardingMoreImportApps:
+    "Прокрутите по горизонтали · осталось приложений: {count}",
+  onboardingImportChecking:
+    "Проверяем результат импорта; ваш выбор сохранён",
   onboardingAllApps: "Показаны все приложения: {count}",
   默认位置: "Расположение по умолчанию",
   自定义位置: "Своё расположение",

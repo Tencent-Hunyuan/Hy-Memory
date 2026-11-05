@@ -467,9 +467,10 @@ describe("OnboardingFlow S1.3", () => {
         name: "对话正在汇入，记忆从这里开始",
       }),
     ).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain(
-      "开始导入的结果尚未确认",
-    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByText("正在核对导入结果，已保存的选择不会丢失"),
+    ).toBeTruthy();
     expect(
       screen.queryByRole("heading", { name: "把熟悉的背景，带到这里" }),
     ).toBeNull();
@@ -552,11 +553,11 @@ describe("OnboardingFlow S1.3", () => {
       modelBoundary,
     );
     await user.click(screen.getByRole("button", { name: "返回导入" }));
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(
-        "开始导入的结果尚未确认",
-      ),
-    );
+    await waitFor(() => {
+      expect(
+        screen.getByText("正在核对导入结果，已保存的选择不会丢失"),
+      ).toBeTruthy();
+    });
     expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
   });
 
@@ -2690,7 +2691,7 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unknown connection visible and reconciles its receipt without a duplicate POST", async () => {
+  it("keeps an unknown connection visible without reporting an error or duplicating the POST", async () => {
     const user = userEvent.setup();
     const onFinish = vi.fn();
     vi.stubGlobal("crypto", webcrypto);
@@ -2706,6 +2707,7 @@ describe("OnboardingFlow S1.3", () => {
     vi.mocked(api.getSourceConnection).mockRejectedValueOnce(
       new Error("receipt offline"),
     );
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
     function Harness() {
       const controller = useImportSources({ automaticSync: false });
       return controller.loading ? (
@@ -2723,9 +2725,9 @@ describe("OnboardingFlow S1.3", () => {
     await choose(user);
     await approve(user);
     await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("alert");
+    await screen.findByText("正在核对导入结果，已保存的选择不会丢失");
     expect(onFinish).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert").textContent).toContain("尚未确认");
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(completeOnboarding).not.toHaveBeenCalled();
     expect(api.connectSources).toHaveBeenCalledOnce();
     const requestId = vi.mocked(api.connectSources).mock.calls[0][2]?.requestId;
@@ -2738,26 +2740,9 @@ describe("OnboardingFlow S1.3", () => {
         requestId,
       }),
     );
-    await user.click(screen.getByRole("button", { name: START }));
-    await waitFor(() =>
-      expect(api.getSourceConnection).toHaveBeenCalledTimes(2),
-    );
-    expect(api.getSourceConnection).toHaveBeenLastCalledWith(requestId);
     expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(screen.getByRole("alert").textContent).toContain("尚未确认");
-    vi.mocked(api.getSourceConnection).mockResolvedValueOnce({
-      request_id: requestId,
-      accepted_source_ids: ["claude"],
-      failed_sources: {},
-      jobs: [],
-    });
-    await openApps();
-    await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("button", { name: "选择记忆模式" });
-    await continueImport(user);
-    expect(onFinish).toHaveBeenCalledWith("sources");
-    expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(api.getSourceConnection).toHaveBeenCalledTimes(3);
+    expect(api.getSourceConnection).toHaveBeenCalledOnce();
+    expect(api.getSourceConnection).toHaveBeenCalledWith(requestId);
     expect(api.createImportJob).not.toHaveBeenCalled();
   });
 

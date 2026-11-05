@@ -1258,6 +1258,10 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "Menos repetição. Mais compreensão.",
   onboardingMoreApps: "Role para ver mais · Apps restantes: {count}",
   "onboardingMoreApps.one": "Role para ver mais · {count} app restante",
+  onboardingMoreImportApps:
+    "Role horizontalmente · {count} apps restantes",
+  onboardingImportChecking:
+    "Verificando o resultado da importação; sua seleção foi mantida",
   onboardingAllApps: "Todos os apps exibidos ({count})",
   默认位置: "Local padrão",
   自定义位置: "Local personalizado",

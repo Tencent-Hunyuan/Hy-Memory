@@ -1234,6 +1234,10 @@ export const japaneseMessages: Record<MessageKey, string> = {
   onboardingMoreApps: "スクロールしてさらに表示 · 残り {count} 個のアプリ",
   "onboardingMoreApps.one":
     "スクロールしてさらに表示 · 残り {count} 個のアプリ",
+  onboardingMoreImportApps:
+    "横にスクロール · 残り {count} 個のアプリ",
+  onboardingImportChecking:
+    "インポート結果を確認しています。選択内容は保持されています",
   onboardingAllApps: "全 {count} 個のアプリを表示中",
   默认位置: "既定の場所",
   自定义位置: "カスタムの場所",

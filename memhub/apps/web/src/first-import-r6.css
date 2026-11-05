@@ -13,6 +13,7 @@
   flex-direction: column;
 }
 .first-import-r6-intro {
+  position: relative;
   margin: 0 0 8px;
 }
 .first-import-r6-intro h2 {
@@ -44,29 +45,53 @@
   margin-inline: auto;
 }
 .first-import-r6-main > .r6-import-progress[data-count="1"] {
-  width: min(680px, 100%);
-  grid-auto-columns: 100%;
+  grid-auto-columns: min(320px, 100%);
+  justify-content: center;
 }
 .first-import-r6-main > .r6-import-progress[data-count="2"] {
-  width: min(720px, 100%);
-  grid-auto-columns: calc((100% - 16px) / 2);
+  grid-auto-columns: min(320px, calc((100% - 16px) / 2));
+  justify-content: center;
+}
+.first-import-r6-main > .r6-import-progress[data-count="3"] {
+  grid-auto-columns: calc((100% - 32px) / 3);
+  justify-content: center;
+  overflow-x: hidden;
+}
+.first-import-r6-main > .r6-import-progress[data-count="many"] {
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - 32px) / 3);
+  justify-content: start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-color: rgb(102 128 145 / 50%) transparent;
+}
+.first-import-r6-main > .r6-import-progress:focus-visible {
+  outline: 2px solid #557c93;
+  outline-offset: 3px;
 }
 .first-import-r6-main > .r6-import-progress .r6-import-progress-card {
-  min-height: 112px;
-  padding: 12px 18px;
+  min-height: 128px;
+  padding: 16px 20px;
   display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
   grid-template-rows: auto auto auto;
   align-content: center;
-  column-gap: 16px;
+  column-gap: 18px;
   text-align: left;
+  scroll-snap-align: start;
 }
 .first-import-r6-main > .r6-import-progress .r6-import-progress-orbit {
-  width: 76px;
-  height: 76px;
+  width: 86px;
+  height: 86px;
   grid-column: 1;
   grid-row: 1 / 4;
   margin: 0;
+}
+.first-import-r6-main > .r6-import-progress .r6-import-progress-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
 }
 .first-import-r6-main > .r6-import-progress :is(h2, p, small) {
   grid-column: 2;
@@ -74,67 +99,50 @@
 .first-import-r6-main > .r6-import-progress .r6-import-progress-card h2 {
   align-self: end;
 }
-.first-import-r6-main > .r6-import-progress[data-count="many"] {
-  grid-auto-flow: row;
-  grid-auto-columns: unset;
-  overflow-x: hidden;
+.first-import-r6-submission-status {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #41697d !important;
+  font-weight: 500;
+  white-space: nowrap;
 }
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:not(:has(> :nth-child(4))) {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.first-import-r6-submission-status::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgb(88 124 144 / 28%);
+  border-top-color: #587c90;
+  border-radius: 50%;
+  animation: first-import-r6-checking 1.2s linear infinite;
 }
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(4)):not(
-    :has(> :nth-child(5))
-  ) {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.first-import-r6-intro:has(.first-import-r6-submission-status) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(5)):not(
-    :has(> :nth-child(6))
-  ) {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+.first-import-r6-intro:has(.first-import-r6-submission-status) h2 {
+  flex: 0 0 auto;
+  margin: 0;
 }
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(6)):not(
-    :has(> :nth-child(7))
-  ) {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+.first-import-r6-scroll-hint {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  color: #6b7e8b !important;
+  font-size: 11px !important;
+  line-height: 20px !important;
+  white-space: nowrap;
 }
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(7)) {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.first-import-r6-intro:has(.first-import-r6-scroll-hint) {
+  padding-right: 190px;
 }
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
-  .r6-import-progress-card {
-  min-height: 112px;
-  grid-template-columns: minmax(0, 1fr);
-  justify-items: center;
-  gap: 1px;
-  padding: 8px;
-  text-align: center;
-}
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
-  .r6-import-progress-orbit {
-  width: 54px;
-  height: 54px;
-  grid-column: 1;
-  grid-row: auto;
-}
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
-  :is(h2, p, small) {
-  grid-column: 1;
-  align-self: auto;
-  margin-top: 1px;
-}
-.first-import-r6-main
-  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
-  .r6-import-progress-icon {
-  width: 36px;
-  height: 36px;
+@keyframes first-import-r6-checking {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .first-import-r6-feed {
   flex: 0 0 auto;
@@ -512,6 +520,22 @@ dialog.first-import-r6-original[open] {
     gap: 18px;
   }
 }
+@media (min-width: 761px) and (max-height: 859px) {
+  .onboarding-r6:has(.first-import-r6-layout)
+    > :is(.onboarding-r6-titlebar, .onboarding-r6-local-footer) {
+    display: none;
+  }
+  .onboarding-r6:has(.first-import-r6-layout) > .onboarding-r6-stage {
+    min-height: 0;
+    height: 100dvh;
+    padding: 10px 24px 2px;
+  }
+  .onboarding-r6:has(.first-import-r6-layout)
+    > .onboarding-r6-stage
+    > .onboarding-r6-shell {
+    height: 100%;
+  }
+}
 @media (min-width: 761px) and (max-height: 959px) {
   .onboarding-r6-body:has(> .first-import-r6-layout) {
     overflow-y: auto;
@@ -630,6 +654,10 @@ dialog.first-import-r6-original[open] {
   outline-offset: 3px;
 }
 @media (prefers-reduced-motion: reduce) {
+  .first-import-r6-submission-status::before {
+    animation: none;
+    border-color: #587c90;
+  }
   .first-import-r6-selection,
   .first-import-r6-selection input::after {
     transition: none;
