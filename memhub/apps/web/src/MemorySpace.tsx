@@ -9,6 +9,7 @@ import type {
   MemoryLibraryPage,
   MemoryProcessingSummary,
   SdkAskMemory,
+  SdkRawGraphItem,
   SourceResponse,
 } from "@one-memory/contracts";
 import { isMessageKey } from "@one-memory/i18n";
@@ -38,6 +39,7 @@ import {
   getSdkMemoryGraph,
   getSdkMemoryLibrary,
   getSdkRaw,
+  getSdkRawGraph,
   manualExtract,
   searchSdkRaw,
   setExtractionWindow,
@@ -60,9 +62,12 @@ import {
 import {
   type RawMapRecord,
   rawDetail,
+  rawGraphProjection,
+  rawGraphRecord,
   rawLibraryPage,
   rawRecordId,
   rawSearchPage,
+  SDK_RAW_PAGE_SIZE,
 } from "./sdk-raw-map";
 import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 import { traceUiAction } from "./ui-trace";
@@ -165,6 +170,8 @@ export function MemorySpace({
       source.grant_revision,
     ]),
   );
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
   const management = simplified && displayedMode === "library";
   useEffect(() => {
     viewActive.current = active;
@@ -187,6 +194,11 @@ export function MemorySpace({
     scope: string;
     status: "ready" | "failed";
     value: MemoryGraphResponse | null;
+  } | null>(null);
+  const [sdkGraphProgress, setSdkGraphProgress] = useState<{
+    scope: string;
+    loaded: number;
+    total: number | null;
   } | null>(null);
   // Bumping this re-reads the page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
@@ -239,18 +251,21 @@ export function MemorySpace({
     sdkLibrary.settledQuery.trim() === requestedQuery &&
     sdkLibrary.page?.offset === sdkLibraryOffset;
   const sdkPage = sdkPageSettled ? sdkLibrary.page : null;
-  const sdkRequestedScope = JSON.stringify([
+  const sdkGraphRequestedScope = JSON.stringify([
     pipelineMode,
-    sdkLibraryQuery.trim(),
     sdkLibrarySource,
   ]);
-  const sdkGraphSettled = sdkGraph?.scope === sdkRequestedScope;
+  const sdkGraphSettled = sdkGraph?.scope === sdkGraphRequestedScope;
   const visibleSdkGraph =
-    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "ready"
+    sdkGraph?.scope === sdkGraphRequestedScope && sdkGraph.status === "ready"
       ? sdkGraph.value
       : null;
   const sdkGraphFailed =
-    sdkGraph?.scope === sdkRequestedScope && sdkGraph.status === "failed";
+    sdkGraph?.scope === sdkGraphRequestedScope && sdkGraph.status === "failed";
+  const visibleGraphProgress =
+    sdkGraphProgress?.scope === sdkGraphRequestedScope
+      ? sdkGraphProgress
+      : null;
   // A keyword search pages through one server-side result window. The id is
   // kept for the query and source it was searched with; a new query or
   // source starts without one, so the server searches afresh.
@@ -295,61 +310,37 @@ export function MemorySpace({
           rawRecords.current = next;
           rawRecordsScope.current = windowKey;
         };
-        const [page, graph] = lite
-          ? await Promise.all([
-              query
-                ? searchSdkRaw(query, {
-                    source,
-                    signal: request.signal,
-                  }).then((items) => {
-                    rememberRaw(items);
-                    return rawSearchPage(items);
-                  })
-                : getSdkRaw({
-                    source,
-                    offset: 0,
-                    limit: SDK_MEMORY_PAGE_SIZE,
-                    paging: "cursor",
-                    cursor: sdkRawCursor,
-                    signal: request.signal,
-                  }).then((rawPage) => {
-                    rememberRaw(rawPage.items);
-                    return rawLibraryPage(rawPage);
-                  }),
-              Promise.resolve({
-                status: "ready" as const,
-                value: null,
-              }),
-            ])
-          : await Promise.all([
-              getSdkMemoryLibrary(
-                {
-                  statuses: ["active"],
-                  source,
-                  query,
-                  offset: sdkLibraryOffset,
-                  limit: SDK_MEMORY_PAGE_SIZE,
-                  windowId: query ? sdkSearchWindow.current.id : null,
-                },
-                request.signal,
-              ).then(sdkLibraryPage),
-              query
-                ? Promise.resolve({
-                    status: "ready" as const,
-                    value: null,
-                  })
-                : getSdkMemoryGraph(
-                    {
-                      source,
-                      offset: 0,
-                      limit: 300,
-                    },
-                    request.signal,
-                  ).then(
-                    (value) => ({ status: "ready" as const, value }),
-                    () => ({ status: "failed" as const, value: null }),
-                  ),
-            ]);
+        const page = lite
+          ? query
+            ? await searchSdkRaw(query, {
+                source,
+                signal: request.signal,
+              }).then((items) => {
+                rememberRaw(items);
+                return rawSearchPage(items);
+              })
+            : await getSdkRaw({
+                source,
+                offset: 0,
+                limit: SDK_RAW_PAGE_SIZE,
+                paging: "cursor",
+                cursor: sdkRawCursor,
+                signal: request.signal,
+              }).then((rawPage) => {
+                rememberRaw(rawPage.items);
+                return rawLibraryPage(rawPage);
+              })
+          : await getSdkMemoryLibrary(
+              {
+                statuses: ["active"],
+                source,
+                query,
+                offset: sdkLibraryOffset,
+                limit: SDK_MEMORY_PAGE_SIZE,
+                windowId: query ? sdkSearchWindow.current.id : null,
+              },
+              request.signal,
+            ).then(sdkLibraryPage);
         if (cancelled) return;
         if (!lite && sdkSearchWindow.current.key === windowKey)
           sdkSearchWindow.current = {
@@ -405,7 +396,6 @@ export function MemorySpace({
             settledMode: pipelineMode,
           };
         });
-        setSdkGraph({ scope: windowKey, ...graph });
       } catch (reason) {
         if (cancelled || request.signal.aborted) return;
         if (
@@ -443,6 +433,114 @@ export function MemorySpace({
     lite,
     pipelineMode,
   ]);
+  const rawGraphRecords = useRef(new Map<string, RawMapRecord>());
+  useEffect(() => {
+    if (!sdkMapVisible) return;
+    void sdkMapRevision;
+    void sourceKey;
+    const scope = sdkGraphRequestedScope;
+    const source = sdkLibrarySource || undefined;
+    const request = new AbortController();
+    let cancelled = false;
+    let reading = false;
+    rawGraphRecords.current.clear();
+    setSdkGraphProgress({ scope, loaded: 0, total: null });
+    const readGraph = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        if (!lite) {
+          const value = await getSdkMemoryGraph(
+            { source, offset: 0, limit: 300 },
+            request.signal,
+          );
+          if (cancelled) return;
+          setSdkGraph({ scope, status: "ready", value });
+          setSdkGraphProgress({
+            scope,
+            loaded: value.projected_memories,
+            total: value.total_memories,
+          });
+          return;
+        }
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const items: SdkRawGraphItem[] = [];
+          let offset = 0;
+          let total = 0;
+          let snapshotId: string | undefined;
+          rawGraphRecords.current.clear();
+          try {
+            while (!cancelled) {
+              const page = await getSdkRawGraph({
+                source,
+                offset,
+                limit: 500,
+                snapshotId,
+                signal: request.signal,
+              });
+              if (cancelled) return;
+              snapshotId = page.snapshot_id;
+              total = page.total;
+              items.push(...page.items);
+              for (const item of page.items) {
+                const record = rawGraphRecord(item);
+                rawGraphRecords.current.set(rawRecordId(record), record);
+              }
+              setSdkGraphProgress({ scope, loaded: items.length, total });
+              if (!page.has_more || page.items.length === 0) break;
+              offset += page.items.length;
+              await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            }
+          } catch (reason) {
+            if (
+              attempt === 0 &&
+              apiErrorCode(reason) === "raw_graph_snapshot_stale"
+            )
+              continue;
+            throw reason;
+          }
+          if (cancelled) return;
+          setSdkGraph({
+            scope,
+            status: "ready",
+            value: rawGraphProjection(items, total, sourcesRef.current),
+          });
+          break;
+        }
+      } catch {
+        if (cancelled || request.signal.aborted) return;
+        setSdkGraph({ scope, status: "failed", value: null });
+      } finally {
+        reading = false;
+      }
+    };
+    void readGraph();
+    const timer = setInterval(() => void readGraph(), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      request.abort();
+    };
+  }, [
+    lite,
+    sdkGraphRequestedScope,
+    sdkLibrarySource,
+    sdkMapRevision,
+    sdkMapVisible,
+    sourceKey,
+  ]);
+  const displayedSdkPage =
+    lite &&
+    !sdkLibraryQuery.trim() &&
+    sdkPage &&
+    visibleGraphProgress?.total != null
+      ? {
+          ...sdkPage,
+          total: visibleGraphProgress.total,
+          total_exact: true,
+        }
+      : sdkPage;
   const sdkFilterLabel = [
     sdkLibrary.settledSource
       ? `${t("memory:来源")} ${
@@ -572,10 +670,13 @@ export function MemorySpace({
   }, [active, onArrivalChange]);
   const requestIds = useRef(new Map<string, string>());
   const detailEpoch = useRef(0);
+  const rawDetailController = useRef<AbortController | null>(null);
   const answerEpoch = useRef(0);
   const answerMemories = useRef<AskMemory[]>([]);
   const closeDetail = useCallback(() => {
     detailEpoch.current++;
+    rawDetailController.current?.abort();
+    rawDetailController.current = null;
     setDetail(null);
     setSelectedRaw(null);
     setDetailLoad(null);
@@ -650,6 +751,8 @@ export function MemorySpace({
       cancelled = true;
       stopProcessing();
       detailEpoch.current++;
+      rawDetailController.current?.abort();
+      rawDetailController.current = null;
       answerEpoch.current++;
       deleteAnswer.current?.(false);
       deleteAnswer.current = null;
@@ -761,11 +864,15 @@ export function MemorySpace({
   async function open(memoryId: string) {
     if (simplified && (!viewActive.current || stale.current)) return;
     const epoch = ++detailEpoch.current;
+    rawDetailController.current?.abort();
+    rawDetailController.current = null;
     setError(null);
     setDetail(null);
     setSelectedRaw(null);
     if (lite) {
-      let record = rawRecords.current.get(memoryId);
+      let record =
+        rawRecords.current.get(memoryId) ??
+        rawGraphRecords.current.get(memoryId);
       if (!record) {
         setDetailLoad({
           memoryId,
@@ -776,6 +883,8 @@ export function MemorySpace({
       }
       if ("kind" in record) {
         setDetailLoad({ memoryId, status: "loading" });
+        const request = new AbortController();
+        rawDetailController.current = request;
         try {
           let offset = 0;
           while (true) {
@@ -784,6 +893,7 @@ export function MemorySpace({
               sessionId: record.session_id || undefined,
               offset,
               limit: 500,
+              signal: request.signal,
             });
             const full = page.items.find(
               (item) => rawRecordId(item) === memoryId,
@@ -798,15 +908,18 @@ export function MemorySpace({
               throw new Error("raw_not_found");
           }
         } catch {
-          if (epoch === detailEpoch.current)
+          if (epoch === detailEpoch.current) {
+            rawDetailController.current = null;
             setDetailLoad({
               memoryId,
               status: "failed",
               error: t("sdk.raw.loadFailed"),
             });
+          }
           return;
         }
         if (epoch !== detailEpoch.current) return;
+        rawDetailController.current = null;
       }
       setSelectedRaw(record);
       setDetail(rawDetail(record));
@@ -961,12 +1074,12 @@ export function MemorySpace({
               ? pipelineMode === null
                 ? t("memory:记忆暂时无法读取")
                 : lite
-                  ? sdkPage
-                    ? sdkPage.total_exact === false
+                  ? displayedSdkPage
+                    ? displayedSdkPage.total_exact === false
                       ? t("memory:原始对话")
                       : sdkLibrary.settledQuery.trim()
-                        ? tn("sdk.raw.found", sdkPage.total)
-                        : tn("sdk.raw.total", sdkPage.total)
+                        ? tn("sdk.raw.found", displayedSdkPage.total)
+                        : tn("sdk.raw.total", displayedSdkPage.total)
                     : sdkLibrary.failed
                       ? null
                       : t("memory:正在读取…")
@@ -1257,11 +1370,13 @@ export function MemorySpace({
             ? {
                 query: sdkLibraryQuery,
                 source: sdkLibrarySource,
-                page: sdkPage,
+                page: displayedSdkPage,
                 loading: sdkLibrary.loading,
                 failed: sdkLibrary.failed,
                 graphLoading: !sdkGraphSettled,
                 graphFailed: sdkGraphFailed,
+                graphLoaded: visibleGraphProgress?.loaded,
+                graphTotal: visibleGraphProgress?.total ?? undefined,
                 stale: false,
                 settledSource: sdkLibrary.settledSource,
                 settledQuery: sdkLibrary.settledQuery,
@@ -1289,7 +1404,7 @@ export function MemorySpace({
           displayedMode !== "map" ||
           (simplified && pipelineMode === null)
         }
-        memories={sdkPage?.items ?? []}
+        memories={displayedSdkPage?.items ?? []}
         graph={visibleSdkGraph}
         sources={sources}
         processing={processing}
