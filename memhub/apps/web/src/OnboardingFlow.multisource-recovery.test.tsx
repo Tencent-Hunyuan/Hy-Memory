@@ -353,7 +353,6 @@ it("empty discovery shows zero and allows explicit entry without a connection re
   );
   fireEvent.click(screen.getByRole("button", { name: "选择记忆模式" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  fireEvent.click(await screen.findByRole("button", { name: "确认选择" }));
   fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
@@ -400,7 +399,6 @@ it("partial acceptance preserves the successful job and failure through model-st
   fireEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
   expect(api.completeOnboarding).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  fireEvent.click(await screen.findByRole("button", { name: "确认选择" }));
   fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),

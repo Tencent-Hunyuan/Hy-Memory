@@ -148,6 +148,11 @@ export function FirstImportReview({
   const canResume = batch.some((job) =>
     ["paused", "interrupted", "failed"].includes(job.status),
   );
+  const allCompleted =
+    batch.length > 0 &&
+    ids.every((id) => batch.some((job) => job.source_id === id)) &&
+    batch.every((job) => job.status === "completed") &&
+    !Object.keys(failedSources).length;
   const title = "对话正在汇入，记忆从这里开始";
   const hostEligible = importHostEligible(sources, ids);
   const draftReady = !!connectionDraft && !!onConnectionDraftChange;
@@ -322,6 +327,16 @@ export function FirstImportReview({
           className="first-import-r6-main"
           aria-label={text("导入与原文")}
         >
+          <div className="first-import-r6-intro">
+            <h2>{text("正在导入你的会话")}</h2>
+            <p>
+              {text(
+                allCompleted
+                  ? "本次导入已结束。已保存的对话无需重复导入。"
+                  : "后台将持续为你导入，可以放心进入下一步",
+              )}
+            </p>
+          </div>
           {(error || actionMessage) && (
             <div className="first-import-r6-feedback">
               <p
@@ -355,46 +370,39 @@ export function FirstImportReview({
             jobs={batch}
             stale={progressStale}
           />
-          <section
-            className="first-import-r6-feed"
-            aria-label={text("导入说明")}
-          >
-            <h2>{text("正在导入你的会话")}</h2>
-            <p className="first-import-r6-feed-status">
-              {text("后台将持续为你导入，可以放心进入下一步")}
-            </p>
-            {Object.keys(failedSources).length > 0 && (
-              <section
-                className="first-import-r6-failures"
-                aria-label={text("未开始的导入")}
+          {Object.keys(failedSources).length > 0 && (
+            <section
+              className="first-import-r6-failures"
+              aria-label={text("未开始的导入")}
+            >
+              {Object.keys(failedSources).map((id) => (
+                <p key={id}>
+                  {sources.find((source) => source.source_id === id)
+                    ?.display_name ?? id}{" "}
+                  {text("未能开始导入，其他已接受任务不受影响。")}
+                </p>
+              ))}
+              <R6Button
+                variant="quiet"
+                disabled={busy}
+                onClick={() => leave("sources")}
               >
-                {Object.keys(failedSources).map((id) => (
-                  <p key={id}>
-                    {sources.find((source) => source.source_id === id)
-                      ?.display_name ?? id}{" "}
-                    {text("未能开始导入，其他已接受任务不受影响。")}
-                  </p>
-                ))}
-                <R6Button
-                  variant="quiet"
-                  disabled={busy}
-                  onClick={() => leave("sources")}
-                >
-                  {text("查看未导入的应用")}
-                </R6Button>
-              </section>
-            )}
-          </section>
+                {text("查看未导入的应用")}
+              </R6Button>
+            </section>
+          )}
         </section>
         <aside
           className="first-import-r6-options"
           aria-label={text("连接应用")}
         >
-          <p className="first-import-r6-eyebrow">{text("让记忆继续生长")}</p>
-          <h2>{text("连接你的应用")}</h2>
-          <p className="first-import-r6-options-intro">
-            {text("适用于本次选择且支持的应用。")}
-          </p>
+          <div className="first-import-r6-options-head">
+            <p className="first-import-r6-eyebrow">{text("让记忆继续生长")}</p>
+            <h2>{text("连接你的应用")}</h2>
+            <p className="first-import-r6-options-intro">
+              {text("适用于本次选择且支持的应用。")}
+            </p>
+          </div>
           <SelectionTile
             title={text(
               hostConnectionAvailable ? "一键接入应用" : "测试实例不接入应用",
@@ -430,13 +438,11 @@ export function FirstImportReview({
               {text(connectionNote)}
             </p>
           )}
-          <p className="first-import-r6-options-note">
-            {text(
-              draftReady
-                ? "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。"
-                : "暂时无法连接应用，当前不会安装连接。",
-            )}
-          </p>
+          {!draftReady && (
+            <p className="first-import-r6-options-note">
+              {text("暂时无法连接应用，当前不会安装连接。")}
+            </p>
+          )}
         </aside>
       </div>
     </R6ColdStartFrame>

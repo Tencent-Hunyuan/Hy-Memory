@@ -1,17 +1,32 @@
 /* 143:2419/2502/2594/2685: only step2; shared frame/progress are owned elsewhere. */
 .first-import-r6-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 738px) 278px;
-  gap: 30px;
-  min-height: 0;
-  height: 100%;
-  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 100%;
+  height: auto;
 }
 .first-import-r6-main {
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+.first-import-r6-intro {
+  margin: 0 0 8px;
+}
+.first-import-r6-intro h2 {
+  margin: 0 0 3px;
+  color: #262a2e;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 26px;
+}
+.first-import-r6-intro p {
+  margin: 0;
+  color: #63707b;
+  font-size: 12px;
+  line-height: 20px;
 }
 .first-import-r6-history-window {
   margin: 0 0 12px;
@@ -25,6 +40,101 @@
 }
 .first-import-r6-main > .r6-import-progress {
   flex: 0 0 auto;
+  width: 100%;
+  margin-inline: auto;
+}
+.first-import-r6-main > .r6-import-progress[data-count="1"] {
+  width: min(680px, 100%);
+  grid-auto-columns: 100%;
+}
+.first-import-r6-main > .r6-import-progress[data-count="2"] {
+  width: min(720px, 100%);
+  grid-auto-columns: calc((100% - 16px) / 2);
+}
+.first-import-r6-main > .r6-import-progress .r6-import-progress-card {
+  min-height: 112px;
+  padding: 12px 18px;
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  column-gap: 16px;
+  text-align: left;
+}
+.first-import-r6-main > .r6-import-progress .r6-import-progress-orbit {
+  width: 76px;
+  height: 76px;
+  grid-column: 1;
+  grid-row: 1 / 4;
+  margin: 0;
+}
+.first-import-r6-main > .r6-import-progress :is(h2, p, small) {
+  grid-column: 2;
+}
+.first-import-r6-main > .r6-import-progress .r6-import-progress-card h2 {
+  align-self: end;
+}
+.first-import-r6-main > .r6-import-progress[data-count="many"] {
+  grid-auto-flow: row;
+  grid-auto-columns: unset;
+  overflow-x: hidden;
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:not(:has(> :nth-child(4))) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(4)):not(
+    :has(> :nth-child(5))
+  ) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(5)):not(
+    :has(> :nth-child(6))
+  ) {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(6)):not(
+    :has(> :nth-child(7))
+  ) {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(7)) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
+  .r6-import-progress-card {
+  min-height: 112px;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  gap: 1px;
+  padding: 8px;
+  text-align: center;
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
+  .r6-import-progress-orbit {
+  width: 54px;
+  height: 54px;
+  grid-column: 1;
+  grid-row: auto;
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
+  :is(h2, p, small) {
+  grid-column: 1;
+  align-self: auto;
+  margin-top: 1px;
+}
+.first-import-r6-main
+  > .r6-import-progress[data-count="many"]:has(> :nth-child(4))
+  .r6-import-progress-icon {
+  width: 36px;
+  height: 36px;
 }
 .first-import-r6-feed {
   flex: 0 0 auto;
@@ -76,9 +186,14 @@
   margin: 0;
 }
 .first-import-r6-options {
+  flex: 1 1 auto;
   min-width: 0;
-  min-height: 0;
-  padding: 24px;
+  min-height: 132px;
+  padding: 22px 24px;
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 0 28px;
   border: 1px solid #ffffffe0;
   border-radius: 22px;
   background:
@@ -87,10 +202,13 @@
   box-shadow:
     inset 0 1px #fff,
     0 12px 32px rgb(49 75 101 / 4%);
-  overflow: auto;
+  overflow: visible;
   scrollbar-width: thin;
   overscroll-behavior: contain;
   align-self: stretch;
+}
+.first-import-r6-options-head {
+  min-width: 0;
 }
 .first-import-r6-eyebrow {
   margin: 0 0 14px;
@@ -117,12 +235,12 @@
   position: relative;
   display: block;
   width: 100%;
-  min-height: 124px;
-  margin: 0 0 16px;
-  padding: 18px 16px 12px;
+  min-height: 104px;
+  margin: 0;
+  padding: 18px 52px 16px 18px;
   border: 1px solid rgb(179 196 209 / 42%);
-  border-radius: 0;
-  background: rgb(255 255 255 / 10%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 34%);
   box-shadow: inset 0 1px 1px #ffffffd9;
   backdrop-filter: blur(20px);
   cursor: pointer;
@@ -151,8 +269,8 @@
 .first-import-r6-selection input {
   appearance: none;
   position: absolute;
-  top: 22px;
-  right: 18px;
+  top: 20px;
+  right: 20px;
   width: 16px;
   height: 16px;
   min-height: 16px;
@@ -190,10 +308,11 @@
   display: block;
   font-size: 12px;
   line-height: 20px;
-  margin-top: 8px;
+  margin-top: 7px;
   color: #5e6e7a;
 }
 .first-import-r6-options-note {
+  grid-column: 1 / -1;
   font-size: 11px;
   line-height: 22px;
   margin: 0 0 12px;
@@ -390,8 +509,7 @@ dialog.first-import-r6-original[open] {
 }
 @media (max-width: 1150px) {
   .first-import-r6-layout {
-    grid-template-columns: minmax(0, 1fr) 278px;
-    gap: 24px;
+    gap: 18px;
   }
 }
 @media (min-width: 761px) and (max-height: 959px) {
@@ -401,12 +519,12 @@ dialog.first-import-r6-original[open] {
     padding-bottom: 16px;
   }
   .first-import-r6-layout {
-    height: auto;
+    height: 100%;
   }
 }
 @media (min-width: 761px) and (max-height: 859px) {
   .first-import-r6-options {
-    padding: 14px;
+    padding: 18px 20px;
     overflow: visible;
   }
   .first-import-r6-eyebrow {
@@ -424,16 +542,16 @@ dialog.first-import-r6-original[open] {
   }
   .first-import-r6-selection,
   .first-import-r6-selection + .first-import-r6-selection {
-    min-height: 86px;
-    margin-bottom: 8px;
-    padding: 9px 12px;
+    min-height: 96px;
+    margin-bottom: 0;
+    padding: 15px 48px 13px 16px;
   }
   .first-import-r6-selection strong {
     line-height: 24px;
   }
   .first-import-r6-selection input {
-    top: 13px;
-    right: 12px;
+    top: 17px;
+    right: 16px;
   }
   .first-import-r6-selection span {
     margin-top: 4px;
@@ -454,6 +572,7 @@ dialog.first-import-r6-original[open] {
     overflow: visible;
   }
   .first-import-r6-options {
+    display: block;
     overflow: visible;
   }
   .first-import-r6-footer-note {

@@ -96,7 +96,7 @@ it("renders all settings modes as one grouped shared choice list", async () => {
   expect(within(group).getAllByRole("radio")).toHaveLength(3);
   expect(
     within(group).getByText("当前模式").closest("label")?.textContent,
-  ).toContain("智能记忆（pro）");
+  ).toContain("智能记忆PRO");
 });
 
 it("confirms the data effects before switching to lite", async () => {

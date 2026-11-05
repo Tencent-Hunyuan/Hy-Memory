@@ -227,9 +227,26 @@
   font-size: 13px;
   line-height: 22px;
 }
-.r6-memory-mode-settings .memory-mode-choice-list {
+.r6-memory-mode-settings .memory-mode-cards {
   width: 100%;
   max-width: none;
+}
+.r6-memory-mode-settings
+  .memory-mode-card[data-mode="ultra"][data-selected="true"] {
+  grid-column: 1 / -1;
+}
+.r6-memory-mode-settings
+  .memory-mode-card[data-mode="ultra"][data-selected="true"]
+  .memory-mode-card-choice {
+  min-height: 180px;
+}
+.r6-evolve-settings--in-card {
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+}
+.r6-evolve-settings--in-card .r6-evolve-setting:last-child {
+  border-bottom: 0;
 }
 .r6-settings-note {
   margin: 14px 0 0;

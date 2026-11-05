@@ -251,7 +251,6 @@ async function selectMode(
   name: RegExp,
 ) {
   await user.click(screen.getByRole("radio", { name }));
-  await user.click(await screen.findByRole("button", { name: "确认选择" }));
 }
 function choice(name = "Claude Code") {
   return screen.getByRole<HTMLInputElement>("checkbox", {
@@ -948,7 +947,7 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: SKIP }));
 
     expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
-    expect(screen.queryByText("之后可在设置中更改。")).toBeNull();
+    expect(screen.getByText("之后可在设置中更改。")).toBeTruthy();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect(screen.getByRole("radio", { name: /ultra/i })).toBeTruthy();
     expect(screen.queryByText("推荐")).toBeNull();
@@ -1001,24 +1000,8 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await user.click(screen.getByRole("radio", { name: /ultra/i }));
-    expect(
-      await screen.findByRole("heading", {
-        name: "选择深度记忆（ultra）？",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("使用 pro 或 ultra 前需要先配置并启用生成模型。"),
-    ).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
-
-    expect(
-      screen
-        .getByRole("switch", { name: "每天自动整合" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(
-      screen.getByRole("button", { name: "执行时间，03:00" }),
-    ).toBeTruthy();
+    expect(screen.getByText("每天自动整合")).toBeTruthy();
+    expect(screen.getByText(/每天 03:00 左右自动整合/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "继续" }));
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
     expect(putOnboardingProgress).toHaveBeenCalledWith(
@@ -1087,11 +1070,7 @@ describe("OnboardingFlow S1.3", () => {
         false,
       ),
     );
-    expect(
-      screen
-        .getByRole("switch", { name: "每天自动整合" })
-        .getAttribute("aria-checked"),
-    ).toBe("false");
+    expect(screen.getByText(/重新开启后仍按 05:30 运行/)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续" }));
     await waitFor(() =>
@@ -1169,9 +1148,7 @@ describe("OnboardingFlow S1.3", () => {
 
     await user.click(screen.getByRole("button", { name: "重试" }));
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "执行时间，04:15" }),
-      ).toBeTruthy(),
+      expect(screen.getByText(/每天 04:15 左右自动整合/)).toBeTruthy(),
     );
     expect(
       screen.getByRole<HTMLInputElement>("radio", { name: /ultra/i }).checked,
