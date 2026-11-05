@@ -61,7 +61,10 @@ import { R6ColdStartFrame } from "./R6ColdStartFrame";
 import { R6Button } from "./R6Controls";
 import { UltraEvolveScheduleFields } from "./UltraEvolveScheduleFields";
 import { traceUiAction } from "./ui-trace";
-import type { ImportSourcesController } from "./use-import-sources";
+import {
+  type ImportSourcesController,
+  isDefiniteAccessRefusal,
+} from "./use-import-sources";
 import { isDefiniteRefusal } from "./write-outcome";
 import "./cold-start.css";
 
@@ -1133,11 +1136,14 @@ export function OnboardingFlow({
       setAccepted(result);
       setStartingImport(null);
       setError(null);
-    } catch {
+    } catch (reason) {
       if (alive.current) {
-        setStartingImport(null);
+        const refused = isDefiniteAccessRefusal(reason);
+        if (refused) setStartingImport(null);
         setError(
-          "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
+          refused
+            ? "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。"
+            : "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
         );
       }
     } finally {
