@@ -329,7 +329,6 @@ it("uses compact Spanish actions and preserves Chinese copy and permissions", as
   expect(
     screen.getByText(/Solo para las apps seleccionadas y compatibles/),
   ).toBeTruthy();
-  expect(screen.getByText(/Si una falla, las demás siguen/)).toBeTruthy();
   fireEvent.click(screen.getByText("中文"));
   expect(screen.getByRole("button", { name: "选择记忆模式" })).toBeTruthy();
   expect(navigation.textContent).toContain("连接应用");
@@ -447,9 +446,6 @@ it("translates completion recovery live without repeating completion writes", as
     screen.getByRole("button", { name: "Elegir el modo de memoria" }),
   );
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Confirmar selección" }),
-  );
   fireEvent.click(screen.getByRole("button", { name: "Entrar con Lite" }));
   expect(
     await screen.findByRole("button", { name: "Reintentar guardar y entrar" }),

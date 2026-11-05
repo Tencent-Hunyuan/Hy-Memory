@@ -371,13 +371,11 @@ it("uses user-facing connection confirmation copy without implementation narrati
     />,
   );
   expect(screen.getByRole("complementary", { name: "连接应用" })).toBeTruthy();
+  expect(screen.getByRole("checkbox", { name: "一键接入应用" })).toBeTruthy();
   expect(
-    screen.getByText(
-      "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。",
+    screen.queryByText(
+      /点击底部按钮后|选择草稿|按各应用回执|本页任务控制尚未接通/,
     ),
-  ).toBeTruthy();
-  expect(
-    screen.queryByText(/选择草稿|按各应用回执|本页任务控制尚未接通/),
   ).toBeNull();
   expect(screen.queryByText(/下一步选择记忆模式/)).toBeNull();
   expect(screen.queryByText(/之后仍可在设置中更改/)).toBeNull();

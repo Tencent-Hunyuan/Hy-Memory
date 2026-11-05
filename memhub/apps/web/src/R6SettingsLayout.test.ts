@@ -9,7 +9,7 @@ function declaration(file: string, selector: string): string {
 
 it("fills settings controls without widening shared fallback controls", () => {
   for (const selector of [
-    ".r6-memory-mode-settings .memory-mode-choice-list",
+    ".r6-memory-mode-settings .memory-mode-cards",
     ".r6-settings .connection-fallback .custom-harness-name",
   ]) {
     const rule = declaration("r6-settings.css", selector);

@@ -25,12 +25,8 @@ import {
   commitConfirmedMemoryMode,
   issueConfirmedModeTicket,
 } from "./confirmed-memory-mode";
-import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
-import {
-  BLOCKER_COPY,
-  MemoryModeConfirmDialog,
-  MODE_COPY,
-} from "./memory-mode-ui";
+import { MemoryModeCards } from "./MemoryModeCards";
+import { BLOCKER_COPY, MemoryModeConfirmDialog } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
@@ -237,16 +233,11 @@ export function MemoryModeSettings({
           <p>{text("模式决定新对话如何保存，以及记忆页面展示什么。")}</p>
         </div>
       </div>
-      <MemoryModeChoiceList
+      <MemoryModeCards
         aria-label={text("当前模式")}
         aria-busy={state === null}
-        modes={(["lite", "pro", "ultra"] as const).map((mode) => ({
-          mode,
-          title: text(MODE_COPY[mode].title),
-          description: text(MODE_COPY[mode].description),
-        }))}
         current={state?.mode}
-        selected={state?.mode ?? null}
+        value={state?.mode ?? null}
         currentBadge={text("当前模式")}
         disabled={(mode) =>
           !state ||
@@ -256,6 +247,50 @@ export function MemoryModeSettings({
           (mode !== "lite" && !modelStateKnown)
         }
         onChange={(mode, control) => void choose(mode, control)}
+        ultraDetail={
+          state?.mode === "ultra" && schedule ? (
+            <section
+              id={`${id}-evolve`}
+              className="r6-evolve-settings r6-evolve-settings--in-card"
+              aria-labelledby={`${id}-evolve-title`}
+              tabIndex={-1}
+            >
+              <UltraEvolveScheduleFields
+                schedule={schedule}
+                headingId={`${id}-evolve-title`}
+                disabled={busy || maintenance}
+                onEnabledChange={(enabled) => void changeSchedule({ enabled })}
+                onTimeChange={(time) => changeSchedule({ time })}
+              />
+              <div className="r6-evolve-setting r6-evolve-setting--manual">
+                <div className="r6-evolve-setting-copy">
+                  <h3>{text("立即整合一次")}</h3>
+                  <p>
+                    {text("只运行这一次，不改变每天的计划。")}
+                    {" · "}
+                    {text(
+                      run?.state === "running"
+                        ? "正在整合记忆…"
+                        : last?.last_run_at
+                          ? text("上次整合：{time}").replace(
+                              "{time}",
+                              new Date(last.last_run_at).toLocaleString(locale),
+                            )
+                          : "尚未整合",
+                    )}
+                  </p>
+                </div>
+                <R6Button
+                  pending={run?.state === "running"}
+                  disabled={busy || lifecycleBusy}
+                  onClick={() => void evolveNow()}
+                >
+                  {text("立即整合")}
+                </R6Button>
+              </div>
+            </section>
+          ) : null
+        }
       />
       {state?.forced_by_env ? (
         <p className="r6-settings-note" role="status">
@@ -283,49 +318,6 @@ export function MemoryModeSettings({
             {text(error)}
           </p>
         )
-      ) : null}
-
-      {state?.mode === "ultra" && schedule ? (
-        <section
-          id={`${id}-evolve`}
-          className="r6-evolve-settings"
-          aria-labelledby={`${id}-evolve-title`}
-          tabIndex={-1}
-        >
-          <UltraEvolveScheduleFields
-            schedule={schedule}
-            headingId={`${id}-evolve-title`}
-            disabled={busy || maintenance}
-            onEnabledChange={(enabled) => void changeSchedule({ enabled })}
-            onTimeChange={(time) => changeSchedule({ time })}
-          />
-          <div className="r6-evolve-setting r6-evolve-setting--manual">
-            <div className="r6-evolve-setting-copy">
-              <h3>{text("立即整合一次")}</h3>
-              <p>
-                {text("只运行这一次，不改变每天的计划。")}
-                {" · "}
-                {text(
-                  run?.state === "running"
-                    ? "正在整合记忆…"
-                    : last?.last_run_at
-                      ? text("上次整合：{time}").replace(
-                          "{time}",
-                          new Date(last.last_run_at).toLocaleString(locale),
-                        )
-                      : "尚未整合",
-                )}
-              </p>
-            </div>
-            <R6Button
-              pending={run?.state === "running"}
-              disabled={busy || lifecycleBusy}
-              onClick={() => void evolveNow()}
-            >
-              {text("立即整合")}
-            </R6Button>
-          </div>
-        </section>
       ) : null}
 
       {pendingMode && pendingPlan ? (
