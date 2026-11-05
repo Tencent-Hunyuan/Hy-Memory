@@ -13,24 +13,32 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export function R6Button({
   variant = "secondary",
-  pending = false,
+  pending,
   disabled,
   children,
   className = "",
   type = "button",
   ...props
 }: ButtonProps) {
+  const supportsPending = pending !== undefined;
+  const busy = pending === true;
   return (
     <button
       {...props}
       type={type}
       className={`r6-button ${className}`}
       data-variant={variant}
-      disabled={disabled || pending}
-      aria-busy={pending || undefined}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
     >
       <span className="r6-button-label">{children}</span>
-      {pending && <span className="r6-button-spinner" aria-hidden="true" />}
+      {supportsPending ? (
+        <span
+          className="r6-button-spinner"
+          data-visible={busy || undefined}
+          aria-hidden="true"
+        />
+      ) : null}
     </button>
   );
 }

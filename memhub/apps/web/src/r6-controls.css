@@ -251,7 +251,13 @@ button.r6-button[data-variant="quiet"]:disabled {
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
+  visibility: hidden;
   animation: r6-spin 1.8s linear infinite;
+  animation-play-state: paused;
+}
+.r6-button-spinner[data-visible="true"] {
+  visibility: visible;
+  animation-play-state: running;
 }
 
 .r6-stepper {
