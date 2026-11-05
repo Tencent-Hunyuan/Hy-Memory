@@ -178,3 +178,69 @@ def test_recording_a_rejection_never_breaks_the_host_turn(tmp_path) -> None:
         "workbuddy",
         CaptureRejection.GRANT_REVOKED,
     )
+
+
+def test_a_truncated_marker_is_repaired_instead_of_disabling_the_sink(tmp_path) -> None:
+    """A half-written marker must not stay broken forever.
+
+    The record is read by support as-is, and ``record_capture_rejection``
+    swallows every error by design.  If a truncated marker made ``json.loads``
+    raise on every later call, the count would silently stop being maintained.
+    """
+    store, database, home = build_store(tmp_path)
+    _grant(store, home, "workbuddy")
+
+    logs = database.parent / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "capture-rejection-workbuddy-sync_disabled.json").write_text('{"count": 4', encoding="utf8")
+
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+
+    record = json.loads(
+        (logs / "capture-rejection-workbuddy-sync_disabled.json").read_text(encoding="utf8")
+    )
+    assert record["count"] == 1
+    assert record["source_id"] == "workbuddy"
+
+
+def test_the_marker_tracks_when_the_last_rejection_happened(tmp_path) -> None:
+    """``last_at`` must move with every rejection, not stay at the window start."""
+    store, database, home = build_store(tmp_path)
+    _grant(store, home, "workbuddy")
+
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+    first = json.loads(
+        (database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json").read_text(
+            encoding="utf8"
+        )
+    )
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+    second = json.loads(
+        (database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json").read_text(
+            encoding="utf8"
+        )
+    )
+
+    assert second["count"] == 2
+    assert second["window_started_at"] == first["window_started_at"]
+    assert second["last_at"] != second["window_started_at"]
+
+
+def test_a_failed_publish_leaves_the_previous_marker_intact(tmp_path, monkeypatch) -> None:
+    from pathlib import Path as _Path
+
+    store, database, home = build_store(tmp_path)
+    _grant(store, home, "workbuddy")
+
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+    marker = database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json"
+    before = marker.read_text(encoding="utf8")
+
+    def boom(_self, _target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(_Path, "replace", boom)
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+
+    assert marker.read_text(encoding="utf8") == before
+    assert sorted(p.name for p in marker.parent.iterdir()) == ["capture-rejection-workbuddy-sync_disabled.json"]
