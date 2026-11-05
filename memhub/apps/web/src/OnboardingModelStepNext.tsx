@@ -12,6 +12,7 @@ import type {
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6ColdStartFrame } from "./R6ColdStartFrame";
 import { R6Button } from "./R6Controls";
+import "./onboarding-model-r6.css";
 
 type Action = "test" | "save-and-enable";
 
@@ -58,6 +59,10 @@ export function OnboardingModelStepNext(props: OnboardingModelStepProps) {
     const technicalError = firstError && firstError !== "api_key";
     if (technicalError && !props.advancedOpen) {
       props.onAdvancedChange(true);
+      return;
+    }
+    if (firstError === "api_key" && props.advancedOpen) {
+      props.onAdvancedChange(false);
       return;
     }
     if (firstError && (!technicalError || props.advancedOpen)) {
@@ -173,10 +178,7 @@ export function OnboardingModelStepNext(props: OnboardingModelStepProps) {
           </>
         }
       >
-        <div
-          className="onboarding-model-layout onboarding-model-layout--single-column-600"
-          data-responsive="single-column-600"
-        >
+        <div className="onboarding-model-layout">
           <section
             ref={formRef}
             className="onboarding-model-form"
@@ -184,6 +186,9 @@ export function OnboardingModelStepNext(props: OnboardingModelStepProps) {
             data-advanced={props.advancedOpen}
           >
             <div className="onboarding-model-group">
+              <p className="onboarding-model-intro">
+                {text("选择服务商，填入 API Key。核对已有配置后再继续。")}
+              </p>
               <label
                 className="onboarding-model-field onboarding-model-provider"
                 htmlFor={`${id}-provider`}
@@ -263,16 +268,6 @@ export function OnboardingModelStepNext(props: OnboardingModelStepProps) {
                   )}
                 </strong>
               </div>
-              <div className="onboarding-model-disclosure">
-                <p>
-                  {text("相关对话会发送给所选服务商。")}
-                  {sourceSummary ? ` ${sourceSummary}` : ""}
-                </p>
-                <p>
-                  {text("密钥保存在系统安全存储中，不写入对话或日志。")}{" "}
-                  {text("测试只向此接口发送测试内容，不发送历史对话。")}
-                </p>
-              </div>
               <GenerationTechnicalDisclosure
                 open={props.advancedOpen}
                 disabled={fieldsLocked}
@@ -348,6 +343,35 @@ export function OnboardingModelStepNext(props: OnboardingModelStepProps) {
               ) : null}
             </div>
           </section>
+          <aside
+            className="onboarding-model-summary"
+            aria-label={text("记忆整理")}
+          >
+            <div className="onboarding-model-summary-heading">
+              <p>{text("记忆整理")}</p>
+              <h2>{text("让记忆从这里开始")}</h2>
+            </div>
+            <div className="onboarding-model-connections">
+              <p>{text("对话来源")}</p>
+              <strong>{sourceSummary || text("尚无已选来源")}</strong>
+              <small>
+                {t("onboardingImportedConversations", {
+                  count: props.importedConversationCount ?? 0,
+                })}
+              </small>
+            </div>
+            <div className="onboarding-model-summary-status">
+              <small>
+                {text("处理服务：")}
+                {text(provider?.label ?? "待选择")}
+              </small>
+              <small>
+                {text("相关对话会发送给所选服务商。")}
+                <br />
+                {text("测试只向此接口发送测试内容，不发送历史对话。")}
+              </small>
+            </div>
+          </aside>
         </div>
       </R6ColdStartFrame>
     </div>
