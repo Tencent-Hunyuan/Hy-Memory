@@ -115,14 +115,16 @@
 }
 .onboarding-r6-stage {
   flex: 1;
-  min-height: 852px;
-  padding: 32px 24px 2px;
+  min-height: 0;
+  display: flex;
+  padding: 24px;
 }
 .onboarding-r6-shell {
   min-height: 0;
   width: 1120px;
   max-width: 100%;
-  height: 820px;
+  height: 100%;
+  max-height: 820px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -137,7 +139,7 @@
     inset 0 -1px 0 #adc0d22e;
 }
 .onboarding-r6-head {
-  min-height: 123.7px;
+  min-height: 0;
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
@@ -195,6 +197,7 @@
   background: #ffffff38;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 16px;
   border-radius: 0 0 25px 25px;
 }
@@ -224,27 +227,21 @@
   }
 }
 .onboarding-r6-discovery {
-  height: 560.2px;
+  height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 738px) 278px;
   gap: 30px;
 }
 .onboarding-r6-apps {
-  position: relative;
   min-width: 0;
-}
-.onboarding-r6-intro {
-  margin: 0;
-  font-size: 13px;
-  line-height: 24.05px;
-  color: #5a6169;
-}
-.onboarding-r6-intro p {
-  margin: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
 }
 .onboarding-r6-list-heading {
-  position: absolute;
-  inset: 96px 0 auto;
+  position: static;
   height: 30px;
   display: flex;
   align-items: center;
@@ -277,8 +274,10 @@
   cursor: default;
 }
 .onboarding-r6-list-area {
-  position: absolute;
-  inset: 142px 0 auto;
+  position: static;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .onboarding-r6-list-status .onboarding-r6-quiet:disabled {
   color: #4e6478;
@@ -288,7 +287,9 @@
   padding: 0;
   margin: 0;
   list-style: none;
-  height: 330px;
+  min-height: 0;
+  height: auto;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -451,44 +452,6 @@
   content: "↓";
   margin-right: 6px;
 }
-.onboarding-r6-import {
-  position: absolute;
-  top: 498px;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: #6a7988;
-}
-/* 143:2085 puts 导入历史包 first and the "没有本机历史？" sentence after it; the
-   markup keeps the sentence first so it stays the accessible label order for
-   the control that follows. Reordering visually only, rather than moving the
-   DOM, keeps that reading order intact. */
-.onboarding-r6-import > p {
-  order: 2;
-}
-.onboarding-r6-import > .history-import,
-.onboarding-r6-import > .history-import-trigger {
-  order: 1;
-}
-.onboarding-r6-import > p {
-  margin: 0;
-}
-.onboarding-r6-import .history-import-trigger {
-  font: inherit;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: #4e6478;
-  padding: 5px 11px;
-  min-height: 30px;
-  box-shadow: none;
-}
-.onboarding-r6-import .history-import-trigger > svg {
-  display: none;
-}
 .onboarding-r6-summary {
   border-radius: 22px;
   border: 1px solid #ffffffe0;
@@ -500,6 +463,8 @@
   display: flex;
   flex-direction: column;
   gap: 11px;
+  align-self: stretch;
+  min-height: 0;
 }
 .onboarding-r6-summary p {
   margin: 0;
@@ -572,8 +537,8 @@
   border: 0;
 }
 .onboarding-r6-mode {
-  width: min(720px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -801,17 +766,11 @@
     flex-direction: column;
   }
   .onboarding-r6-apps {
-    min-height: 590px;
+    min-height: 0;
   }
-  .onboarding-r6-list-heading {
-    top: 110px;
-  }
-  .onboarding-r6-list-area {
-    top: 154px;
-  }
-  .onboarding-r6-import {
-    top: 552px;
-    flex-wrap: wrap;
+  .onboarding-r6-list {
+    height: min(330px, 45vh);
+    flex: none;
   }
   .onboarding-r6-row > label {
     padding: 14px 10px;
@@ -853,20 +812,7 @@
   }
   .onboarding-r6-discovery > .onboarding-r6-apps {
     min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto 30px minmax(0, 1fr) auto;
-    gap: 12px;
-  }
-  .onboarding-r6-apps > .onboarding-r6-list-heading,
-  .onboarding-r6-apps > .onboarding-r6-list-area,
-  .onboarding-r6-apps > .onboarding-r6-import {
-    position: static;
-    min-height: 0;
-  }
-  .onboarding-r6-apps > .onboarding-r6-list-area {
-    display: flex;
-    flex-direction: column;
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .onboarding-r6-list-area > .onboarding-r6-list {
     min-height: 0;

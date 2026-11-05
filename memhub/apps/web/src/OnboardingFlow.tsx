@@ -1148,6 +1148,8 @@ export function OnboardingFlow({
   }
 
   const count = selected.length;
+  const continueWithoutImport =
+    busy === null && locationCheck !== "checking" && count === 0;
   // D51 item 3: only a *confirmed* snapshot may show a number. A failed
   // detection must read 未完成 even when sources are listed — otherwise the
   // number branch answered first and the summary claimed a count while the
@@ -1251,78 +1253,38 @@ export function OnboardingFlow({
             <R6ColdStartFrame
               step={3}
               title={text("选择记忆模式")}
-              eyebrow={text("最后一步 · 决定如何处理对话")}
               focusToken={modeFocusToken}
               footer={
-                <>
-                  <R6Button
-                    variant="quiet"
-                    disabled={modeSaving || completionBusy}
-                    onClick={() => {
-                      modePlanOperation.current += 1;
-                      setModePlanBusy(false);
-                      setPendingMode(null);
-                      setPendingPlan(null);
-                      setModeError(null);
-                      intentRef.current = modeChoice;
-                      setupStepRef.current = "review";
-                      setSetupStep("review");
-                      void queueProgressWrite(() =>
-                        patchOnboardingProgress({
-                          mode_intent: modeChoice,
-                          setup_step: "review",
-                        }),
-                      ).catch((reason) => {
-                        if (
-                          !isCompletedProgressConflict(reason) &&
-                          alive.current
-                        )
-                          setModeError(
-                            "恢复进度未能保存。你的选择已保留，请重试。",
-                          );
-                      });
-                    }}
-                  >
-                    {text("返回导入")}
-                  </R6Button>
-                  <R6Button
-                    className="onboarding-r6-submit"
-                    variant="primary"
-                    pending={modeSaving || modePlanBusy}
-                    disabled={
-                      !modeChoice ||
-                      completionBusy ||
-                      modePlanBusy ||
-                      (modeChoice === "ultra" && !scheduleLoaded)
-                    }
-                    onClick={() => void saveModeChoice()}
-                  >
-                    {text(
-                      modePhase === "saving"
-                        ? "正在保存模式…"
-                        : modePhase === "completing"
-                          ? "正在完成首次设置…"
-                          : modeChoice === "lite"
-                            ? "使用 Lite 进入"
-                            : modeChoice === "pro"
-                              ? "继续配置模型"
-                              : modeChoice === "ultra"
-                                ? "继续"
-                                : "继续",
-                    )}
-                  </R6Button>
-                </>
+                <R6Button
+                  className="onboarding-r6-submit"
+                  variant="primary"
+                  pending={modeSaving || modePlanBusy}
+                  disabled={
+                    !modeChoice ||
+                    completionBusy ||
+                    modePlanBusy ||
+                    (modeChoice === "ultra" && !scheduleLoaded)
+                  }
+                  onClick={() => void saveModeChoice()}
+                >
+                  {text(
+                    modePhase === "saving"
+                      ? "正在保存模式…"
+                      : modePhase === "completing"
+                        ? "正在完成首次设置…"
+                        : modeChoice === "lite"
+                          ? "使用 Lite 进入"
+                          : modeChoice === "pro"
+                            ? "继续配置模型"
+                            : "继续",
+                  )}
+                </R6Button>
               }
             >
               <section
                 className="onboarding-r6-mode"
-                aria-labelledby="onboarding-memory-mode-title"
+                aria-label={text("记忆模式")}
               >
-                <div className="onboarding-r6-mode-intro">
-                  <p id="onboarding-memory-mode-title">
-                    {text("之后可在设置中更改。")}
-                  </p>
-                </div>
                 <MemoryModeChoiceList
                   aria-label={text("记忆模式")}
                   modes={(["lite", "pro", "ultra"] as const).map((mode) => ({
@@ -1502,16 +1464,8 @@ export function OnboardingFlow({
     <R6ColdStartFrame
       step={1}
       title={text("把熟悉的背景，带到这里")}
-      eyebrow={text("你的记忆，从这里接上")}
       footer={
         <>
-          <R6Button
-            variant="quiet"
-            disabled={locked}
-            onClick={() => requestModeChoice("sources")}
-          >
-            {text("稍后添加，先进入")}
-          </R6Button>
           {error && (
             <p className="onboarding-r6-error" role="alert">
               {error && text(error)}
@@ -1520,10 +1474,20 @@ export function OnboardingFlow({
           <R6Button
             className="onboarding-r6-submit"
             variant="primary"
-            disabled={locked || count === 0}
-            onClick={() => void startImport()}
+            disabled={locked}
+            onClick={() =>
+              continueWithoutImport
+                ? requestModeChoice("sources")
+                : void startImport()
+            }
           >
-            {text(busy === "submitting" ? "正在开始导入…" : "开始导入")}
+            {text(
+              continueWithoutImport
+                ? "选择记忆模式"
+                : busy === "submitting"
+                  ? "正在开始导入…"
+                  : "开始导入",
+            )}
           </R6Button>
         </>
       }
@@ -1533,12 +1497,6 @@ export function OnboardingFlow({
           className="onboarding-r6-apps"
           aria-labelledby="cold-start-phase"
         >
-          <div className="onboarding-r6-intro">
-            <p>
-              {text("不用从头介绍自己。从常用的 App 开始，把已有背景带过来。")}
-            </p>
-            <p>{text("确认前只检查应用信息，不读取对话，也不安装连接。")}</p>
-          </div>
           <div className="onboarding-r6-list-heading">
             <h2 id="cold-start-phase" ref={heading} tabIndex={-1}>
               {text("本机 AI 应用")}

@@ -347,11 +347,11 @@ it("keeps the single-source submit frozen when another source arrives during fin
 it("empty discovery shows zero and allows explicit entry without a connection request", async () => {
   await ready();
   await waitFor(() => expect(count()).toBe("0"));
-  expect(screen.getByRole("button", { name: "开始导入" })).toHaveProperty(
+  expect(screen.getByRole("button", { name: "选择记忆模式" })).toHaveProperty(
     "disabled",
-    true,
+    false,
   );
-  fireEvent.click(screen.getByRole("button", { name: "稍后添加，先进入" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择记忆模式" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
   fireEvent.click(await screen.findByRole("button", { name: "确认选择" }));
   fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
@@ -398,13 +398,7 @@ it("partial acceptance preserves the successful job and failure through model-st
     "accepted-job:completed",
   );
   fireEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
-  fireEvent.click(await screen.findByRole("button", { name: "返回导入" }));
-  expect(screen.getByLabelText("保留任务").textContent).toBe(
-    "accepted-job:completed",
-  );
-  expect(screen.getByLabelText("失败来源").textContent).toBe("cursor");
   expect(api.completeOnboarding).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "进入应用" }));
   fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
   fireEvent.click(await screen.findByRole("button", { name: "确认选择" }));
   fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));

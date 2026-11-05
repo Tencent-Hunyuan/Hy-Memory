@@ -199,8 +199,8 @@ it("keeps the saved count when authority or freshness changes, without a convers
   expect(view.container.querySelector('[data-running="true"]')).toBeTruthy();
   expect(screen.getByText("已保存 7 条消息")).toBeTruthy();
   expect(
-    screen.getAllByText("正在重新核对来源；已保存数量仍按任务回执显示。"),
-  ).toHaveLength(1);
+    screen.queryByText("正在重新核对来源；已保存数量仍按任务回执显示。"),
+  ).toBeNull();
   view.update({
     sourceSnapshot: { confirmedAt: "2026-09-14T00:00:02Z", stale: false },
     jobs: [{ ...job, stored: 20 }],

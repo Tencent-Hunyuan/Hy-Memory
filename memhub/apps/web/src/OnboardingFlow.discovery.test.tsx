@@ -164,8 +164,7 @@ it("moves from import to the actual third step without completing onboarding", a
   expect(completeOnboarding).not.toHaveBeenCalled();
   expect(finish).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "返回第二步" }));
-  await userEvent.click(screen.getByRole("button", { name: "返回导入" }));
-  expect(screen.getByText("Import accepted")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
   expect(completeOnboarding).not.toHaveBeenCalled();
 });
 
@@ -184,7 +183,7 @@ it("lets an empty first-time user enter without granting or importing a source",
       onFinish={finish}
     />,
   );
-  const skip = await screen.findByRole("button", { name: "稍后添加，先进入" });
+  const skip = await screen.findByRole("button", { name: "选择记忆模式" });
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
@@ -210,7 +209,7 @@ it("retains explicit retry or enter when saving the skipped onboarding fails", a
       onFinish={finish}
     />,
   );
-  const skip = await screen.findByRole("button", { name: "稍后添加，先进入" });
+  const skip = await screen.findByRole("button", { name: "选择记忆模式" });
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
@@ -302,7 +301,9 @@ it("freezes the explicitly submitted source list when a later source arrives", a
         resolveRefresh = resolve;
       }),
   );
-  await userEvent.click(screen.getByRole("button", { name: "开始导入" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "开始导入" }),
+  );
   const lateSources = [source("workbuddy"), source("codex")];
   rendered.rerender(view({ ...imports, sources: lateSources }));
   expect(checkbox("codex").checked).toBe(false);

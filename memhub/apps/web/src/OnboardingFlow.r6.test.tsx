@@ -125,7 +125,7 @@ it("renders the final shell, double title, step one, branded rows and exact sour
   expect(
     screen.getByRole("heading", { name: "把熟悉的背景，带到这里" }),
   ).toBeTruthy();
-  expect(screen.getByText("你的记忆，从这里接上")).toBeTruthy();
+  expect(screen.queryByText("你的记忆，从这里接上")).toBeNull();
   expect(
     screen
       .getByRole("navigation", { name: "首次设置进度" })
@@ -133,8 +133,8 @@ it("renders the final shell, double title, step one, branded rows and exact sour
   ).toContain("导入历史");
   expect(screen.getByRole("heading", { name: "本机 AI 应用" })).toBeTruthy();
   expect(
-    screen.getByText("确认前只检查应用信息，不读取对话，也不安装连接。"),
-  ).toBeTruthy();
+    screen.queryByText("确认前只检查应用信息，不读取对话，也不安装连接。"),
+  ).toBeNull();
   expect(screen.queryByRole("button", { name: "导入历史包" })).toBeNull();
   expect(screen.getByText("/fixture/workbuddy · 默认位置")).toBeTruthy();
   expect(
@@ -349,7 +349,7 @@ it("custom source cancel does not grant or select and accepted import retains re
   expect(
     (screen.getByLabelText("导入 codex 历史") as HTMLInputElement).checked,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始导入" }));
   await screen.findByText("已受理 workbuddy");
   expect(vi.mocked(imports.connectForOnboarding).mock.calls[0]?.[0]).toEqual([
     "workbuddy",
@@ -373,7 +373,7 @@ it("does not submit authorization when the first-step owner leaves during final 
       done = resolve;
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始导入" }));
   view.unmount();
   await act(async () =>
     done({

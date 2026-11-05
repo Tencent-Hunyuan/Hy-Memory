@@ -379,8 +379,8 @@ it("uses user-facing connection confirmation copy without implementation narrati
   expect(
     screen.queryByText(/选择草稿|按各应用回执|本页任务控制尚未接通/),
   ).toBeNull();
-  expect(screen.getByText(/下一步选择记忆模式/)).toBeTruthy();
-  expect(screen.getByText(/之后仍可在设置中更改/)).toBeTruthy();
+  expect(screen.queryByText(/下一步选择记忆模式/)).toBeNull();
+  expect(screen.queryByText(/之后仍可在设置中更改/)).toBeNull();
 });
 
 it.each(["paused", "failed", "cancelled", "interrupted"] as const)(
@@ -398,11 +398,7 @@ it.each(["paused", "failed", "cancelled", "interrupted"] as const)(
     expect(
       screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
     ).toBeTruthy();
-    expect(
-      screen.getByText(/已保存的对话还在/, {
-        selector: ".first-import-r6-footer-note p",
-      }),
-    ).toBeTruthy();
+    expect(screen.queryByText(/已保存的对话还在/)).toBeNull();
   },
 );
 
@@ -439,9 +435,7 @@ it.each(["stale", "revoked", "missing"])(
         onContinue={vi.fn()}
       />,
     );
-    if (kind === "missing")
-      expect(screen.getByText("导入在后台继续，无需等待。")).toBeTruthy();
-    else expect(screen.queryByText("导入在后台继续，无需等待。")).toBeNull();
+    expect(screen.queryByText("导入在后台继续，无需等待。")).toBeNull();
     expect(
       screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
     ).toBeTruthy();

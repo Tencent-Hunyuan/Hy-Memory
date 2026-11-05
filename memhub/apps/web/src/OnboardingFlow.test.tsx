@@ -219,7 +219,7 @@ function imports(
 
 const READ_CONSENT = "允许读取以上来源的本次历史";
 const START = "开始导入";
-const SKIP = "稍后添加，先进入";
+const SKIP = "选择记忆模式";
 async function openApps(_user?: ReturnType<typeof userEvent.setup>) {
   await waitFor(() =>
     expect(
@@ -334,7 +334,7 @@ describe("OnboardingFlow S1.3", () => {
 
   it("D41 opens source choice with metadata discovery but no content or authorization requests", async () => {
     const controller = imports();
-    render(
+    const view = render(
       <OnboardingFlow
         state={onboarding}
         imports={controller}
@@ -470,15 +470,12 @@ describe("OnboardingFlow S1.3", () => {
       modelBoundary,
     );
     await user.click(screen.getByRole("button", { name: "返回导入" }));
-    await user.click(screen.getByRole("button", { name: "返回导入" }));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain(
         "开始导入的结果尚未确认",
       ),
     );
-    expect(
-      screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
   });
 
   it("accepts Lite once while the import submission is still in flight", async () => {
@@ -951,7 +948,7 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: SKIP }));
 
     expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
-    expect(screen.getByText("之后可在设置中更改。")).toBeTruthy();
+    expect(screen.queryByText("之后可在设置中更改。")).toBeNull();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect(screen.getByRole("radio", { name: /ultra/i })).toBeTruthy();
     expect(screen.getByText("推荐").closest("label")?.textContent).toContain(
@@ -1208,7 +1205,7 @@ describe("OnboardingFlow S1.3", () => {
       }),
     );
     const user = userEvent.setup();
-    render(
+    const view = render(
       <OnboardingFlow
         state={onboarding}
         imports={imports({ sources: [] })}
@@ -1219,7 +1216,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await user.click(screen.getByRole("radio", { name: /lite/i }));
-    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    view.unmount();
     await act(async () =>
       resolvePlan({
         current: "pro",
@@ -1238,11 +1235,6 @@ describe("OnboardingFlow S1.3", () => {
     );
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(
-      screen.getByRole("heading", {
-        name: "对话正在汇入，记忆从这里开始",
-      }),
-    ).toBeTruthy();
   });
 
   it("persists Lite mode before resumable progress and completion", async () => {
@@ -1758,7 +1750,7 @@ describe("OnboardingFlow S1.3", () => {
 
   it("skipping after a selection does not grant, install, sync or connect", async () => {
     const user = userEvent.setup();
-    const controller = imports();
+    const controller = imports({ sources: [] });
     const onFinish = vi.fn();
     render(
       <OnboardingFlow
@@ -1767,7 +1759,7 @@ describe("OnboardingFlow S1.3", () => {
         onFinish={onFinish}
       />,
     );
-    await choose(user);
+    await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
@@ -1823,6 +1815,7 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: "重新检测位置" }));
     expect(choice()).toHaveProperty("disabled", false);
     await waitFor(() => expect(choice()).toHaveProperty("checked", true));
+    await user.click(choice());
     await user.click(screen.getByRole("button", { name: SKIP }));
     await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
@@ -1847,6 +1840,7 @@ describe("OnboardingFlow S1.3", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
     expect(onFinish).not.toHaveBeenCalled();
+    await user.click(choice());
     await user.click(screen.getByRole("button", { name: SKIP }));
     await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
@@ -1929,9 +1923,9 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(choice());
     await user.click(screen.getByRole("button", { name: "重新检测位置" }));
     expect(choice()).toHaveProperty("checked", false);
-    expect(screen.getByRole("button", { name: START })).toHaveProperty(
+    expect(screen.getByRole("button", { name: SKIP })).toHaveProperty(
       "disabled",
-      true,
+      false,
     );
   });
 
@@ -2738,10 +2732,9 @@ describe("OnboardingFlow S1.3", () => {
       "disabled",
       true,
     );
-    expect(screen.getByRole("button", { name: SKIP })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    expect(
+      screen.getByRole("button", { name: "正在开始导入…" }),
+    ).toHaveProperty("disabled", true);
     expect(controller.refresh).toHaveBeenCalledTimes(2);
     await act(async () => resolve());
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
@@ -3084,7 +3077,7 @@ describe("OnboardingFlow S1.3", () => {
   it("lets the user leave after completion cannot be persisted without reconnecting", async () => {
     const user = userEvent.setup();
     completeOnboarding.mockRejectedValue(new Error("disk unavailable"));
-    const controller = imports();
+    const controller = imports({ sources: [] });
     const onFinish = vi.fn();
     render(
       <OnboardingFlow
@@ -3093,6 +3086,7 @@ describe("OnboardingFlow S1.3", () => {
         onFinish={onFinish}
       />,
     );
+    await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await chooseLiteAndContinue(user);
     await user.click(screen.getByRole("button", { name: "仍进入应用页" }));
