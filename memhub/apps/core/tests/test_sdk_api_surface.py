@@ -743,6 +743,44 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
             assert cursor_page["has_more"] is True
         assert cursor_turns == ["我喜欢绿茶", "我叫费天翔", "你好"]
         assert len(sdk.all("list_memories")) == cursor_calls + 3
+        graph = await client.get("/api/v2/raw/graph", params={"limit": 2})
+        assert graph.status_code == 200, graph.text
+        graph_body = graph.json()
+        assert graph_body["total"] == 3
+        assert graph_body["has_more"] is True
+        assert [item["label"] for item in graph_body["items"]] == [
+            "[user]: 我喜欢绿茶 [assistant]: 也记住了。",
+            "[user]: 我叫费天翔 [assistant]: 好的，记住了。",
+        ]
+        graph_page_2 = (
+            await client.get(
+                "/api/v2/raw/graph",
+                params={
+                    "limit": 2,
+                    "offset": 2,
+                    "snapshot_id": graph_body["snapshot_id"],
+                },
+            )
+        ).json()
+        assert graph_page_2["total"] == 3
+        assert graph_page_2["has_more"] is False
+        assert graph_page_2["items"][0]["turn_id"]
+        assert (
+            await client.get(
+                "/api/v2/raw/graph",
+                params={"limit": 2, "offset": 2},
+            )
+        ).status_code == 422
+        assert (
+            await client.get(
+                "/api/v2/raw/graph",
+                params={
+                    "limit": 2,
+                    "offset": 2,
+                    "snapshot_id": "missing",
+                },
+            )
+        ).status_code == 409
         inserted = {
             "memory_id": "raw-new",
             "content": "[user]: 新消息",
@@ -754,6 +792,21 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         }
         RAW_ROWS["local"].insert(0, inserted)
         try:
+            stable_graph_page = (
+                await client.get(
+                    "/api/v2/raw/graph",
+                    params={
+                        "limit": 2,
+                        "offset": 2,
+                        "snapshot_id": graph_body["snapshot_id"],
+                    },
+                )
+            ).json()
+            assert stable_graph_page["total"] == 3
+            assert stable_graph_page["items"][0]["label"] == "[user]: 你好"
+            updated_graph = (await client.get("/api/v2/raw/graph")).json()
+            assert updated_graph["total"] == 4
+            assert updated_graph["items"][0]["label"] == "[user]: 新消息"
             continued = await client.get(
                 "/api/v2/raw",
                 params={

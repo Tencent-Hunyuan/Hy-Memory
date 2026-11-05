@@ -1,13 +1,17 @@
 import type {
   GovernedMemory,
   MemoryDetail,
+  MemoryGraphResponse,
   MemoryLibraryPage,
   SdkRawContextItem,
+  SdkRawGraphItem,
   SdkRawPage,
   SdkRawRecord,
+  SourceResponse,
 } from "@one-memory/contracts";
 
 export type RawMapRecord = SdkRawRecord | SdkRawContextItem;
+export const SDK_RAW_PAGE_SIZE = 50;
 
 export function rawRecordId(record: RawMapRecord): string {
   return record.turn_id || record.raw_id;
@@ -122,6 +126,78 @@ export function rawLibraryPage(page: SdkRawPage): MemoryLibraryPage {
 
 export function rawSearchPage(items: SdkRawContextItem[]): MemoryLibraryPage {
   return pageFor(items, items.length, 0, Math.max(items.length, 1));
+}
+
+export function rawGraphRecord(item: SdkRawGraphItem): SdkRawContextItem {
+  return {
+    kind: "raw",
+    raw_id: item.raw_id,
+    turn_id: item.turn_id,
+    content: item.label,
+    source: item.source,
+    session_id: item.session_id,
+    memory_at:
+      typeof item.memory_at === "number"
+        ? new Date(item.memory_at * 1_000).toISOString()
+        : null,
+    score: 0,
+    truncated: true,
+  };
+}
+
+export function rawGraphProjection(
+  items: SdkRawGraphItem[],
+  total: number,
+  sources: SourceResponse[],
+): MemoryGraphResponse {
+  const labels = new Map(
+    sources.map((source) => [source.source_id, source.display_name]),
+  );
+  const nodes = [];
+  const edges = [];
+  const sourceIds = new Set<string>();
+  for (const item of items) {
+    const sourceId = item.source || "default";
+    if (!sourceIds.has(sourceId)) {
+      sourceIds.add(sourceId);
+      nodes.push({
+        node_id: `source:${sourceId}`,
+        node_type: "source" as const,
+        memory_id: null,
+        source_id: sourceId,
+        label: labels.get(sourceId) ?? sourceId,
+        kind: null,
+        status: null,
+        confidence: null,
+      });
+    }
+    const nodeId = `memory:${item.turn_id}`;
+    nodes.push({
+      node_id: nodeId,
+      node_type: "memory" as const,
+      memory_id: item.turn_id,
+      source_id: null,
+      label: item.label,
+      kind: "chat",
+      status: "confirmed",
+      confidence: null,
+    });
+    edges.push({
+      edge_id: `source:${sourceId}->${nodeId}`,
+      source_node_id: `source:${sourceId}`,
+      target_node_id: nodeId,
+      relation: "evidence_source",
+      origin: "provenance" as const,
+      weight: null,
+    });
+  }
+  return {
+    total_memories: total,
+    projected_memories: items.length,
+    hy_graph_available: false,
+    nodes,
+    edges,
+  };
 }
 
 export function rawDetail(record: RawMapRecord): MemoryDetail {
