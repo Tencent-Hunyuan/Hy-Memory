@@ -41,6 +41,7 @@ import {
   retryAutoReconcile,
   useAutoConnect,
 } from "./connection-reconcile";
+import { localEvolveRunning, useEvolveState } from "./evolve-state";
 import { useGuiLanguage } from "./gui-language";
 import { HomeCardBoundary } from "./HomeCardBoundary";
 import {
@@ -55,6 +56,7 @@ import {
   sourceConnectionIncomplete,
   useRecallHosts,
 } from "./host-state";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { prefetchDataRuntime } from "./runtime-state";
@@ -209,6 +211,10 @@ export function ApplicationsHome({
   active?: boolean;
 }) {
   const { locale, t, tn } = useGuiLanguage();
+  const { text } = useOnboardingTranslation();
+  const evolveState = useEvolveState(active);
+  const evolveRunning = localEvolveRunning(evolveState.data);
+  const evolveUncertain = evolveState.isError && evolveRunning;
   const hostQuery = useRecallHosts({ poll: active });
   const hostBridge = hostBridgeAvailable();
   const hosts = hostQuery.data ?? [];
@@ -313,6 +319,12 @@ export function ApplicationsHome({
   const [expanded, setExpanded] = useState(retained.expanded);
   const [phase, setPhase] = useState("idle");
   const [revision, setRevision] = useState(0);
+  const previousEvolveRunning = useRef(evolveRunning);
+  useEffect(() => {
+    const previous = previousEvolveRunning.current;
+    previousEvolveRunning.current = evolveRunning;
+    if (previous && !evolveRunning && active) setRevision((value) => value + 1);
+  }, [active, evolveRunning]);
   const confirmedModeSeen = useRef(confirmedMode);
   const expandButton = useRef<HTMLButtonElement>(null);
   const backButton = useRef<HTMLButtonElement>(null);
@@ -953,6 +965,11 @@ export function ApplicationsHome({
             <header>
               <h2>{t("apps.overview")}</h2>
             </header>
+            {evolveRunning ? (
+              <p className="r6-evolve-status" role="status">
+                {text(evolveUncertain ? "正在核对整合状态…" : "正在整合记忆…")}
+              </p>
+            ) : null}
             <div className="r6-home-metrics">
               <div role="status" aria-live="polite" aria-atomic="true">
                 <p>{t(viewModel.countLabel)}</p>

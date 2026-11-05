@@ -159,7 +159,7 @@ button.r6-button {
   min-height: 44px;
   height: 44px;
   padding: 0 20px;
-  gap: 0;
+  gap: 8px;
   border: 1px solid var(--r6-control-edge);
   border-radius: 8px;
   background: rgb(255 255 255 / 20%);
@@ -244,14 +244,20 @@ button.r6-button[data-variant="quiet"]:disabled {
   min-width: 0;
 }
 .r6-button-spinner {
-  position: absolute;
-  right: 5px;
+  position: static;
+  flex: 0 0 auto;
   width: 12px;
   height: 12px;
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
+  visibility: hidden;
   animation: r6-spin 1.8s linear infinite;
+  animation-play-state: paused;
+}
+.r6-button-spinner[data-visible="true"] {
+  visibility: visible;
+  animation-play-state: running;
 }
 
 .r6-stepper {

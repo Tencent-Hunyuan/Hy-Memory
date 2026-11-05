@@ -45,10 +45,12 @@ import {
   setExtractionWindow,
   updateSdkMemory,
 } from "./api";
+import { localEvolveRunning, useEvolveState } from "./evolve-state";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
 import { useGuiLanguage } from "./gui-language";
 import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
 import { MemoryMap } from "./MemoryMap";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { subscribePoll } from "./poll-scheduler";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
@@ -119,6 +121,10 @@ export function MemorySpace({
   onFocusMemoryConsumed?(): void;
 }) {
   const { locale, t, tn } = useGuiLanguage();
+  const { text } = useOnboardingTranslation();
+  const evolveState = useEvolveState(active || preload);
+  const evolveRunning = localEvolveRunning(evolveState.data);
+  const evolveUncertain = evolveState.isError && evolveRunning;
   const memoryText = (text: string) => {
     const key = `memory:${text}`;
     return isMessageKey(key) ? t(key) : text;
@@ -203,6 +209,12 @@ export function MemorySpace({
   // Bumping this re-reads the page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
   const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
+  const previousEvolveRunning = useRef(evolveRunning);
+  useEffect(() => {
+    const previous = previousEvolveRunning.current;
+    previousEvolveRunning.current = evolveRunning;
+    if (previous && !evolveRunning) bumpSdkMap();
+  }, [bumpSdkMap, evolveRunning]);
   const [sdkLibrary, setSdkLibrary] = useState<{
     page: MemoryLibraryPage | null;
     loading: boolean;
@@ -257,7 +269,8 @@ export function MemorySpace({
   ]);
   const sdkGraphSettled = sdkGraph?.scope === sdkGraphRequestedScope;
   const visibleSdkGraph =
-    sdkGraph?.scope === sdkGraphRequestedScope && sdkGraph.status === "ready"
+    sdkGraph?.scope === sdkGraphRequestedScope &&
+    (sdkGraph.status === "ready" || evolveRunning)
       ? sdkGraph.value
       : null;
   const sdkGraphFailed =
@@ -510,7 +523,11 @@ export function MemorySpace({
         }
       } catch {
         if (cancelled || request.signal.aborted) return;
-        setSdkGraph({ scope, status: "failed", value: null });
+        setSdkGraph((current) => ({
+          scope,
+          status: "failed",
+          value: current?.scope === scope ? current.value : null,
+        }));
       } finally {
         reading = false;
       }
@@ -1187,6 +1204,11 @@ export function MemorySpace({
           </div>
         )}
       </header>
+      {evolveRunning ? (
+        <p className="memory-evolve-status" role="status">
+          {text(evolveUncertain ? "正在核对整合状态…" : "正在整合记忆…")}
+        </p>
+      ) : null}
       {processing && (!simplified || managementOpen) ? (
         <details className="memory-processing-details">
           <summary>
@@ -1372,9 +1394,9 @@ export function MemorySpace({
                 source: sdkLibrarySource,
                 page: displayedSdkPage,
                 loading: sdkLibrary.loading,
-                failed: sdkLibrary.failed,
+                failed: sdkLibrary.failed && !evolveRunning,
                 graphLoading: !sdkGraphSettled,
-                graphFailed: sdkGraphFailed,
+                graphFailed: sdkGraphFailed && !evolveRunning,
                 graphLoaded: visibleGraphProgress?.loaded,
                 graphTotal: visibleGraphProgress?.total ?? undefined,
                 stale: false,

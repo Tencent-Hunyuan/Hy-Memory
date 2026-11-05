@@ -19,13 +19,23 @@ describe("R6 shared controls", () => {
 
   it("keeps its label and prevents duplicate activation while pending", () => {
     const onClick = vi.fn();
-    render(
-      <R6Button pending onClick={onClick}>
+    const view = render(
+      <R6Button pending={false} onClick={onClick}>
         保存修改
       </R6Button>,
     );
     const button = screen.getByRole("button", { name: "保存修改" });
+    const reservedSpinner = button.querySelector(".r6-button-spinner");
+    expect(reservedSpinner).toBeTruthy();
+    expect(reservedSpinner?.getAttribute("data-visible")).toBeNull();
+    view.rerender(
+      <R6Button pending onClick={onClick}>
+        保存修改
+      </R6Button>,
+    );
     expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.querySelector(".r6-button-spinner")).toBe(reservedSpinner);
+    expect(reservedSpinner?.getAttribute("data-visible")).toBe("true");
     fireEvent.click(button);
     expect(onClick).not.toHaveBeenCalled();
     expect(button.textContent).toContain("保存修改");

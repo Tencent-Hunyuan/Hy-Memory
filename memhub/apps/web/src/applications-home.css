@@ -69,6 +69,17 @@
   font-size: 18px;
   font-weight: 500;
 }
+.r6-evolve-status {
+  width: fit-content;
+  margin: 12px 0 -4px;
+  padding: 5px 9px;
+  border: 1px solid #cbd8e0;
+  border-radius: 999px;
+  background: #edf3f6;
+  color: #4f6574;
+  font-size: 12px;
+  line-height: 20px;
+}
 .r6-home-metrics {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr;
