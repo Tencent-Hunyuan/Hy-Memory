@@ -46,6 +46,7 @@ export function defaultHostSourceIds(
 export type ImportConnectionDraft = {
   hostSourceIds: readonly string[];
 };
+export type ImportSubmissionState = "confirmed" | "checking" | "refused";
 export interface FirstImportReviewProps {
   sourceIds: readonly string[];
   sources: SourceResponse[];
@@ -54,6 +55,7 @@ export interface FirstImportReviewProps {
   acceptedJobIds?: readonly string[];
   failedSources?: Record<string, string>;
   sourceSnapshot?: { confirmedAt: string | null; stale: boolean };
+  importSubmissionState?: ImportSubmissionState;
   busy?: boolean;
   error?: string | null;
   connectionNote?: string;
@@ -78,6 +80,7 @@ export function FirstImportReview({
   acceptedJobIds,
   failedSources = {},
   sourceSnapshot,
+  importSubmissionState = "confirmed",
   busy = false,
   error,
   connectionNote,
@@ -329,13 +332,24 @@ export function FirstImportReview({
         >
           <div className="first-import-r6-intro">
             <h2>{text("正在导入你的会话")}</h2>
-            <p>
-              {text(
-                allCompleted
-                  ? "本次导入已结束。已保存的对话无需重复导入。"
-                  : "后台将持续为你导入，可以放心进入下一步",
-              )}
-            </p>
+            {importSubmissionState === "checking" ? (
+              <p className="first-import-r6-submission-status" role="status">
+                {t("onboardingImportChecking")}
+              </p>
+            ) : (
+              <p>
+                {text(
+                  allCompleted
+                    ? "本次导入已结束。已保存的对话无需重复导入。"
+                    : "后台将持续为你导入，可以放心进入下一步",
+                )}
+              </p>
+            )}
+            {ids.length > 3 && (
+              <p className="first-import-r6-scroll-hint">
+                {t("onboardingMoreImportApps", { count: ids.length - 3 })}
+              </p>
+            )}
           </div>
           {(error || actionMessage) && (
             <div className="first-import-r6-feedback">

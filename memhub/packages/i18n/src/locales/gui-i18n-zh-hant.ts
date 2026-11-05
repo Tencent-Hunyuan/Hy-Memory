@@ -1133,6 +1133,8 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "少一些重複交代，多一些理解。",
   onboardingMoreApps: "向下捲動檢視更多 · 還有 {count} 個 App",
   "onboardingMoreApps.one": "向下捲動檢視更多 · 還有 {count} 個 App",
+  onboardingMoreImportApps: "橫向捲動查看更多 · 還有 {count} 個 App",
+  onboardingImportChecking: "正在確認匯入結果，已保留你的選擇",
   onboardingAllApps: "已顯示全部 {count} 個 App",
   默认位置: "預設位置",
   自定义位置: "自訂位置",

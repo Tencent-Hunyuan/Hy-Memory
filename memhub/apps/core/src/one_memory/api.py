@@ -1786,6 +1786,7 @@ def create_app(
                 else None
             )
             app.state.live_sync_watch_lock = asyncio.Lock()
+            app.state.source_activation_tasks = {}
             app.state.live_sync_supervisor.set_watched_sources(
                 watch_roots if watching and runtime_settings.live_sync_enabled else ()
             )
@@ -2121,6 +2122,11 @@ def create_app(
                         app.state.memory_governance_store.wait_content_candidate_backfill,
                         5.0,
                     )
+                source_activation_tasks = tuple(app.state.source_activation_tasks.values())
+                for task in source_activation_tasks:
+                    task.cancel()
+                if source_activation_tasks:
+                    await asyncio.gather(*source_activation_tasks, return_exceptions=True)
                 if app.state.live_sync_watch is not None:
                     await app.state.live_sync_watch.shutdown()
                 await app.state.live_sync_supervisor.shutdown()
@@ -3263,6 +3269,69 @@ def create_app(
         """`POST /api/v1/import-jobs` on one user's lane (Hermes only for another user)."""
         return await create_job_on(request.source_id, request.operation, request.user_id)
 
+    async def _activate_connected_sources(
+        request_id: str,
+        source_ids: tuple[str, ...],
+        *,
+        enable_sync: bool,
+    ) -> None:
+        """Apply one committed connection intent without holding its HTTP response."""
+        try:
+            for source_id in source_ids:
+                if enable_sync:
+                    await _live_sync(app).initialize_source(
+                        source_id,
+                        baseline_missing_files=True,
+                    )
+                else:
+                    await _live_sync(app).stop_source(source_id)
+            if enable_sync:
+                for source_id in source_ids:
+                    await _activate_source_resume(source_id)
+            await _refresh_live_watch(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            diagnostic_event(
+                level="error",
+                component="source.connection",
+                event="source.connection.activation_failed",
+                outcome="failed",
+                **diagnostic_exception(error),
+                details={"request_id": request_id, "source_ids": list(source_ids)},
+            )
+            raise
+
+    def _schedule_source_activation(
+        request_id: str,
+        source_ids: tuple[str, ...],
+        *,
+        enable_sync: bool,
+    ) -> None:
+        tasks = app.state.source_activation_tasks
+        existing = tasks.get(request_id)
+        if existing is not None and not existing.done():
+            return
+        task = watched_task(
+            asyncio.get_running_loop(),
+            lambda: _activate_connected_sources(
+                request_id,
+                source_ids,
+                enable_sync=enable_sync,
+            ),
+            component="source.connection",
+            name=f"source-connection-{request_id}",
+        )
+        if task is None:
+            return
+        tasks[request_id] = task
+
+        def forget(completed: asyncio.Future[None]) -> None:
+            if tasks.get(request_id) is completed:
+                tasks.pop(request_id, None)
+
+        task.add_done_callback(forget)
+
     @app.post(
         "/api/v1/sources/connect",
         response_model=ConnectSourcesResponse,
@@ -3352,44 +3421,21 @@ def create_app(
             if grant is not None:
                 _supervisor(app).register_adapter(registration.create_adapter(grant))
                 _detection(app).pop(job.source_id, None)
-                if request.enable_sync:
-                    await _prepare_source_resume(job.source_id)
-                else:
-                    await _live_sync(app).stop_source(job.source_id)
                 configured.append(job.source_id)
         if configured:
-            previous = {
-                source_id: _config_store(app).sync_enabled(source_id) for source_id in configured
-            }
-            try:
-                await asyncio.to_thread(
-                    _config_store(app).set_sync_many,
-                    {source_id: request.enable_sync for source_id in configured},
-                )
-            except BaseException:
-                for source_id in configured:
-                    if request.enable_sync:
-                        await _live_sync(app).stop_source(source_id)
-                    elif previous[source_id]:
-                        await _prepare_source_resume(source_id)
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-                raise
-            try:
-                if request.enable_sync:
-                    for source_id in configured:
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-            except BaseException:
-                await asyncio.to_thread(_config_store(app).set_sync_many, previous)
-                for source_id in configured:
-                    if request.enable_sync:
-                        await _live_sync(app).stop_source(source_id)
-                    elif previous[source_id]:
-                        await _prepare_source_resume(source_id)
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-                raise
+            await asyncio.to_thread(
+                _config_store(app).set_sync_many,
+                {source_id: request.enable_sync for source_id in configured},
+            )
+            if request.enable_sync:
+                for job in result.jobs:
+                    if job.source_id in configured and job.status is ImportStatus.PENDING:
+                        await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
+            _schedule_source_activation(
+                request.request_id,
+                tuple(configured),
+                enable_sync=request.enable_sync,
+            )
         return ConnectSourcesResponse(**result.model_dump())
 
     async def _refuse_overlapping_root(source_id: str, root: Path, user_id: str) -> None:

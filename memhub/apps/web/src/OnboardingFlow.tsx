@@ -41,6 +41,7 @@ import {
   defaultHostSourceIds,
   FirstImportReview,
   type ImportConnectionDraft,
+  type ImportSubmissionState,
 } from "./FirstImportReview";
 import {
   enableHostConnection,
@@ -134,6 +135,8 @@ export function OnboardingFlow({
   const [startingImport, setStartingImport] = useState<SourceResponse[] | null>(
     null,
   );
+  const [importSubmissionState, setImportSubmissionState] =
+    useState<ImportSubmissionState>("confirmed");
   const resumedStep =
     state.mode_intent &&
     state.mode_intent !== "lite" &&
@@ -1058,6 +1061,7 @@ export function OnboardingFlow({
 
   async function submitImport(approved: SourceResponse[]) {
     sourceFlight.current = true;
+    setImportSubmissionState("checking");
     if (window.oneMemory) setStartingImport(approved);
     const version = scopeVersion.current;
     const retryFailed = Object.keys(itemErrors).length > 0;
@@ -1069,8 +1073,11 @@ export function OnboardingFlow({
       try {
         current = (await imports.refresh()).sources;
       } catch {
-        if (alive.current)
+        if (alive.current) {
+          setStartingImport(null);
+          setImportSubmissionState("refused");
           setError("暂时无法核对来源，尚未提交授权。选择已保留，可以重试。");
+        }
         return;
       }
       if (!alive.current) return;
@@ -1093,6 +1100,7 @@ export function OnboardingFlow({
       setItemErrors(result.failed_sources);
       if (result.accepted_source_ids.length === 0) {
         setStartingImport(null);
+        setImportSubmissionState("refused");
         setError(
           "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。",
         );
@@ -1101,16 +1109,25 @@ export function OnboardingFlow({
       // Keep the accepted intent and job IDs while the user inspects early originals.
       setAccepted(result);
       setStartingImport(null);
+      setImportSubmissionState("confirmed");
       setError(null);
     } catch (reason) {
       if (alive.current) {
         const refused = isDefiniteAccessRefusal(reason);
-        if (refused) setStartingImport(null);
-        setError(
-          refused
-            ? "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。"
-            : "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
-        );
+        if (refused) {
+          setStartingImport(null);
+          setImportSubmissionState("refused");
+          setError(
+            "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。",
+          );
+        } else {
+          setImportSubmissionState("checking");
+          setError(
+            window.oneMemory
+              ? null
+              : "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
+          );
+        }
       }
     } finally {
       connectSent.current = false;
@@ -1186,6 +1203,7 @@ export function OnboardingFlow({
             jobs={reviewJobs}
             failedSources={accepted?.failed_sources}
             sourceSnapshot={imports.sourceSnapshot}
+            importSubmissionState={importSubmissionState}
             busy={completionBusy}
             error={error && text(error)}
             onContinue={(destination) => {

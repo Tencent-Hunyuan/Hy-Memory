@@ -1063,6 +1063,9 @@ const baseEnglishMessages = {
   "少一些重复交代，多一些理解。": "Less repetition. More understanding.",
   onboardingMoreApps: "Scroll for more · {count} apps remaining",
   "onboardingMoreApps.one": "Scroll for more · {count} app remaining",
+  onboardingMoreImportApps: "Scroll horizontally · {count} apps remaining",
+  onboardingImportChecking:
+    "Checking the import result; your selection is kept",
   onboardingAllApps: "All {count} apps shown",
   默认位置: "Default location",
   自定义位置: "Custom location",
