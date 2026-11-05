@@ -720,6 +720,27 @@ export interface SdkRawPage {
   time_filtered?: boolean;
 }
 
+/** Lightweight complete-map projection. Raw text remains SDK-owned. */
+export interface SdkRawGraphItem {
+  turn_id: string;
+  raw_id: string;
+  label: string;
+  source: string;
+  session_id: string;
+  memory_at: number | null;
+  gmt_created: number | null;
+}
+
+export interface SdkRawGraphPage {
+  user_id: string;
+  items: SdkRawGraphItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  snapshot_id: string;
+}
+
 /** `GET /api/v2/memory-library/layers`: memories per SDK layer. */
 export interface SdkLayerCounts {
   /** The user whose memories were counted. */

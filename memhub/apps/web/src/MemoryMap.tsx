@@ -16,6 +16,7 @@ import type {
 import type { GuiLocale } from "@one-memory/i18n";
 import {
   ArrowUp,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -51,6 +52,7 @@ import {
 } from "./memory-map-model";
 import { OptionMenu } from "./OptionMenu";
 import { R6Button } from "./R6Controls";
+import { RawConversationGraph3D } from "./RawConversationGraph3D";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
 import { SelectedRawDetail } from "./SelectedRawDetail";
 import { sourceNameOr } from "./source-label";
@@ -106,6 +108,8 @@ type Props = {
     /** The graph for the current source/query scope has not arrived yet. */
     graphLoading?: boolean;
     graphFailed?: boolean;
+    graphLoaded?: number;
+    graphTotal?: number;
     stale: boolean;
     settledSource?: string;
     settledQuery?: string;
@@ -179,6 +183,8 @@ const SCENE_LABELS: Record<SdkMemoryScene, string> = {
   working: "工作",
   coding: "编码",
 };
+const RAW_ROW_HEIGHT = 116;
+const RAW_LIST_OVERSCAN = 6;
 
 export function MemoryMap(props: Props) {
   const { locale, text, count, plain } = useMemoryLanguage();
@@ -257,6 +263,10 @@ export function MemoryMap(props: Props) {
   const pane = useRef<HTMLElement>(null);
   const memoryList = useRef<HTMLUListElement>(null);
   const inspectorBody = useRef<HTMLDivElement>(null);
+  const [rawListWindow, setRawListWindow] = useState({
+    start: 0,
+    end: 20,
+  });
   const openedDefault = useRef(false);
   const scrollSelection = useRef(false);
   const controlledSource = library
@@ -342,6 +352,33 @@ export function MemoryMap(props: Props) {
       ),
     [active, group, search, serverPaged, axis, groupKey],
   );
+  const rawWindowed = raw && !!library?.cursorPaging && filtered.length > 100;
+  const visibleMemories = rawWindowed
+    ? filtered.slice(rawListWindow.start, rawListWindow.end)
+    : filtered;
+  const rawTopSpace = rawWindowed ? rawListWindow.start * RAW_ROW_HEIGHT : 0;
+  const rawBottomSpace = rawWindowed
+    ? Math.max(0, filtered.length - rawListWindow.end) * RAW_ROW_HEIGHT
+    : 0;
+  const updateRawListWindow = useCallback(
+    (element: HTMLUListElement) => {
+      if (!rawWindowed) return;
+      const first = Math.max(
+        0,
+        Math.floor(element.scrollTop / RAW_ROW_HEIGHT) - RAW_LIST_OVERSCAN,
+      );
+      const visible = Math.ceil(element.clientHeight / RAW_ROW_HEIGHT);
+      setRawListWindow({
+        start: first,
+        end: Math.min(filtered.length, first + visible + RAW_LIST_OVERSCAN * 2),
+      });
+    },
+    [filtered.length, rawWindowed],
+  );
+  useLayoutEffect(() => {
+    if (rawWindowed && memoryList.current)
+      updateRawListWindow(memoryList.current);
+  }, [rawWindowed, updateRawListWindow]);
   const projection = useMemo(() => {
     // Until the new scope's graph arrives (or after it failed), drawing the
     // previous scope's graph would show the wrong source.
@@ -357,7 +394,7 @@ export function MemoryMap(props: Props) {
     // left-hand list window. Projecting the graph back down to the current
     // 20-row page made "All applications" look like whichever source happened
     // to dominate that page. Keyword search is intentionally page-scoped.
-    if (serverPaged && !library?.query) {
+    if (serverPaged && (!library?.query || raw)) {
       return (
         baseGraph ??
         projectMap(
@@ -409,6 +446,7 @@ export function MemoryMap(props: Props) {
     search,
     sources,
     serverPaged,
+    raw,
     library?.query,
     library?.graphLoading,
     library?.graphFailed,
@@ -1026,11 +1064,42 @@ export function MemoryMap(props: Props) {
         )}
         <ul
           ref={memoryList}
-          className="map-memory-list"
+          className={`map-memory-list${raw ? " raw" : ""}`}
           aria-label={raw ? t("memory:原始对话") : text("地图记忆列表")}
           id="memory-pane-memories"
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            updateRawListWindow(element);
+            if (
+              library?.cursorPaging &&
+              library.hasMore &&
+              !pageTransitioning &&
+              element.scrollHeight - element.scrollTop - element.clientHeight <
+                element.clientHeight
+            )
+              library.onMore?.();
+          }}
+          onWheel={(event) => {
+            const element = event.currentTarget;
+            if (
+              event.deltaY > 0 &&
+              library?.cursorPaging &&
+              library.hasMore &&
+              !pageTransitioning &&
+              element.scrollHeight - element.scrollTop - element.clientHeight <
+                8
+            )
+              library.onMore?.();
+          }}
         >
-          {filtered.map((m) => (
+          {rawTopSpace ? (
+            <li
+              className="map-memory-spacer"
+              style={{ height: rawTopSpace }}
+              aria-hidden="true"
+            />
+          ) : null}
+          {visibleMemories.map((m) => (
             <li key={m.memory_id} data-memory-id={m.memory_id}>
               <button
                 type="button"
@@ -1086,6 +1155,13 @@ export function MemoryMap(props: Props) {
               </button>
             </li>
           ))}
+          {rawBottomSpace ? (
+            <li
+              className="map-memory-spacer"
+              style={{ height: rawBottomSpace }}
+              aria-hidden="true"
+            />
+          ) : null}
         </ul>
         {library?.failed && (
           <div role="alert">
@@ -1136,12 +1212,24 @@ export function MemoryMap(props: Props) {
             >
               {library.cursorPaging ? (
                 library.hasMore ? (
-                  <R6Button
+                  <button
+                    type="button"
+                    className="map-load-more"
                     disabled={pageTransitioning}
+                    aria-label={
+                      pageTransitioning ? text("正在读取…") : text("加载更多")
+                    }
+                    title={
+                      pageTransitioning ? text("正在读取…") : text("加载更多")
+                    }
                     onClick={() => library.onMore?.()}
                   >
-                    {pageTransitioning ? text("正在读取…") : text("加载更多")}
-                  </R6Button>
+                    <ChevronDown
+                      size={18}
+                      aria-hidden="true"
+                      className={pageTransitioning ? "loading" : undefined}
+                    />
+                  </button>
                 ) : (
                   <span>{text("已加载全部")}</span>
                 )
@@ -1239,15 +1327,34 @@ export function MemoryMap(props: Props) {
                   : text("记忆关联")
                 : label}
             </h2>
-            {props.simplified && (!raw || !projection.nodes.length) && (
-              <p className="selected-graph-subtitle">
-                {projection.nodes.length
-                  ? text("来源归属")
-                  : raw
-                    ? t("sdk.raw.empty")
-                    : text("可在沉淀记忆后查看视图")}
+            {props.simplified && raw && library?.graphTotal !== undefined ? (
+              <p className="selected-graph-subtitle" role="status">
+                {library.graphLoading
+                  ? `${text("正在读取记忆地图…")} ${new Intl.NumberFormat(
+                      locale,
+                    ).format(
+                      library.graphLoaded ?? 0,
+                    )} / ${new Intl.NumberFormat(locale).format(
+                      library.graphTotal,
+                    )}`
+                  : `${new Intl.NumberFormat(locale).format(
+                      library.graphLoaded ?? 0,
+                    )} / ${new Intl.NumberFormat(locale).format(
+                      library.graphTotal,
+                    )}`}
               </p>
-            )}
+            ) : null}
+            {props.simplified &&
+              (!raw || !projection.nodes.length) &&
+              !(raw && library?.graphLoading) && (
+                <p className="selected-graph-subtitle">
+                  {projection.nodes.length
+                    ? text("来源归属")
+                    : raw
+                      ? t("sdk.raw.empty")
+                      : text("可在沉淀记忆后查看视图")}
+                </p>
+              )}
           </div>
           {compact && (activeId || selectedSource) && !inspectorOpen && (
             <button
@@ -1267,14 +1374,25 @@ export function MemoryMap(props: Props) {
         </header>
         <div className="map-canvas" data-tour-id="memory-map-canvas">
           {projection.nodes.length && (!props.simplified || !hidden) ? (
-            <MemoryGraph3D
-              graph={projection}
-              selectedNodeId={
-                visibleGroupNode?.node_id ??
-                (activeId ? `memory:${activeId}` : null)
-              }
-              onSelectNode={pickNode}
-            />
+            raw ? (
+              <RawConversationGraph3D
+                graph={projection}
+                selectedNodeId={
+                  visibleGroupNode?.node_id ??
+                  (activeId ? `memory:${activeId}` : null)
+                }
+                onSelectNode={pickNode}
+              />
+            ) : (
+              <MemoryGraph3D
+                graph={projection}
+                selectedNodeId={
+                  visibleGroupNode?.node_id ??
+                  (activeId ? `memory:${activeId}` : null)
+                }
+                onSelectNode={pickNode}
+              />
+            )
           ) : (
             <div className="map-empty-stage">
               <Network size={32} strokeWidth={1} />
