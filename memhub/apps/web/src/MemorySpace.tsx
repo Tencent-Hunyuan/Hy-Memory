@@ -964,10 +964,9 @@ export function MemorySpace({
                   ? sdkPage
                     ? sdkPage.total_exact === false
                       ? t("memory:原始对话")
-                      : `${t("memory:原始对话")} · ${tn(
-                          "sdk.raw.found",
-                          sdkPage.total,
-                        )}`
+                      : sdkLibrary.settledQuery.trim()
+                        ? tn("sdk.raw.found", sdkPage.total)
+                        : tn("sdk.raw.total", sdkPage.total)
                     : sdkLibrary.failed
                       ? null
                       : t("memory:正在读取…")

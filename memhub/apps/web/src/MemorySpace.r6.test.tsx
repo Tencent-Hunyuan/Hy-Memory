@@ -289,6 +289,11 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
   render(<MemorySpace simplified />);
 
   expect(await screen.findAllByText("原始对话内容")).toHaveLength(2);
+  expect(screen.getByText("1 条原始对话")).toBeTruthy();
+  expect(screen.queryByText("找到 1 条")).toBeNull();
+  expect(
+    screen.getByRole("heading", { level: 2, name: "来源归属" }),
+  ).toBeTruthy();
   expect(
     document.querySelector(".core-memory-map")?.hasAttribute("hidden"),
   ).toBe(false);
@@ -625,6 +630,7 @@ it("opens a search hit with the complete role transcript", async () => {
   await user.click(screen.getByRole("button", { name: "搜索" }));
 
   expect(await screen.findByText("完整问题")).toBeTruthy();
+  expect(screen.getByText("找到 1 条")).toBeTruthy();
   expect(screen.getByText("完整回答")).toBeTruthy();
   expect(
     document.querySelector(".map-dialogue-reading")?.textContent,

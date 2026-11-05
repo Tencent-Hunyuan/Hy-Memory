@@ -1235,11 +1235,11 @@ export function MemoryMap(props: Props) {
             <h2>
               {props.simplified
                 ? raw
-                  ? t("memory:原始对话")
+                  ? text("来源归属")
                   : text("记忆关联")
                 : label}
             </h2>
-            {props.simplified && (
+            {props.simplified && (!raw || !projection.nodes.length) && (
               <p className="selected-graph-subtitle">
                 {projection.nodes.length
                   ? text("来源归属")

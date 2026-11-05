@@ -80,6 +80,8 @@ export const koreanMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "최근 원본 대화",
   "sdk.raw.empty":
     "아직 원본 대화가 없습니다. 소스를 연결하면 여기에 표시됩니다.",
+  "sdk.raw.total": "원본 대화 {count}개",
+  "sdk.raw.total.one": "원본 대화 {count}개",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "기본 메모리를 사용 중입니다. 새 대화는 원본 기록으로 저장되며 고급 메모리를 만들지 않습니다. 기존 고급 메모리는 보존되지만 현재 표시되거나 회상에 사용되지 않습니다.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -149,6 +151,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "변경 사항 저장",
   "selectedMemory.author.user": "나",
   "selectedMemory.author.agent": "어시스턴트",
+  "selectedMemory.author.tool": "도구",
   "selectedMemory.sourceUnavailable":
     "출처 권한이 변경되었거나 원문을 사용할 수 없습니다.",
   "selectedMemory.related": "관련 기억",

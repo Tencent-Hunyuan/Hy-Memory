@@ -86,6 +86,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Letzte Originalunterhaltungen",
   "sdk.raw.empty":
     "Noch keine Originalunterhaltungen. Verbinde eine Quelle, damit sie hier erscheinen.",
+  "sdk.raw.total": "{count} Originalunterhaltungen",
+  "sdk.raw.total.one": "{count} Originalunterhaltung",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "Der Basisspeicher ist aktiv. Neue Unterhaltungen werden als Originale gespeichert und erzeugen keine erweiterten Erinnerungen. Vorhandene erweiterte Erinnerungen bleiben gespeichert, werden aber nicht angezeigt oder abgerufen.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -158,6 +160,7 @@ export const germanMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Speichern",
   "selectedMemory.author.user": "Sie",
   "selectedMemory.author.agent": "Assistent",
+  "selectedMemory.author.tool": "Tool",
   "selectedMemory.sourceUnavailable":
     "Quellberechtigungen haben sich geändert oder der Originaltext ist nicht verfügbar.",
   "selectedMemory.related": "Zugehörige Erinnerung",

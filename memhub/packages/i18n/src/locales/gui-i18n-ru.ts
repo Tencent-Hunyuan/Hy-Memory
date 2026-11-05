@@ -83,6 +83,8 @@ export const russianMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Недавние исходные диалоги",
   "sdk.raw.empty":
     "Исходных диалогов пока нет. Подключите источник, и они появятся здесь.",
+  "sdk.raw.total": "Исходных диалогов: {count}",
+  "sdk.raw.total.one": "{count} исходный диалог",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "Включена базовая память. Новые диалоги сохраняются в исходном виде и не создают расширенные воспоминания. Существующие расширенные воспоминания сохраняются, но не показываются и не используются при поиске.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -155,6 +157,7 @@ export const russianMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Сохранить изменения",
   "selectedMemory.author.user": "Вы",
   "selectedMemory.author.agent": "Ассистент",
+  "selectedMemory.author.tool": "Инструмент",
   "selectedMemory.sourceUnavailable":
     "Разрешения источника изменились, или исходный текст недоступен.",
   "selectedMemory.related": "Связанная запись памяти",

@@ -87,6 +87,8 @@ export const frenchMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Conversations originales récentes",
   "sdk.raw.empty":
     "Aucune conversation originale pour le moment. Connectez une source pour les afficher ici.",
+  "sdk.raw.total": "{count} conversations originales",
+  "sdk.raw.total.one": "{count} conversation originale",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "La mémoire de base est active. Les nouvelles conversations sont conservées telles quelles et ne créent pas de mémoires avancées. Les mémoires avancées existantes restent enregistrées, mais ne sont ni affichées ni rappelées.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -162,6 +164,7 @@ export const frenchMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Enregistrer",
   "selectedMemory.author.user": "Vous",
   "selectedMemory.author.agent": "Assistant",
+  "selectedMemory.author.tool": "Outil",
   "selectedMemory.sourceUnavailable":
     "Les autorisations de la source ont changé ou le texte original est indisponible.",
   "selectedMemory.related": "Mémoire associée",
