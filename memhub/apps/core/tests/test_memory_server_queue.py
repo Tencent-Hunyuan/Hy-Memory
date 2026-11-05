@@ -475,3 +475,38 @@ def test_lost_lease_before_invocation_never_calls_hy() -> None:
 
 async def _noop(job: ClaimedJob) -> None:
     return None
+
+
+async def test_renew_loop_keeps_renewing_after_an_error() -> None:
+    """One failed renewal must not end the loop for the rest of the job.
+
+    ``_renew_loop`` is the only thing keeping the lease alive.  If a transient
+    database error killed it, the lease would lapse, another worker would claim
+    the job and the work would run twice -- the outcome the loop exists to
+    prevent.
+    """
+    import asyncio
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from one_memory.memory_server.queue import WriteQueuePipelines
+
+    worker = WriteQueuePipelines.__new__(WriteQueuePipelines)
+    worker._stop = asyncio.Event()
+    worker._renew_every = timedelta(seconds=0)
+    worker._owner_for = lambda _job: "owner"  # type: ignore[method-assign]
+
+    calls: list[str] = []
+
+    async def renew(job_id: str, _owner: str) -> None:
+        calls.append(job_id)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        if len(calls) == 3:
+            worker._stop.set()
+
+    worker._renew = renew  # type: ignore[method-assign]
+
+    await asyncio.wait_for(worker._renew_loop(SimpleNamespace(job_id="job-1")), timeout=5)
+
+    assert len(calls) == 3
