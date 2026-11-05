@@ -430,6 +430,89 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
   });
 
+  it("keeps the import review open when a late connection result is unknown", async () => {
+    const user = userEvent.setup();
+    let rejectImport!: (reason?: unknown) => void;
+    const controller = imports({
+      connectForOnboarding: vi.fn(
+        () =>
+          new Promise<
+            Awaited<ReturnType<ImportSourcesController["connectForOnboarding"]>>
+          >((_resolve, reject) => {
+            rejectImport = reject;
+          }),
+      ),
+    });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+    expect(
+      await screen.findByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeTruthy();
+
+    await act(async () => rejectImport(new Error("response lost")));
+
+    expect(
+      screen.getByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "开始导入的结果尚未确认",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "把熟悉的背景，带到这里" }),
+    ).toBeNull();
+  });
+
+  it("returns to source review when Core definitely refuses the connection", async () => {
+    const user = userEvent.setup();
+    const controller = imports({
+      connectForOnboarding: vi.fn().mockRejectedValue(
+        Object.assign(new Error("source rejected"), {
+          definiteRefusal: true,
+        }),
+      ),
+    });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "把熟悉的背景，带到这里",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "本次没有来源获准导入",
+    );
+    expect(
+      screen.queryByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeNull();
+  });
+
   it("opens model setup immediately and preserves it across a late import failure", async () => {
     const user = userEvent.setup();
     let rejectImport!: (reason?: unknown) => void;
@@ -2680,10 +2763,9 @@ describe("OnboardingFlow S1.3", () => {
     );
     await user.click(screen.getByRole("button", { name: START }));
     await waitFor(() =>
-      expect(api.getSourceConnection).toHaveBeenCalledExactlyOnceWith(
-        requestId,
-      ),
+      expect(api.getSourceConnection).toHaveBeenCalledTimes(2),
     );
+    expect(api.getSourceConnection).toHaveBeenLastCalledWith(requestId);
     expect(api.connectSources).toHaveBeenCalledOnce();
     expect(screen.getByRole("alert").textContent).toContain("尚未确认");
     vi.mocked(api.getSourceConnection).mockResolvedValueOnce({
@@ -2698,7 +2780,7 @@ describe("OnboardingFlow S1.3", () => {
     await continueImport(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(api.getSourceConnection).toHaveBeenCalledTimes(2);
+    expect(api.getSourceConnection).toHaveBeenCalledTimes(3);
     expect(api.createImportJob).not.toHaveBeenCalled();
   });
 
