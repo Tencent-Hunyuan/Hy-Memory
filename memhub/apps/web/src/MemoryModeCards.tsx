@@ -1,5 +1,5 @@
 import type { MemoryPipelineMode } from "@one-memory/contracts";
-import { Check } from "lucide-react";
+import { Check, Clock3 } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { MODE_COPY } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
@@ -32,6 +32,7 @@ export function MemoryModeCards({
   current,
   currentBadge,
   disabled = false,
+  layout = "grid",
   onChange,
   ultraDetail,
   "aria-label": ariaLabel,
@@ -41,6 +42,7 @@ export function MemoryModeCards({
   current?: MemoryPipelineMode;
   currentBadge?: ReactNode;
   disabled?: boolean | ((mode: MemoryPipelineMode) => boolean);
+  layout?: "grid" | "rows";
   onChange(mode: MemoryPipelineMode, control: HTMLInputElement): void;
   ultraDetail?: ReactNode;
   "aria-label": string;
@@ -53,70 +55,77 @@ export function MemoryModeCards({
 
   return (
     <div
-      className="memory-mode-cards"
+      className={`memory-mode-cards memory-mode-cards--${layout}`}
       role="radiogroup"
       aria-label={ariaLabel}
       aria-busy={ariaBusy || undefined}
     >
-      {MODES.map((mode) => {
-        const selected = value === mode.id;
-        const modeDisabled = unavailable(mode.id);
-        const localizedTitle = text(MODE_COPY[mode.id].title);
-        const title = localizedTitle.replace(
-          /\s*[（(](?:lite|pro|ultra)[)）]\s*$/i,
-          "",
-        );
-        const features = text(MODE_COPY[mode.id].description).split(/\s*·\s*/);
-        return (
-          <div
-            key={mode.id}
-            className="memory-mode-card"
-            data-mode={mode.id}
-            data-selected={selected || undefined}
-            data-current={current === mode.id || undefined}
-            data-disabled={modeDisabled || undefined}
-          >
-            <label className="memory-mode-card-choice">
-              <input
-                type="radio"
-                name={name}
-                value={mode.id}
-                aria-label={localizedTitle}
-                checked={selected}
-                disabled={modeDisabled}
-                onChange={(event) => onChange(mode.id, event.currentTarget)}
-              />
-              <span className="memory-mode-title">
-                <span className="memory-mode-index">{mode.index}</span>
-                <strong>{title}</strong>
-                <span className="memory-mode-tier">
-                  {mode.id.toUpperCase()}
-                </span>
-                {current === mode.id && currentBadge ? (
-                  <span className="memory-mode-current">{currentBadge}</span>
-                ) : null}
-                <span className="memory-mode-radio" aria-hidden="true">
-                  {selected ? <Check size={13} /> : null}
-                </span>
-              </span>
-              <span className="memory-mode-description">
-                {text(mode.description)}
-              </span>
-              <span className="memory-mode-features">
-                {features.map((feature) => (
-                  <span key={feature}>
-                    <i aria-hidden="true" />
-                    {text(feature)}
+      <div className="memory-mode-card-list">
+        {MODES.map((mode) => {
+          const selected = value === mode.id;
+          const modeDisabled = unavailable(mode.id);
+          const localizedTitle = text(MODE_COPY[mode.id].title);
+          const title = localizedTitle.replace(
+            /\s*[（(](?:lite|pro|ultra)[)）]\s*$/i,
+            "",
+          );
+          const features = text(MODE_COPY[mode.id].description).split(
+            /\s*·\s*/,
+          );
+          return (
+            <div
+              key={mode.id}
+              className="memory-mode-card"
+              data-mode={mode.id}
+              data-selected={selected || undefined}
+              data-current={current === mode.id || undefined}
+              data-disabled={modeDisabled || undefined}
+            >
+              <label className="memory-mode-card-choice">
+                <input
+                  type="radio"
+                  name={name}
+                  value={mode.id}
+                  aria-label={localizedTitle}
+                  checked={selected}
+                  disabled={modeDisabled}
+                  onChange={(event) => onChange(mode.id, event.currentTarget)}
+                />
+                <span className="memory-mode-title">
+                  <span className="memory-mode-index">{mode.index}</span>
+                  <strong>{title}</strong>
+                  <span className="memory-mode-tier">
+                    {mode.id.toUpperCase()}
                   </span>
-                ))}
-              </span>
-            </label>
-            {mode.id === "ultra" && selected && ultraDetail ? (
-              <div className="memory-mode-detail">{ultraDetail}</div>
-            ) : null}
-          </div>
-        );
-      })}
+                  {current === mode.id && currentBadge ? (
+                    <span className="memory-mode-current">{currentBadge}</span>
+                  ) : null}
+                  <span className="memory-mode-radio" aria-hidden="true">
+                    {selected ? <Check size={13} /> : null}
+                  </span>
+                </span>
+                <span className="memory-mode-description">
+                  {text(mode.description)}
+                </span>
+                <span className="memory-mode-features">
+                  {features.map((feature) => (
+                    <span key={feature}>
+                      <i aria-hidden="true" />
+                      {text(feature)}
+                    </span>
+                  ))}
+                </span>
+                {mode.id === "ultra" && selected && ultraDetail ? (
+                  <div className="memory-mode-detail">
+                    <Clock3 size={14} aria-hidden="true" />
+                    <div>{ultraDetail}</div>
+                  </div>
+                ) : null}
+              </label>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

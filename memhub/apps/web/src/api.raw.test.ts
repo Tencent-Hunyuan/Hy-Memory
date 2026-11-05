@@ -14,7 +14,7 @@ vi.mock("axios", () => ({
   },
 }));
 
-import { getSdkRaw, searchSdkRaw } from "./api";
+import { getSdkRaw, getSdkRawGraph, searchSdkRaw } from "./api";
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -58,4 +58,37 @@ it("keeps the application filter when searching raw conversations", async () => 
     },
     { signal, timeout: 10_000 },
   );
+});
+
+it("pages the independent lightweight raw graph", async () => {
+  get.mockResolvedValue({
+    data: {
+      user_id: "local",
+      items: [],
+      total: 1_600,
+      offset: 500,
+      limit: 500,
+      has_more: true,
+      snapshot_id: "snapshot-1",
+    },
+  });
+  const signal = new AbortController().signal;
+
+  await getSdkRawGraph({
+    source: "cursor",
+    offset: 500,
+    limit: 500,
+    snapshotId: "snapshot-1",
+    signal,
+  });
+
+  expect(get).toHaveBeenCalledWith("/api/v2/raw/graph", {
+    params: {
+      source: "cursor",
+      offset: 500,
+      limit: 500,
+      snapshot_id: "snapshot-1",
+    },
+    signal,
+  });
 });

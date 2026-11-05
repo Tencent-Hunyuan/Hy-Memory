@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import (
     Depends,
@@ -650,6 +650,34 @@ class SdkRawPage(BaseModel):
     #: Set when a time filter was applied in Core. For storage `raw`, `total`
     #: remains the SDK count; for product `turn`, it is the filtered turn count.
     time_filtered: bool = False
+
+
+class SdkRawGraphItem(BaseModel):
+    """Small, non-authoritative projection used to draw the complete raw map."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    turn_id: str = Field(min_length=1, max_length=96)
+    raw_id: str = Field(min_length=1)
+    label: str = Field(max_length=240)
+    source: str
+    session_id: str
+    memory_at: float | None = None
+    gmt_created: float | None = None
+
+
+class SdkRawGraphPage(BaseModel):
+    """One page from a complete, bounded-memory raw-turn catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    items: tuple[SdkRawGraphItem, ...] = ()
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=500)
+    has_more: bool = False
+    snapshot_id: str = Field(min_length=1, max_length=64)
 
 
 class SdkLayerCounts(BaseModel):
@@ -4542,6 +4570,164 @@ def create_app(
         ],
     ] = {}
     raw_turn_cache_locks: dict[tuple[object, ...], asyncio.Lock] = {}
+    raw_graph_cache: dict[
+        tuple[object, ...],
+        tuple[
+            float,
+            int,
+            tuple[tuple[str, str | None], ...],
+            tuple[SdkRawGraphItem, ...],
+            int,
+        ],
+    ] = {}
+    raw_graph_cache_locks: dict[tuple[object, ...], asyncio.Lock] = {}
+    raw_graph_snapshots: dict[
+        str,
+        tuple[float, tuple[object, ...], tuple[SdkRawGraphItem, ...], int],
+    ] = {}
+    raw_graph_cache_ttl = 300.0
+    raw_graph_snapshot_ttl = 120.0
+    raw_graph_cache_budget = 8 * 1024 * 1024
+
+    def graph_cache_size(items: Iterable[SdkRawGraphItem]) -> int:
+        return sum(
+            128
+            + len(item.turn_id.encode())
+            + len(item.raw_id.encode())
+            + len(item.label.encode())
+            + len(item.source.encode())
+            + len(item.session_id.encode())
+            for item in items
+        )
+
+    def prune_raw_graph_state() -> None:
+        now = time.monotonic()
+        for key, cached in tuple(raw_graph_cache.items()):
+            if now - cached[0] > raw_graph_cache_ttl:
+                raw_graph_cache.pop(key, None)
+        for snapshot_id, snapshot in tuple(raw_graph_snapshots.items()):
+            if now - snapshot[0] > raw_graph_snapshot_ttl:
+                raw_graph_snapshots.pop(snapshot_id, None)
+        while raw_graph_cache and (
+            len(raw_graph_cache) > 8
+            or sum(cached[4] for cached in raw_graph_cache.values()) > raw_graph_cache_budget
+        ):
+            raw_graph_cache.pop(next(iter(raw_graph_cache)))
+        while raw_graph_snapshots and (
+            len(raw_graph_snapshots) > 8
+            or sum(snapshot[3] for snapshot in raw_graph_snapshots.values())
+            > raw_graph_cache_budget
+        ):
+            raw_graph_snapshots.pop(next(iter(raw_graph_snapshots)))
+
+    def graph_items(
+        records: Iterable[HySdkRawRecord],
+    ) -> tuple[SdkRawGraphItem, ...]:
+        items: list[SdkRawGraphItem] = []
+        for record in records:
+            for turn in reversed(raw_display_turns(record)):
+                label = re.sub(r"\s+", " ", turn.content).strip()[:240]
+                items.append(
+                    SdkRawGraphItem(
+                        turn_id=turn.turn_id,
+                        raw_id=record.raw_id,
+                        label=label or record.raw_id,
+                        source=record.source,
+                        session_id=record.session_id,
+                        memory_at=record.memory_at,
+                        gmt_created=record.gmt_created,
+                    )
+                )
+        return tuple(items)
+
+    async def raw_graph_catalog(
+        client: object,
+        *,
+        query: dict[str, object],
+        cache_key: tuple[object, ...],
+    ) -> tuple[SdkRawGraphItem, ...]:
+        """Build a complete raw-turn map without retaining raw bodies.
+
+        The SDK remains the sole raw authority. This cache contains only stable
+        ids and short labels and can be dropped at any time. A verified first
+        page makes one catalog snapshot atomic from the reader's perspective.
+        """
+        prune_raw_graph_state()
+        if len(raw_graph_cache_locks) > 16:
+            for stale_key, stale_lock in tuple(raw_graph_cache_locks.items()):
+                if stale_key not in raw_graph_cache and not stale_lock.locked():
+                    raw_graph_cache_locks.pop(stale_key, None)
+        lock = raw_graph_cache_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            for _attempt in range(3):
+                value = await asyncio.to_thread(
+                    client.list_memories,
+                    **query,
+                    offset=0,
+                    limit=500,
+                )
+                first_page = HySdkRawPage.from_memory_list(value, limit=500, offset=0)
+                signature = tuple((record.raw_id, record.status) for record in first_page.raw)
+                cached = raw_graph_cache.get(cache_key)
+                if cached is not None and cached[1] == first_page.total and cached[2] == signature:
+                    return cached[3]
+                added = (
+                    None
+                    if cached is None
+                    else raw_prefix_added(
+                        cached[2],
+                        signature,
+                        cached[1],
+                        first_page.total,
+                    )
+                )
+                if cached is not None and added is not None:
+                    items = graph_items(first_page.raw[:added]) + cached[3]
+                else:
+                    items = graph_items(first_page.raw)
+                    raw_offset = len(first_page.raw)
+                    snapshot_changed = False
+                    while first_page.raw and raw_offset < first_page.total:
+                        value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=raw_offset,
+                            limit=500,
+                        )
+                        page = HySdkRawPage.from_memory_list(value, limit=500, offset=raw_offset)
+                        if (
+                            page.total != first_page.total
+                            or not page.raw
+                            or raw_offset + len(page.raw) > first_page.total
+                        ):
+                            snapshot_changed = True
+                            break
+                        items += graph_items(page.raw)
+                        raw_offset += len(page.raw)
+                    if snapshot_changed or raw_offset != first_page.total:
+                        continue
+
+                verify_value = await asyncio.to_thread(
+                    client.list_memories,
+                    **query,
+                    offset=0,
+                    limit=500,
+                )
+                verify = HySdkRawPage.from_memory_list(verify_value, limit=500, offset=0)
+                verify_signature = tuple((record.raw_id, record.status) for record in verify.raw)
+                if verify.total != first_page.total or verify_signature != signature:
+                    continue
+                raw_graph_cache.pop(cache_key, None)
+                raw_graph_cache[cache_key] = (
+                    time.monotonic(),
+                    first_page.total,
+                    signature,
+                    items,
+                    graph_cache_size(items),
+                )
+                prune_raw_graph_state()
+                return items
+        raise RuntimeError("hy_memory_raw_snapshot_busy")
 
     @app.get(
         "/api/v2/raw",
@@ -4679,15 +4865,11 @@ def create_app(
                             offset=raw_offset,
                         )
                         if raw_page.total != observed_total:
-                            raise HTTPException(
-                                status_code=409, detail="raw_cursor_stale"
-                            )
+                            raise HTTPException(status_code=409, detail="raw_cursor_stale")
 
                     if expected_raw.startswith("p"):
                         if raw_offset == 0:
-                            raise HTTPException(
-                                status_code=409, detail="raw_cursor_stale"
-                            )
+                            raise HTTPException(status_code=409, detail="raw_cursor_stale")
                         previous_value = await asyncio.to_thread(
                             client.list_memories,
                             **query,
@@ -4700,13 +4882,11 @@ def create_app(
                         valid_anchor = (
                             previous_page.total == raw_page.total
                             and bool(previous_page.raw)
-                            and raw_anchor(previous_page.raw[0])
-                            == expected_raw[1:]
+                            and raw_anchor(previous_page.raw[0]) == expected_raw[1:]
                         )
                     else:
                         valid_anchor = (
-                            bool(raw_page.raw)
-                            and raw_anchor(raw_page.raw[0]) == expected_raw
+                            bool(raw_page.raw) and raw_anchor(raw_page.raw[0]) == expected_raw
                         )
                     if expected_raw and not valid_anchor:
                         raise HTTPException(status_code=409, detail="raw_cursor_stale")
@@ -4714,9 +4894,7 @@ def create_app(
                 next_cursor: str | None = None
                 for record_index, record in enumerate(raw_page.raw):
                     turns = raw_display_turns(record)
-                    ordered_turns = (
-                        tuple(reversed(turns)) if order == "desc" else turns
-                    )
+                    ordered_turns = tuple(reversed(turns)) if order == "desc" else turns
                     start = turn_offset if record_index == 0 else 0
                     for index in range(start, len(ordered_turns)):
                         selected_turns.append((record, ordered_turns[index]))
@@ -4751,14 +4929,9 @@ def create_app(
                         break
                     if len(selected_turns) >= limit:
                         break
-                if (
-                    next_cursor is None
-                    and raw_offset + len(raw_page.raw) < raw_page.total
-                ):
+                if next_cursor is None and raw_offset + len(raw_page.raw) < raw_page.total:
                     if not raw_page.raw:
-                        raise HTTPException(
-                            status_code=409, detail="raw_cursor_stale"
-                        )
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
                     next_raw = raw_offset + len(raw_page.raw)
                     previous_anchor = raw_anchor(raw_page.raw[-1])
                     next_cursor = (
@@ -4767,10 +4940,7 @@ def create_app(
                     )
                 return SdkRawPage(
                     user_id=user_id,
-                    items=tuple(
-                        SdkRawItem.of(record, turn)
-                        for record, turn in selected_turns
-                    ),
+                    items=tuple(SdkRawItem.of(record, turn) for record, turn in selected_turns),
                     # Cursor consumers do not use a precise total. This lower
                     # bound preserves the legacy numeric field without forcing
                     # a full scan merely to count variable-size turn batches.
@@ -4942,6 +5112,114 @@ def create_app(
             limit=limit,
             unit="raw",
             time_filtered=time_filtered,
+        )
+
+    @app.get(
+        "/api/v2/raw/graph",
+        response_model=SdkRawGraphPage,
+        dependencies=strict,
+    )
+    async def sdk_raw_graph(
+        source: list[str] | None = Query(default=None),  # noqa: B008
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=500),
+        snapshot_id: str | None = Query(default=None, max_length=64),
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+        exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
+        session_id: list[str] | None = Query(default=None),  # noqa: B008
+        statuses: list[str] | None = Query(default=None),  # noqa: B008
+    ) -> SdkRawGraphPage:
+        """Complete lightweight raw graph, independent of list pagination."""
+        chosen_statuses = (
+            _library_values(
+                statuses or [],
+                MEMORY_STATUSES,
+                "memory_status_unknown",
+            )
+            or raw_list_filters()["statuses"]
+        )
+        sources = split_csv(source)
+        excluded = split_csv(exclude_sources)
+        sessions = split_csv(session_id)
+        snapshot_scope: tuple[object, ...] = (
+            user_id,
+            tuple(sorted(chosen_statuses)),
+            tuple(sorted(sources)),
+            tuple(sorted(excluded)),
+            tuple(sorted(sessions)),
+        )
+        if offset and snapshot_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="raw_graph_snapshot_required",
+            )
+        prune_raw_graph_state()
+        if snapshot_id is not None:
+            snapshot = raw_graph_snapshots.get(snapshot_id)
+            if snapshot is None or snapshot[1] != snapshot_scope:
+                raise HTTPException(
+                    status_code=409,
+                    detail="raw_graph_snapshot_stale",
+                )
+            items = snapshot[2]
+        else:
+            query: dict[str, object] = {
+                "user_id": user_id,
+                **raw_list_filters(chosen_statuses),
+                "order": "desc",
+            }
+            cache_key: tuple[object, ...] = (
+                user_id,
+                tuple(sorted(chosen_statuses)),
+            )
+            try:
+                client = await _sdk_client_handle(app).client()
+                catalog = await raw_graph_catalog(
+                    client,
+                    query=query,
+                    cache_key=cache_key,
+                )
+            except HTTPException:
+                raise
+            except Exception as error:
+                raise _sdk_http_error(
+                    error,
+                    "hy_memory_raw_graph_failed",
+                ) from None
+            source_set = set(sources)
+            excluded_set = set(excluded)
+            session_set = set(sessions)
+            items = tuple(
+                item
+                for item in catalog
+                if (not source_set or item.source in source_set)
+                and item.source not in excluded_set
+                and (not session_set or item.session_id in session_set)
+            )
+            snapshot_id = uuid4().hex
+            raw_graph_snapshots[snapshot_id] = (
+                time.monotonic(),
+                snapshot_scope,
+                items,
+                graph_cache_size(items),
+            )
+            prune_raw_graph_state()
+            if snapshot_id not in raw_graph_snapshots:
+                raise HTTPException(
+                    status_code=413,
+                    detail="raw_graph_snapshot_too_large",
+                )
+        if snapshot_id is None:
+            raise RuntimeError("raw_graph_snapshot_missing")
+        selected = items[offset : offset + limit]
+        return SdkRawGraphPage(
+            user_id=user_id,
+            items=selected,
+            total=len(items),
+            offset=offset,
+            limit=limit,
+            has_more=offset + len(selected) < len(items),
+            snapshot_id=snapshot_id,
         )
 
     @app.post(

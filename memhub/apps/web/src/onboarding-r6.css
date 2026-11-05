@@ -634,6 +634,12 @@
   font-size: 13px;
   line-height: 20px;
 }
+@media (min-width: 761px) {
+  .onboarding-r6-mode {
+    min-height: 100%;
+    gap: 24px;
+  }
+}
 .onboarding-r6-empty {
   margin: 0;
   padding: 28px 18px;

@@ -45,6 +45,7 @@ import {
   type SdkMemoryStatus,
   type SdkMemoryVariant,
   type SdkRawContextItem,
+  type SdkRawGraphPage,
   type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
@@ -1010,6 +1011,26 @@ export async function getSdkRaw({
       paging,
       cursor: cursor || undefined,
     },
+    signal,
+  });
+  return response.data;
+}
+
+export async function getSdkRawGraph({
+  source,
+  offset = 0,
+  limit = 500,
+  snapshotId,
+  signal,
+}: {
+  source?: string;
+  offset?: number;
+  limit?: number;
+  snapshotId?: string;
+  signal?: AbortSignal;
+} = {}): Promise<SdkRawGraphPage> {
+  const response = await client.get<SdkRawGraphPage>("/api/v2/raw/graph", {
+    params: { source, offset, limit, snapshot_id: snapshotId },
     signal,
   });
   return response.data;
