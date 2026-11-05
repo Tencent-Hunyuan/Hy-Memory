@@ -22,6 +22,7 @@ import {
   setMemoryMode,
 } from "./api";
 import { MemoryModeSettings } from "./MemoryModeSettings";
+import { resetClient } from "./query-client";
 
 vi.mock("./api", () => ({
   getMemoryMode: vi.fn(),
@@ -81,6 +82,7 @@ async function chooseMode(
 
 afterEach(() => {
   cleanup();
+  resetClient();
   vi.clearAllMocks();
   vi.mocked(apiErrorCode).mockReturnValue(null);
   vi.mocked(memoryModePlanUnsupported).mockReturnValue(false);

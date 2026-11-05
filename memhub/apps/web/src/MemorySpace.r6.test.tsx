@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { MemorySpace } from "./MemorySpace";
+import { queryClient, resetClient } from "./query-client";
 
 it("translates memory filters and detail affordances live without refetching", async () => {
   setup();
@@ -79,6 +80,7 @@ const { reads } = vi.hoisted(() => ({
     raw: vi.fn(),
     rawGraph: vi.fn(),
     rawSearch: vi.fn(),
+    evolve: vi.fn(),
   },
 }));
 vi.mock("./api", async (importOriginal) => ({
@@ -90,6 +92,7 @@ vi.mock("./api", async (importOriginal) => ({
   getSdkRaw: reads.raw,
   getSdkRawGraph: reads.rawGraph,
   searchSdkRaw: reads.rawSearch,
+  getEvolveOverview: reads.evolve,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryAddComposer", () => ({
@@ -119,13 +122,19 @@ vi.mock("./MemoryAddComposer", () => ({
   ),
 }));
 vi.mock("./MemoryGraph3D", () => ({
-  MemoryGraph3D: () => <div data-testid="graph-owner" />,
+  MemoryGraph3D: ({ graph }: { graph?: { nodes?: unknown[] } | null }) => (
+    <div
+      data-testid="graph-owner"
+      data-graph-nodes={graph?.nodes?.length ?? 0}
+    />
+  ),
 }));
 vi.mock("./RawConversationGraph3D", () => ({
   RawConversationGraph3D: () => <div data-testid="graph-owner" />,
 }));
 afterEach(() => {
   cleanup();
+  resetClient();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
@@ -159,7 +168,94 @@ it("translates the model-required prompt without configuring a model", async () 
   localStorage.clear();
 });
 
+it("keeps the memory snapshot visible during Evolve and refreshes when it ends", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("ultra"));
+  reads.evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [
+      {
+        run_id: "run-1",
+        user_id: "local",
+        state: "running",
+      },
+    ],
+  });
+  render(<MemorySpace simplified />);
+
+  expect((await screen.findAllByText("已保存的记忆")).length).toBeGreaterThan(
+    0,
+  );
+  expect(await screen.findByText("正在整合记忆…")).toBeTruthy();
+  const readsBeforeCompletion = reads.sdkLibrary.mock.calls.length;
+
+  act(() => {
+    queryClient.setQueryData(["evolve", "local"], {
+      mode: "ultra",
+      schedule: { enabled: true, time: "03:00" },
+      users: {},
+      running: [],
+    });
+  });
+
+  await waitFor(() =>
+    expect(reads.sdkLibrary.mock.calls.length).toBeGreaterThan(
+      readsBeforeCompletion,
+    ),
+  );
+});
+
+it("keeps the last successful graph when its Evolve refresh fails", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("ultra"));
+  reads.evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [{ run_id: "run-1", user_id: "local", state: "running" }],
+  });
+  const firstSource = {
+    source_id: "cursor",
+    display_name: "Cursor",
+    authorized: true,
+    sync_enabled: true,
+    imported_messages: 1,
+    imported_conversations: 1,
+  } as SourceResponse;
+  const view = render(<MemorySpace simplified sources={[firstSource]} />);
+
+  await waitFor(() =>
+    expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("1"),
+  );
+  reads.sdkGraph.mockRejectedValueOnce(new Error("evolve write lock"));
+
+  view.rerender(
+    <MemorySpace
+      simplified
+      sources={[
+        firstSource,
+        {
+          ...firstSource,
+          source_id: "codex",
+          display_name: "Codex",
+        },
+      ]}
+    />,
+  );
+
+  await waitFor(() => expect(reads.sdkGraph).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("1");
+});
+
 function setup() {
+  reads.evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  });
   const memories = [
     {
       memory_id: "m1",

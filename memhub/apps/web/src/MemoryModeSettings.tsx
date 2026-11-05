@@ -1,6 +1,4 @@
 import type {
-  EvolveOverview,
-  EvolveRunReceipt,
   EvolveSchedule,
   MemoryModeChange,
   MemoryModePlan,
@@ -11,7 +9,6 @@ import { legacyMemoryModePlan } from "@one-memory/operations";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   apiErrorCode,
-  getEvolveOverview,
   getEvolveSchedule,
   getMemoryMode,
   getMemoryProcessing,
@@ -25,6 +22,7 @@ import {
   commitConfirmedMemoryMode,
   issueConfirmedModeTicket,
 } from "./confirmed-memory-mode";
+import { commitEvolveRun, useEvolveState } from "./evolve-state";
 import { MemoryModeCards } from "./MemoryModeCards";
 import { BLOCKER_COPY, MemoryModeConfirmDialog } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
@@ -47,7 +45,11 @@ export function MemoryModeSettings({
   const id = useId();
   const [state, setState] = useState<MemoryModeState | null>(null);
   const [schedule, setScheduleState] = useState<EvolveSchedule | null>(null);
-  const [overview, setOverview] = useState<EvolveOverview | null>(null);
+  const evolveState = useEvolveState();
+  const overview = evolveState.data ?? null;
+  const run =
+    overview?.running.find((candidate) => candidate.user_id === "local") ??
+    null;
   const [pendingMode, setPendingMode] = useState<MemoryPipelineMode | null>(
     null,
   );
@@ -56,7 +58,6 @@ export function MemoryModeSettings({
   const [maintenance, setMaintenance] = useState(false);
   const [error, setError] = useState("");
   const [readFailed, setReadFailed] = useState(false);
-  const [run, setRun] = useState<EvolveRunReceipt | null>(null);
   const refreshVersion = useRef(0);
   const dialogOpener = useRef<HTMLElement | null>(null);
   const focusEvolveWhenReady = useRef(false);
@@ -83,11 +84,10 @@ export function MemoryModeSettings({
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
     const modeTicket = issueConfirmedModeTicket("settings");
-    const [modeResult, scheduleResult, overviewResult, processingResult] =
+    const [modeResult, scheduleResult, processingResult] =
       await Promise.allSettled([
         getMemoryMode(),
         getEvolveSchedule(),
-        getEvolveOverview(),
         getMemoryProcessing(),
       ]);
     if (version !== refreshVersion.current) return;
@@ -103,10 +103,6 @@ export function MemoryModeSettings({
     }
     if (scheduleResult.status === "fulfilled")
       setScheduleState(scheduleResult.value);
-    if (overviewResult.status === "fulfilled") {
-      setOverview(overviewResult.value);
-      setRun(overviewResult.value.running[0] ?? null);
-    }
     if (processingResult.status === "fulfilled")
       setMaintenance(Boolean(processingResult.value.embedding_switch));
   }, [onModeChange]);
@@ -116,14 +112,11 @@ export function MemoryModeSettings({
   }, [refresh]);
 
   useEffect(() => {
-    const running =
-      maintenance ||
-      state?.graph_build.state === "running" ||
-      run?.state === "running";
+    const running = maintenance || state?.graph_build.state === "running";
     if (!running) return;
     const timer = window.setInterval(() => void refresh(), 1500);
     return () => window.clearInterval(timer);
-  }, [maintenance, refresh, run?.state, state?.graph_build.state]);
+  }, [maintenance, refresh, state?.graph_build.state]);
 
   const lifecycleBusy =
     maintenance ||
@@ -202,13 +195,21 @@ export function MemoryModeSettings({
   }
 
   async function evolveNow() {
+    if (!state || !schedule) return;
     refreshVersion.current++;
     setBusy(true);
     setError("");
     try {
       const receipt = await startEvolve();
-      setRun(receipt);
-      await refresh();
+      commitEvolveRun(
+        receipt,
+        overview ?? {
+          mode: state.mode,
+          schedule,
+          users: {},
+          running: [],
+        },
+      );
     } catch (reason) {
       const code = apiErrorCode(reason);
       setError(
