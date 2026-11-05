@@ -1,6 +1,8 @@
 """Write visible hook text into Evidence. Tool output stays out."""
 
 import json
+import tempfile
+import stat
 import os
 import time
 from datetime import UTC, datetime
@@ -218,6 +220,30 @@ def capture_rejection(database: Path, source_id: str) -> CaptureRejection | None
     return None
 
 
+def _publish(path: Path, content: str) -> None:
+    """Write *content* to *path* without ever leaving it truncated.
+
+    The record is read by support as-is, so a half-written file is worse than
+    no file: ``json.loads`` then fails on every later call.  Stage the content
+    in a sibling file and swap it in with ``Path.replace``, keeping the
+    original mode.
+    """
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = None
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf8") as handle:
+            handle.write(content)
+        if mode is not None:
+            os.chmod(staging, mode)
+        Path(staging).replace(path)
+    except BaseException:
+        Path(staging).unlink(missing_ok=True)
+        raise
+
+
 def record_capture_rejection(
     database: Path,
     source_id: str,
@@ -242,15 +268,22 @@ def record_capture_rejection(
         marker = directory / f"capture-rejection-{source_id}-{reason.value}.json"
         now = time.time()
         payload: dict[str, object] = {"source_id": source_id, "reason": reason.value}
+        started_at = datetime.fromtimestamp(now, UTC).isoformat()
         if marker.exists() and now - marker.stat().st_mtime < window_seconds:
-            payload = json.loads(marker.read_text(encoding="utf8"))
+            try:
+                payload = json.loads(marker.read_text(encoding="utf8"))
+            except (OSError, ValueError):
+                # A truncated or hand-edited marker must not disable the sink
+                # for the rest of the process: start the window again.
+                payload = {"source_id": source_id, "reason": reason.value, "count": 0}
             previous = payload.get("count", 1)
             payload["count"] = int(previous) + 1 if isinstance(previous, (str, int, float)) else 2
+            payload.setdefault("window_started_at", started_at)
         else:
             payload["count"] = 1
-            payload["window_started_at"] = datetime.fromtimestamp(now, UTC).isoformat()
-            payload["last_at"] = payload["window_started_at"]
-        marker.write_text(json.dumps(payload, sort_keys=True), encoding="utf8")
+            payload["window_started_at"] = started_at
+        payload["last_at"] = started_at
+        _publish(marker, json.dumps(payload, sort_keys=True))
     except Exception:
         return
 
