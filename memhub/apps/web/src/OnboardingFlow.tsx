@@ -1294,7 +1294,6 @@ export function OnboardingFlow({
                   }))}
                   selected={modeChoice}
                   disabled={modeSaving || completionBusy || modePlanBusy}
-                  recommended={{ mode: "pro", badge: text("推荐") }}
                   onChange={(mode, control) =>
                     void requestModeSelection(
                       mode as OnboardingMemoryMode,

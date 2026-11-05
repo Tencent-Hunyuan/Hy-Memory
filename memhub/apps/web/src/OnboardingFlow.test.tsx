@@ -334,7 +334,7 @@ describe("OnboardingFlow S1.3", () => {
 
   it("D41 opens source choice with metadata discovery but no content or authorization requests", async () => {
     const controller = imports();
-    const view = render(
+    render(
       <OnboardingFlow
         state={onboarding}
         imports={controller}
@@ -951,9 +951,7 @@ describe("OnboardingFlow S1.3", () => {
     expect(screen.queryByText("之后可在设置中更改。")).toBeNull();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect(screen.getByRole("radio", { name: /ultra/i })).toBeTruthy();
-    expect(screen.getByText("推荐").closest("label")?.textContent).toContain(
-      "pro",
-    );
+    expect(screen.queryByText("推荐")).toBeNull();
     const modeStep = screen
       .getByRole("navigation", { name: "首次设置进度" })
       .querySelector('[aria-current="step"]');
