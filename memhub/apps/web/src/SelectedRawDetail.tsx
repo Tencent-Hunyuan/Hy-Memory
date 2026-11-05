@@ -14,6 +14,7 @@ function authorLabel(role: string, t: ReturnType<typeof useGuiLanguage>["t"]) {
   if (role === "user") return t("selectedMemory.author.user");
   if (role === "assistant" || role === "agent")
     return t("selectedMemory.author.agent");
+  if (role === "tool") return t("selectedMemory.author.tool");
   return t("selectedMemory.author.unknown");
 }
 
@@ -46,8 +47,7 @@ export function SelectedRawDetail({
           record.source || t("selectedMemory.sourceUnknown"),
         );
   return (
-    <article className="map-dialogue-reading">
-      <p className="selected-memory-status">{t("memory:原始对话")}</p>
+    <article className="map-dialogue-reading" aria-label={t("memory:原始对话")}>
       <ul className="map-transcript">
         {messages.map((message) => (
           <li key={`${rawRecordId(record)}:${message.role}:${message.content}`}>

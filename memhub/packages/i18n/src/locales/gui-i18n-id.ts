@@ -81,6 +81,8 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Percakapan asli terbaru",
   "sdk.raw.empty":
     "Belum ada percakapan asli. Hubungkan sumber agar percakapan tampil di sini.",
+  "sdk.raw.total": "{count} percakapan asli",
+  "sdk.raw.total.one": "{count} percakapan asli",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "Memori dasar aktif. Percakapan baru disimpan sebagai catatan asli dan tidak membuat memori lanjutan. Memori lanjutan yang ada tetap tersimpan, tetapi tidak ditampilkan atau digunakan untuk recall.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -151,6 +153,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Simpan perubahan",
   "selectedMemory.author.user": "Anda",
   "selectedMemory.author.agent": "Asisten",
+  "selectedMemory.author.tool": "Alat",
   "selectedMemory.sourceUnavailable":
     "Izin sumber berubah atau teks asli tidak tersedia.",
   "selectedMemory.related": "Memori terkait",

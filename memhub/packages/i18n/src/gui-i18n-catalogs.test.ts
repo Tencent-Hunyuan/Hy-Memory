@@ -229,6 +229,12 @@ describe("English catalog", () => {
   });
 
   it("uses CLDR English singular and plural forms", () => {
+    expect(translateCount("en", "sdk.raw.total", 1, { count: 1 })).toBe(
+      "1 original conversation",
+    );
+    expect(translateCount("en", "sdk.raw.total", 2, { count: 2 })).toBe(
+      "2 original conversations",
+    );
     expect(
       translateCount("en", "calls.headline.found", 1, {
         host: "Cursor",

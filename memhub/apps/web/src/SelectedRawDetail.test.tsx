@@ -29,6 +29,8 @@ it("shows every role and preserves a long original message in the detail pane", 
           messages: [
             { role: "user", content: long },
             { role: "assistant", content: "已收到" },
+            { role: "tool", content: "3 tests passed" },
+            { role: "unknown", content: "来源角色缺失" },
           ],
         }}
         sources={[]}
@@ -38,6 +40,10 @@ it("shows every role and preserves a long original message in the detail pane", 
 
   expect(screen.getByText("你")).toBeTruthy();
   expect(screen.getByText("助手")).toBeTruthy();
+  expect(screen.getByText("工具")).toBeTruthy();
+  expect(screen.getByText("作者待核对")).toBeTruthy();
   expect(screen.getByText(long)).toHaveProperty("textContent", long);
   expect(screen.getByText("已收到")).toBeTruthy();
+  expect(screen.queryByText("原始对话")).toBeNull();
+  expect(screen.getByRole("article", { name: "原始对话" })).toBeTruthy();
 });
