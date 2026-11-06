@@ -9,7 +9,6 @@ import type {
   MemoryLibraryPage,
   MemoryProcessingSummary,
   SdkAskMemory,
-  SdkRawGraphItem,
   SourceResponse,
 } from "@one-memory/contracts";
 import { isMessageKey } from "@one-memory/i18n";
@@ -201,11 +200,6 @@ export function MemorySpace({
     status: "ready" | "failed";
     value: MemoryGraphResponse | null;
   } | null>(null);
-  const [sdkGraphProgress, setSdkGraphProgress] = useState<{
-    scope: string;
-    loaded: number;
-    total: number | null;
-  } | null>(null);
   // Bumping this re-reads the page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
   const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
@@ -269,16 +263,11 @@ export function MemorySpace({
   ]);
   const sdkGraphSettled = sdkGraph?.scope === sdkGraphRequestedScope;
   const visibleSdkGraph =
-    sdkGraph?.scope === sdkGraphRequestedScope &&
-    (sdkGraph.status === "ready" || evolveRunning)
-      ? sdkGraph.value
-      : null;
+    sdkGraph?.scope === sdkGraphRequestedScope ? sdkGraph.value : null;
   const sdkGraphFailed =
-    sdkGraph?.scope === sdkGraphRequestedScope && sdkGraph.status === "failed";
-  const visibleGraphProgress =
-    sdkGraphProgress?.scope === sdkGraphRequestedScope
-      ? sdkGraphProgress
-      : null;
+    sdkGraph?.scope === sdkGraphRequestedScope &&
+    sdkGraph.status === "failed" &&
+    sdkGraph.value === null;
   // A keyword search pages through one server-side result window. The id is
   // kept for the query and source it was searched with; a new query or
   // source starts without one, so the server searches afresh.
@@ -456,8 +445,6 @@ export function MemorySpace({
     const request = new AbortController();
     let cancelled = false;
     let reading = false;
-    rawGraphRecords.current.clear();
-    setSdkGraphProgress({ scope, loaded: 0, total: null });
     const readGraph = async () => {
       if (reading) return;
       reading = true;
@@ -469,58 +456,25 @@ export function MemorySpace({
           );
           if (cancelled) return;
           setSdkGraph({ scope, status: "ready", value });
-          setSdkGraphProgress({
-            scope,
-            loaded: value.projected_memories,
-            total: value.total_memories,
-          });
           return;
         }
-
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const items: SdkRawGraphItem[] = [];
-          let offset = 0;
-          let total = 0;
-          let snapshotId: string | undefined;
-          rawGraphRecords.current.clear();
-          try {
-            while (!cancelled) {
-              const page = await getSdkRawGraph({
-                source,
-                offset,
-                limit: 500,
-                snapshotId,
-                signal: request.signal,
-              });
-              if (cancelled) return;
-              snapshotId = page.snapshot_id;
-              total = page.total;
-              items.push(...page.items);
-              for (const item of page.items) {
-                const record = rawGraphRecord(item);
-                rawGraphRecords.current.set(rawRecordId(record), record);
-              }
-              setSdkGraphProgress({ scope, loaded: items.length, total });
-              if (!page.has_more || page.items.length === 0) break;
-              offset += page.items.length;
-              await new Promise<void>((resolve) => setTimeout(resolve, 0));
-            }
-          } catch (reason) {
-            if (
-              attempt === 0 &&
-              apiErrorCode(reason) === "raw_graph_snapshot_stale"
-            )
-              continue;
-            throw reason;
-          }
-          if (cancelled) return;
-          setSdkGraph({
-            scope,
-            status: "ready",
-            value: rawGraphProjection(items, total, sourcesRef.current),
-          });
-          break;
+        const page = await getSdkRawGraph({
+          source,
+          offset: 0,
+          limit: 300,
+          signal: request.signal,
+        });
+        if (cancelled) return;
+        rawGraphRecords.current.clear();
+        for (const item of page.items) {
+          const record = rawGraphRecord(item);
+          rawGraphRecords.current.set(rawRecordId(record), record);
         }
+        setSdkGraph({
+          scope,
+          status: "ready",
+          value: rawGraphProjection(page.items, page.total, sourcesRef.current),
+        });
       } catch {
         if (cancelled || request.signal.aborted) return;
         setSdkGraph((current) => ({
@@ -547,17 +501,7 @@ export function MemorySpace({
     sdkMapVisible,
     sourceKey,
   ]);
-  const displayedSdkPage =
-    lite &&
-    !sdkLibraryQuery.trim() &&
-    sdkPage &&
-    visibleGraphProgress?.total != null
-      ? {
-          ...sdkPage,
-          total: visibleGraphProgress.total,
-          total_exact: true,
-        }
-      : sdkPage;
+  const displayedSdkPage = sdkPage;
   const sdkFilterLabel = [
     sdkLibrary.settledSource
       ? `${t("memory:来源")} ${
@@ -1397,8 +1341,6 @@ export function MemorySpace({
                 failed: sdkLibrary.failed && !evolveRunning,
                 graphLoading: !sdkGraphSettled,
                 graphFailed: sdkGraphFailed && !evolveRunning,
-                graphLoaded: visibleGraphProgress?.loaded,
-                graphTotal: visibleGraphProgress?.total ?? undefined,
                 stale: false,
                 settledSource: sdkLibrary.settledSource,
                 settledQuery: sdkLibrary.settledQuery,
