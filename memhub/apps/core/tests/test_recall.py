@@ -414,3 +414,139 @@ def test_recall_async_keeps_lexical_hits_when_semantic_times_out(tmp_path) -> No
     ids = [hit.memory_id for hit in result.hits]
     assert ids == [weak.memory_id]
     assert strong.memory_id not in ids
+
+
+def test_sdk_recall_uses_requested_budget_for_primary_search() -> None:
+    async def search(_query):
+        await asyncio.sleep(0.65)
+        return (SemanticMemoryHit(memory_id="found", score=0.9),)
+
+    async def get_memory(memory_id):
+        return HySdkMemoryRecord(
+            memory_id=memory_id,
+            content="grounded",
+            layer="l2_fact",
+            status="active",
+            is_latest=True,
+            user_id="local",
+            agent_id="one-memory",
+            gmt_created=1_700_000_000,
+        )
+
+    receipt = asyncio.run(
+        SdkRecallTarget(semantic_search=search, get_memory=get_memory).recall_async(
+            RecallRequest(query="slow result", timeout_ms=1500)
+        )
+    )
+    assert receipt.state is RecallState.GROUNDED
+    assert [hit.memory_id for hit in receipt.hits] == ["found"]
+
+
+def test_sdk_recall_timeout_remains_bounded_and_reports_partial() -> None:
+    async def exercise():
+        cancelled = asyncio.Event()
+
+        async def search(_query):
+            try:
+                await asyncio.sleep(3)
+            finally:
+                cancelled.set()
+            return ()
+
+        async def get_memory(_memory_id):
+            raise AssertionError("no memory is resolved when search times out")
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        receipt = await SdkRecallTarget(semantic_search=search, get_memory=get_memory).recall_async(
+            RecallRequest(query="slow result", timeout_ms=300)
+        )
+        elapsed = loop.time() - started
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        assert elapsed < 0.8
+        assert receipt.state is RecallState.EMPTY
+        assert receipt.truncated_by == "timeout_budget"
+
+    asyncio.run(exercise())
+
+
+def test_sdk_recall_search_and_memory_reads_share_deadline() -> None:
+    async def exercise():
+        async def search(_query):
+            await asyncio.sleep(0.18)
+            return (SemanticMemoryHit(memory_id="found", score=0.9),)
+
+        async def get_memory(_memory_id):
+            await asyncio.sleep(1)
+            raise AssertionError("slow memory read must be cancelled")
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        receipt = await SdkRecallTarget(semantic_search=search, get_memory=get_memory).recall_async(
+            RecallRequest(query="slow read", timeout_ms=400)
+        )
+        assert loop.time() - started < 0.8
+        assert receipt.state is RecallState.EMPTY
+        assert receipt.truncated_by == "timeout_budget"
+        assert receipt.unexamined_count == 1
+
+    asyncio.run(exercise())
+
+
+def test_sdk_recall_caller_cancellation_propagates() -> None:
+    async def exercise():
+        started, stopped = asyncio.Event(), asyncio.Event()
+
+        async def search(_query):
+            started.set()
+            try:
+                await asyncio.sleep(3)
+            finally:
+                stopped.set()
+            return ()
+
+        async def get_memory(_memory_id):
+            raise AssertionError("search did not return")
+
+        task = asyncio.create_task(
+            SdkRecallTarget(semantic_search=search, get_memory=get_memory).recall_async(
+                RecallRequest(query="cancel", timeout_ms=3000)
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(stopped.wait(), timeout=1)
+
+    asyncio.run(exercise())
+
+
+def test_sdk_recall_concurrent_requests_keep_independent_deadlines() -> None:
+    async def exercise():
+        async def search(_query):
+            await asyncio.sleep(0.65)
+            return (SemanticMemoryHit(memory_id="found", score=0.9),)
+
+        async def get_memory(memory_id):
+            return HySdkMemoryRecord(
+                memory_id=memory_id,
+                content="grounded",
+                layer="l2_fact",
+                status="active",
+                is_latest=True,
+                user_id="local",
+                agent_id="one-memory",
+                gmt_created=1_700_000_000,
+            )
+
+        target = SdkRecallTarget(semantic_search=search, get_memory=get_memory)
+        short, long = await asyncio.gather(
+            target.recall_async(RecallRequest(query="short", timeout_ms=300)),
+            target.recall_async(RecallRequest(query="long", timeout_ms=1500)),
+        )
+        assert short.state is RecallState.EMPTY and short.truncated_by == "timeout_budget"
+        assert long.state is RecallState.GROUNDED
+        assert [hit.memory_id for hit in long.hits] == ["found"]
+
+    asyncio.run(exercise())
