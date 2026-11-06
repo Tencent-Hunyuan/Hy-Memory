@@ -222,3 +222,70 @@ class TestSingleLineAndJsonFormat:
         monkeypatch.delenv("MEMORY_LOG_FORMAT", raising=False)
         fmt = log_setup._make_formatter()
         assert isinstance(fmt, log_setup.SingleLineFormatter)
+
+
+class TestLogStreamOptIn:
+    """MEMORY_LOG_STREAM=stderr：DEBUG/INFO 并入 stderr，stdout 保持纯净。
+
+    stdio 传输宿主（如 MCP server over stdio）要求 stdout 只承载协议帧；
+    默认行为（双流分离）必须保持不变。
+    """
+
+    def _redirect(self, monkeypatch):
+        out_buf = io.StringIO()
+        err_buf = io.StringIO()
+        monkeypatch.setattr(sys, "stdout", out_buf)
+        monkeypatch.setattr(sys, "stderr", err_buf)
+        return out_buf, err_buf
+
+    def _emit_and_flush(self):
+        log = logging.getLogger("hy_memory.test_optin")
+        log.info("OPTIN_INFO_TOKEN")
+        log.warning("OPTIN_WARN_TOKEN")
+        for h in logging.getLogger("hy_memory").handlers:
+            h.flush()
+
+    def test_stderr_mode_keeps_stdout_clean(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_STREAM", "stderr")
+        out_buf, err_buf = self._redirect(monkeypatch)
+        log_setup.setup_logging(level=logging.DEBUG)
+        self._emit_and_flush()
+        assert out_buf.getvalue() == ""
+        assert "OPTIN_INFO_TOKEN" in err_buf.getvalue()
+        assert "OPTIN_WARN_TOKEN" in err_buf.getvalue()
+
+    def test_stderr_mode_no_console_handler_targets_stdout(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_STREAM", "stderr")
+        log_setup.setup_logging(level=logging.DEBUG)
+        hy_logger = logging.getLogger("hy_memory")
+        stream_handlers = [
+            h for h in hy_logger.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+        ]
+        assert stream_handlers, "expected console stream handlers"
+        assert all(h.stream is not sys.stdout for h in stream_handlers)
+
+    def test_default_unchanged_info_still_on_stdout(self, monkeypatch):
+        monkeypatch.delenv("MEMORY_LOG_STREAM", raising=False)
+        out_buf, err_buf = self._redirect(monkeypatch)
+        log_setup.setup_logging(level=logging.DEBUG)
+        self._emit_and_flush()
+        assert "OPTIN_INFO_TOKEN" in out_buf.getvalue()
+        assert "OPTIN_INFO_TOKEN" not in err_buf.getvalue()
+
+    def test_explicit_stdout_value_behaves_like_default(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_STREAM", "stdout")
+        out_buf, err_buf = self._redirect(monkeypatch)
+        log_setup.setup_logging(level=logging.DEBUG)
+        self._emit_and_flush()
+        assert "OPTIN_INFO_TOKEN" in out_buf.getvalue()
+        assert "OPTIN_INFO_TOKEN" not in err_buf.getvalue()
+
+    def test_invalid_value_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_LOG_STREAM", "not-a-stream")
+        out_buf, err_buf = self._redirect(monkeypatch)
+        log_setup.setup_logging(level=logging.DEBUG)
+        self._emit_and_flush()
+        assert "OPTIN_INFO_TOKEN" in out_buf.getvalue()
+        assert "OPTIN_INFO_TOKEN" not in err_buf.getvalue()

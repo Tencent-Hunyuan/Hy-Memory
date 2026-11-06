@@ -211,6 +211,7 @@ client = HyMemoryClient.from_config({
 |---|---|---|
 | `MEMORY_LOG_LEVEL` | `INFO` | 运行日志级别 |
 | `MEMORY_LOG_FORMAT` | `text` | `text` / `json` |
+| `MEMORY_LOG_STREAM` | `stdout` | 控制台 DEBUG/INFO 日志的输出流：`stdout`（默认，双流分离）/ `stderr`（stdio 传输宿主设置，避免 SDK 日志破坏 stdout 上的协议帧）|
 | `MEMORY_LOG_DIR` | — | 统一日志根目录 |
 | `MEMORY_TRACE_LOG_DIR` | — | JSONL 日志目录的兼容旧名；优先使用 `MEMORY_LOG_DIR` |
 | `MEMORY_PIPELINE_LOG_ENABLED` | `true` | 是否写 pipeline JSONL 日志（`{MEMORY_LOG_DIR}/<subdir>/<date>.log`）；`false` 完全不写 |
