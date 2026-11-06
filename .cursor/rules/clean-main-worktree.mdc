@@ -1,0 +1,35 @@
+---
+description: Require every coding task and PR to use an isolated worktree based on current main
+alwaysApply: true
+---
+
+# Clean Main Worktree Workflow
+
+For every task that may edit code:
+
+1. Before editing, run `git fetch origin main`; if it fails, stop rather than use a stale ref.
+2. Never develop in a dirty, detached, or stale primary workspace.
+3. Record `BASE_SHA=$(git rev-parse origin/main)`, then create the task branch and isolated worktree from that exact SHA.
+4. Verify the worktree is clean and its initial `HEAD` equals `BASE_SHA`.
+5. Keep one task per branch/worktree and include only files required by that task.
+6. Never delete, prune, force-remove, or reuse another task's worktree to resolve a path, branch, or registration collision.
+
+Before pushing or opening/updating a PR:
+
+1. Apply intended formatting/fixes, then commit only the current task.
+2. Fetch `origin/main` again; if it fails, stop.
+3. If main advanced, integrate it before delivery. Rebase is allowed only for an unpublished branch used by this task alone; never rewrite shared history without approval. Otherwise merge main or ask.
+4. Re-review files changed by both sides; a conflict-free integration is not proof of semantic compatibility.
+5. Run only checks that are necessary and proportionate to the changed files and risk. Prefer focused tests. Do not run repository-wide tests, type checks, or builds by default.
+6. Do not let optional, slow, or stalled local checks block opening or updating a PR. Stop them when appropriate, report exactly what ran, passed, failed, or was not run, and rely on required CI before merge.
+7. If any check changes files, inspect and commit them, then repeat the relevant checks.
+8. Require a clean worktree after checks so the tested tree equals the pushed `HEAD`.
+
+Before merge:
+
+1. Fetch `origin/main` again; if it fails, stop.
+2. Record the fetched base SHA and PR head SHA. Required CI must validate the merge result produced from those exact revisions.
+3. Confirm the PR targets `main`, contains only intended files, and has no failing or pending required CI.
+4. If either SHA changes, repeat overlap review and validation before merge.
+
+Never discard or clean an existing dirty workspace without explicit user approval.
