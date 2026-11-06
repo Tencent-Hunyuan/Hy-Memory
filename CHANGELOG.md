@@ -105,7 +105,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.6 — 2026-11-04
 
-Build 43, on `hy-memory==2.0.14`. Linux x64/arm64 Runtime and macOS arm64
+Build 44, on `hy-memory==2.0.14`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - MemHub App now exposes the complete memory-mode lifecycle. New installs

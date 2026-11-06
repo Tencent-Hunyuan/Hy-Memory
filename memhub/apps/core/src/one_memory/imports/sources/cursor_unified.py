@@ -176,9 +176,9 @@ class CursorUnifiedSourceAdapter:
         self.grant = grant
         self.source_version = source_version
         self._history_listing_cache: _CursorListing | None = None
-        self._probe_listing_cache: tuple[
-            dict[str, SourceCursor], int | None, _CursorListing
-        ] | None = None
+        self._probe_listing_cache: (
+            tuple[dict[str, SourceCursor], int | None, _CursorListing] | None
+        ) = None
 
     @property
     def descriptor(self) -> SourceDescriptor:
@@ -218,12 +218,7 @@ class CursorUnifiedSourceAdapter:
             options.max_scan_targets,
             listing,
         )
-        return bool(
-            listing.transcripts
-            or listing.stores
-            or listing.legacy
-            or listing.failures
-        )
+        return bool(listing.transcripts or listing.stores or listing.legacy or listing.failures)
 
     async def live_baseline(self) -> dict[str, SourceCursor]:
         """Capture Cursor's current tail so the realtime lane never backfills history."""

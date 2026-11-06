@@ -33,6 +33,17 @@
   font-size: 13px;
   color: #637786;
 }
+.r6-memory .memory-evolve-status {
+  width: fit-content;
+  margin: -12px 0 20px;
+  padding: 5px 9px;
+  border: 1px solid #cbd8e0;
+  border-radius: 999px;
+  background: #edf3f6;
+  color: #4f6574;
+  font-size: 12px;
+  line-height: 20px;
+}
 .r6-memory .memory-pending-add {
   display: flex;
   align-items: center;

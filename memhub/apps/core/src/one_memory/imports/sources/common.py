@@ -226,9 +226,9 @@ class JsonlSourceAdapter:
         self.header_gate = header_gate
         self._header_cache: dict[str, tuple[str, dict[str, JsonValue] | None]] = {}
         self._history_listing_cache: SourceListing | None = None
-        self._probe_listing_cache: tuple[
-            dict[str, SourceCursor], int | None, SourceListing
-        ] | None = None
+        self._probe_listing_cache: (
+            tuple[dict[str, SourceCursor], int | None, SourceListing] | None
+        ) = None
 
     @property
     def descriptor(self) -> SourceDescriptor:

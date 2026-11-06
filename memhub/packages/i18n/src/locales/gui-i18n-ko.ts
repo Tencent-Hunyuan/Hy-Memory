@@ -1210,6 +1210,9 @@ export const koreanMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "반복은 줄이고, 이해는 깊게.",
   onboardingMoreApps: "스크롤하여 더 보기 · 앱 {count}개 남음",
   "onboardingMoreApps.one": "스크롤하여 더 보기 · 앱 {count}개 남음",
+  onboardingMoreImportApps: "가로로 스크롤 · 앱 {count}개 남음",
+  onboardingImportChecking:
+    "가져오기 결과를 확인하는 중이며 선택 항목은 유지됩니다",
   onboardingAllApps: "앱 {count}개 모두 표시됨",
   默认位置: "기본 위치",
   自定义位置: "사용자 지정 위치",

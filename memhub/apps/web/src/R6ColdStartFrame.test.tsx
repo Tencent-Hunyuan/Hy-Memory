@@ -82,7 +82,7 @@ it("does not reserve an empty eyebrow row", () => {
   expect(screen.queryByText("你的记忆，从这里接上")).toBeNull();
 });
 
-it("keeps progress cards content-sized and the step-two footer in normal flow", () => {
+it("keeps the v1.0.4 step-two split layout and progress geometry", () => {
   const card = declaration(
     "r6-import-progress.css",
     ".r6-import-progress-card",
@@ -94,13 +94,12 @@ it("keeps progress cards content-sized and the step-two footer in normal flow", 
       "first-import-r6.css",
       ".first-import-r6-main > .r6-import-progress",
     ),
-  ).toMatch(/flex:\s*0 0 auto/);
-  expect(declaration("first-import-r6.css", ".first-import-r6-layout")).toMatch(
-    /height:\s*100%/,
+  ).toMatch(/flex:\s*0 0 218px/);
+  const layout = declaration("first-import-r6.css", ".first-import-r6-layout");
+  expect(layout).toMatch(
+    /grid-template-columns:\s*minmax\(0,\s*738px\)\s+278px/,
   );
-  expect(
-    declaration("first-import-r6.css", ".first-import-r6-feedback"),
-  ).not.toMatch(/max-height|overflow/);
+  expect(layout).toMatch(/height:\s*560\.2px/);
   expect(declaration("onboarding-r6.css", ".onboarding-r6-body")).toMatch(
     /overflow-y:\s*auto/,
   );

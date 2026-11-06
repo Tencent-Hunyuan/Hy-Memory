@@ -83,6 +83,10 @@ export const onboardingSpanishMessages = {
   onboardingMoreApps: "Desplázate para ver más · Quedan {count} aplicaciones",
   "onboardingMoreApps.one":
     "Desplázate para ver más · Queda {count} aplicación",
+  onboardingMoreImportApps:
+    "Desplázate horizontalmente · Quedan {count} aplicaciones",
+  onboardingImportChecking:
+    "Comprobando el resultado de la importación; tu selección se conserva",
   onboardingAllApps: "Se muestran las {count} aplicaciones",
   默认位置: "Ubicación predeterminada",
   自定义位置: "Ubicación personalizada",
@@ -393,6 +397,8 @@ export const onboardingChineseMessages = {
   onboardingImportHistory: "导入 {name} 历史",
   onboardingMoreApps: "向下查看更多 · 还有 {count} 个应用",
   "onboardingMoreApps.one": "向下查看更多 · 还有 {count} 个应用",
+  onboardingMoreImportApps: "横向滑动查看更多 · 还有 {count} 个应用",
+  onboardingImportChecking: "正在核对导入结果，已保存的选择不会丢失",
   onboardingAllApps: "已显示全部 {count} 个应用",
   onboardingImportRefused: "尚未获准导入（{reason}）。请核对来源后重试。",
   onboardingConfirmHistory: "确认这是 {name} 的历史位置",

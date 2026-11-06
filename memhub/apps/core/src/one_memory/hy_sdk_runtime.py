@@ -376,8 +376,9 @@ def apply_sdk_language(config: MemoryConfig, language: str | None) -> MemoryConf
     """Set the SDK prompt language (`MemoryConfig.language`), when there is one.
 
     None (no language set) sets nothing: the SDK detects zh/en as it always
-    did. Every display language, zh-Hans included, is set explicitly. Like a feature, the language never touches `vector_store`, so
-    the collection identity never depends on it.
+    did. Every display language, zh-Hans included, is set explicitly. Like a
+    feature, the language never touches `vector_store`, so the collection
+    identity never depends on it.
     """
     if language is not None:
         config.language = language

@@ -197,6 +197,82 @@ def test_connection_retry_reuses_completed_job_and_checks_root_snapshot(tmp_path
     asyncio.run(scenario())
 
 
+def test_connection_returns_committed_receipt_before_live_activation_finishes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("one_memory.model_presets._preset_data", lambda: None)
+
+    async def scenario():
+        home = tmp_path / "home"
+        root = home / ".claude/projects"
+        root.mkdir(parents=True)
+        app = create_app(
+            Settings(
+                data_dir=tmp_path / "data",
+                source_home=home,
+                api_token=SecretStr("test"),
+                automatic_memory_processing=False,
+                live_sync_enabled=False,
+            ),
+            source_catalog=build_source_catalog(home=home, environment={}),
+        )
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer test"},
+            ) as client,
+        ):
+            found = await client.post("/api/v1/sources/claude-code/location")
+            started = asyncio.Event()
+            release = asyncio.Event()
+            original = app.state.live_sync_supervisor.initialize_source
+
+            async def blocked_initialize(source_id, *, baseline_missing_files):
+                started.set()
+                await release.wait()
+                return await original(
+                    source_id,
+                    baseline_missing_files=baseline_missing_files,
+                )
+
+            monkeypatch.setattr(
+                app.state.live_sync_supervisor,
+                "initialize_source",
+                blocked_initialize,
+            )
+            try:
+                response = await asyncio.wait_for(
+                    client.post(
+                        "/api/v1/sources/connect",
+                        json={
+                            "source_ids": ["claude-code"],
+                            "request_id": "fast-receipt",
+                            "source_roots": {
+                                "claude-code": found.json()["root_id"],
+                            },
+                            "onboarding": True,
+                            "full_rescan": True,
+                            "enable_sync": True,
+                        },
+                    ),
+                    timeout=1,
+                )
+                assert response.status_code == 200
+                assert response.json()["request_id"] == "fast-receipt"
+                assert app.state.config_store.sync_enabled("claude-code")
+                await asyncio.wait_for(started.wait(), timeout=1)
+                assert not release.is_set()
+            finally:
+                release.set()
+            tasks = tuple(app.state.source_activation_tasks.values())
+            if tasks:
+                await asyncio.gather(*tasks)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("turn_count", "age_days", "limited"),
     [

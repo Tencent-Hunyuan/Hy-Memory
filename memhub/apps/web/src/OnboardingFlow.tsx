@@ -41,6 +41,7 @@ import {
   defaultHostSourceIds,
   FirstImportReview,
   type ImportConnectionDraft,
+  type ImportSubmissionState,
 } from "./FirstImportReview";
 import {
   enableHostConnection,
@@ -111,7 +112,7 @@ export function OnboardingFlow({
   imports: ImportSourcesController;
   onFinish(destination: OnboardingDestination): void;
 }) {
-  const { text, t, locale } = useOnboardingTranslation();
+  const { text, t } = useOnboardingTranslation();
   const [sources, setSources] = useState(imports.sources);
   const sourceGeneration = useRef({ value: imports.sources, epoch: 0 });
   if (sourceGeneration.current.value !== imports.sources) {
@@ -134,6 +135,8 @@ export function OnboardingFlow({
   const [startingImport, setStartingImport] = useState<SourceResponse[] | null>(
     null,
   );
+  const [importSubmissionState, setImportSubmissionState] =
+    useState<ImportSubmissionState>("confirmed");
   const resumedStep =
     state.mode_intent &&
     state.mode_intent !== "lite" &&
@@ -162,6 +165,7 @@ export function OnboardingFlow({
   });
   const [scheduleLoaded, setScheduleLoaded] = useState(false);
   const [scheduleReadFailed, setScheduleReadFailed] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const scheduleReadOperation = useRef(0);
   const [modeFocusToken, setModeFocusToken] = useState(
     resumedStep === "mode" ? 1 : 0,
@@ -427,7 +431,7 @@ export function OnboardingFlow({
   const refreshUltraSchedule = useCallback(async () => {
     const operation = ++scheduleReadOperation.current;
     setScheduleLoaded(false);
-    setScheduleReadFailed(false);
+    setScheduleLoading(true);
     try {
       const schedule = await getEvolveSchedule();
       if (!alive.current || scheduleReadOperation.current !== operation) return;
@@ -443,6 +447,9 @@ export function OnboardingFlow({
         setScheduleLoaded(false);
         setScheduleReadFailed(true);
       }
+    } finally {
+      if (alive.current && scheduleReadOperation.current === operation)
+        setScheduleLoading(false);
     }
   }, []);
 
@@ -1058,6 +1065,7 @@ export function OnboardingFlow({
 
   async function submitImport(approved: SourceResponse[]) {
     sourceFlight.current = true;
+    setImportSubmissionState("checking");
     if (window.oneMemory) setStartingImport(approved);
     const version = scopeVersion.current;
     const retryFailed = Object.keys(itemErrors).length > 0;
@@ -1069,8 +1077,11 @@ export function OnboardingFlow({
       try {
         current = (await imports.refresh()).sources;
       } catch {
-        if (alive.current)
+        if (alive.current) {
+          setStartingImport(null);
+          setImportSubmissionState("refused");
           setError("暂时无法核对来源，尚未提交授权。选择已保留，可以重试。");
+        }
         return;
       }
       if (!alive.current) return;
@@ -1093,6 +1104,7 @@ export function OnboardingFlow({
       setItemErrors(result.failed_sources);
       if (result.accepted_source_ids.length === 0) {
         setStartingImport(null);
+        setImportSubmissionState("refused");
         setError(
           "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。",
         );
@@ -1101,16 +1113,25 @@ export function OnboardingFlow({
       // Keep the accepted intent and job IDs while the user inspects early originals.
       setAccepted(result);
       setStartingImport(null);
+      setImportSubmissionState("confirmed");
       setError(null);
     } catch (reason) {
       if (alive.current) {
         const refused = isDefiniteAccessRefusal(reason);
-        if (refused) setStartingImport(null);
-        setError(
-          refused
-            ? "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。"
-            : "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
-        );
+        if (refused) {
+          setStartingImport(null);
+          setImportSubmissionState("refused");
+          setError(
+            "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。",
+          );
+        } else {
+          setImportSubmissionState("checking");
+          setError(
+            window.oneMemory
+              ? null
+              : "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
+          );
+        }
       }
     } finally {
       connectSent.current = false;
@@ -1186,6 +1207,7 @@ export function OnboardingFlow({
             jobs={reviewJobs}
             failedSources={accepted?.failed_sources}
             sourceSnapshot={imports.sourceSnapshot}
+            importSubmissionState={importSubmissionState}
             busy={completionBusy}
             error={error && text(error)}
             onContinue={(destination) => {
@@ -1242,11 +1264,11 @@ export function OnboardingFlow({
                     ? "正在保存模式…"
                     : modePhase === "completing"
                       ? "正在完成首次设置…"
-                      : modeChoice === "lite"
-                        ? "使用 Lite 进入"
-                        : modeChoice === "pro"
-                          ? "继续配置模型"
-                          : "继续",
+                      : !modeChoice
+                        ? "继续"
+                        : modeChoice === "lite"
+                          ? "使用 Lite 进入"
+                          : "配置模型",
                 )}
               </R6Button>
             }
@@ -1256,18 +1278,21 @@ export function OnboardingFlow({
               aria-label={text("记忆模式")}
             >
               <div className="onboarding-r6-mode-intro">
-                <h2>
-                  {locale === "zh-Hans"
-                    ? "Choose how MemHub remembers"
-                    : text("你希望 MemHub 如何形成记忆？")}
-                </h2>
+                <h2>{text("你希望 MemHub 如何形成记忆？")}</h2>
                 <p>{text("需要明确选择一种方式；之后仍可在设置中更改。")}</p>
               </div>
               <MemoryModeCards
                 aria-label={text("记忆模式")}
                 value={modeChoice}
                 layout="rows"
+                describedBy={{
+                  ultra:
+                    modeChoice === "ultra"
+                      ? "onboarding-ultra-schedule-description"
+                      : undefined,
+                }}
                 disabled={modeSaving || completionBusy}
+                ultraDetailBusy={scheduleLoading}
                 onChange={(mode) => {
                   modeChoiceTouched.current = true;
                   intentRef.current = mode;
@@ -1276,30 +1301,51 @@ export function OnboardingFlow({
                 }}
                 ultraDetail={
                   scheduleLoaded ? (
-                    <div className="onboarding-r6-ultra-default">
+                    <div className="onboarding-r6-ultra-default" role="status">
                       <strong>{text("每天自动整合")}</strong>
-                      <small>
+                      <small id="onboarding-ultra-schedule-description">
                         {text(
                           ultraSchedule.enabled
                             ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
                             : "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
                         ).replace("{time}", ultraSchedule.time)}
+                        {ultraSchedule.enabled ? (
+                          <>
+                            <br />
+                            <span>
+                              {text("后续可在设置页自定义时间或关闭。")}
+                            </span>
+                          </>
+                        ) : null}
                       </small>
                     </div>
                   ) : scheduleReadFailed ? (
                     <div className="onboarding-r6-schedule-recovery">
-                      <p role="alert">
+                      <p
+                        id="onboarding-ultra-schedule-description"
+                        role="alert"
+                      >
                         {text("记忆模式状态暂时无法读取，请重试。")}
                       </p>
                       <R6Button
                         className="onboarding-r6-schedule-retry"
+                        pending={scheduleLoading}
+                        disabled={
+                          scheduleLoading || modeSaving || completionBusy
+                        }
                         onClick={() => void refreshUltraSchedule()}
                       >
                         {text("重试")}
                       </R6Button>
                     </div>
                   ) : (
-                    <p>{text("正在读取自动整合设置…")}</p>
+                    <p
+                      id="onboarding-ultra-schedule-description"
+                      className="onboarding-r6-schedule-loading"
+                      role="status"
+                    >
+                      {text("正在读取自动整合设置…")}
+                    </p>
                   )
                 }
               />

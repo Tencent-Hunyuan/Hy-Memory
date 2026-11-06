@@ -76,7 +76,9 @@ describe("OnboardingModelStep", () => {
     localStorage.setItem(LANGUAGE_STORAGE_KEY, locale);
     const title = guiMessages[locale]["配置记忆整理模型"];
     const back = guiMessages[locale]["返回选择模式"];
-    if (!title || !back) throw new Error(`missing ${locale} model copy`);
+    const summary = guiMessages[locale]["记忆整理"];
+    if (!title || !back || !summary)
+      throw new Error(`missing ${locale} model copy`);
     render(
       <LanguageProvider>
         <OnboardingModelStep {...props()} />
@@ -93,10 +95,11 @@ describe("OnboardingModelStep", () => {
       }),
     ).toBeTruthy();
     expect(screen.getByLabelText(/API Key/)).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: summary })).toBeTruthy();
     expect(screen.getAllByRole("button").length).toBeGreaterThanOrEqual(4);
   });
 
-  it("keeps step 3 on memory mode in a generation-only column", () => {
+  it("keeps current behavior in the restored open-source composition", () => {
     render(<OnboardingModelStep {...props()} />);
     expect(
       screen.getByRole("heading", { name: "配置记忆整理模型" }),
@@ -110,12 +113,9 @@ describe("OnboardingModelStep", () => {
     expect(screen.getByText("DeepSeek · deepseek-flash")).toBeTruthy();
     expect(screen.queryByText("本次沉淀")).toBeNull();
     expect(screen.queryByLabelText(/向量|Embedding/)).toBeNull();
-    expect(
-      document.querySelector(
-        ".onboarding-model-layout--single-column-600" +
-          '[data-responsive="single-column-600"]',
-      ),
-    ).toBeTruthy();
+    expect(document.querySelector(".onboarding-model-layout")).toBeTruthy();
+    expect(document.querySelector(".onboarding-model-summary")).toBeTruthy();
+    expect(screen.getByText("让记忆从这里开始")).toBeTruthy();
   });
 
   it("focuses the page title when entering the model substep", async () => {
@@ -178,6 +178,18 @@ describe("OnboardingModelStep", () => {
     view.rerender(<OnboardingModelStep {...p} advancedOpen />);
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByLabelText("生成模型名")),
+    );
+  });
+
+  it("returns to the visible API key field when it fails in advanced mode", async () => {
+    const p = props();
+    p.advancedOpen = true;
+    p.fieldErrors = { api_key: "请填写 API Key。" };
+    const view = render(<OnboardingModelStep {...p} />);
+    await waitFor(() => expect(p.onAdvancedChange).toHaveBeenCalledWith(false));
+    view.rerender(<OnboardingModelStep {...p} advancedOpen={false} />);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText("API Key")),
     );
   });
 

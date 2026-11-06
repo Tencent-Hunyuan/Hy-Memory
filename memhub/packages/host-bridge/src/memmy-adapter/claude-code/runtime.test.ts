@@ -88,6 +88,26 @@ describe("MH-C01 event contract", () => {
     expect(f.notifySourceChanged).not.toHaveBeenCalled();
   });
 
+  it("counts astral characters the same way as Core's character budget", async () => {
+    const f = fixture();
+    const content = "😀".repeat(4_000);
+    f.recall.mockResolvedValueOnce({
+      ...hit,
+      hits: [{ ...hit.hits[0], content }],
+      used_characters: 4_000,
+      truncated: true,
+      truncated_by: "character_budget",
+    });
+
+    const result = await f.adapter.handle({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "s1",
+      prompt: "previous decision",
+    });
+
+    expect(result.state).toBe("grounded");
+  });
+
   it("accepts a raw-mode recall and labels its hits as conversation excerpts", async () => {
     const f = fixture();
     f.recall.mockResolvedValueOnce({

@@ -9,7 +9,6 @@ import type {
   MemoryLibraryPage,
   MemoryProcessingSummary,
   SdkAskMemory,
-  SdkRawGraphItem,
   SourceResponse,
 } from "@one-memory/contracts";
 import { isMessageKey } from "@one-memory/i18n";
@@ -45,10 +44,12 @@ import {
   setExtractionWindow,
   updateSdkMemory,
 } from "./api";
+import { localEvolveRunning, useEvolveState } from "./evolve-state";
 import { GraphWidthPrompt } from "./GraphWidthPrompt";
 import { useGuiLanguage } from "./gui-language";
 import { MemoryDeleteDialog } from "./MemoryDeleteDialog";
 import { MemoryMap } from "./MemoryMap";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { subscribePoll } from "./poll-scheduler";
 import { SdkMemoryLibrary } from "./SdkMemoryLibrary";
 import { SdkRawHistory } from "./SdkRawHistory";
@@ -119,6 +120,10 @@ export function MemorySpace({
   onFocusMemoryConsumed?(): void;
 }) {
   const { locale, t, tn } = useGuiLanguage();
+  const { text } = useOnboardingTranslation();
+  const evolveState = useEvolveState(active || preload);
+  const evolveRunning = localEvolveRunning(evolveState.data);
+  const evolveUncertain = evolveState.isError && evolveRunning;
   const memoryText = (text: string) => {
     const key = `memory:${text}`;
     return isMessageKey(key) ? t(key) : text;
@@ -195,14 +200,15 @@ export function MemorySpace({
     status: "ready" | "failed";
     value: MemoryGraphResponse | null;
   } | null>(null);
-  const [sdkGraphProgress, setSdkGraphProgress] = useState<{
-    scope: string;
-    loaded: number;
-    total: number | null;
-  } | null>(null);
   // Bumping this re-reads the page and graph after an edit or a delete.
   const [sdkMapRevision, setSdkMapRevision] = useState(0);
   const bumpSdkMap = useCallback(() => setSdkMapRevision((v) => v + 1), []);
+  const previousEvolveRunning = useRef(evolveRunning);
+  useEffect(() => {
+    const previous = previousEvolveRunning.current;
+    previousEvolveRunning.current = evolveRunning;
+    if (previous && !evolveRunning) bumpSdkMap();
+  }, [bumpSdkMap, evolveRunning]);
   const [sdkLibrary, setSdkLibrary] = useState<{
     page: MemoryLibraryPage | null;
     loading: boolean;
@@ -257,15 +263,11 @@ export function MemorySpace({
   ]);
   const sdkGraphSettled = sdkGraph?.scope === sdkGraphRequestedScope;
   const visibleSdkGraph =
-    sdkGraph?.scope === sdkGraphRequestedScope && sdkGraph.status === "ready"
-      ? sdkGraph.value
-      : null;
+    sdkGraph?.scope === sdkGraphRequestedScope ? sdkGraph.value : null;
   const sdkGraphFailed =
-    sdkGraph?.scope === sdkGraphRequestedScope && sdkGraph.status === "failed";
-  const visibleGraphProgress =
-    sdkGraphProgress?.scope === sdkGraphRequestedScope
-      ? sdkGraphProgress
-      : null;
+    sdkGraph?.scope === sdkGraphRequestedScope &&
+    sdkGraph.status === "failed" &&
+    sdkGraph.value === null;
   // A keyword search pages through one server-side result window. The id is
   // kept for the query and source it was searched with; a new query or
   // source starts without one, so the server searches afresh.
@@ -443,8 +445,6 @@ export function MemorySpace({
     const request = new AbortController();
     let cancelled = false;
     let reading = false;
-    rawGraphRecords.current.clear();
-    setSdkGraphProgress({ scope, loaded: 0, total: null });
     const readGraph = async () => {
       if (reading) return;
       reading = true;
@@ -456,61 +456,32 @@ export function MemorySpace({
           );
           if (cancelled) return;
           setSdkGraph({ scope, status: "ready", value });
-          setSdkGraphProgress({
-            scope,
-            loaded: value.projected_memories,
-            total: value.total_memories,
-          });
           return;
         }
-
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const items: SdkRawGraphItem[] = [];
-          let offset = 0;
-          let total = 0;
-          let snapshotId: string | undefined;
-          rawGraphRecords.current.clear();
-          try {
-            while (!cancelled) {
-              const page = await getSdkRawGraph({
-                source,
-                offset,
-                limit: 500,
-                snapshotId,
-                signal: request.signal,
-              });
-              if (cancelled) return;
-              snapshotId = page.snapshot_id;
-              total = page.total;
-              items.push(...page.items);
-              for (const item of page.items) {
-                const record = rawGraphRecord(item);
-                rawGraphRecords.current.set(rawRecordId(record), record);
-              }
-              setSdkGraphProgress({ scope, loaded: items.length, total });
-              if (!page.has_more || page.items.length === 0) break;
-              offset += page.items.length;
-              await new Promise<void>((resolve) => setTimeout(resolve, 0));
-            }
-          } catch (reason) {
-            if (
-              attempt === 0 &&
-              apiErrorCode(reason) === "raw_graph_snapshot_stale"
-            )
-              continue;
-            throw reason;
-          }
-          if (cancelled) return;
-          setSdkGraph({
-            scope,
-            status: "ready",
-            value: rawGraphProjection(items, total, sourcesRef.current),
-          });
-          break;
+        const page = await getSdkRawGraph({
+          source,
+          offset: 0,
+          limit: 300,
+          signal: request.signal,
+        });
+        if (cancelled) return;
+        rawGraphRecords.current.clear();
+        for (const item of page.items) {
+          const record = rawGraphRecord(item);
+          rawGraphRecords.current.set(rawRecordId(record), record);
         }
+        setSdkGraph({
+          scope,
+          status: "ready",
+          value: rawGraphProjection(page.items, page.total, sourcesRef.current),
+        });
       } catch {
         if (cancelled || request.signal.aborted) return;
-        setSdkGraph({ scope, status: "failed", value: null });
+        setSdkGraph((current) => ({
+          scope,
+          status: "failed",
+          value: current?.scope === scope ? current.value : null,
+        }));
       } finally {
         reading = false;
       }
@@ -530,17 +501,7 @@ export function MemorySpace({
     sdkMapVisible,
     sourceKey,
   ]);
-  const displayedSdkPage =
-    lite &&
-    !sdkLibraryQuery.trim() &&
-    sdkPage &&
-    visibleGraphProgress?.total != null
-      ? {
-          ...sdkPage,
-          total: visibleGraphProgress.total,
-          total_exact: true,
-        }
-      : sdkPage;
+  const displayedSdkPage = sdkPage;
   const sdkFilterLabel = [
     sdkLibrary.settledSource
       ? `${t("memory:来源")} ${
@@ -1187,6 +1148,11 @@ export function MemorySpace({
           </div>
         )}
       </header>
+      {evolveRunning ? (
+        <p className="memory-evolve-status" role="status">
+          {text(evolveUncertain ? "正在核对整合状态…" : "正在整合记忆…")}
+        </p>
+      ) : null}
       {processing && (!simplified || managementOpen) ? (
         <details className="memory-processing-details">
           <summary>
@@ -1372,11 +1338,9 @@ export function MemorySpace({
                 source: sdkLibrarySource,
                 page: displayedSdkPage,
                 loading: sdkLibrary.loading,
-                failed: sdkLibrary.failed,
+                failed: sdkLibrary.failed && !evolveRunning,
                 graphLoading: !sdkGraphSettled,
-                graphFailed: sdkGraphFailed,
-                graphLoaded: visibleGraphProgress?.loaded,
-                graphTotal: visibleGraphProgress?.total ?? undefined,
+                graphFailed: sdkGraphFailed && !evolveRunning,
                 stale: false,
                 settledSource: sdkLibrary.settledSource,
                 settledQuery: sdkLibrary.settledQuery,

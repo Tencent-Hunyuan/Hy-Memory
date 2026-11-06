@@ -720,7 +720,7 @@ export interface SdkRawPage {
   time_filtered?: boolean;
 }
 
-/** Lightweight complete-map projection. Raw text remains SDK-owned. */
+/** Lightweight bounded-map projection. Raw text remains SDK-owned. */
 export interface SdkRawGraphItem {
   turn_id: string;
   raw_id: string;
@@ -734,11 +734,12 @@ export interface SdkRawGraphItem {
 export interface SdkRawGraphPage {
   user_id: string;
   items: SdkRawGraphItem[];
+  /** SDK-reported matching raw scope; `items` remains capped by `limit`. */
   total: number;
   limit: number;
   offset: number;
+  /** More matching turns exist, but the product map does not auto-page them. */
   has_more: boolean;
-  snapshot_id: string;
 }
 
 /** `GET /api/v2/memory-library/layers`: memories per SDK layer. */

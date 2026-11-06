@@ -588,6 +588,25 @@
   font-size: 11px;
   line-height: 18px;
 }
+.onboarding-r6-schedule-loading {
+  margin: 0;
+  color: #607482;
+  font-size: 12px;
+  line-height: 20px;
+}
+.memory-mode-detail .onboarding-r6-schedule-recovery {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+.memory-mode-detail .onboarding-r6-schedule-retry {
+  flex: 0 0 auto;
+  min-width: 76px;
+}
 .onboarding-r6-evolve-settings {
   margin-top: 0;
   padding: 18px 20px 4px;
@@ -615,15 +634,12 @@
   font-weight: 600;
   line-height: 22px;
 }
-.onboarding-r6-schedule-recovery {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
+.onboarding-r6-mode .onboarding-r6-schedule-recovery {
   color: #944242;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
-.onboarding-r6-schedule-recovery p {
+.onboarding-r6-mode .onboarding-r6-schedule-recovery p {
   margin: 0;
 }
 .onboarding-r6-mode-error {
@@ -637,7 +653,19 @@
 @media (min-width: 761px) {
   .onboarding-r6-mode {
     min-height: 100%;
-    gap: 24px;
+  }
+}
+@media (min-width: 761px) and (max-height: 959px) {
+  .onboarding-r6-mode {
+    gap: 12px;
+  }
+  .onboarding-r6-mode-intro h2 {
+    font-size: 20px;
+    line-height: 28px;
+  }
+  .onboarding-r6-mode-intro p {
+    font-size: 12px;
+    line-height: 20px;
   }
 }
 .onboarding-r6-empty {
@@ -807,6 +835,13 @@
     padding: 18px 20px;
     flex-wrap: wrap;
     flex-basis: auto;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-recovery {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-retry {
+    align-self: flex-start;
   }
 }
 @media (prefers-reduced-transparency: reduce) {

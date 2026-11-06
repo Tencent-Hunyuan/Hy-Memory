@@ -62,30 +62,6 @@ vi.mock("./MemoryGraph3D", () => ({
     </div>
   ),
 }));
-vi.mock("./RawConversationGraph3D", () => ({
-  RawConversationGraph3D: ({
-    graph,
-    selectedNodeId,
-    onSelectNode,
-  }: {
-    graph: MemoryGraphResponse;
-    selectedNodeId: string | null;
-    onSelectNode(node: MemoryGraphNode): void;
-  }) => (
-    <div data-testid="canvas" data-selected={selectedNodeId}>
-      {graph.nodes.map((node) => (
-        <button
-          key={node.node_id}
-          type="button"
-          aria-label={`图中选择 ${node.label}`}
-          onClick={() => onSelectNode(node)}
-        >
-          {node.label}
-        </button>
-      ))}
-    </div>
-  ),
-}));
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();

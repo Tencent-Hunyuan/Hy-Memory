@@ -1239,6 +1239,9 @@ export const indonesianMessages: Record<MessageKey, string> = {
   onboardingMoreApps: "Gulir untuk melihat lainnya · {count} aplikasi lagi",
   "onboardingMoreApps.one":
     "Gulir untuk melihat lainnya · {count} aplikasi lagi",
+  onboardingMoreImportApps: "Gulir horizontal · {count} aplikasi lagi",
+  onboardingImportChecking:
+    "Memeriksa hasil impor; pilihan Anda tetap tersimpan",
   onboardingAllApps: "Semua {count} aplikasi ditampilkan",
   默认位置: "Lokasi default",
   自定义位置: "Lokasi kustom",
