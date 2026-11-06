@@ -1,10 +1,10 @@
 /* 143:2419/2502/2594/2685: only step2; shared frame/progress are owned elsewhere. */
 .first-import-r6-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  min-height: 100%;
-  height: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 278px;
+  align-items: start;
+  gap: 30px;
+  min-height: 0;
 }
 .first-import-r6-main {
   min-width: 0;
@@ -41,6 +41,7 @@
 }
 .first-import-r6-main > .r6-import-progress {
   flex: 0 0 auto;
+  min-height: 218px;
   width: 100%;
   margin-inline: auto;
 }
@@ -71,33 +72,27 @@
   outline-offset: 3px;
 }
 .first-import-r6-main > .r6-import-progress .r6-import-progress-card {
-  min-height: 128px;
-  padding: 16px 20px;
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
-  align-content: center;
-  column-gap: 18px;
-  text-align: left;
+  min-height: 218px;
+  padding: 16px 12px 12px;
+  display: block;
+  text-align: center;
   scroll-snap-align: start;
 }
 .first-import-r6-main > .r6-import-progress .r6-import-progress-orbit {
-  width: 86px;
-  height: 86px;
-  grid-column: 1;
-  grid-row: 1 / 4;
-  margin: 0;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 12px;
 }
 .first-import-r6-main > .r6-import-progress .r6-import-progress-icon {
-  width: 54px;
-  height: 54px;
-  border-radius: 14px;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
 }
 .first-import-r6-main > .r6-import-progress :is(h2, p, small) {
-  grid-column: 2;
+  grid-column: auto;
 }
 .first-import-r6-main > .r6-import-progress .r6-import-progress-card h2 {
-  align-self: end;
+  align-self: auto;
 }
 .first-import-r6-intro .first-import-r6-submission-status {
   min-height: 26px;
@@ -194,14 +189,10 @@
   margin: 0;
 }
 .first-import-r6-options {
-  flex: 1 1 auto;
   min-width: 0;
-  min-height: 132px;
-  padding: 22px 24px;
-  display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.3fr);
-  align-items: center;
-  gap: 0 28px;
+  min-height: 0;
+  padding: 24px;
+  display: block;
   border: 1px solid #ffffffe0;
   border-radius: 22px;
   background:
@@ -213,7 +204,7 @@
   overflow: visible;
   scrollbar-width: thin;
   overscroll-behavior: contain;
-  align-self: stretch;
+  align-self: start;
 }
 .first-import-r6-options-head {
   min-width: 0;
@@ -243,9 +234,9 @@
   position: relative;
   display: block;
   width: 100%;
-  min-height: 104px;
-  margin: 0;
-  padding: 18px 52px 16px 18px;
+  min-height: 124px;
+  margin: 0 0 16px;
+  padding: 18px 42px 16px 18px;
   border: 1px solid rgb(179 196 209 / 42%);
   border-radius: 12px;
   background: rgb(255 255 255 / 34%);
@@ -320,7 +311,6 @@
   color: #5e6e7a;
 }
 .first-import-r6-options-note {
-  grid-column: 1 / -1;
   font-size: 11px;
   line-height: 22px;
   margin: 0 0 12px;
@@ -517,7 +507,15 @@ dialog.first-import-r6-original[open] {
 }
 @media (max-width: 1150px) {
   .first-import-r6-layout {
-    gap: 18px;
+    gap: 24px;
+  }
+}
+@media (max-width: 900px) {
+  .first-import-r6-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .first-import-r6-options {
+    width: 100%;
   }
 }
 @media (min-width: 761px) and (max-height: 859px) {
@@ -543,7 +541,7 @@ dialog.first-import-r6-original[open] {
     padding-bottom: 16px;
   }
   .first-import-r6-layout {
-    height: 100%;
+    min-height: 100%;
   }
 }
 @media (min-width: 761px) and (max-height: 859px) {

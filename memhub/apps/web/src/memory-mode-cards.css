@@ -300,40 +300,40 @@
 
 @media (min-width: 761px) and (max-height: 959px) {
   .memory-mode-cards--rows {
-    min-height: 360px;
+    min-height: 284px;
   }
   .memory-mode-cards--rows .memory-mode-card-list {
-    gap: 12px;
+    gap: 10px;
   }
   .memory-mode-cards--rows .memory-mode-card {
-    min-height: 112px;
+    min-height: 88px;
   }
   .memory-mode-cards--rows .memory-mode-card-choice {
     min-height: 0;
-    padding: 13px 16px;
+    padding: 9px 16px;
     grid-template-columns: minmax(205px, 0.82fr) minmax(0, 1.5fr);
     column-gap: 22px;
   }
   .memory-mode-cards--rows .memory-mode-radio {
-    top: 13px;
+    top: 9px;
     right: 16px;
   }
   .memory-mode-cards--rows .memory-mode-title strong {
-    font-size: 17px;
-    line-height: 25px;
+    font-size: 16px;
+    line-height: 22px;
   }
   .memory-mode-cards--rows .memory-mode-description {
     min-height: 0;
-    margin-top: 4px;
-    font-size: 12px;
-    line-height: 18px;
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 16px;
   }
   .memory-mode-cards--rows .memory-mode-features {
     margin-top: 0;
     padding: 0 36px 0 22px;
-    gap: 6px;
+    gap: 3px;
     font-size: 11px;
-    line-height: 17px;
+    line-height: 15px;
   }
   .memory-mode-cards--rows .memory-mode-detail {
     margin-top: 5px;

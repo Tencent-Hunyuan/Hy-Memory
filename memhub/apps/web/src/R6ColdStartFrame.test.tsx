@@ -95,9 +95,10 @@ it("keeps progress cards content-sized and the step-two footer in normal flow", 
       ".first-import-r6-main > .r6-import-progress",
     ),
   ).toMatch(/flex:\s*0 0 auto/);
-  expect(declaration("first-import-r6.css", ".first-import-r6-layout")).toMatch(
-    /height:\s*100%/,
-  );
+  const layout = declaration("first-import-r6.css", ".first-import-r6-layout");
+  expect(layout).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+278px/);
+  expect(layout).toMatch(/align-items:\s*start/);
+  expect(layout).not.toMatch(/(?:^|;)\s*height:/);
   expect(
     declaration("first-import-r6.css", ".first-import-r6-feedback"),
   ).not.toMatch(/max-height|overflow/);
