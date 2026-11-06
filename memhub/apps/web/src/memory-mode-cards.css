@@ -52,7 +52,7 @@
 
 .memory-mode-cards--rows
   .memory-mode-card[data-mode="ultra"][data-selected="true"] {
-  min-height: 158px;
+  min-height: 166px;
 }
 
 .memory-mode-card[data-disabled="true"] {
@@ -189,13 +189,11 @@
 }
 
 .memory-mode-features > span {
-  display: grid;
-  grid-template-columns: 6px minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
+  display: flex;
+  align-items: center;
   min-width: 0;
   min-height: 40px;
-  padding: 0 14px;
+  padding: 0 16px;
   overflow-wrap: anywhere;
 }
 
@@ -204,26 +202,18 @@
 }
 
 .memory-mode-features i {
-  width: 6px;
-  height: 6px;
-  margin-top: 6px;
-  border-radius: 50%;
-  background: #6f9183;
+  display: none;
 }
 
 .memory-mode-detail {
-  width: 100%;
-  margin: 0;
-  padding: 10px 18px;
+  width: auto;
+  margin: 7px 18px 12px;
+  padding: 10px 0 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 9px;
-  border-top: 1px solid #d4e0e7;
-  background: linear-gradient(
-    105deg,
-    rgb(236 244 240 / 90%),
-    rgb(244 248 250 / 78%)
-  );
+  border-top: 1px solid rgb(166 190 179 / 48%);
+  background: transparent;
   color: #405867;
   font-size: 12px;
   line-height: 18px;
@@ -304,11 +294,11 @@
 }
 
 .memory-mode-cards--grid .memory-mode-detail {
-  width: 100%;
-  margin: 0;
-  padding: 14px 18px;
+  width: auto;
+  margin: 8px 18px 16px;
+  padding: 12px 0 0;
   display: block;
-  background: #f1f6f8;
+  background: transparent;
   font-size: 12px;
   line-height: 20px;
 }
@@ -336,7 +326,7 @@
   }
   .memory-mode-cards--rows
     .memory-mode-card[data-mode="ultra"][data-selected="true"] {
-    min-height: 108px;
+    min-height: 116px;
   }
   .memory-mode-cards--rows .memory-mode-card-choice {
     min-height: 0;
@@ -367,12 +357,11 @@
   }
   .memory-mode-cards--rows .memory-mode-features > span {
     min-height: 32px;
-    padding: 0 8px;
-    gap: 6px;
+    padding: 0 10px;
   }
   .memory-mode-cards--rows .memory-mode-detail {
-    margin: 0;
-    padding: 8px 14px;
+    margin: 6px 14px 10px;
+    padding: 8px 0 0;
     gap: 6px;
     font-size: 11px;
     line-height: 16px;
@@ -429,10 +418,10 @@
     border-left: 0;
   }
   .memory-mode-cards--rows .memory-mode-detail {
-    width: 100%;
-    margin: 0;
-    padding: 14px 20px 16px;
-    background: #f1f6f8;
+    width: auto;
+    margin: 8px 20px 14px;
+    padding: 12px 0 0;
+    background: transparent;
   }
 }
 
@@ -464,9 +453,9 @@
     line-height: 18px;
   }
   .memory-mode-cards--grid .memory-mode-detail {
-    width: 100%;
-    margin: 0;
-    padding: 10px 14px;
+    width: auto;
+    margin: 6px 14px 14px;
+    padding: 10px 0 0;
     font-size: 11px;
     line-height: 18px;
   }
