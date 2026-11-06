@@ -20,9 +20,10 @@ Before pushing or opening/updating a PR:
 2. Fetch `origin/main` again; if it fails, stop.
 3. If main advanced, integrate it before delivery. Rebase is allowed only for an unpublished branch used by this task alone; never rewrite shared history without approval. Otherwise merge main or ask.
 4. Re-review files changed by both sides; a conflict-free integration is not proof of semantic compatibility.
-5. Run formatting in check-only mode, focused tests, required full checks, type checks, and build on the integrated `HEAD`.
-6. If any check changes files, inspect and commit them, then repeat all final checks.
-7. Require a clean worktree after checks so the tested tree equals the pushed `HEAD`.
+5. Run only checks that are necessary and proportionate to the changed files and risk. Prefer focused tests. Do not run repository-wide tests, type checks, or builds by default.
+6. Do not let optional, slow, or stalled local checks block opening or updating a PR. Stop them when appropriate, report exactly what ran, passed, failed, or was not run, and rely on required CI before merge.
+7. If any check changes files, inspect and commit them, then repeat the relevant checks.
+8. Require a clean worktree after checks so the tested tree equals the pushed `HEAD`.
 
 Before merge:
 
