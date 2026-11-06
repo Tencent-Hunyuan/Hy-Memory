@@ -597,6 +597,7 @@
 .memory-mode-detail .onboarding-r6-schedule-recovery {
   width: 100%;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -834,6 +835,13 @@
     padding: 18px 20px;
     flex-wrap: wrap;
     flex-basis: auto;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-recovery {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-retry {
+    align-self: flex-start;
   }
 }
 @media (prefers-reduced-transparency: reduce) {

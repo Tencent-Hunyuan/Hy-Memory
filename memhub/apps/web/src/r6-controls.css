@@ -208,6 +208,10 @@ button.r6-button[data-variant="quiet"] {
   color: var(--r6-muted);
 }
 
+button.r6-button[data-variant="quiet"][data-pending-capable="true"] {
+  padding-inline: 24px;
+}
+
 button.r6-button:hover:not(:disabled) {
   background: rgb(231 239 244 / 60%);
   border-color: #aabcc8;

@@ -1100,6 +1100,7 @@ describe("OnboardingFlow S1.3", () => {
       "onboarding-ultra-schedule-description",
     );
     expect(screen.getByText(/每天 03:00 左右自动整合/)).toBeTruthy();
+    expect(screen.getByText("后续可在设置页自定义时间或关闭。")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "配置模型" }));
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
     expect(putOnboardingProgress).toHaveBeenCalledWith(
@@ -1169,6 +1170,7 @@ describe("OnboardingFlow S1.3", () => {
       ),
     );
     expect(screen.getByText(/重新开启后仍按 05:30 运行/)).toBeTruthy();
+    expect(screen.queryByText("后续可在设置页自定义时间或关闭。")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "配置模型" }));
     await waitFor(() =>
@@ -1250,12 +1252,19 @@ describe("OnboardingFlow S1.3", () => {
     );
 
     const retry = screen.getByRole("button", { name: "重试" });
+    expect(retry.closest(".memory-mode-card")?.getAttribute("data-mode")).toBe(
+      "ultra",
+    );
+    expect(retry.closest("label")).toBeNull();
     retry.focus();
     await user.click(retry);
     expect(screen.getByRole("button", { name: "重试" })).toHaveProperty(
       "disabled",
       true,
     );
+    expect(
+      retry.closest(".memory-mode-detail")?.getAttribute("aria-busy"),
+    ).toBe("true");
     expect(document.activeElement).toBe(retry);
     expect(api.getEvolveSchedule).toHaveBeenCalledTimes(2);
     await act(async () => resolveRetry({ enabled: true, time: "04:15" }));

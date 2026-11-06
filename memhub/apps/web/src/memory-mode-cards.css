@@ -194,7 +194,8 @@
   min-width: 0;
   min-height: 40px;
   padding: 0 16px;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  hyphens: auto;
 }
 
 .memory-mode-features > span::before {
