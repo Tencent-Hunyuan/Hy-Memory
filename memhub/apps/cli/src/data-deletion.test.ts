@@ -108,4 +108,53 @@ describe("explicit data deletion", () => {
     expect(receipt.state).toBe("deleted");
     await expect(stat(dataDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("refuses a directory whose only marker is a generic logs directory", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "memhub-del-"));
+    const project = path.join(home, "my-project");
+    await mkdir(path.join(project, "logs"), { recursive: true });
+    await writeFile(path.join(project, "main.js"), "project code");
+
+    const plan = await planDataDeletion({
+      dataDir: project,
+      home,
+      runtimeRunning: false,
+      runtimeLock: "clear",
+    });
+    expect(plan).toMatchObject({
+      state: "blocked",
+      code: "not_a_one_memory_home",
+    });
+    await expect(readFile(path.join(project, "main.js"), "utf8")).resolves.toBe(
+      "project code",
+    );
+  });
+
+  it("refuses while the service lease is live even without a runtime receipt", async () => {
+    const { home, dataDir } = await homeWith();
+    const plan = await planDataDeletion({
+      dataDir,
+      home,
+      runtimeRunning: false,
+      runtimeLock: "live",
+    });
+    expect(plan).toMatchObject({
+      state: "blocked",
+      code: "runtime_still_running",
+    });
+  });
+
+  it("refuses when the service lease cannot be inspected", async () => {
+    const { home, dataDir } = await homeWith();
+    const plan = await planDataDeletion({
+      dataDir,
+      home,
+      runtimeRunning: false,
+      runtimeLock: "unknown",
+    });
+    expect(plan).toMatchObject({
+      state: "blocked",
+      code: "runtime_state_unknown",
+    });
+  });
 });
