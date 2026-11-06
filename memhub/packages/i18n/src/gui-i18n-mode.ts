@@ -10,6 +10,7 @@ const modeChineseMessages = {
   选择记忆方式: "选择记忆方式",
   选择记忆模式: "选择记忆模式",
   "之后可在设置中更改。": "之后可在设置中更改。",
+  "后续可在设置页自定义时间或关闭。": "后续可在设置页自定义时间或关闭。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra 可在完成首次设置后到设置页开启。",
   "使用 Lite 进入": "使用 Lite 进入",
@@ -200,6 +201,8 @@ export const modeEnglishMessages: ModeMessages = {
   选择记忆方式: "Choose how memory works",
   选择记忆模式: "Choose memory mode",
   "之后可在设置中更改。": "You can change this later in Settings.",
+  "后续可在设置页自定义时间或关闭。":
+    "You can later customize the time or turn this off in Settings.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra can be enabled in Settings after initial setup.",
   "使用 Lite 进入": "Enter with Lite",
@@ -404,6 +407,8 @@ export const modeSpanishMessages: ModeMessages = {
   选择记忆方式: "Elegir cómo funciona la memoria",
   选择记忆模式: "Elegir el modo de memoria",
   "之后可在设置中更改。": "Puedes cambiarlo más adelante en Configuración.",
+  "后续可在设置页自定义时间或关闭。":
+    "Más adelante, puedes personalizar la hora o desactivarlo en Configuración.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Puedes activar Ultra en Configuración después de completar la configuración inicial.",
   "使用 Lite 进入": "Entrar con Lite",
@@ -607,6 +612,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   选择记忆方式: "選擇記憶方式",
   选择记忆模式: "選擇記憶模式",
   "之后可在设置中更改。": "之後可在設定中更改。",
+  "后续可在设置页自定义时间或关闭。": "之後可在設定頁自訂時間或關閉。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "完成首次設定後，可到設定頁開啟 Ultra。",
   "使用 Lite 进入": "使用 Lite 進入",
@@ -795,6 +801,8 @@ export const modeJapaneseMessages: ModeMessages = {
   选择记忆方式: "記憶方法を選択",
   选择记忆模式: "記憶モードを選択",
   "之后可在设置中更改。": "後から設定で変更できます。",
+  "后续可在设置页自定义时间或关闭。":
+    "後から設定画面で時刻を変更したり、無効にしたりできます。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "初期設定の完了後、設定画面で Ultra を有効にできます。",
   "使用 Lite 进入": "Lite で開始",
@@ -994,6 +1002,8 @@ export const modeGermanMessages: ModeMessages = {
   选择记忆方式: "Erinnerungsmodus wählen",
   选择记忆模式: "Erinnerungsmodus auswählen",
   "之后可在设置中更改。": "Sie können dies später in den Einstellungen ändern.",
+  "后续可在设置页自定义时间或关闭。":
+    "Später können Sie die Uhrzeit in den Einstellungen anpassen oder die Funktion deaktivieren.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra kann nach der Ersteinrichtung in den Einstellungen aktiviert werden.",
   "使用 Lite 进入": "Mit Lite starten",
@@ -1198,6 +1208,8 @@ export const modePortugueseMessages: ModeMessages = {
   选择记忆方式: "Escolher o modo de memória",
   选择记忆模式: "Escolher o modo de memória",
   "之后可在设置中更改。": "Pode alterar esta opção mais tarde nas Definições.",
+  "后续可在设置页自定义时间或关闭。":
+    "Mais tarde, pode personalizar a hora ou desativar esta opção nas Definições.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Pode ativar o Ultra nas Definições depois da configuração inicial.",
   "使用 Lite 进入": "Entrar com Lite",
@@ -1404,6 +1416,8 @@ export const modeFrenchMessages: ModeMessages = {
   选择记忆模式: "Choisir le mode de mémoire",
   "之后可在设置中更改。":
     "Vous pourrez le modifier plus tard dans les réglages.",
+  "后续可在设置页自定义时间或关闭。":
+    "Vous pourrez ensuite personnaliser l’heure ou désactiver cette option dans les réglages.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Vous pourrez activer Ultra dans les réglages après la configuration initiale.",
   "使用 Lite 进入": "Entrer avec Lite",
@@ -1607,6 +1621,8 @@ export const modeKoreanMessages: ModeMessages = {
   选择记忆方式: "메모리 방식 선택",
   选择记忆模式: "메모리 모드 선택",
   "之后可在设置中更改。": "나중에 설정에서 변경할 수 있습니다.",
+  "后续可在设置页自定义时间或关闭。":
+    "나중에 설정에서 시간을 변경하거나 끌 수 있습니다.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "초기 설정을 마친 후 설정에서 Ultra를 켤 수 있습니다.",
   "使用 Lite 进入": "Lite로 시작",
@@ -1805,6 +1821,8 @@ export const modeRussianMessages: ModeMessages = {
   选择记忆方式: "Выберите режим памяти",
   选择记忆模式: "Выберите режим памяти",
   "之后可在设置中更改。": "Позже режим можно изменить в настройках.",
+  "后续可在设置页自定义时间或关闭。":
+    "Позже в настройках можно изменить время или отключить эту функцию.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra можно включить в настройках после завершения первоначальной настройки.",
   "使用 Lite 进入": "Войти с Lite",
@@ -2009,6 +2027,8 @@ export const modeIndonesianMessages: ModeMessages = {
   选择记忆方式: "Pilih cara kerja memori",
   选择记忆模式: "Pilih mode memori",
   "之后可在设置中更改。": "Anda dapat mengubahnya nanti di Pengaturan.",
+  "后续可在设置页自定义时间或关闭。":
+    "Nanti, Anda dapat menyesuaikan waktunya atau menonaktifkannya di Pengaturan.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra dapat diaktifkan di Pengaturan setelah penyiapan awal selesai.",
   "使用 Lite 进入": "Masuk dengan Lite",

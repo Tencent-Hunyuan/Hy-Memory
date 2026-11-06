@@ -1309,6 +1309,9 @@ export function OnboardingFlow({
                             ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
                             : "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
                         ).replace("{time}", ultraSchedule.time)}
+                        {ultraSchedule.enabled
+                          ? ` ${text("后续可在设置页自定义时间或关闭。")}`
+                          : ""}
                       </small>
                     </div>
                   ) : scheduleReadFailed ? (
