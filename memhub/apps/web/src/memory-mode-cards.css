@@ -181,7 +181,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-content: center;
-  gap: 10px;
+  gap: 0;
   border-left: 1px solid #dbe4ea;
   color: #5e6e7a;
   font-size: 12px;
@@ -189,24 +189,26 @@
 }
 
 .memory-mode-features > span {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr);
+  align-items: start;
   gap: 8px;
   min-width: 0;
-  min-height: 34px;
-  padding: 7px 8px;
-  border-radius: 8px;
-  background: rgb(229 237 242 / 58%);
+  min-height: 40px;
+  padding: 0 14px;
   overflow-wrap: anywhere;
 }
 
+.memory-mode-features > span + span {
+  border-left: 1px solid rgb(199 211 220 / 72%);
+}
+
 .memory-mode-features i {
-  width: 5px;
-  height: 5px;
-  margin-top: 7px;
-  flex: 0 0 5px;
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
   border-radius: 50%;
-  background: #7f95a4;
+  background: #6f9183;
 }
 
 .memory-mode-detail {
@@ -291,6 +293,16 @@
   border-left: 0;
 }
 
+.memory-mode-cards--grid .memory-mode-features > span {
+  min-height: 34px;
+  padding: 6px 0;
+}
+
+.memory-mode-cards--grid .memory-mode-features > span + span {
+  border-top: 1px solid rgb(199 211 220 / 72%);
+  border-left: 0;
+}
+
 .memory-mode-cards--grid .memory-mode-detail {
   width: 100%;
   margin: 0;
@@ -349,13 +361,13 @@
   .memory-mode-cards--rows .memory-mode-features {
     margin-top: 0;
     padding: 0 34px 0 18px;
-    gap: 7px;
+    gap: 0;
     font-size: 11px;
     line-height: 15px;
   }
   .memory-mode-cards--rows .memory-mode-features > span {
-    min-height: 30px;
-    padding: 6px;
+    min-height: 32px;
+    padding: 0 8px;
     gap: 6px;
   }
   .memory-mode-cards--rows .memory-mode-detail {
@@ -406,6 +418,14 @@
     padding: 16px 0 0;
     grid-template-columns: minmax(0, 1fr);
     border-top: 1px solid #dbe4ea;
+    border-left: 0;
+  }
+  .memory-mode-cards--rows .memory-mode-features > span {
+    min-height: 34px;
+    padding: 6px 0;
+  }
+  .memory-mode-cards--rows .memory-mode-features > span + span {
+    border-top: 1px solid rgb(199 211 220 / 72%);
     border-left: 0;
   }
   .memory-mode-cards--rows .memory-mode-detail {
