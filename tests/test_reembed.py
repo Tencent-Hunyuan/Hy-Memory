@@ -644,3 +644,48 @@ async def test_returned_width_is_validated_and_not_retried():
             pytest.raises(EmbeddingDimensionMismatchError):
         await svc.embed_batch(["a", "b"], use_cache=False)
     assert client.embeddings.with_raw_response.create.await_count == 1
+
+
+@pytest.mark.parametrize("selected_roles", [None, ["memory"]])
+async def test_verify_reports_source_role_absent_from_target_mapping(tmp_path, selected_roles):
+    """A scanned/explicit partial target cannot verify a whole source space."""
+    path = tmp_path / "v"
+    await _seed(path, "src", 512)
+    source = _space(path, "src", 512)
+    # The public VectorSpace contract supports explicitly named partial spaces.
+    target = VectorSpace(
+        base_name="dst", dims=512, persist_directory=str(path), collections={},
+    )
+    before = _records(path, "src_512")
+    result = await verify_reembed(source, target, roles=selected_roles, samples=0)
+    diff = await diff_spaces(source, target, roles=selected_roles)
+    assert not result.ok
+    assert result.per_role["memory"]["source"] == len(before)
+    assert result.per_role["memory"]["target"] == 0
+    assert result.per_role["memory"]["missing"] == len(before)
+    assert len(diff.missing["memory"]) == len(before)
+    assert any("memory:" in problem and "missing" in problem for problem in result.problems)
+    assert _records(path, "src_512") == before
+
+
+async def test_verify_scanned_partial_target_detects_uncopied_roles(tmp_path):
+    path = tmp_path / "v"
+    names = await _seed(path, "src", 512)
+    source, target = _space(path, "src", 512), _space(path, "dst", 512)
+    before = _snapshot(path, names)
+    embedding = FakeEmbedder("new", 512)
+    await reembed_vector_space(source, target, embedding=embedding, roles=["memory"])
+    scanned_target = next(
+        space for space in await scan_vector_spaces(path) if space.base_name == "dst"
+    ).space(model="new")
+    result = await verify_reembed(source, scanned_target, embedding=embedding)
+    assert not result.ok
+    assert result.per_role["memory"]["missing"] == 0
+    assert result.per_role["entities"]["missing"] == 2
+    assert result.per_role["coding_keys"]["missing"] == 1
+    assert result.per_role["working_facts_cv"]["missing"] == 1
+    assert result.self_recall_hits == result.self_recall_samples == 14
+    # An explicitly scoped verification remains valid for intentionally partial copies.
+    assert (await verify_reembed(source, scanned_target, roles=["memory"], samples=0)).ok
+    assert _snapshot(path, names) == before
+    assert set(scanned_target.names()) == {"memory"}
