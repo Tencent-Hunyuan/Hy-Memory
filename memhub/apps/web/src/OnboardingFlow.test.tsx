@@ -1091,14 +1091,14 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: SKIP }));
     const ultra = screen.getByRole("radio", { name: /ultra/i });
     await user.click(ultra);
-    const schedule = screen.getByRole("complementary", {
-      name: "每天自动整合",
-    });
-    expect(schedule.closest(".memory-mode-card")).toBeNull();
+    const schedule = screen.getByText("每天自动整合");
+    expect(
+      schedule.closest(".memory-mode-card")?.getAttribute("data-mode"),
+    ).toBe("ultra");
+    expect(schedule.closest("label")).toBeNull();
     expect(ultra.getAttribute("aria-describedby")).toBe(
       "onboarding-ultra-schedule-description",
     );
-    expect(screen.getByText("每天自动整合")).toBeTruthy();
     expect(screen.getByText(/每天 03:00 左右自动整合/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "配置模型" }));
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();

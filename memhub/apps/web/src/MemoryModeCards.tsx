@@ -36,6 +36,7 @@ export function MemoryModeCards({
   describedBy,
   onChange,
   ultraDetail,
+  ultraDetailBusy = false,
   "aria-label": ariaLabel,
   "aria-busy": ariaBusy,
 }: {
@@ -47,6 +48,7 @@ export function MemoryModeCards({
   describedBy?: Partial<Record<MemoryPipelineMode, string | undefined>>;
   onChange(mode: MemoryPipelineMode, control: HTMLInputElement): void;
   ultraDetail?: ReactNode;
+  ultraDetailBusy?: boolean;
   "aria-label": string;
   "aria-busy"?: boolean;
 }) {
@@ -118,13 +120,16 @@ export function MemoryModeCards({
                     </span>
                   ))}
                 </span>
-                {mode.id === "ultra" && selected && ultraDetail ? (
-                  <div className="memory-mode-detail">
-                    <Clock3 size={14} aria-hidden="true" />
-                    <div>{ultraDetail}</div>
-                  </div>
-                ) : null}
               </label>
+              {mode.id === "ultra" && selected && ultraDetail ? (
+                <div
+                  className="memory-mode-detail"
+                  aria-busy={ultraDetailBusy || undefined}
+                >
+                  <Clock3 size={14} aria-hidden="true" />
+                  <div>{ultraDetail}</div>
+                </div>
+              ) : null}
             </div>
           );
         })}

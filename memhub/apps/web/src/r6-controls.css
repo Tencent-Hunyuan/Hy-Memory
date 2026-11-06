@@ -190,6 +190,10 @@ button.r6-button[data-variant="primary"] {
     0 3px 8px -2px rgb(64 87 102 / 12%);
 }
 
+button.r6-button[data-pending-capable="true"] {
+  padding-inline: 32px;
+}
+
 button.r6-button[data-variant="quiet"] {
   height: 36px;
   min-height: 36px;
@@ -242,12 +246,16 @@ button.r6-button[data-variant="quiet"]:disabled {
 }
 .r6-button-label {
   min-width: 0;
+  text-align: center;
 }
 .r6-button-spinner {
-  position: static;
+  position: absolute;
+  top: 50%;
+  right: 12px;
   flex: 0 0 auto;
   width: 12px;
   height: 12px;
+  margin-top: -6px;
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;

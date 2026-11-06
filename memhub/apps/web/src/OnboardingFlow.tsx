@@ -7,7 +7,7 @@ import type {
   SourceResponse,
 } from "@one-memory/contracts";
 import { legacyMemoryModePlan } from "@one-memory/operations";
-import { Check, Clock3, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import {
   type CSSProperties,
   type ReactNode,
@@ -1292,22 +1292,15 @@ export function OnboardingFlow({
                       : undefined,
                 }}
                 disabled={modeSaving || completionBusy}
+                ultraDetailBusy={scheduleLoading}
                 onChange={(mode) => {
                   modeChoiceTouched.current = true;
                   intentRef.current = mode;
                   setModeChoice(mode);
                   setModeError(null);
                 }}
-              />
-              {modeChoice === "ultra" && (
-                <aside
-                  id="onboarding-ultra-schedule"
-                  className="onboarding-r6-ultra-status"
-                  aria-label={text("每天自动整合")}
-                  aria-busy={scheduleLoading || undefined}
-                >
-                  <Clock3 size={18} aria-hidden="true" />
-                  {scheduleLoaded ? (
+                ultraDetail={
+                  scheduleLoaded ? (
                     <div className="onboarding-r6-ultra-default" role="status">
                       <strong>{text("每天自动整合")}</strong>
                       <small id="onboarding-ultra-schedule-description">
@@ -1343,9 +1336,9 @@ export function OnboardingFlow({
                     >
                       {text("正在读取自动整合设置…")}
                     </p>
-                  )}
-                </aside>
-              )}
+                  )
+                }
+              />
               {(modeError || error) && (
                 <p className="onboarding-r6-mode-error" role="alert">
                   {text(modeError ?? error ?? "")}
