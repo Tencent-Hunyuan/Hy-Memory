@@ -349,10 +349,16 @@ class ModelProber:
         if listing_optional and response.status_code in {400, 404, 405, 501}:
             return _stage(stage, True, ProbeCode.MODEL_LIST_UNSUPPORTED, started)
         if response.status_code in {401, 403}:
-            # Read a structured error body before classifying a 401. Some
-            # compatible providers distinguish an unknown model in the body.
-            if _body_error_code(response) is ProbeCode.MODEL_NOT_FOUND:
+            # Read a structured error body before classifying a 401/403. A
+            # gateway may answer with a permission status while the body says
+            # the account is out of quota or over a rate limit; those need a
+            # top-up or a wait, not a new key. An unknown model can also be
+            # reported this way by some compatible providers.
+            body_error = _body_error_code(response)
+            if body_error is ProbeCode.MODEL_NOT_FOUND:
                 return _stage(stage, False, ProbeCode.MODEL_NOT_FOUND, started)
+            if body_error in {ProbeCode.INSUFFICIENT_BALANCE, ProbeCode.RATE_LIMITED}:
+                return _stage(stage, False, body_error, started)
             return _stage(stage, False, ProbeCode.UNAUTHORIZED, started)
         if response.status_code == 402:
             # 402 就是欠费，不看 body：网关常常只回这个状态码而不写字面量，
