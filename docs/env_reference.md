@@ -94,6 +94,17 @@ Graph 写入和读侧 Rerank 的高级开关见 [pro_graph_design.md](pro_graph_
 | `MEMORY_MYSQL_POOL_SIZE` | `10` | 连接池大小 |
 | `MEMORY_MYSQL_POOL_RECYCLE` | `3600` | 连接回收周期，秒 |
 
+## Working / Coding 业务存储
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MEMORY_BUSINESS_STORE` | `sqlite` | `sqlite` / `postgres`；不改变向量库或审计缓存后端 |
+| `MEMORY_POSTGRES_DSN` | — | PostgreSQL 连接串，仅 postgres 后端需要 |
+| `MEMORY_POSTGRES_SCHEMA` | `hy_memory` | schema 前缀，1–48 个小写字母、数字或下划线，不能以数字开头 |
+| `MEMORY_POSTGRES_CONNECT_TIMEOUT` | `10` | 建连超时秒数，必须为正整数 |
+
+详见[业务存储后端](business_storage.md)。切换配置不自动迁移已有 SQLite 数据。
+
 ## 写入、场景与 Query Rewrite
 
 | 变量 | 默认值 | 说明 |
