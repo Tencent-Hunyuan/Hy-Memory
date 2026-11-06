@@ -52,7 +52,6 @@ import {
 } from "./memory-map-model";
 import { OptionMenu } from "./OptionMenu";
 import { R6Button } from "./R6Controls";
-import { RawConversationGraph3D } from "./RawConversationGraph3D";
 import { SelectedMemoryDetail } from "./SelectedMemoryDetail";
 import { SelectedRawDetail } from "./SelectedRawDetail";
 import { sourceNameOr } from "./source-label";
@@ -108,8 +107,6 @@ type Props = {
     /** The graph for the current source/query scope has not arrived yet. */
     graphLoading?: boolean;
     graphFailed?: boolean;
-    graphLoaded?: number;
-    graphTotal?: number;
     stale: boolean;
     settledSource?: string;
     settledQuery?: string;
@@ -1327,23 +1324,6 @@ export function MemoryMap(props: Props) {
                   : text("记忆关联")
                 : label}
             </h2>
-            {props.simplified && raw && library?.graphTotal !== undefined ? (
-              <p className="selected-graph-subtitle" role="status">
-                {library.graphLoading
-                  ? `${text("正在读取记忆地图…")} ${new Intl.NumberFormat(
-                      locale,
-                    ).format(
-                      library.graphLoaded ?? 0,
-                    )} / ${new Intl.NumberFormat(locale).format(
-                      library.graphTotal,
-                    )}`
-                  : `${new Intl.NumberFormat(locale).format(
-                      library.graphLoaded ?? 0,
-                    )} / ${new Intl.NumberFormat(locale).format(
-                      library.graphTotal,
-                    )}`}
-              </p>
-            ) : null}
             {props.simplified &&
               (!raw || !projection.nodes.length) &&
               !(raw && library?.graphLoading) && (
@@ -1374,25 +1354,14 @@ export function MemoryMap(props: Props) {
         </header>
         <div className="map-canvas" data-tour-id="memory-map-canvas">
           {projection.nodes.length && (!props.simplified || !hidden) ? (
-            raw ? (
-              <RawConversationGraph3D
-                graph={projection}
-                selectedNodeId={
-                  visibleGroupNode?.node_id ??
-                  (activeId ? `memory:${activeId}` : null)
-                }
-                onSelectNode={pickNode}
-              />
-            ) : (
-              <MemoryGraph3D
-                graph={projection}
-                selectedNodeId={
-                  visibleGroupNode?.node_id ??
-                  (activeId ? `memory:${activeId}` : null)
-                }
-                onSelectNode={pickNode}
-              />
-            )
+            <MemoryGraph3D
+              graph={projection}
+              selectedNodeId={
+                visibleGroupNode?.node_id ??
+                (activeId ? `memory:${activeId}` : null)
+              }
+              onSelectNode={pickNode}
+            />
           ) : (
             <div className="map-empty-stage">
               <Network size={32} strokeWidth={1} />

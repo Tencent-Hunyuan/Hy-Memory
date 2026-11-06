@@ -11,7 +11,7 @@ import type {
 } from "@one-memory/contracts";
 
 export type RawMapRecord = SdkRawRecord | SdkRawContextItem;
-export const SDK_RAW_PAGE_SIZE = 50;
+export const SDK_RAW_PAGE_SIZE = 20;
 
 export function rawRecordId(record: RawMapRecord): string {
   return record.turn_id || record.raw_id;
