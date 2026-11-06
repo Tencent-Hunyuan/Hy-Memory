@@ -280,11 +280,17 @@ def _resolve_normal_min_score(value: Optional[float]) -> float:
 def _filter_normal_results_by_score(
     items: List[Dict[str, Any]], min_score: float,
 ) -> List[Dict[str, Any]]:
-    """Filter normal candidates before diversity and bounded truncation."""
+    """Filter normal candidates before diversity and bounded truncation.
+
+    The default output mapping keeps the retrieval channel in
+    ``retrieval_source`` and writes ``"default"`` into ``source``, so the gate
+    has to use the effective source (the same fallback used when building the
+    public result) instead of ``source`` alone.
+    """
     gated_sources = {"vdb", "vdb_keyword_only", "temporal_day"}
     return [
         item for item in items
-        if item.get("source") not in gated_sources
+        if (item.get("retrieval_source") or item.get("source")) not in gated_sources
         or float(item.get("score") or 0.0) >= min_score
     ]
 
