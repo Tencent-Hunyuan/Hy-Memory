@@ -319,12 +319,8 @@ def test_recall_route_falls_back_and_keeps_the_raw_grant(tmp_path, monkeypatch):
                 json={"query": "数据库"},
                 headers={
                     **EXTERNAL,
-                    "X-One-Memory-Allowed-Tools": json.dumps(
-                        ["om_recall", "om_conversations"]
-                    ),
-                    "X-One-Memory-Allowed-Scopes": json.dumps(
-                        ["all-apps", "source:workbuddy"]
-                    ),
+                    "X-One-Memory-Allowed-Tools": json.dumps(["om_recall", "om_conversations"]),
+                    "X-One-Memory-Allowed-Scopes": json.dumps(["all-apps", "source:workbuddy"]),
                 },
             )
             return local.json(), recall_only.json(), cross_app.json()

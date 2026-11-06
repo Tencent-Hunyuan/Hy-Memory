@@ -18,8 +18,7 @@ from one_memory.memory_server.store_binding import store_for
 #: parameter later forces the `?`/`%s` difference to be considered here rather
 #: than being introduced silently at the call site.
 CONNECTED_SOURCES_SQL = (
-    "SELECT DISTINCT source_id FROM source_grants "
-    "WHERE user_id='local' AND revoked_at IS NULL"
+    "SELECT DISTINCT source_id FROM source_grants WHERE user_id='local' AND revoked_at IS NULL"
 )
 
 
@@ -51,9 +50,7 @@ def resolve_context_authority(
     )
     memory_allowed = memory_requested and "om_recall" in access.tools and bool(memory_scopes)
     raw_allowed = (
-        raw_requested
-        and "om_conversations" in access.tools
-        and "all-apps" in access.scopes
+        raw_requested and "om_conversations" in access.tools and "all-apps" in access.scopes
     )
     if explicit is not None and not raw_allowed:
         raise HTTPException(403, "external_context_scope_denied")
