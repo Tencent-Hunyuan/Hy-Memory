@@ -3,7 +3,7 @@
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 
 class MockLLMProvider:
@@ -57,7 +57,12 @@ class MockLLMProvider:
                     },
                 })
             tool_calls = normalized
-        return LLMResponse(content=content, tokens_used=10, tool_calls=tool_calls)
+        return LLMResponse(
+            content=content,
+            tokens_used=10,
+            tool_calls=tool_calls,
+            finish_reason=str(raw.get("finish_reason", "") or ""),
+        )
 
     async def complete(self, prompt, max_tokens=500, temperature=0.7, tools=None, tool_choice=None, **kwargs):
         self.calls.append({

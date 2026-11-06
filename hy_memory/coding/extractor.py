@@ -220,7 +220,8 @@ class CodingMemoryExtractor:
 
         Raises:
             CodingWriteError: 未开启原文兜底时，LLM 调用失败（LLM_ERROR）、返回空
-                content（EMPTY_RESPONSE）或回复解析不出 JSON 对象（JSON_PARSE_FAILED）。
+                content（EMPTY_RESPONSE）、回复被 token 预算截断（OUTPUT_TRUNCATED）
+                或回复解析不出 JSON 对象（JSON_PARSE_FAILED）。
         """
         if not messages:
             return [], []
@@ -312,7 +313,9 @@ class CodingMemoryExtractor:
         # 模型答了且没有可记的内容（如 {"experiences": [], "fact": null}）是正常的空
         # 抽取；200 但 content 为空、或回复解析不出 JSON 对象，是模型失败，不能当成
         # 「成功、0 条」。原文兜底显式开启时沿用旧行为（交给下面的 verbatim 兜底）。
-        failure = self._output_failure(resp.content)
+        failure = self._output_failure(
+            resp.content, getattr(resp, "finish_reason", "") or ""
+        )
         if failure is not None and not self.verbatim_fallback_enabled:
             code, message = failure
             await _store_coding_log(
@@ -507,11 +510,25 @@ class CodingMemoryExtractor:
         return "\n".join(rows)
 
     @classmethod
-    def _output_failure(cls, text: Optional[str]) -> Optional[Tuple[str, str]]:
-        """回复本身是失败时返回 (error_code, message)；正常（含空抽取）返回 None。"""
+    def _output_failure(
+        cls, text: Optional[str], finish_reason: str = ""
+    ) -> Optional[Tuple[str, str]]:
+        """回复本身是失败时返回 (error_code, message)；正常（含空抽取）返回 None。
+
+        finish_reason=length 且解析不出 JSON 对象时报 OUTPUT_TRUNCATED 而不是
+        JSON_PARSE_FAILED：预算不够和输出坏了的修复动作完全不同（提高
+        max_tokens 重试 vs 换模型 / 修 prompt），混在一个码里会把排查带偏。
+        """
         if not (text or "").strip():
             return "EMPTY_RESPONSE", "coding extract LLM returned empty response"
         if cls._load_output_object(text) is None:
+            if str(finish_reason or "").strip().lower() == "length":
+                return (
+                    "OUTPUT_TRUNCATED",
+                    "coding extract output was cut off by the token budget "
+                    f"(finish_reason=length, {len(text)} chars); "
+                    "retry with a larger max_tokens",
+                )
             return (
                 "JSON_PARSE_FAILED",
                 f"coding extract output is not a JSON object ({len(text)} chars)",
