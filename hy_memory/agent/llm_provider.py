@@ -297,6 +297,10 @@ class LLMProvider:
         self._llm_config = self._build_llm_config()
         self._client = None
         self._clients = weakref.WeakKeyDictionary()
+        # Per-loop leases prevent one failed request from closing a client
+        # that is still serving other calls. Retired clients cannot be reused.
+        self._client_users = weakref.WeakKeyDictionary()
+        self._retired_clients = weakref.WeakKeyDictionary()
         
         # 统计
         self._total_calls = 0
@@ -543,20 +547,35 @@ class LLMProvider:
         if self._llm_config.extra_body:
             kwargs["extra_body"] = self._llm_config.extra_body
 
+        users = self._client_users.setdefault(loop, {})
+        retired = self._retired_clients.setdefault(loop, set())
+        users[client] = users.get(client, 0) + 1
         try:
             async with llm_slot():
                 response = await client.chat.completions.create(**kwargs)
         except Exception:
-            # A transport failure may poison a pooled connection.  Evict only
-            # this endpoint so the outer retry creates a clean client.
-            clients.pop(client_key, None)
-            try:
-                closed = client.close()
-                if asyncio.iscoroutine(closed):
-                    await closed
-            except Exception:
-                pass
+            # A failing call may belong to an already retired generation. Do
+            # not evict a newer client created while that call was in flight.
+            if clients.get(client_key) is client:
+                clients.pop(client_key)
+            retired.add(client)
             raise
+        finally:
+            users[client] -= 1
+            if users[client] == 0:
+                users.pop(client)
+                if client in retired:
+                    try:
+                        closed = client.close()
+                        if asyncio.iscoroutine(closed):
+                            await closed
+                    except Exception:
+                        # Keep the retired client reachable for close() to
+                        # attempt cleanup again after a close error. A transport
+                        # that marks itself closed before raising may not retry.
+                        pass
+                    else:
+                        retired.discard(client)
 
         msg, usage, _finish, _choices_count = self._extract_response(response)
         _reasoning_content, _reasoning_tokens = self._extract_reasoning(msg, usage)
@@ -576,12 +595,18 @@ class LLMProvider:
         )
 
     async def close(self) -> None:
-        clients = [
+        clients = {
             client
             for per_loop in list(self._clients.values())
             for client in list(per_loop.values())
-        ]
+        }
+        clients.update(
+            client
+            for per_loop in list(self._retired_clients.values())
+            for client in list(per_loop)
+        )
         self._clients.clear()
+        self._retired_clients.clear()
         for client in clients:
             try:
                 closed = client.close()
