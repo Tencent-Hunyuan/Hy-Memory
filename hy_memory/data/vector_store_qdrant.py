@@ -1060,6 +1060,8 @@ class QdrantVectorStore(VectorStoreBase):
         only_latest: bool = False,
         with_vectors: bool = True,
         allow_raw_layer: bool = False,
+        order_by_created: bool = False,
+        exclude_node_ids: Optional[List[str]] = None,
     ) -> List[MemoryNode]:
         """枚举用户的记忆节点，使用 scroll API，支持多 user / 多 agent
 
@@ -1092,6 +1094,10 @@ class QdrantVectorStore(VectorStoreBase):
                 must_conditions.append(
                     FieldCondition(key="agent_id", match=MatchAny(any=effective_aids))
                 )
+        if exclude_node_ids:
+            must_not_conditions.append(
+                FieldCondition(key="node_id", match=MatchAny(any=list(exclude_node_ids)))
+            )
         if only_latest:
             must_conditions.append(
                 FieldCondition(key="is_latest", match=MatchValue(value=True))
@@ -1137,6 +1143,15 @@ class QdrantVectorStore(VectorStoreBase):
         )
 
         def _scroll_all():
+            if order_by_created:
+                points = self._recent_created_points(scroll_filter, limit, with_vectors)
+                nodes = []
+                for point in points:
+                    node = self._recent_payload_to_node(point.payload)
+                    if with_vectors and point.vector:
+                        node.embedding = self._dense_of(point.vector)
+                    nodes.append(node)
+                return nodes
             nodes = []
             offset = None
             if self._is_local:
@@ -1199,6 +1214,86 @@ class QdrantVectorStore(VectorStoreBase):
             f"agent_ids={effective_aids} found={len(nodes)}"
         )
         return nodes
+
+    def _recent_created_points(self, scroll_filter, limit: int, with_vectors: bool):
+        """Order projected timestamps first; retrieve bodies for the final IDs only."""
+        import heapq
+        from qdrant_client import models as qdrant_models
+        from qdrant_client.http.exceptions import UnexpectedResponse
+        from qdrant_client.models import Filter, FieldCondition, HasIdCondition, MatchValue
+
+        if limit <= 0:
+            return []
+        projection = ["node_id", "gmt_created"]
+
+        def key(point):
+            return self._created_payload_key(point.payload or {}, point.id)
+
+        def projected(condition):
+            offset = None
+            while True:
+                result = self._client.scroll(
+                    collection_name=self._collection_name, scroll_filter=condition,
+                    limit=256, offset=offset, with_payload=projection, with_vectors=False,
+                )
+                points, offset = result if isinstance(result, tuple) else (result.points, result.next_page_offset)
+                yield from points
+                if offset is None or not points:
+                    break
+
+        ordered = None
+        order_by_type = getattr(qdrant_models, "OrderBy", None)
+        if order_by_type is None:
+            self._created_order_supported = False
+        if getattr(self, "_created_order_supported", None) is not False:
+            try:
+                result = self._client.scroll(
+                    collection_name=self._collection_name, scroll_filter=scroll_filter,
+                    order_by=order_by_type(key="gmt_created", direction="desc"), limit=limit,
+                    with_payload=projection, with_vectors=False,
+                )
+                ordered = result[0] if isinstance(result, tuple) else result.points
+                self._created_order_supported = True
+            except UnexpectedResponse as exc:
+                # Old remote collections may not have the integer range index.
+                # Preserve correctness through projected paging, never first-N.
+                message = str(exc).lower()
+                if (exc.status_code != 400 or "gmt_created" not in message
+                        or "index" not in message):
+                    raise
+                self._created_order_supported = False
+                logger.debug("[qdrant] created-time ordering unavailable; paging projected timestamps")
+            except (TypeError, ValueError) as exc:
+                message = str(exc).lower()
+                if not any(text in message for text in (
+                    "unexpected keyword argument 'order_by'",
+                    "order_by is not supported", "order by is not supported",
+                    "unsupported order_by", "unsupported order by",
+                )):
+                    raise
+                self._created_order_supported = False
+
+        if ordered is not None and len(ordered) == limit:
+            cutoff = min(key(point)[0] for point in ordered)
+            newer = [point for point in ordered if key(point)[0] > cutoff]
+            tied_filter = Filter(must=[
+                scroll_filter, FieldCondition(key="gmt_created", match=MatchValue(value=int(cutoff))),
+            ])
+            selected = newer + heapq.nlargest(limit - len(newer), projected(tied_filter), key=key)
+        else:
+            # Local/legacy stores without usable ordering still scan only IDs
+            # and timestamps, keeping O(limit) candidates and no conversation text.
+            selected = heapq.nlargest(limit, projected(scroll_filter), key=key)
+        if not selected:
+            return []
+        ids = [point.id for point in selected]
+        result = self._client.scroll(
+            collection_name=self._collection_name,
+            scroll_filter=Filter(must=[scroll_filter, HasIdCondition(has_id=ids)]),
+            limit=len(ids), with_payload=True, with_vectors=with_vectors,
+        )
+        points = result[0] if isinstance(result, tuple) else result.points
+        return sorted(points, key=key, reverse=True)
 
     async def _scroll_filtered_nodes(
         self,
