@@ -67,7 +67,7 @@ export function isContextSearchRequest(
   );
 }
 
-/** Composition of existing rights, not a new all-content grant. Core checks live sources. */
+/** Composition of existing rights. Core checks which connected sources remain live. */
 export function authorizeContext(
   identity: VerifiedHostIdentity,
   request: ContextSearchRequest,
@@ -76,16 +76,9 @@ export function authorizeContext(
   const raw =
     kinds.includes("raw") &&
     identity.allowedTools.includes("om_conversations") &&
-    identity.allowedScopes.includes("all-apps") &&
-    identity.allowedScopes.some((s) => s.startsWith("source:"));
+    identity.allowedScopes.includes("all-apps");
   const memory = kinds.includes("memory") && hasMemoryAuthority(identity);
-  if (
-    request.raw_source_ids &&
-    (!raw ||
-      !request.raw_source_ids.every((s) =>
-        identity.allowedScopes.includes(`source:${s}`),
-      ))
-  )
+  if (request.raw_source_ids && !raw)
     throw new HostGrantError("host_grant_scope_denied");
   if (!raw && !memory) throw new HostGrantError("host_grant_tool_denied");
 }
@@ -109,8 +102,7 @@ export function isContextResponseAuthorized(
     item.kind === "memory"
       ? hasMemoryAuthority(identity)
       : identity.allowedTools.includes("om_conversations") &&
-        identity.allowedScopes.includes("all-apps") &&
-        identity.allowedScopes.includes(`source:${item.source}`),
+        identity.allowedScopes.includes("all-apps"),
   );
 }
 
