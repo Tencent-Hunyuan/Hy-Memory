@@ -33,6 +33,7 @@ export function MemoryModeCards({
   currentBadge,
   disabled = false,
   layout = "grid",
+  describedBy,
   onChange,
   ultraDetail,
   "aria-label": ariaLabel,
@@ -43,6 +44,7 @@ export function MemoryModeCards({
   currentBadge?: ReactNode;
   disabled?: boolean | ((mode: MemoryPipelineMode) => boolean);
   layout?: "grid" | "rows";
+  describedBy?: Partial<Record<MemoryPipelineMode, string | undefined>>;
   onChange(mode: MemoryPipelineMode, control: HTMLInputElement): void;
   ultraDetail?: ReactNode;
   "aria-label": string;
@@ -87,6 +89,7 @@ export function MemoryModeCards({
                   name={name}
                   value={mode.id}
                   aria-label={localizedTitle}
+                  aria-describedby={describedBy?.[mode.id]}
                   checked={selected}
                   disabled={modeDisabled}
                   onChange={(event) => onChange(mode.id, event.currentTarget)}

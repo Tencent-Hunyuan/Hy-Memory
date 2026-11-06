@@ -7,7 +7,7 @@ import type {
   SourceResponse,
 } from "@one-memory/contracts";
 import { legacyMemoryModePlan } from "@one-memory/operations";
-import { Check, X } from "lucide-react";
+import { Check, Clock3, X } from "lucide-react";
 import {
   type CSSProperties,
   type ReactNode,
@@ -112,7 +112,7 @@ export function OnboardingFlow({
   imports: ImportSourcesController;
   onFinish(destination: OnboardingDestination): void;
 }) {
-  const { text, t, locale } = useOnboardingTranslation();
+  const { text, t } = useOnboardingTranslation();
   const [sources, setSources] = useState(imports.sources);
   const sourceGeneration = useRef({ value: imports.sources, epoch: 0 });
   if (sourceGeneration.current.value !== imports.sources) {
@@ -165,6 +165,7 @@ export function OnboardingFlow({
   });
   const [scheduleLoaded, setScheduleLoaded] = useState(false);
   const [scheduleReadFailed, setScheduleReadFailed] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const scheduleReadOperation = useRef(0);
   const [modeFocusToken, setModeFocusToken] = useState(
     resumedStep === "mode" ? 1 : 0,
@@ -430,7 +431,7 @@ export function OnboardingFlow({
   const refreshUltraSchedule = useCallback(async () => {
     const operation = ++scheduleReadOperation.current;
     setScheduleLoaded(false);
-    setScheduleReadFailed(false);
+    setScheduleLoading(true);
     try {
       const schedule = await getEvolveSchedule();
       if (!alive.current || scheduleReadOperation.current !== operation) return;
@@ -446,6 +447,9 @@ export function OnboardingFlow({
         setScheduleLoaded(false);
         setScheduleReadFailed(true);
       }
+    } finally {
+      if (alive.current && scheduleReadOperation.current === operation)
+        setScheduleLoading(false);
     }
   }, []);
 
@@ -1260,11 +1264,11 @@ export function OnboardingFlow({
                     ? "正在保存模式…"
                     : modePhase === "completing"
                       ? "正在完成首次设置…"
-                      : modeChoice === "lite"
-                        ? "使用 Lite 进入"
-                        : modeChoice === "pro"
-                          ? "继续配置模型"
-                          : "继续",
+                      : !modeChoice
+                        ? "继续"
+                        : modeChoice === "lite"
+                          ? "使用 Lite 进入"
+                          : "配置模型",
                 )}
               </R6Button>
             }
@@ -1274,17 +1278,19 @@ export function OnboardingFlow({
               aria-label={text("记忆模式")}
             >
               <div className="onboarding-r6-mode-intro">
-                <h2>
-                  {locale === "zh-Hans"
-                    ? "Choose how MemHub remembers"
-                    : text("你希望 MemHub 如何形成记忆？")}
-                </h2>
+                <h2>{text("你希望 MemHub 如何形成记忆？")}</h2>
                 <p>{text("需要明确选择一种方式；之后仍可在设置中更改。")}</p>
               </div>
               <MemoryModeCards
                 aria-label={text("记忆模式")}
                 value={modeChoice}
                 layout="rows"
+                describedBy={{
+                  ultra:
+                    modeChoice === "ultra"
+                      ? "onboarding-ultra-schedule-description"
+                      : undefined,
+                }}
                 disabled={modeSaving || completionBusy}
                 onChange={(mode) => {
                   modeChoiceTouched.current = true;
@@ -1292,11 +1298,19 @@ export function OnboardingFlow({
                   setModeChoice(mode);
                   setModeError(null);
                 }}
-                ultraDetail={
-                  scheduleLoaded ? (
-                    <div className="onboarding-r6-ultra-default">
+              />
+              {modeChoice === "ultra" && (
+                <aside
+                  id="onboarding-ultra-schedule"
+                  className="onboarding-r6-ultra-status"
+                  aria-label={text("每天自动整合")}
+                  aria-busy={scheduleLoading || undefined}
+                >
+                  <Clock3 size={18} aria-hidden="true" />
+                  {scheduleLoaded ? (
+                    <div className="onboarding-r6-ultra-default" role="status">
                       <strong>{text("每天自动整合")}</strong>
-                      <small>
+                      <small id="onboarding-ultra-schedule-description">
                         {text(
                           ultraSchedule.enabled
                             ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
@@ -1306,21 +1320,32 @@ export function OnboardingFlow({
                     </div>
                   ) : scheduleReadFailed ? (
                     <div className="onboarding-r6-schedule-recovery">
-                      <p role="alert">
+                      <p
+                        id="onboarding-ultra-schedule-description"
+                        role="alert"
+                      >
                         {text("记忆模式状态暂时无法读取，请重试。")}
                       </p>
                       <R6Button
                         className="onboarding-r6-schedule-retry"
+                        pending={scheduleLoading}
+                        disabled={scheduleLoading}
                         onClick={() => void refreshUltraSchedule()}
                       >
                         {text("重试")}
                       </R6Button>
                     </div>
                   ) : (
-                    <p>{text("正在读取自动整合设置…")}</p>
-                  )
-                }
-              />
+                    <p
+                      id="onboarding-ultra-schedule-description"
+                      className="onboarding-r6-schedule-loading"
+                      role="status"
+                    >
+                      {text("正在读取自动整合设置…")}
+                    </p>
+                  )}
+                </aside>
+              )}
               {(modeError || error) && (
                 <p className="onboarding-r6-mode-error" role="alert">
                   {text(modeError ?? error ?? "")}
