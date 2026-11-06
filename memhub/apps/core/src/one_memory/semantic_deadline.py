@@ -7,6 +7,7 @@ drift apart on what "HY did not answer" means.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -98,11 +99,51 @@ def normalize_semantic_hits(values: object) -> tuple[SemanticMemoryHit, ...] | N
 #: reading HY's ids back from the ledger and filtering them. On a
 #: 1,500-memory library that measured p95 ≈ 55 ms under load.
 _LEDGER_RESERVE_S = 0.25
-# Semantic ranking is an enhancement to the local governed-memory read. Under
-# import pressure HY can take seconds even when the ledger already has useful
-# results, so never spend the host's one-second interaction target waiting for
-# it. The unfinished read is reported as partial and completes in isolation.
-_HY_WAIT_CAP_S = 0.5
+# Semantic ranking is an enhancement to the local governed-memory read, so the
+# wait is capped: a slow HY must not spend the host's interaction budget. The
+# cap has to clear the cost of the deep search, though, and that cost is not
+# small. `recall_async` asks HY for `schema_limit` and `intention_limit`
+# sub-queries on top of the vector search, and `_search_sdk_memories` passes the
+# caller's `limit` to both.
+#
+# Measured on a 4-core / 11 GB Linux host, 1,900 memories, same query, eight
+# runs (mean ≈ 0.74 s, range 0.63–0.92 s):
+#
+#     schema_limit=0   intention_limit=0    127 ms
+#     schema_limit=1   intention_limit=1    384 ms
+#     schema_limit=3   intention_limit=1    334 ms
+#     schema_limit=12  intention_limit=12   682 ms   <- the default path
+#
+# So 0.55 s of that 0.68 s is the schema and intention sub-queries, and a 0.5 s
+# cap fired ~180 ms before the search could answer. `recall_async` has no
+# keyword fallback, so this did not degrade to a partial answer: every recall
+# returned no hits at all (`truncated_by=timeout_budget`, `unexamined_count=0`)
+# while `/api/v2/context/search` answered the same query in 0.3 s.
+#
+# It is not contention: pausing the source sync left both the core's CPU share
+# and the search time unchanged (718 ms → 683 ms mean, ~5%).
+#
+# The comment above states the budget as "the host's one-second interaction
+# target", and 0.68 s is inside that. A 0.5 s cap is stricter than the target it
+# is meant to protect, so it rejects machines that meet the design goal.
+#
+# 1.0 s matches that stated target: it clears the measured deep search, and the
+# caller's own `timeout_ms` still bounds the total. Deployments that would
+# rather wait longer, or must keep a tighter interactive target, override it
+# with `ONE_MEMORY_HY_WAIT_CAP_S`.
+_HY_WAIT_CAP_DEFAULT_S = 1.0
+
+
+def _hy_wait_cap_s() -> float:
+    """The HY wait cap, honouring `ONE_MEMORY_HY_WAIT_CAP_S` when it is valid."""
+    raw = os.environ.get("ONE_MEMORY_HY_WAIT_CAP_S", "").strip()
+    if not raw:
+        return _HY_WAIT_CAP_DEFAULT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return _HY_WAIT_CAP_DEFAULT_S
+    return value if value > 0 else _HY_WAIT_CAP_DEFAULT_S
 
 
 def ledger_wait_budget(remaining_s: float) -> float:
@@ -111,7 +152,7 @@ def ledger_wait_budget(remaining_s: float) -> float:
 
 
 def hy_wait_budget(remaining_s: float) -> float:
-    return min(_HY_WAIT_CAP_S, ledger_wait_budget(remaining_s))
+    return min(_hy_wait_cap_s(), ledger_wait_budget(remaining_s))
 
 
 async def search_within(
