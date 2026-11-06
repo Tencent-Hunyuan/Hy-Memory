@@ -7,7 +7,7 @@ import type {
   SourceResponse,
 } from "@one-memory/contracts";
 import { legacyMemoryModePlan } from "@one-memory/operations";
-import { Check, Clock3, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import {
   type CSSProperties,
   type ReactNode,
@@ -1292,22 +1292,15 @@ export function OnboardingFlow({
                       : undefined,
                 }}
                 disabled={modeSaving || completionBusy}
+                ultraDetailBusy={scheduleLoading}
                 onChange={(mode) => {
                   modeChoiceTouched.current = true;
                   intentRef.current = mode;
                   setModeChoice(mode);
                   setModeError(null);
                 }}
-              />
-              {modeChoice === "ultra" && (
-                <aside
-                  id="onboarding-ultra-schedule"
-                  className="onboarding-r6-ultra-status"
-                  aria-label={text("每天自动整合")}
-                  aria-busy={scheduleLoading || undefined}
-                >
-                  <Clock3 size={18} aria-hidden="true" />
-                  {scheduleLoaded ? (
+                ultraDetail={
+                  scheduleLoaded ? (
                     <div className="onboarding-r6-ultra-default" role="status">
                       <strong>{text("每天自动整合")}</strong>
                       <small id="onboarding-ultra-schedule-description">
@@ -1316,6 +1309,14 @@ export function OnboardingFlow({
                             ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
                             : "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
                         ).replace("{time}", ultraSchedule.time)}
+                        {ultraSchedule.enabled ? (
+                          <>
+                            <br />
+                            <span>
+                              {text("后续可在设置页自定义时间或关闭。")}
+                            </span>
+                          </>
+                        ) : null}
                       </small>
                     </div>
                   ) : scheduleReadFailed ? (
@@ -1329,7 +1330,9 @@ export function OnboardingFlow({
                       <R6Button
                         className="onboarding-r6-schedule-retry"
                         pending={scheduleLoading}
-                        disabled={scheduleLoading}
+                        disabled={
+                          scheduleLoading || modeSaving || completionBusy
+                        }
                         onClick={() => void refreshUltraSchedule()}
                       >
                         {text("重试")}
@@ -1343,9 +1346,9 @@ export function OnboardingFlow({
                     >
                       {text("正在读取自动整合设置…")}
                     </p>
-                  )}
-                </aside>
-              )}
+                  )
+                }
+              />
               {(modeError || error) && (
                 <p className="onboarding-r6-mode-error" role="alert">
                   {text(modeError ?? error ?? "")}

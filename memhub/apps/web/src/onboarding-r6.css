@@ -588,51 +588,24 @@
   font-size: 11px;
   line-height: 18px;
 }
-.onboarding-r6-ultra-status {
-  min-height: 66px;
-  padding: 12px 14px;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  border: 1px solid rgb(143 169 158 / 42%);
-  border-radius: 12px;
-  background:
-    linear-gradient(105deg, rgb(236 244 240 / 88%), rgb(255 255 255 / 56%)),
-    rgb(255 255 255 / 42%);
-  box-shadow:
-    inset 0 1px rgb(255 255 255 / 82%),
-    0 8px 24px rgb(47 107 87 / 5%);
-  color: #405867;
-  animation: onboarding-r6-ultra-status-in 180ms cubic-bezier(0.16, 1, 0.3, 1)
-    both;
-}
-.onboarding-r6-ultra-status > svg {
-  color: #527565;
-}
 .onboarding-r6-schedule-loading {
   margin: 0;
   color: #607482;
   font-size: 12px;
   line-height: 20px;
 }
-.onboarding-r6-ultra-status .onboarding-r6-schedule-recovery {
+.memory-mode-detail .onboarding-r6-schedule-recovery {
   width: 100%;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   text-align: left;
 }
-.onboarding-r6-ultra-status .onboarding-r6-schedule-retry {
+.memory-mode-detail .onboarding-r6-schedule-retry {
   flex: 0 0 auto;
   min-width: 76px;
-}
-@keyframes onboarding-r6-ultra-status-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
 }
 .onboarding-r6-evolve-settings {
   margin-top: 0;
@@ -662,11 +635,8 @@
   line-height: 22px;
 }
 .onboarding-r6-mode .onboarding-r6-schedule-recovery {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
   color: #944242;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
 .onboarding-r6-mode .onboarding-r6-schedule-recovery p {
@@ -696,10 +666,6 @@
   .onboarding-r6-mode-intro p {
     font-size: 12px;
     line-height: 20px;
-  }
-  .onboarding-r6-ultra-status {
-    min-height: 58px;
-    padding-block: 9px;
   }
 }
 .onboarding-r6-empty {
@@ -869,6 +835,13 @@
     padding: 18px 20px;
     flex-wrap: wrap;
     flex-basis: auto;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-recovery {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-retry {
+    align-self: flex-start;
   }
 }
 @media (prefers-reduced-transparency: reduce) {
@@ -1040,9 +1013,6 @@
   .onboarding-r6-head,
   .onboarding-r6-body,
   .onboarding-r6-badge[data-found="true"] i {
-    animation: none;
-  }
-  .onboarding-r6-ultra-status {
     animation: none;
   }
   .onboarding-r6-row,
