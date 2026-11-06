@@ -2,8 +2,9 @@
 
 Without a usable generation model no memory can be distilled, and with no
 memory in the library a memory search can only come back empty. In both cases
-recall searches the SDK raw layer and says so with `mode: "raw"`. Original
-conversations stay under their own grant: recall's grant does not widen it.
+recall searches the SDK raw layer and says so with `mode: "raw"`. External
+callers need the conversations tool and all-apps scope; Core resolves that to
+every connected, unrevoked source.
 """
 
 import asyncio
@@ -18,6 +19,7 @@ from one_memory import api
 from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.hy_sdk_types import HySdkRawHit
+from one_memory.imports.sources.registry import RootCandidateKind
 from one_memory.recall import RecallHit, RecallReceipt, RecallRequest, RecallState
 from one_memory.recall_fallback import recall_with_fallback
 from one_memory.secrets import InMemorySecretStore
@@ -156,6 +158,26 @@ def test_raw_fallback_respects_the_callers_raw_sources():
     assert [hit.memory_id for hit in receipt.hits] == ["r1"]
 
 
+def test_raw_fallback_rechecks_sources_after_search_before_releasing_content():
+    _, fakes = _fakes(
+        ready=False,
+        memories=[],
+        has_memories=False,
+        raw=[_raw("r1", "private", source="cursor")],
+        sources=frozenset({"cursor"}),
+    )
+    checks = iter((frozenset({"cursor"}), frozenset()))
+
+    async def sources():
+        return next(checks)
+
+    fakes["raw_sources"] = sources
+    receipt = run(RecallRequest(query="private"), fakes)
+
+    assert receipt.state == RecallState.EMPTY
+    assert receipt.hits == ()
+
+
 def test_a_caller_with_no_raw_grant_gets_nothing_rather_than_a_wider_read():
     calls, fakes = _fakes(
         ready=False,
@@ -185,6 +207,43 @@ def test_raw_fallback_keeps_the_count_and_character_budgets():
     assert len(by_count.hits) == 2 and by_count.truncated_by.value == "count_budget"
     assert len(by_chars.hits) == 2 and by_chars.truncated_by.value == "character_budget"
     assert by_chars.used_characters == 300
+
+
+def test_oversized_raw_hit_returns_a_query_anchored_excerpt_instead_of_empty():
+    _, fakes = _fakes(
+        ready=False,
+        memories=[],
+        has_memories=False,
+        raw=[_raw("large", ("x" * 5_000) + "WebGL 黄色节点" + ("y" * 5_000))],
+    )
+
+    receipt = run(
+        RecallRequest(query="WebGL 黄色节点", limit=3, character_budget=300),
+        fakes,
+    )
+
+    assert receipt.state == RecallState.GROUNDED
+    assert len(receipt.hits) == 1
+    assert len(receipt.hits[0].content) == receipt.used_characters == 300
+    assert "WebGL 黄色节点" in receipt.hits[0].content
+    assert receipt.truncated_by.value == "character_budget"
+
+
+@pytest.mark.parametrize("prefix_length", [0, 100, 5_000, 9_980])
+def test_raw_excerpt_never_exceeds_its_character_budget(prefix_length):
+    needle = "WebGL"
+    content = ("x" * prefix_length) + needle + ("y" * (10_000 - prefix_length))
+    _, fakes = _fakes(
+        ready=False,
+        memories=[],
+        has_memories=False,
+        raw=[_raw("large", content)],
+    )
+
+    receipt = run(RecallRequest(query=needle, character_budget=300), fakes)
+
+    assert len(receipt.hits[0].content) == receipt.used_characters == 300
+    assert needle in receipt.hits[0].content
 
 
 def test_the_probe_never_falls_back():
@@ -237,6 +296,14 @@ def test_recall_route_falls_back_and_keeps_the_raw_grant(tmp_path, monkeypatch):
                 headers={"Authorization": "Bearer recall-test"},
             ) as client,
         ):
+            cursor_root = tmp_path / "cursor"
+            cursor_root.mkdir()
+            app.state.source_grant_store.grant(
+                user_id="local",
+                source_id="cursor",
+                root=cursor_root,
+                candidate_kind=RootCandidateKind.DEFAULT,
+            )
             local = await client.post("/api/v1/recall", json={"query": "数据库"})
             recall_only = await client.post(
                 "/api/v1/recall",
@@ -247,9 +314,22 @@ def test_recall_route_falls_back_and_keeps_the_raw_grant(tmp_path, monkeypatch):
                     "X-One-Memory-Allowed-Scopes": json.dumps(["all-apps"]),
                 },
             )
-            return local.json(), recall_only.json()
+            cross_app = await client.post(
+                "/api/v1/recall",
+                json={"query": "数据库"},
+                headers={
+                    **EXTERNAL,
+                    "X-One-Memory-Allowed-Tools": json.dumps(
+                        ["om_recall", "om_conversations"]
+                    ),
+                    "X-One-Memory-Allowed-Scopes": json.dumps(
+                        ["all-apps", "source:workbuddy"]
+                    ),
+                },
+            )
+            return local.json(), recall_only.json(), cross_app.json()
 
-    local, recall_only = asyncio.run(scenario())
+    local, recall_only, cross_app = asyncio.run(scenario())
 
     assert local["mode"] == "raw" and local["fallback_reason"] == "model_unavailable"
     assert local["hits"][0]["content_format"] == "raw"
@@ -258,7 +338,9 @@ def test_recall_route_falls_back_and_keeps_the_raw_grant(tmp_path, monkeypatch):
     assert searched[0] is None
     # A host granted recall alone may not read original conversations.
     assert recall_only["mode"] == "raw" and recall_only["hits"] == []
-    assert len(searched) == 1
+    # all-apps covers every connected source, not only the host's source scope.
+    assert cross_app["hits"][0]["source"] == "cursor"
+    assert searched == [None, frozenset({"cursor"})]
 
 
 def test_the_total_recall_budget_stays_under_the_brokers_wait():

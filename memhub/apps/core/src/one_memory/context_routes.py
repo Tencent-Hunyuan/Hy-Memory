@@ -322,6 +322,25 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
         raw_candidates = (
             () if isinstance(raw_items, Exception) else cast(tuple[SdkContextItem, ...], raw_items)
         )
+        if access is not None and raw_candidates:
+            try:
+                current = await asyncio.to_thread(
+                    resolve_context_authority,
+                    value,
+                    access,
+                    database,
+                    deadline=started + value.timeout_ms / 1000,
+                )
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(503, "context_authority_unavailable") from None
+            current_sources = current.raw_sources or frozenset()
+            raw_candidates = tuple(
+                item
+                for item in raw_candidates
+                if item.kind == "raw" and item.source in current_sources
+            )
         memory_candidates = (
             ()
             if isinstance(memory_items, Exception)
