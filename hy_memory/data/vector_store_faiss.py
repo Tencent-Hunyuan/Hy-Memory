@@ -14,9 +14,14 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 import asyncio
 import concurrent.futures
+import hashlib
 import json
 import logging
+import os
+import shutil
+import struct
 import threading
+import uuid
 import numpy as np
 
 from ..models.memory import (
@@ -31,6 +36,12 @@ logger = logging.getLogger(__name__)
 # VDB 独立线程池
 from .vector_store_chroma import _vdb_executor
 
+# Indirections so tests can inject a crash or an unavailable backup without
+# patching the process-wide os module.
+_atomic_replace = os.replace
+_hard_link = os.link
+_copy_file = shutil.copy2
+
 
 def _run_in_vdb_pool(func, *args, **kwargs):
     """在 VDB 独立线程池中执行同步函数"""
@@ -39,12 +50,197 @@ def _run_in_vdb_pool(func, *args, **kwargs):
     return run_in_executor_guarded(_vdb_executor, call)
 
 
+def _backup_path(path: Path) -> Path:
+    """Legacy pair backup path, kept for stores written before the container."""
+    return path.with_name(path.name + ".bak")
+
+
+def _fsync_file(path: Path) -> None:
+    with open(path, "rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _pair_is_consistent(index: Any, saved: Any) -> bool:
+    """Whether the index and its payload describe the same save generation.
+
+    FAISS appends a vector for every upsert/update, so `ntotal` counts all
+    appends while `idx_to_id` only keeps live ones. The invariants that must
+    hold are: `next_idx` equals the number of appends, every live mapping
+    points at that mapping's `idx`, and every data row has exactly one live
+    mapping.
+    """
+    if not isinstance(saved, dict):
+        return False
+    data = saved.get("data")
+    raw_mapping = saved.get("idx_to_id")
+    next_idx = saved.get("next_idx")
+    if not isinstance(data, dict) or not isinstance(raw_mapping, dict):
+        return False
+    if not isinstance(next_idx, int) or next_idx < 0:
+        return False
+    try:
+        mapping = {int(key): str(value) for key, value in raw_mapping.items()}
+    except (TypeError, ValueError):
+        return False
+    if int(getattr(index, "ntotal", -1)) != next_idx:
+        return False
+    if len(mapping) != len(data):
+        return False
+    if len(set(mapping.values())) != len(mapping):
+        return False
+    if set(mapping.values()) != set(data):
+        return False
+    for idx, point_id in mapping.items():
+        entry = data.get(point_id)
+        if not isinstance(entry, dict) or entry.get("idx") != idx:
+            return False
+        if idx < 0 or idx >= next_idx:
+            return False
+    return True
+
+
+def _load_pair(faiss: Any, index_path: Path, payload_path: Path):
+    """Load a legacy index/payload pair; return None when unusable."""
+    try:
+        index = faiss.read_index(str(index_path))
+        with open(payload_path, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
+        return None
+    if not _pair_is_consistent(index, saved):
+        return None
+    return index, saved
+
+
+# One file, one atomic replace: the index bytes and the payload cannot come
+# from different generations, which a pair of separately replaced files can.
+_CONTAINER_MAGIC = b"OMFAISS1\n"
+_CONTAINER_HEADER_LENGTH = 4
+_CONTAINER_MAX_HEADER = 1024 * 1024
+
+
+def _write_container(index_path: Path, container_path: Path, payload: bytes) -> None:
+    """Write index + payload into one container file and fsync it."""
+    index_len = index_path.stat().st_size
+    header = json.dumps(
+        {
+            "schema": 1,
+            "payload_len": len(payload),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
+            "index_len": index_len,
+            "index_sha256": _sha256_file(index_path),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if len(header) > _CONTAINER_MAX_HEADER:
+        raise ValueError("FAISS container header is too large")
+    with open(container_path, "wb") as out:
+        out.write(_CONTAINER_MAGIC)
+        out.write(struct.pack(">I", len(header)))
+        out.write(header)
+        out.write(payload)
+        with open(index_path, "rb") as source:
+            shutil.copyfileobj(source, out, length=1024 * 1024)
+        out.flush()
+        os.fsync(out.fileno())
+
+
+def _load_container(faiss: Any, container_path: Path):
+    """Load and verify one container file; return None when unusable."""
+    try:
+        file_size = container_path.stat().st_size
+        with open(container_path, "rb") as handle:
+            if handle.read(len(_CONTAINER_MAGIC)) != _CONTAINER_MAGIC:
+                return None
+            length_bytes = handle.read(_CONTAINER_HEADER_LENGTH)
+            if len(length_bytes) != _CONTAINER_HEADER_LENGTH:
+                return None
+            header_length = struct.unpack(">I", length_bytes)[0]
+            if header_length <= 0 or header_length > _CONTAINER_MAX_HEADER:
+                return None
+            header = json.loads(handle.read(header_length))
+            payload_len = int(header["payload_len"])
+            index_len = int(header["index_len"])
+            body_start = len(_CONTAINER_MAGIC) + _CONTAINER_HEADER_LENGTH + header_length
+            if payload_len < 0 or index_len < 0:
+                return None
+            if body_start + payload_len + index_len != file_size:
+                return None
+            payload = handle.read(payload_len)
+            index_bytes = handle.read(index_len)
+            if len(payload) != payload_len or len(index_bytes) != index_len:
+                return None
+            if handle.read(1):
+                return None
+        if hashlib.sha256(payload).hexdigest() != str(header["payload_sha256"]):
+            return None
+        if hashlib.sha256(index_bytes).hexdigest() != str(header["index_sha256"]):
+            return None
+        saved = json.loads(payload)
+        index = faiss.deserialize_index(np.frombuffer(index_bytes, dtype=np.uint8))
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        json.JSONDecodeError,
+    ):
+        return None
+    if not _pair_is_consistent(index, saved):
+        return None
+    return index, saved
+
+
+def _stage_backup(source: Path, backup: Path) -> Path:
+    """Snapshot one container beside it; raise rather than lose the old one.
+
+    The backup lands under a unique name first and is promoted only after the
+    live file has been replaced. A hard link costs no copy; filesystems that
+    refuse it fall back to a copy. If neither works, the caller aborts before
+    touching the live file and the previous recovery point stays intact.
+    """
+    staging = backup.with_name(backup.name + f".next-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        try:
+            _hard_link(source, staging)
+        except OSError:
+            _copy_file(source, staging)
+        _fsync_file(staging)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
+    return staging
+
+
 class FaissVectorStore(VectorStoreBase):
     """
     FAISS 向量存储实现
 
     使用 faiss-cpu 做相似度检索，内存 dict 存储 payload，
-    持久化到磁盘（faiss index 文件 + JSON payload 文件）。
+    持久化到磁盘（index 字节与 payload 存在同一个容器文件里）。
     """
 
     def __init__(self, config: MemoryConfig):
@@ -57,6 +253,9 @@ class FaissVectorStore(VectorStoreBase):
         self._next_idx: int = 0
         self._lock = threading.Lock()
         self._dims = config.vector_store.embedding_dims
+        # The live container was unreadable and its backup could not be
+        # restored. Never stage that damaged file over the good backup.
+        self._live_container_damaged = False
 
     async def initialize(self) -> None:
         """初始化 FAISS 索引"""
@@ -72,51 +271,149 @@ class FaissVectorStore(VectorStoreBase):
             persist_dir = Path(self.config.vector_store.persist_directory)
             persist_dir.mkdir(parents=True, exist_ok=True)
 
+            container_path = persist_dir / f"{self._collection_name}.omfaiss"
+            backup_path = container_path.with_name(container_path.name + ".bak")
             index_path = persist_dir / f"{self._collection_name}.faiss"
             payload_path = persist_dir / f"{self._collection_name}.json"
 
-            if index_path.exists() and payload_path.exists():
-                # 从磁盘加载
-                self._index = faiss.read_index(str(index_path))
-                with open(payload_path, "r", encoding="utf-8") as f:
-                    saved = json.load(f)
-                self._data = saved.get("data", {})
-                self._idx_to_id = {int(k): v for k, v in saved.get("idx_to_id", {}).items()}
-                self._next_idx = saved.get("next_idx", 0)
-                logger.info(
-                    f"FAISS index loaded from {index_path}, "
-                    f"points={self._index.ntotal}"
+            loaded = None
+            if container_path.exists():
+                loaded = _load_container(faiss, container_path)
+                if loaded is None:
+                    logger.warning(
+                        f"[faiss] container is inconsistent: {container_path}"
+                    )
+                    if backup_path.exists():
+                        loaded = _load_container(faiss, backup_path)
+                        if loaded is not None:
+                            logger.warning(
+                                f"[faiss] recovered the previous save from "
+                                f"{backup_path.name}; restoring it"
+                            )
+                            staging = container_path.with_name(
+                                container_path.name
+                                + f".restore-{os.getpid()}-{uuid.uuid4().hex}"
+                            )
+                            try:
+                                _copy_file(backup_path, staging)
+                                _fsync_file(staging)
+                                _atomic_replace(staging, container_path)
+                            except OSError as error:
+                                self._live_container_damaged = True
+                                logger.warning(
+                                    f"[faiss] could not restore the backup: {error}"
+                                )
+                            finally:
+                                staging.unlink(missing_ok=True)
+            elif index_path.exists() and payload_path.exists():
+                # Pre-container stores. The first successful save writes the
+                # container; the legacy pair is left in place so an older
+                # build still finds the state it understands.
+                loaded = _load_pair(faiss, index_path, payload_path)
+                if loaded is None:
+                    logger.warning(
+                        f"[faiss] legacy index/payload pair is inconsistent: {index_path}"
+                    )
+                    backup_index = _backup_path(index_path)
+                    backup_payload = _backup_path(payload_path)
+                    if backup_index.exists() and backup_payload.exists():
+                        loaded = _load_pair(faiss, backup_index, backup_payload)
+                        if loaded is not None:
+                            logger.warning(
+                                f"[faiss] recovered the previous save from "
+                                f"{backup_index.name}"
+                            )
+            elif index_path.exists() or payload_path.exists():
+                logger.warning(
+                    f"[faiss] incomplete legacy index/payload pair: {index_path}"
                 )
-            else:
+
+            if loaded is not None:
+                self._index, saved = loaded
+                self._data = saved.get("data", {})
+                self._idx_to_id = {
+                    int(k): v for k, v in saved.get("idx_to_id", {}).items()
+                }
+                self._next_idx = saved.get("next_idx", 0)
+                logger.info(f"FAISS index loaded, points={self._index.ntotal}")
+            elif (
+                not container_path.exists()
+                and not index_path.exists()
+                and not payload_path.exists()
+            ):
                 # 创建新索引 (使用 IndexFlatIP，余弦相似度需先归一化)
                 self._index = faiss.IndexFlatIP(self._dims)
                 logger.info(f"Created new FAISS index, dims={self._dims}")
+            else:
+                # 有文件但一个有效代都读不出来：保留现场，拒绝用空索引覆盖。
+                raise RuntimeError(
+                    f"FAISS index and payload cannot be loaded consistently and no "
+                    f"usable backup exists: {container_path}"
+                )
 
         await _run_in_vdb_pool(_init)
-        logger.debug(f"VectorStore initialized (FAISS), collection={self._collection_name}")
+        logger.debug(
+            f"VectorStore initialized (FAISS), collection={self._collection_name}"
+        )
 
     # ================================================================
     # 持久化
     # ================================================================
 
     def _persist(self) -> None:
-        """持久化索引和 payload 到磁盘"""
+        """持久化索引和 payload 到磁盘。
+
+        FAISS 的原生 `write_index` 直接覆盖目标文件；磁盘写满会在旧数据上
+        留下半个索引，进程被杀会在 JSON 写入途中留下空文件——这正是
+        issue #17 里“新增一条记录导致整库打不开”的原因。
+
+        现在 index 字节和 payload 写进同一个容器文件，标题记录两者长度和
+        SHA-256，再用一次 `os.replace` 原子换入。单个文件意味着 index 和
+        payload 不可能来自不同代。换入前先给旧容器做备份；备份失败就中止，
+        旧容器和旧备份都保持不动。
+        """
         import faiss
 
         persist_dir = Path(self.config.vector_store.persist_directory)
         persist_dir.mkdir(parents=True, exist_ok=True)
 
-        index_path = persist_dir / f"{self._collection_name}.faiss"
-        payload_path = persist_dir / f"{self._collection_name}.json"
+        container_path = persist_dir / f"{self._collection_name}.omfaiss"
+        backup_path = container_path.with_name(container_path.name + ".bak")
+        token = f".tmp-{os.getpid()}-{uuid.uuid4().hex}"
+        temp_index = persist_dir / f".{self._collection_name}.index{token}"
+        temp_container = container_path.with_name(container_path.name + token)
+        staged_backup: Path | None = None
 
-        faiss.write_index(self._index, str(index_path))
-        saved = {
-            "data": self._data,
-            "idx_to_id": {str(k): v for k, v in self._idx_to_id.items()},
-            "next_idx": self._next_idx,
-        }
-        with open(payload_path, "w", encoding="utf-8") as f:
-            json.dump(saved, f, ensure_ascii=False)
+        try:
+            faiss.write_index(self._index, str(temp_index))
+            _fsync_file(temp_index)
+
+            saved = {
+                "data": self._data,
+                "idx_to_id": {str(k): v for k, v in self._idx_to_id.items()},
+                "next_idx": self._next_idx,
+            }
+            payload = json.dumps(saved, ensure_ascii=False).encode("utf-8")
+            _write_container(temp_index, temp_container, payload)
+
+            # Secure the previous recovery point before touching the live
+            # file. If this raises, nothing live has moved.
+            if container_path.exists() and not self._live_container_damaged:
+                staged_backup = _stage_backup(container_path, backup_path)
+
+            _atomic_replace(temp_container, container_path)
+            self._live_container_damaged = False
+            if staged_backup is not None:
+                # A single-file promotion; the old backup is replaced only
+                # after the live container is already the new generation.
+                _atomic_replace(staged_backup, backup_path)
+                staged_backup = None
+            _fsync_directory(persist_dir)
+        finally:
+            temp_index.unlink(missing_ok=True)
+            temp_container.unlink(missing_ok=True)
+            if staged_backup is not None:
+                staged_backup.unlink(missing_ok=True)
 
     @staticmethod
     def _normalize(vec: List[float]) -> np.ndarray:
