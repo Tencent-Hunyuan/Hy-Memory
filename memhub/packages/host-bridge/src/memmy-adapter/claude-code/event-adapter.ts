@@ -94,7 +94,7 @@ function checkedReceipt(value: RecallReceipt, query: string): RecallReceipt {
         !hit.evidence_ids.every((id) => typeof id === "string"),
     ) ||
     (value.state === "empty") !== (value.hits.length === 0) ||
-    value.hits.reduce((n, h) => n + h.content.length, 0) > 6000
+    value.hits.reduce((n, h) => n + [...h.content].length, 0) > 6000
   ) {
     throw new ClaudeAdapterError("invalid_recall_response");
   }

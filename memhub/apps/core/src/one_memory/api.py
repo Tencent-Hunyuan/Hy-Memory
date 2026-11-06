@@ -6772,9 +6772,8 @@ async def _recall_raw_sources(
 ) -> frozenset[str] | None:
     """The raw sources this caller may read: the `/context` raw-lane rule.
 
-    Recall's own grant does not cover original conversations. A host reads
-    them only with `om_conversations` and its granted, unrevoked sources; a
-    trusted local caller reads every source.
+    `om_conversations` plus `all-apps` reads every connected, unrevoked source.
+    A trusted local caller reads every source without an external grant.
     """
     if access is None:
         return None

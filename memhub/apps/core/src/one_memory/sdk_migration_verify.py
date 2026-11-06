@@ -288,4 +288,3 @@ def verify_readback(
         productivity_readable=sum(1 for memory_id in legacy.productivity if readable(memory_id)),
         chat_missing_before_migration=chat_missing_before_migration,
     )
-

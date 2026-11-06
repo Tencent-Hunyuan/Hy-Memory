@@ -28,6 +28,7 @@ export function R6Button({
       type={type}
       className={`r6-button ${className}`}
       data-variant={variant}
+      data-pending-capable={supportsPending || undefined}
       disabled={disabled || busy}
       aria-busy={busy || undefined}
     >

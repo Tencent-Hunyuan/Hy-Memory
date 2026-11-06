@@ -53,8 +53,8 @@ def test_external_marker_is_not_an_installation_grant(tmp_path):
                 "/api/v2/memories/ask", json={"question": "history"}, headers=headers()
             )
             assert denied_tool.status_code == 403
-            # om_conversations reaches Core only as the v2 raw lane, and only
-            # with a source grant: all-apps alone opens no raw source.
+            # om_conversations reaches Core only as the v2 raw lane. all-apps
+            # has nothing to open because this fresh home has no connected source.
             no_raw = await client.post(
                 "/api/v2/context/search",
                 json={"query": "history", "kinds": ["raw"]},

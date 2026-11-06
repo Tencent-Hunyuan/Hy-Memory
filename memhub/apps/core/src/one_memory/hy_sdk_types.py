@@ -99,9 +99,7 @@ class HySdkMemoryRecord(BaseModel):
                 created_at = gmt_created
             updated_at = _epoch(raw.get("updated_at"))
             modified_at = _epoch(raw.get("gmt_modified"))
-            sort_updated_at = (
-                modified_at if modified_at is not None else updated_at
-            )
+            sort_updated_at = modified_at if modified_at is not None else updated_at
             return cls(
                 memory_id=str(raw["memory_id"]),
                 content=str(raw["content"]),
