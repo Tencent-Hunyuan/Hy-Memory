@@ -1052,6 +1052,8 @@ export async function searchSdkRaw(
     },
     { signal: options.signal, timeout: 10_000 },
   );
+  if (response.data?.state !== "grounded" && response.data?.state !== "empty")
+    throw new Error("raw_search_unavailable");
   const items = response.data?.items;
   return Array.isArray(items)
     ? items.filter(

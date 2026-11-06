@@ -41,7 +41,7 @@ it("lists raw conversations for the selected application", async () => {
 });
 
 it("keeps the application filter when searching raw conversations", async () => {
-  post.mockResolvedValue({ data: { items: [] } });
+  post.mockResolvedValue({ data: { state: "empty", items: [] } });
   const signal = new AbortController().signal;
 
   await searchSdkRaw("release plan", { source: "claude-code", signal });
@@ -58,6 +58,14 @@ it("keeps the application filter when searching raw conversations", async () => 
     },
     { signal, timeout: 10_000 },
   );
+});
+
+it("does not present an unavailable raw search as no matches", async () => {
+  post.mockResolvedValue({
+    data: { state: "unavailable", items: [] },
+  });
+
+  await expect(searchSdkRaw("3d")).rejects.toThrow("raw_search_unavailable");
 });
 
 it("pages the independent lightweight raw graph", async () => {
