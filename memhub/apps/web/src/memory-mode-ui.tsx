@@ -21,6 +21,22 @@ export const MODE_COPY: Record<
   },
 };
 
+export const MODE_TIER: Record<MemoryPipelineMode, string> = {
+  lite: "Lite",
+  pro: "Pro",
+  ultra: "Ultra",
+};
+
+export function modeDisplayName(
+  text: (value: string) => string,
+  mode: MemoryPipelineMode,
+) {
+  return text(MODE_COPY[mode].title)
+    .replace(/\s*[（(](?:lite|pro|ultra)[)）]\s*/i, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export const BLOCKER_COPY: Record<MemoryModePlan["blockers"][number], string> =
   {
     active_model_required: "使用 pro 或 ultra 前需要先配置并启用生成模型。",
@@ -184,7 +200,7 @@ export function MemoryModeConfirmDialog({
         <h2 id="memory-mode-confirm-title">
           {text("切换到 {mode}？").replace(
             "{mode}",
-            text(MODE_COPY[mode].title),
+            `${modeDisplayName(text, mode)} · ${MODE_TIER[mode]}`,
           )}
         </h2>
         <dl className="r6-mode-confirm-effects">

@@ -34,6 +34,7 @@ it("shows every mode feature and reveals Ultra scheduling after selection", asyn
   expect(screen.getByText("不调用生成模型")).toBeTruthy();
   expect(screen.getByText("沉淀高级记忆")).toBeTruthy();
   expect(screen.getByText("增强关联召回")).toBeTruthy();
+  expect(screen.getByText("· Pro").className).toContain("memory-mode-tier");
   expect(screen.queryByText("每天自动整合")).toBeNull();
 
   await user.click(screen.getByRole("radio", { name: /深度记忆/ }));
