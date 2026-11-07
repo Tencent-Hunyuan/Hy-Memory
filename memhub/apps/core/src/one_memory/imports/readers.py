@@ -139,6 +139,13 @@ def read_zstd_jsonl(
     max_records = None if max_bytes is None else _ZSTD_RECORD_BUDGET
     index = records_before_frame
     decompressor = zstandard.ZstdDecompressor()
+    # A record can straddle a frame boundary, because Harness writes one frame
+    # per flush and a flush can land mid-record. `carry` holds the bytes of a
+    # record that began in an earlier frame, and `carry_origin` remembers where
+    # it began so its checkpoint still names a frame a resume can seek to.
+    carry = b""
+    carry_origin: tuple[int, int] | None = None
+    discarding = False
     with source_file.open_binary() as compressed:
         if offset:
             compressed.seek(offset)
@@ -151,34 +158,65 @@ def read_zstd_jsonl(
                 # A torn frame at the tail: nothing after it can be trusted.
                 return
             if frame is None:
+                # A clean EOF. Bytes left over are a record whose newline never
+                # arrived, which counts as a record only for a frozen input.
+                if immutable and carry and len(carry) <= max_record_bytes:
+                    index += 1
+                    if index > records_done and carry_origin is not None:
+                        yield _decode_json_record(
+                            carry, f"frame:{carry_origin[0]}:{carry_origin[1]}:{index}"
+                        )
                 return
-            # Every record this frame yields is named by the frame's start, the
-            # count before the frame, and the count after this record, so a
-            # resume re-reads this one frame and skips exactly the records it
-            # already produced. Naming the frame's end instead would let a resume
-            # jump past the records that share the frame with the one it resumed
-            # from. A frame is ~400 bytes, so re-reading it is free.
+            # Every record this frame yields is named by the start of the frame
+            # it began in and the count before that frame, so a resume re-reads
+            # that frame and skips exactly the records already produced. A frame
+            # that inherits a straddling record keeps the earlier origin: a
+            # resume there replays the straddle, which is what makes the record
+            # after it nameable at all. Naming the frame's end instead would let
+            # a resume jump past the records that share the frame with the one it
+            # resumed from. A frame is ~400 bytes, so replaying it is free.
+            origin = carry_origin or (frame_start, base)
             try:
                 payload = decompressor.decompressobj().decompress(frame)
             except zstandard.ZstdError:
                 return
-            buffer = io.BytesIO(payload)
+            buffer = io.BytesIO(carry + payload)
+            carry = b""
             while line := buffer.readline(max_record_bytes + 1):
-                if not line.endswith(b"\n"):
-                    # The frame ended mid-record. Do not count it: the next pass
-                    # re-reads this frame from its start and sees it whole.
-                    if immutable and len(line) <= max_record_bytes and index >= records_done:
+                if discarding:
+                    if line.endswith(b"\n"):
+                        discarding = False
+                        carry_origin = None
                         index += 1
-                        yield _decode_json_record(
-                            line, f"frame:{frame_start}:{base}:{index}"
-                        )
-                    return
+                        if index > records_done:
+                            yield RawReadFailure(
+                                f"frame:{origin[0]}:{origin[1]}:{index}",
+                                RawReadFailureCode.RECORD_TOO_LARGE,
+                            )
+                        origin = (frame_start, base)
+                    continue
+                if not line.endswith(b"\n"):
+                    if len(line) > max_record_bytes:
+                        # Longer than the cap and still no newline: keep skipping
+                        # to its end, in this frame or a later one, so the records
+                        # after it stay reachable.
+                        discarding = True
+                        carry_origin = origin
+                        continue
+                    carry = line
+                    carry_origin = origin
+                    break
                 index += 1
                 if max_records is not None and index - records_done > max_records:
                     return
                 if index <= records_done:
+                    # Already delivered. Its bytes are consumed either way, and
+                    # the next record starts here rather than in the earlier
+                    # frame this one began in.
+                    origin = (frame_start, base)
                     continue
-                record_checkpoint = f"frame:{frame_start}:{base}:{index}"
+                record_checkpoint = f"frame:{origin[0]}:{origin[1]}:{index}"
+                origin = (frame_start, base)
                 if len(line) > max_record_bytes:
                     yield RawReadFailure(
                         record_checkpoint,

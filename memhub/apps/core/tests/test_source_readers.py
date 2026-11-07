@@ -247,3 +247,43 @@ def test_zstd_reader_accepts_a_legacy_record_checkpoint(tmp_path) -> None:
     ]
 
     assert records == [2, 3, 4]
+
+
+def test_zstd_reader_joins_a_record_split_across_frames(tmp_path) -> None:
+    """A flush can land mid-record, so a record does not belong to one frame.
+
+    Reading frame by frame and calling the end of a frame the end of a record
+    drops the split record and leaves the checkpoint in front of it. The next
+    pass then re-reads the same bytes, drops it again, and the file never
+    advances: the reader spins on it forever instead of making progress.
+    """
+    compressor = zstandard.ZstdCompressor(write_checksum=True)
+    source = tmp_path / "session.jsonl.zstd"
+    first = compressor.compress(b'{"id":1}\n{"id":2,"body":"')
+    source.write_bytes(first + compressor.compress(b'x' * 32 + b'"}\n{"id":3}\n'))
+
+    records = [
+        event for event in read_zstd_jsonl(authorized(source)) if isinstance(event, RawRecord)
+    ]
+
+    assert [event.value["id"] for event in records] == [1, 2, 3]
+    assert len(records[1].value["body"]) == 32
+
+    # The split record began in the first frame, so that is where a resume
+    # restarts -- and restarting there must still reach the record after it.
+    resumed = [
+        event.value["id"]
+        for event in read_zstd_jsonl(authorized(source), checkpoint=records[1].checkpoint)
+        if isinstance(event, RawRecord)
+    ]
+    assert resumed == [3]
+
+    # The record that begins after the split ends is nameable by its own frame.
+    assert records[2].checkpoint.startswith(f"frame:{len(first)}:")
+    resumed = [
+        event.value["id"]
+        for event in read_zstd_jsonl(authorized(source), checkpoint=records[2].checkpoint)
+        if isinstance(event, RawRecord)
+    ]
+    assert resumed == []
+
