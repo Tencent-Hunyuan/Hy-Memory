@@ -22,7 +22,14 @@ import pytest
 from one_memory.database_access import main_database
 from one_memory.imports.adapters import ScanEvent, ScanOptions, ScanCursorTouch
 from one_memory.imports.jobs import ImportJobStore
-from one_memory.imports.models import EvidenceInput, EvidenceOrigin, OriginMetadata, WrittenBy
+from one_memory.imports.models import (
+    EvidenceContentKind,
+    EvidenceInput,
+    EvidenceOrigin,
+    EvidenceRecord,
+    OriginMetadata,
+    WrittenBy,
+)
 from one_memory.imports.runner import ImportRunner
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.durable_queue import DurableWriteQueue
