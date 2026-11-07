@@ -606,19 +606,34 @@ class HyMemoryClient:
 
         # 3. GraphStore（可选，由 enable_graph 配置控制）
         self._graph_store = None
+        self.graph_degraded = False
+        self.graph_degraded_reason: Optional[str] = None
         if self.enable_graph:
             from .data.graph_store import create_graph_store
             self._graph_store = create_graph_store(self._config)
             await self._graph_store.initialize()
-            # 检查图数据库是否真正可用（Kuzu 会静默降级为 no-op）
+            # Kuzu 拿不到文件锁（同一数据目录上的第二个进程）、或数据库文件打不开时
+            # 会静默降级为 no-op。这里不能改成抛错：ultra 模式下第二个进程必然拿不到
+            # 锁，抛错会让除首个进程外的所有进程（后台写 worker、CLI 短命令）在构造期
+            # 直接失败，而 pro 模式会关掉 Graph / System 2，并不是等价替代。
+            # 因此降级继续运行，并把降级状态明确暴露给调用方。
             if hasattr(self._graph_store, '_available') and not self._graph_store._available:
-                raise RuntimeError(
-                    f"GraphStore ({self._config.graph_store.provider}) init failed. "
-                    f"Use mode='pro' instead of mode='ultra' to disable Graph, or check logs for details."
+                self.graph_degraded = True
+                self.graph_degraded_reason = (
+                    f"GraphStore ({self._config.graph_store.provider}) is unavailable"
                 )
-            logger.info(
-                f"[init] GraphStore ready: provider={self._config.graph_store.provider}"
-            )
+                logger.warning(
+                    "[init] GraphStore (%s) unavailable; continuing without graph features. "
+                    "Graph writes are skipped and graph-based recall is disabled for this process. "
+                    "A common cause is another process holding the database file lock "
+                    "(db_path=%s); see the GraphStore init log line above for the underlying error.",
+                    self._config.graph_store.provider,
+                    getattr(self._config.graph_store, "db_path", None),
+                )
+            else:
+                logger.info(
+                    f"[init] GraphStore ready: provider={self._config.graph_store.provider}"
+                )
 
         # 4. ComponentFactory（注入已初始化的共享组件）
         self._registry = ComponentFactory(
