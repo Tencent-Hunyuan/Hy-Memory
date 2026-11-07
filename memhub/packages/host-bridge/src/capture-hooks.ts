@@ -449,16 +449,30 @@ export default function oneMemoryCapture(pi) {
 }
 
 function openCodePlugin(command: string, dataDir?: string): string {
-  return `// MemHub capture. Only text parts are sent.
+  return `// MemHub capture. Only visible text is sent.
 import { spawnSync } from "node:child_process";
 
 const command = ${JSON.stringify(command)};
 const pending = new Map();
+// OpenCode may load one plugin instance per location. Module state is shared,
+// so a streamed part seen twice is still sent once.
+const seen = globalThis[Symbol.for("one-memory.capture.seen")] ?? new Set();
+globalThis[Symbol.for("one-memory.capture.seen")] = seen;
 
-function remember(sessionId, role, text) {
-  if (!sessionId || !text) return;
+function remember(sessionId, role, text, messageId) {
+  if (!sessionId || typeof text !== "string" || text.length === 0) return;
+  if (messageId) {
+    const key = JSON.stringify([sessionId, messageId, text]);
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (seen.size > 500) seen.delete(seen.values().next().value);
+  }
   const turn = pending.get(sessionId) ?? [];
-  turn.push({ role, parts: [{ type: "text", text }] });
+  turn.push({
+    role,
+    parts: [{ type: "text", text }],
+    ...(messageId ? { message_id: messageId } : {}),
+  });
   pending.set(sessionId, turn);
 }
 
@@ -483,7 +497,13 @@ function send(sessionId) {
   }
 }
 
-export default async function oneMemoryCapture() {
+function idle(status) {
+  return status === "idle" || status?.type === "idle" || status?.status === "idle";
+}
+
+// OpenCode 1 entrypoint. Object exports with \`server()\` are understood from
+// 1.18.29; the V2 loader ignores this key.
+async function server() {
   return {
     event: async ({ event }) => {
       try {
@@ -493,10 +513,15 @@ export default async function oneMemoryCapture() {
         if (type === "message.part.updated" || type === "message.part.delta") {
           const part = props.part ?? props;
           if (part?.type === "text" && typeof part.text === "string") {
-            remember(sessionId, props.role ?? "assistant", part.text);
+            remember(
+              sessionId,
+              props.role ?? "assistant",
+              part.text,
+              props.messageID ?? part.messageID,
+            );
           }
         }
-        if (type === "session.idle" || (type === "session.status" && props.status === "idle")) {
+        if (type === "session.idle" || (type === "session.status" && idle(props.status))) {
           send(sessionId);
         }
       } catch {
@@ -505,5 +530,54 @@ export default async function oneMemoryCapture() {
     },
   };
 }
+
+// OpenCode 2 entrypoint. Text arrives per block; execution end and idle both
+// flush, so a retry or a version that omits one still delivers the turn.
+async function setup(ctx) {
+  if (typeof ctx?.event?.subscribe !== "function") return;
+  const controller = new AbortController();
+  const registrations = [];
+  try {
+    if (typeof ctx.session?.hook === "function") {
+      registrations.push(
+        await ctx.session.hook("prompt", (event) => {
+          const prompt = event?.prompt ?? {};
+          remember(event?.sessionID ?? prompt.sessionID, "user", prompt.text, event?.messageID);
+        }),
+      );
+    }
+  } catch {
+    // A build without the prompt hook still yields assistant text.
+  }
+  void (async () => {
+    for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+      const data = event?.data ?? event?.properties ?? {};
+      const type = event?.type;
+      if (type === "session.text.ended") {
+        remember(data.sessionID, "assistant", data.text, data.assistantMessageID);
+      } else if (
+        type === "session.execution.succeeded" ||
+        type === "session.execution.failed" ||
+        type === "session.execution.interrupted" ||
+        type === "session.idle" ||
+        (type === "session.status" && idle(data.status))
+      ) {
+        send(data.sessionID);
+      }
+    }
+  })().catch(() => {
+    // A closed subscription must not surface as a plugin failure.
+  });
+  return async () => {
+    try {
+      controller.abort();
+      for (const registration of registrations) await registration?.dispose?.();
+    } catch {
+      // Cleanup runs while the host unloads; a throw would fail the plugin.
+    }
+  };
+}
+
+export default { id: "one-memory-capture", server, setup };
 `;
 }
