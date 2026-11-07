@@ -65,6 +65,7 @@ export const CALL_HOSTS: Record<string, string> = {
   hermes: "Hermes",
   pi: "Pi",
   "deepseek-harness": "DeepSeek Harness",
+  antigravity: "Google Antigravity",
 };
 export function callHostName(id: string | null, locale: GuiLocale = "zh-Hans") {
   return id === null
