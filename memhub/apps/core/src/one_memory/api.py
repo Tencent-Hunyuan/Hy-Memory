@@ -5232,6 +5232,15 @@ def create_app(
         sdk_counts = (
             supervisor.status_counts() if app.state.memory_authority is MemoryAuthority.SDK else {}
         )
+        # On the SDK plane `in_flight_count` is the number of `running` rows, so
+        # the legacy `running - in_flight` difference is always zero there and
+        # reported a healthy queue whatever was stuck. `stranded_depths` counts
+        # the rows a worker no longer holds, from the same read as `running`.
+        sdk_stranded = (
+            supervisor.stranded_depths()[1]
+            if app.state.memory_authority is MemoryAuthority.SDK
+            else 0
+        )
         # `running` counts rows the store still marks running, which includes
         # work a worker has already given up on. Reporting that as "what is
         # running" is how a stalled queue looks busy, so the strand is given
@@ -5254,7 +5263,11 @@ def create_app(
             ),
             recent_completions=depths.recent_completions,
             running=sdk_counts.get("running", running_rows),
-            stranded_running=(0 if sdk_counts else max(0, running_rows - in_flight_count)),
+            stranded_running=(
+                sdk_stranded
+                if sdk_counts
+                else max(0, running_rows - in_flight_count)
+            ),
             unexecuted_policy_failures=store.unexecuted_policy_failures(),
             waiting_for_model=sdk_counts.get(
                 "waiting_for_model",
