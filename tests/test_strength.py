@@ -15,7 +15,7 @@ import asyncio
 import math
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -91,6 +91,79 @@ class TestComputeStrength:
         stale = _FakeNode(access_count=1, last_accessed_at=now - timedelta(days=300),
                           gmt_created=now - timedelta(days=10))
         assert compute_strength(kobe, now=now) > compute_strength(stale, now=now)
+
+
+class TestComputeStrengthMixedTimezones:
+    """真实 MemoryNode 的时间字段可能不是 naive datetime。
+
+    VDB payload 把时间存成 epoch 整数（`_node_to_payload` / `bump_access`），
+    外部调用方也可能塞进 timezone-aware datetime 或带偏移的 ISO 串。任何
+    naive/aware 或 datetime/int 的减法都会抛 TypeError；修复前它被 except 吞掉，
+    idle_days 静默归零 → strength 恒满值，衰减整体失效。
+    """
+
+    DAYS = 300
+
+    def _expected(self):
+        return math.exp(-self.DAYS / DEFAULT_TAU)
+
+    def test_aware_last_with_naive_now_decays(self):
+        now = datetime.now()
+        last = datetime.now(timezone.utc) - timedelta(days=self.DAYS)
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0,
+                       last_accessed_at=last)
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_naive_last_with_aware_now_decays(self):
+        now = datetime.now(timezone.utc)
+        last = datetime.now() - timedelta(days=self.DAYS)
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0,
+                       last_accessed_at=last)
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_int_last_accessed_at_decays(self):
+        """bump_access 写回的是 int(now.timestamp())；读到 int 时也必须衰减。"""
+        now = datetime.now()
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0)
+        n.last_accessed_at = int((now - timedelta(days=self.DAYS)).timestamp())
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_int_gmt_created_cold_start_decays(self):
+        now = datetime.now()
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0)
+        n.last_accessed_at = None
+        n.gmt_created = int((now - timedelta(days=self.DAYS)).timestamp())
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_iso_string_with_offset_decays(self):
+        now = datetime.now()
+        last = (datetime.now(timezone.utc) - timedelta(days=self.DAYS)).isoformat()
+        n = MemoryNode.from_dict({
+            "content": "x", "layer": "l2_fact", "access_count": 0,
+            "last_accessed_at": last, "gmt_created": last,
+        })
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_payload_roundtrip_int_still_decays(self):
+        """_node_to_payload 存 epoch int → from_dict 还原；两跳都不能让衰减失效。"""
+        now = datetime.now()
+        n = MemoryNode.from_dict({
+            "content": "x", "layer": "l2_fact", "access_count": 0,
+            "last_accessed_at": int((now - timedelta(days=self.DAYS)).timestamp()),
+            "gmt_created": int((now - timedelta(days=self.DAYS)).timestamp()),
+        })
+        # from_dict 已把 int 还原成 naive datetime；这里再显式验证原始 int 形态
+        assert n.last_accessed_at.tzinfo is None
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_apply_strength_normal_channel_with_aware_last(self):
+        now = datetime.now()
+        last = datetime.now(timezone.utc) - timedelta(days=self.DAYS)
+        node = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=1,
+                          last_accessed_at=last)
+        hits = [{"node": node, "score": 1.0, "layer": "l2_fact"}]
+        apply_strength_to_normal(hits, now=now)
+        assert hits[0]["score"] < 0.5
 
 
 class TestApplyStrengthToNormal:

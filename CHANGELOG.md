@@ -4,6 +4,16 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Memory Strength (`MEMORY_RECALL_STRENGTH_ENABLED`) no longer turns its idle
+  decay off whenever a memory's timestamp is not a local naive `datetime`.
+  `compute_strength` subtracted `last_accessed_at` / `gmt_created` straight
+  from `datetime.now()` inside a `try` that swallowed `TypeError`; a
+  timezone-aware timestamp, an ISO string with an offset, or the epoch integer
+  that `bump_access` itself writes back therefore produced `idle_days = 0`
+  and `strength = frequency` — every memory ranked as if just accessed, with
+  no decay at all. Both sides are now normalised to epoch seconds before
+  subtraction, so those shapes are read correctly. Unreadable timestamps still
+  fall back to `idle_days = 0` but are logged at debug instead of vanishing.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an
