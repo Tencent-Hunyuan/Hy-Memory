@@ -7,6 +7,7 @@ from functools import partial
 
 from one_memory.imports.access import AuthorizedSourceFile, AuthorizedSourceRoot
 from one_memory.imports.adapters import (
+    ScanCursorTouch,
     ScanEvent,
     ScanFailure,
     ScanIssueCode,
@@ -31,6 +32,7 @@ from one_memory.imports.sources.common import (
     resume_checkpoint,
     source_cursor,
     to_evidence,
+    touched_cursor,
 )
 from one_memory.imports.sources.parsing import parse_timestamp, tool_evidence_text
 from one_memory.imports.sqlite_access import open_sqlite_readonly
@@ -90,6 +92,7 @@ class OpenCodeSourceAdapter:
                 continue
             if discovered.relative_path.name != "opencode.db":
                 continue
+            last = None
             try:
                 async for event in iterate_in_worker(
                     partial(
@@ -102,12 +105,28 @@ class OpenCodeSourceAdapter:
                     scope_key=self.descriptor.source_id,
                 ):
                     yield event
+                    cursor = getattr(event, "cursor", None)
+                    if cursor is not None:
+                        last = cursor
                     if isinstance(event, ScannedEvidence):
                         emitted += 1
                         if options.max_messages is not None and emitted >= options.max_messages:
                             return
             except sqlite3.Error:
                 yield ScanFailure(reason_code=ScanIssueCode.SOURCE_BUSY)
+                continue
+            # Read to the end of this file. Without this touch the staged
+            # records stay in `state='assembling'` forever: `finalize_sdk_file`
+            # is only reached from the runner's ScanCursorTouch branch, and
+            # `flush_idle_assemblies` skips `priority='normal'` (history).
+            yield ScanCursorTouch(
+                cursor=touched_cursor(
+                    discovered,
+                    options,
+                    last=last,
+                    empty_checkpoint="record:0",
+                )
+            )
         yield ScanProgressEvent(phase=ScanPhase.DONE)
 
 
