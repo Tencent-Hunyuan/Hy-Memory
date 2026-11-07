@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+import time
 from functools import partial
 from pathlib import Path
 
@@ -655,6 +656,198 @@ def test_opencode_reads_only_text_parts(tmp_path: Path) -> None:
             cursors=_cursors(events),
         )
     )
+
+
+def test_opencode_v2_reads_text_and_tool_content(tmp_path: Path) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    now = int(time.time() * 1000)
+    assistant = {
+        "time": {"created": now, "streamed": now, "completed": now},
+        "content": [
+            {"type": "reasoning", "text": SECRET},
+            {"type": "text", "text": "first answer"},
+            {
+                "type": "tool",
+                "id": "tool-v2",
+                "name": "shell",
+                "state": {
+                    "status": "completed",
+                    "input": {"command": "echo"},
+                    "content": [{"type": "text", "text": "tool output"}],
+                },
+            },
+            {"type": "text", "text": "second answer"},
+        ],
+    }
+    _write_opencode_v2(
+        root,
+        [
+            (
+                "message-v2-user",
+                "session-v2",
+                "user",
+                1,
+                now,
+                now,
+                json.dumps({"text": "visible v2"}),
+            ),
+            (
+                "message-v2-assistant",
+                "session-v2",
+                "assistant",
+                2,
+                now,
+                now,
+                json.dumps(assistant),
+            ),
+            (
+                "message-v2-idle",
+                "session-v2",
+                "idle",
+                3,
+                now,
+                now,
+                json.dumps({"tokens": {"input": 1}}),
+            ),
+        ],
+    )
+
+    events = _scan(create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)))
+
+    assert _evidence_text(events) == [
+        "visible v2",
+        "first answer",
+        "[shell] tool output",
+        "second answer",
+    ]
+    assert [item.evidence.written_by for item in _evidence(events)] == [
+        WrittenBy.UNKNOWN,
+        WrittenBy.AGENT,
+        WrittenBy.TOOL,
+        WrittenBy.AGENT,
+    ]
+    workspaces = {item.evidence.workspace for item in _evidence(events)}
+    assert len(workspaces) == 1 and None not in workspaces
+    assert SECRET not in repr(events)
+    assert not _evidence(
+        _scan(
+            create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)),
+            cursors=_cursors(events),
+        )
+    )
+
+
+def test_opencode_v2_holds_a_streaming_assistant_message_until_completed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    now = int(time.time() * 1000)
+    _write_opencode_v2(
+        root,
+        [
+            (
+                "message-v2-user",
+                "session-v2",
+                "user",
+                1,
+                now,
+                now,
+                json.dumps({"text": "question"}),
+            ),
+            (
+                "message-v2-assistant",
+                "session-v2",
+                "assistant",
+                2,
+                now,
+                now,
+                json.dumps(
+                    {"time": {"created": now}, "content": [{"type": "text", "text": "half"}]}
+                ),
+            ),
+        ],
+    )
+
+    adapter = create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path))
+    first = _scan(adapter)
+    assert _evidence_text(first) == ["question"]
+
+    connection = sqlite3.connect(root / "opencode.db")
+    connection.execute(
+        "UPDATE session_message SET data = ?, time_updated = ? WHERE id = ?",
+        (
+            json.dumps(
+                {
+                    "time": {"created": now, "completed": now},
+                    "content": [{"type": "text", "text": "answer"}],
+                }
+            ),
+            now,
+            "message-v2-assistant",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    second = _scan(adapter, cursors=_cursors(first))
+    assert _evidence_text(second) == ["answer"]
+
+
+def test_opencode_v2_keeps_an_interrupted_reply_after_the_settle_window(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    stale = int(time.time() * 1000) - 11 * 60 * 1000
+    _write_opencode_v2(
+        root,
+        [
+            (
+                "message-v2-assistant",
+                "session-v2",
+                "assistant",
+                1,
+                stale,
+                stale,
+                json.dumps(
+                    {
+                        "time": {"created": stale},
+                        "content": [{"type": "text", "text": "interrupted"}],
+                    }
+                ),
+            ),
+        ],
+    )
+
+    events = _scan(create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)))
+
+    assert _evidence_text(events) == ["interrupted"]
+
+
+def _write_opencode_v2(
+    root: Path,
+    rows: list[tuple[str, str, str, int, int, int, str]],
+) -> None:
+    connection = sqlite3.connect(root / "opencode.db")
+    connection.executescript(
+        """
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+            seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        INSERT INTO session_v2 VALUES ('session-v2', '/private/v2-project');
+        """
+    )
+    connection.executemany(
+        "INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    connection.commit()
+    connection.close()
 
 
 def test_locked_source_reports_busy_and_loses_nothing_on_retry(
