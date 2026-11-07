@@ -36,7 +36,7 @@ Preview 不会弹出给用户；开关点击本身被视为确认。关闭时通
 | [Claude Code](claude-code.md) | 开放 | MCP + Skill | Capture Hooks | `.claude/projects` 扫描 + Hook 实时入口 |
 | [Codex](codex.md) | 开放 | MCP + Skill | Capture Hooks | `.codex/sessions` 扫描 + Hook 实时入口 |
 | [WorkBuddy](workbuddy.md) | 开放 | `.codebuddy-plugin` 内 MCP + Skill | Plugin Hooks | WorkBuddy Adapter 扫描 + Plugin Hook |
-| [OpenCode](opencode.md) | 开放 | MCP，无 Skill | JS Capture Plugin | OpenCode DB 扫描 + Plugin 实时入口 |
+| [OpenCode](opencode.md) | 开放（V1 / V2） | MCP，无 Skill | JS Capture Plugin（V1/V2 双入口） | OpenCode DB 扫描（两代表结构）+ Plugin 实时入口 |
 | [Qwen Code](qwen-code.md) | 开放 | MCP + Skill | 无自动 Hook | `$QWEN_HOME/projects` 扫描 |
 | [Pi](pi.md) | 开放 | CLI Skill，不使用 MCP | JS Capture Extension | Pi session 扫描 + Extension 实时入口 |
 | [OpenClaw](openclaw.md) | 正式产品冻结 | 当前没有；仅有未开放的底层 MCP 写入器 | 没有 Hook、Plugin 或 Prefetch | Adapter 也被冻结，开关不可用 |
