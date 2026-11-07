@@ -520,7 +520,16 @@ class WriteQueuePipelines:
         interval = self._renew_every.total_seconds()
         while not self._stop.is_set():
             await asyncio.sleep(interval)
-            await self._renew(job.job_id, owner)
+            try:
+                await self._renew(job.job_id, owner)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient database error must not end the renewal for good.
+                # This loop is the only thing keeping the lease alive, and a
+                # lapsed lease lets another worker claim the job and run it a
+                # second time -- the outcome this method exists to prevent.
+                logger.warning("lease renewal failed for %s; retrying", job.job_id, exc_info=True)
 
     def _owner_for(self, job: ClaimedJob) -> str:
         return job.owner or "claimer-unknown"
