@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
+import stat
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
@@ -127,6 +129,14 @@ def repair_sdk_metadata_from_bundle(
         coding_rows,
     )
     temporary = receipt.with_suffix(".tmp")
+    # Write the receipt privately, then publish it.  Opening the file by path
+    # applies the process umask, so without this the receipt -- which records
+    # the migration id and the mapping -- lands world-readable, while the
+    # sibling writer in sdk_migration_restore.py explicitly uses 0600.
+    try:
+        mode = stat.S_IMODE(receipt.stat().st_mode)
+    except OSError:
+        mode = 0o600
     temporary.write_text(
         json.dumps(
             {
@@ -141,6 +151,7 @@ def repair_sdk_metadata_from_bundle(
         + "\n",
         encoding="utf-8",
     )
+    os.chmod(temporary, mode)
     temporary.replace(receipt)
     return result
 
