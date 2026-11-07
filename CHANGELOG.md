@@ -4,6 +4,16 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- `memory-processing` reports stranded writes on the SDK data plane instead of
+  a constant zero. `active_depths()` returns the same number twice there — both
+  are the count of `running` rows — so the legacy `running - in_flight_count`
+  difference was always zero, and the panel called a stalled queue healthy
+  however many workers had died. The field exists for exactly that case (#231),
+  and had been constant since #145 moved memory authority to the SDK. The new
+  `stranded_depths()` counts the rows whose lease is missing or lapsed, from
+  the same read as `running`. The web client also treated only `undefined` as
+  "not reported"; JSON carries an unknown value as `null`, which read as a
+  healthy zero and suppressed the "status unverified" line.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an
