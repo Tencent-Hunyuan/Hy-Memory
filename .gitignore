@@ -17,7 +17,8 @@ ENV/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-data/
+# 只忽略仓库根目录的本地数据目录；hy_memory/data/ 是源码目录
+/data/
 node_modules/
 package-lock.json
 !plugins/openclaw/package-lock.json
