@@ -75,3 +75,32 @@ def test_acceptance_score_fails_missing_personal_memory(tmp_path) -> None:
     assert score.passed is False
     assert score.false_negative == 1
     assert score.failures == ("omission_rate_above_threshold",)
+
+
+def test_write_pack_publishes_atomically_and_privately(tmp_path, monkeypatch) -> None:
+    """The acceptance pack must never be world-readable or half-written."""
+    import stat as _stat
+    from pathlib import Path as _Path
+
+    import pytest
+
+    from one_memory.quality_acceptance import write_pack
+
+    path = tmp_path / "pack.jsonl"
+    write_pack(path, [])
+
+    assert path.read_text(encoding="utf-8") == "\n"
+    assert _stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    before = path.read_text(encoding="utf-8")
+
+    def boom(_self, _target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(_Path, "replace", boom)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        write_pack(path, [])
+
+    assert path.read_text(encoding="utf-8") == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pack.jsonl"]
