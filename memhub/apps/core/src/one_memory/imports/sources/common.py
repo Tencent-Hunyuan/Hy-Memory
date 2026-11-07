@@ -478,7 +478,7 @@ class JsonlSourceAdapter:
                     options,
                     last=last,
                     empty_checkpoint=(
-                        "record:0" if listed.relative_path.name.endswith(".zstd") else "byte:0"
+                        "frame:0:0:0" if listed.relative_path.name.endswith(".zstd") else "byte:0"
                     ),
                 )
             )
@@ -701,7 +701,7 @@ def _start_cursor(
     previous = options.cursors.get(source_file.safe_id)
     if checkpoint is not None and previous is not None and previous.checkpoint == checkpoint:
         return previous
-    empty = "record:0" if source_file.relative_path.name.endswith(".zstd") else "byte:0"
+    empty = "frame:0:0:0" if source_file.relative_path.name.endswith(".zstd") else "byte:0"
     return source_cursor(source_file, empty)
 
 

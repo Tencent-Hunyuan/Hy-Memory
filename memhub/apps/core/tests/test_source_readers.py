@@ -163,3 +163,87 @@ def test_zstd_reader_resumes_across_frames(tmp_path) -> None:
     ]
 
     assert records == [3, 4]
+
+
+def test_zstd_reader_checkpoint_names_the_frame_that_holds_the_record(tmp_path) -> None:
+    """A resume must seek to the recorded frame instead of decompressing the prefix.
+
+    Without an offset a growing session is re-decompressed from the top on
+    every pass, and one pass that cannot finish the file leaves `read_to_end`
+    false forever: the file is then re-read on every scan.
+    """
+    compressor = zstandard.ZstdCompressor(write_checksum=True)
+    source = tmp_path / "session.jsonl.zstd"
+    frames = [
+        compressor.compress(json.dumps({"id": item}).encode() + b"\n") for item in range(1, 6)
+    ]
+    source.write_bytes(b"".join(frames))
+
+    records = [
+        event for event in read_zstd_jsonl(authorized(source)) if isinstance(event, RawRecord)
+    ]
+    assert [event.value["id"] for event in records] == [1, 2, 3, 4, 5]
+
+    checkpoint = records[2].checkpoint
+    kind, _, rest = checkpoint.partition(":")
+    assert kind == "frame"
+    offset_raw, _, counts = rest.partition(":")
+    # Record 3 lives in the third frame, so the offset is the sum of the first two.
+    assert int(offset_raw) == len(frames[0]) + len(frames[1])
+    before_raw, _, done_raw = counts.partition(":")
+    assert int(before_raw) == 2
+    assert int(done_raw) == 3
+
+    resumed = [
+        event.value["id"]
+        for event in read_zstd_jsonl(authorized(source), checkpoint=checkpoint)
+        if isinstance(event, RawRecord)
+    ]
+    assert resumed == [4, 5]
+
+
+def test_zstd_reader_resumes_inside_a_multi_record_frame(tmp_path) -> None:
+    """One frame can hold several records; a resume must not skip its siblings.
+
+    Harness writes a frame per append batch, and a batch carries several
+    records. Naming the frame's end in the checkpoint would make a resume jump
+    past the records that share the frame with the one it resumed from.
+    """
+    compressor = zstandard.ZstdCompressor(write_checksum=True)
+    source = tmp_path / "session.jsonl.zstd"
+    first_batch = b"".join(json.dumps({"id": item}).encode() + b"\n" for item in range(1, 4))
+    source.write_bytes(
+        compressor.compress(first_batch) + compressor.compress(b'{"id":4}\n')
+    )
+
+    records = [
+        event for event in read_zstd_jsonl(authorized(source)) if isinstance(event, RawRecord)
+    ]
+    assert [event.value["id"] for event in records] == [1, 2, 3, 4]
+
+    # Record 2 shares its frame with 1 and 3: resuming from it still delivers 3.
+    resumed = [
+        event.value["id"]
+        for event in read_zstd_jsonl(authorized(source), checkpoint=records[1].checkpoint)
+        if isinstance(event, RawRecord)
+    ]
+    assert resumed == [3, 4]
+
+
+def test_zstd_reader_accepts_a_legacy_record_checkpoint(tmp_path) -> None:
+    """Cursors written before the frame offset still resume correctly."""
+    compressor = zstandard.ZstdCompressor(write_checksum=True)
+    source = tmp_path / "session.jsonl.zstd"
+    source.write_bytes(
+        b"".join(
+            compressor.compress(json.dumps({"id": item}).encode() + b"\n") for item in range(1, 5)
+        )
+    )
+
+    records = [
+        event.value["id"]
+        for event in read_zstd_jsonl(authorized(source), checkpoint="record:1")
+        if isinstance(event, RawRecord)
+    ]
+
+    assert records == [2, 3, 4]

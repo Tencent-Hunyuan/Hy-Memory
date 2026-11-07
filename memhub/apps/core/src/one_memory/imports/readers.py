@@ -23,10 +23,14 @@ MAX_JSONL_RECORD_BYTES = 10 * 1024 * 1024
 #: separately so the two are never confused for one another.
 DEFAULT_IMPORT_MAX_FILE_BYTES = 32 * 1024 * 1024
 #: How many records one pass reads from a zstd stream when a budget applies.
-#: The stream is decompressed from the start every pass, so a large count
-#: costs repeated decompression; a small one costs extra passes. Sized so a
-#: pass stays well inside the byte budget for ordinary transcript records.
+#: Sized so a pass stays well inside the byte budget for ordinary transcript
+#: records. A pass resumes at the frame boundary recorded in its checkpoint, so
+#: this bounds how much *new* content one pass takes, not how much the file
+#: holds.
 _ZSTD_RECORD_BUDGET = 20_000
+#: Every zstd frame starts with this. A `.jsonl.zstd` file is a sequence of
+#: them, one per flush, so frame boundaries double as resume points.
+ZSTD_FRAME_MAGIC = b"\x28\xb5\x2f\xfd"
 SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -116,57 +120,72 @@ def read_zstd_jsonl(
     max_bytes: int | None = None,
     immutable: bool = False,
 ) -> Generator[RawReadEvent, None, None]:
-    """Use immutable EOF semantics only for a caller-owned frozen input."""
+    """Use immutable EOF semantics only for a caller-owned frozen input.
+
+    The checkpoint carries the compressed offset of the frame that follows the
+    last record read, so a resumed pass seeks there instead of decompressing
+    the whole prefix. Without it a growing file is re-decompressed from the top
+    on every pass, which is what made a 19 MB session hold a core busy: the
+    file never reached `read_to_end` because one pass could not finish it, and
+    every later pass paid the full prefix again.
+    """
     if max_record_bytes < 1:
         raise ValueError("max_record_bytes must be positive")
     if max_bytes is not None and max_bytes < 1:
         raise ValueError("max_bytes must be positive")
-    completed_records = _parse_checkpoint(checkpoint, "record")
-    # A zstd stream has no byte offset to resume from: its checkpoint counts
-    # decompressed records, and seeking back means re-decompressing from the
-    # start. Bounding it by a byte budget would therefore have to guess bytes
-    # from `max_record_bytes`, which is a cap on one record and not its size --
-    # dividing by it assumed every record is 10MB and stopped after three.
-    # Bound the count of records instead, which is what this reader can
-    # actually resume on.
+    offset, records_before_frame, records_done = _parse_zstd_checkpoint(checkpoint)
+    # Bound how much *new* content one pass takes. The resume point is a frame
+    # boundary, so this no longer also bounds how much the file costs to reach.
     max_records = None if max_bytes is None else _ZSTD_RECORD_BUDGET
-    with (
-        source_file.open_binary() as compressed,
-        zstandard.ZstdDecompressor().stream_reader(compressed) as stream,
-        io.BufferedReader(stream) as decompressed,
-    ):
-        index = 0
-        while line := decompressed.readline(max_record_bytes + 1):
-            index += 1
-            next_checkpoint = f"record:{index}"
-            if max_records is not None and index - completed_records > max_records:
+    index = records_before_frame
+    decompressor = zstandard.ZstdDecompressor()
+    with source_file.open_binary() as compressed:
+        if offset:
+            compressed.seek(offset)
+        while True:
+            frame_start = compressed.tell()
+            base = index
+            try:
+                frame = _read_zstd_frame(compressed)
+            except ValueError:
+                # A torn frame at the tail: nothing after it can be trusted.
                 return
-            if not line.endswith(b"\n"):
-                if len(line) <= max_record_bytes:
-                    if immutable and index > completed_records:
-                        yield _decode_json_record(line, next_checkpoint)
+            if frame is None:
+                return
+            # Every record this frame yields is named by the frame's start, the
+            # count before the frame, and the count after this record, so a
+            # resume re-reads this one frame and skips exactly the records it
+            # already produced. Naming the frame's end instead would let a resume
+            # jump past the records that share the frame with the one it resumed
+            # from. A frame is ~400 bytes, so re-reading it is free.
+            try:
+                payload = decompressor.decompressobj().decompress(frame)
+            except zstandard.ZstdError:
+                return
+            buffer = io.BytesIO(payload)
+            while line := buffer.readline(max_record_bytes + 1):
+                if not line.endswith(b"\n"):
+                    # The frame ended mid-record. Do not count it: the next pass
+                    # re-reads this frame from its start and sees it whole.
+                    if immutable and len(line) <= max_record_bytes and index >= records_done:
+                        index += 1
+                        yield _decode_json_record(
+                            line, f"frame:{frame_start}:{base}:{index}"
+                        )
                     return
-                terminated = _discard_until_newline(
-                    decompressed,
-                    max_record_bytes=max_record_bytes,
-                )
-                if not terminated and not immutable:
+                index += 1
+                if max_records is not None and index - records_done > max_records:
                     return
-                if index > completed_records:
+                if index <= records_done:
+                    continue
+                record_checkpoint = f"frame:{frame_start}:{base}:{index}"
+                if len(line) > max_record_bytes:
                     yield RawReadFailure(
-                        next_checkpoint,
+                        record_checkpoint,
                         RawReadFailureCode.RECORD_TOO_LARGE,
                     )
-                continue
-            if index <= completed_records:
-                continue
-            if len(line) > max_record_bytes:
-                yield RawReadFailure(
-                    next_checkpoint,
-                    RawReadFailureCode.RECORD_TOO_LARGE,
-                )
-                continue
-            yield _decode_json_record(line, next_checkpoint)
+                    continue
+                yield _decode_json_record(line, record_checkpoint)
 
 
 def read_sqlite_table(
@@ -263,6 +282,109 @@ def _parse_checkpoint(checkpoint: str | None, expected_kind: str) -> int:
     if value < 0:
         raise ValueError("Checkpoint cannot be negative")
     return value
+
+
+def _parse_zstd_checkpoint(checkpoint: str | None) -> tuple[int, int, int]:
+    """Return `(compressed_offset, records_before_frame, records_done)`.
+
+    A zstd frame cannot be resumed mid-way, so the checkpoint names the frame
+    that follows the last record read plus two counts: how many records precede
+    that frame, and how many records have been produced overall. A resumed pass
+    seeks to the frame, skips `records_done - records_before_frame` of its
+    records, and continues. Accepts the legacy `record:N`, which carries no
+    offset and so still decompresses from the top.
+    """
+    if checkpoint is None:
+        return 0, 0, 0
+    kind, separator, raw_value = checkpoint.partition(":")
+    if separator != ":":
+        raise ValueError("Expected record or frame checkpoint")
+    if kind == "record":
+        value = int(raw_value)
+        if value < 0:
+            raise ValueError("Checkpoint cannot be negative")
+        return 0, 0, value
+    if kind != "frame":
+        raise ValueError("Expected record or frame checkpoint")
+    offset_raw, separator, rest = raw_value.partition(":")
+    if separator != ":":
+        raise ValueError("Expected frame:<offset>:<before>:<done>")
+    before_raw, separator, done_raw = rest.partition(":")
+    if separator != ":":
+        raise ValueError("Expected frame:<offset>:<before>:<done>")
+    offset = int(offset_raw)
+    before = int(before_raw)
+    done = int(done_raw)
+    if offset < 0 or before < 0 or done < before:
+        raise ValueError("Checkpoint cannot be negative")
+    return offset, before, done
+
+
+def _read_zstd_frame(source: BinaryIO) -> bytes | None:
+    """One whole zstd frame from `source`, or `None` at a clean EOF.
+
+    Walks the frame header and block headers to learn each block's length, so
+    the caller knows exactly where the frame ended. Reading the frame as a unit
+    is what lets the checkpoint name a compressed offset: a zstd stream cannot
+    be resumed mid-frame, but its frames are independently decodable and sit
+    back to back.
+    """
+    magic = source.read(4)
+    if not magic:
+        return None
+    if magic != ZSTD_FRAME_MAGIC:
+        raise ValueError("Not a zstd frame")
+    frame = bytearray(magic)
+    descriptor = source.read(1)
+    if len(descriptor) != 1:
+        raise ValueError("Truncated zstd frame header")
+    frame += descriptor
+    descriptor_byte = descriptor[0]
+    content_size_flag = descriptor_byte >> 6
+    single_segment = (descriptor_byte >> 5) & 1
+    has_checksum = (descriptor_byte >> 2) & 1
+    dictionary_id_flag = descriptor_byte & 3
+    if not single_segment:
+        window = source.read(1)
+        if len(window) != 1:
+            raise ValueError("Truncated zstd window descriptor")
+        frame += window
+    header_rest = [0, 1, 2, 4][dictionary_id_flag]
+    if content_size_flag == 0:
+        header_rest += 1 if single_segment else 0
+    else:
+        header_rest += [0, 2, 4, 8][content_size_flag]
+    if header_rest:
+        tail = source.read(header_rest)
+        if len(tail) != header_rest:
+            raise ValueError("Truncated zstd frame header")
+        frame += tail
+    while True:
+        block_header = source.read(3)
+        if len(block_header) != 3:
+            raise ValueError("Truncated zstd block header")
+        frame += block_header
+        value = int.from_bytes(block_header, "little")
+        last_block = value & 1
+        block_type = (value >> 1) & 3
+        block_size = value >> 3
+        if block_type == 3:
+            raise ValueError("Reserved zstd block type")
+        # RLE stores one byte and regenerates `block_size` of it; raw and
+        # compressed both store `block_size` bytes.
+        payload_size = 1 if block_type == 1 else block_size
+        payload = source.read(payload_size)
+        if len(payload) != payload_size:
+            raise ValueError("Truncated zstd block")
+        frame += payload
+        if last_block:
+            break
+    if has_checksum:
+        checksum = source.read(4)
+        if len(checksum) != 4:
+            raise ValueError("Truncated zstd checksum")
+        frame += checksum
+    return bytes(frame)
 
 
 def _decode_json_record(line: bytes, checkpoint: str) -> RawReadEvent:
