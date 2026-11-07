@@ -895,7 +895,7 @@ class ChromaVectorStore(VectorStoreBase):
         payload = {}
         # 需要从 JSON string 还原为 list/dict 的字段
         json_fields = {
-            "meta_tags", "tags",
+            "meta_tags", "tags", "tag_ners",
             "supersedes", "superseded_by",
             "evidence_chain", "custom",
         }
