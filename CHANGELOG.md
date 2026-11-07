@@ -4,6 +4,15 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- The underflow fill pass's `limit` is now documented as bounding the normal
+  channel only. `fill_normal_slots()` already counted just L2/L3/L4/L5 toward
+  `limit` and let L0 profile, L6 schema and L7 intention through on their own
+  quotas, but its docstring said only that it filled "unused normal-result
+  slots". That made a result list longer than `limit` look like an overflow
+  bug and invited a "fix" that truncated the list — which would silently drop
+  side-channel evidence the caller had already selected. The docstrings now
+  state the invariant explicitly and unit tests pin it, including that the
+  normal channel still ends at exactly `limit` entries.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an
