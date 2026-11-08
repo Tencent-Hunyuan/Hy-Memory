@@ -4,6 +4,17 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- The CLI keeps the refusal Core names in a 5xx body instead of dropping
+  it. `memhub models configure` on a machine without a key store answered
+  `http_503_result_unknown` while Core had sent `{"detail":"secure_storage_unavailable"}`
+  -- an instruction, not a status: the machine has no key store, and the fix
+  is to give it one. The four mutation verbs in `core-operations.ts` and
+  `submitMemoryWrite` in `core-client.ts` now carry that code
+  (`secure_storage_unavailable_result_unknown`). `state` stays `unknown`,
+  because a 5xx may have committed part of the request. The body value is held
+  to the shape every Core refusal code has -- lowercase words joined by
+  underscores -- so a bind address such as `127.0.0.1:8765` can never be
+  promoted to a code, which the looser 4xx matcher would have allowed.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an
