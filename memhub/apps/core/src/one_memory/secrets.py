@@ -114,7 +114,12 @@ class KeyringSecretStore:
                     code=SecretStoreErrorCode.BACKOFF,
                 )
             try:
-                if type(kr.get_keyring()).__module__ == "keyring.backends.macOS":
+                backend = type(kr.get_keyring()).__module__
+                # SecretService blocks on a D-Bus prompt forever on headless
+                # Linux (#375). Both backends answer through the bounded child.
+                if backend == "keyring.backends.macOS" or backend.startswith(
+                    "keyring.backends.SecretService"
+                ):
                     value = _bounded_keychain_read(secret_ref)
                 else:
                     value = kr.get_password(keychain_service_name(), secret_ref)
@@ -302,9 +307,9 @@ def _bounded_keychain_delete_many(secret_refs: tuple[str, ...]) -> None:
 
 
 def _bounded_keychain_read(secret_ref: str) -> str | None:
-    # A thread cannot cancel a stuck Security.framework call. The same
-    # executable reads in a short-lived child so its Keychain identity stays
-    # unchanged, while timeout kills and reaps the blocked process.
+    # A thread cannot cancel a stuck Security.framework or D-Bus call. The
+    # same executable reads in a short-lived child so its store identity
+    # stays unchanged, while timeout kills and reaps the blocked process.
     try:
         result = subprocess.run(
             _keychain_read_command(),
