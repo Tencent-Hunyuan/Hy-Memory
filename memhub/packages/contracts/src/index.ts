@@ -1049,6 +1049,9 @@ export interface GraphStoreStatus {
   /** Every quarantine this home has seen (fewer copies are kept). */
   quarantine_count: number;
   last_quarantined_at: string | null;
+  /** A probe outcome (`timeout`, `rss_cap`, `crashed`, `exit_nonzero`) or
+   *  `core_died_during_probe`; optional for an older Core. */
+  last_quarantine_reason?: string | null;
   /** Starts that died while opening the graph, not yet resolved. */
   failed_open_attempts: number;
 }

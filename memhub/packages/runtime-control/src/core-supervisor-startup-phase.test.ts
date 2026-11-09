@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -60,6 +61,22 @@ async function declarePhase(
   );
 }
 
+/** The same receipt, written before `spawn` returns, as Core's is before the
+ *  probe starts: no race against the readiness budget. */
+function declarePhaseNow(directory: string, budgetMs: number): void {
+  writeFileSync(
+    path.join(directory, "core-startup.json"),
+    JSON.stringify({
+      schema_version: 1,
+      pid: null,
+      instance_id: "owned",
+      phase: "graph_open",
+      started_at: new Date().toISOString(),
+      budget_ms: budgetMs,
+    }),
+  );
+}
+
 async function clearPhase(directory: string): Promise<void> {
   await rm(path.join(directory, "core-startup.json"), { force: true });
 }
@@ -96,17 +113,18 @@ describe("Core startup phase (the ultra graph's guarded first open)", () => {
   it("waits past the readiness budget while Core declares a slow startup phase", async () => {
     const directory = await dataDir();
     const logged: DiagnosticInput[] = [];
+    let ready = false;
     const spawnProcess = vi.fn(() => {
-      // The guarded open starts right after spawn and outlasts the plain
-      // readiness budget, then finishes.
-      void declarePhase(directory, 5_000);
-      setTimeout(() => void clearPhase(directory), 250);
+      // The guarded probe starts right after spawn and outlasts the plain
+      // readiness budget, then finishes and Core binds.
+      declarePhaseNow(directory, 5_000);
+      setTimeout(() => {
+        void clearPhase(directory).then(() => {
+          ready = true;
+        });
+      }, 250);
       return fakeChild();
     });
-    let ready = false;
-    setTimeout(() => {
-      ready = true;
-    }, 300);
     const supervisor = new CoreSupervisor({
       launch: { command: "one-memory", args: [] },
       dataDir: directory,
@@ -192,7 +210,7 @@ describe("Core startup phase (the ultra graph's guarded first open)", () => {
       spawns += 1;
       // The first two Cores hang inside the graph open; the third one (which
       // in Core quarantines the graph) comes straight up.
-      if (spawns <= 2) void declarePhase(directory, 80);
+      if (spawns <= 2) declarePhaseNow(directory, 80);
       else void clearPhase(directory);
       return killableChild();
     });
@@ -236,9 +254,8 @@ describe("Core startup phase (the ultra graph's guarded first open)", () => {
     const spawnProcess = vi.fn(() => {
       const child = fakeChild();
       // Killed by the OS while opening the graph: the receipt stays behind.
-      void declarePhase(directory, 180_000).then(() =>
-        setTimeout(() => child.emit("exit", null, "SIGKILL"), 20),
-      );
+      declarePhaseNow(directory, 180_000);
+      setTimeout(() => child.emit("exit", null, "SIGKILL"), 20);
       return child;
     });
     const supervisor = new CoreSupervisor({
@@ -312,6 +329,44 @@ describe("Core after readiness", () => {
     answering = true;
     await until(() => spawnProcess.mock.calls.length >= 2);
     expect(spawnProcess.mock.calls.length).toBeGreaterThanOrEqual(2);
+    await supervisor.stop();
+  });
+
+  it("rides out a stall shorter than the liveness window", async () => {
+    // The field's worst loop stall was 44 s against a 90 s window; scaled
+    // down here: silent for ~half the window, then answering again.
+    const directory = await dataDir();
+    const logged: DiagnosticInput[] = [];
+    const spawnProcess = vi.fn(() => killableChild());
+    let answering = true;
+    const supervisor = new CoreSupervisor({
+      launch: { command: "one-memory", args: [] },
+      dataDir: directory,
+      instanceId: "owned",
+      port: 9710,
+      shutdownTimeoutMs: 20,
+      attempts: 5,
+      delayMs: 5,
+      livenessIntervalMs: 10,
+      livenessTimeoutMs: 200,
+      spawnProcess,
+      probeHealth: async () => {
+        if (!answering) throw new Error("loop stalled");
+        return OWNED;
+      },
+      diagnostics: { log: async (event) => void logged.push(event) },
+    });
+    await supervisor.start();
+    for (let stall = 0; stall < 3; stall += 1) {
+      answering = false;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      answering = true;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(logged.map((event) => event.event)).not.toContain(
+      "core.unresponsive",
+    );
     await supervisor.stop();
   });
 

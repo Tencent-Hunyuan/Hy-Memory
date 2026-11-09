@@ -74,7 +74,13 @@ export interface CoreSupervisorOptions {
    *  quarantines the graph on the start after two failed opens. */
   startupPhaseRetries?: number;
   /** Post-ready liveness: how often the supervisor probes, and how long a
-   *  live but silent Core is tolerated before it is restarted. 0 disables. */
+   *  live but silent Core is tolerated before it is restarted. 0 disables.
+   *  The 90 s default is twice the longest event-loop stall in the field
+   *  logs (44 s) and well past one 500 ms probe timeout per 5 s tick: a
+   *  single answer anywhere in the window resets it. Post-ready recovery
+   *  steps run their work off the loop (`recover_after_ready`, covered by
+   *  Core's test_core_is_ready_while_recovery_is_still_running), so a long but
+   *  healthy step keeps answering and never trips it. */
   livenessIntervalMs?: number;
   livenessTimeoutMs?: number;
   /** How long a (re)launched Core must stay up before its crash streak is
@@ -87,7 +93,9 @@ export const CORE_READINESS_DEFAULTS = Object.freeze({
   attempts: 300,
   delayMs: 200,
   readinessBudgetMs: 60_000,
-  startupPhaseMaxBudgetMs: 300_000,
+  // Core's graph probe is a bounded child (at most 120 s, plus a 30 s
+  // margin it declares), so the ceiling no longer has to cover a wedged open.
+  startupPhaseMaxBudgetMs: 180_000,
   startupPhaseRetries: 2,
   livenessIntervalMs: 5_000,
   livenessTimeoutMs: 90_000,
