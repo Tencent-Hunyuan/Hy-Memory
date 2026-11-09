@@ -205,6 +205,26 @@ def retire_mismatched_graph_store(config: Any) -> Path | None:
     return archive
 
 
+def open_graph_store_once(db_path: Path) -> None:
+    """Open the Kuzu graph the way the SDK does, then close it.
+
+    Core's guarded first open (`graph_open_guard`): a graph that cannot be
+    opened is found here, before readiness, instead of inside the first SDK
+    client after it. Read-write and not lazy, like the SDK's own open, so the
+    WAL replay and checkpoint happen here once.
+    """
+    kuzu = import_module("kuzu")
+    database = kuzu.Database(str(db_path))
+    try:
+        connection = kuzu.Connection(database)
+        try:
+            connection.execute("RETURN 1")
+        finally:
+            connection.close()
+    finally:
+        database.close()
+
+
 _GRAPH_WIDTH_CACHE: dict[str, int | None] = {}
 _GRAPH_WIDTH_LOCK = threading.Lock()
 
@@ -261,6 +281,15 @@ def _inspect_graph_width(
         expected_width=int(expected_width),
         graph_path=str(db_path),
     )
+
+
+def live_graph_path(data_dir: Path, graph_dir: str | None) -> Path:
+    """The graph `build_sdk_config` gives an ultra client of this space.
+
+    Same root and directory as the SDK config's `graph_store.db_path`, without
+    building a client config (that needs the profile's secrets).
+    """
+    return data_dir.resolve() / "hy-memory" / HY_MEMORY_NAMESPACE / (graph_dir or "graph")
 
 
 def _profile_graph_path(data_dir: Path, mode: str | None = None, graph_dir: str = "graph") -> Path:

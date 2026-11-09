@@ -4,6 +4,34 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub: a knowledge graph that freezes or kills Core while it opens is
+  quarantined and rebuilt instead of restarting Core forever. In ultra, Kuzu's
+  open of a bloated graph file held the GIL, grew RSS to 13 GB and the OS
+  killed Core about 26 s in; the Runtime relaunched it into the same file in an
+  endless `restart_scheduled → spawn_started → ready` loop. Core now opens the
+  live graph as an explicit startup step before it reports ready, declares
+  that phase to the Runtime (`core-startup.json`, 180 s budget) and writes
+  `graph-open-in-progress.json` before the open. The start after two
+  consecutive starts that died or hung there renames the graph and its
+  sidecars to `graph.quarantined-<UTC>` (never deleted, the two newest kept),
+  records `graph_store.quarantined`, starts without it and runs the normal
+  per-user graph rebuild. An embedding switch's staging graph is never
+  touched, and quarantine waits while a switch is open. `memory-processing`,
+  `settings/memory-mode` and `memhub status` report
+  `pipeline.graph_store` (`opening` / `ready` / `rebuilding_after_quarantine`
+  plus the quarantine count), and the App shows "知识图谱文件损坏，已自动重建"
+  in all 11 languages. The Runtime supervisor waits for a declared startup
+  phase instead of killing Core at the readiness budget, respawns a Core that
+  died inside it (bounded) so the quarantine can run, restarts a Core that is
+  alive but has not answered for 90 s after ready, and only forgives a crash
+  streak once Core stayed up 2 minutes, so the relaunch delay grows and the
+  circuit opens instead of a relaunch every ~20 s.
+- MemHub: `agent_max_tokens` (512–32000) is now a persistent memory-features
+  setting (`memhub settings features set agent_max_tokens=6000 --yes` /
+  `reset agent_max_tokens`), applied to the SDK's `MemoryConfig` when clients
+  are built, so evolve and System 2 output from local models is no longer cut
+  off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
+  existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an

@@ -1038,6 +1038,21 @@ export interface EvolveOverview {
   running: EvolveRunReceipt[];
 }
 
+/** The ultra graph's own state (Core `graph_open_guard`). */
+export interface GraphStoreStatus {
+  state:
+    | "not_used"
+    | "opening"
+    | "ready"
+    | "rebuilding_after_quarantine"
+    | "unavailable";
+  /** Every quarantine this home has seen (fewer copies are kept). */
+  quarantine_count: number;
+  last_quarantined_at: string | null;
+  /** Starts that died while opening the graph, not yet resolved. */
+  failed_open_attempts: number;
+}
+
 export interface MemoryModeState {
   mode: MemoryPipelineMode;
   configured_mode: MemoryPipelineMode;
@@ -1045,6 +1060,8 @@ export interface MemoryModeState {
   forced_by_env: boolean;
   modes: MemoryPipelineMode[];
   graph_build: GraphBuildState;
+  /** Optional: an older Core does not report it. */
+  graph_store?: GraphStoreStatus;
 }
 
 export interface MemoryModeChange extends MemoryModeState {
@@ -1081,6 +1098,7 @@ export interface MemoryPipelineStatus {
   evolve: EvolveOverview;
   last_evolve_at: string | null;
   graph_build: GraphBuildState;
+  graph_store?: GraphStoreStatus;
   features: Record<string, boolean | number>;
   ui_language?: string | null;
   sdk_language?: string;

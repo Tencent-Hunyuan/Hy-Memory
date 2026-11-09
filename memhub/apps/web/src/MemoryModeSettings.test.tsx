@@ -664,3 +664,36 @@ it("blocks lifecycle controls while the knowledge graph is being built", async (
     true,
   );
 });
+
+it("says a damaged graph was quarantined and is being rebuilt", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_store: {
+      state: "rebuilding_after_quarantine",
+      quarantine_count: 1,
+      last_quarantined_at: "2026-11-09T00:00:00Z",
+      failed_open_attempts: 0,
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(await screen.findByText("知识图谱文件损坏，已自动重建")).toBeTruthy();
+});
+
+it("shows no graph notice once the graph is ready", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_store: {
+      state: "ready",
+      quarantine_count: 1,
+      last_quarantined_at: "2026-11-09T00:00:00Z",
+      failed_open_attempts: 0,
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await screen.findByRole("combobox", { name: "记忆模式" });
+  expect(screen.queryByText("知识图谱文件损坏，已自动重建")).toBeNull();
+});

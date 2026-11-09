@@ -65,13 +65,45 @@ export interface CoreSupervisorOptions {
    *  existing per-attempt contract; the default is bounded but long enough for
    *  launchd cold starts measured at 11-20s under normal system load. */
   readinessBudgetMs?: number;
+  /** Ceiling on how long a Core that declares a startup phase in
+   *  `core-startup.json` (the ultra graph's first open) may stay unready.
+   *  While the phase runs Core is "starting", not hung; past this it is. */
+  startupPhaseMaxBudgetMs?: number;
+  /** Fresh spawns after a Core died, or was stopped at its budget, inside a
+   *  declared startup phase. Core's own crash-loop guard needs these: it
+   *  quarantines the graph on the start after two failed opens. */
+  startupPhaseRetries?: number;
+  /** Post-ready liveness: how often the supervisor probes, and how long a
+   *  live but silent Core is tolerated before it is restarted. 0 disables. */
+  livenessIntervalMs?: number;
+  livenessTimeoutMs?: number;
+  /** How long a (re)launched Core must stay up before its crash streak is
+   *  forgiven. Clearing it on readiness alone let a Core that came up and
+   *  died 26s later be relaunched after the base delay forever. */
+  restartStableMs?: number;
 }
 
 export const CORE_READINESS_DEFAULTS = Object.freeze({
   attempts: 300,
   delayMs: 200,
   readinessBudgetMs: 60_000,
+  startupPhaseMaxBudgetMs: 300_000,
+  startupPhaseRetries: 2,
+  livenessIntervalMs: 5_000,
+  livenessTimeoutMs: 90_000,
+  restartStableMs: 120_000,
 });
+
+/** Core died (or was stopped at the budget) inside a declared startup phase. */
+export class CoreStartupPhaseError extends Error {
+  constructor(
+    message: string,
+    readonly phase: string,
+  ) {
+    super(message);
+    this.name = "CoreStartupPhaseError";
+  }
+}
 
 /** Core's exit status when it refuses a home that is not on SDK authority. */
 export const SDK_MIGRATION_REQUIRED_EXIT = 78;
@@ -163,6 +195,51 @@ async function readCoreReceipt(dataDir: string): Promise<CoreReceipt | null> {
   };
 }
 
+/** What Core declares while a long startup step runs (`graph_open_guard`). */
+export interface CoreStartupPhase {
+  pid: number | null;
+  instanceId: string | null;
+  phase: string;
+  startedAt: number;
+  budgetMs: number;
+}
+
+export async function readCoreStartupPhase(
+  dataDir: string,
+): Promise<CoreStartupPhase | null> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(
+      await readFile(path.join(dataDir, "core-startup.json"), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  const startedAt =
+    typeof record.started_at === "string"
+      ? Date.parse(record.started_at)
+      : Number.NaN;
+  if (
+    typeof record.phase !== "string" ||
+    !record.phase ||
+    !Number.isFinite(startedAt) ||
+    typeof record.budget_ms !== "number" ||
+    !(record.budget_ms > 0)
+  ) {
+    return null;
+  }
+  return {
+    pid: typeof record.pid === "number" ? record.pid : null,
+    instanceId:
+      typeof record.instance_id === "string" ? record.instance_id : null,
+    phase: record.phase,
+    startedAt,
+    budgetMs: record.budget_ms,
+  };
+}
+
 export function processIsAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
@@ -236,6 +313,11 @@ export class CoreSupervisor {
       | "restartBaseDelayMs"
       | "restartMaxDelayMs"
       | "readinessBudgetMs"
+      | "startupPhaseMaxBudgetMs"
+      | "startupPhaseRetries"
+      | "livenessIntervalMs"
+      | "livenessTimeoutMs"
+      | "restartStableMs"
     >
   > &
     CoreSupervisorOptions;
@@ -264,6 +346,9 @@ export class CoreSupervisor {
   private restartStreak = 0;
   private restartCircuitOpen = false;
   private lastProbeError: string | null = null;
+  private livenessTimer: ReturnType<typeof setInterval> | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
+  private readyAt: number | null = null;
 
   constructor(options: CoreSupervisorOptions) {
     this.ownedInstanceId = options.instanceId ?? randomUUID();
@@ -282,6 +367,19 @@ export class CoreSupervisor {
       restartAttempts: options.restartAttempts ?? 5,
       restartBaseDelayMs: options.restartBaseDelayMs ?? 1_000,
       restartMaxDelayMs: options.restartMaxDelayMs ?? 30_000,
+      startupPhaseMaxBudgetMs:
+        options.startupPhaseMaxBudgetMs ??
+        CORE_READINESS_DEFAULTS.startupPhaseMaxBudgetMs,
+      startupPhaseRetries:
+        options.startupPhaseRetries ??
+        CORE_READINESS_DEFAULTS.startupPhaseRetries,
+      livenessIntervalMs:
+        options.livenessIntervalMs ??
+        CORE_READINESS_DEFAULTS.livenessIntervalMs,
+      livenessTimeoutMs:
+        options.livenessTimeoutMs ?? CORE_READINESS_DEFAULTS.livenessTimeoutMs,
+      restartStableMs:
+        options.restartStableMs ?? CORE_READINESS_DEFAULTS.restartStableMs,
     };
     this.ownedPort = this.options.port;
     this.activeInstanceId = this.ownedInstanceId;
@@ -473,17 +571,77 @@ export class CoreSupervisor {
   }
 
   private async attempt(): Promise<HealthResponse> {
-    try {
-      return await this.attemptOnce();
-    } catch (error) {
-      await this.logStartFailure(error);
-      throw error;
+    for (let retry = 0; ; retry += 1) {
+      try {
+        return await this.attemptOnce();
+      } catch (error) {
+        // A Core that died inside its declared startup phase (the ultra
+        // graph open) is retried with a fresh spawn: Core counts these starts
+        // itself and quarantines the graph on the one after two failures, so
+        // giving up here would leave the person relaunching the App by hand.
+        if (
+          error instanceof CoreStartupPhaseError &&
+          retry < this.options.startupPhaseRetries &&
+          !this.stopping
+        ) {
+          const delayMs = Math.min(
+            this.options.restartBaseDelayMs * 2 ** retry,
+            this.options.restartMaxDelayMs,
+          );
+          await this.options.diagnostics?.log({
+            level: "warn",
+            component: "runtime.core",
+            event: "core.startup_phase_retry",
+            outcome: "started",
+            instance_id: this.activeInstanceId,
+            details: {
+              phase: error.phase,
+              attempt: retry + 1,
+              delay_ms: delayMs,
+            },
+          });
+          await delay(delayMs);
+          if (this.stopping) {
+            await this.logStartFailure(error);
+            throw error;
+          }
+          this.child = null;
+          this.exited = false;
+          this.exitCode = null;
+          this.exitSignal = null;
+          this.spawnError = null;
+          this.startFailureLogged = false;
+          continue;
+        }
+        await this.logStartFailure(error);
+        throw error;
+      }
     }
+  }
+
+  /** The startup phase this child declared, if it is this child's. */
+  private async declaredPhase(
+    spawnedAt: number,
+  ): Promise<CoreStartupPhase | null> {
+    const phase = await readCoreStartupPhase(this.options.dataDir);
+    if (phase === null) return null;
+    const pid = this.child?.pid;
+    // The instance id is this launch's; the pid is a fallback only, because
+    // under PyInstaller the spawned pid can be a bootloader, not Core.
+    const ours =
+      phase.instanceId === this.activeInstanceId ||
+      (typeof pid === "number" && phase.pid === pid);
+    if (!ours) return null;
+    // The receipt survives a SIGKILL, and the instance id is reused across
+    // relaunches: one written before this spawn belongs to an earlier Core.
+    if (phase.startedAt < spawnedAt - 5_000) return null;
+    return phase;
   }
 
   private async attemptOnce(): Promise<HealthResponse> {
     const spawnProcess = this.options.spawnProcess ?? spawn;
     this.coreSessionId = randomUUID();
+    const spawnedAt = Date.now();
     await this.options.diagnostics?.log({
       level: "info",
       component: "runtime.core",
@@ -549,7 +707,19 @@ export class CoreSupervisor {
         // Startup failures are handled (and surfaced) by the attempt loop
         // below. Once the Core has come up, an unexpected exit is a runtime
         // fault we must recover from or report honestly.
-        if (this.startedOk && !this.stopping) void this.scheduleRestart();
+        this.clearReadyTimers();
+        if (this.startedOk && !this.stopping) {
+          // A Core that did not stay up long enough is part of a crash
+          // streak, even though it reached readiness.
+          if (
+            this.readyAt !== null &&
+            Date.now() - this.readyAt < this.options.restartStableMs
+          ) {
+            this.restartStreak += 1;
+          }
+          this.readyAt = null;
+          void this.scheduleRestart();
+        }
       });
       this.child?.once("error", (error) => {
         this.spawnError = error;
@@ -560,12 +730,63 @@ export class CoreSupervisor {
 
     const probeHealth = this.options.probeHealth ?? defaultProbeHealth;
     const deadline = Date.now() + this.options.readinessBudgetMs;
-    for (
-      let attempt = 0;
-      attempt < this.options.attempts && Date.now() < deadline;
-      attempt += 1
-    ) {
+    let waitingOnPhase: CoreStartupPhase | null = null;
+    let timedOutInPhase: CoreStartupPhase | null = null;
+    let phaseEndedAt: number | null = null;
+    for (let attempt = 0; ; attempt += 1) {
+      if (
+        !this.exited &&
+        (attempt >= this.options.attempts || Date.now() >= deadline)
+      ) {
+        // Past the plain readiness budget. A Core that declared a startup
+        // phase (the ultra graph open) is starting, not hung: wait for it
+        // until the phase's own budget, bounded by the supervisor's ceiling.
+        const phase = this.stopping
+          ? null
+          : await this.declaredPhase(spawnedAt);
+        const phaseDeadline =
+          phase === null
+            ? 0
+            : Math.min(
+                phase.startedAt + phase.budgetMs,
+                spawnedAt + this.options.startupPhaseMaxBudgetMs,
+              );
+        if (phase === null) {
+          // A phase that just finished still has to bind and answer: give
+          // it a fresh readiness budget from the moment it was seen gone.
+          if (waitingOnPhase !== null && phaseEndedAt === null) {
+            phaseEndedAt = Date.now();
+          }
+          const graceDeadline =
+            phaseEndedAt === null
+              ? 0
+              : Math.min(
+                  phaseEndedAt + this.options.readinessBudgetMs,
+                  spawnedAt + this.options.startupPhaseMaxBudgetMs,
+                );
+          if (Date.now() >= graceDeadline) break;
+        } else if (Date.now() >= phaseDeadline) {
+          timedOutInPhase = phase;
+          break;
+        } else if (waitingOnPhase === null) {
+          await this.options.diagnostics?.log({
+            level: "info",
+            component: "runtime.core",
+            event: "core.startup_phase_waiting",
+            outcome: "started",
+            instance_id: this.activeInstanceId,
+            details: {
+              phase: phase.phase,
+              budget_ms: phaseDeadline - spawnedAt,
+            },
+          });
+        }
+        if (phase !== null) waitingOnPhase = phase;
+      }
       if (this.exited) {
+        const diedInPhase = this.spawnError
+          ? null
+          : await this.declaredPhase(spawnedAt);
         // Core refuses to serve a home that is not on SDK authority with this
         // exit status; it is a stable code the callers show, not a crash.
         const refusedLegacy =
@@ -585,7 +806,9 @@ export class CoreSupervisor {
             ? "core_spawn_failed"
             : refusedLegacy
               ? "sdk_migration_required"
-              : "core_exited_before_ready",
+              : diedInPhase
+                ? "core_died_in_startup_phase"
+                : "core_exited_before_ready",
           error_type: this.spawnError?.name ?? "Error",
           details: {
             ...(this.exitCode === null ? {} : { exit_code: this.exitCode }),
@@ -595,6 +818,7 @@ export class CoreSupervisor {
             // detail key. Report only that the tail was non-empty; the bounded
             // text itself already lives in the rotating service log.
             ...(this.stderrTail.trim() ? { spawned: true } : {}),
+            ...(diedInPhase ? { phase: diedInPhase.phase } : {}),
           },
         });
         this.startFailureLogged = true;
@@ -614,9 +838,12 @@ export class CoreSupervisor {
             "runtime-service",
           );
         }
-        await this.stop();
+        await this.stopChild();
         if (this.spawnError) {
           throw new Error(failure, { cause: this.spawnError });
+        }
+        if (diedInPhase && !refusedLegacy) {
+          throw new CoreStartupPhaseError(failure, diedInPhase.phase);
         }
         throw new Error(failure);
       }
@@ -625,6 +852,7 @@ export class CoreSupervisor {
         this.lastProbeError = null;
         if (isOwnedHealth(health, this.activeInstanceId)) {
           this.startedOk = true;
+          this.markReady();
           await this.options.diagnostics?.log({
             level: "info",
             component: "runtime.core",
@@ -643,7 +871,27 @@ export class CoreSupervisor {
       await delay(this.options.delayMs);
     }
 
-    await this.stop();
+    await this.stopChild();
+    if (timedOutInPhase !== null) {
+      await this.options.diagnostics?.log({
+        level: "error",
+        component: "runtime.core",
+        event: "core.start_failed",
+        outcome: "failed",
+        instance_id: this.activeInstanceId,
+        error_code: "core_startup_phase_timeout",
+        error_type: "TimeoutError",
+        details: {
+          phase: timedOutInPhase.phase,
+          budget_ms: this.options.startupPhaseMaxBudgetMs,
+        },
+      });
+      this.startFailureLogged = true;
+      throw new CoreStartupPhaseError(
+        `MemHub Core did not finish its startup phase ${timedOutInPhase.phase} within its budget`,
+        timedOutInPhase.phase,
+      );
+    }
     await this.options.diagnostics?.log({
       level: "error",
       component: "runtime.core",
@@ -680,6 +928,23 @@ export class CoreSupervisor {
       // Once the circuit is open, relaunching is what keeps corrupting the
       // heap. Report and wait for a caller that can act (a new session, a
       // restart from the product) instead of retrying forever.
+      if (
+        !this.restartCircuitOpen &&
+        this.restartStreak >= this.options.restartAttempts
+      ) {
+        // Every relaunch came up and went down again before it was stable:
+        // the same loop as failing to start, only slower. Stop feeding it.
+        this.restartCircuitOpen = true;
+        await this.options.diagnostics?.log({
+          level: "error",
+          component: "runtime.core",
+          event: "core.restart_circuit_opened",
+          outcome: "failed",
+          instance_id: this.activeInstanceId,
+          error_code: "core_restart_circuit_open",
+          details: { restart_streak: this.restartStreak },
+        });
+      }
       if (this.restartCircuitOpen) {
         await this.options.diagnostics?.log({
           level: "error",
@@ -736,10 +1001,9 @@ export class CoreSupervisor {
               details: { attempt: attempt + 1, port: this.activePort },
             });
             void health;
-            // A Core that came back and stayed up is no longer in a crash
-            // streak; the next failure starts from the base delay again.
-            this.restartStreak = 0;
-            this.restartCircuitOpen = false;
+            // Not forgiven yet: only a Core that stays up for
+            // `restartStableMs` clears the streak (`markReady`). One that
+            // comes up and dies again keeps the delay growing.
             return;
           } catch (error) {
             this.restartStreak += 1;
@@ -786,8 +1050,101 @@ export class CoreSupervisor {
     return this.restartPromise;
   }
 
+  /** After readiness: forgive the streak once Core has stayed up, and watch
+   * for a Core that is alive but no longer answering. */
+  private markReady(): void {
+    this.clearReadyTimers();
+    this.readyAt = Date.now();
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null;
+      this.restartStreak = 0;
+      this.restartCircuitOpen = false;
+    }, this.options.restartStableMs);
+    this.stableTimer.unref?.();
+    this.startLiveness();
+  }
+
+  private clearReadyTimers(): void {
+    if (this.stableTimer !== null) clearTimeout(this.stableTimer);
+    this.stableTimer = null;
+    if (this.livenessTimer !== null) clearInterval(this.livenessTimer);
+    this.livenessTimer = null;
+  }
+
+  /** "Ready but not answering": the Core reached readiness, its process is
+   *  still there, and it has not answered a health probe for
+   *  `livenessTimeoutMs`. Stopped so the exit path relaunches it with the
+   *  same growing backoff as a crash. Before readiness this never runs; the
+   *  readiness loop and the declared startup phase own that window. */
+  private startLiveness(): void {
+    const interval = this.options.livenessIntervalMs;
+    const timeout = this.options.livenessTimeoutMs;
+    if (interval <= 0 || timeout <= 0 || !this.ownedChild) return;
+    const child = this.child;
+    const probeHealth = this.options.probeHealth ?? defaultProbeHealth;
+    let lastAnswered = Date.now();
+    let probing = false;
+    this.livenessTimer = setInterval(() => {
+      if (probing || this.stopping || this.exited || this.child !== child)
+        return;
+      probing = true;
+      void (async () => {
+        try {
+          const health = await probeHealth(this.activePort);
+          if (isOwnedHealth(health, this.activeInstanceId)) {
+            lastAnswered = Date.now();
+            return;
+          }
+          this.lastProbeError = "identity_mismatch";
+        } catch (error) {
+          this.lastProbeError =
+            error instanceof Error ? error.name : "probe_failed";
+        }
+        if (Date.now() - lastAnswered < timeout) return;
+        if (this.stopping || this.exited || this.child !== child) return;
+        this.clearReadyTimers();
+        await this.options.diagnostics?.log({
+          level: "error",
+          component: "runtime.core",
+          event: "core.unresponsive",
+          outcome: "failed",
+          instance_id: this.activeInstanceId,
+          error_code: "core_unresponsive",
+          details: {
+            budget_ms: timeout,
+            last_probe: this.lastProbeError ?? "not_probed",
+          },
+        });
+        await this.terminateChild(child);
+      })().finally(() => {
+        probing = false;
+      });
+    }, interval);
+    this.livenessTimer.unref?.();
+  }
+
+  private async terminateChild(child: ChildProcess | null): Promise<void> {
+    if (!child || this.exited) return;
+    const exitPromise = this.exitPromise;
+    child.kill("SIGTERM");
+    const exited =
+      exitPromise &&
+      (await Promise.race([
+        exitPromise.then(() => true),
+        delay(this.options.shutdownTimeoutMs).then(() => false),
+      ]));
+    if (!exited && !this.exited) child.kill("SIGKILL");
+  }
+
   async stop(): Promise<void> {
     this.stopping = true;
+    this.clearReadyTimers();
+    await this.stopChild();
+  }
+
+  /** Stop the current child without declaring a deliberate stop: used when a
+   *  start attempt fails, so a relaunch round can still continue. */
+  private async stopChild(): Promise<void> {
     const child = this.child;
     const exitPromise = this.exitPromise;
     if (!child) {

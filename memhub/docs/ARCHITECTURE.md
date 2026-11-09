@@ -129,6 +129,16 @@ surface: `hy_graph_projection.py` and `hy_graph_admin.py` may query Kuzu
 directly for low-latency Cypher projection and store-width administration.
 This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
+The ultra graph's first open at startup (`graph_open_guard.py`, through
+`hy_graph_admin.open_graph_store_once`) is part of the same graph-store
+administration: it opens and closes the live space's Kuzu file before Core
+reports ready, behind a durable marker (`graph-open-in-progress.json`) and a
+declared startup phase (`core-startup.json`) the Runtime supervisor honours.
+After two consecutive starts that died or hung in that open, the graph file is
+renamed to `graph.quarantined-<UTC>` (never deleted, two copies kept) and the
+normal `MemoryGraphBackfill` rebuilds it from SDK memories. It never touches
+an embedding switch's staging graph, and defers while a switch is open.
+
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。
 - Raw retention：MemHub 不删除任何 SDK L1 raw，任何模式都全部保留（SDK 自身也不删 raw）；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。记忆模式（lite / pro / ultra）与 evolve 见 `docs/contracts/memory-mode-evolve-v1.md`；SDK 可选检索与提取功能（graph rerank、episode recall 等，全局设置，默认保持 SDK 默认值）见 `docs/contracts/memory-features-v1.md`。
