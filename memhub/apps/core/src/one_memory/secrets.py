@@ -1,6 +1,5 @@
 import json
 import os
-import pwd
 import subprocess
 import sys
 import threading
@@ -11,6 +10,11 @@ from ctypes import byref, c_void_p
 from enum import StrEnum
 from importlib import import_module
 from typing import Any, Protocol, cast
+
+try:
+    import pwd
+except ImportError:  # Windows has no pwd module
+    pwd = None  # type: ignore[assignment]
 
 DEFAULT_SERVICE_NAME = "one-memory"
 # Public compatibility constant; runtime operations use keychain_service_name().
@@ -193,7 +197,9 @@ def _keychain_delete_many_command() -> list[str]:
 
 def _keychain_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    environment["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+    # pwd is POSIX-only; the macOS Keychain child never runs on Windows.
+    if pwd is not None and hasattr(os, "getuid"):
+        environment["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
     return environment
 
 
