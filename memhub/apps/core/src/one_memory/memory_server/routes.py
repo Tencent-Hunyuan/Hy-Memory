@@ -246,4 +246,51 @@ def sdk_router(dependencies: list[Any] | None = None) -> APIRouter:
             next_retry_at=next_retry_at(request.app, record.state, record.next_retry_at),
         )
 
+    @instance.delete("/{request_id}", response_model=MemoryWriteReceipt)
+    def cancel(
+        request_id: str,
+        request: Request,
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> MemoryWriteReceipt:
+        """Withdraw a write that has not started yet.
+
+        A pending write has no memory id, so `DELETE /memories/{id}` cannot
+        reach it and the queue keeps it until a worker picks it up. Only a
+        queued write may be withdrawn: a claimed one may already have reached
+        HY, and a terminal outcome is final.
+        """
+        # Same ownership rule as `status`: another user's key is namespaced,
+        # and `local` may not name a namespaced key directly.
+        if user_id == DEFAULT_USER_ID and request_id.startswith(_USER_KEY_PREFIX):
+            raise HTTPException(404, "unknown request id")
+        key = durable_request_key(request_id, user_id)
+        registry = _registry(request)
+        try:
+            current = registry.get(key)
+        except DurableQueueSchemaUnavailableError as error:
+            raise HTTPException(503, str(error)) from error
+        if current is None:
+            raise HTTPException(404, "unknown request id")
+        # `accepted` is the HTTP spelling of `pending` (and, on the durable
+        # path, also of `running`/`unknown`). `set_state` then refuses those
+        # two for us: only a lease owner may settle in-flight work.
+        if current.state != "accepted":
+            raise HTTPException(409, "write_not_cancellable")
+        updated = registry.set_state(key, "cancelled", "cancelled_by_client")
+        if updated is None or updated.state != "cancelled":
+            # A claimed or already-settled row must not be reported as
+            # withdrawn: the drain may still finish it.
+            raise HTTPException(409, "write_not_cancellable")
+        return MemoryWriteReceipt(
+            request_id=request_id,
+            state=updated.state,
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+            detail=updated.detail,
+            raw_ids=updated.raw_ids,
+            memory_ids=updated.memory_ids,
+            error_code=updated.error_code,
+            next_retry_at=next_retry_at(request.app, updated.state, updated.next_retry_at),
+        )
+
     return instance
