@@ -13,6 +13,7 @@ import { ConnectionFallback } from "./ConnectionFallback";
 import { exportDiagnosticsFile } from "./diagnostics-export";
 import { LanguageSelector } from "./LanguageSelector";
 import { MemoryModeSettings } from "./MemoryModeSettings";
+import { MemoryFeaturesSettings } from "./MemoryFeaturesSettings";
 import {
   ModelSettings,
   type ModelSettingsActions,
@@ -368,6 +369,7 @@ export function R6Settings({
               }}
               onModeChange={setMemoryModeState}
             />
+            <MemoryFeaturesSettings />
           </section>
           <section
             id={`${id}-panel-models`}

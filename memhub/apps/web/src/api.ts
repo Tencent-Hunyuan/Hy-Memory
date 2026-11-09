@@ -1145,6 +1145,49 @@ export async function getMemoryProcessing(): Promise<MemoryProcessingSummary> {
   return response.data;
 }
 
+/** One optional SDK feature as reported by GET /settings/memory-features. */
+export interface MemoryFeatureState {
+  name: string;
+  enabled: boolean;
+  configured: boolean | null;
+  default: boolean;
+  active: boolean;
+  reason: string | null;
+  cost: string;
+  requires_mode: string;
+  requires_feature: string | null;
+  description: string;
+}
+
+export interface MemoryFeaturesState {
+  mode: string;
+  features: MemoryFeatureState[];
+  non_default: Record<string, boolean | number>;
+}
+
+export interface MemoryFeaturesChange extends MemoryFeaturesState {
+  changed?: string[];
+}
+
+export async function getMemoryFeatures(): Promise<MemoryFeaturesState> {
+  const response = await client.get<MemoryFeaturesState>(
+    "/api/v1/settings/memory-features",
+  );
+  return response.data;
+}
+
+/** A key sets a feature, an absent key is left alone (contract: memory-features-v1.md). */
+export async function setMemoryFeature(
+  name: string,
+  enabled: boolean,
+): Promise<MemoryFeaturesChange> {
+  const response = await client.put<MemoryFeaturesChange>(
+    "/api/v1/settings/memory-features",
+    { [name]: enabled },
+  );
+  return response.data;
+}
+
 export async function getMemoryMode(): Promise<MemoryModeState> {
   const response = await client.get<MemoryModeState>(
     "/api/v1/settings/memory-mode",
