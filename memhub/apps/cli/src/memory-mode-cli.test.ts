@@ -271,6 +271,56 @@ describe("status pipeline", () => {
     const text = renderStatusText(report, "MemHub");
     expect(text).toContain("记忆模式：ultra");
     expect(text).toContain("每日 03:00 自动进化");
+    // An older Core has no graph_store: nothing is said about it.
+    expect(report.pipeline?.graph_store).toBeNull();
+    expect(report.pipeline?.graph_quarantine_count).toBe(0);
+    expect(text).not.toContain("知识图谱");
+  });
+
+  it("reports a quarantined graph that is being rebuilt", async () => {
+    const pipeline = {
+      mode: "ultra",
+      configured_mode: "ultra",
+      forced_by_env: false,
+      last_evolve_at: null,
+      graph_build: { state: "running", users: {} },
+      graph_store: {
+        state: "rebuilding_after_quarantine",
+        quarantine_count: 1,
+        last_quarantined_at: "2026-11-09T08:00:00+00:00",
+        failed_open_attempts: 0,
+      },
+      evolve: { mode: "ultra", schedule: null, running: [], users: {} },
+    };
+    const read = (state: Record<string, unknown>) =>
+      composeStatusReport({
+        dataDir: "/tmp/isolated",
+        runtime: { state: "running", code: "ok", host: "127.0.0.1", port: 1 },
+        background: null,
+        reader: (async (path: string) =>
+          path === "/api/v1/memory-processing"
+            ? {
+                state: "ok",
+                data: {
+                  pending: 0,
+                  blocked_stages: [],
+                  pipeline: { ...pipeline, graph_store: state },
+                },
+              }
+            : { state: "unavailable", code: "x" }) as never,
+      });
+    const rebuilding = await read(pipeline.graph_store);
+    expect(rebuilding.pipeline?.graph_store).toBe(
+      "rebuilding_after_quarantine",
+    );
+    expect(rebuilding.pipeline?.graph_quarantine_count).toBe(1);
+    expect(renderStatusText(rebuilding, "MemHub")).toContain(
+      "知识图谱文件损坏，已隔离并正在重建（累计隔离 1 次）",
+    );
+    const ready = await read({ ...pipeline.graph_store, state: "ready" });
+    expect(renderStatusText(ready, "MemHub")).toContain(
+      "知识图谱累计隔离 1 次",
+    );
   });
 });
 

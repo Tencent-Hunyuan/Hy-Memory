@@ -52,6 +52,7 @@ from one_memory.memory_features import (
     FeatureOverrides,
     SettingValue,
     feature_overrides,
+    parameter_value,
 )
 from one_memory.model_profiles import (
     ModelProfileSnapshot,
@@ -335,8 +336,8 @@ def sdk_feature_defaults() -> dict[str, SettingValue]:
         spec.name: bool(getattr(getattr(config, spec.section), spec.field)) for spec in FEATURES
     }
     for parameter in PARAMETERS:
-        defaults[parameter.name] = float(
-            getattr(getattr(config, parameter.section), parameter.field)
+        defaults[parameter.name] = parameter_value(
+            parameter.name, getattr(getattr(config, parameter.section), parameter.field)
         )
     return defaults
 

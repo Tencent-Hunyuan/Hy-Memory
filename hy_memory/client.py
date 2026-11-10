@@ -6821,6 +6821,10 @@ class HyMemoryClient:
                 getattr(gcfg, "hierarchy_topic_write", False) if gcfg else False
             ),
         )
+        # 回填是一次性的大批写入：立刻 CHECKPOINT，不把整批 WAL 留给下次打开回放。
+        checkpoint = getattr(self._graph_store, "checkpoint", None)
+        if callable(checkpoint):
+            await checkpoint()
         return {
             "success": True,
             "memories_scanned": len(nodes),
