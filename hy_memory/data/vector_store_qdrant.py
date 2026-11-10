@@ -1073,6 +1073,11 @@ class QdrantVectorStore(VectorStoreBase):
             logger.warning("[vector-store] list_by_user called without user_id/user_ids, refused")
             return []
         effective_aids = list(agent_ids) if agent_ids else ([agent_id] if agent_id else [])
+        if layers and not allow_raw_layer and all(
+            (layer.value if hasattr(layer, "value") else str(layer)) == MemoryLayer.L1_RAW.value
+            for layer in layers
+        ):
+            return []
 
         if len(effective_uids) == 1:
             must_conditions = [
@@ -1119,12 +1124,6 @@ class QdrantVectorStore(VectorStoreBase):
             if layer_values:
                 must_conditions.append(
                     FieldCondition(key="layer", match=MatchAny(any=layer_values))
-                )
-            else:
-                # 只点名了 raw：过滤后为空，补排除条件使结果必然为空集，
-                # 不能省略（省略等于放开全部层级，比原意图更宽）
-                must_not_conditions.append(
-                    FieldCondition(key="layer", match=MatchValue(value=MemoryLayer.L1_RAW.value))
                 )
         elif not allow_raw_layer:
             must_not_conditions.append(
