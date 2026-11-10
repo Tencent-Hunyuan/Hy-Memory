@@ -3305,10 +3305,17 @@ def _split_statements(sql: str) -> list[str]:
     and splitting on `;` alone produced a fragment starting with the comment
     text, which MySQL rejected with error 1064.
 
-    The scan is quote-aware: a `;` or `--` inside a `'...'`/`"..."`/`` `...` ``
-    literal is content, not a separator or a comment. A naive `str.split(";")`
-    cuts `DEFAULT 'a;b'` in half, and stripping `--` first would silently delete
-    everything after it in a string. Both would turn one statement into garbage
+    MySQL also treats `#` as a line comment, so it is stripped the same way.
+    Missing that was a real 1064: a `#: Emulates SQLite's partial index` comment
+    inside `model_profiles` contains an apostrophe, the scanner read it as the
+    start of a string literal, and the `;` separating the two `CREATE TABLE`
+    statements was swallowed — one broken statement reached the server.
+
+    The scan is quote-aware: a `;`, `--` or `#` inside a
+    `'...'`/`"..."`/`` `...` `` literal is content, not a separator or a
+    comment. A naive `str.split(";")` cuts `DEFAULT 'a;b'` in half, and
+    stripping `--`/`#` first would silently delete everything after it in a
+    string such as `DEFAULT '#fff'`. Both would turn one statement into garbage
     the engine rejects far from the migration that caused it.
 
     Comments are dropped rather than preserved because the statement is sent
@@ -3333,9 +3340,11 @@ def _split_statements(sql: str) -> list[str]:
             current.append(character)
             index += 1
             continue
-        if character == "-" and index + 1 < length and sql[index + 1] == "-":
-            # Line comment: skip to the end of the line, keep the newline so
-            # tokens on either side do not run together.
+        if character == "#" or (
+            character == "-" and index + 1 < length and sql[index + 1] == "-"
+        ):
+            # Line comment (`#` or `--`): skip to the end of the line, keep the
+            # newline so tokens on either side do not run together.
             newline = sql.find("\n", index)
             if newline == -1:
                 break
