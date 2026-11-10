@@ -111,3 +111,48 @@ def test_running_and_stranded_come_from_the_same_read(tmp_path: Path) -> None:
 
     assert running == 4
     assert stranded == 2
+
+
+def test_memory_processing_reports_the_stranded_count_on_the_sdk_plane(tmp_path: Path) -> None:
+    """The endpoint, not just the helper: the panel reads this field."""
+    import asyncio
+
+    from httpx import ASGITransport, AsyncClient
+    from pydantic import SecretStr
+
+    from one_memory.api import create_app
+    from one_memory.config import Settings
+    from one_memory.sdk_data_plane_migration import MemoryAuthority
+    from one_memory.secrets import InMemorySecretStore
+
+    async def scenario() -> dict[str, object]:
+        app = create_app(
+            Settings(
+                data_dir=tmp_path / "data",
+                source_home=tmp_path,
+                api_token=SecretStr("local-token"),
+            ),
+            secret_store=InMemorySecretStore(),
+        )
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer local-token"},
+            ) as client,
+        ):
+            assert app.state.memory_authority is MemoryAuthority.SDK
+            db = app.state.sdk_memory_runtime.write_queue.database_path
+            now = datetime.now(UTC)
+            _add_row(db, job_id="live", seq=1, owner="w", expires_at=now + timedelta(hours=1))
+            _add_row(db, job_id="orphan", seq=2, owner=None, expires_at=None)
+            _add_row(db, job_id="lapsed", seq=3, owner="w", expires_at=now - timedelta(hours=1))
+            response = await client.get("/api/v1/memory-processing")
+            assert response.status_code == 200
+            return response.json()
+
+    body = asyncio.run(scenario())
+
+    assert body["running"] == 3
+    assert body["stranded_running"] == 2
