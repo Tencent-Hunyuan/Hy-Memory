@@ -4,6 +4,36 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub: backups now include the memories. A backup (`memhub backup create`,
+  `POST /api/v1/backup`) used to hold only MemHub's management database; the
+  memories and raw turns in the SDK stores under `hy-memory/` were never in
+  it, so a restore could not bring them back. A backup is now a directory
+  `backups/<name>.memhub-backup/` (owner-only) with a manifest (schema 2),
+  the management database and every SDK file of the home: Chroma with the
+  live embedding space and any space kept for retention, the Kuzu graphs and
+  the SDK's SQLite caches; on a Qdrant server also a JSONL export of every
+  memory through the SDK (every layer and status, raw turns included; no
+  vectors, which hy-memory 2.0.15 does not return). SDK writes are paused with
+  the embedding switch's gate, every SDK client is closed (Kuzu checkpoints)
+  and the stores are held offline while files are copied (SQLite through its
+  backup API); writes resume on every path. The pause is reported
+  (`pause_ms`; about 1.3 s for 1,000 memories). The manifest records the
+  backend, the embedding space, the SDK version, the users and the counts per
+  user and layer, per vector collection and per graph layer. `memhub backup
+  create` shows the size first (`GET /api/v1/backup/estimate`) and writes
+  with `--yes`. A restore verifies every file, stages the data, swaps it in
+  under a journal, runs the registry, space-scan and graph-probe checks (a
+  corrupt graph is quarantined and rebuilt), counts again through the SDK and
+  rolls back on any mismatch (`backup_restore_counts_mismatch`); the previous
+  data is kept in `backups/pre-restore-*.memhub-previous/`. A killed restore
+  is rolled back by the next start. Old backups (one `.sqlite3` file) restore
+  as before and say they hold no memories. Restores across backends are
+  refused (`backup_restore_backend_mismatch`), and restoring memories onto
+  Qdrant is refused (`backup_restore_remote_sdk_unsupported`) until MemHub
+  pins an SDK that can write a memory back with its id and vector. The evolve
+  schedule no longer holds a read client for good, which kept a backup (and an
+  ultra embedding switch's graph re-embed) from closing every client. Contract:
+  `memhub/docs/contracts/backup-v2.md`.
 - Hy Memory: `HyMemoryClient.export_user_memories()` /
   `import_user_memories()` (and their `async_` forms) export one user's
   vector-store memories with their ids and vectors, and write them back into

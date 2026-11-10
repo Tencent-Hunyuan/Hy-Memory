@@ -264,20 +264,36 @@ try:
             break
 except Exception:
     width = ""
+counts = None
+if "counts" in sys.argv[4:]:
+    # The backup's graph count (`memory_backup`): Memory nodes per user and
+    # layer, one JSON line. A failure here is a non-zero exit, never a guess.
+    import json
+    counts = {}
+    result = connection.execute(
+        "MATCH (m:Memory) RETURN m.user_id, m.layer, count(*)"
+    )
+    while result.has_next():
+        user, layer, number = result.get_next()
+        counts.setdefault(str(user or ""), {})[str(layer or "")] = int(number)
 connection.close()
 database.close()
 print("width=" + width, flush=True)
+if counts is not None:
+    print("counts=" + json.dumps(counts, sort_keys=True), flush=True)
 """
 )
 
 
 def run_graph_open_probe(arguments: list[str]) -> int:
-    """`one-memory --graph-open-probe <graph> <alarm_s> [ro]`: open, then close.
+    """`one-memory --graph-open-probe <graph> <alarm_s> [ro [counts]]`: open, then close.
 
     Read-write and not lazy, like the SDK's own open, so the WAL replay and
-    checkpoint happen here, in a process that may be killed for it.
+    checkpoint happen here, in a process that may be killed for it. `ro counts`
+    opens read-only and also prints the Memory nodes per user and layer (the
+    backup's graph count).
     """
-    if len(arguments) not in (2, 3):
+    if len(arguments) not in (2, 3, 4):
         return 2
     namespace: dict[str, object] = {"__name__": "__graph_open_probe__"}
     saved = sys.argv

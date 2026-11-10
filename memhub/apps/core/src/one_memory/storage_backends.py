@@ -331,6 +331,8 @@ GRAPH_GUARD_SKIPPED = "graph_open_guard_not_kuzu"
 #: The startup stray-space scan and merge read the home's Chroma store.
 SCAN_SKIPPED = "embedding_scan_skipped_custom_backend"
 MIGRATION_SKIPPED = "upgrade_migration_skipped_custom_backend"
+#: Restoring a backup's memories onto a Qdrant server (`memory_backup`).
+RESTORE_REMOTE_UNSUPPORTED = "backup_restore_remote_sdk_unsupported"
 
 
 def embedding_switch_refusal(settings: StorageBackends, *, mode: str) -> str | None:
@@ -354,10 +356,15 @@ def capabilities(settings: StorageBackends, *, mode: str) -> dict[str, StorageCa
     switch = embedding_switch_refusal(settings, mode=mode)
     return {
         "embedding_switch": StorageCapability(state="refused" if switch else "works", code=switch),
-        # Backup and restore cover MemHub's management database, which is the
-        # same whatever stores the memories (docs/contracts/storage-backends-v1.md).
+        # A backup holds the memories on every backend: the local stores'
+        # files, and on Qdrant an export through the SDK. Restoring memories
+        # onto Qdrant needs an SDK write that keeps ids and vectors, which
+        # hy-memory 2.0.15 does not have (docs/contracts/backup-v2.md).
         "backup": StorageCapability(state="works"),
-        "restore": StorageCapability(state="works"),
+        "restore": StorageCapability(
+            state="works" if chroma else "refused",
+            code=None if chroma else RESTORE_REMOTE_UNSUPPORTED,
+        ),
         "graph_export": StorageCapability(
             state="works" if kuzu else "refused",
             code=None if kuzu else GRAPH_EXPORT_UNSUPPORTED,

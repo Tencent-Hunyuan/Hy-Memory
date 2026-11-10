@@ -199,7 +199,8 @@ mode. `works` / `skipped` (nothing to do there, nothing touched) / `refused`
 | `graph-width` export / rebuild | works | **refused** `graph_export_backend_unsupported` | works |
 | Graph backfill and evolve | works | works (SDK; backfill starts when the graph moves) | works |
 | Memory map (graph view) | works | works (same Cypher) | works |
-| Backup create / restore | works | works | works |
+| Backup create (memories included, `backup-v2.md`) | works | works (local files; the server graph is derived) | works (local files + SDK export) |
+| Restore of a backup's memories | works | works; the graph is rebuilt | **refused** `backup_restore_remote_sdk_unsupported` |
 | Upgrade migrations (`sdk-migrate`, `sdk-migration-status`) | work | **skipped** `upgrade_migration_skipped_custom_backend` | **skipped** |
 
 Notes:
@@ -216,14 +217,17 @@ Notes:
   containing it, `SdkReembedBackend` can pass the Qdrant location and this
   home's prefix, and the refusal on Qdrant can be lifted. The refusal for a
   Neo4j/Memgraph graph in ultra stays.
-- **Backup and restore** cover MemHub's management database
-  (`one-memory.sqlite3`: sources, write queue, profiles, the embedding-space
-  registry). They never contained the memories themselves on any backend:
-  the SDK stores are not in a MemHub backup, and a restore never replaces
-  them. On a server backend, back the memories up with the server's own tools
-  (Neo4j `neo4j-admin database dump`, Qdrant snapshots). `config.json` and
-  the secrets are not in the backup either, so a restore never changes the
-  backends.
+- **Backup and restore** include the memories since 1.0.7
+  ([`backup-v2.md`](backup-v2.md)): the management database and every local
+  SDK file, plus on Qdrant an export of the memories through the SDK. A
+  restore onto Qdrant is refused until the SDK can write memories back with
+  their ids and vectors; a restore across backends is refused
+  (`backup_restore_backend_mismatch`). On a Neo4j/Memgraph graph the restore
+  rebuilds the server's graph from the restored facts. Server-side snapshots
+  (Neo4j `neo4j-admin database dump`, Qdrant snapshots) remain the way to back
+  up the servers themselves. `config.json` and the secrets are not in the
+  backup, so a restore never changes the backends. Old backups (management
+  database only) still restore as before.
 - **Restore of an SDK-era backup.** Since this version a managed restore
   accepts a backup taken after the SDK cutover (identity: the
   `memory_authority_state` row and the write queue); it used to require the

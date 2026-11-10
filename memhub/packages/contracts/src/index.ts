@@ -1373,9 +1373,15 @@ export interface MemoryAddReceipt {
 }
 
 export type {
+  BackupBackend,
+  BackupEstimate,
+  BackupFailureCode,
+  BackupRequest,
   BackupRestoreFailureCode,
   BackupRestoreRequest,
   BackupRestoreResult,
+  BackupRestoreVerification,
+  BackupResult,
 } from "./backup-restore.js";
 export type {
   ContextItem,

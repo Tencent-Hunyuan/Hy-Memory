@@ -798,24 +798,25 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "backup",
     summary:
-      "备份与恢复主库（来源、写入队列、配置）。注意：不包含记忆本身——SDK 记忆库 hy-memory/ 不在备份里，restore 也不会替换它。create 的目标要放在 <数据目录>/backups/ 下才能被 restore 使用；restore 覆盖现有主库，需 Runtime 已停止，并加 --yes 与 --confirm <同一个备份路径>。",
+      "备份与恢复主库（来源、写入队列、配置）和全部记忆（记忆库 hy-memory/；Qdrant 上的记忆经 SDK 导出）。create 先显示预计大小，加 --yes 才写入；备份期间记忆写入短暂暂停后自动恢复。目标要放在 <数据目录>/backups/ 下才能被 restore 使用。restore 替换主库和记忆、核对条数、不一致整体回滚，需 Runtime 已停止，并加 --yes 与 --confirm <同一个备份路径>。旧格式备份（单个 .sqlite3）不包含记忆本身，只恢复主库。",
     usage:
-      "memhub backup create --target <path> [--json]\n" +
+      "memhub backup create --target <path> [--yes] [--json]\n" +
       "            memhub backup restore --source <path> [--yes --confirm <path>] [--json]",
     options: [
       {
         flag: "--target <path>",
-        summary: "create 的备份文件路径，必须在数据目录内。",
+        summary:
+          "create 的备份目录：<数据目录>/backups/ 下尚不存在的名字（backups/x 写成 backups/x.memhub-backup）。",
       },
       {
         flag: "--source <path>",
         summary:
-          "restore 的备份文件，必须是 <数据目录>/backups/ 下的受管备份。",
+          "restore 的备份：<数据目录>/backups/ 下的 .memhub-backup 目录（含记忆），或旧格式 .sqlite3 文件（只含主库）。",
       },
       {
         ...DESTRUCTIVE_CONFIRM_OPTION,
         summary:
-          "restore 必须加，且要同时给出 --confirm <path>；create 不需要。",
+          "create 加了才写入（不加只显示预计大小）；restore 必须加，且要同时给出 --confirm <path>。",
       },
       {
         flag: "--confirm <path>",

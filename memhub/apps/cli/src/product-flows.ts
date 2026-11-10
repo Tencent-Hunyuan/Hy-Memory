@@ -30,7 +30,12 @@ export type ScanCommand =
   | { readonly kind: "all" };
 
 export type BackupCommand =
-  | { readonly verb: "create"; readonly target: string }
+  | {
+      readonly verb: "create";
+      readonly target: string;
+      /** Without `--yes` a create only shows the expected size. */
+      readonly confirmed: boolean;
+    }
   | {
       readonly verb: "restore";
       readonly source: string;
@@ -117,7 +122,7 @@ export function parseScanCommand(args: readonly string[]): ScanCommand | null {
     : null;
 }
 
-/** `backup create --target <path>` and
+/** `backup create --target <path> [--yes]` and
  * `backup restore --source <path> [--yes]`. */
 export function parseBackupCommand(
   args: readonly string[],
@@ -126,7 +131,9 @@ export function parseBackupCommand(
   if (verb === "create") {
     const flags = parseFlags(args.slice(1), ["--target"], ["--yes", "--json"]);
     const target = flags?.values.get("--target");
-    return flags && target !== undefined ? { verb: "create", target } : null;
+    return flags && target !== undefined
+      ? { verb: "create", target, confirmed: flags.switches.has("--yes") }
+      : null;
   }
   if (verb === "restore") {
     const flags = parseFlags(

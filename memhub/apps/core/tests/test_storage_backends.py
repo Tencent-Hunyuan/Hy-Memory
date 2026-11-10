@@ -318,6 +318,10 @@ def test_capabilities_per_backend_and_mode() -> None:
     # Qdrant: the SDK cannot re-embed it (hy-memory 2.0.15), in any mode.
     assert embedding_switch_refusal(qdrant, mode="lite") == "embedding_switch_backend_unsupported"
     assert capabilities(qdrant, mode="pro")["embedding_space_scan"].state == "skipped"
+    # A backup exports Qdrant's memories; writing them back needs an SDK API.
+    assert capabilities(qdrant, mode="pro")["backup"].state == "works"
+    assert capabilities(qdrant, mode="pro")["restore"].code == "backup_restore_remote_sdk_unsupported"
+    assert capabilities(neo4j, mode="ultra")["restore"].state == "works"
 
 
 def test_the_graph_view_reads_rows_from_either_graph_store() -> None:

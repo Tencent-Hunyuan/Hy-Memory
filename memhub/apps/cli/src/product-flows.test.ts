@@ -115,11 +115,15 @@ describe("scan", () => {
 });
 
 describe("backup", () => {
-  it("creates directly and requires a target", () => {
+  it("creates with --yes, previews without, and requires a target", () => {
     expect(parseBackupCommand(["create", "--target", "/tmp/b"])).toEqual({
       verb: "create",
       target: "/tmp/b",
+      confirmed: false,
     });
+    expect(
+      parseBackupCommand(["create", "--target", "/tmp/b", "--yes"]),
+    ).toMatchObject({ confirmed: true });
     expect(parseBackupCommand(["create"])).toBeNull();
     expect(
       parseBackupCommand(["create", "--target", "/tmp/b", "--source", "/x"]),

@@ -252,13 +252,30 @@ node apps/cli/dist/one-memory.cjs settings backends reset --yes         # 回到
 ## 9. 备份
 
 ```bash
-node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<文件名> --json
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名>        # 预览
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名> --yes --confirm <数据目录>/backups/<文件名>  # 执行
+node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<名字>              # 预览：预计大小
+node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<名字> --yes --json  # 执行
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<名字>.memhub-backup        # 预览
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<名字>.memhub-backup --yes --confirm <数据目录>/backups/<名字>.memhub-backup  # 执行
 ```
 
-备份只包含主库（来源、写入队列、配置），**不包含记忆本身**（`hy-memory/`）。目标必须在
-数据目录内（否则拒绝），放在 `backups/` 下才能被 restore 使用；restore 需 Runtime 已停止。
+从 1.0.7 起备份**包含全部记忆**：主库（来源、写入队列、配置）加记忆库 `hy-memory/`
+（Chroma、Kuzu 图谱、SDK 的 SQLite 缓存）；向量在 Qdrant 服务器上时另含一份经 SDK
+导出的 `export/memories.jsonl`。备份是一个目录 `backups/<名字>.memhub-backup/`
+（`backups/x.sqlite3` 也写成 `backups/x.memhub-backup`），只有本人可读写（0700/0600）。
+
+- `create` 不加 `--yes` 只显示目标和预计大小（`GET /api/v1/backup/estimate`），
+  不写任何东西；加 `--yes` 才写。复制期间记忆写入短暂暂停（约 1 秒 / 千条记忆），
+  结束后自动恢复，结果里有 `pause_ms`。目标必须是 `<数据目录>/backups/` 下尚不存在的名字（路径中的 `..` 与符号链接都会被解析，指向别处一律拒绝）。
+- `restore` 需 Runtime 已停止，并用 `--confirm` 再写一遍路径。它替换主库和记忆库，
+  然后核对记忆条数（每个用户每一层、每个向量集合、图谱节点）；不一致就整体回滚，
+  `backup_restore_counts_mismatch`。之前的数据留在
+  `backups/pre-restore-<时间>.memhub-previous/`。图谱打不开会被隔离并在下次启动时重建。
+- 旧格式备份（单个 `.sqlite3` 文件）照旧恢复主库，结果写明
+  `memories_included: false`：它不含记忆，记忆库保持原样。
+- 后端不同（本机 Kuzu + Chroma 与服务器之间）拒绝恢复：`backup_restore_backend_mismatch`；
+  记忆在 Qdrant 上时暂不支持恢复记忆：`backup_restore_remote_sdk_unsupported`。
+
+合同：[`../contracts/backup-v2.md`](../contracts/backup-v2.md)。
 
 ## 10. 宿主接入（host）
 
@@ -286,7 +303,7 @@ node apps/cli/dist/one-memory.cjs sync resume --source codex
 `backup restore`、`graph-width --decision rebuild_with_new`。不加时只说明将要做什么，不做任何
 改动（exit 0）。`delete-data` 和 `backup restore` 还要用 `--confirm <路径>` 再写一遍目标（数据目录 /
 备份文件），只加 `--yes` 会被拒绝。install / upgrade / uninstall / service-install / service-uninstall 不加 `--yes`
-时只出计划。其它写命令直接执行。
+时只出计划。`backup create` 不加 `--yes` 时只显示预计大小（备份含全部记忆，可能很大）。其它写命令直接执行。
 
 ## 12. 卸载（保留数据）
 

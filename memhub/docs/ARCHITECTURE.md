@@ -169,6 +169,8 @@ staging graph, and does not quarantine while a switch is open. With a Neo4j/Memg
   同一 turn 只进 SDK 一次；只有没有文件轮询的来源才从 hook 入队。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
 
+- 备份与恢复（[`contracts/backup-v2.md`](contracts/backup-v2.md)）：备份包含记忆。它是 SDK 本地存储的第三个离线维护边界：先用 embedding switch 的同一写入闸门（`writes_open`）暂停 SDK 写入，关闭全部 SDK client（Kuzu 在 SDK close 时 CHECKPOINT）并 `hold_stores_offline`，再按文件复制 `hy-memory/governed-v2`（SQLite 走 backup API），结束时无论成败都恢复写入；计数只经 SDK 公开读与 `hy_sdk_migration` 的空间扫描。Qdrant 上的记忆经 SDK 公开 list 导出为 JSONL，不直接读服务器。恢复先校验、暂存，再在 journal 下改名换入，按清单核对条数，不一致整体回滚；跨后端或写回 Qdrant 记忆（SDK 2.0.15 无保留 id 与向量的写入 API）一律拒绝。旧备份（只含主库）照旧恢复。
+
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。
 
 ## Permission Boundaries（管理面 · 仍独立）

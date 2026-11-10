@@ -438,10 +438,12 @@ export interface ScanJob {
   readonly status: string;
 }
 
-/** Ask Runtime to copy its committed database to `target`.
+/** Ask Runtime to write a backup (memories included) at `target`.
  *
- * The server decides the final path; the CLI reports what it was told, rather
- * than assuming its own argument survived unchanged.
+ * The server decides the final path (`backups/x` becomes
+ * `backups/x.memhub-backup`); the CLI reports what it was told, rather than
+ * assuming its own argument survived unchanged. A refusal throws its Core
+ * code (`backup_target_outside_data_dir`, `backup_target_exists`, ...).
  */
 export async function submitBackup(
   attachment: RuntimeAttachmentLike,
@@ -452,6 +454,46 @@ export async function submitBackup(
     { target },
     {
       headers: { Authorization: `Bearer ${attachment.apiToken}` },
+      // Every memory is copied: a large library takes minutes. Writes are
+      // paused only for the copy itself (`pause_ms` in the answer).
+      timeout: BACKUP_TIMEOUT_MS,
+      proxy: false,
+      maxRedirects: 0,
+      maxContentLength: MAX_RESPONSE_BYTES,
+      validateStatus: () => true,
+    },
+  );
+  if (response.status >= 400) {
+    throw new Error(backupRefusal(response.status, response.data));
+  }
+  return response.data;
+}
+
+/** How long a backup may take before the CLI stops waiting for its answer. */
+export const BACKUP_TIMEOUT_MS = 60 * 60_000;
+
+function backupRefusal(status: number, data: unknown): string {
+  const detail =
+    data !== null && typeof data === "object" && !Array.isArray(data)
+      ? (data as { detail?: unknown }).detail
+      : undefined;
+  if (typeof detail === "string" && /^backup_[a-z0-9_]{1,96}$/.test(detail)) {
+    return detail;
+  }
+  if (status === 422) return "backup_target_outside_data_dir";
+  return `backup_rejected http_${status}`;
+}
+
+/** How large a backup would be, before writing one. */
+export async function fetchBackupEstimate(
+  attachment: RuntimeAttachmentLike,
+  target: string,
+): Promise<BackupEstimate | null> {
+  const response = await axios.get<BackupEstimate>(
+    `${baseUrlOf(attachment)}/api/v1/backup/estimate`,
+    {
+      params: { target },
+      headers: { Authorization: `Bearer ${attachment.apiToken}` },
       timeout: 120_000,
       proxy: false,
       maxRedirects: 0,
@@ -459,18 +501,51 @@ export async function submitBackup(
       validateStatus: () => true,
     },
   );
-  if (response.status === 422) {
-    throw new Error("backup_target_outside_data_dir");
+  if (response.status === 404) {
+    // A Core before 1.0.7: no estimate, and its backup holds no memories.
+    return null;
   }
   if (response.status >= 400) {
-    throw new Error(`backup_rejected http_${response.status}`);
+    throw new Error(backupRefusal(response.status, response.data));
   }
-  return response.data;
+  const data = response.data as unknown;
+  if (
+    data === null ||
+    typeof data !== "object" ||
+    typeof (data as { bytes?: unknown }).bytes !== "number"
+  ) {
+    throw new Error("backup_estimate_invalid");
+  }
+  return data as BackupEstimate;
+}
+
+export interface BackupEstimate {
+  /** The directory the backup would be written to. */
+  readonly target?: string | null;
+  readonly bytes: number;
+  readonly files: number;
+  readonly local_bytes: number;
+  readonly export_bytes: number;
+  readonly free_bytes: number | null;
+  readonly memories_included: boolean;
+  readonly backend: {
+    readonly kind: string;
+    readonly vector: string;
+    readonly graph: string;
+  };
 }
 
 export interface BackupResult {
   readonly target: string;
   readonly bytes: number;
+  /** Absent from a Core before 1.0.7, whose backup held no memories. */
+  readonly files?: number;
+  readonly schema_version?: number;
+  readonly memories_included?: boolean;
+  readonly pause_ms?: number;
+  readonly copy_ms?: number;
+  readonly backend?: { readonly kind: string };
+  readonly users?: readonly string[];
 }
 
 /** Ask Runtime to delete a model profile.
