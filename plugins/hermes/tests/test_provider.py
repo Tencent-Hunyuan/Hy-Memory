@@ -2,6 +2,7 @@
 
 import contextvars
 import json
+import os
 import threading
 import urllib.error
 from unittest.mock import Mock
@@ -126,6 +127,7 @@ def test_scope_nested_and_sanitization(provider, monkeypatch):
         "user_ids": ["owner-A"],
         "agent_ids": ["agent-A"],
         "limit": 5,
+        "min_score": 0.4,
     }
     assert call(provider, "add", text="save") == {
         "success": False,
@@ -1035,3 +1037,48 @@ def test_search_tags_spend_the_max_chars_budget(provider, monkeypatch):
     assert memories[0]["tags"] == [tag]
     assert memories[1] == {"memory_id": "memory-2", "content": "more", "tags": ["late"]}
     assert used == budget - 100 + 64 + 4 + 4 <= budget
+
+
+def _direct_provider(monkeypatch, min_score=None):
+    for key in list(os.environ):
+        if key.startswith("HY_MEMORY_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    if min_score is not None:
+        monkeypatch.setenv("HY_MEMORY_MIN_SCORE", min_score)
+    instance = HyMemoryProvider()
+    instance.initialize("session-A", hermes_home="/profile/A", platform="cli")
+    return instance
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, 0.4), ("0.62", 0.62), ("0", 0.0), ("1", 1.0)],
+)
+def test_search_forwards_configured_min_score(monkeypatch, configured, expected):
+    """The SDK's 0.4 default must not be forced on every direct-mode caller."""
+    instance = _direct_provider(monkeypatch, configured)
+    calls = transport(monkeypatch, {"memories": []})
+    try:
+        assert call(instance, query="remember") == {"success": True, "memories": []}
+        payload = json.loads(calls[0][0].data)
+        assert payload["min_score"] == expected
+        assert payload["query"] == "remember"
+        assert payload["limit"] == 5
+    finally:
+        instance.shutdown()
+
+
+@pytest.mark.parametrize("value", ["1.5", "-0.1", "nan", "not-a-number"])
+def test_invalid_min_score_disables_provider(monkeypatch, value):
+    """A bad floor is a configuration error, never a request with a wrong type."""
+    for key in list(os.environ):
+        if key.startswith("HY_MEMORY_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    monkeypatch.setenv("HY_MEMORY_MIN_SCORE", value)
+    instance = HyMemoryProvider()
+    assert instance._config_error == "invalid_configuration"
+    assert not instance.is_available()

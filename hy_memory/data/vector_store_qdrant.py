@@ -18,6 +18,8 @@ Agent Memory V2 - VectorStore (Qdrant)
 
 import concurrent.futures
 import os
+import tempfile
+import stat
 import threading
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from pathlib import Path
@@ -32,6 +34,34 @@ from .vector_store_base import VectorStoreBase
 from .vector_store_chroma import _vdb_executor
 
 logger = logging.getLogger(__name__)
+
+
+def _publish_json(path: Path, payload: object) -> None:
+    """Rewrite *path* without ever leaving it truncated.
+
+    ``meta.json`` is read by Qdrant when a collection is opened, and this
+    migration is the only place that rewrites it.  Writing in place means a
+    crash, a full disk or an interrupt leaves the file truncated, which makes
+    the collection unreadable.  Stage a sibling file and swap it in with
+    ``Path.replace`` -- the same idiom as ``hy_memory/snapshot.py`` -- and keep
+    the original permissions so a group-readable index stays readable.
+    """
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = None
+    import json
+
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload))
+        if mode is not None:
+            os.chmod(staging, mode)
+        Path(staging).replace(path)
+    except BaseException:
+        Path(staging).unlink(missing_ok=True)
+        raise
 
 
 def _run_in_vdb_pool(func, *args, **kwargs):
@@ -1801,7 +1831,7 @@ class QdrantVectorStore(VectorStoreBase):
                 changed = True
 
         if changed:
-            meta_path.write_text(_json.dumps(meta), encoding="utf-8")
+            _publish_json(meta_path, meta)
             logger.info("Patched Qdrant meta.json: removed unsupported fields")
 
     # ================================================================

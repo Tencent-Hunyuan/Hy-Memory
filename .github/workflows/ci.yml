@@ -28,6 +28,22 @@ permissions:
 jobs:
   sdk:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: hy_memory_test
+          POSTGRES_USER: hy_memory
+          POSTGRES_PASSWORD: hy_memory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hy_memory -d hy_memory_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HY_MEMORY_TEST_POSTGRES_DSN: postgresql://hy_memory:hy_memory_test@localhost:5432/hy_memory_test
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -36,7 +52,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --extra dev --extra faiss --extra qdrant
+      - run: uv sync --extra dev --extra faiss --extra qdrant --extra postgres
       - run: uv run pytest tests/ -q -o log_cli=false
 
   memhub:

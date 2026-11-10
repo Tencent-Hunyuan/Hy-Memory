@@ -99,6 +99,7 @@ async def recall_with_fallback(
     has_memories: Callable[[], Awaitable[bool]],
     raw_sources: Callable[[], Awaitable[RawSources]],
     search_raw: Callable[[str, int, RawSources], Awaitable[tuple[HySdkRawHit, ...]]],
+    bounded_sdk_primary: bool = False,
 ) -> RecallReceipt:
     """Memory recall when a model and memories exist, otherwise the raw layer.
 
@@ -110,8 +111,36 @@ async def recall_with_fallback(
         return await recall_memories(request)
     started = time.monotonic()
     if await model_ready():
-        receipt = await recall_memories(request)
-        if receipt.hits or await has_memories():
+        memory_request = request
+        if bounded_sdk_primary:
+            # SDK search is the primary source. Bound it below the HTTP
+            # ceiling, accounting for model readiness and reserving grace for
+            # response handling and any downstream work.
+            search_budget = min(
+                request.timeout_ms / 1_000,
+                RECALL_TOTAL_CEILING_SECONDS - RECALL_TOTAL_GRACE_SECONDS,
+            )
+            remaining = search_budget - (time.monotonic() - started)
+            if remaining <= 0:
+                return RecallReceipt(
+                    state=RecallState.EMPTY,
+                    query=request.query,
+                    scope=request.scope,
+                    hits=(),
+                    used_characters=0,
+                    truncated=True,
+                    truncated_by=TruncationBudget.TIMEOUT,
+                    user_id=request.user_id,
+                )
+            memory_request = request.model_copy(
+                update={"timeout_ms": max(1, int(remaining * 1_000))}
+            )
+        receipt = await recall_memories(memory_request)
+        if (
+            receipt.hits
+            or (bounded_sdk_primary and receipt.truncated_by == TruncationBudget.TIMEOUT)
+            or await has_memories()
+        ):
             return receipt
         reason: FallbackReason = "no_memories"
     else:
