@@ -94,11 +94,13 @@ from one_memory.external_memory_access import (
 )
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
+from one_memory.graph_open_guard import GraphOpenGuard, GraphOpenOutcome, GraphStoreStatus
 from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     GraphWidthMismatch,
     effective_memory_mode,
     graph_store_enabled,
+    live_graph_path,
 )
 from one_memory.hy_runtime_config import (
     HY_MEMORY_READER,
@@ -226,6 +228,7 @@ from one_memory.memory_features import (
     effective_features,
     feature_activity,
     non_default_features,
+    parameter_value,
 )
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
@@ -798,6 +801,9 @@ class MemoryModeState(BaseModel):
     forced_by_env: bool
     modes: tuple[MemoryMode, ...] = MEMORY_MODES
     graph_build: GraphBuildState
+    #: The ultra graph's own state: opening / ready / rebuilt after a
+    #: quarantine (`graph_open_guard`).
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
 
 
 class MemoryModeUpdate(BaseModel):
@@ -885,6 +891,10 @@ class PipelineStatus(BaseModel):
     #: Newest finished run across users, for a one-line status.
     last_evolve_at: datetime | None = None
     graph_build: GraphBuildState
+    #: The ultra graph's own state (`graph_open_guard`): `opening` while the
+    #: startup step runs, `rebuilding_after_quarantine` after a graph that
+    #: kept taking Core down was renamed aside, else `ready` / `not_used`.
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
     #: The SDK features (`memory_features`) whose value differs from the SDK
     #: default; empty while every feature is at its default. A parameter
     #: (`intention_dedup_threshold`) appears as its number.
@@ -954,19 +964,22 @@ class MemoryParameterState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: MemoryParameterName
-    #: What clients are built with: `configured`, else `default`.
-    value: float
+    #: What clients are built with: `configured`, else `default`. An integer
+    #: parameter (`agent_max_tokens`) is an int throughout.
+    value: int | float
     #: What a person set; null = not set, the SDK default applies.
-    configured: float | None
+    configured: int | float | None
     #: The SDK default (its code default, or its own env var when set).
-    default: float
+    default: int | float
     #: The range a `PUT` accepts, inclusive.
-    minimum: float
-    maximum: float
-    #: Whether it acts: exactly when `requires_feature` acts.
+    minimum: int | float
+    maximum: int | float
+    #: Whether it acts: when `requires_feature` acts, or, without one, when
+    #: the mode reaches `requires_mode`.
     active: bool
     reason: FeatureReason | None
-    requires_feature: MemoryFeatureName
+    requires_feature: MemoryFeatureName | None
+    requires_mode: Literal["pro", "ultra"] = "pro"
     sdk_field: str
     env: str
     description: str
@@ -1929,6 +1942,15 @@ def create_app(
                     )
 
                 async def resume_graph_backfill() -> None:
+                    if (
+                        app.state.graph_open_outcome == "quarantined"
+                        and _memory_mode(app) == "ultra"
+                    ):
+                        # The quarantined graph is derived data: rebuild it
+                        # from every user's memories, the normal ultra path.
+                        users = await asyncio.to_thread(_known_user_ids, app)
+                        app.state.memory_graph_backfill.start(users)
+                        return
                     saved = app.state.evolve_state_store.graph_build()
                     if saved.state != "running":
                         return
@@ -2060,6 +2082,18 @@ def create_app(
                     duration_ms=elapsed_ms(recovery_started),
                     details={"count": len(failed)},
                 )
+
+            # The ultra graph's first open, as its own startup step before
+            # readiness (`graph_open_guard`): a graph that freezes or kills
+            # Core while opening used to do it after readiness, inside the
+            # first SDK client, and the Runtime relaunched into the same file
+            # forever. Here the Runtime sees a declared startup phase, and a
+            # graph that took two starts down is quarantined and rebuilt.
+            app.state.graph_open_guard = GraphOpenGuard(
+                runtime_settings.data_dir,
+                instance_id=runtime_settings.instance_id,
+            )
+            app.state.graph_open_outcome = await _open_graph_store_at_startup(app)
 
             app.state.recovery_task = None
             app.state.sdk_stores_held = False
@@ -6889,6 +6923,40 @@ def _memory_mode_state(app: FastAPI) -> MemoryModeState:
         explicitly_configured=store.memory_mode_explicitly_configured(),
         forced_by_env=graph_store_enabled(),
         graph_build=app.state.evolve_state_store.graph_build(),
+        graph_store=_graph_store_status(app),
+    )
+
+
+def _graph_store_status(app: FastAPI) -> GraphStoreStatus:
+    guard = cast(GraphOpenGuard | None, getattr(app.state, "graph_open_guard", None))
+    if guard is None:
+        return GraphStoreStatus()
+    backfill = getattr(app.state, "memory_graph_backfill", None)
+    running: bool | None = bool(backfill is not None and backfill.running) or (
+        app.state.evolve_state_store.graph_build().state == "running"
+    )
+    if getattr(app.state, "recovery", None) not in {"done", "failed"}:
+        # The rebuild is started by post-ready recovery; until that has run,
+        # "not running" does not mean "finished".
+        running = None
+    return guard.status(rebuild_running=running)
+
+
+async def _open_graph_store_at_startup(app: FastAPI) -> GraphOpenOutcome:
+    """Run the guarded first open of the live ultra graph; see `graph_open_guard`."""
+    guard = cast(GraphOpenGuard, app.state.graph_open_guard)
+    if app.state.memory_authority is not MemoryAuthority.SDK or _memory_mode(app) != "ultra":
+        guard.mark_not_used()
+        return "skipped"
+    live = app.state.embedding_spaces.live()
+    graph_path = live_graph_path(
+        cast(Settings, app.state.settings).data_dir,
+        live.graph_dir if live is not None else None,
+    )
+    switch = getattr(app.state, "embedding_switch", None)
+    switch_in_progress = bool(switch is not None and switch.jobs.open_job() is not None)
+    return await asyncio.to_thread(
+        guard.open_at_startup, graph_path, switch_in_progress=switch_in_progress
     )
 
 
@@ -7009,14 +7077,15 @@ def _memory_features_state(
         parameters.append(
             MemoryParameterState(
                 name=parameter.name,
-                value=float(effective[parameter.name]),
-                configured=cast(float | None, configured.get(parameter.name)),
-                default=float(defaults[parameter.name]),
-                minimum=parameter.minimum,
-                maximum=parameter.maximum,
+                value=parameter_value(parameter.name, effective[parameter.name]),
+                configured=configured.get(parameter.name),
+                default=parameter_value(parameter.name, defaults[parameter.name]),
+                minimum=parameter_value(parameter.name, parameter.minimum),
+                maximum=parameter_value(parameter.name, parameter.maximum),
                 active=reason is None,
                 reason=reason,
                 requires_feature=parameter.requires_feature,
+                requires_mode=parameter.requires_mode,
                 sdk_field=parameter.sdk_field,
                 env=parameter.env,
                 description=parameter.description,
@@ -7048,6 +7117,7 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
         evolve=overview,
         last_evolve_at=max(finished, default=None),
         graph_build=state.graph_build,
+        graph_store=state.graph_store,
         features=cast(
             dict[MemorySettingName, SettingValue],
             non_default_features(_memory_features(app), sdk_feature_defaults()),

@@ -183,6 +183,7 @@ const modeChineseMessages = {
     "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "模型配置已保留，确认记忆模式后会显示是否生效。",
+  "mode.graphStore.quarantined": "知识图谱文件损坏，已自动重建",
 } as const;
 
 export { modeChineseMessages };
@@ -394,6 +395,8 @@ export const modeEnglishMessages: ModeMessages = {
     "The model is active in this mode and creates memories from new conversations.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "The model configuration is kept. Its active state appears after the memory mode is confirmed.",
+  "mode.graphStore.quarantined":
+    "The knowledge graph file was damaged and has been rebuilt automatically.",
 };
 
 export const modeSpanishMessages: ModeMessages = {
@@ -602,6 +605,8 @@ export const modeSpanishMessages: ModeMessages = {
     "El modelo está activo en este modo y crea memorias a partir de conversaciones nuevas.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "La configuración se conserva. Su estado aparecerá cuando se confirme el modo de memoria.",
+  "mode.graphStore.quarantined":
+    "El archivo del grafo de conocimiento estaba dañado y se ha reconstruido automáticamente.",
 };
 
 export const modeTraditionalChineseMessages: ModeMessages = {
@@ -792,6 +797,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "记忆维护正在进行，完成后才能切换模式。":
     "記憶維護正在進行，完成後才能切換模式。",
   "模式切换影响暂时无法读取，请重试。": "暫時無法讀取模式切換影響，請重試。",
+  "mode.graphStore.quarantined": "知識圖譜檔案損壞，已自動重建",
 };
 
 export const modeJapaneseMessages: ModeMessages = {
@@ -993,6 +999,8 @@ export const modeJapaneseMessages: ModeMessages = {
     "記憶の保守処理中です。完了後にモードを切り替えてください。",
   "模式切换影响暂时无法读取，请重试。":
     "モード変更の影響を読み取れません。もう一度お試しください。",
+  "mode.graphStore.quarantined":
+    "ナレッジグラフのファイルが破損していたため、自動的に再構築しました。",
 };
 
 export const modeGermanMessages: ModeMessages = {
@@ -1202,6 +1210,8 @@ export const modeGermanMessages: ModeMessages = {
     "Die Speicherwartung läuft. Wechseln Sie den Modus nach Abschluss.",
   "模式切换影响暂时无法读取，请重试。":
     "Die Auswirkungen des Moduswechsels sind nicht verfügbar. Bitte erneut versuchen.",
+  "mode.graphStore.quarantined":
+    "Die Wissensgraph-Datei war beschädigt und wurde automatisch neu aufgebaut.",
 };
 
 export const modePortugueseMessages: ModeMessages = {
@@ -1410,6 +1420,8 @@ export const modePortugueseMessages: ModeMessages = {
     "A manutenção da memória está em curso. Aguarde antes de mudar de modo.",
   "模式切换影响暂时无法读取，请重试。":
     "Não é possível ler os efeitos da mudança de modo. Tente novamente.",
+  "mode.graphStore.quarantined":
+    "O arquivo do grafo de conhecimento estava danificado e foi reconstruído automaticamente.",
 };
 
 export const modeFrenchMessages: ModeMessages = {
@@ -1620,6 +1632,8 @@ export const modeFrenchMessages: ModeMessages = {
     "La maintenance de la mémoire est en cours. Attendez avant de changer de mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Les effets du changement de mode sont indisponibles. Réessayez.",
+  "mode.graphStore.quarantined":
+    "Le fichier du graphe de connaissances était endommagé et a été reconstruit automatiquement.",
 };
 
 export const modeKoreanMessages: ModeMessages = {
@@ -1821,6 +1835,8 @@ export const modeKoreanMessages: ModeMessages = {
     "메모리 유지 관리 중입니다. 완료 후 모드를 전환하세요.",
   "模式切换影响暂时无法读取，请重试。":
     "모드 전환 영향을 읽을 수 없습니다. 다시 시도하세요.",
+  "mode.graphStore.quarantined":
+    "지식 그래프 파일이 손상되어 자동으로 다시 구축했습니다.",
 };
 
 export const modeRussianMessages: ModeMessages = {
@@ -2028,6 +2044,8 @@ export const modeRussianMessages: ModeMessages = {
     "Идёт обслуживание памяти. Дождитесь завершения перед сменой режима.",
   "模式切换影响暂时无法读取，请重试。":
     "Не удалось прочитать последствия смены режима. Повторите попытку.",
+  "mode.graphStore.quarantined":
+    "Файл графа знаний был повреждён и автоматически перестроен.",
 };
 
 export const modeIndonesianMessages: ModeMessages = {
@@ -2234,4 +2252,6 @@ export const modeIndonesianMessages: ModeMessages = {
     "Pemeliharaan memori sedang berjalan. Tunggu sebelum mengganti mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Dampak perubahan mode tidak dapat dibaca. Coba lagi.",
+  "mode.graphStore.quarantined":
+    "File grafik pengetahuan rusak dan telah dibangun ulang secara otomatis.",
 };
