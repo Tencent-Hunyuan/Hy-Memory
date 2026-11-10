@@ -132,6 +132,7 @@ class HyMemoryProvider(MemoryProvider):
             self.timeout = self._number("TIMEOUT", 5, 0.1, 30)
             self.write_timeout = self._number("WRITE_TIMEOUT", self.timeout, 0.1, 120)
             self.limit = int(self._number("LIMIT", 5, 1, 20, integer=True))
+            self.min_score = self._number("MIN_SCORE", 0.4, 0.0, 1.0)
             self.chars = int(self._number("MAX_CHARS", 4000, 256, 16000, integer=True))
             self.body_bytes = int(
                 self._number("MAX_BODY_BYTES", 262144, 1024, 1048576, integer=True)
@@ -540,6 +541,7 @@ class HyMemoryProvider(MemoryProvider):
                     "user_ids": [self.user_id],
                     "agent_ids": [self.agent_id],
                     "limit": limit,
+                    "min_score": self.min_score,
                 },
             )
             raw = result.get("memories")
