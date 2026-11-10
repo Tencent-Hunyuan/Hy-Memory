@@ -67,6 +67,12 @@ Hy Memory and MemHub are versioned and released independently.
   are built, so evolve and System 2 output from local models is no longer cut
   off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
   existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
+- Memory Strength idle decay now also applies when a memory's timestamp is
+  timezone-aware, an ISO string with an offset, or an epoch integer (the shape
+  `bump_access` writes back). `compute_strength` could raise `TypeError` on
+  those and fell back to `idle_days = 0`; both sides are now converted to epoch
+  seconds before subtracting. Unreadable timestamps still fall back to
+  `idle_days = 0` and are logged at debug.
 - Hermes and OpenCode history imports now produce memories. Neither adapter
   ended a file with a `ScanCursorTouch`, and that event is the only thing that
   turns staged records into a write job: `finalize_sdk_file` is reached from
