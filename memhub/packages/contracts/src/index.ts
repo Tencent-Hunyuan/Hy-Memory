@@ -1129,14 +1129,16 @@ export interface MemoryProcessingSummary {
   running: number;
   /** Rows marked `running` that no worker currently owns.
    *
-   * The difference between `running` and `in_flight_count`, floored at zero.
+   * On the SDK data plane: `running` rows whose lease is missing or has
+   * lapsed, counted in the same read as `running`. On the legacy plane: the
+   * difference between `running` and `in_flight_count`, floored at zero.
    * Non-zero means work is stranded: those tasks hold their harness's slot
    * until they are recovered, and a harness is serial, so nothing else from
    * that harness can run behind them. */
   /* Optional so that existing producers and fixtures stay valid; Core always
-   * sends it, and a reader that does not see it should treat it as unknown
-   * rather than as zero. */
-  stranded_running?: number;
+   * sends it. A reader that does not see it, or sees `null`, should treat it
+   * as unknown rather than as zero. */
+  stranded_running?: number | null;
   /** Failed and never attempted because the continuous policy was not in
    * force. Included in `failed`, but not a real extraction failure: nothing
    * was sent to HY. A revoked policy otherwise reads as a broken pipeline. */

@@ -33,13 +33,18 @@ class ModelRequestBudget:
     def reserve(self, content: bytes) -> None:
         try:
             body = json.loads(content)
-            ceiling = body.get("max_tokens")
+            # Compatible endpoints may select either field when both are present.
+            limits = [body[key] for key in ("max_tokens", "max_completion_tokens") if key in body]
             if (
                 len(content) > self.body_byte_limit
-                or type(ceiling) is not int
-                or not 0 < ceiling <= self.output_token_limit
+                or not limits
+                or any(
+                    type(value) is not int or not 0 < value <= self.output_token_limit
+                    for value in limits
+                )
             ):
                 raise ValueError
+            ceiling = max(limits)
         except (ValueError, TypeError, AttributeError):
             raise ModelRequestBudgetError("model_request_budget_payload_exceeded") from None
         with main_database(self.database).write() as db, db:

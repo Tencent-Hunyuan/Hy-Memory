@@ -4,6 +4,17 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- The CLI keeps the refusal Core names in a 5xx body instead of dropping
+  it. `memhub models configure` on a machine without a key store answered
+  `http_503_result_unknown` while Core had sent `{"detail":"secure_storage_unavailable"}`
+  -- an instruction, not a status: the machine has no key store, and the fix
+  is to give it one. The four mutation verbs in `core-operations.ts` and
+  `submitMemoryWrite` in `core-client.ts` now carry that code
+  (`secure_storage_unavailable_result_unknown`). `state` stays `unknown`,
+  because a 5xx may have committed part of the request. The body value is held
+  to the shape every Core refusal code has -- lowercase words joined by
+  underscores -- so a bind address such as `127.0.0.1:8765` can never be
+  promoted to a code, which the looser 4xx matcher would have allowed.
 - Hy Memory's Kuzu graph store bounds its memory, shares one database per
   file, and keeps its setup off the event loop. Every `kuzu.Database` the SDK
   opens (the graph store and the re-embed copies) now gets an explicit buffer
@@ -62,6 +73,26 @@ Hy Memory and MemHub are versioned and released independently.
   those and fell back to `idle_days = 0`; both sides are now converted to epoch
   seconds before subtracting. Unreadable timestamps still fall back to
   `idle_days = 0` and are logged at debug.
+- Hermes and OpenCode history imports now produce memories. Neither adapter
+  ended a file with a `ScanCursorTouch`, and that event is the only thing that
+  turns staged records into a write job: `finalize_sdk_file` is reached from
+  the runner's cursor-touch branch alone, while `flush_idle_assemblies` covers
+  `priority='live'` and history is staged as `normal`. A history import of
+  either source therefore reported `completed` with a non-zero `stored` count
+  and left every record in `state='assembling'`, so the library stayed empty.
+  Both adapters now emit the touch after a file is read to its end, matching
+  `sources/common.py`; a read that stopped early or failed emits none, so a
+  partial scan never claims to have reached the end.
+- `memory-processing` reports stranded writes on the SDK data plane instead of
+  a constant zero. `active_depths()` returns the same number twice there — both
+  are the count of `running` rows — so the legacy `running - in_flight_count`
+  difference was always zero, and the panel called a stalled queue healthy
+  however many workers had died. The field exists for exactly that case (#231),
+  and had been constant since #145 moved memory authority to the SDK. The new
+  `stranded_depths()` counts the rows whose lease is missing or lapsed, from
+  the same read as `running`. The web client also treated only `undefined` as
+  "not reported"; JSON carries an unknown value as `null`, which read as a
+  healthy zero and suppressed the "status unverified" line.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an

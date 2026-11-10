@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sqlite3
+import time
 from functools import partial
 from pathlib import Path
 
@@ -655,6 +656,295 @@ def test_opencode_reads_only_text_parts(tmp_path: Path) -> None:
             cursors=_cursors(events),
         )
     )
+
+
+def test_opencode_v2_reads_text_and_tool_content(tmp_path: Path) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    now = int(time.time() * 1000)
+    assistant = {
+        "time": {"created": now, "streamed": now, "completed": now},
+        "content": [
+            {"type": "reasoning", "text": SECRET},
+            {"type": "text", "text": "first answer"},
+            {
+                "type": "tool",
+                "id": "tool-v2",
+                "name": "shell",
+                "state": {
+                    "status": "completed",
+                    "input": {"command": "echo"},
+                    "content": [{"type": "text", "text": "tool output"}],
+                },
+            },
+            {"type": "text", "text": "second answer"},
+        ],
+    }
+    _write_opencode_v2(
+        root,
+        [
+            (
+                "message-v2-user",
+                "session-v2",
+                "user",
+                1,
+                now,
+                now,
+                json.dumps({"text": "visible v2"}),
+            ),
+            (
+                "message-v2-assistant",
+                "session-v2",
+                "assistant",
+                2,
+                now,
+                now,
+                json.dumps(assistant),
+            ),
+            (
+                "message-v2-idle",
+                "session-v2",
+                "idle",
+                3,
+                now,
+                now,
+                json.dumps({"tokens": {"input": 1}}),
+            ),
+            (
+                # Text OpenCode injected on the person's behalf; not theirs.
+                "message-v2-synthetic",
+                "session-v2",
+                "synthetic",
+                4,
+                now,
+                now,
+                json.dumps({"text": SECRET}),
+            ),
+        ],
+    )
+
+    events = _scan(create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)))
+
+    assert _evidence_text(events) == [
+        "visible v2",
+        "first answer",
+        "[shell] tool output",
+        "second answer",
+    ]
+    assert [item.evidence.written_by for item in _evidence(events)] == [
+        WrittenBy.UNKNOWN,
+        WrittenBy.AGENT,
+        WrittenBy.TOOL,
+        WrittenBy.AGENT,
+    ]
+    workspaces = {item.evidence.workspace for item in _evidence(events)}
+    assert len(workspaces) == 1 and None not in workspaces
+    assert SECRET not in repr(events)
+    assert not _evidence(
+        _scan(
+            create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)),
+            cursors=_cursors(events),
+        )
+    )
+
+
+def test_opencode_v2_holds_a_streaming_assistant_message_until_completed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    now = int(time.time() * 1000)
+    _write_opencode_v2(
+        root,
+        [
+            (
+                "message-v2-user",
+                "session-v2",
+                "user",
+                1,
+                now,
+                now,
+                json.dumps({"text": "question"}),
+            ),
+            (
+                "message-v2-assistant",
+                "session-v2",
+                "assistant",
+                2,
+                now,
+                now,
+                json.dumps(
+                    {"time": {"created": now}, "content": [{"type": "text", "text": "half"}]}
+                ),
+            ),
+        ],
+    )
+
+    adapter = create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path))
+    first = _scan(adapter)
+    assert _evidence_text(first) == ["question"]
+
+    connection = sqlite3.connect(root / "opencode.db")
+    connection.execute(
+        "UPDATE session_message SET data = ?, time_updated = ? WHERE id = ?",
+        (
+            json.dumps(
+                {
+                    "time": {"created": now, "completed": now},
+                    "content": [{"type": "text", "text": "answer"}],
+                }
+            ),
+            now,
+            "message-v2-assistant",
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    second = _scan(adapter, cursors=_cursors(first))
+    assert _evidence_text(second) == ["answer"]
+
+
+def test_opencode_v2_keeps_an_interrupted_reply_after_the_settle_window(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    stale = int(time.time() * 1000) - 11 * 60 * 1000
+    _write_opencode_v2(
+        root,
+        [
+            (
+                "message-v2-assistant",
+                "session-v2",
+                "assistant",
+                1,
+                stale,
+                stale,
+                json.dumps(
+                    {
+                        "time": {"created": stale},
+                        "content": [{"type": "text", "text": "interrupted"}],
+                    }
+                ),
+            ),
+        ],
+    )
+
+    events = _scan(create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)))
+
+    assert _evidence_text(events) == ["interrupted"]
+
+
+def test_opencode_upgrade_from_v1_does_not_reimport_messages(tmp_path: Path) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    database = root / "opencode.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT
+        );
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT
+        );
+        INSERT INTO session VALUES ('session-o', '/private/project');
+        INSERT INTO message VALUES
+            ('message-user', 'session-o', 1000, '{"role":"user"}'),
+            ('message-answer', 'session-o', 1001, '{"role":"assistant"}');
+        INSERT INTO part VALUES
+            ('part-q1', 'message-user', 1000, '{"type":"text","text":"question"}'),
+            ('part-q2', 'message-user', 1000, '{"type":"text","text":"more"}'),
+            ('part-a', 'message-answer', 1001, '{"type":"text","text":"answer"}');
+        """
+    )
+    connection.close()
+    adapter = create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path))
+    v1 = _scan(adapter)
+    assert _evidence_text(v1) == ["question\nmore", "answer"]
+
+    # One more V1 message the V1 reader never saw, then the upgrade: OpenCode 2
+    # migrates the history in place under the same ids (joining user text with
+    # a blank line), in its own order, and the person keeps chatting in V2.
+    now = int(time.time() * 1000)
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        INSERT INTO message VALUES
+            ('message-late', 'session-o', 1002, '{"role":"user"}');
+        INSERT INTO part VALUES
+            ('part-late', 'message-late', 1002, '{"type":"text","text":"late v1"}');
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+            seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        INSERT INTO session_v2 VALUES ('session-o', '/private/project');
+        """
+    )
+    done = {"time": {"created": now, "completed": now}}
+    connection.executemany(
+        "INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("message-late", "session-o", "user", 2, 1002, 1002, '{"text":"late v1"}'),
+            ("message-user", "session-o", "user", 0, 1000, 1000, '{"text":"question\\n\\nmore"}'),
+            (
+                "message-answer",
+                "session-o",
+                "assistant",
+                1,
+                1001,
+                1001,
+                json.dumps({**done, "content": [{"type": "text", "text": "answer"}]}),
+            ),
+            ("message-new", "session-o", "user", 3, now, now, '{"text":"new in v2"}'),
+        ],
+    )
+    connection.commit()
+    connection.close()
+
+    # A scan stopped after one message must still remember what V1 imported.
+    async def first_only() -> list[ScanEvent]:
+        return [
+            event async for event in adapter.scan(ScanOptions(cursors=_cursors(v1), max_messages=1))
+        ]
+
+    partial = asyncio.run(first_only())
+    assert _evidence_text(partial) == ["late v1"]
+    rest = _scan(adapter, cursors={**_cursors(v1), **_cursors(partial)})
+    assert _evidence_text(rest) == ["new in v2"]
+    assert not _evidence(
+        _scan(adapter, cursors={**_cursors(v1), **_cursors(partial), **_cursors(rest)})
+    )
+    # Without a V1 cursor nothing is known to be imported, so all of it is read.
+    assert _evidence_text(_scan(adapter)) == ["late v1", "question\n\nmore", "answer", "new in v2"]
+
+
+def _write_opencode_v2(
+    root: Path,
+    rows: list[tuple[str, str, str, int, int, int, str]],
+) -> None:
+    connection = sqlite3.connect(root / "opencode.db")
+    connection.executescript(
+        """
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+            seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        INSERT INTO session_v2 VALUES ('session-v2', '/private/v2-project');
+        """
+    )
+    connection.executemany(
+        "INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    connection.commit()
+    connection.close()
 
 
 def test_locked_source_reports_busy_and_loses_nothing_on_retry(

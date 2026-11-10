@@ -11,6 +11,7 @@ instead: plain retrieval over what was imported, the same lane
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,8 @@ from one_memory.recall import (
     RecallState,
     TruncationBudget,
 )
+
+logger = logging.getLogger(__name__)
 
 FallbackReason = Literal["model_unavailable", "no_memories"]
 
@@ -99,6 +102,7 @@ async def recall_with_fallback(
     has_memories: Callable[[], Awaitable[bool]],
     raw_sources: Callable[[], Awaitable[RawSources]],
     search_raw: Callable[[str, int, RawSources], Awaitable[tuple[HySdkRawHit, ...]]],
+    bounded_sdk_primary: bool = False,
 ) -> RecallReceipt:
     """Memory recall when a model and memories exist, otherwise the raw layer.
 
@@ -110,8 +114,36 @@ async def recall_with_fallback(
         return await recall_memories(request)
     started = time.monotonic()
     if await model_ready():
-        receipt = await recall_memories(request)
-        if receipt.hits or await has_memories():
+        memory_request = request
+        if bounded_sdk_primary:
+            # SDK search is the primary source. Bound it below the HTTP
+            # ceiling, accounting for model readiness and reserving grace for
+            # response handling and any downstream work.
+            search_budget = min(
+                request.timeout_ms / 1_000,
+                RECALL_TOTAL_CEILING_SECONDS - RECALL_TOTAL_GRACE_SECONDS,
+            )
+            remaining = search_budget - (time.monotonic() - started)
+            if remaining <= 0:
+                return RecallReceipt(
+                    state=RecallState.EMPTY,
+                    query=request.query,
+                    scope=request.scope,
+                    hits=(),
+                    used_characters=0,
+                    truncated=True,
+                    truncated_by=TruncationBudget.TIMEOUT,
+                    user_id=request.user_id,
+                )
+            memory_request = request.model_copy(
+                update={"timeout_ms": max(1, int(remaining * 1_000))}
+            )
+        receipt = await recall_memories(memory_request)
+        if (
+            receipt.hits
+            or (bounded_sdk_primary and receipt.truncated_by == TruncationBudget.TIMEOUT)
+            or await has_memories()
+        ):
             return receipt
         reason: FallbackReason = "no_memories"
     else:
@@ -160,6 +192,14 @@ async def _raw_recall(
         # a wider grant than recall had.
         return receipt()
     if remaining_seconds <= 0:
+        # Silent before: the receipt said `truncated_by=timeout_budget` but the
+        # log said nothing, so "no hits" looked the same as "not finished".
+        logger.warning(
+            "recall_raw_budget_exhausted remaining_ms=%.0f timeout_ms=%d reason=%s",
+            remaining_seconds * 1_000,
+            request.timeout_ms,
+            reason,
+        )
         return receipt(truncated_by=TruncationBudget.TIMEOUT)
     try:
         found = await asyncio.wait_for(
@@ -167,6 +207,12 @@ async def _raw_recall(
             timeout=remaining_seconds,
         )
     except TimeoutError:
+        logger.warning(
+            "recall_raw_search_timeout remaining_ms=%.0f timeout_ms=%d query_len=%d",
+            remaining_seconds * 1_000,
+            request.timeout_ms,
+            len(request.query),
+        )
         return receipt(truncated_by=TruncationBudget.TIMEOUT)
     current_sources = await raw_sources()
     if sources is not None:
