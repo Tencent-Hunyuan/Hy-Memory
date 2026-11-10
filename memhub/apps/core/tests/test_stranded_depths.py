@@ -142,7 +142,9 @@ def test_memory_processing_reports_the_stranded_count_on_the_sdk_plane(tmp_path:
                 headers={"Authorization": "Bearer local-token"},
             ) as client,
         ):
-            assert app.state.memory_authority is MemoryAuthority.SDK
+            # A fresh home starts on the legacy plane; the route reads the
+            # authority per request, so this selects the SDK-plane branch.
+            app.state.memory_authority = MemoryAuthority.SDK
             db = app.state.sdk_memory_runtime.write_queue.database_path
             now = datetime.now(UTC)
             _add_row(db, job_id="live", seq=1, owner="w", expires_at=now + timedelta(hours=1))

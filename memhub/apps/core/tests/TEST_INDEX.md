@@ -308,6 +308,7 @@
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
 | `test_store_binding_ratchet.py` | `contract` | D56: ratchet the retired dual-engine 'store_for' seam out of the Core. |
 | `test_store_port.py` | `contract` | A1-04/A2: the store port, and that real implementations satisfy it. |
+| `test_stranded_depths.py` | `contract` | `stranded_running` must count rows a worker no longer holds. |
 | `test_subscription_visibility.py` | `unit` | A shared directory is not a read grant. |
 | `test_sync_facade.py` | `contract` | A2: the sync facade must keep the sync shape call sites already use. |
 | `test_tail_metadata_lane.py` | `contract` | Post-response metadata retries must be bounded and never block the route. |
@@ -326,4 +327,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 321 个测试文件。
+共 322 个测试文件。

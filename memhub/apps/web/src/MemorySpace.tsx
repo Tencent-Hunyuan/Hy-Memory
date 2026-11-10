@@ -1789,7 +1789,8 @@ function queueWaiting(
   // and the contract says to treat that as unknown rather than as a healthy
   // zero. Testing only for `undefined` let `null` read as zero.
   const strandedReported =
-    processing.stranded_running !== undefined && processing.stranded_running !== null;
+    processing.stranded_running !== undefined &&
+    processing.stranded_running !== null;
   const strandedUnknown = !strandedReported && processing.running > inFlight;
   const stranded = processing.stranded_running ?? 0;
   const activeSuffix =
