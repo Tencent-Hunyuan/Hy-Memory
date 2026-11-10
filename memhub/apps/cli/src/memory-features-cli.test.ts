@@ -98,7 +98,28 @@ function featuresState(
       env: "MEMORY_INTENTION_DEDUP_THRESHOLD",
       description: "threshold",
     },
+    {
+      name: "agent_max_tokens",
+      value: (configured.agent_max_tokens as number | undefined) ?? 2000,
+      configured:
+        "agent_max_tokens" in configured ? configured.agent_max_tokens : null,
+      default: 2000,
+      minimum: 512,
+      maximum: 32000,
+      active: mode !== "lite",
+      reason: mode !== "lite" ? null : "requires_pro",
+      requires_feature: null,
+      requires_mode: "pro",
+      sdk_field: "llm.agent_max_tokens",
+      env: "MEMORY_AGENT_MAX_TOKENS",
+      description: "agent max tokens",
+    },
   ];
+  if (
+    configured.agent_max_tokens !== undefined &&
+    configured.agent_max_tokens !== 2000
+  )
+    nonDefault.agent_max_tokens = configured.agent_max_tokens;
   return { mode, features, parameters, non_default: nonDefault, ...extra };
 }
 
@@ -297,6 +318,73 @@ describe("memhub settings features", () => {
       expect(result.code, value).toBe(2);
     }
     expect(transport.put).not.toHaveBeenCalled();
+  });
+
+  it("sets and resets agent_max_tokens, whole numbers in range only", async () => {
+    const text = (await capturedRun(["settings", "features"])).stdout;
+    expect(text).toContain("agent_max_tokens：2000（默认，可设 512–32000）");
+    const preview = await capturedRun([
+      "settings",
+      "features",
+      "set",
+      "agent_max_tokens=6000",
+    ]);
+    expect(preview.code).toBe(0);
+    expect(preview.stdout).toContain("- agent_max_tokens = 6000");
+    for (const value of ["511", "32001", "6000.5", "6e3", "-6000", "abc"]) {
+      const result = await capturedRun([
+        "settings",
+        "features",
+        "set",
+        `agent_max_tokens=${value}`,
+        "--yes",
+      ]);
+      expect(result.code, value).toBe(2);
+    }
+    expect(transport.put).not.toHaveBeenCalled();
+
+    transport.put.mockResolvedValueOnce({
+      status: 200,
+      data: featuresState({ agent_max_tokens: 6000 }, "pro", {
+        changed: ["agent_max_tokens"],
+      }),
+    });
+    const set = await capturedRun([
+      "settings",
+      "features",
+      "set",
+      "agent_max_tokens=6000",
+      "--yes",
+    ]);
+    expect(set.code).toBe(0);
+    expect(transport.put).toHaveBeenLastCalledWith(
+      "/api/v1/settings/memory-features",
+      { agent_max_tokens: 6000 },
+      undefined,
+    );
+    expect(set.stdout).toContain("已更新：agent_max_tokens");
+    expect(set.stdout).toContain("agent_max_tokens：6000（已设置");
+
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: featuresState({ agent_max_tokens: 6000 }),
+    });
+    transport.put.mockResolvedValueOnce({
+      status: 200,
+      data: featuresState({}, "pro", { changed: ["agent_max_tokens"] }),
+    });
+    const reset = await capturedRun([
+      "settings",
+      "features",
+      "reset",
+      "agent_max_tokens",
+    ]);
+    expect(reset.code).toBe(0);
+    expect(transport.put).toHaveBeenLastCalledWith(
+      "/api/v1/settings/memory-features",
+      { agent_max_tokens: null },
+      undefined,
+    );
   });
 
   it("does not send a threshold to a Runtime that does not list it", async () => {
