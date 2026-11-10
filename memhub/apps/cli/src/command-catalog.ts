@@ -467,6 +467,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       "            memhub settings features [--json]\n" +
       "            memhub settings features set <name>=<true|false> [...] [--yes] [--json]\n" +
       "            memhub settings features set intention_dedup_threshold=<0.8-1.0> [--yes] [--json]\n" +
+      "            memhub settings features set agent_max_tokens=<512-32000> [--yes] [--json]\n" +
       "            memhub settings features reset [<name> ...] [--json]\n" +
       "            memhub settings language [<code>|system] [--json]",
     options: [
@@ -477,7 +478,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "features set <name>=<true|false>",
         summary:
-          "开关一个或多个 SDK 功能；功能在当前模式下不生效时会注明原因（例如 graph_rerank 需要 ultra）。intention_dedup_threshold 取 0.8–1.0 的数值。",
+          "开关一个或多个 SDK 功能；功能在当前模式下不生效时会注明原因（例如 graph_rerank 需要 ultra）。intention_dedup_threshold 取 0.8–1.0 的数值；agent_max_tokens 取 512–32000 的整数（evolve、System 2 的输出上限，默认 2000）。",
       },
       {
         flag: "features reset [<name> ...]",

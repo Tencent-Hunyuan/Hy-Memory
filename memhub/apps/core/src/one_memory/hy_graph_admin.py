@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -205,6 +204,62 @@ def retire_mismatched_graph_store(config: Any) -> Path | None:
     return archive
 
 
+#: The body of the graph-open probe child (`graph_open_guard.GraphOpenProbe`).
+#: Run as `python -I -c <this> <graph> <alarm_s>` from source; the frozen
+#: binary runs the same through `--graph-open-probe` (`run_graph_open_probe`).
+#: It imports nothing of MemHub, so a broken graph costs only this process.
+GRAPH_OPEN_PROBE_SOURCE = """
+import re, signal, sys
+if hasattr(signal, "alarm"):
+    # Default SIGALRM action ends the process in the kernel, GIL or not.
+    signal.alarm(max(1, int(sys.argv[2])))
+read_only = len(sys.argv) > 3 and sys.argv[3] == "ro"
+try:
+    import kuzu
+except ImportError:
+    raise SystemExit(3)
+database = kuzu.Database(sys.argv[1], read_only=read_only)
+connection = kuzu.Connection(database)
+connection.execute("RETURN 1")
+width = ""
+try:
+    result = connection.execute("CALL TABLE_INFO('Memory') RETURN *")
+    while result.has_next():
+        row = result.get_next()
+        if len(row) >= 3 and row[1] == "embedding":
+            match = re.search(r"\\[(\\d+)\\]", str(row[2]))
+            width = match.group(1) if match else ""
+            break
+except Exception:
+    width = ""
+connection.close()
+database.close()
+print("width=" + width, flush=True)
+"""
+
+
+def run_graph_open_probe(arguments: list[str]) -> int:
+    """`one-memory --graph-open-probe <graph> <alarm_s> [ro]`: open, then close.
+
+    Read-write and not lazy, like the SDK's own open, so the WAL replay and
+    checkpoint happen here, in a process that may be killed for it.
+    """
+    if len(arguments) not in (2, 3):
+        return 2
+    namespace: dict[str, object] = {"__name__": "__graph_open_probe__"}
+    saved = sys.argv
+    sys.argv = ["--graph-open-probe", *arguments]
+    try:
+        exec(compile(GRAPH_OPEN_PROBE_SOURCE, "<graph-open-probe>", "exec"), namespace)
+    except SystemExit as stop:
+        return int(stop.code or 0) if not isinstance(stop.code, str) else 1
+    except Exception:  # noqa: BLE001 - the exit status is the whole answer
+        return 1
+    finally:
+        sys.argv = saved
+    return 0
+
+
 _GRAPH_WIDTH_CACHE: dict[str, int | None] = {}
 _GRAPH_WIDTH_LOCK = threading.Lock()
 
@@ -215,33 +270,31 @@ def forget_graph_widths() -> None:
         _GRAPH_WIDTH_CACHE.clear()
 
 
+def remember_graph_width(db_path: Path, width: int | None) -> None:
+    """Cache a width the startup probe already read (`graph_open_guard`)."""
+    with _GRAPH_WIDTH_LOCK:
+        _GRAPH_WIDTH_CACHE[str(db_path.resolve())] = width
+
+
 def _graph_embedding_width(db_path: Path) -> int | None:
-    """Read the Memory embedding width directly from Kuzu's schema."""
-    try:
-        kuzu = import_module("kuzu")
-    except ModuleNotFoundError:
-        return None
+    """Read the Memory embedding width from Kuzu's schema, never in Core.
+
+    A damaged graph can freeze or kill the process that opens it, and an open
+    here would also be a second `kuzu.Database` beside the SDK's in this
+    process. So the width is read by the same bounded child as the startup
+    probe (read-only here) and cached; the startup probe primes the cache.
+    """
     key = str(db_path.resolve())
     with _GRAPH_WIDTH_LOCK:
         if key in _GRAPH_WIDTH_CACHE:
             return _GRAPH_WIDTH_CACHE[key]
-    try:
-        database = kuzu.Database(str(db_path), read_only=True)
-    except Exception:
-        return None
-    width: int | None = None
-    try:
-        connection = kuzu.Connection(database)
-        result = connection.execute("CALL TABLE_INFO('Memory') RETURN *")
-        while result.has_next():
-            row = result.get_next()
-            if len(row) < 3 or row[1] != "embedding":
-                continue
-            match = re.search(r"\[(\d+)\]", str(row[2]))
-            width = int(match.group(1)) if match else None
-            break
-    except Exception:
-        width = None
+    from one_memory.graph_open_guard import GraphOpenProbe, default_probe_command
+
+    result = GraphOpenProbe(
+        command=lambda path, alarm_s: default_probe_command(path, alarm_s, read_only=True),
+        timeout_s=30,
+    )(db_path)
+    width = result.width if result.ok else None
     with _GRAPH_WIDTH_LOCK:
         _GRAPH_WIDTH_CACHE[key] = width
     return width
@@ -261,6 +314,15 @@ def _inspect_graph_width(
         expected_width=int(expected_width),
         graph_path=str(db_path),
     )
+
+
+def live_graph_path(data_dir: Path, graph_dir: str | None) -> Path:
+    """The graph `build_sdk_config` gives an ultra client of this space.
+
+    Same root and directory as the SDK config's `graph_store.db_path`, without
+    building a client config (that needs the profile's secrets).
+    """
+    return data_dir.resolve() / "hy-memory" / HY_MEMORY_NAMESPACE / (graph_dir or "graph")
 
 
 def _profile_graph_path(data_dir: Path, mode: str | None = None, graph_dir: str = "graph") -> Path:

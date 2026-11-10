@@ -52,7 +52,7 @@ TODAY = {
     "few_shot": False,
 }
 #: The same for the numeric settings.
-TODAY_PARAMETERS = {"intention_dedup_threshold": 0.95}
+TODAY_PARAMETERS = {"intention_dedup_threshold": 0.95, "agent_max_tokens": 2000}
 
 
 @pytest.fixture(autouse=True)
@@ -165,6 +165,55 @@ def test_the_sdk_env_vars_still_move_the_threshold_default(monkeypatch) -> None:
     assert hy_sdk_runtime.sdk_feature_defaults()["intention_dedup_threshold"] == 0.9
     monkeypatch.setenv("MEMORY_INTENTION_DEDUP_THRESHOLD", "0.97")
     assert hy_sdk_runtime.sdk_feature_defaults()["intention_dedup_threshold"] == 0.97
+
+
+@pytest.mark.parametrize("bad", (511, 32001, 0, -1, 6000.5, True, "6000", float("nan")))
+def test_an_agent_max_tokens_outside_its_range_or_not_an_int_is_refused(bad) -> None:
+    with pytest.raises(ValidationError):
+        MemoryFeatures.model_validate({"agent_max_tokens": bad})
+
+
+def test_agent_max_tokens_is_an_int_with_an_inclusive_range() -> None:
+    for value in (512, 6000, 32000):
+        document = MemoryFeatures.model_validate({"agent_max_tokens": value})
+        ((name, stored),) = document.overrides()
+        assert (name, stored) == ("agent_max_tokens", value)
+        assert type(stored) is int
+    with pytest.raises(ValueError, match="invalid_memory_feature_value"):
+        hy_sdk_runtime.build_sdk_config(
+            PROFILES[0],
+            api_key=None,
+            data_dir=Path("/tmp/unused"),
+            features={"agent_max_tokens": 100},
+        )
+
+
+def test_the_sdk_env_var_still_moves_the_agent_max_tokens_default(monkeypatch) -> None:
+    assert hy_sdk_runtime.sdk_feature_defaults()["agent_max_tokens"] == 2000
+    monkeypatch.setenv("MEMORY_AGENT_MAX_TOKENS", "8000")
+    default = hy_sdk_runtime.sdk_feature_defaults()["agent_max_tokens"]
+    assert default == 8000 and type(default) is int
+
+
+@pytest.mark.parametrize("profile", PROFILES, ids=("builtin", "remote"))
+def test_agent_max_tokens_reaches_the_built_memory_config(tmp_path, profile, monkeypatch) -> None:
+    assert _config(tmp_path, profile).llm.agent_max_tokens == 2000
+    config = _config(tmp_path, profile, {"agent_max_tokens": 6000})
+    assert config.llm.agent_max_tokens == 6000 and type(config.llm.agent_max_tokens) is int
+    # Unset, an env var the person already set still applies; set, the setting wins.
+    monkeypatch.setenv("MEMORY_AGENT_MAX_TOKENS", "8000")
+    assert _config(tmp_path, profile).llm.agent_max_tokens == 8000
+    assert _config(tmp_path, profile, {"agent_max_tokens": 6000}).llm.agent_max_tokens == 6000
+
+
+def test_agent_max_tokens_acts_in_pro_and_ultra_only() -> None:
+    defaults = {**TODAY, **TODAY_PARAMETERS}
+    assert feature_activity("agent_max_tokens", defaults, "pro") is None
+    assert feature_activity("agent_max_tokens", defaults, "ultra") is None
+    assert feature_activity("agent_max_tokens", defaults, "lite") == "requires_pro"
+    # It tunes no feature: turning intention_dedup off does not touch it.
+    off = effective_features((("intention_dedup", False),), defaults)
+    assert feature_activity("agent_max_tokens", off, "pro") is None
 
 
 def test_merge_sets_resets_and_leaves_absent_keys_alone() -> None:
@@ -601,7 +650,7 @@ def test_intention_dedup_api_on_off_threshold_and_422(tmp_path, monkeypatch) -> 
         assert dedup["configured"] is None and dedup["active"] is True
         assert dedup["sdk_field"] == "recall.intention_dedup_enabled"
         assert dedup["env"] == "MEMORY_INTENTION_DEDUP_ENABLED"
-        (threshold,) = current["parameters"]
+        threshold, _agent_max_tokens = current["parameters"]
         assert threshold == {
             "name": "intention_dedup_threshold",
             "value": 0.95,
@@ -612,6 +661,7 @@ def test_intention_dedup_api_on_off_threshold_and_422(tmp_path, monkeypatch) -> 
             "active": True,
             "reason": None,
             "requires_feature": "intention_dedup",
+            "requires_mode": "pro",
             "sdk_field": "recall.intention_dedup_threshold",
             "env": "MEMORY_INTENTION_DEDUP_THRESHOLD",
             "description": threshold["description"],
@@ -661,5 +711,67 @@ def test_intention_dedup_api_on_off_threshold_and_422(tmp_path, monkeypatch) -> 
         assert reset["non_default"] == {}
         assert app.state.sdk_client_handle.current_features() == ()
         assert built_now(app) == (True, 0.95)
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_agent_max_tokens_api_sets_persists_rebuilds_and_resets(tmp_path, monkeypatch) -> None:
+    original = hy_sdk_runtime.build_sdk_config
+
+    def built_now(app) -> int:
+        """What a client built with the read handle's current key carries."""
+        config = original(
+            hy_sdk_runtime.builtin_retrieval_snapshot(),
+            api_key=None,
+            data_dir=tmp_path,
+            features=app.state.sdk_client_handle.current_features(),
+        )
+        return config.llm.agent_max_tokens
+
+    async def scenario(app, client):
+        path = "/api/v1/settings/memory-features"
+        parameters = {item["name"]: item for item in (await client.get(path)).json()["parameters"]}
+        tokens = parameters["agent_max_tokens"]
+        assert tokens == {
+            "name": "agent_max_tokens",
+            "value": 2000,
+            "configured": None,
+            "default": 2000,
+            "minimum": 512,
+            "maximum": 32000,
+            "active": True,
+            "reason": None,
+            "requires_feature": None,
+            "requires_mode": "pro",
+            "sdk_field": "llm.agent_max_tokens",
+            "env": "MEMORY_AGENT_MAX_TOKENS",
+            "description": tokens["description"],
+        }
+        assert built_now(app) == 2000
+
+        response = await client.put(path, json={"agent_max_tokens": 6000})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["changed"] == ["agent_max_tokens"]
+        assert body["non_default"] == {"agent_max_tokens": 6000}
+        assert app.state.sdk_client_handle.current_features() == (("agent_max_tokens", 6000),)
+        assert app.state.sdk_write_coordinator.memory_features() == (("agent_max_tokens", 6000),)
+        assert built_now(app) == 6000
+        saved = json.loads((tmp_path / "data" / "config.json").read_text())
+        assert saved["memory_features"] == {"agent_max_tokens": 6000}
+        processing = (await client.get("/api/v1/memory-processing")).json()
+        assert processing["pipeline"]["features"] == {"agent_max_tokens": 6000}
+
+        for bad in (100, 511, 32001, 6000.5, "6000", True):
+            refused = await client.put(path, json={"agent_max_tokens": bad})
+            assert refused.status_code == 422, bad
+        assert app.state.sdk_client_handle.current_features() == (("agent_max_tokens", 6000),)
+
+        reset = (await client.put(path, json={"agent_max_tokens": None})).json()
+        assert reset["changed"] == ["agent_max_tokens"]
+        assert reset["non_default"] == {}
+        assert app.state.sdk_client_handle.current_features() == ()
+        assert built_now(app) == 2000
 
     run_app(tmp_path, monkeypatch, scenario)
