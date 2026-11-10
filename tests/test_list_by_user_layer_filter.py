@@ -138,32 +138,55 @@ class TestRawOnlyFilterReturnsEmptyCrossBackend:
         ))
         assert nodes == []
 
-    @pytest.mark.parametrize("provider,cls", [
-        ("chroma", "ChromaVectorStore"),
-        ("qdrant", "QdrantVectorStore"),
+    @pytest.mark.parametrize("provider,cls,module", [
+        ("chroma", "ChromaVectorStore", "chromadb"),
+        ("qdrant", "QdrantVectorStore", "qdrant_client"),
     ])
-    def test_mixed_layer_filter_is_not_short_circuited(self, provider, cls):
-        """混合层（raw + 其它层）不应触发短路：短路只针对「全是 raw」。"""
+    def test_layer_filters_against_real_backend(self, tmp_path, provider, cls, module):
+        """Real local backend: raw-only -> empty, mixed -> only the non-raw layers."""
+        pytest.importorskip(module)
         import importlib
         mod = importlib.import_module(f"hy_memory.data.vector_store_{provider}")
         store_cls = getattr(mod, cls)
         config = MemoryConfig.from_dict({
             "vector_store": {
                 "provider": provider,
-                "collection_name": "test_raw_only",
+                "collection_name": "test_raw_only_real",
+                "persist_directory": str(tmp_path / f"{provider}_data"),
                 "embedding_dims": DIMS,
             },
         })
         vs = store_cls(config)
+        run(vs.initialize())
+        try:
+            u = "user_raw_only_real"
+            run(vs.upsert_batch([
+                _node(u, MemoryLayer.L1_RAW, "raw dialogue"),
+                _node(u, MemoryLayer.L0_BASIC_INFO, "The user's name is ivanye."),
+                _node(u, MemoryLayer.L2_FACT, "likes badminton"),
+            ]))
 
-        # 混合层过滤后仍有非 raw 层，不应短路返回空；未 initialize 的
-        # store 会继续走到 backend 调用处并抛错（说明短路未误触发）。
-        with pytest.raises(Exception):
-            run(vs.list_by_user(
-                user_id="u",
+            # raw-only with raw disabled: empty, not "every non-raw layer" (#189)
+            only_raw = run(vs.list_by_user(
+                user_id=u, layers=[MemoryLayer.L1_RAW], allow_raw_layer=False,
+            ))
+            assert only_raw == []
+
+            # mixed raw + fact with raw disabled: raw dropped, fact kept, L0 not leaked
+            mixed = run(vs.list_by_user(
+                user_id=u,
                 layers=[MemoryLayer.L1_RAW, MemoryLayer.L2_FACT],
                 allow_raw_layer=False,
             ))
+            assert [n.layer for n in mixed] == [MemoryLayer.L2_FACT]
+
+            # raw explicitly allowed: the raw node is reachable
+            internal = run(vs.list_by_user(
+                user_id=u, layers=[MemoryLayer.L1_RAW], allow_raw_layer=True,
+            ))
+            assert [n.layer for n in internal] == [MemoryLayer.L1_RAW]
+        finally:
+            run(vs.close())
 
 
 class TestEvolutionChainExcludesRaw:
