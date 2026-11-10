@@ -2035,6 +2035,117 @@ def test_the_statement_splitter_still_drops_real_comments() -> None:
     assert statements == ["CREATE TABLE t (x TEXT)", "CREATE INDEX i ON t(x)"]
 
 
+def test_the_statement_splitter_drops_hash_comments() -> None:
+    """MySQL treats `#` as a line comment, so it must be stripped too."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "# explain\nCREATE TABLE t (x TEXT); # trailing\nCREATE INDEX i ON t(x);"
+    )
+
+    assert statements == ["CREATE TABLE t (x TEXT)", "CREATE INDEX i ON t(x)"]
+
+
+def test_a_hash_comment_apostrophe_does_not_swallow_the_next_statement() -> None:
+    """Regression: `SQLite's` in a `#:` comment opened a phantom literal.
+
+    This is the real 1064: the scanner only knew `--`, so the apostrophe in
+    `#: Emulates SQLite's partial index` started a `'...'` string that ran past
+    the `;`, and two `CREATE TABLE` statements reached MySQL as one broken one.
+    """
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE a (x TEXT);\n"
+        "#: Emulates SQLite's partial index\n"
+        "CREATE TABLE b (y TEXT);\n"
+    )
+
+    assert statements == [
+        "CREATE TABLE a (x TEXT)",
+        "CREATE TABLE b (y TEXT)",
+    ]
+
+
+def test_model_profiles_ddl_splits_into_two_statements_on_mysql() -> None:
+    """The DDL that triggered the 1064 must render as two statements."""
+    from one_memory.memory_server.migrations import _split_statements, model_profiles_ddl
+
+    statements = _split_statements(model_profiles_ddl("mysql"))
+
+    assert len(statements) == 2
+    assert statements[0].startswith("CREATE TABLE IF NOT EXISTS model_profiles")
+    assert statements[1].startswith("CREATE TABLE IF NOT EXISTS model_profile_versions")
+    assert "SQLite's" not in " ".join(statements)
+
+
+def test_a_hash_inside_a_string_literal_is_content() -> None:
+    """`DEFAULT '#fff'` must survive: `#` in a literal is not a comment."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE t (c TEXT DEFAULT '#fff; #a'); CREATE INDEX i ON t(c);"
+    )
+
+    assert statements == [
+        "CREATE TABLE t (c TEXT DEFAULT '#fff; #a')",
+        "CREATE INDEX i ON t(c)",
+    ]
+
+
+def test_the_statement_splitter_keeps_comment_markers_inside_each_quote_style() -> None:
+    """`--` and `#` inside `'...'`, `"..."` and `` `...` `` are all content."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE t (a TEXT DEFAULT 'x#y--z', b TEXT DEFAULT \"p#q--r\", "
+        "`c#d--e` TEXT); CREATE INDEX i ON t(a);"
+    )
+
+    assert statements == [
+        "CREATE TABLE t (a TEXT DEFAULT 'x#y--z', b TEXT DEFAULT \"p#q--r\", "
+        "`c#d--e` TEXT)",
+        "CREATE INDEX i ON t(a)",
+    ]
+
+
+def test_the_statement_splitter_keeps_double_quote_markers_inside_strings() -> None:
+    """A `#` or `--` in a double-quoted literal does not start a comment."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        'CREATE TABLE t (c TEXT DEFAULT "a--b#c"); CREATE INDEX i ON t(c);'
+    )
+
+    assert statements == [
+        'CREATE TABLE t (c TEXT DEFAULT "a--b#c")',
+        "CREATE INDEX i ON t(c)",
+    ]
+
+
+def test_the_statement_splitter_keeps_backtick_markers_inside_identifiers() -> None:
+    """A `#` or `--` in a backtick identifier does not start a comment."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE t (`a--b#c` TEXT); CREATE INDEX i ON t(`a--b#c`);"
+    )
+
+    assert statements == [
+        "CREATE TABLE t (`a--b#c` TEXT)",
+        "CREATE INDEX i ON t(`a--b#c`)",
+    ]
+
+
+def test_a_hash_comment_at_end_of_input_terminates_the_statement() -> None:
+    """A trailing `#` comment with no newline must not leak into the statement."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements("CREATE TABLE t (x TEXT); # done")
+
+    assert statements == ["CREATE TABLE t (x TEXT)"]
+
+
 def test_retrieval_index_ddl_v1_is_a_real_baseline_and_v2_folds_the_upgrade() -> None:
     """migration 33 owns the schema: v1 baseline vs folded v2.
 

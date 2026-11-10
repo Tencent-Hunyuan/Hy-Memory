@@ -93,3 +93,30 @@ def test_default_distribution_avoids_per_launch_self_extraction(monkeypatch):
     calls, _, _ = evaluate_spec(monkeypatch, None)
     assert calls["exe"][1]["exclude_binaries"] is True
     assert calls["collect"][1]["name"] == "one-memory-runtime"
+
+
+def test_linux_bundle_includes_secret_service_backend(monkeypatch):
+    """A frozen Linux Core needs keyring's D-Bus backend to store API keys.
+
+    `keyring` resolves backends through entry points at runtime, so PyInstaller
+    cannot discover `SecretService`, `secretstorage` or `jeepney` on its own.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+    calls, _, collected = evaluate_spec(monkeypatch, "folder")
+    hiddenimports = calls["analysis"][1]["hiddenimports"]
+    assert "keyring.backends.SecretService" in hiddenimports
+    assert "secretstorage" in hiddenimports
+    assert "jeepney" in hiddenimports
+    # The backend is added as plain hidden imports, not as a collected package.
+    assert collected == CORE_PACKAGES
+
+
+def test_non_linux_bundles_do_not_require_linux_only_packages(monkeypatch):
+    """secretstorage/jeepney are Linux-only dependencies in the lock file."""
+    for platform in ("darwin", "win32"):
+        monkeypatch.setattr(sys, "platform", platform)
+        calls, _, _ = evaluate_spec(monkeypatch, "folder")
+        hiddenimports = calls["analysis"][1]["hiddenimports"]
+        assert "keyring.backends.SecretService" not in hiddenimports
+        assert "secretstorage" not in hiddenimports
+        assert "jeepney" not in hiddenimports

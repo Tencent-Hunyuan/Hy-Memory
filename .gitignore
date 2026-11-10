@@ -17,7 +17,10 @@ ENV/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# Local data/ dirs may hold real memories: keep them ignored everywhere,
+# but hy_memory/data/ is a source package and must stay tracked.
 data/
+!hy_memory/data/
 node_modules/
 package-lock.json
 !plugins/openclaw/package-lock.json

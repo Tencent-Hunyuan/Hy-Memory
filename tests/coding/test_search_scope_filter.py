@@ -141,10 +141,10 @@ class TestAgentSessionScope:
 
 class TestScopeRule:
     def test_no_workspace_means_no_filter(self):
-        assert _scope_where(None, None) == ("1", [])
+        assert _scope_where(None, None) == ("TRUE", [])
         # 单传 branch 不生效（与 list_memories 的组合语义一致）
-        assert _scope_where(None, "main") == ("1", [])
-        assert _scope_where("", "main") == ("1", [])
+        assert _scope_where(None, "main") == ("TRUE", [])
+        assert _scope_where("", "main") == ("TRUE", [])
 
     def test_workspace_only_is_exact(self):
         assert _scope_where("ws/a", None) == ("workspace_id = ?", ["ws/a"])

@@ -249,7 +249,7 @@ Coding 与 Working **复用同一套双层 pipeline 和数据 schema**，区别�
 
 - 向量库：ChromaDB（默认）、Qdrant、FAISS
 - 图库（ultra 模式）：Kuzu（默认）、Neo4j
-- Working / Coding 的元数据使用本地 SQLite
+- Working / Coding 业务存储：SQLite（默认）、PostgreSQL（可选）；[配置说明](docs/business_storage.md)
 
 ### 文档
 

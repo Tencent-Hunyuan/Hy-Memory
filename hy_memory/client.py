@@ -696,7 +696,8 @@ class HyMemoryClient:
         # _store_for_variant() 取正确的那一份。
         self._coding_writers: Dict[str, Any] = {}   # variant → CodingWriter
         self._coding_stores: Dict[str, Any] = {}    # variant → CodingMemoryStore
-        # 版本演进链层（scene="coding" 独有）。零 LLM 纯 sqlite，见 _get_chain_store。
+        # 版本演进链层（scene="coding" 独有）。零 LLM，跟随业务存储后端。
+        self._chain_lock = threading.RLock()
         self._chain_store = None         # HyCodeMem | None
         self._chain_store_failed = False  # 初始化失败过就不再重试
         # 链层反查真实 diff 用的本地仓路径。None = 只用对话里的 old/new 兜底抽取；
@@ -1206,20 +1207,13 @@ class HyMemoryClient:
         return "" if not (u or w) else "%s|%s" % (u, w)
 
     def _get_chain_store(self, owner: str = ""):
-        """
-        Lazy 初始化版本演进链层（scene="coding" 独有）。
+        """Lazy 初始化版本演进链层（scene="coding" 独有）。
 
-        零 LLM、零 embedding、纯 sqlite —— 构造代价可以忽略，所以不用异步锁。
-        失败返回 None：这层是**增量**，拿不到就退回纯向量双层（= working 的行为），
-        不该让一次 add/search 整体失败。
-
-        owner 变了要换实例（同一个 client 服务多个 user 时）—— 实例只是个 sqlite
-        连接 + owner 字符串，重建很便宜，而复用会让 owner 过滤失效。
-        库文件是同一个，所以不同 owner 共享文件、靠 WHERE 隔离。
-
-        库位置：跟 coding_memory.db 同目录下的 hy_code_chain/hy_code.db。不并进同一个
-        文件是因为 CodingMemoryStore 自己管 schema 迁移，塞三张表进去会让两边的迁移
-        逻辑互相踩；两个文件同目录，备份/清理时不会漏。
+        跟随 business_store 后端；SQLite 使用 coding_memory.db 同目录的
+        hy_code_chain/hy_code.db，PostgreSQL 使用独立 chain schema。
+        owner 变化时关闭旧连接并新建作用域实例，调用方持有 _chain_lock。
+        SQLite 的可选链层保持 best-effort；显式 PostgreSQL 初始化失败抛错，
+        避免服务端误以为已持久化版本历史。
         """
         if self._chain_store is not None and getattr(
                 self._chain_store, "owner", "") == owner:
@@ -1233,12 +1227,16 @@ class HyMemoryClient:
                 _os.path.dirname(_os.path.abspath(self._config.coding.db_path)),
                 "hy_code_chain",
             )
+            if self._chain_store is not None:
+                self._chain_store.close()
             self._chain_store = HyCodeMem(
-                _dir, repo_root=self._chain_repo_root, owner=owner)
-            logger.info("[coding] chain store initialized at %s (owner=%r)",
-                        _dir, owner)
+                _dir, repo_root=self._chain_repo_root, owner=owner, config=self._config)
+            logger.info("[coding] chain store initialized (backend=%s, owner=%r)",
+                        self._config.business_store.backend, owner)
             return self._chain_store
         except Exception as e:
+            if self._config.business_store.backend == "postgres":
+                raise
             # 只试一次。失败通常是环境性的（目录不可写 / sqlite 不可用），重试每次
             # add 都付一遍代价却不会变好。
             self._chain_store_failed = True
@@ -1281,28 +1279,31 @@ class HyMemoryClient:
 
         返回存下的 hunk 数（0 = 这段没有可识别的代码改动，正常情况，不是错误）。
 
-        全程零 LLM、零 embedding、纯 sqlite + 正则，适合在写链路同步执行。
+        全程零 LLM、零 embedding、业务存储 + 正则，适合在写链路同步执行。
 
         best-effort：任何异常只记 warning。这层是增量，它失败时向量双层已经写完了，
         把整个 add 拖失败是净亏。
         """
         # 走类而不是 self：_chain_owner 是 staticmethod，而这两个方法会被测试绑到裸
         # SimpleNamespace 上调（同 _scene_variant 那处），self 上没有这个属性。
-        store = self._get_chain_store(
-            HyMemoryClient._chain_owner(user_id, workspace_id))
-        if store is None:
-            return 0
-        try:
-            text = self._chain_text(chat_messages)
-            if not text.strip():
+        from contextlib import nullcontext
+
+        with getattr(self, "_chain_lock", nullcontext()):
+            store = self._get_chain_store(
+                HyMemoryClient._chain_owner(user_id, workspace_id))
+            if store is None:
                 return 0
-            # branch 给了就不猜（meta 里的 branch 优先于从文本里正则认）。
-            # workspace_id 不单独透传给 observe：它已经进了 owner（见 _chain_owner），
-            # thread 的键里不再需要第二个仓维度。
-            return int(store.observe(text, meta={"branch": branch or ""}) or 0)
-        except Exception as e:
-            logger.warning("[coding] chain observe failed: %s", e)
-            return 0
+            try:
+                text = self._chain_text(chat_messages)
+                if not text.strip():
+                    return 0
+                # branch 给了就不猜（meta 里的 branch 优先于从文本里正则认）。
+                # workspace_id 不单独透传给 observe：它已经进了 owner（见 _chain_owner），
+                # thread 的键里不再需要第二个仓维度。
+                return int(store.observe(text, meta={"branch": branch or ""}) or 0)
+            except Exception as e:
+                logger.warning("[coding] chain observe failed: %s", e)
+                return 0
 
     def _chain_block_enabled(self) -> bool:
         """search 是否注入 coding 版本演进链块（diff / chain_block）。
@@ -1331,21 +1332,24 @@ class HyMemoryClient:
         best-effort：失败返回 ("", [])，退化成纯向量双层（= working 的行为）。
         默认不注入（见 _chain_block_enabled）；需显式开启 chain_block_enabled。
         """
-        if not facts:
-            return "", []
-        # 走类而不是 self：测试常把本方法绑到裸 SimpleNamespace 上，self 上未必有
-        # 同名 bound method；_chain_owner 同理。
-        if not HyMemoryClient._chain_block_enabled(self):
-            return "", []
-        store = self._get_chain_store(
-            HyMemoryClient._chain_owner(user_id, workspace_id))
-        if store is None:
-            return "", []
-        try:
-            return store.decorate(facts, instruction=instruction, scope=scope)
-        except Exception as e:
-            logger.warning("[coding] chain decorate failed: %s", e)
-            return "", []
+        from contextlib import nullcontext
+
+        with getattr(self, "_chain_lock", nullcontext()):
+            if not facts:
+                return "", []
+            # 走类而不是 self：测试常把本方法绑到裸 SimpleNamespace 上，self 上未必有
+            # 同名 bound method；_chain_owner 同理。
+            if not HyMemoryClient._chain_block_enabled(self):
+                return "", []
+            store = self._get_chain_store(
+                HyMemoryClient._chain_owner(user_id, workspace_id))
+            if store is None:
+                return "", []
+            try:
+                return store.decorate(facts, instruction=instruction, scope=scope)
+            except Exception as e:
+                logger.warning("[coding] chain decorate failed: %s", e)
+                return "", []
 
     async def _search_coding(
         self,
@@ -1708,8 +1712,9 @@ class HyMemoryClient:
         # out_facts 里删掉。不同调用方可能自行拼 prompt，悄悄少给 facts 比多给一个
         # 字段危险得多；需要“块 + 剩余 facts”时可按 chain_used 自行过滤。
         if variant == "coding":
-            _blk, _used = self._decorate_with_chain(
-                out_facts, instruction=target_query,
+            from .coding.store import _run_in_pool
+            _blk, _used = await _run_in_pool(
+                self._decorate_with_chain, out_facts, instruction=target_query,
                 scope=(workspace_id or None),
                 user_id=primary_user, workspace_id=workspace_id,
             )
@@ -2555,10 +2560,14 @@ class HyMemoryClient:
             self._coding_store = None
             self._coding_writer = None
             self._coding_llm_provider = None
-        # 链层：纯 sqlite，没有异步资源
+        # 链层：同步数据库连接，和写入/读取共用线程锁
         if getattr(self, "_chain_store", None) is not None:
             try:
-                self._chain_store.close()
+                from .coding.store import _run_in_pool
+                def close_chain():
+                    with self._chain_lock:
+                        self._chain_store.close()
+                await _run_in_pool(close_chain)
             except Exception as e:
                 logger.warning(f"[close] chain store close failed: {e}")
             self._chain_store = None
@@ -3039,8 +3048,9 @@ class HyMemoryClient:
                 # 向量层写入失败（success=False）时跳过：调用方会重跑整段，失败的
                 # 那次不该先把改动记进演进链。
                 if scene_variant == "coding" and resp.get("success"):
-                    resp["chain_rounds"] = self._observe_chain(
-                        chat_messages, user_id=uid,
+                    from .coding.store import _run_in_pool
+                    resp["chain_rounds"] = await _run_in_pool(
+                        self._observe_chain, chat_messages, user_id=uid,
                         workspace_id=workspace_id, branch=branch,
                     )
                 # 同步刷新 elapsed
@@ -4561,10 +4571,11 @@ class HyMemoryClient:
         coding_config = getattr(config, "coding", None)
         if config is None or coding_config is None:
             return None
-        if not CodingMemoryStore.database_exists(
-            config,
-            db_path=coding_config.db_path,
-            variant=variant,
+        from .coding.store import _run_in_pool
+
+        if not await _run_in_pool(
+            CodingMemoryStore.database_exists, config,
+            db_path=coding_config.db_path, variant=variant,
         ):
             return None
         await self._get_coding_writer(variant=variant)

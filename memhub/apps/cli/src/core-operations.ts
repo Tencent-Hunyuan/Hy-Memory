@@ -162,7 +162,7 @@ export function createCoreOperations(attachment: {
       }
       return {
         state: "unknown",
-        code: `http_${response.status}_result_unknown`,
+        code: unknownResultCode(response.data, response.status),
       };
     },
     async put<T>(
@@ -206,7 +206,7 @@ export function createCoreOperations(attachment: {
       }
       return {
         state: "unknown",
-        code: `http_${response.status}_result_unknown`,
+        code: unknownResultCode(response.data, response.status),
       };
     },
     async patch<T>(
@@ -239,7 +239,7 @@ export function createCoreOperations(attachment: {
       }
       return {
         state: "unknown",
-        code: `http_${response.status}_result_unknown`,
+        code: unknownResultCode(response.data, response.status),
       };
     },
     async delete<T>(path: string, signal?: AbortSignal) {
@@ -272,7 +272,7 @@ export function createCoreOperations(attachment: {
       }
       return {
         state: "unknown",
-        code: `http_${response.status}_result_unknown`,
+        code: unknownResultCode(response.data, response.status),
       };
     },
   };
@@ -289,4 +289,43 @@ function safeErrorCode(value: unknown, status: number): string {
     if (/^[a-z0-9_.:-]{1,128}$/.test(detail)) return detail;
   }
   return `http_${status}`;
+}
+
+/** A refusal Core can name, taken from a 5xx body, or null when it cannot.
+ *
+ * 5xx answers may carry `{"detail":"<code>"}` for a condition the caller can
+ * act on -- `secure_storage_unavailable` is "this machine has no key store",
+ * which is a different instruction from "the server broke". Dropping it left
+ * the user with `http_503_result_unknown` and no way to tell those apart.
+ *
+ * Stricter than `safeErrorCode`: a 5xx body is a place a URL or bind address
+ * could leak into, and `safeErrorCode`'s character class accepts `127.0.0.1:8765`.
+ * This one requires the shape every Core refusal code actually has -- lowercase
+ * words joined by underscores -- so an address can never be promoted to a code.
+ */
+const NAMED_REFUSAL = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+
+function namedRefusalCode(value: unknown): string | null {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as Record<string, unknown>).detail === "string"
+  ) {
+    const detail = (value as { detail: string }).detail;
+    if (detail.length <= 128 && NAMED_REFUSAL.test(detail)) return detail;
+  }
+  return null;
+}
+
+/** The `code` of a 5xx: the named refusal when Core gave one, else the status.
+ *
+ * `state` stays `unknown` either way: a 5xx may have committed part of the
+ * request, so the caller still must not retry a write blindly.
+ */
+export function unknownResultCode(value: unknown, status: number): string {
+  const named = namedRefusalCode(value);
+  return named === null
+    ? `http_${status}_result_unknown`
+    : `${named}_result_unknown`;
 }

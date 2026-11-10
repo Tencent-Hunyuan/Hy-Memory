@@ -66,3 +66,120 @@ def test_a_wrong_address_is_still_a_missing_model_not_an_unpaid_one(tmp_path) ->
     result = _probe(_generation_only(handler), tmp_path)
 
     assert result.stages[1].code is ProbeCode.MODEL_NOT_FOUND
+
+
+def test_http_403_quota_error_body_is_not_swallowed_as_unauthorized(
+    tmp_path,
+) -> None:
+    """A 403 whose body names a quota problem must not read as a bad key.
+
+    Gateways commonly answer 403 for an exhausted free tier. Classifying every
+    403 as UNAUTHORIZED sends the user to re-check a key that is perfectly
+    valid, while the actual fix is to wait for the quota or top up. The body
+    classifier already decides quota vs. rate limit; the 403 path must use it
+    instead of returning UNAUTHORIZED unconditionally.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "message": "Free quota exhausted",
+                    "type": "insufficient_quota",
+                    "code": "insufficient_quota",
+                }
+            },
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.RATE_LIMITED
+
+
+def test_http_403_rate_limit_body_stays_a_rate_limit(tmp_path) -> None:
+    """A 403 whose body is about rate limiting is a wait, not a new key."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "message": "Rate limit reached for requests",
+                    "type": "requests",
+                    "code": "rate_limit_exceeded",
+                }
+            },
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.RATE_LIMITED
+
+
+def test_http_403_credit_wording_without_a_quota_code_stays_unauthorized(
+    tmp_path,
+) -> None:
+    """Words like "credit" or "balance" in a 403 message are not a quota code.
+
+    "No credit permission for this model" is a permission problem: the key is
+    not allowed to use the model. Only an explicit provider quota or rate-limit
+    code/type may move a 401/403 away from UNAUTHORIZED.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "message": "no credit permission for this model",
+                    "type": "permission_error",
+                    "code": "forbidden",
+                }
+            },
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.UNAUTHORIZED
+
+
+def test_http_403_balance_wording_without_a_code_stays_unauthorized(
+    tmp_path,
+) -> None:
+    """Free-text balance wording alone does not reclassify a 403."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {"message": "balance check failed: permission denied"}},
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.UNAUTHORIZED
+
+
+def test_http_403_without_a_recognisable_body_stays_unauthorized(tmp_path) -> None:
+    """A bare 403 keeps meaning "the key is not allowed" (regression guard)."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": {"message": "forbidden"}})
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.UNAUTHORIZED
+
+
+def test_http_401_unknown_model_is_still_a_missing_model(tmp_path) -> None:
+    """The model-not-found body path already worked for 401; keep it working."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": {"message": "model not found: memory-model"}},
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.MODEL_NOT_FOUND

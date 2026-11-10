@@ -18,6 +18,8 @@ Agent Memory V2 - VectorStore (Qdrant)
 
 import concurrent.futures
 import os
+import tempfile
+import stat
 import threading
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from pathlib import Path
@@ -32,6 +34,34 @@ from .vector_store_base import VectorStoreBase
 from .vector_store_chroma import _vdb_executor
 
 logger = logging.getLogger(__name__)
+
+
+def _publish_json(path: Path, payload: object) -> None:
+    """Rewrite *path* without ever leaving it truncated.
+
+    ``meta.json`` is read by Qdrant when a collection is opened, and this
+    migration is the only place that rewrites it.  Writing in place means a
+    crash, a full disk or an interrupt leaves the file truncated, which makes
+    the collection unreadable.  Stage a sibling file and swap it in with
+    ``Path.replace`` -- the same idiom as ``hy_memory/snapshot.py`` -- and keep
+    the original permissions so a group-readable index stays readable.
+    """
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = None
+    import json
+
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload))
+        if mode is not None:
+            os.chmod(staging, mode)
+        Path(staging).replace(path)
+    except BaseException:
+        Path(staging).unlink(missing_ok=True)
+        raise
 
 
 def _run_in_vdb_pool(func, *args, **kwargs):
@@ -1066,13 +1096,26 @@ class QdrantVectorStore(VectorStoreBase):
         allow_raw_layer: 默认 False，即不返回 L1_RAW（对外读路径）。
             内部管线读原始对话须显式置 True。
         """
-        from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
-
         effective_uids = list(user_ids) if user_ids else ([user_id] if user_id else [])
         if not effective_uids:
             logger.warning("[vector-store] list_by_user called without user_id/user_ids, refused")
             return []
         effective_aids = list(agent_ids) if agent_ids else ([agent_id] if agent_id else [])
+
+        # 提前判定「只点名 raw 且不允许 raw」：过滤后没有可命中的层，
+        # 直接返回空集，而不是交给 backend 用一个错误的「排除 raw」条件
+        # 去匹配所有非 raw 层（见 #189）。注意这里在导入 qdrant_client
+        # 之前短路，避免无 backend 依赖时也能正确返回。
+        if layers and not allow_raw_layer:
+            _lv = [l.value if hasattr(l, 'value') else str(l) for l in layers]
+            if all(v == MemoryLayer.L1_RAW.value for v in _lv):
+                logger.info(
+                    f"[vector-store] list_by_user: user_ids={effective_uids} "
+                    f"agent_ids={effective_aids} raw-only filter with raw disabled, returning empty"
+                )
+                return []
+
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 
         if len(effective_uids) == 1:
             must_conditions = [
@@ -1121,10 +1164,10 @@ class QdrantVectorStore(VectorStoreBase):
                     FieldCondition(key="layer", match=MatchAny(any=layer_values))
                 )
             else:
-                # 只点名了 raw：过滤后为空，补排除条件使结果必然为空集，
-                # 不能省略（省略等于放开全部层级，比原意图更宽）
-                must_not_conditions.append(
-                    FieldCondition(key="layer", match=MatchValue(value=MemoryLayer.L1_RAW.value))
+                # 只点名了 raw：置为不可能命中的条件，结果必然为空集。
+                # 外层已短路返回，这里作为防御兜底，避免误匹配非 raw 层。
+                must_conditions.append(
+                    FieldCondition(key="layer", match=MatchValue(value="__blocked__"))
                 )
         elif not allow_raw_layer:
             must_not_conditions.append(
@@ -1801,7 +1844,7 @@ class QdrantVectorStore(VectorStoreBase):
                 changed = True
 
         if changed:
-            meta_path.write_text(_json.dumps(meta), encoding="utf-8")
+            _publish_json(meta_path, meta)
             logger.info("Patched Qdrant meta.json: removed unsupported fields")
 
     # ================================================================

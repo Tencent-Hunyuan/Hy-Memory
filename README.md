@@ -250,7 +250,7 @@ That version is usually not in the working tree or at HEAD either, so it cannot 
 
 - Vector stores: ChromaDB (default), Qdrant, FAISS
 - Graph stores (ultra mode): Kuzu (default), Neo4j
-- Working / Coding metadata: local SQLite
+- Working / Coding business storage: SQLite (default), optional PostgreSQL; [configuration](docs/business_storage.md)
 
 ### Documentation
 

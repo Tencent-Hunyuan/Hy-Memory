@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -93,3 +94,22 @@ def test_sedimentation_rejects_a_non_boolean(tmp_path):
     with pytest.raises(ValueError, match="invalid_sedimentation_config"):
         store.set_sedimentation_enabled("yes")  # type: ignore[arg-type]
     assert store.sedimentation_enabled()
+
+
+def test_sync_config_is_written_where_directories_cannot_be_fsynced(
+    tmp_path, monkeypatch
+) -> None:
+    """Windows has no os.O_DIRECTORY; the rename alone is durable there.
+
+    Reading it unguarded raised AttributeError *after* os.replace, so the
+    caller saw a failure for a write that had already landed.
+    """
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+
+    store = ConfigStore(tmp_path)
+    store.set_sync("cursor", True)
+
+    assert ConfigStore(tmp_path).sync_enabled("cursor")
+    assert json.loads((tmp_path / "config.json").read_text())["sources"] == {
+        "cursor": {"sync_enabled": True}
+    }

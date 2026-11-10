@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -33,6 +34,17 @@ tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('tokenizers')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+if sys.platform.startswith('linux'):
+    # keyring picks its backend at runtime from entry points, so PyInstaller
+    # cannot see the Secret Service backend or its D-Bus dependencies. They are
+    # installed on Linux (see uv.lock) but without these imports the frozen
+    # runtime has no usable secure-storage backend and refuses every API key.
+    hiddenimports += [
+        'keyring.backends.SecretService',
+        'secretstorage',
+        'jeepney',
+    ]
 
 
 a = Analysis(

@@ -1784,8 +1784,14 @@ function queueWaiting(
   const backlog = processing.backlog_pending ?? 0;
   const active = processing.active_queue ?? 0;
   const inFlight = processing.in_flight_count ?? 0;
-  const strandedUnknown =
-    processing.stranded_running === undefined && processing.running > inFlight;
+  // JSON has no `undefined`: a Core that omits the field leaves it absent,
+  // while an explicit unknown arrives as `null`. Both mean "not reported",
+  // and the contract says to treat that as unknown rather than as a healthy
+  // zero. Testing only for `undefined` let `null` read as zero.
+  const strandedReported =
+    processing.stranded_running !== undefined &&
+    processing.stranded_running !== null;
+  const strandedUnknown = !strandedReported && processing.running > inFlight;
   const stranded = processing.stranded_running ?? 0;
   const activeSuffix =
     inFlight || active

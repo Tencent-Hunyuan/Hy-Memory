@@ -111,6 +111,7 @@
 | `test_harness_contract_suite.py` | `contract` | A4-09: one contract, ten harnesses. |
 | `test_health.py` | `contract` | 覆盖 a backfill that fails says so rather than disappearing、a failed catch up leaves a traceback behind、configured model without content consent does not start backfill 等 15 个场景。 |
 | `test_hermes_gateway_injection.py` | `contract` | Hermes gateway text in `user` rows: notices are skipped, relayed messages unwrapped. |
+| `test_history_adapter_cursor_touch.py` | `contract` | History imports must reach the write queue, not stop at `assembling`. |
 | `test_history_listing_rotation.py` | `contract` | 覆盖 history listing alternates started and untouched files、history listing drains whichever cohort is longer 场景。 |
 | `test_home_projection.py` | `contract` | 覆盖 memory projection covers pro and ultra、memory projection preserves productivity namespace、project raw latest uses import time without conversation time 等 7 个场景。 |
 | `test_host_capabilities.py` | `unit` | A plugin does not become realtime on every host or every unknown version. |
@@ -193,6 +194,7 @@
 | `test_memory_write_registry.py` | `contract` | A3-01: acceptance and outcome recording for the unified write path. |
 | `test_memory_write_routes.py` | `integration` | A3-01: the HTTP write entry, tested against a real FastAPI app. |
 | `test_migrate_off_sqlite.py` | `contract` | A1-06: the migration is only done when reconciliation agrees. |
+| `test_migration_idempotency.py` | `contract` | A migration interrupted after a statement must be replayable, not fatal. |
 | `test_model_backoff.py` | `contract` | A broken model configuration must not turn a backlog into a request storm (#245). |
 | `test_model_creation_api.py` | `integration` | Normal protected model creation routes with temporary data and in-memory secrets. |
 | `test_model_creation_operations.py` | `contract` | 覆盖 lookup without table is read only and legacy create does not initialize、operation commits with profile and version without autoactivation、any replay conflicts before secret put 等 21 个场景。 |
@@ -216,7 +218,7 @@
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
 | `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
-| `test_pinned_sdk_shared_graph.py` | `integration` | Two ultra clients MemHub builds in one Core share one Kuzu database. |
+| `test_pinned_sdk_shared_graph.py` | `contract` | Two ultra clients MemHub builds in one Core share one Kuzu database. |
 | `test_policy_api_wiring.py` | `integration` | 覆盖 global model permission off does not backfill、backfill puts history on write jobs without scheduling memory tasks、source pause skips history until the source is reenabled 场景。 |
 | `test_policy_production_entry.py` | `contract` | 覆盖 production serve passes only supported app options、maintenance serve does not own the runtime 场景。 |
 | `test_precipitation_concurrency_setting.py` | `contract` | Rule 2/9: precipitation concurrency is configurable, not hardcoded to 1. |
@@ -272,6 +274,7 @@
 | `test_secondary_source_adapters.py` | `contract` | 覆盖 pi and qwenwork keep tool and sidechain content out of the persons words、qwen code reads only the transcript beside its bookkeeping、qwen native parts preserve visible text not reasoning or tools 等 22 个场景。 |
 | `test_secret_store_error_code_api.py` | `integration` | 3925a kernel item 3: the error code reaches the HTTP boundary. |
 | `test_secret_store_error_codes.py` | `integration` | 3925a kernel item 3: keychain failure classification and backoff that heals. |
+| `test_secrets_bounded_keyring.py` | `contract` | A D-Bus keyring read must be bounded, not block the whole process (#375). |
 | `test_secure_storage.py` | `integration` | 覆盖 isolated keychain service namespace、custom keychain service is refused outside isolated tests、packaged keychain budget covers loaded process startup 等 20 个场景。 |
 | `test_sedimentation_switch.py` | `contract` | Stopping model-driven sedimentation without losing the configuration. |
 | `test_service_level_pressure_acceptance.py` | `contract` | 覆盖 workbuddy recall remains available during 100k import 场景。 |
@@ -311,6 +314,7 @@
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
 | `test_store_binding_ratchet.py` | `contract` | D56: ratchet the retired dual-engine 'store_for' seam out of the Core. |
 | `test_store_port.py` | `contract` | A1-04/A2: the store port, and that real implementations satisfy it. |
+| `test_stranded_depths.py` | `contract` | `stranded_running` must count rows a worker no longer holds. |
 | `test_subscription_visibility.py` | `unit` | A shared directory is not a read grant. |
 | `test_sync_facade.py` | `contract` | A2: the sync facade must keep the sync shape call sites already use. |
 | `test_tail_metadata_lane.py` | `contract` | Post-response metadata retries must be bounded and never block the route. |
@@ -329,4 +333,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 324 个测试文件。
+共 328 个测试文件。
