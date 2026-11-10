@@ -218,6 +218,7 @@
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
 | `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
+| `test_pinned_sdk_shared_graph.py` | `contract` | Two ultra clients MemHub builds in one Core share one Kuzu database. |
 | `test_policy_api_wiring.py` | `integration` | 覆盖 global model permission off does not backfill、backfill puts history on write jobs without scheduling memory tasks、source pause skips history until the source is reenabled 场景。 |
 | `test_policy_production_entry.py` | `contract` | 覆盖 production serve passes only supported app options、maintenance serve does not own the runtime 场景。 |
 | `test_precipitation_concurrency_setting.py` | `contract` | Rule 2/9: precipitation concurrency is configurable, not hardcoded to 1. |
@@ -305,6 +306,10 @@
 | `test_sql_compat.py` | `contract` | The shared compatibility layer, especially 'rowcount'. |
 | `test_sqlite_semantics_gate.py` | `contract` | D56: prevent SQLite implementation details spreading outside the data layer. |
 | `test_sqlite_write_contention.py` | `contract` | Measure whether SQLite's single writer actually blocks us. |
+| `test_storage_backend_neo4j_live.py` | `contract` | A real Neo4j/Memgraph server, when one is named: probe, then an ultra SDK client. |
+| `test_storage_backend_packaging.py` | `contract` | The frozen Core ships every driver a selectable storage backend needs. |
+| `test_storage_backend_qdrant.py` | `contract` | MemHub on a Qdrant vector store, end to end, against the pinned SDK wheel. |
+| `test_storage_backends.py` | `contract` | The `storage_backends` setting: what it accepts, where its secrets go, what it builds. |
 | `test_storage_ingest_journal.py` | `contract` | 覆盖 legacy put and reopen never initialize journal、initialized put records final origins create revision and noop、attribution propagation journals old rows as maintenance only 等 11 个场景。 |
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
 | `test_store_binding_ratchet.py` | `contract` | D56: ratchet the retired dual-engine 'store_for' seam out of the Core. |
@@ -328,4 +333,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 323 个测试文件。
+共 328 个测试文件。

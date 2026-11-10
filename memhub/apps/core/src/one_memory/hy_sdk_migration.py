@@ -503,7 +503,7 @@ def _ensure_coding_schema(path: Path) -> None:
         CodingMemoryStore,
     )
 
-    # Relies on the pinned SDK's internals (hy-memory==2.0.14 is pinned exactly).
+    # Relies on the pinned SDK's internals (hy-memory==2.0.15 is pinned exactly).
     store = CodingMemoryStore.__new__(CodingMemoryStore)
     store._db_path = str(path)
     store._conn = None
@@ -541,6 +541,11 @@ class SdkReembedBackend:
     Runs beside live SDK clients: the vector functions open Chroma with the
     SDK's own settings, so they share its client system. The graph functions
     refuse a graph a live client holds open; the switch closes them first.
+
+    Chroma and Kuzu only, as the SDK's re-embed is (hy-memory 2.0.15). With
+    another store configured (`storage_backends`) the switch never gets here:
+    `EmbeddingSwitchService.storage_refusal` refuses it and `chroma_is_live`
+    keeps the startup scan and every cleanup off the Chroma files.
     """
 
     def __init__(self, data_dir: Path) -> None:

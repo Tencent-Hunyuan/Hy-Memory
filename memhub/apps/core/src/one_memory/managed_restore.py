@@ -16,6 +16,14 @@ from pathlib import Path
 from one_memory.database_access import close_main_databases, main_database
 from one_memory.memory_server.migrations import MIGRATIONS, SCHEMA_TABLE
 
+#: What makes a SQLite file a One Memory database, by era. Before the SDK
+#: cutover the evidence and governance tables; after it those are dropped
+#: (`target_schema`), and a home is its management plane: the authority row
+#: and the write queue. A fresh home has only the second shape, so a restore
+#: that asked for `evidence` refused every backup a fresh or migrated home took.
+_LEGACY_IDENTITY = frozenset({"evidence", "governed_memories"})
+_SDK_IDENTITY = frozenset({"memory_authority_state", "memory_write_jobs"})
+
 
 class RestoreRejected(RuntimeError):
     def __init__(self, code: str) -> None:
@@ -53,7 +61,11 @@ def restore_managed_backup(
                 str(row[0])
                 for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
-            if not {"evidence", "governed_memories"} <= present:
+            if present >= _LEGACY_IDENTITY:
+                identity = frozenset({"evidence"})
+            elif present >= _SDK_IDENTITY and _sdk_authority(connection):
+                identity = _SDK_IDENTITY
+            else:
                 raise RestoreRejected("backup_restore_source_invalid")
             source_version = 0
             if SCHEMA_TABLE in present:
@@ -86,7 +98,7 @@ def restore_managed_backup(
         # Drop every cached connection before the atomic replacement: a pooled
         # connection would otherwise keep reading the old inode.
         close_main_databases()
-        main_database(live).restore_from(resolved, required_tables=frozenset({"evidence"}))
+        main_database(live).restore_from(resolved, required_tables=identity)
         close_main_databases()
     except (OSError, sqlite3.Error, ValueError, RuntimeError) as error:
         close_main_databases()
@@ -97,3 +109,10 @@ def restore_managed_backup(
         previous_backup_path=protective,
         source_schema_version=source_version,
     )
+
+
+def _sdk_authority(connection: sqlite3.Connection) -> bool:
+    row = connection.execute(
+        "SELECT authority FROM memory_authority_state WHERE singleton=1"
+    ).fetchone()
+    return row is not None and row[0] == "sdk"

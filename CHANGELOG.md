@@ -4,6 +4,37 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub: the graph and vector stores can be chosen from the CLI and the API.
+  The default stays the embedded Kuzu + Chroma pair. `memhub settings backends
+  show|set|test|reset` (and `GET/PUT/DELETE /api/v1/settings/storage-backends`,
+  `POST .../test`) select a Neo4j or Memgraph server for the ultra graph and a
+  Qdrant server for vectors. The setting is persisted in `config.json`
+  (`storage_backends`); the graph password and the Qdrant API key go to the
+  secret store. Core connects to the chosen servers before it saves anything,
+  then rebuilds the SDK clients the way a mode change does. Before, MemHub
+  hard-coded `kuzu` and `chroma`, so `MEMORY_GRAPH_PROVIDER=neo4j` or
+  `MEMORY_VECTOR_STORE=qdrant` still logged `provider=kuzu` / `provider=chroma`;
+  those SDK variables still have no effect (the setting is the only source).
+  Qdrant collections carry a per-home prefix so homes sharing a server stay
+  apart; a Neo4j/Memgraph database that already holds a graph must be adopted
+  explicitly. Switching moves no memory: what the old store holds stays there,
+  untouched, and switching back shows it again. FAISS and Qdrant's embedded
+  mode are refused (`storage_backend_faiss_unsupported`,
+  `storage_backend_vector_host_required`): they are not safe with the several
+  SDK clients MemHub runs on one home. On a custom backend, the embedding
+  switch is refused on Qdrant, and in ultra on Neo4j/Memgraph
+  (`embedding_switch_backend_unsupported`, until the SDK can re-embed them).
+  The Kuzu open probe, the graph-width tools, the startup stray-space scan and
+  every upgrade migration are skipped, and none of them touch the old Kuzu or
+  Chroma files. Backup, restore, search, recall, delete, evolve and the
+  memory map work on every backend. `memhub status` and `memory-processing`
+  show the active backends and whether they answer. The App shows them
+  read-only ("存储后端：Neo4j + Qdrant（通过 CLI 配置）") in every language and
+  offers no control. The frozen Core now ships the `neo4j` and
+  `qdrant-client` drivers (+6 MB on macOS arm64, after no longer shipping the
+  SDK's unused `.py` copies). A managed restore now also accepts a backup taken
+  after the SDK cutover; it used to refuse any backup without the legacy
+  `evidence` table. Contract: `memhub/docs/contracts/storage-backends-v1.md`.
 - The CLI keeps the refusal Core names in a 5xx body instead of dropping
   it. `memhub models configure` on a machine without a key store answered
   `http_503_result_unknown` while Core had sent `{"detail":"secure_storage_unavailable"}`
@@ -49,6 +80,13 @@ Hy Memory and MemHub are versioned and released independently.
   are built, so evolve and System 2 output from local models is no longer cut
   off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
   existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
+- MemHub pins `hy-memory==2.0.15`. In ultra, the read client and the write
+  coordinator's client in one Core now share one `kuzu.Database` on the live
+  graph instead of each opening their own, whose checkpoints overwrote each
+  other and lost graph writes; that graph is opened with a 512 MB buffer pool
+  and at most 4 Kuzu threads (`MEMORY_GRAPH_BUFFER_POOL_MB`,
+  `MEMORY_GRAPH_MAX_THREADS`). The startup graph-open probe now opens the
+  graph with the same bounds.
 - Memory Strength idle decay now also applies when a memory's timestamp is
   timezone-aware, an ISO string with an offset, or an epoch integer (the shape
   `bump_access` writes back). `compute_strength` could raise `TypeError` on

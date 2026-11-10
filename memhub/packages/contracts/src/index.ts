@@ -1105,6 +1105,20 @@ export interface MemoryPipelineStatus {
   features: Record<string, boolean | number>;
   ui_language?: string | null;
   sdk_language?: string;
+  /** The SDK graph and vector stores (`storage_backends`), configured only
+   *  through the CLI/API; absent from an older Core. */
+  storage_backends?: StorageBackendsSummary | null;
+}
+
+/** `pipeline.storage_backends` (docs/contracts/storage-backends-v1.md §4). */
+export interface StorageBackendsSummary {
+  graph: "kuzu" | "neo4j" | "memgraph";
+  vector: "chroma" | "qdrant" | "faiss";
+  is_default: boolean;
+  /** `Neo4j + Qdrant`: graph first; product names, never translated. */
+  label: string;
+  health: "ok" | "local" | "failed" | "unknown";
+  health_code: string | null;
 }
 
 export interface MemoryProcessingSummary {

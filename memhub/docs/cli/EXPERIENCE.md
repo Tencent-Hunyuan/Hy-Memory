@@ -31,6 +31,10 @@ node apps/cli/dist/one-memory.cjs doctor
 ```
 
 `status` 显示 Runtime 是否运行；`doctor` 按诊断口径做只读检查（默认不修复）。
+`status` 还有一行 `存储后端：Kuzu + Chroma（默认）`；换过后端时是
+`存储后端：Neo4j + Qdrant（通过 CLI 配置，连接正常）`。服务器没有响应最近一次连接测试时显示
+`连接失败：<code>`，并算作异常（`storage_backends`，`status` 退出码 1）；`--json` 在
+`pipeline.storage_backends`。
 
 ## 2. 首次接入（init / sources connect）—— 没有独立的「授权」步骤
 
@@ -207,6 +211,38 @@ node apps/cli/dist/one-memory.cjs settings language system   # 清除设置（�
 - 所有语言（包括 `zh-Hans` 和 `en`）都作为 `MemoryConfig.language` 传给 SDK，提取等提示使用该语言；只有未设置（`system`，或只用 CLI/API、从未打开 App 的安装）时不向 SDK 传语言，SDK 照旧自动识别中文或英文。
 - 修改会像功能开关一样重建 SDK 客户端；不迁移数据，不改集合名（需要 hy-memory 2.0.11 的 `MemoryConfig.language`）。
 - `status --json` 的 `pipeline.ui_language` / `pipeline.sdk_language`（`auto` 或语言代码；`zh-Hans` 用户显示 `zh-Hans`）。API：`GET`/`PUT /api/v1/settings/ui-language`。
+
+### 存储后端（`settings backends`）
+
+记忆默认存在本机的 Kuzu（图数据库，ultra 使用）和 Chroma（向量库）里。只能用 CLI 或 API
+更换；App 只读显示。契约见 `docs/contracts/storage-backends-v1.md`。
+
+```bash
+node apps/cli/dist/one-memory.cjs settings backends                     # 当前后端、连接状态、哪些功能可用
+node apps/cli/dist/one-memory.cjs settings backends test --graph neo4j --graph-url bolt://127.0.0.1:7687 \
+  --graph-user neo4j --graph-password-file ~/.neo4j-pass                # 只测连接，不保存
+node apps/cli/dist/one-memory.cjs settings backends set --vector qdrant --vector-host 127.0.0.1   # 测连接 + 显示计划
+node apps/cli/dist/one-memory.cjs settings backends set --vector qdrant --vector-host 127.0.0.1 --yes  # 保存并生效
+node apps/cli/dist/one-memory.cjs settings backends reset --yes         # 回到 Kuzu + Chroma
+```
+
+- 图数据库：`kuzu`（默认）、`neo4j`、`memgraph`（`--graph-url bolt://…`、`--graph-user`、
+  `--graph-database`、`--graph-password-file`）。向量库：`chroma`（默认）、`qdrant`（必须是服务器：
+  `--vector-host`、`--vector-port` 默认 6333、`--vector-prefix`、`--vector-api-key-file`）。
+  FAISS 和 Qdrant 本地模式不支持（`storage_backend_faiss_unsupported` /
+  `storage_backend_vector_host_required`）。只写一侧时另一侧不变。
+- 密码和 API key 只从文件读（文件须是自己的、权限 600；`-` 从管道读），保存在系统钥匙串，
+  不写进 `config.json`，输出里只显示「已保存」。不写这个参数时保留已保存的值。
+- `set` 先做连接测试，失败就不保存；再显示计划，加 `--yes` 才保存。`reset` 同样需要 `--yes`。
+- **不迁移数据**：已有记忆留在原后端，不会被搬到新后端；新后端从它现在的内容开始。原来的数据
+  不会被删除或改写，改回原后端就能再次看到。
+- 图数据库里已经有记忆图谱时（图谱不按资料空间隔离，可能是另一个 MemHub 的），需要加
+  `--adopt-existing-graph` 才能接管。Qdrant 的集合都带本资料空间的前缀（`namespace`），多个
+  MemHub 共用一台服务器也不会互相读写。
+- 在 Qdrant 上更换向量模型会被拒绝（`embedding_switch_backend_unsupported`，SDK 还不能为 Qdrant
+  重新生成向量）；Neo4j/Memgraph 在 ultra 下同样拒绝。`show` 列出每个功能在当前后端上是
+  可用、跳过还是不支持。升级迁移在自定义后端上跳过。
+- API：`GET`/`PUT`/`DELETE /api/v1/settings/storage-backends`，`POST /api/v1/settings/storage-backends/test`。
 
 ## 8. 召回（recall）
 

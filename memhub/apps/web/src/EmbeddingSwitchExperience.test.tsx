@@ -196,6 +196,23 @@ it("blocks start when Core reports a prerequisite", () => {
   );
 });
 
+it("names a storage backend that cannot be re-embedded as the blocker", () => {
+  render(
+    <EmbeddingSwitchConfirmDialog
+      plan={{ ...plan, blockers: ["embedding_switch_backend_unsupported"] }}
+      busy={false}
+      errorCode={null}
+      onCancel={vi.fn()}
+      onStart={vi.fn()}
+    />,
+  );
+  expect(screen.getByText(/当前存储后端（通过 CLI 配置）/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "开始更新索引" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+});
+
 it("keeps a running switch visible and cancellable outside settings", async () => {
   current = {
     schema_version: 1,

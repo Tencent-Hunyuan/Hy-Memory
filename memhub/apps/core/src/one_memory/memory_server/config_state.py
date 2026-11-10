@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from one_memory.memory_features import MemoryFeatures
 from one_memory.memory_queue import ExtractionWindowPreset
+from one_memory.storage_backends import StorageBackends
 from one_memory.ui_language import UI_LANGUAGES, UiLanguage
 
 _SOURCE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
@@ -78,6 +79,10 @@ class ConfigDocument(BaseModel):
     #: it follows); None = none set. See `one_memory.ui_language` for what it
     #: does to the SDK.
     ui_language: UiLanguage | None = None
+    #: The graph and vector stores the SDK is configured with; Kuzu + Chroma
+    #: unless set through the CLI or API. Secrets are in the secret store.
+    #: See `one_memory.storage_backends`.
+    storage_backends: StorageBackends = Field(default_factory=StorageBackends)
 
     @field_validator("sources")
     @classmethod
@@ -100,7 +105,9 @@ class ConfigFileError(RuntimeError):
     pass
 
 
-_WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule", "memory_features", "ui_language"})
+_WRITTEN_WHEN_SET = frozenset(
+    {"memory_mode", "evolve_schedule", "memory_features", "ui_language", "storage_backends"}
+)
 
 
 def _sync_directory(directory: Path) -> None:
@@ -229,6 +236,19 @@ class ConfigStore:
             self._document = updated
             return updated
 
+    def storage_backends(self) -> StorageBackends:
+        with self._lock:
+            return self._document.storage_backends
+
+    def set_storage_backends(self, backends: StorageBackends) -> ConfigDocument:
+        if not isinstance(backends, StorageBackends):
+            raise ValueError("invalid_storage_backends")
+        with self._lock:
+            updated = self._document.model_copy(update={"storage_backends": backends})
+            self._write(updated)
+            self._document = updated
+            return updated
+
     def migrate_extraction_window_preset(self, preset: ExtractionWindowPreset) -> ConfigDocument:
         """Adopt the legacy SQL value only when config.json has no value."""
         if not isinstance(preset, ExtractionWindowPreset):
@@ -281,6 +301,10 @@ class ConfigStore:
         if "memory_features" in values:
             # Only the features a person set; an absent one is the SDK default.
             values["memory_features"] = document.memory_features.model_dump(exclude_none=True)
+        if "storage_backends" in values:
+            values["storage_backends"] = document.storage_backends.model_dump(
+                mode="json", exclude_none=True
+            )
         payload = (
             json.dumps(
                 values,

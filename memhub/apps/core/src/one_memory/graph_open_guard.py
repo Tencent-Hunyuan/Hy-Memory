@@ -13,7 +13,9 @@ child process (`GraphOpenProbe`), watched from here:
 - a wall-clock budget (`probe_timeout_s`, 60 s plus a little per MB, at most
   120 s; `ONE_MEMORY_GRAPH_PROBE_TIMEOUT_S` overrides) and an RSS cap
   (`ONE_MEMORY_GRAPH_PROBE_MAX_RSS_MB`, default 2048), polled from the parent
-  with `/proc` or `ps`; the child is SIGKILLed past either;
+  with `/proc` or `ps`; the child is SIGKILLed past either; it opens the
+  graph with the SDK's buffer pool and thread bounds
+  (`MEMORY_GRAPH_BUFFER_POOL_MB`, `MEMORY_GRAPH_MAX_THREADS`);
 - a clean exit means the graph opens (and its WAL replay / checkpoint already
   happened in the child); the SDK then opens it in Core as before;
 - a kill, a crash or a non-zero exit is a failed open: the graph is renamed to

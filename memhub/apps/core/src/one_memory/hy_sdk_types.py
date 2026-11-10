@@ -790,8 +790,9 @@ class LibraryHit(NamedTuple):
 def library_keyword_hits(raw: object, query: str) -> tuple[tuple[LibraryHit, ...], int]:
     """Memories in an SDK search window whose text contains every query term.
 
-    The local SDK store has no keyword channel (Chroma's keyword search is
-    empty), so search is pure vector similarity: a word in the library can
+    The SDK store has no keyword channel MemHub can rely on (Chroma's keyword
+    search is empty, and Qdrant's needs the `fastembed` BM25 model MemHub does
+    not ship), so search is pure vector similarity: a word in the library can
     score below the floor, and a word in none of it still scores above. The
     library search asks the SDK for its most relevant window and keeps only the
     rows that actually contain the words, most relevant first. Returns those

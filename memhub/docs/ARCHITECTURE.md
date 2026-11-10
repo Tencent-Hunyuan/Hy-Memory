@@ -125,8 +125,10 @@ clients. MemHub does not patch prompts, private stores, writer/reader caches,
 reconcile operations, or response retries.
 
 The only product exception is the existing Graph visualization and Graph Width
-surface: `hy_graph_projection.py` and `hy_graph_admin.py` may query Kuzu
-directly for low-latency Cypher projection and store-width administration.
+surface: `hy_graph_projection.py` and `hy_graph_admin.py` may query the SDK
+graph directly for low-latency Cypher projection (Kuzu, or the Neo4j/Memgraph
+store a `storage_backends` setting selects) and Kuzu store-width administration
+(a server graph has no file to inspect, archive or export: skipped/refused).
 This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
 The ultra graph's first open at startup (`graph_open_guard.py`) is part of the
@@ -144,9 +146,10 @@ what the Runtime supervisor honours. The graph-width check
 (`_graph_embedding_width`) reads through the same child (read-only) and is
 primed by the startup probe, so MemHub never holds a second `kuzu.Database`
 beside the SDK's in Core. The probe never touches an embedding switch's
-staging graph, and does not quarantine while a switch is open.
+staging graph, and does not quarantine while a switch is open. With a Neo4j/Memgraph graph
+(`storage_backends`) there is no file to probe and the guard is skipped.
 
-- Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
+- Storage backends：只经 SDK config，由 `build_sdk_config` 统一构造；SDK 自己的环境变量（`MEMORY_VECTOR_STORE`、`MEMORY_GRAPH_PROVIDER` 等）一律被覆盖、不生效。默认是内嵌的 Kuzu（图）+ Chroma（向量）。可以通过持久化 Core 设置 `storage_backends` 改用 Neo4j/Memgraph 图或 Qdrant 服务器向量，只能用 CLI（`memhub settings backends`）或 API（`/api/v1/settings/storage-backends`）配置，App 只读显示；密码与 API key 进安全存储。FAISS 与 Qdrant 本地模式被拒绝（多 client 并发不安全）。切换不迁移任何记忆，旧 Kuzu/Chroma 数据原样保留；自定义后端的 home 跳过升级迁移；嵌入切换在 Qdrant（及 ultra 下的 Neo4j/Memgraph）上明确拒绝，直到 SDK 支持。见 [`contracts/storage-backends-v1.md`](contracts/storage-backends-v1.md)。raw、coding 元数据、cache、history 始终是本 home 的 SQLite。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。
 - Raw retention：MemHub 不删除任何 SDK L1 raw，任何模式都全部保留（SDK 自身也不删 raw）；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。记忆模式（lite / pro / ultra）与 evolve 见 `docs/contracts/memory-mode-evolve-v1.md`；SDK 可选检索与提取功能（graph rerank、episode recall 等，全局设置，默认保持 SDK 默认值）见 `docs/contracts/memory-features-v1.md`。
 - Recall：Host Bridge / Core 先做宿主安装凭据与 tool grant，再调 **SDK search/get**。当前产品没有逐 memory 的 A-harness→B-harness 可见性开关，默认允许跨 harness 搜索；未来若增加来源限制，直接透传 SDK `source` / `include_sources` / `exclude_sources`，不在 MemHub 建 memory ACL。
@@ -308,7 +311,7 @@ Support is declared per immutable GitHub Release manifest:
 - Linux x64/arm64 Runtime on native GHA runners.
 - macOS arm64/x64 App/Runtime: Developer ID, notarization, native acceptance.
 - Windows is not supported.
-- `hy-memory==2.0.14` is the current stable SDK dependency; the release
+- `hy-memory==2.0.15` is the current stable SDK dependency; the release
   lock and [`../MEMORY.md`](../MEMORY.md) are authoritative when the pin changes.
 
 See [`INSTALLATION.md`](INSTALLATION.md).

@@ -4,6 +4,7 @@ import type {
   MemoryModePlan,
   MemoryModeState,
   MemoryPipelineMode,
+  StorageBackendsSummary,
 } from "@one-memory/contracts";
 import { legacyMemoryModePlan } from "@one-memory/operations";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
@@ -34,6 +35,7 @@ import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
+import { StorageBackendsNote } from "./StorageBackendsNote";
 import { UltraEvolveScheduleFields } from "./UltraEvolveScheduleFields";
 
 export function MemoryModeSettings({
@@ -62,6 +64,8 @@ export function MemoryModeSettings({
   const [pendingPlan, setPendingPlan] = useState<MemoryModePlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
+  const [storageBackends, setStorageBackends] =
+    useState<StorageBackendsSummary | null>(null);
   const [error, setError] = useState("");
   const [readFailed, setReadFailed] = useState(false);
   const [scheduleReadFailed, setScheduleReadFailed] = useState(false);
@@ -124,8 +128,12 @@ export function MemoryModeSettings({
     } else {
       setScheduleReadFailed(true);
     }
-    if (processingResult.status === "fulfilled")
+    if (processingResult.status === "fulfilled") {
       setMaintenance(Boolean(processingResult.value.embedding_switch));
+      setStorageBackends(
+        processingResult.value.pipeline?.storage_backends ?? null,
+      );
+    }
   }, [onModeChange]);
 
   useEffect(() => {
@@ -302,6 +310,7 @@ export function MemoryModeSettings({
             {text("正在检查或切换向量模型，完成前不能切换模式或手动整合。")}
           </p>
         ) : null}
+        <StorageBackendsNote backends={storageBackends} />
         {graphRebuilding ? (
           <p className="r6-settings-note" role="status">
             {text("mode.graphStore.quarantined")}

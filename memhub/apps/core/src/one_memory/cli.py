@@ -103,6 +103,13 @@ def main() -> None:
         from one_memory.hy_graph_admin import run_graph_open_probe
 
         raise SystemExit(run_graph_open_probe(sys.argv[2:]))
+    if sys.argv[1:] == ["--storage-drivers"]:
+        # Hidden: the packaging guard asks the frozen Core which storage
+        # backend drivers it can import (`storage_backend_probe`).
+        from one_memory.storage_backend_probe import driver_availability
+
+        print(json.dumps(driver_availability(import_them=True), sort_keys=True), flush=True)
+        raise SystemExit(0)
     if sys.argv[1:2] == ["capture"] and __name__ != "__main__":
         _end_by(os.environ.get("ONE_MEMORY_CAPTURE_DEADLINE_S"))
 
@@ -598,10 +605,17 @@ def _sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         from one_memory.sdk_migration_runner import abandoned_staging_present
         from one_memory.sdk_migration_verify import read_active_profile
         from one_memory.sdk_vector_reattach import legacy_vector_collections
+        from one_memory.storage_backends import MIGRATION_SKIPPED, custom_backends_configured
         from one_memory.target_schema import legacy_tables_present
 
         authority = SdkDataPlaneMigrationStore(database_path).authority()
-        if authority is MemoryAuthority.SDK:
+        skipped: str | None = None
+        if authority is MemoryAuthority.SDK and custom_backends_configured(settings.data_dir):
+            # A home on another store: the upgrade's repairs of the local
+            # Kuzu/Chroma stores do not apply, and those stores stay as they
+            # are (`run_startup_migration`). Not even read here.
+            state, skipped = "not_required", MIGRATION_SKIPPED
+        elif authority is MemoryAuthority.SDK:
             profile = read_active_profile(database_path) or builtin_retrieval_snapshot()
             leftovers = bool(
                 legacy_tables_present(database_path)
@@ -615,6 +629,8 @@ def _sdk_migration_status(options: Sequence[str], stream: TextIO) -> int:
         else:
             state = "required"
         document = {"schema_version": 1, "authority": authority.value, "state": state}
+        if skipped is not None:
+            document["skipped"] = skipped
         from one_memory.embedding_switch import read_open_job
 
         # Informational. An unfinished embedding switch never makes a
