@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import tempfile
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -248,12 +250,24 @@ def score_acceptance_pack(
 
 
 def write_pack(path: Path, rows: list[AcceptanceRow]) -> None:
+    """Publish an acceptance pack atomically and privately.
+
+    The pack is the evidence a quality run is judged on, so a half-written file
+    is worse than none: ``read_pack`` parses line by line and would fail on the
+    truncated tail.  Write a sibling created 0600 and swap it in, so the
+    content is never readable by anyone else and the previous pack survives a
+    failure.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(json.dumps(asdict(row), ensure_ascii=False) for row in rows) + "\n",
-        encoding="utf-8",
-    )
-    path.chmod(0o600)
+    content = "\n".join(json.dumps(asdict(row), ensure_ascii=False) for row in rows) + "\n"
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        Path(staging).replace(path)
+    except BaseException:
+        Path(staging).unlink(missing_ok=True)
+        raise
 
 
 def read_pack(path: Path) -> list[AcceptanceRow]:
