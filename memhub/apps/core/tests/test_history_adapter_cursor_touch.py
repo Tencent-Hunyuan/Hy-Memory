@@ -13,6 +13,7 @@ stream, so a missing touch fails here instead of in a user's empty library.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,7 @@ import pytest
 
 from one_memory.database_access import main_database
 from one_memory.imports.adapters import ScanEvent, ScanOptions, ScanCursorTouch
+from one_memory.imports.grants import SourceGrantStore
 from one_memory.imports.jobs import ImportJobStore
 from one_memory.imports.models import (
     EvidenceContentKind,
@@ -31,6 +33,7 @@ from one_memory.imports.models import (
     WrittenBy,
 )
 from one_memory.imports.runner import ImportRunner
+from one_memory.imports.sources.registry import RootCandidateKind, build_source_catalog
 from one_memory.imports.storage import EvidenceStore
 from one_memory.memory_server.durable_queue import DurableWriteQueue
 
@@ -124,21 +127,104 @@ def test_without_a_touch_history_stays_in_assembling(tmp_path: Path) -> None:
     assert _queue_states(db) == [("assembling", "normal")]
 
 
-@pytest.mark.parametrize("module", ["hermes", "opencode"])
-def test_history_adapters_emit_a_cursor_touch(module: str) -> None:
-    """Every adapter that can read history must end a file with a touch.
+def _write_hermes(root: Path, rows: int) -> None:
+    connection = sqlite3.connect(root / "state.db")
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, cwd TEXT);
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
+                timestamp INTEGER, tool_calls TEXT, active INTEGER
+            );
+            INSERT INTO sessions VALUES ('h', 'cli', '/private/project');
+            """
+        )
+        connection.executemany(
+            "INSERT INTO messages VALUES (?, 'h', 'user', ?, ?, NULL, 1)",
+            [(index + 1, f"hermes-{index}", 1000 + index) for index in range(rows)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
-    Checked at the source level so a new adapter that forgets it fails here,
-    not in a user's library. `common.py` is the shared implementation the
-    JSONL adapters inherit from.
+
+def _write_opencode(root: Path, rows: int) -> None:
+    connection = sqlite3.connect(root / "opencode.db")
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+            CREATE TABLE message (
+                id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT
+            );
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT
+            );
+            INSERT INTO session VALUES ('o', '/private/project');
+            """
+        )
+        for index in range(rows):
+            connection.execute(
+                "INSERT INTO message VALUES (?, 'o', ?, ?)",
+                (f"m{index}", 1000 + index, json.dumps({"role": "user"})),
+            )
+            connection.execute(
+                "INSERT INTO part VALUES (?, ?, ?, ?)",
+                (
+                    f"p{index}",
+                    f"m{index}",
+                    1000 + index,
+                    json.dumps({"type": "text", "text": f"opencode-{index}"}),
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    ("source", "write"), [("hermes", _write_hermes), ("opencode", _write_opencode)]
+)
+def test_real_history_adapters_produce_write_jobs(tmp_path: Path, source: str, write) -> None:
+    """Drive the shipped Hermes and OpenCode readers through the real runner.
+
+    Without the end-of-file touch these imports complete with a non-zero
+    `stored` count while every record stays in `state='assembling'`.
     """
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "one_memory"
-        / "imports"
-        / "sources"
-        / f"{module}.py"
-    ).read_text(encoding="utf-8")
+    home = tmp_path / "home"
+    catalog = build_source_catalog(home=home, environment={})
+    root = catalog[source].candidate.path
+    root.mkdir(parents=True, exist_ok=True)
+    write(root, 3)
 
-    assert "ScanCursorTouch(" in source, f"{module} never yields a ScanCursorTouch"
+    db = tmp_path / "one-memory.sqlite3"
+    evidence_store = EvidenceStore(db)
+    jobs = ImportJobStore(db)
+    grants = SourceGrantStore(db, home=home)
+    grants.grant(
+        user_id="local",
+        source_id=source,
+        root=root,
+        candidate_kind=RootCandidateKind.DEFAULT,
+    )
+    adapter = catalog[source].create_adapter(
+        grants.authorized_root(user_id="local", source_id=source)
+    )
+    queue = DurableWriteQueue(db, evidence=evidence_store)
+    job = jobs.create(user_id="local", source_id=source, operation="history")
+    runner = ImportRunner(
+        evidence_store=evidence_store,
+        job_store=jobs,
+        sdk_queue=queue,
+        sdk_authority=lambda: True,
+    )
+
+    result = asyncio.run(runner.run(adapter=adapter, job_id=job.job_id))
+
+    assert result.status.value == "completed"
+    assert result.stored == 3
+    states = _queue_states(db)
+    assert states, f"{source} staged no write job"
+    assert all(state == "pending" for state, _ in states), states
+    assert all(priority == "normal" for _, priority in states), states
