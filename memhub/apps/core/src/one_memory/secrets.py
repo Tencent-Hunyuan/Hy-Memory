@@ -1,6 +1,5 @@
 import json
 import os
-import pwd
 import subprocess
 import sys
 import threading
@@ -192,8 +191,29 @@ def _keychain_delete_many_command() -> list[str]:
 
 
 def _keychain_environment() -> dict[str, str]:
+    """Environment for the Keychain child process; macOS backend only.
+
+    ``pwd`` and ``os.getuid`` do not exist on Windows. Importing pwd at
+    module level made this whole module unimportable there, and with it
+    ``model_profiles`` -> ``memory_tasks`` -> ``durable_queue``, so
+    ``_submit_live_memory`` raised inside capture_stdio's fail-open
+    handler and live record assembly never ran -- silently.
+
+    The passwd lookup is kept rather than replaced with ``expanduser``:
+    it deliberately ignores an inherited ``HOME``, which is what keeps a
+    rewritten environment from redirecting the child's Keychain lookup.
+    Both calls are POSIX-only, so a platform without them keeps the
+    environment it inherited instead of raising.
+    """
     environment = dict(os.environ)
-    environment["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+    try:
+        import pwd
+
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, AttributeError, KeyError):
+        # No passwd database here, and no macOS Keychain to reach either.
+        return environment
+    environment["HOME"] = home
     return environment
 
 
