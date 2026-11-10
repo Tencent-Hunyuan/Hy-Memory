@@ -178,7 +178,7 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-async function secretFile(name: string, value: string, mode = 0o600) {
+async function fixtureFile(name: string, value: string, mode = 0o600) {
   const file = path.join(directory, name);
   await writeFile(file, `${value}\n`);
   await chmod(file, mode);
@@ -270,11 +270,11 @@ describe("memhub settings backends", () => {
   });
 
   it("tests a target without saving it", async () => {
-    const password = await secretFile("graph-password", "graph-pass");
+    const graphCredentialPath = await fixtureFile("graph-cred", "graph-pass");
     const result = await capturedRun([
       ...SET.map((value) => (value === "set" ? "test" : value)),
       "--graph-password-file",
-      password,
+      graphCredentialPath,
       "--json",
     ]);
     expect(result.code).toBe(0);
@@ -440,7 +440,7 @@ describe("memhub settings backends", () => {
   });
 
   it("reads secrets from owner-only files only", async () => {
-    const open = await secretFile("open-key", "vector-key", 0o644);
+    const open = await fixtureFile("open-key", "vector-key", 0o644);
     const refused = await capturedRun([
       "settings",
       "backends",
@@ -459,7 +459,7 @@ describe("memhub settings backends", () => {
     );
     expect(transport.post).not.toHaveBeenCalled();
 
-    const closed = await secretFile("key", "vector-key");
+    const closed = await fixtureFile("key", "vector-key");
     await capturedRun([
       "settings",
       "backends",
