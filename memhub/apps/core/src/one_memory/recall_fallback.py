@@ -11,6 +11,7 @@ instead: plain retrieval over what was imported, the same lane
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,8 @@ from one_memory.recall import (
     RecallState,
     TruncationBudget,
 )
+
+logger = logging.getLogger(__name__)
 
 FallbackReason = Literal["model_unavailable", "no_memories"]
 
@@ -189,6 +192,14 @@ async def _raw_recall(
         # a wider grant than recall had.
         return receipt()
     if remaining_seconds <= 0:
+        # Silent before: the receipt said `truncated_by=timeout_budget` but the
+        # log said nothing, so "no hits" looked the same as "not finished".
+        logger.warning(
+            "recall_raw_budget_exhausted remaining_ms=%.0f timeout_ms=%d reason=%s",
+            remaining_seconds * 1_000,
+            request.timeout_ms,
+            reason,
+        )
         return receipt(truncated_by=TruncationBudget.TIMEOUT)
     try:
         found = await asyncio.wait_for(
@@ -196,6 +207,12 @@ async def _raw_recall(
             timeout=remaining_seconds,
         )
     except TimeoutError:
+        logger.warning(
+            "recall_raw_search_timeout remaining_ms=%.0f timeout_ms=%d query_len=%d",
+            remaining_seconds * 1_000,
+            request.timeout_ms,
+            len(request.query),
+        )
         return receipt(truncated_by=TruncationBudget.TIMEOUT)
     current_sources = await raw_sources()
     if sources is not None:
