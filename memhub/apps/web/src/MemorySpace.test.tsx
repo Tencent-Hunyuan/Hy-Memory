@@ -628,6 +628,37 @@ describe("MemorySpace", () => {
     expect(screen.queryByText(/任务状态异常，正在恢复/)).toBeNull();
   });
 
+  it("treats an explicit null as unknown, not as a healthy zero", async () => {
+    // JSON cannot carry `undefined`: a Core that reports "not known" sends
+    // `null`. Reading that as zero is the same lie the absent field avoids.
+    getMemoryProcessing.mockResolvedValue({
+      pending: 2,
+      fresh_pending: 2,
+      backlog_pending: 0,
+      recent_completions: [],
+      running: 2,
+      stranded_running: null,
+      waiting_for_model: 0,
+      completed: 0,
+      failed: 0,
+      blocked_stages: [],
+      outside_window_pending: 0,
+      extraction_window_preset: "3m",
+      manual_extract_batches_planned: 0,
+      manual_extract_batches_current: 0,
+      active_queue: 0,
+      in_flight_count: 0,
+      seconds_per_completion: 60,
+    });
+    render(<MemorySpace />);
+
+    expect(
+      await screen.findByText(
+        "2 处理中 · 最新 2 条待处理 · 2 条任务状态待核对（约 2 分钟）",
+      ),
+    ).toBeTruthy();
+  });
+
   it("names the stuck pipeline stage instead of implying there is nothing", async () => {
     getMemoryProcessing.mockResolvedValue({
       pending: 0,
