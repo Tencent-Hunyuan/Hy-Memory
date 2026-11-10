@@ -56,6 +56,16 @@ Hy Memory and MemHub are versioned and released independently.
   are built, so evolve and System 2 output from local models is no longer cut
   off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
   existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
+- Hermes and OpenCode history imports now produce memories. Neither adapter
+  ended a file with a `ScanCursorTouch`, and that event is the only thing that
+  turns staged records into a write job: `finalize_sdk_file` is reached from
+  the runner's cursor-touch branch alone, while `flush_idle_assemblies` covers
+  `priority='live'` and history is staged as `normal`. A history import of
+  either source therefore reported `completed` with a non-zero `stored` count
+  and left every record in `state='assembling'`, so the library stayed empty.
+  Both adapters now emit the touch after a file is read to its end, matching
+  `sources/common.py`; a read that stopped early or failed emits none, so a
+  partial scan never claims to have reached the end.
 - `memory-processing` reports stranded writes on the SDK data plane instead of
   a constant zero. `active_depths()` returns the same number twice there — both
   are the count of `running` rows — so the legacy `running - in_flight_count`
