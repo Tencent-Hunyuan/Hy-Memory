@@ -129,6 +129,23 @@ surface: `hy_graph_projection.py` and `hy_graph_admin.py` may query Kuzu
 directly for low-latency Cypher projection and store-width administration.
 This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
+The ultra graph's first open at startup (`graph_open_guard.py`) is part of the
+same graph-store administration, but never runs inside Core: a short-lived
+child (the frozen binary's hidden `--graph-open-probe`, or `python -I -c` from
+source, body in `hy_graph_admin.GRAPH_OPEN_PROBE_SOURCE`) opens and closes the
+live space's Kuzu file before Core reports ready, bounded by a wall clock
+(60–120 s) and an RSS cap (2 GB) polled from Core. A clean exit lets the SDK
+open the graph as before; a kill, crash or non-zero exit renames it to
+`graph.quarantined-<UTC>` at once (never deleted, two copies kept) and the
+normal `MemoryGraphBackfill` rebuilds it from SDK memories. A durable marker
+(`graph-open-in-progress.json`) quarantines after two starts in which Core
+itself died mid-probe, and the declared startup phase (`core-startup.json`) is
+what the Runtime supervisor honours. The graph-width check
+(`_graph_embedding_width`) reads through the same child (read-only) and is
+primed by the startup probe, so MemHub never holds a second `kuzu.Database`
+beside the SDK's in Core. The probe never touches an embedding switch's
+staging graph, and does not quarantine while a switch is open.
+
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。
 - Raw retention：MemHub 不删除任何 SDK L1 raw，任何模式都全部保留（SDK 自身也不删 raw）；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。记忆模式（lite / pro / ultra）与 evolve 见 `docs/contracts/memory-mode-evolve-v1.md`；SDK 可选检索与提取功能（graph rerank、episode recall 等，全局设置，默认保持 SDK 默认值）见 `docs/contracts/memory-features-v1.md`。
