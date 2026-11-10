@@ -2290,6 +2290,71 @@ class HyMemoryClient:
             )
         )
 
+    def export_user_memories(
+        self,
+        user_id: str,
+        *,
+        layers: Optional[List[Any]] = None,
+        include_embeddings: bool = True,
+        limit: int = 1_000_000,
+    ) -> Dict[str, Any]:
+        """
+        导出一个用户在向量库中的全部记忆节点（备份用）。
+
+        每个层级（含 L1_RAW 原始对话）、每种状态（含 SUPERSEDED / SHADOW）都在内，
+        每条是 `MemoryNode.to_dict()`，默认带 embedding。与 clone_user 同一读法，
+        但不写任何东西。图库（L5-L7）不在内：图是可由记忆重建的派生数据
+        （`build_memory_graph`）。
+
+        Args:
+            user_id:            用户 ID（必填）
+            layers:             可选，只导出这些层级（字符串或 MemoryLayer）
+            include_embeddings: 是否带向量（默认 True；False 时 embedding 为 None）
+            limit:              单次最多导出的节点数
+
+        Returns:
+            {"success": True, "request_id", "user_id", "nodes": [...], "count",
+             "by_layer": {"l1_raw": N, ...}, "embedding_dims", "embedding_model",
+             "elapsed_ms"}
+        """
+        return self._loop_thread.run(
+            self.async_export_user_memories(
+                user_id, layers=layers,
+                include_embeddings=include_embeddings, limit=limit,
+            )
+        )
+
+    def import_user_memories(
+        self,
+        user_id: str,
+        nodes: List[Dict[str, Any]],
+        *,
+        require_empty: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        把 export_user_memories 导出的节点原样写回（恢复用）。
+
+        保留 node_id、层级、状态、演化链指针与时间；有 embedding 就原样写入
+        （维度必须与当前向量库一致），没有就用当前 embedding 服务重算。默认要求
+        该用户在向量库里是空的；写入失败时回滚已写入的该用户数据。不写图库：
+        恢复后用 `build_memory_graph` 重建。
+
+        Args:
+            user_id:       用户 ID；每个节点的 user_id 必须与之相同
+            nodes:         `MemoryNode.to_dict()` 形式的节点
+            require_empty: 目标用户必须为空（默认 True）
+
+        Returns:
+            {"success": True, "request_id", "user_id", "imported_count",
+             "by_layer", "re_embedded", "elapsed_ms"}；失败时 success=False
+            并带 "error_message"。
+        """
+        return self._loop_thread.run(
+            self.async_import_user_memories(
+                user_id, nodes, require_empty=require_empty,
+            )
+        )
+
     # ================================================================
     # System 2 Evolve API
     # ================================================================
@@ -7050,6 +7115,174 @@ class HyMemoryClient:
                 current["waiters"] -= 1
                 if current["waiters"] <= 0:
                     entries.pop(key, None)
+
+    @_ensure_internal_loop
+    async def async_export_user_memories(
+        self,
+        user_id: str,
+        *,
+        layers: Optional[List[Any]] = None,
+        include_embeddings: bool = True,
+        limit: int = 1_000_000,
+    ) -> Dict[str, Any]:
+        """导出一个用户的全部向量库记忆节点（异步），见 export_user_memories。"""
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            raise ValueError("user_id is required and cannot be empty")
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+        effective_layers = self._normalize_layers(layers)
+        nodes = await self._vector_store.list_by_user(
+            normalized_user_id,
+            limit=limit,
+            layers=effective_layers,
+            with_vectors=include_embeddings,
+            # 备份要的是这个用户的全部数据，含原始对话层。
+            allow_raw_layer=True,
+        )
+        items: List[Dict[str, Any]] = []
+        by_layer: Dict[str, int] = {}
+        for node in nodes or []:
+            data = node.to_dict()
+            embedding = getattr(node, "embedding", None)
+            data["embedding"] = (
+                [float(value) for value in embedding]
+                if include_embeddings and embedding
+                else None
+            )
+            items.append(data)
+            by_layer[data["layer"]] = by_layer.get(data["layer"], 0) + 1
+        vector_config = getattr(self._config, "vector_store", None)
+        embedder_config = getattr(self._config, "embedder", None)
+        dims = getattr(vector_config, "embedding_dims", None)
+        if not dims:
+            dims = next((len(item["embedding"]) for item in items if item["embedding"]), None)
+        return {
+            "success": True,
+            "request_id": request_id,
+            "user_id": normalized_user_id,
+            "nodes": items,
+            "count": len(items),
+            "by_layer": by_layer,
+            "embedding_dims": dims,
+            "embedding_model": getattr(embedder_config, "model", None),
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+
+    @_ensure_internal_loop
+    async def async_import_user_memories(
+        self,
+        user_id: str,
+        nodes: List[Dict[str, Any]],
+        *,
+        require_empty: bool = True,
+    ) -> Dict[str, Any]:
+        """把导出的节点按原 id 写回（异步），见 import_user_memories。"""
+        from .models.memory import MemoryNode
+
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+
+        def failed(message: str) -> Dict[str, Any]:
+            return {
+                "success": False,
+                "request_id": request_id,
+                "user_id": user_id,
+                "imported_count": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+                "error_message": message,
+            }
+
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return failed("user_id is required")
+        if not nodes:
+            return {
+                "success": True,
+                "request_id": request_id,
+                "user_id": normalized_user_id,
+                "imported_count": 0,
+                "by_layer": {},
+                "re_embedded": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+
+        built: List[Any] = []
+        missing: List[Any] = []
+        seen_ids = set()
+        dims = getattr(getattr(self._config, "vector_store", None), "embedding_dims", None)
+        for data in nodes:
+            if not isinstance(data, dict):
+                return failed("every node must be a dict from export_user_memories")
+            if str(data.get("user_id") or "") != normalized_user_id:
+                return failed("a node belongs to another user_id")
+            node = MemoryNode.from_dict(dict(data))
+            if not data.get("node_id") or node.node_id in seen_ids:
+                return failed("every node needs a unique node_id")
+            seen_ids.add(node.node_id)
+            embedding = data.get("embedding")
+            if embedding:
+                if dims and len(embedding) != int(dims):
+                    return failed(
+                        f"embedding width {len(embedding)} does not match "
+                        f"the vector store ({dims})"
+                    )
+                node.embedding = [float(value) for value in embedding]
+            else:
+                node.embedding = None
+                missing.append(node)
+            built.append(node)
+
+        if require_empty:
+            existing = await self._vector_store.list_by_user(
+                normalized_user_id, limit=1, with_vectors=False,
+                allow_raw_layer=True,
+            )
+            if existing:
+                return failed(
+                    f"user_id '{normalized_user_id}' already has memories. "
+                    "Import requires an empty user."
+                )
+
+        try:
+            if missing:
+                # 导出时没带向量（或旧格式）：用当前 embedding 服务按内容重算。
+                vectors = await self._embed_service.embed_batch(
+                    [node.content for node in missing]
+                )
+                for node, vector in zip(missing, vectors):
+                    node.embedding = list(vector)
+            written = await self._vector_store.upsert_batch(built)
+            if set(written) != {node.node_id for node in built}:
+                raise RuntimeError("import incomplete: not every node was written")
+        except Exception as error:  # noqa: BLE001 - reported, and rolled back below
+            logger.error(f"[import] failed: {error}", exc_info=True)
+            if require_empty:
+                try:
+                    await self._vector_store.delete_by_metadata(user_id=normalized_user_id)
+                except Exception as rollback_error:  # noqa: BLE001
+                    logger.warning(f"[import] rollback failed: {rollback_error}")
+            return failed(str(error))
+
+        by_layer: Dict[str, int] = {}
+        for node in built:
+            layer = node.layer.value if hasattr(node.layer, "value") else str(node.layer)
+            by_layer[layer] = by_layer.get(layer, 0) + 1
+        logger.info(
+            f"[import] user={normalized_user_id} imported={len(built)} "
+            f"re_embedded={len(missing)}"
+        )
+        return {
+            "success": True,
+            "request_id": request_id,
+            "user_id": normalized_user_id,
+            "imported_count": len(built),
+            "by_layer": by_layer,
+            "re_embedded": len(missing),
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
 
     @_ensure_internal_loop
     async def async_clone_user(
