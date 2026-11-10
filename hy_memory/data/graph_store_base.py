@@ -97,6 +97,10 @@ class GraphStoreBase(ABC):
         """关闭连接"""
         ...
 
+    async def checkpoint(self) -> bool:
+        """把未落盘的写入合并进主存储（嵌入式后端用）。默认无事可做。"""
+        return False
+
     @abstractmethod
     async def get_stats(self) -> Dict[str, Any]:
         """获取图统计信息"""
