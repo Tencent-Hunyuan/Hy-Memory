@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,9 @@ from one_memory.storage_backends import GraphBackend, StorageBackends, VectorBac
 
 def _sqlite(path: Path, rows: int = 1) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as database:
+    # Closed here, not whenever it is collected: closing a WAL database
+    # checkpoints it, and a late close would change the files under a test.
+    with closing(sqlite3.connect(path)) as database, database:
         database.execute("PRAGMA journal_mode=WAL")
         database.execute("CREATE TABLE IF NOT EXISTS t (v TEXT)")
         database.executemany("INSERT INTO t VALUES (?)", [(str(n),) for n in range(rows)])
@@ -125,7 +128,7 @@ def test_sqlite_files_are_copied_whole_and_owner_only(tmp_path) -> None:
     home = _home(tmp_path)
     backup = _backup(home)
     copy = backup / "sdk" / "governed-v2" / "cache.sqlite3"
-    with sqlite3.connect(copy) as database:
+    with closing(sqlite3.connect(copy)) as database:
         assert database.execute("SELECT count(*) FROM t").fetchone() == (3,)
         assert database.execute("PRAGMA journal_mode").fetchone() == ("delete",)
     assert not (copy.parent / "cache.sqlite3-wal").exists()
