@@ -12,9 +12,16 @@ from one_memory.secrets import (
 def main() -> int:
     try:
         reference = sys.stdin.read(2049)
-        if not reference or len(reference) > 2048 or sys.platform != "darwin":
+        if not reference or len(reference) > 2048:
             return 1
-        value = _macos_password_without_prompt(reference)
+        if sys.platform == "darwin":
+            value = _macos_password_without_prompt(reference)
+        else:
+            import keyring
+
+            from one_memory.secrets import keychain_service_name
+
+            value = keyring.get_password(keychain_service_name(), reference)
         sys.stdout.write(json.dumps({"value": value}))
         return 0
     except SecretStoreUnavailableError as error:
