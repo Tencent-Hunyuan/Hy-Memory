@@ -309,5 +309,7 @@ function namedRefusalCode(value: unknown): string | null {
  */
 export function unknownResultCode(value: unknown, status: number): string {
   const named = namedRefusalCode(value);
-  return named === null ? `http_${status}_result_unknown` : `${named}_result_unknown`;
+  return named === null
+    ? `http_${status}_result_unknown`
+    : `${named}_result_unknown`;
 }

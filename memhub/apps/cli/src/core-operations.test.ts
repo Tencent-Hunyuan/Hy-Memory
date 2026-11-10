@@ -51,7 +51,9 @@ describe("5xx keeps the refusal Core named", () => {
     async (verb, path) => {
       respond(503, { detail: "secure_storage_unavailable" });
 
-      const outcome = await operations()[verb](path, {});
+      const ops = operations();
+      const outcome =
+        verb === "delete" ? await ops.delete(path) : await ops[verb](path, {});
 
       expect(outcome).toEqual({
         state: "unknown",
