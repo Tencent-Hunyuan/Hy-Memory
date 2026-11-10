@@ -5,7 +5,7 @@ import type {
 } from "@one-memory/contracts";
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
-import { createRelationLayout } from "./MemoryGraph3D";
+import { createRelationLayout, isGraphLayoutCacheValid } from "./MemoryGraph3D";
 
 const NODE_TYPES: MemoryGraphNode["node_type"][] = [
   "memory",
@@ -134,6 +134,18 @@ function snapshot(positions: Map<string, THREE.Vector3>): [string, number[]][] {
 }
 
 describe("createRelationLayout", () => {
+  it("rejects runaway cached coordinates for the current graph", () => {
+    const nodes = [{ node_id: "existing" }, { node_id: "new" }];
+    const cache = new Map([
+      ["existing", new THREE.Vector3(1, 2, 3)],
+      ["unrelated", new THREE.Vector3(Number.NaN, 0, 0)],
+    ]);
+    expect(isGraphLayoutCacheValid(nodes, cache)).toBe(true);
+    cache.set("existing", new THREE.Vector3(1e57, 0, 0));
+    expect(isGraphLayoutCacheValid(nodes, cache)).toBe(false);
+    cache.set("existing", new THREE.Vector3(Number.NaN, 0, 0));
+    expect(isGraphLayoutCacheValid(nodes, cache)).toBe(false);
+  });
   it("分帧推进与一次算完结果完全一致", () => {
     const graph = makeGraph(14);
 
@@ -208,6 +220,29 @@ describe("createRelationLayout", () => {
     }
     expect(minimum).toBeGreaterThan(0.05);
   });
+
+  it.each([80, 160, 300])(
+    "keeps a source with %i nodes inside the graph",
+    (nodeCount) => {
+      const graph = makeGraph(nodeCount);
+      graph.edges = graph.nodes.slice(1).map((node, index) => ({
+        edge_id: `source-edge-${index}`,
+        source_node_id: graph.nodes[0].node_id,
+        target_node_id: node.node_id,
+        relation: "evidence_source",
+        weight: null,
+        origin: "provenance",
+      }));
+      const layout = createRelationLayout(graph);
+      while (!layout.done()) {
+        layout.step();
+        for (const position of layout.positions.values()) {
+          expect(Number.isFinite(position.length())).toBe(true);
+          expect(position.length()).toBeLessThan(12);
+        }
+      }
+    },
+  );
 
   it("空图与单节点图不抛错", () => {
     const empty = createRelationLayout(makeGraph(0));

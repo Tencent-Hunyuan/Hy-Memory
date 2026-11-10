@@ -144,7 +144,14 @@ def read_zstd_jsonl(
             if not line.endswith(b"\n"):
                 if len(line) <= max_record_bytes:
                     if immutable and index > completed_records:
-                        yield _decode_json_record(line, next_checkpoint)
+                        # A frozen append-only zstd file can end inside a frame:
+                        # the tail is bytes of a record that is still being
+                        # written, not a malformed record. Report EOF instead of
+                        # invalid JSON, so a snapshot taken mid-append does not
+                        # add a corruption issue for data that is merely early.
+                        decoded = _decode_json_record(line, next_checkpoint)
+                        if not isinstance(decoded, RawReadFailure):
+                            yield decoded
                     return
                 terminated = _discard_until_newline(
                     decompressed,

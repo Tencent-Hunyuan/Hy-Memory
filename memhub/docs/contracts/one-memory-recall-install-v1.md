@@ -74,7 +74,7 @@ decides rather than the published docs:
 | :--- | :--- |
 | Most MCP hosts | `mcpServers` |
 | Codex | same keys, TOML rather than JSON |
-| OpenCode | `mcp`, with the whole invocation as one `command` array and the env block named `environment` |
+| OpenCode | V2 native: `mcp.servers.<name>` with `disabled: false`; V1/flat: `mcp.<name>` with `enabled: true`; one `command` array and the env block named `environment` |
 | Hermes | same keys, YAML rather than JSON |
 
 ## 4. Hosts with no MCP, but a shell
