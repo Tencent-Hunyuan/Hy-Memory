@@ -106,6 +106,66 @@ class TestListByUserLayerFilter:
         assert len(internal_all) == 3
 
 
+class TestRawOnlyFilterReturnsEmptyCrossBackend:
+    """回归 #189：Chroma/Qdrant 的 raw-only 过滤此前误返回所有非 raw 层。
+
+    修复后，`layers=[L1_RAW]` 且 `allow_raw_layer=False` 应在查询 backend
+    之前就短路返回空列表。这里只构造 store 对象（不 initialize、不依赖
+    chromadb/qdrant_client 可用），验证短路分支本身的正确性；完整跨后端
+    集成覆盖在 CI 有 backend 依赖时由同一断言驱动。
+    """
+
+    @pytest.mark.parametrize("provider,cls", [
+        ("chroma", "ChromaVectorStore"),
+        ("qdrant", "QdrantVectorStore"),
+    ])
+    def test_raw_only_filter_returns_empty_without_backend(self, provider, cls):
+        import importlib
+        mod = importlib.import_module(f"hy_memory.data.vector_store_{provider}")
+        store_cls = getattr(mod, cls)
+        config = MemoryConfig.from_dict({
+            "vector_store": {
+                "provider": provider,
+                "collection_name": "test_raw_only",
+                "embedding_dims": DIMS,
+            },
+        })
+        vs = store_cls(config)
+
+        # 只点名 raw 且不允许 raw：必须返回空列表，而不是退回非 raw 层
+        nodes = run(vs.list_by_user(
+            user_id="u", layers=[MemoryLayer.L1_RAW], allow_raw_layer=False,
+        ))
+        assert nodes == []
+
+    @pytest.mark.parametrize("provider,cls", [
+        ("chroma", "ChromaVectorStore"),
+        ("qdrant", "QdrantVectorStore"),
+    ])
+    def test_mixed_layer_filter_is_not_short_circuited(self, provider, cls):
+        """混合层（raw + 其它层）不应触发短路：短路只针对「全是 raw」。"""
+        import importlib
+        mod = importlib.import_module(f"hy_memory.data.vector_store_{provider}")
+        store_cls = getattr(mod, cls)
+        config = MemoryConfig.from_dict({
+            "vector_store": {
+                "provider": provider,
+                "collection_name": "test_raw_only",
+                "embedding_dims": DIMS,
+            },
+        })
+        vs = store_cls(config)
+
+        # 混合层过滤后仍有非 raw 层，不应短路返回空；未 initialize 的
+        # store 会继续走到 backend 调用处并抛错（说明短路未误触发）。
+        with pytest.raises(Exception):
+            run(vs.list_by_user(
+                user_id="u",
+                layers=[MemoryLayer.L1_RAW, MemoryLayer.L2_FACT],
+                allow_raw_layer=False,
+            ))
+
+
 class TestEvolutionChainExcludesRaw:
     def test_chain_drops_raw_nodes(self):
         from hy_memory.pipelines._retrieval.evolution import _expand_one_chain
