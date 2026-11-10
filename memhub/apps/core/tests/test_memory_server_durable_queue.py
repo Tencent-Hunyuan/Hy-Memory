@@ -832,7 +832,7 @@ class _Recorder:
     async def process_sdk_job(self, records, **_kwargs):
         self.seen.append(tuple(record.evidence_id for record in records))
         if self.invoke_hy:
-            await _kwargs["before_hy_invocation"]()
+            await _kwargs["before_hy_invocation"](True)
         if self.error is not None:
             raise self.error
         return type("Receipt", (), {"raw_ids": (), "memory_ids": ()})()
@@ -844,10 +844,10 @@ class _TwoInvocationRecorder:
         self.invocations = 0
 
     async def process_sdk_job(self, _records, **kwargs):
-        await kwargs["before_hy_invocation"]()
+        await kwargs["before_hy_invocation"](True)
         self.invocations += 1
         self.pause_after_first()
-        await kwargs["before_hy_invocation"]()
+        await kwargs["before_hy_invocation"](True)
         self.invocations += 1
         return type("Receipt", (), {"raw_ids": (), "memory_ids": ()})()
 
@@ -916,7 +916,7 @@ def test_execute_job_persists_sdk_ids_returned_after_the_single_add(tmp_path) ->
         @classmethod
         async def process_sdk_job(cls, _records, **kwargs):
             cls.calls += 1
-            await kwargs["before_hy_invocation"]()
+            await kwargs["before_hy_invocation"](True)
             return type(
                 "Result",
                 (),
@@ -1045,7 +1045,7 @@ def test_sdk_write_processor_calls_add_once_with_public_scope_and_receipt() -> N
     )
 
     async def run() -> SdkWriteReceipt:
-        async def before() -> None:
+        async def before(_requires_generation: bool) -> None:
             client.events.append("before")
 
         return await processor.process_sdk_job(
@@ -1105,7 +1105,7 @@ def test_sdk_write_processor_uses_add_extracted_for_memory_content_and_additions
     processor = SdkWriteProcessor(_SdkPublicHandle(client))  # type: ignore[arg-type]
 
     async def run() -> SdkWriteReceipt:
-        async def before() -> None:
+        async def before(_requires_generation: bool) -> None:
             client.events.append("before")
 
         return await processor.process_sdk_job(
@@ -1260,7 +1260,7 @@ def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeyp
 
     async def process(self, records, *, request_id, before_hy_invocation):
         client = await self._client_handle.client()
-        await before_hy_invocation()
+        await before_hy_invocation(getattr(client, "mode", None) != "lite")
         seen.append((client.profile_id, client.closed))
         if client.profile_id == "profile-a":
             await writing.wait()
@@ -1270,7 +1270,7 @@ def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeyp
 
     monkeypatch.setattr(sdk_write_processor.SdkWriteProcessor, "process_sdk_job", process)
 
-    async def noop():
+    async def noop(_requires_generation: bool):
         return None
 
     async def scenario():
@@ -1298,6 +1298,42 @@ def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeyp
         ("profile-b", False),
         ("profile-a", False),
     ]
+
+
+def test_sdk_write_sets_the_model_request_audit_context(monkeypatch) -> None:
+    """The usage panel stayed empty because the SDK write never opened an audit context.
+
+    `AuditedModelTransport` records a request only while
+    `audit_precipitation_request(request_id)` is active. Removing the private
+    bridge took away its only caller, so every precipitation request was let
+    through unrecorded and `/api/v1/diagnostics/model-usage` stayed at zero.
+    """
+    from one_memory import model_request_audit, sdk_write_processor
+
+    opened: list[_TrackedHandle] = []
+    coordinator, _ = _coordinator(monkeypatch, opened)
+    seen: list[str | None] = []
+
+    async def process(self, records, *, request_id, before_hy_invocation):
+        context = model_request_audit._audit_context.get()
+        seen.append(context.request_id if context is not None else None)
+        return sdk_write_processor.SdkWriteReceipt()
+
+    monkeypatch.setattr(sdk_write_processor.SdkWriteProcessor, "process_sdk_job", process)
+
+    async def noop(_requires_generation: bool):
+        return None
+
+    asyncio.run(
+        coordinator.process_sdk_job(
+            (),
+            request_id="audit-request-1",
+            before_hy_invocation=noop,
+        )
+    )
+    assert seen == ["audit-request-1"]
+    # Reset on the way out: a later job must not inherit this request's id.
+    assert model_request_audit._audit_context.get() is None
 
 
 def test_an_unused_stale_handle_still_closes_at_once(monkeypatch) -> None:
@@ -1728,7 +1764,7 @@ def test_a_failed_job_logs_where_it_failed_but_never_the_message(tmp_path, caplo
 
     class _Failing:
         async def process_sdk_job(self, _records, **kwargs):
-            await kwargs["before_hy_invocation"]()
+            await kwargs["before_hy_invocation"](True)
             try:
                 closed_store(type("Client", (), {"private_store_name": None})())
             except AttributeError as error:
@@ -4138,6 +4174,71 @@ def test_a_failing_renewal_does_not_kill_the_drain(tmp_path) -> None:
     assert queue.get("idem-1").state == COMPLETED
 
 
+def test_a_locked_fallback_settlement_does_not_kill_the_drain(tmp_path, monkeypatch) -> None:
+    """The incident shape: executor and its fallback both lose the writer.
+
+    The first row keeps its lease for normal reclaim; an unrelated row must
+    still run instead of being stranded behind a dead drain task.
+    """
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    first = queue.submit(_request(key="first", source="cursor"))
+    second = queue.submit(_request(key="second", source="codex"))
+    executed: list[str] = []
+
+    async def execute(job_id: str) -> None:
+        executed.append(job_id)
+        if job_id == first.job_id:
+            raise RuntimeError("executor failed")
+        queue.settle(job_id, state=COMPLETED)
+        drain.stop()
+
+    drain = DurableWriteDrain(queue, execute=execute, max_concurrent_sources=1)
+
+    def locked_settlement(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(queue, "settle_worker_error", locked_settlement)
+
+    asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
+
+    assert executed == [first.job_id, second.job_id]
+    assert queue.get("first").state == RUNNING
+    assert queue.get("second").state == COMPLETED
+
+
+def test_an_unexpected_job_task_failure_is_contained_by_the_drain(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A programming error stays visible without taking down the consumer."""
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    first = queue.submit(_request(key="first", source="cursor"))
+    second = queue.submit(_request(key="second", source="codex"))
+    executed: list[str] = []
+
+    async def run_job(job_id: str) -> None:
+        executed.append(job_id)
+        if job_id == first.job_id:
+            raise RuntimeError("unexpected job task failure")
+        drain.stop()
+
+    drain = DurableWriteDrain(
+        queue,
+        execute=_never_execute,
+        max_concurrent_sources=1,
+    )
+    monkeypatch.setattr(drain, "_run_claimed_job", run_job)
+
+    with caplog.at_level(logging.ERROR, logger="one_memory.memory_server.durable_queue"):
+        asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
+
+    assert executed == [first.job_id, second.job_id]
+    assert any(
+        "durable_write_drain_job_task_failed" in message.getMessage()
+        and "error_type=RuntimeError" in message.getMessage()
+        for message in caplog.records
+    )
+
+
 @pytest.mark.parametrize("terminal", [COMPLETED, FAILED, DEAD])
 def test_a_terminal_row_is_sticky_against_a_late_settle(tmp_path, terminal: str) -> None:
     """A late settle must not overwrite an outcome that already happened.
@@ -4758,7 +4859,7 @@ def test_sedimentation_pause_releases_claim_without_spending_an_attempt(tmp_path
     drain = DurableWriteDrain(queue, execute=_never_execute, owner="pause-owner")
     assert drain.claim(limit=1) == (record.job_id,)
 
-    async def refuse_before_hy(_source_id, _mark_invoked):
+    async def refuse_before_hy(_source_id, _requires_generation, _mark_invoked):
         raise RuntimeError("model_sedimentation_disabled")
 
     asyncio.run(
@@ -4978,6 +5079,27 @@ def test_permanent_renewal_error_stops_the_worker(tmp_path, monkeypatch) -> None
 
     with pytest.raises(RuntimeError):
         asyncio.run(drain.run_one())
+
+
+def test_permanent_renewal_error_stops_the_long_lived_drain(tmp_path, monkeypatch) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    queue.submit(_request())
+    drain = DurableWriteDrain(
+        queue,
+        execute=lambda _job_id: asyncio.sleep(0.03),
+        lease=timedelta(seconds=1),
+        renew_every=timedelta(milliseconds=10),
+    )
+    monkeypatch.setattr(
+        drain,
+        "renew",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            sqlite3.OperationalError("database schema is corrupt")
+        ),
+    )
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
 
 
 def test_lost_renewal_waits_for_execution_before_releasing_source(tmp_path, monkeypatch) -> None:
@@ -5442,3 +5564,190 @@ def test_a_disabled_source_suspends_its_jobs_and_enabling_it_resumes_them(tmp_pa
     assert runtime.status_counts() == {PENDING: 3, COMPLETED: 1}
     assert runtime.queue_depths().fresh == 3
     assert len(drain.claim(limit=10)) == 1
+
+
+def test_a_claim_path_error_restarts_the_drain_and_later_jobs_still_run(
+    tmp_path, monkeypatch
+) -> None:
+    """An unexpected SQLite error on the claim path used to end the drain for good."""
+    from one_memory.memory_server import durable_queue as _queue_module
+
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    queue.submit(_request(key="later", source="cursor"))
+    reported: list[tuple[str, BaseException]] = []
+    monkeypatch.setattr(
+        _queue_module,
+        "report_exception",
+        lambda component, event, error, **_kwargs: reported.append((event, error)),
+    )
+
+    async def execute(job_id: str) -> None:
+        queue.settle(job_id, state=COMPLETED)
+        drain.stop()
+
+    drain = DurableWriteDrain(queue, execute=execute, max_concurrent_sources=1)
+    real_claim = drain.claim
+    calls = {"claim": 0}
+
+    def failing_once(**kwargs):
+        calls["claim"] += 1
+        if calls["claim"] == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_claim(**kwargs)
+
+    monkeypatch.setattr(drain, "claim", failing_once)
+    first_owner = drain.owner
+
+    asyncio.run(
+        asyncio.wait_for(
+            drain.run_supervised(idle_pause=0.005, restart_backoff=0.01, max_restart_backoff=0.05),
+            2,
+        )
+    )
+
+    assert queue.get("later").state == COMPLETED
+    assert drain.restarts == 1
+    assert drain.last_error_code == "operational_error"
+    assert drain.liveness == "stopped"
+    # A restarted drain leases under a new name: nothing the old one left in a
+    # pool thread can renew or settle as it.
+    assert drain.owner != first_owner
+    assert [event for event, _error in reported] == ["memory.write_queue.drain_exited"]
+    assert reported[0][1].__traceback__ is not None
+
+
+def test_a_claim_gate_exception_restarts_the_drain(tmp_path, monkeypatch) -> None:
+    from one_memory.memory_server import durable_queue as _queue_module
+
+    monkeypatch.setattr(_queue_module, "report_exception", lambda *_args, **_kwargs: None)
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    queue.submit(_request(key="gated", source="cursor"))
+    asked = {"count": 0}
+
+    def gate(_source_key: str) -> bool:
+        asked["count"] += 1
+        if asked["count"] == 1:
+            raise KeyError("gate bug")
+        return True
+
+    async def execute(job_id: str) -> None:
+        queue.settle(job_id, state=COMPLETED)
+        drain.stop()
+
+    drain = DurableWriteDrain(queue, execute=execute, source_claim_enabled=gate)
+
+    asyncio.run(asyncio.wait_for(drain.run_supervised(idle_pause=0.005, restart_backoff=0.01), 2))
+
+    assert queue.get("gated").state == COMPLETED
+    assert drain.last_error_code == "key_error"
+
+
+def test_stop_ends_a_restart_backoff_at_once(tmp_path, monkeypatch) -> None:
+    from one_memory.memory_server import durable_queue as _queue_module
+
+    monkeypatch.setattr(_queue_module, "report_exception", lambda *_args, **_kwargs: None)
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    drain = DurableWriteDrain(queue, execute=_never_execute)
+
+    def broken(**_kwargs):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(drain, "claim", broken)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(drain.run_supervised(restart_backoff=30))
+        for _ in range(200):
+            if drain.liveness == "restarting":
+                break
+            await asyncio.sleep(0.005)
+        assert drain.liveness == "restarting"
+        drain.stop()
+        await asyncio.wait_for(task, 1)
+
+    asyncio.run(scenario())
+    assert drain.liveness == "stopped"
+    assert drain.last_error_code == "database_error"
+
+
+def test_a_cancelled_supervised_drain_stays_cancelled(tmp_path) -> None:
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    drain = DurableWriteDrain(queue, execute=_never_execute)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(drain.run_supervised(idle_pause=0.005))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert drain.liveness == "stopped"
+    assert drain.restarts == 0
+
+
+def test_a_contained_job_task_failure_is_reported_with_its_stack(tmp_path, monkeypatch) -> None:
+    from one_memory.memory_server import durable_queue as _queue_module
+
+    reported: list[tuple[str, BaseException]] = []
+    monkeypatch.setattr(
+        _queue_module,
+        "report_exception",
+        lambda component, event, error, **_kwargs: reported.append((event, error)),
+    )
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    first = queue.submit(_request(key="first", source="cursor"))
+    queue.submit(_request(key="second", source="codex"))
+
+    async def run_job(job_id: str) -> None:
+        if job_id == first.job_id:
+            raise RuntimeError("systematic job task bug")
+        drain.stop()
+
+    drain = DurableWriteDrain(queue, execute=_never_execute, max_concurrent_sources=1)
+    monkeypatch.setattr(drain, "_run_claimed_job", run_job)
+
+    asyncio.run(asyncio.wait_for(drain.run_forever(idle_pause=0.005), 1))
+
+    assert [event for event, _error in reported] == ["memory.write_queue.job_task_failed"]
+    assert reported[0][1].__traceback__ is not None
+
+
+def test_a_lease_is_renewed_while_every_bulk_thread_is_blocked(tmp_path) -> None:
+    """The incident: bulk threads stuck in job listings starved lease renewal."""
+    from one_memory.background_work import BULK_WORKERS, bulk_pool, shutdown_bulk_pool
+
+    queue = DurableWriteQueue(tmp_path / "one-memory.sqlite3")
+    queue.submit(_request(key="slow", source="cursor"))
+    release = threading.Event()
+    blocked = [bulk_pool().submit(release.wait, 10) for _ in range(BULK_WORKERS * 2)]
+    renewed: list[bool] = []
+
+    async def execute(job_id: str) -> None:
+        # Longer than the lease: only renewals keep it.
+        await asyncio.sleep(0.8)
+        queue.settle(job_id, state=COMPLETED, owner=drain.owner)
+
+    drain = DurableWriteDrain(
+        queue,
+        execute=execute,
+        lease=timedelta(milliseconds=400),
+        renew_every=timedelta(milliseconds=50),
+    )
+    real_renew = drain.renew
+
+    def counted(job_id: str, **kwargs) -> bool:
+        result = real_renew(job_id, **kwargs)
+        renewed.append(result)
+        return result
+
+    drain.renew = counted  # type: ignore[method-assign]
+    try:
+        assert asyncio.run(asyncio.wait_for(drain.run_one(), 3)) == 1
+    finally:
+        release.set()
+        for future in blocked:
+            future.result(timeout=5)
+        shutdown_bulk_pool()
+
+    assert renewed and all(renewed)
+    assert queue.get("slow").state == COMPLETED

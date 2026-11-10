@@ -41,6 +41,8 @@ from one_memory.memory_evolution import (
     EvolveScheduler,
     EvolveService,
     EvolveStateStore,
+    GraphBuildState,
+    GraphBuildUser,
     MemoryGraphBackfill,
     evolve_due,
 )
@@ -58,8 +60,10 @@ def test_mode_defaults_to_pro_and_the_env_still_forces_ultra(tmp_path, monkeypat
     monkeypatch.delenv("ONE_MEMORY_GRAPH_STORE", raising=False)
     store = ConfigStore(tmp_path)
     assert store.memory_mode() == "pro"
+    assert store.memory_mode_explicitly_configured() is False
     assert effective_memory_mode(store.memory_mode()) == "pro"
     store.set_memory_mode("lite")
+    assert store.memory_mode_explicitly_configured() is True
     assert ConfigStore(tmp_path).memory_mode() == "lite"
     assert json.loads((tmp_path / "config.json").read_text())["memory_mode"] == "lite"
     monkeypatch.setenv("ONE_MEMORY_GRAPH_STORE", "kuzu")
@@ -68,6 +72,21 @@ def test_mode_defaults_to_pro_and_the_env_still_forces_ultra(tmp_path, monkeypat
     assert effective_memory_mode("lite") == "lite"
     with pytest.raises(ValueError):
         store.set_memory_mode("max")  # type: ignore[arg-type]
+
+
+def test_old_config_defaults_to_implicit_pro_until_pro_is_explicitly_set(tmp_path) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps({"schema_version": 1, "sources": {}}), encoding="utf-8"
+    )
+    store = ConfigStore(tmp_path)
+    assert store.memory_mode() == "pro"
+    assert store.memory_mode_explicitly_configured() is False
+
+    store.set_memory_mode("pro")
+
+    assert store.memory_mode_explicitly_configured() is True
+    assert json.loads((tmp_path / "config.json").read_text())["memory_mode"] == "pro"
+    assert ConfigStore(tmp_path).memory_mode_explicitly_configured() is True
 
 
 def test_an_untouched_install_writes_no_new_settings(tmp_path) -> None:
@@ -156,6 +175,37 @@ def test_the_read_handle_rebuilds_on_a_mode_or_profile_change(monkeypatch, tmp_p
         assert made[1].closed
 
     asyncio.run(scenario())
+
+
+def test_read_handle_can_bind_one_caller_mode_snapshot(monkeypatch, tmp_path) -> None:
+    from one_memory import sdk_read_handle
+
+    callback_reads = 0
+
+    def current_mode() -> str:
+        nonlocal callback_reads
+        callback_reads += 1
+        return "pro"
+
+    monkeypatch.setattr(
+        sdk_read_handle,
+        "SdkClientHandle",
+        lambda profile, **kwargs: _FakeHandle(kwargs.get("mode") or "pro", profile.profile_id),
+    )
+    reads = sdk_read_handle.ActiveProfileReadHandle(
+        profiles=_Profiles(identity=None),  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=tmp_path,
+        memory_mode=current_mode,
+    )
+
+    async def scenario():
+        client = await reads.client_for_mode("lite")
+        assert client.mode == "lite"
+        await reads.close()
+
+    asyncio.run(scenario())
+    assert callback_reads == 0
 
 
 class _FakeHandle:
@@ -288,7 +338,7 @@ class _SdkHandle:
         return None
 
 
-async def _noop() -> None:
+async def _noop(_requires_generation: bool) -> None:
     return None
 
 
@@ -311,14 +361,14 @@ def test_a_note_in_lite_is_stored_as_raw_and_never_calls_add_extracted() -> None
     ]
 
 
-def test_a_lite_write_runs_through_the_coordinator_without_a_model(monkeypatch) -> None:
+def test_a_lite_write_ignores_the_model_sedimentation_pause(monkeypatch) -> None:
     sdk = _WritingSdk()
     coordinator = sdk_write_processor.SdkWriteCoordinator(
         profiles=_Profiles(identity=None),  # type: ignore[arg-type]
         secrets=None,  # type: ignore[arg-type]
         data_dir=None,
         transport_factory=lambda _profile: None,
-        sedimentation_enabled=lambda: True,
+        sedimentation_enabled=lambda: False,
         memory_mode=lambda: "lite",
     )
     monkeypatch.setattr(
@@ -332,6 +382,37 @@ def test_a_lite_write_runs_through_the_coordinator_without_a_model(monkeypatch) 
         coordinator.process_sdk_job(turn, request_id="r-1", before_hy_invocation=_noop)
     )
     assert receipt.raw_ids == ("raw-1",)
+    assert [name for name, _ in sdk.calls] == ["add"]
+
+
+def test_a_lite_write_ignores_the_model_sedimentation_switch(monkeypatch) -> None:
+    sdk = _WritingSdk()
+    coordinator = sdk_write_processor.SdkWriteCoordinator(
+        profiles=_Profiles(identity=None),  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=None,
+        transport_factory=lambda _profile: None,
+        sedimentation_enabled=lambda: False,
+        memory_mode=lambda: "lite",
+    )
+    monkeypatch.setattr(
+        sdk_write_processor, "SdkClientHandle", lambda profile, **kwargs: _SdkHandle(sdk, "lite")
+    )
+    admitted = 0
+
+    async def admit(_requires_generation: bool) -> None:
+        nonlocal admitted
+        admitted += 1
+
+    receipt = asyncio.run(
+        coordinator.process_sdk_job(
+            (_record("still stored as raw", extracted=False),),
+            request_id="r-off-lite",
+            before_hy_invocation=admit,
+        )
+    )
+    assert receipt.raw_ids == ("raw-1",)
+    assert admitted == 1
     assert [name for name, _ in sdk.calls] == ["add"]
 
 
@@ -624,6 +705,38 @@ def test_the_scheduler_runs_each_due_user_once_in_ultra_only(tmp_path, monkeypat
     assert state.user("wife").last_result["trigger"] == "scheduled"
 
 
+def test_scheduled_evolve_obeys_the_shared_lifecycle_gate(tmp_path, monkeypatch) -> None:
+    sdk = _EvolveSdk(continuing=0)
+    state = EvolveStateStore(tmp_path)
+    state.anchor(_at(1, 12))
+    open_gate = [False]
+    service = EvolveService(
+        coordinator=_Coordinator(sdk, monkeypatch),
+        state=state,
+        memory_mode=lambda: "ultra",
+        now=lambda: _at(2, 3, 2),
+    )
+
+    async def users():
+        return ("local",)
+
+    async def scenario():
+        scheduler = EvolveScheduler(
+            service=service,
+            schedule=EvolveSchedule,
+            users_with_memories=users,
+            lifecycle_lock=asyncio.Lock(),
+            lifecycle_open=lambda: open_gate[0],
+            now=lambda: _at(2, 3, 2),
+        )
+        assert await scheduler.tick() == ()
+        assert sdk.calls == []
+        open_gate[0] = True
+        assert await scheduler.tick() == ("local",)
+
+    asyncio.run(scenario())
+
+
 def test_the_graph_backfill_runs_once_per_user(tmp_path, monkeypatch) -> None:
     sdk = _EvolveSdk()
     state = EvolveStateStore(tmp_path)
@@ -641,6 +754,63 @@ def test_the_graph_backfill_runs_once_per_user(tmp_path, monkeypatch) -> None:
         "local": "succeeded",
         "wife": "succeeded",
     }
+
+
+def test_an_interrupted_graph_backfill_resumes_only_unfinished_users(tmp_path, monkeypatch) -> None:
+    sdk = _EvolveSdk()
+    state = EvolveStateStore(tmp_path)
+    state.set_graph_build(
+        GraphBuildState(
+            state="running",
+            started_at=_at(1, 3),
+            users={
+                "local": GraphBuildUser(state="succeeded", memories_scanned=4, nodes=4),
+                "wife": GraphBuildUser(state="running"),
+            },
+        )
+    )
+    backfill = MemoryGraphBackfill(coordinator=_Coordinator(sdk, monkeypatch), state=state)
+
+    async def scenario():
+        resumed = backfill.recover(["local", "wife"])
+        assert resumed.state == "running"
+        assert resumed.users["local"].state == "succeeded"
+        assert resumed.users["wife"].state == "pending"
+        await backfill.wait()
+
+    asyncio.run(scenario())
+    assert sdk.graph_builds == ["wife"]
+    assert state.graph_build().state == "succeeded"
+
+
+def test_graph_backfill_waits_for_embedding_maintenance_to_finish(tmp_path, monkeypatch) -> None:
+    sdk = _EvolveSdk()
+    state = EvolveStateStore(tmp_path)
+    gate = [False]
+    checked = asyncio.Event()
+
+    def lifecycle_open() -> bool:
+        checked.set()
+        return gate[0]
+
+    backfill = MemoryGraphBackfill(
+        coordinator=_Coordinator(sdk, monkeypatch),
+        state=state,
+        lifecycle_open=lifecycle_open,
+    )
+
+    async def scenario():
+        backfill.start(["local"])
+        await checked.wait()
+        assert sdk.graph_builds == []
+        assert state.graph_build().state == "running"
+        assert state.graph_build().users["local"].state == "pending"
+        gate[0] = True
+        await backfill.wait()
+
+    asyncio.run(scenario())
+    assert sdk.graph_builds == ["local"]
+    assert state.graph_build().state == "succeeded"
 
 
 # --- the HTTP surface -----------------------------------------------------------
@@ -701,23 +871,38 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
     async def scenario(app, sdk, client):
         current = (await client.get("/api/v1/settings/memory-mode")).json()
         assert current["mode"] == current["configured_mode"] == "pro"
+        assert current["explicitly_configured"] is False
         assert current["forced_by_env"] is False
         assert app.state.sdk_write_coordinator.memory_mode() == "pro"
+        assert (
+            await client.put("/api/v1/sedimentation", json={"enabled": False})
+        ).status_code == 200
+        from one_memory.api import _sedimentation_claim_enabled
 
+        app.state.history_import_gate_released = True
+        assert not _sedimentation_claim_enabled(app, "one-memory-manual")
+
+        app.state.config_store.set_sedimentation_enabled(False)
         lite = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
         assert lite.status_code == 200, lite.text
         body = lite.json()
         assert body["mode"] == "lite" and body["previous_mode"] == "pro"
+        assert body["explicitly_configured"] is True
         assert body["effects"] == ["higher_mode_memories_hidden"]
+        resume = getattr(app.state, "sedimentation_resume", None)
+        assert resume is not None
+        await asyncio.wait_for(asyncio.shield(resume), 5)
         assert app.state.sdk_write_coordinator.memory_mode() == "lite"
         assert _sdk_client_handle(app).memory_mode() == "lite"
         # lite claims queued work without a generation model.
-        from one_memory.api import _sedimentation_claim_enabled
-
         assert app.state.model_profile_store.active_identity() is None
-        app.state.history_import_gate_released = True
         assert _sedimentation_claim_enabled(app, "one-memory-manual")
 
+        monkeypatch.setattr(
+            app.state.model_profile_store,
+            "active_identity",
+            lambda: ("active-profile", 1),
+        )
         ultra = await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
         assert ultra.status_code == 200, ultra.text
         assert "existing_memories_added_to_graph" in ultra.json()["effects"]
@@ -742,13 +927,186 @@ def test_mode_api_get_put_and_its_effects(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.fresh_sdk
+def test_mode_plan_and_put_share_validation_and_effects(tmp_path, monkeypatch) -> None:
+    async def scenario(app, _sdk, client):
+        plan = await client.post(
+            "/api/v1/settings/memory-mode/plan",
+            json={"mode": "lite"},
+        )
+        assert plan.status_code == 200
+        body = plan.json()
+        assert body == {
+            "current": "pro",
+            "target": "lite",
+            "effective_target": "lite",
+            "capabilities": {
+                "content_plane": "raw",
+                "generation_required": False,
+                "graph_enabled": False,
+                "evolve_available": False,
+            },
+            "effects": ["higher_mode_memories_hidden"],
+            "warnings": [],
+            "blockers": [],
+        }
+        changed = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
+        assert changed.status_code == 200
+        assert changed.json()["effects"] == body["effects"]
+
+        missing_model = (
+            await client.post(
+                "/api/v1/settings/memory-mode/plan",
+                json={"mode": "pro"},
+            )
+        ).json()
+        assert missing_model["blockers"] == ["active_model_required"]
+        assert missing_model["effects"] == []
+        refused = await client.put("/api/v1/settings/memory-mode", json={"mode": "pro"})
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == missing_model["blockers"][0]
+
+        monkeypatch.setenv("ONE_MEMORY_GRAPH_STORE", "kuzu")
+        forced = (
+            await client.post(
+                "/api/v1/settings/memory-mode/plan",
+                json={"mode": "lite"},
+            )
+        ).json()
+        assert forced["effective_target"] == "ultra"
+        assert forced["warnings"] == ["forced_by_env", "effective_no_change"]
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_mode_plan_reports_all_blockers_without_planned_effects(tmp_path, monkeypatch) -> None:
+    async def scenario(app, _sdk, client):
+        changed = await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
+        assert changed.status_code == 200
+        switch = app.state.embedding_switch
+        switch._scan_hold = True
+        hold = asyncio.Event()
+        task = asyncio.create_task(hold.wait())
+        app.state.memory_graph_backfill._task = task
+        monkeypatch.setattr("one_memory.api.importlib.util.find_spec", lambda _name: None)
+        try:
+            plan = (
+                await client.post(
+                    "/api/v1/settings/memory-mode/plan",
+                    json={"mode": "ultra"},
+                )
+            ).json()
+            assert plan["blockers"] == [
+                "embedding_maintenance_in_progress",
+                "active_model_required",
+                "memory_lifecycle_busy",
+                "graph_store_unavailable",
+            ]
+            assert plan["effects"] == []
+        finally:
+            switch._scan_hold = False
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            app.state.memory_graph_backfill._task = None
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_lite_startup_readmits_jobs_while_model_sedimentation_is_off(tmp_path, monkeypatch) -> None:
+    store = ConfigStore(tmp_path / "data")
+    store.set_memory_mode("lite")
+    store.set_sedimentation_enabled(False)
+    resumed = asyncio.Event()
+    original = SdkMemoryRuntime.resume_allowed
+
+    async def resume_allowed(runtime):
+        await original(runtime)
+        resumed.set()
+
+    monkeypatch.setattr(SdkMemoryRuntime, "resume_allowed", resume_allowed)
+
+    async def scenario(app, _sdk, _client):
+        await asyncio.wait_for(resumed.wait(), 5)
+        assert app.state.config_store.sedimentation_enabled() is False
+        assert app.state.config_store.memory_mode() == "lite"
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_embedding_maintenance_blocks_mode_put_and_evolve_but_not_mode_get(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario(app, _sdk, client):
+        switch = app.state.embedding_switch
+
+        switch._scan_hold = True
+        current = await client.get("/api/v1/settings/memory-mode")
+        assert current.status_code == 200
+        assert current.json()["explicitly_configured"] is False
+        for response in (
+            await client.put("/api/v1/settings/memory-mode", json={"mode": "pro"}),
+            await client.post("/api/v2/evolve", json={}),
+        ):
+            assert response.status_code == 409
+            assert response.json()["detail"] == "embedding_maintenance_in_progress"
+        assert app.state.config_store.memory_mode_explicitly_configured() is False
+
+        switch._scan_hold = False
+        switch._open_cache = True
+        assert (await client.get("/api/v1/settings/memory-mode")).status_code == 200
+        for response in (
+            await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"}),
+            await client.post("/api/v2/evolve", json={}),
+        ):
+            assert response.status_code == 409
+            assert response.json()["detail"] == "embedding_maintenance_in_progress"
+
+        switch._open_cache = False
+        explicitly_pro = await client.put("/api/v1/settings/memory-mode", json={"mode": "pro"})
+        assert explicitly_pro.status_code == 200
+        assert explicitly_pro.json()["explicitly_configured"] is True
+        assert explicitly_pro.json()["effects"] == []
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_graph_backfill_blocks_mode_change_and_manual_evolve(tmp_path, monkeypatch) -> None:
+    async def scenario(app, _sdk, client):
+        hold = asyncio.Event()
+        task = asyncio.create_task(hold.wait())
+        app.state.memory_graph_backfill._task = task
+        try:
+            for response in (
+                await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"}),
+                await client.post("/api/v2/evolve", json={}),
+            ):
+                assert response.status_code == 409
+                assert response.json()["detail"] == "memory_lifecycle_busy"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            app.state.memory_graph_backfill._task = None
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
 def test_evolve_api_is_ultra_only_async_and_scoped_per_user(tmp_path, monkeypatch) -> None:
     async def scenario(app, sdk, client):
         refused = await client.post("/api/v2/evolve", json={})
         assert refused.status_code == 409
         assert refused.json()["detail"] == "memory_mode_not_ultra"
 
-        await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
+        monkeypatch.setattr(
+            app.state.model_profile_store,
+            "active_identity",
+            lambda: ("active-profile", 1),
+        )
+        changed = await client.put("/api/v1/settings/memory-mode", json={"mode": "ultra"})
+        assert changed.status_code == 200, changed.text
         await app.state.memory_graph_backfill.wait()
         started = await client.post(
             "/api/v2/evolve", json={"user_id": "wife", "agent_id": "all-apps", "max_batches": 2}
@@ -862,6 +1220,90 @@ def test_a_job_written_in_lite_stays_done_and_a_pending_job_takes_the_new_mode(
         assert await drain_once(queue) == 0
         assert queue.get("turn-lite").state == queue.get("turn-pro").state == "completed"
         assert seen == ["lite", "pro"]
+        await coordinator.close()
+
+    run_app(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_paused_model_still_writes_a_lite_job_through_the_durable_boundary(
+    tmp_path, monkeypatch
+) -> None:
+    from one_memory.api import _admit_pipeline_invocation
+    from one_memory.memory_server.durable_queue import DurableWriteDrain, execute_job
+
+    seen: list[str] = []
+
+    class Sdk:
+        mode = "lite"
+
+        def add(self, messages, **kwargs):
+            seen.append("add")
+            return {"success": True, "raw_ids": ["raw-lite"]}
+
+        def add_extracted(self, contents, **kwargs):
+            seen.append("add_extracted")
+            raise AssertionError("lite must never call add_extracted")
+
+    monkeypatch.setattr(
+        sdk_write_processor,
+        "SdkClientHandle",
+        lambda profile, **kwargs: _SdkHandle(Sdk(), "lite"),
+    )
+    coordinator = sdk_write_processor.SdkWriteCoordinator(
+        profiles=_Profiles(identity=None),  # type: ignore[arg-type]
+        secrets=None,  # type: ignore[arg-type]
+        data_dir=None,
+        transport_factory=lambda _profile: None,
+        sedimentation_enabled=lambda: False,
+        memory_mode=lambda: "lite",
+    )
+
+    async def never(_job_id):
+        return None
+
+    async def scenario(app, _sdk, client):
+        app.state.memory_write_drain.stop()
+        if app.state.memory_write_drain_task is not None:
+            await app.state.memory_write_drain_task
+            app.state.memory_write_drain_task = None
+        await client.put("/api/v1/sedimentation", json={"enabled": False})
+        await client.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
+        app.state.history_import_gate_released = True
+        written = await client.post(
+            "/api/v2/memory-writes",
+            json={
+                "request_id": "paused-lite-turn",
+                "session_id": "paused-lite-session",
+                "source_id": "one-memory-manual",
+                "messages": [
+                    {"role": "user", "content": "保留原始会话"},
+                    {"role": "assistant", "content": "已保留"},
+                ],
+            },
+        )
+        assert written.status_code == 202
+        queue = app.state.memory_write_queue
+        drain = DurableWriteDrain(queue, execute=never, lease=timedelta(seconds=30))
+        [job_id] = drain.claim(limit=1)
+        await execute_job(
+            job_id,
+            queue=queue,
+            supervisor=coordinator,
+            evidence=None,  # type: ignore[arg-type]
+            admit_hy_invocation=lambda source_id, requires_generation, mark: (
+                _admit_pipeline_invocation(
+                    app,
+                    source_id,
+                    requires_generation,
+                    mark,
+                )
+            ),
+        )
+        current = queue.get("paused-lite-turn")
+        assert current is not None and current.state == "completed"
+        assert current.sdk_raw_ids == ("raw-lite",)
+        assert seen == ["add"]
         await coordinator.close()
 
     run_app(tmp_path, monkeypatch, scenario)

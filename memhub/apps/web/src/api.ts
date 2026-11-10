@@ -2,12 +2,21 @@ import {
   CORE_SERVICE,
   type ConnectSourcesResponse,
   type DetectionResponse,
+  type EmbeddingSpaceDeleteReceipt,
+  type EmbeddingSpaces,
+  type EmbeddingSwitchCurrent,
+  type EmbeddingSwitchJob,
+  type EmbeddingSwitchPlan,
+  type EvolveOverview,
+  type EvolveRunReceipt,
+  type EvolveSchedule,
   type ExtractionSettings,
   type ExtractionWindowPreset,
   type GraphWidthDecision,
   type GraphWidthDecisionReceipt,
   type GraphWidthStatus,
   type HealthResponse,
+  type HomeProjectionV1,
   type HostAskMemoryEvent,
   type HostHomeSummary,
   type ImportIssue,
@@ -17,6 +26,10 @@ import {
   type MemoryAddInput,
   type MemoryAddReceipt,
   type MemoryGraphResponse,
+  type MemoryModeChange,
+  type MemoryModePlan,
+  type MemoryModeState,
+  type MemoryPipelineMode,
   type MemoryProcessingSummary,
   type ModelCreationOperation,
   type ModelProbeOperationReceipt,
@@ -24,6 +37,7 @@ import {
   type ModelProfile,
   type ModelProfileInput,
   type ModelProfilePatch,
+  type OnboardingProgressUpdate,
   type OnboardingState,
   type SdkMemoryKind,
   type SdkMemoryPage,
@@ -31,6 +45,7 @@ import {
   type SdkMemoryStatus,
   type SdkMemoryVariant,
   type SdkRawContextItem,
+  type SdkRawGraphPage,
   type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
@@ -42,20 +57,37 @@ import {
 // stays here is the transport adapter: axios wiring, recovery clients, and the
 // UI-facing error mapping.
 import {
+  buildEmbeddingSwitchPlanRequest,
+  buildEmbeddingSwitchStartRequest,
   buildMemoryAddRequest,
   buildModelProfileCreateRequest,
   buildModelProfileUpdateRequest,
   buildSourceImportRequest,
   buildSourceSyncRequest,
   classifyModelRemove,
+  EMBEDDING_SPACES_PATH,
+  EMBEDDING_SWITCH_CURRENT_PATH,
+  type EmbeddingSwitchRefusal,
+  type EmbeddingSwitchStartInput,
+  embeddingSwitchCancelPath,
   hasSourceSyncTarget,
+  isBareNotFound,
   memoryAddStatusPath,
   normalizeManualExtractEvidence,
+  parseEmbeddingSpaceDeleteReceipt,
+  parseEmbeddingSpaces,
+  parseEmbeddingSwitchCurrent,
+  parseEmbeddingSwitchJob,
+  parseEmbeddingSwitchPlan,
+  parseEmbeddingSwitchRefusal,
+  parseEmbeddingSwitchSummary,
   parseExtractionSettingsReceipt,
   parseGraphWidthDecisionReceipt,
   parseManualExtractReceipt,
   parseMemoryAddReceipt,
+  parseMemoryModePlan,
   parseModelProfileReceipt,
+  retiredEmbeddingSpacePath,
   SourceSyncInputError,
 } from "@one-memory/operations";
 import axios from "axios";
@@ -448,6 +480,26 @@ export async function getOnboarding(): Promise<OnboardingState> {
   return response.data;
 }
 
+export async function patchOnboardingProgress(
+  update: OnboardingProgressUpdate,
+): Promise<OnboardingState> {
+  const response = await client.patch<OnboardingState>(
+    "/api/v1/onboarding/progress",
+    update,
+  );
+  return response.data;
+}
+
+export async function putOnboardingProgress(
+  update: OnboardingProgressUpdate,
+): Promise<OnboardingState> {
+  const response = await client.put<OnboardingState>(
+    "/api/v1/onboarding/progress",
+    update,
+  );
+  return response.data;
+}
+
 export async function completeOnboarding(
   traceId?: string,
 ): Promise<OnboardingState> {
@@ -588,6 +640,135 @@ export async function probeModelProfile(
   });
 }
 
+function preserveEmbeddingSwitchRefusal(reason: unknown): never {
+  const refusal = embeddingSwitchRefusal(reason);
+  if (refusal !== null && typeof reason === "object" && reason !== null) {
+    throw Object.assign(reason, {
+      embeddingSwitchRefusal: refusal,
+    });
+  }
+  throw reason;
+}
+
+/** An older Core answers a route-level 404 because switch v1 is not present. */
+export function embeddingSwitchUnsupported(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    isBareNotFound(reason.response?.data)
+  );
+}
+
+/** Recover a Core refusal without losing the replacement plan it may carry. */
+export function embeddingSwitchRefusal(
+  reason: unknown,
+): EmbeddingSwitchRefusal | null {
+  if (
+    typeof reason === "object" &&
+    reason !== null &&
+    "embeddingSwitchRefusal" in reason
+  ) {
+    const preserved = (reason as { embeddingSwitchRefusal?: unknown })
+      .embeddingSwitchRefusal;
+    if (
+      preserved !== null &&
+      typeof preserved === "object" &&
+      "code" in preserved
+    )
+      return preserved as EmbeddingSwitchRefusal;
+  }
+  if (!axios.isAxiosError(reason)) return null;
+  return parseEmbeddingSwitchRefusal(reason.response?.data);
+}
+
+export async function planEmbeddingSwitch(
+  profileId: string,
+  expectedRevision?: number,
+  traceId?: string,
+): Promise<EmbeddingSwitchPlan> {
+  const request = buildEmbeddingSwitchPlanRequest(profileId, expectedRevision);
+  try {
+    const response = await client.post<unknown>(
+      request.path,
+      request.body,
+      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+    );
+    const plan = parseEmbeddingSwitchPlan(response.data);
+    if (plan === null) throw new Error("embedding_switch_plan_invalid");
+    return plan;
+  } catch (reason) {
+    preserveEmbeddingSwitchRefusal(reason);
+  }
+}
+
+export async function startEmbeddingSwitch(
+  input: EmbeddingSwitchStartInput,
+  traceId?: string,
+): Promise<EmbeddingSwitchJob> {
+  const request = buildEmbeddingSwitchStartRequest(input);
+  try {
+    const response = await client.post<unknown>(
+      request.path,
+      request.body,
+      traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+    );
+    const job = parseEmbeddingSwitchJob(response.data);
+    if (job === null) throw new Error("embedding_switch_job_invalid");
+    return job;
+  } catch (reason) {
+    preserveEmbeddingSwitchRefusal(reason);
+  }
+}
+
+export async function getCurrentEmbeddingSwitch(
+  options: { signal?: AbortSignal } = {},
+): Promise<EmbeddingSwitchCurrent> {
+  const response = await client.get<unknown>(EMBEDDING_SWITCH_CURRENT_PATH, {
+    signal: options.signal,
+  });
+  const current = parseEmbeddingSwitchCurrent(response.data);
+  if (current === null) throw new Error("embedding_switch_current_invalid");
+  return current;
+}
+
+export async function cancelEmbeddingSwitch(
+  jobId: string,
+  traceId?: string,
+): Promise<EmbeddingSwitchJob> {
+  const response = await client.post<unknown>(
+    embeddingSwitchCancelPath(jobId),
+    {},
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+  );
+  const job = parseEmbeddingSwitchJob(response.data);
+  if (job === null) throw new Error("embedding_switch_job_invalid");
+  return job;
+}
+
+export async function listEmbeddingSpaces(
+  options: { signal?: AbortSignal } = {},
+): Promise<EmbeddingSpaces> {
+  const response = await client.get<unknown>(EMBEDDING_SPACES_PATH, {
+    signal: options.signal,
+  });
+  const spaces = parseEmbeddingSpaces(response.data);
+  if (spaces === null) throw new Error("embedding_spaces_invalid");
+  return spaces;
+}
+
+export async function deleteRetiredEmbeddingSpace(
+  spaceId: string,
+  traceId?: string,
+): Promise<EmbeddingSpaceDeleteReceipt> {
+  const response = await client.delete<unknown>(
+    retiredEmbeddingSpacePath(spaceId),
+    traceId ? { headers: { "X-One-Memory-Trace-Id": traceId } } : undefined,
+  );
+  const receipt = parseEmbeddingSpaceDeleteReceipt(response.data);
+  if (receipt === null) throw new Error("embedding_space_receipt_invalid");
+  return receipt;
+}
+
 export async function activateModelProfile(
   profileId: string,
   traceId?: string,
@@ -657,6 +838,22 @@ export async function deleteModelProfile(
 export async function getHomeSummary(): Promise<HostHomeSummary> {
   const response = await client.get<HostHomeSummary>("/api/v2/home-summary");
   return response.data;
+}
+
+export async function getHomeProjection(): Promise<HomeProjectionV1> {
+  const response = await client.get<unknown>("/api/v2/home-projection");
+  const projection = parseHomeProjection(response.data);
+  if (projection === null) throw new Error("home_projection_invalid");
+  return projection;
+}
+
+/** A route-level 404 only: domain errors must not masquerade as old Core. */
+export function homeProjectionUnsupported(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    isBareNotFound(reason.response?.data)
+  );
 }
 
 export async function getLiveSyncHealth(): Promise<LiveSyncHealth[]> {
@@ -787,33 +984,74 @@ function isMemoryNotFound(reason: unknown): boolean {
 
 export async function getSdkRaw({
   source,
+  sessionId,
   offset = 0,
   limit = 100,
+  unit = "turn",
+  paging,
+  cursor,
+  signal,
+}: {
+  source?: string;
+  sessionId?: string;
+  offset?: number;
+  limit?: number;
+  unit?: "raw" | "turn";
+  paging?: "offset" | "cursor";
+  cursor?: string | null;
+  signal?: AbortSignal;
+} = {}): Promise<SdkRawPage> {
+  const response = await client.get<SdkRawPage>("/api/v2/raw", {
+    params: {
+      source,
+      session_id: sessionId,
+      offset,
+      limit,
+      unit,
+      paging,
+      cursor: cursor || undefined,
+    },
+    signal,
+  });
+  return response.data;
+}
+
+export async function getSdkRawGraph({
+  source,
+  offset = 0,
+  limit = 300,
+  signal,
 }: {
   source?: string;
   offset?: number;
   limit?: number;
-} = {}): Promise<SdkRawPage> {
-  const response = await client.get<SdkRawPage>("/api/v2/raw", {
+  signal?: AbortSignal;
+} = {}): Promise<SdkRawGraphPage> {
+  const response = await client.get<SdkRawGraphPage>("/api/v2/raw/graph", {
     params: { source, offset, limit },
+    signal,
   });
   return response.data;
 }
 
 export async function searchSdkRaw(
   query: string,
-  signal?: AbortSignal,
+  options: { source?: string; signal?: AbortSignal } = {},
 ): Promise<SdkRawContextItem[]> {
   const response = await client.post(
     "/api/v2/context/search",
     {
       query,
       kinds: ["raw"],
+      ...(options.source ? { include_sources: [options.source] } : {}),
+      raw_unit: "turn",
       limit: 20,
       character_budget: 12_000,
     },
-    { signal, timeout: 10_000 },
+    { signal: options.signal, timeout: 10_000 },
   );
+  if (response.data?.state !== "grounded" && response.data?.state !== "empty")
+    throw new Error("raw_search_unavailable");
   const items = response.data?.items;
   return Array.isArray(items)
     ? items.filter(
@@ -904,6 +1142,77 @@ export async function getMemoryProcessing(): Promise<MemoryProcessingSummary> {
   const response = await client.get<MemoryProcessingSummary>(
     "/api/v1/memory-processing",
   );
+  return response.data;
+}
+
+export async function getMemoryMode(): Promise<MemoryModeState> {
+  const response = await client.get<MemoryModeState>(
+    "/api/v1/settings/memory-mode",
+  );
+  return response.data;
+}
+
+export async function planMemoryMode(
+  mode: MemoryPipelineMode,
+): Promise<MemoryModePlan> {
+  const response = await client.post<unknown>(
+    "/api/v1/settings/memory-mode/plan",
+    { mode },
+  );
+  const plan = parseMemoryModePlan(response.data);
+  if (plan === null || plan.target !== mode)
+    throw new Error("memory_mode_plan_invalid");
+  return plan;
+}
+
+export function memoryModePlanUnsupported(reason: unknown): boolean {
+  return (
+    axios.isAxiosError(reason) &&
+    reason.response?.status === 404 &&
+    isBareNotFound(reason.response?.data)
+  );
+}
+
+export async function setMemoryMode(
+  mode: MemoryPipelineMode,
+): Promise<MemoryModeChange> {
+  const response = await client.put<MemoryModeChange>(
+    "/api/v1/settings/memory-mode",
+    { mode },
+  );
+  return response.data;
+}
+
+export async function getEvolveSchedule(): Promise<EvolveSchedule> {
+  const response = await client.get<EvolveSchedule>(
+    "/api/v1/settings/evolve-schedule",
+  );
+  return response.data;
+}
+
+export async function setEvolveSchedule(
+  update: Partial<EvolveSchedule>,
+): Promise<EvolveSchedule> {
+  const response = await client.put<EvolveSchedule>(
+    "/api/v1/settings/evolve-schedule",
+    update,
+  );
+  return response.data;
+}
+
+export async function getEvolveOverview(
+  userId = "local",
+): Promise<EvolveOverview> {
+  const response = await client.get<EvolveOverview>("/api/v2/evolve", {
+    params: { user_id: userId },
+  });
+  return response.data;
+}
+
+export async function startEvolve(userId = "local"): Promise<EvolveRunReceipt> {
+  const response = await client.post<EvolveRunReceipt>("/api/v2/evolve", {
+    user_id: userId,
+  });
   return response.data;
 }
 
@@ -1153,7 +1462,10 @@ export function isHealthResponse(value: unknown): value is HealthResponse {
     (candidate.memory_backfill === undefined ||
       candidate.memory_backfill === "running" ||
       candidate.memory_backfill === "done" ||
-      candidate.memory_backfill === "failed")
+      candidate.memory_backfill === "failed") &&
+    (candidate.embedding_switch === undefined ||
+      candidate.embedding_switch === null ||
+      parseEmbeddingSwitchSummary(candidate.embedding_switch) !== null)
   );
 }
 
@@ -1308,6 +1620,132 @@ export function isLiveSyncHealth(value: unknown): value is LiveSyncHealth {
 
 function measuredCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+export function parseHomeProjection(value: unknown): HomeProjectionV1 | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const projection = value as Record<string, unknown>;
+  const allowed = new Set([
+    "projection_version",
+    "user_id",
+    "effective_mode",
+    "capabilities",
+    "visible_count",
+    "display_state",
+    "latest",
+    "observed_at",
+  ]);
+  const capabilities = projection.capabilities as Record<
+    string,
+    unknown
+  > | null;
+  if (
+    Object.keys(projection).some((key) => !allowed.has(key)) ||
+    projection.projection_version !== 1 ||
+    typeof projection.user_id !== "string" ||
+    !["lite", "pro", "ultra"].includes(String(projection.effective_mode)) ||
+    !capabilities ||
+    Object.keys(capabilities).some(
+      (key) =>
+        ![
+          "content_plane",
+          "generation_required",
+          "graph_enabled",
+          "evolve_available",
+        ].includes(key),
+    ) ||
+    !["raw", "memory"].includes(String(capabilities.content_plane)) ||
+    typeof capabilities.generation_required !== "boolean" ||
+    typeof capabilities.graph_enabled !== "boolean" ||
+    typeof capabilities.evolve_available !== "boolean" ||
+    capabilities.content_plane !==
+      (projection.effective_mode === "lite" ? "raw" : "memory") ||
+    capabilities.generation_required !==
+      (projection.effective_mode !== "lite") ||
+    capabilities.graph_enabled !== (projection.effective_mode === "ultra") ||
+    capabilities.evolve_available !== (projection.effective_mode === "ultra") ||
+    !measuredCount(projection.visible_count) ||
+    !["empty", "excerpt", "no_user_excerpt", "no_displayable_memory"].includes(
+      String(projection.display_state),
+    ) ||
+    !validProjectionLatest(projection.latest, projection.effective_mode) ||
+    !projectionLatestDisplayConsistent(
+      projection.latest,
+      projection.display_state,
+    ) ||
+    ((projection.visible_count as number) === 0 &&
+      projection.latest !== null) ||
+    ((projection.visible_count as number) > 0 &&
+      projection.display_state === "empty") ||
+    typeof projection.observed_at !== "string" ||
+    !Number.isFinite(Date.parse(projection.observed_at))
+  )
+    return null;
+  return projection as unknown as HomeProjectionV1;
+}
+
+function projectionLatestDisplayConsistent(
+  value: unknown,
+  displayState: unknown,
+): boolean {
+  if (value === null)
+    return displayState !== "excerpt" && displayState !== "no_user_excerpt";
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const latest = value as Record<string, unknown>;
+  return latest.type === "raw"
+    ? displayState === latest.display_state
+    : latest.type === "memory" && displayState === "excerpt";
+}
+
+function validProjectionLatest(value: unknown, mode: unknown): boolean {
+  if (value === null) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const latest = value as Record<string, unknown>;
+  const base = [
+    "type",
+    "time",
+    "time_basis",
+    "excerpt",
+    "truncated",
+    "source_id",
+  ];
+  const raw = ["raw_id", "session_id", "display_state"];
+  const memory = ["memory_id", "scene", "kind", "variant"];
+  if (
+    Object.keys(latest).some(
+      (key) =>
+        ![...base, ...(latest.type === "raw" ? raw : memory)].includes(key),
+    ) ||
+    !(
+      latest.time === null ||
+      (typeof latest.time === "string" &&
+        Number.isFinite(Date.parse(latest.time)))
+    ) ||
+    ![null, "conversation", "import", "write", "update"].includes(
+      latest.time_basis as never,
+    ) ||
+    typeof latest.excerpt !== "string" ||
+    typeof latest.truncated !== "boolean" ||
+    typeof latest.source_id !== "string"
+  )
+    return false;
+  if (latest.type === "raw")
+    return (
+      mode === "lite" &&
+      typeof latest.raw_id === "string" &&
+      typeof latest.session_id === "string" &&
+      ["excerpt", "no_user_excerpt"].includes(String(latest.display_state))
+    );
+  return (
+    latest.type === "memory" &&
+    mode !== "lite" &&
+    typeof latest.memory_id === "string" &&
+    ["chat", "working", "coding"].includes(String(latest.scene)) &&
+    ["chat", "experience"].includes(String(latest.kind)) &&
+    (latest.variant === null ||
+      latest.variant === "working" ||
+      latest.variant === "coding")
+  );
 }
 
 function isSourceImportExample(value: unknown): boolean {

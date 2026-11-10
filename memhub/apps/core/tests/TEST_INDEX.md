@@ -104,6 +104,7 @@
 | `test_file_import_operations_review.py` | `contract` | Upload refusal/legacy compatibility review with bounded synthetic files only. |
 | `test_frozen_core_layout.py` | `contract` | 覆盖 single file layout remains available without private preset、folder layout keeps same core and all native dependencies、unknown layout does not silently build another package 等 5 个场景。 |
 | `test_golden_corpus.py` | `contract` | A7-01: the golden corpus comparison. |
+| `test_graph_open_guard.py` | `integration` | The ultra graph's guarded first open: marker, quarantine and rebuild. |
 | `test_graph_width_endpoint.py` | `integration` | The width mismatch has to reach the interface, not just the log. |
 | `test_graph_width_export.py` | `unit` | EXPORT_FIRST has to actually export. |
 | `test_graph_width_guard.py` | `unit` | Graph width mismatch must ask, never silently archive. |
@@ -111,6 +112,7 @@
 | `test_health.py` | `contract` | 覆盖 a backfill that fails says so rather than disappearing、a failed catch up leaves a traceback behind、configured model without content consent does not start backfill 等 15 个场景。 |
 | `test_hermes_gateway_injection.py` | `contract` | Hermes gateway text in `user` rows: notices are skipped, relayed messages unwrapped. |
 | `test_history_listing_rotation.py` | `contract` | 覆盖 history listing alternates started and untouched files、history listing drains whichever cohort is longer 场景。 |
+| `test_home_projection.py` | `contract` | 覆盖 memory projection covers pro and ultra、memory projection preserves productivity namespace、project raw latest uses import time without conversation time 等 7 个场景。 |
 | `test_host_capabilities.py` | `unit` | A plugin does not become realtime on every host or every unknown version. |
 | `test_hourly_c1_peak_replay_contract.py` | `contract` | Guard the package peak-replay probe's error accounting. |
 | `test_hourly_c1_recall_stage_probe_contract.py` | `contract` | Guard the packaged recall stage probe's command and error semantics. |
@@ -122,6 +124,7 @@
 | `test_import_api.py` | `integration` | 覆盖 resume during cleanup returns conflict without internal error、authorize detect import and revoke api flow、protected api rejects missing token and foreign origin 等 5 个场景。 |
 | `test_import_control_races_review.py` | `contract` | Read-only review repro: real runner/store, synthetic delayed adapter cleanup. |
 | `test_import_evidence_atomicity.py` | `contract` | 覆盖 counter failure rolls back evidence versions and cursor、same identity cursor rewind is blocked and logged、replaced identity may reset checkpoint 等 20 个场景。 |
+| `test_import_job_retention.py` | `integration` | `import_jobs` stays bounded, and the questions asked of it are SQL, not scans. |
 | `test_import_oversized_verbatim.py` | `contract` | 覆盖 normal verbatim is unchanged、oversized verbatim is truncated instead of rejected 场景。 |
 | `test_import_runner.py` | `contract` | 覆盖 job transitions are explicit、runner keeps per record errors and continues、sync slices reuse the same source listing 等 22 个场景。 |
 | `test_import_skip_batching.py` | `contract` | 覆盖 batch limit and tail use fewer commits、batched skips keep their order against the next write、flushes before every nonmatching event 等 14 个场景。 |
@@ -136,7 +139,7 @@
 | `test_internal_preset.py` | `contract` | The optional model preset a configured build carries. |
 | `test_jsonl_snapshot_tail.py` | `contract` | Bounded EOF handling on synthetic files only, never original host history. |
 | `test_library_search_window.py` | `unit` | The library search window store and the unified record/keyword parsing. |
-| `test_live_capture.py` | `integration` | Visible hook text lands in Evidence before the transcript file is flushed. |
+| `test_live_capture.py` | `integration` | Hooks hand visible text to Core, which stages it once, without Evidence. |
 | `test_live_sync.py` | `contract` | 覆盖 live sync preempts a reader batch before it emits work、live sync cuts in front of a running history import、live sync does not resume a history import the user paused 等 24 个场景。 |
 | `test_live_sync_file_incremental.py` | `contract` | 覆盖 unchanged file metadata avoids a job and content read、changed file content is read once by the import job、workbuddy first live poll baselines history then imports only append 等 6 个场景。 |
 | `test_live_sync_job_coalescing.py` | `contract` | A poll that finds nothing must not leave an import job behind. |
@@ -212,6 +215,7 @@
 | `test_onboarding_profile.py` | `integration` | R-09：首次安装引导把画像录下来，不问用户一句话。 |
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
+| `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
 | `test_policy_api_wiring.py` | `integration` | 覆盖 global model permission off does not backfill、backfill puts history on write jobs without scheduling memory tasks、source pause skips history until the source is reenabled 场景。 |
 | `test_policy_production_entry.py` | `contract` | 覆盖 production serve passes only supported app options、maintenance serve does not own the runtime 场景。 |
 | `test_precipitation_concurrency_setting.py` | `contract` | Rule 2/9: precipitation concurrency is configurable, not hardcoded to 1. |
@@ -320,4 +324,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 315 个测试文件。
+共 319 个测试文件。

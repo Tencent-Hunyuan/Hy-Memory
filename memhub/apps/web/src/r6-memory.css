@@ -18,9 +18,31 @@
   font-size: 26px;
   font-weight: 600;
 }
+.r6-memory .memory-title-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.r6-memory .memory-mode-label {
+  color: #287b67;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 21px;
+}
 .r6-memory .memory-loaded-count {
   font-size: 13px;
   color: #637786;
+}
+.r6-memory .memory-evolve-status {
+  width: fit-content;
+  margin: -12px 0 20px;
+  padding: 5px 9px;
+  border: 1px solid #cbd8e0;
+  border-radius: 999px;
+  background: #edf3f6;
+  color: #4f6574;
+  font-size: 12px;
+  line-height: 20px;
 }
 .r6-memory .memory-pending-add {
   display: flex;
@@ -173,6 +195,59 @@
 .r6-memory .map-inspector .wb-detail-actions {
   gap: 12px;
   flex-wrap: wrap;
+}
+.r6-memory .wb-node-related {
+  margin-top: 28px;
+}
+.r6-memory .wb-node-related--names {
+  margin-top: 0;
+}
+.r6-memory .wb-node-related--names li:first-child {
+  border-top: 0;
+}
+.r6-memory .wb-node-related h3 {
+  margin: 0 0 10px;
+  color: #5e6e7a;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 21px;
+}
+.r6-memory .wb-node-related ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.r6-memory .wb-node-related li {
+  border-top: 1px solid #d8e2ea;
+}
+.r6-memory .wb-node-related .map-related {
+  min-height: 0;
+  padding: 12px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #384a57;
+  font-weight: 400;
+  box-shadow: none;
+}
+.r6-memory .wb-node-related .map-related:hover:not(:disabled),
+.r6-memory .wb-node-related .map-related:active:not(:disabled) {
+  border: 0;
+  background: transparent;
+  color: #304757;
+  transform: none;
+}
+.r6-memory .wb-node-related .map-related span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-height: 1.7;
+}
+.r6-memory .wb-node-related .map-related small {
+  flex: none;
+  color: #637786;
+  white-space: nowrap;
 }
 .r6-memory .map-inspector .wb-detail-actions button {
   min-height: 36px;

@@ -5,6 +5,7 @@ Agent Memory - 配置管理
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
@@ -841,6 +842,9 @@ class GraphStoreConfig:
     username: str = None  # Neo4j/Memgraph 用户名
     password: str = None  # Neo4j/Memgraph 密码
     database: str = None  # Neo4j 数据库名
+    # Kuzu 内存上限。Kuzu 默认 buffer pool ≈ 物理内存的 80%，嵌入式记忆图用不到。
+    buffer_pool_mb: int = None  # env: MEMORY_GRAPH_BUFFER_POOL_MB，默认 512；0 = Kuzu 默认
+    max_threads: int = None     # env: MEMORY_GRAPH_MAX_THREADS，默认 4；0 = Kuzu 默认（全部核）
 
     # ── 记忆关系图（pro 模式）──
     # 写侧：把 L2_FACT 投影进图并建 RELATED_TO / TAGGED_WITH 边
@@ -916,6 +920,10 @@ class GraphStoreConfig:
             )
         if self.database is None:
             self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        if self.buffer_pool_mb is None:
+            self.buffer_pool_mb = _get_env_int("MEMORY_GRAPH_BUFFER_POOL_MB", 512)
+        if self.max_threads is None:
+            self.max_threads = _get_env_int("MEMORY_GRAPH_MAX_THREADS", 4)
 
         # ── 记忆关系图参数（默认值见 docs/pro_graph_design.md）──
         if self.memory_graph_write is None:
@@ -1151,6 +1159,37 @@ class HistoryConfig:
 
 
 @dataclass
+class BusinessStoreConfig:
+    """Working/coding authoritative data; independent of vector and audit stores."""
+
+    backend: str = None  # sqlite (default) | postgres
+    postgres_dsn: Optional[str] = field(default=None, repr=False)
+    postgres_schema: str = None
+    connect_timeout: int = None
+
+    def __post_init__(self):
+        if self.backend is None:
+            self.backend = os.getenv("MEMORY_BUSINESS_STORE", "sqlite")
+        if self.postgres_dsn is None:
+            self.postgres_dsn = os.getenv("MEMORY_POSTGRES_DSN")
+        if self.postgres_schema is None:
+            self.postgres_schema = os.getenv("MEMORY_POSTGRES_SCHEMA", "hy_memory")
+        if self.connect_timeout is None:
+            self.connect_timeout = _get_env_int("MEMORY_POSTGRES_CONNECT_TIMEOUT", 10)
+        self.validate()
+
+    def validate(self) -> None:
+        # Revalidate at the factory too: from_dict and callers can mutate config.
+        self.backend = str(self.backend).strip().lower()
+        if self.backend not in ("sqlite", "postgres"):
+            raise ValueError("business_store.backend must be sqlite / postgres")
+        if not re.fullmatch(r"[a-z_][a-z0-9_]{0,47}", str(self.postgres_schema)):
+            raise ValueError("postgres_schema must be a lowercase SQL identifier (1-48 characters)")
+        if not isinstance(self.connect_timeout, int) or self.connect_timeout <= 0:
+            raise ValueError("business_store.connect_timeout must be a positive integer")
+
+
+@dataclass
 class CodingConfig:
     """
     Coding Memory 配置（生产力 / 编码场景独立链路）
@@ -1280,6 +1319,7 @@ class MemoryConfig:
     pipeline: PipelineRouteConfig = field(default_factory=PipelineRouteConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     coding: CodingConfig = field(default_factory=CodingConfig)
+    business_store: BusinessStoreConfig = field(default_factory=BusinessStoreConfig)
     basic_profile: BasicProfileConfig = field(default_factory=BasicProfileConfig)
 
     # 全局配置
@@ -1336,6 +1376,7 @@ class MemoryConfig:
             "pipeline",
             "history",
             "coding",
+            "business_store",
         ]
         for section in _sections:
             if section in config_dict:
@@ -1343,6 +1384,8 @@ class MemoryConfig:
                 for key, value in config_dict[section].items():
                     if hasattr(sub, key):
                         setattr(sub, key, value)
+
+        config.business_store.validate()
 
         # basic_profile: fields 是 Dict[str, str]，整体替换（非空时）
         if "basic_profile" in config_dict:
@@ -1383,6 +1426,11 @@ class MemoryConfig:
                 "db_path": self.graph_store.db_path,
                 "url": self.graph_store.url,
                 "database": self.graph_store.database,
+            },
+            "business_store": {
+                "backend": self.business_store.backend,
+                "postgres_schema": self.business_store.postgres_schema,
+                "connect_timeout": self.business_store.connect_timeout,
             },
             "cache": {
                 "backend": self.cache.backend,

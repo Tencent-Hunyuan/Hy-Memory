@@ -9,6 +9,7 @@
  * makes it live. The CLI shows the plan, asks, starts the job and follows it.
  */
 
+import { isBareNotFound } from "@one-memory/operations";
 import type { CoreReader } from "./core-client.js";
 import type {
   CoreDeleteOperations,
@@ -387,7 +388,11 @@ async function requestPlan(
   }
   if (outcome.state === "rejected") {
     // A Core before the registry has no plan route: activation as before.
-    if (outcome.http_status === 404 && outcome.code === "http_404") {
+    if (
+      outcome.http_status === 404 &&
+      outcome.code === "http_404" &&
+      isBareNotFound(outcome.body)
+    ) {
       return { state: "unsupported" };
     }
     const plan = parsePlan(record(outcome.body)?.plan);

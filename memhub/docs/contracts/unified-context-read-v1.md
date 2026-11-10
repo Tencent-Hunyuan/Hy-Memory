@@ -18,9 +18,10 @@ revision or Evidence fields.
   No caller user/workspace/installation/permission fields. Unknown fields reject.
 - Envelope remains existing broker identity and existing underlying tools. At
   least one requested path must be authorized. Raw needs om_conversations plus
-  all-apps and source grants; memory needs om_recall plus an existing all-apps or
-  workspace scope. Source scopes alone never authorize arbitrary memories.
-- Explicit raw source filter outside current allowed sources is 403. A missing
+  all-apps and reads every connected, unrevoked source; memory needs om_recall
+  plus an existing all-apps or workspace scope. Source scopes alone never
+  authorize arbitrary memories or original conversations.
+- Explicit raw source filter outside currently connected sources is 403. A missing
   optional lane is not_authorized without querying it. No legal requested lane
   means 403. Invalid external envelope/changed installation must reject wholesale.
 - Local authenticated calls may read the existing local data instance; they do

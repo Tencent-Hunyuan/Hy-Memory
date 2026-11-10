@@ -1,5 +1,5 @@
-import type { ModelProfile } from "@one-memory/contracts";
-import { Download, RefreshCw } from "lucide-react";
+import type { MemoryPipelineMode, ModelProfile } from "@one-memory/contracts";
+import { Download } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -12,9 +12,16 @@ import { getModelProfiles, setSedimentation } from "./api";
 import { ConnectionFallback } from "./ConnectionFallback";
 import { exportDiagnosticsFile } from "./diagnostics-export";
 import { LanguageSelector } from "./LanguageSelector";
-import { ModelSettings, type ModelSettingsActions } from "./ModelSettings";
+import { MemoryModeSettings } from "./MemoryModeSettings";
+import {
+  ModelSettings,
+  type ModelSettingsActions,
+  type ModelSettingsFocusSection,
+} from "./ModelSettings";
+import { MODE_TIER, modeDisplayName } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button, R6Switch } from "./R6Controls";
+import { R6StateRecovery } from "./R6StateRecovery";
 import {
   refreshLoginPreference,
   setLoginPreference,
@@ -27,14 +34,9 @@ import {
 } from "./sedimentation-state";
 import "./r6-settings.css";
 
-type Group = "model" | "connections" | "help";
+type Group = "language" | "mode" | "models" | "connections" | "help";
 
-const labels: Record<Group, string> = {
-  model: "模型",
-  connections: "连接其他应用",
-  help: "帮助与诊断",
-};
-const primaryGroups: Group[] = ["model", "connections"];
+const primaryGroups: Group[] = ["language", "mode", "models", "connections"];
 
 function safeEndpoint(value: string | null) {
   if (!value) return "本机 / 受管端点";
@@ -61,12 +63,26 @@ export function R6Settings({
   const groups = showDiagnostics
     ? [...primaryGroups, "help" as const]
     : primaryGroups;
-  const [group, setGroup] = useState<Group>("model");
+  const groupLabel = (key: Group) => {
+    if (key === "language") return t("languageTitle");
+    if (key === "mode") return text("记忆模式");
+    if (key === "models") return text("模型配置");
+    if (key === "connections") return text("连接其他应用");
+    return text("帮助与诊断");
+  };
+  const [group, setGroup] = useState<Group>("mode");
   const [profiles, setProfiles] = useState<ModelProfile[] | null>(null);
   const [modelError, setModelError] = useState(false);
   const [configurationRefusal, setConfigurationRefusal] = useState(false);
+  const [modeHandoffMessage, setModeHandoffMessage] = useState("");
   const [modelVersion, setModelVersion] = useState(0);
   const [configurationOpen, setConfigurationOpen] = useState(false);
+  const [configurationFocus, setConfigurationFocus] =
+    useState<ModelSettingsFocusSection>("generation");
+  const [configurationRequest, setConfigurationRequest] = useState(0);
+  const [memoryMode, setMemoryModeState] = useState<MemoryPipelineMode | null>(
+    null,
+  );
   const [quitOpen, setQuitOpen] = useState(false);
   const [quitting, setQuitting] = useState(false);
   const [quitError, setQuitError] = useState("");
@@ -87,6 +103,10 @@ export function R6Settings({
   const [sedimentationUnavailable, setSedimentationUnavailable] =
     useState(false);
   const modelActions = useRef<ModelSettingsActions>(null);
+  const configurationStarted = useRef(false);
+  const configurationStartedFocus = useRef<ModelSettingsFocusSection | null>(
+    null,
+  );
   const quitPanel = useRef<HTMLElement>(null);
   const quitOpener = useRef<HTMLElement | null>(null);
   const currentModel = profiles?.find((profile) => profile.is_active) ?? null;
@@ -122,9 +142,8 @@ export function R6Settings({
   // biome-ignore lint/correctness/useExhaustiveDependencies: modelVersion is the explicit refresh trigger.
   useEffect(() => {
     if (!active) return;
-    if (group !== "model") return;
     void readModels();
-  }, [active, group, modelVersion, readModels]);
+  }, [active, modelVersion, readModels]);
 
   const readSedimentation = useCallback(async () => {
     try {
@@ -139,7 +158,7 @@ export function R6Settings({
 
   useEffect(() => {
     if (!active) return;
-    if (group !== "model") return;
+    if (group !== "models") return;
     void readSedimentation();
   }, [active, group, readSedimentation]);
 
@@ -208,18 +227,52 @@ export function R6Settings({
     }
   }
 
-  function openConfiguration() {
+  function openConfiguration(
+    focusSection: ModelSettingsFocusSection = "generation",
+  ) {
+    if (
+      configurationStarted.current &&
+      configurationStartedFocus.current === focusSection
+    ) {
+      setConfigurationFocus(focusSection);
+      setConfigurationOpen(true);
+      return;
+    }
     setConfigurationRefusal(false);
+    setConfigurationFocus(focusSection);
+    configurationStarted.current = true;
+    configurationStartedFocus.current = focusSection;
+    setConfigurationOpen(true);
+    setConfigurationRequest((value) => value + 1);
+  }
+
+  // The focused editor can move between the two lanes. Fill it only after
+  // React has mounted it in the requested lane, otherwise an edit sent to the
+  // old lane would be lost during the move.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: configurationRequest is the explicit intent trigger.
+  useEffect(() => {
+    if (!configurationOpen || configurationRequest === 0) return;
     const opened = currentModel
       ? modelActions.current?.editProfile(currentModel)
       : modelActions.current?.add();
-    // The area opens even when the editor refuses: the only recovery entry
-    // lives inside it, and hiding both is what locked people out of their own
-    // settings. They needed the form open to reach “核对测试结果”, and that
-    // button to clear the pending record that kept the form shut. The fence
-    // itself is untouched (see ModelSettings): refusing still returns false.
-    setConfigurationOpen(true);
+    // The area stays open even when the editor refuses: its recovery entry is
+    // the only way to reconcile the pending operation.
     if (!opened) setConfigurationRefusal(true);
+  }, [configurationRequest]);
+
+  function toggleConfiguration(focusSection: ModelSettingsFocusSection) {
+    if (configurationOpen && configurationFocus === focusSection) {
+      setConfigurationOpen(false);
+      return;
+    }
+    openConfiguration(focusSection);
+  }
+
+  function completeConfiguration() {
+    configurationStarted.current = false;
+    configurationStartedFocus.current = null;
+    setConfigurationRefusal(false);
+    setConfigurationOpen(false);
   }
 
   async function quitApplication() {
@@ -268,7 +321,6 @@ export function R6Settings({
   return (
     <section className="r6-settings" aria-label={t("settings")}>
       <h1>{t("settings")}</h1>
-      <LanguageSelector />
       <div className="r6-settings-layout">
         <nav aria-label={text("设置分组")}>
           {groups.map((key) => (
@@ -279,120 +331,295 @@ export function R6Settings({
               aria-controls={`${id}-panel-${key}`}
               aria-current={group === key ? "page" : undefined}
               onKeyDown={moveGroupFocus}
-              onClick={() => setGroup(key)}
+              onClick={() => {
+                setModeHandoffMessage("");
+                setGroup(key);
+              }}
             >
-              {text(labels[key])}
+              {groupLabel(key)}
             </button>
           ))}
         </nav>
         <div className="r6-settings-content">
           <section
-            id={`${id}-panel-model`}
-            aria-labelledby={`${id}-nav-model`}
-            hidden={group !== "model"}
+            id={`${id}-panel-language`}
+            aria-labelledby={`${id}-nav-language`}
+            hidden={group !== "language"}
+            className="r6-settings-language"
+          >
+            <LanguageSelector />
+          </section>
+          <section
+            id={`${id}-panel-mode`}
+            aria-labelledby={`${id}-nav-mode`}
+            hidden={group !== "mode"}
+            className="r6-settings-mode"
+          >
+            <MemoryModeSettings
+              hasActiveModel={currentModel !== null}
+              modelStateKnown={profiles !== null && !modelError}
+              onConfigureModel={(message) => {
+                setModeHandoffMessage(message ?? "");
+                setGroup("models");
+                openConfiguration("generation");
+                window.setTimeout(() => {
+                  document.getElementById(`${id}-model-title`)?.focus();
+                }, 0);
+              }}
+              onModeChange={setMemoryModeState}
+            />
+          </section>
+          <section
+            id={`${id}-panel-models`}
+            aria-labelledby={`${id}-nav-models`}
+            hidden={group !== "models"}
             className="r6-settings-model"
           >
-            <h2>{text("记忆模型")}</h2>
-            <div className="r6-model-overview">
-              <p className="r6-model-caption">{text("当前模型")}</p>
-              <h3 className="r6-current-model">
-                {currentModel?.name ??
-                  text(
-                    profiles === null
-                      ? "正在读取模型…"
-                      : modelError
-                        ? "模型状态暂不可读"
-                        : "尚未配置模型",
-                  )}
-              </h3>
-              {currentModel && (
-                <p className="r6-model-state">
-                  {currentModel.model} ·{" "}
-                  {text(safeEndpoint(currentModel.base_url))}
-                </p>
-              )}
-              <div className="r6-model-actions">
-                <R6Button
-                  variant="primary"
-                  disabled={profiles === null}
-                  onClick={openConfiguration}
+            <div className="r6-model-heading">
+              <div>
+                <h2
+                  id={`${id}-model-title`}
+                  className="r6-model-title"
+                  tabIndex={-1}
                 >
-                  {text(currentModel ? "修改模型" : "配置模型")}
-                </R6Button>
-                <R6Button
-                  variant="quiet"
-                  aria-label={text("刷新模型状态")}
-                  title={text("刷新模型状态")}
-                  onClick={() => setModelVersion((value) => value + 1)}
-                >
-                  <RefreshCw size={16} aria-hidden="true" />
-                </R6Button>
+                  {text("模型配置")}
+                </h2>
+                <p>{text("分别管理记忆整理与搜索所使用的模型。")}</p>
               </div>
-              {modelError && (
-                <p role="alert" className="r6-settings-error">
-                  {text(
-                    profiles === null
-                      ? "模型状态未能读取，请重试。"
-                      : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
-                  )}
-                </p>
-              )}
-              {configurationRefusal && (
-                <p role="alert" className="r6-settings-error">
-                  {text(
-                    "上次模型测试或创建还待核对，配置暂时不能改动。请先在下方模型配置区核对结果； 现有配置和原文不会被改动。",
-                  )}
-                </p>
-              )}
-              {currentModel && (
-                <div className="r6-setting-row">
-                  <div>
-                    <h3>{text("用模型沉淀记忆")}</h3>
-                    <p>
-                      {text(
-                        "开启后，导入和同步到本机的会话会交给当前模型整理成记忆，会产生模型调用。 停止后不再调用模型、不再整理记忆，但会话仍会照常导入和保存；已排队的内容会留着，重新开启后继续。 模型配置始终保留，重新开启不需要重新填写。",
-                      )}
-                    </p>
-                  </div>
-                  <R6Switch
-                    label={text("用模型沉淀记忆")}
-                    checked={sedimentation === true}
-                    disabled={
-                      sedimentation === null ||
-                      sedimentationPending ||
-                      sedimentationUnavailable
-                    }
-                    onCheckedChange={(enabled) =>
-                      void changeSedimentation(enabled)
-                    }
-                  />
-                </div>
-              )}
-              {sedimentationError && (
-                <p role="alert" className="r6-settings-error">
-                  {text(sedimentationError)}
-                </p>
-              )}
-              {sedimentationUnavailable && (
-                <p role="alert" className="r6-settings-error">
-                  {text(
-                    "当前安装还不能读取这个开关，请确认后台服务已启动后重试。",
-                  )}
-                </p>
-              )}
             </div>
-            <section
-              className="r6-model-owner"
-              hidden={!configurationOpen}
-              aria-label={text("模型配置表单")}
-            >
-              <ModelSettings
-                compactSingle
-                controlsRef={modelActions}
-                onProfilesChanged={() => setModelVersion((value) => value + 1)}
-                onSetupComplete={() => setConfigurationOpen(false)}
+            {modeHandoffMessage ? (
+              <p className="r6-settings-note" role="status">
+                {text(modeHandoffMessage)}
+              </p>
+            ) : null}
+            {currentModel && (
+              <div className="r6-model-mode-status" role="status">
+                <strong>
+                  {memoryMode ? (
+                    <>
+                      {modeDisplayName(text, memoryMode)}
+                      <span className="r6-model-mode-tier">
+                        {" "}
+                        · {MODE_TIER[memoryMode]}
+                      </span>
+                    </>
+                  ) : (
+                    text("正在读取记忆模式…")
+                  )}
+                </strong>
+                <p>
+                  {text(
+                    memoryMode === "lite"
+                      ? "模型配置已保留，但当前不会用于沉淀记忆。开启 pro 或 ultra 后，模型将生效并开始整理新对话。"
+                      : memoryMode === "pro" || memoryMode === "ultra"
+                        ? sedimentation === null
+                          ? "正在确认模型沉淀状态，模型配置和已有记忆不会受影响。"
+                          : sedimentation === false
+                            ? "当前模式支持模型沉淀，但模型整理已暂停；重新开启后会继续处理保留的任务。"
+                            : "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。"
+                        : "模型配置已保留，确认记忆模式后会显示是否生效。",
+                  )}
+                </p>
+              </div>
+            )}
+            <div className="r6-model-overview">
+              <section
+                className="r6-model-lane"
+                data-expanded={
+                  configurationOpen && configurationFocus === "generation"
+                    ? "true"
+                    : undefined
+                }
+              >
+                <div className="r6-model-lane-header">
+                  <div className="r6-model-lane-copy">
+                    <h3>{text("记忆整理")}</h3>
+                    <p>{text("把会话理解并整理成可长期使用的记忆。")}</p>
+                    <strong>
+                      {currentModel?.name ??
+                        text(
+                          profiles === null
+                            ? "正在读取模型…"
+                            : modelError
+                              ? "模型状态暂不可读"
+                              : "尚未配置模型",
+                        )}
+                    </strong>
+                    {currentModel && (
+                      <small>
+                        LLM · {currentModel.model} ·{" "}
+                        {text(safeEndpoint(currentModel.base_url))}
+                      </small>
+                    )}
+                  </div>
+                  <R6Button
+                    variant="quiet"
+                    disabled={profiles === null}
+                    aria-expanded={
+                      configurationOpen && configurationFocus === "generation"
+                    }
+                    aria-controls={
+                      configurationFocus === "generation"
+                        ? `${id}-generation-configuration`
+                        : undefined
+                    }
+                    onClick={() => toggleConfiguration("generation")}
+                  >
+                    {configurationOpen && configurationFocus === "generation"
+                      ? t("wb.collapse")
+                      : text(currentModel ? "配置" : "配置模型")}
+                  </R6Button>
+                </div>
+                {configurationFocus === "generation" && (
+                  <section
+                    id={`${id}-generation-configuration`}
+                    className="r6-model-owner"
+                    hidden={!configurationOpen}
+                    aria-label={text("模型配置表单")}
+                  >
+                    {configurationRefusal && (
+                      <p role="alert" className="r6-settings-error">
+                        {text(
+                          "上次模型测试或创建还待核对，配置暂时不能改动。请先在下方模型配置区核对结果； 现有配置和原文不会被改动。",
+                        )}
+                      </p>
+                    )}
+                    <ModelSettings
+                      compactSingle
+                      focusSection={configurationFocus}
+                      controlsRef={modelActions}
+                      onProfilesChanged={() =>
+                        setModelVersion((value) => value + 1)
+                      }
+                      onSetupComplete={completeConfiguration}
+                    />
+                  </section>
+                )}
+              </section>
+              <section
+                className="r6-model-lane"
+                data-expanded={
+                  configurationOpen && configurationFocus === "embedding"
+                    ? "true"
+                    : undefined
+                }
+              >
+                <div className="r6-model-lane-header">
+                  <div className="r6-model-lane-copy">
+                    <h3>{text("记忆搜索")}</h3>
+                    <p>{text("在需要时找到与你的问题最相关的记忆。")}</p>
+                    <strong>
+                      {text(
+                        currentModel?.embedding_provider_kind &&
+                          currentModel.embedding_provider_kind !==
+                            "local_onnx" &&
+                          currentModel.embedding_model
+                          ? currentModel.embedding_model
+                          : "本地内置（推荐）",
+                      )}
+                    </strong>
+                    <small>
+                      {text(
+                        currentModel?.embedding_provider_kind &&
+                          currentModel.embedding_provider_kind !== "local_onnx"
+                          ? `Embedding · ${currentModel.embedding_provider_kind}`
+                          : profiles !== null && !currentModel
+                            ? "Embedding · 配置记忆整理后可自定义"
+                            : "Embedding · 本机处理，无需额外配置",
+                      )}
+                    </small>
+                  </div>
+                  <R6Button
+                    variant="quiet"
+                    disabled={profiles === null || !currentModel}
+                    aria-expanded={
+                      configurationOpen && configurationFocus === "embedding"
+                    }
+                    aria-controls={
+                      configurationFocus === "embedding"
+                        ? `${id}-embedding-configuration`
+                        : undefined
+                    }
+                    onClick={() => toggleConfiguration("embedding")}
+                  >
+                    {configurationOpen && configurationFocus === "embedding"
+                      ? t("wb.collapse")
+                      : text("配置")}
+                  </R6Button>
+                </div>
+                {configurationFocus === "embedding" && (
+                  <section
+                    id={`${id}-embedding-configuration`}
+                    className="r6-model-owner"
+                    hidden={!configurationOpen}
+                    aria-label={text("模型配置表单")}
+                  >
+                    {configurationRefusal && (
+                      <p role="alert" className="r6-settings-error">
+                        {text(
+                          "上次模型测试或创建还待核对，配置暂时不能改动。请先在下方模型配置区核对结果； 现有配置和原文不会被改动。",
+                        )}
+                      </p>
+                    )}
+                    <ModelSettings
+                      compactSingle
+                      focusSection={configurationFocus}
+                      controlsRef={modelActions}
+                      onProfilesChanged={() =>
+                        setModelVersion((value) => value + 1)
+                      }
+                      onSetupComplete={completeConfiguration}
+                    />
+                  </section>
+                )}
+              </section>
+            </div>
+            {modelError && (
+              <R6StateRecovery
+                message={text(
+                  profiles === null
+                    ? "模型状态未能读取，请重试。"
+                    : "模型状态刷新未成功，仍显示上次确认的模型状态；请重试。",
+                )}
+                onRetry={() => setModelVersion((value) => value + 1)}
               />
-            </section>
+            )}
+            {currentModel && memoryMode !== "lite" && (
+              <div className="r6-setting-row">
+                <div>
+                  <h3>{text("用模型沉淀记忆")}</h3>
+                  <p>
+                    {text(
+                      "开启后，导入和同步到本机的会话会交给当前模型整理成记忆，会产生模型调用。 停止后不再调用模型、不再整理记忆，但会话仍会照常导入和保存；已排队的内容会留着，重新开启后继续。 模型配置始终保留，重新开启不需要重新填写。",
+                    )}
+                  </p>
+                </div>
+                <R6Switch
+                  label={text("用模型沉淀记忆")}
+                  checked={sedimentation === true}
+                  disabled={
+                    sedimentation === null ||
+                    sedimentationPending ||
+                    sedimentationUnavailable
+                  }
+                  onCheckedChange={(enabled) =>
+                    void changeSedimentation(enabled)
+                  }
+                />
+              </div>
+            )}
+            {sedimentationError && (
+              <p role="alert" className="r6-settings-error">
+                {text(sedimentationError)}
+              </p>
+            )}
+            {sedimentationUnavailable && (
+              <p role="alert" className="r6-settings-error">
+                {text(
+                  "当前安装还不能读取这个开关，请确认后台服务已启动后重试。",
+                )}
+              </p>
+            )}
           </section>
           <section
             id={`${id}-panel-connections`}

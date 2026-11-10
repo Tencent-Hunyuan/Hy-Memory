@@ -735,6 +735,76 @@ describe("diagnostic log", () => {
     expect(all).not.toContain("/Users/");
   });
 
+  it("optionally includes every regular file from the local logs directory", async () => {
+    const dataDir = await root();
+    const outputDir = await root();
+    const logs = path.join(dataDir, "logs");
+    await mkdir(logs, { recursive: true });
+    await writeFile(
+      path.join(logs, "diagnostic-core.jsonl"),
+      `${JSON.stringify({
+        schema_version: 1,
+        timestamp: "2026-10-05T01:00:00.000Z",
+        level: "error",
+        service: "core",
+        component: "core.database",
+        event: "database.error",
+        outcome: "failed",
+        session_id: "11111111-1111-4111-8111-111111111111",
+        error_code: "database_locked",
+      })}\n`,
+    );
+    await writeFile(
+      path.join(logs, "core.log"),
+      "raw private conversation and full local path\n",
+    );
+    await writeFile(path.join(logs, "service-error.log.1"), "rotated error\n");
+    await writeFile(path.join(logs, ".hidden log"), "hidden diagnostic\n");
+    await writeFile(path.join(logs, "服务 日志.log"), "unicode diagnostic\n");
+    await writeFile(path.join(logs, "empty.log"), "");
+    await writeFile(
+      path.join(logs, "large.log"),
+      Buffer.alloc(256 * 1024, 120),
+    );
+    const outside = path.join(await root(), "outside.log");
+    await writeFile(outside, "must not be followed\n");
+    await symlink(outside, path.join(logs, "linked.log"));
+    const target = path.join(outputDir, "MemHub.zip");
+
+    const result = await exportDiagnosticZip({
+      dataDir,
+      target,
+      productVersion: "3800",
+      includeRawLogs: true,
+    });
+
+    expect(result).toEqual({ filename: "MemHub.zip", file_count: 10 });
+    const files = unzipSync(await readFile(target));
+    expect(Object.keys(files).sort()).toEqual([
+      "README.txt",
+      "diagnostics/events.jsonl",
+      "logs/.hidden log",
+      "logs/core.log",
+      "logs/diagnostic-core.jsonl",
+      "logs/empty.log",
+      "logs/large.log",
+      "logs/service-error.log.1",
+      "logs/服务 日志.log",
+      "summary.json",
+    ]);
+    expect(strFromU8(files["logs/core.log"] ?? new Uint8Array())).toContain(
+      "raw private conversation",
+    );
+    expect(strFromU8(files["README.txt"] ?? new Uint8Array())).toContain(
+      "原始日志可能包含会话正文",
+    );
+    expect(files["logs/linked.log"]).toBeUndefined();
+    expect(files["logs/empty.log"]).toHaveLength(0);
+    expect(files["logs/large.log"]).toHaveLength(256 * 1024);
+    if (process.platform !== "win32")
+      expect((await lstat(target)).mode & 0o777).toBe(0o600);
+  });
+
   it("fails closed without publishing a ZIP when a diagnostic line is invalid", async () => {
     const dataDir = await root();
     await mkdir(path.join(dataDir, "logs"), { recursive: true });

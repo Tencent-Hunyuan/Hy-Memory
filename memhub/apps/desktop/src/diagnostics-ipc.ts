@@ -196,6 +196,7 @@ export function resolveDiagnosticBuildIdentity(options: {
 
 export async function exportDesktopDiagnostics(
   options: DiagnosticExportOptions,
+  exportOptions: { includeRawLogs?: boolean } = {},
 ) {
   const build = options.buildNumber ?? options.productVersion;
   const target = path.join(
@@ -209,6 +210,7 @@ export async function exportDesktopDiagnostics(
     dataDir: options.dataDir,
     target,
     productVersion: build,
+    includeRawLogs: exportOptions.includeRawLogs === true,
     ...(options.commit === undefined ? {} : { commit: options.commit }),
     ...(options.coreSha256 === undefined
       ? {}
@@ -644,7 +646,7 @@ export function installDiagnosticsIpc(
   options.ipc.handle(EXPORT, async (event, ...args) => {
     if (args.length) throw new Error("diagnostic_arguments_rejected");
     options.requireTrustedWindow(event);
-    return exportDesktopDiagnostics(options);
+    return exportDesktopDiagnostics(options, { includeRawLogs: true });
   });
 
   return () => {

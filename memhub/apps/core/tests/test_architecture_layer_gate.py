@@ -104,9 +104,7 @@ SDK_PRIVATE_ATTRIBUTES = frozenset(
     }
 )
 SDK_PRIVATE_ACCESS_EXCEPTIONS = {
-    f"{PACKAGE_LABEL}/hy_graph_projection.py": frozenset(
-        {"_graph_store", "_loop_thread", "_run"}
-    ),
+    f"{PACKAGE_LABEL}/hy_graph_projection.py": frozenset({"_graph_store", "_loop_thread", "_run"}),
     # Startup migration runs while Runtime writers are stopped. It is the one
     # non-runtime path allowed to manipulate SDK storage directly so that
     # migration-only mechanics never become public HyMemoryClient methods.
@@ -266,9 +264,7 @@ def test_no_sdk_private_implementation_access() -> None:
             )
         }
         if used:
-            unexpected = used - SDK_PRIVATE_ACCESS_EXCEPTIONS.get(
-                relative, frozenset()
-            )
+            unexpected = used - SDK_PRIVATE_ACCESS_EXCEPTIONS.get(relative, frozenset())
             if unexpected:
                 offenders.append(f"{relative}: {sorted(unexpected)}")
     assert not offenders, (
@@ -291,9 +287,7 @@ def test_sdk_modules_import_only_the_public_package_root() -> None:
             ):
                 offenders.append(relative)
                 break
-            if isinstance(node, ast.ImportFrom) and (
-                node.module or ""
-            ).startswith("hy_memory."):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("hy_memory."):
                 offenders.append(relative)
                 break
             if (

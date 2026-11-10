@@ -287,6 +287,38 @@ class TestExtractor:
             await ext.extract(_msgs(), user_id="u1")
         assert exc.value.error_code == "JSON_PARSE_FAILED"
 
+    async def test_truncated_reply_raises_output_truncated(self):
+        """截断（finish_reason=length）与解析失败分开报：预算不够 ≠ 输出坏。"""
+        llm = MockLLMProvider({
+            "content": '{"experiences": [{"task": "fix timeout bug", "solu',
+            "finish_reason": "length",
+        })
+        ext = CodingMemoryExtractor(llm)
+        with pytest.raises(CodingWriteError) as exc:
+            await ext.extract(_msgs(), user_id="u1")
+        assert exc.value.error_code == "OUTPUT_TRUNCATED"
+
+    async def test_unparseable_reply_with_stop_keeps_json_parse_failed(self):
+        """同样的坏输出但没有截断：仍是 JSON_PARSE_FAILED（回归守护）。"""
+        llm = MockLLMProvider({
+            "content": '{"experiences": [{"task": "fix timeout bug", "solu',
+            "finish_reason": "stop",
+        })
+        ext = CodingMemoryExtractor(llm)
+        with pytest.raises(CodingWriteError) as exc:
+            await ext.extract(_msgs(), user_id="u1")
+        assert exc.value.error_code == "JSON_PARSE_FAILED"
+
+    async def test_truncated_flag_with_complete_json_still_succeeds(self):
+        """finish_reason=length 但 JSON 完整可解析：不是失败。"""
+        llm = MockLLMProvider({
+            "content": '{"experiences": [], "fact": null}',
+            "finish_reason": "length",
+        })
+        ext = CodingMemoryExtractor(llm)
+        drafts, facts = await ext.extract(_msgs(), user_id="u1")
+        assert drafts == [] and facts == []
+
     async def test_model_answered_nothing_to_remember_is_not_an_error(self):
         """模型答了 {} / 空列表：正常的空抽取，不是失败。"""
         for reply in ("{}", _llm_resp([]), _llm_resp([], None)):

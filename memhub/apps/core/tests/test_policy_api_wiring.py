@@ -189,7 +189,11 @@ def test_first_import_gate_waits_for_every_selected_history_job() -> None:
     app = SimpleNamespace(
         state=SimpleNamespace(
             onboarding_store=SimpleNamespace(get=lambda: state),
-            import_job_store=SimpleNamespace(list_jobs=lambda: jobs),
+            import_job_store=SimpleNamespace(
+                find_jobs=lambda *, user_id, operation: [
+                    job for job in jobs if job.user_id == user_id and job.operation == operation
+                ]
+            ),
         )
     )
 

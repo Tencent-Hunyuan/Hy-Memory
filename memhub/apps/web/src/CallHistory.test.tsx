@@ -159,7 +159,9 @@ it("traduce el historial en vivo sin cambiar nombres ni contenido importado", as
   expect(
     screen.getByRole("heading", { name: "Historial de uso" }),
   ).toBeTruthy();
-  expect(first.textContent).toBe("Cursor encontró 3 contenidos relacionados");
+  expect(first.textContent).toBe(
+    "Cursor encontró 1 memoria · 2 conversaciones originales",
+  );
   fireEvent.click(first);
   expect(
     screen.getByRole("heading", { name: "Esta consulta de memorias" }),
@@ -364,7 +366,7 @@ it("shows exact identity, timestamp, result counts and metadata-only references"
   ).toBeTruthy();
   expect(
     within(detail).getByText((value) =>
-      value.includes("Cursor 查到 3 条相关内容"),
+      value.includes("Cursor 找到 1 条记忆 · 2 条原始会话"),
     ),
   ).toBeTruthy();
   expect(within(detail).getAllByText("source-1").length).toBeGreaterThan(0);
@@ -465,13 +467,9 @@ it("keeps detail bound to event ID across refresh reordering, then removes missi
 });
 
 it.each([
-  ["grounded", "查询成功", "直接调用（诊断） 查到 0 条相关内容"],
+  ["grounded", "查询成功", "直接调用（诊断） 调用已完成"],
   ["empty", "查询成功，没有找到相关记忆", "直接调用（诊断） 没有查到相关记忆"],
-  [
-    "partial",
-    "查询成功，部分内容还在整理中",
-    "直接调用（诊断） 查到 0 条相关内容",
-  ],
+  ["partial", "查询成功，部分内容还在整理中", "直接调用（诊断） 调用已完成"],
   [
     "timed_out",
     "查询超时，没有提供记忆",
@@ -546,11 +544,13 @@ it.each(["om_recall", "om_conversations", "om_ask", "om_matters"] as const)(
     mount();
     expect(
       await screen.findByRole("button", {
-        name: "Cursor 查到 3 条相关内容",
+        name: "Cursor 找到 1 条记忆 · 2 条原始会话",
       }),
     ).toBeTruthy();
     fireEvent.click(
-      screen.getByRole("button", { name: "Cursor 查到 3 条相关内容" }),
+      screen.getByRole("button", {
+        name: "Cursor 找到 1 条记忆 · 2 条原始会话",
+      }),
     );
     expect(
       within(screen.getByRole("article")).getByText("查记忆"),

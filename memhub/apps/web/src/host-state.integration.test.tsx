@@ -27,7 +27,9 @@ vi.mock("./call-history-client", async (original) => ({
   getCallHistory: history,
 }));
 vi.mock("./api", () => ({
+  getHomeProjection: vi.fn().mockRejectedValue(new Error("legacy core")),
   getHomeSummary: summary,
+  homeProjectionUnsupported: vi.fn().mockReturnValue(true),
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
   getSources: vi.fn().mockResolvedValue([]),

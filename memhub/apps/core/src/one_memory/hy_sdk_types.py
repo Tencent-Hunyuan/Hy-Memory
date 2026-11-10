@@ -75,6 +75,9 @@ class HySdkMemoryRecord(BaseModel):
     # Epoch seconds. `updated_at` falls back to `created_at`.
     created_at: int | None = None
     updated_at: int | None = None
+    # Actual scene=all ordering timestamp before the public fallback above.
+    # Internal-only: callers keep the existing SdkMemoryRecord wire shape.
+    sort_updated_at: int | None = Field(default=None, exclude=True, repr=False)
 
     @classmethod
     def from_sdk(cls, raw: object) -> HySdkMemoryRecord:
@@ -95,6 +98,8 @@ class HySdkMemoryRecord(BaseModel):
             if created_at is None:
                 created_at = gmt_created
             updated_at = _epoch(raw.get("updated_at"))
+            modified_at = _epoch(raw.get("gmt_modified"))
+            sort_updated_at = modified_at if modified_at is not None else updated_at
             return cls(
                 memory_id=str(raw["memory_id"]),
                 content=str(raw["content"]),
@@ -116,6 +121,7 @@ class HySdkMemoryRecord(BaseModel):
                 gmt_created=gmt_created,
                 created_at=created_at,
                 updated_at=updated_at if updated_at is not None else created_at,
+                sort_updated_at=sort_updated_at,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise HySdkReadError("hy_memory_record_shape_unknown") from error
@@ -180,6 +186,7 @@ class HySdkMemoryRecord(BaseModel):
                 solution=solution,
                 created_at=created_at,
                 updated_at=updated_at if updated_at is not None else created_at,
+                sort_updated_at=updated_at,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise HySdkReadError("hy_memory_record_shape_unknown") from error

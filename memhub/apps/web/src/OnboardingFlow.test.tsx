@@ -9,6 +9,7 @@ import type {
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -17,6 +18,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
+import {
+  confirmedMemoryModeSnapshot,
+  resetConfirmedMemoryModeForTests,
+} from "./confirmed-memory-mode";
 import { readConnectionPreferences } from "./connection-preferences";
 import { OnboardingFlow, PLUGIN_CONSENT_KEY } from "./OnboardingFlow";
 import {
@@ -25,11 +30,17 @@ import {
 } from "./use-import-sources";
 
 const completeOnboarding = vi.fn();
+const setMemoryMode = vi.fn();
+const getMemoryMode = vi.fn();
+const planMemoryMode = vi.fn();
+const putOnboardingProgress = vi.fn();
+const patchOnboardingProgress = vi.fn();
 const getModelProfiles = vi.fn();
 const getMemoryProcessing = vi.fn();
 const previewSourceDirectory = vi.fn();
 const saveSourceDirectory = vi.fn();
 const getSourceImportReceipt = vi.fn();
+let modelActive = false;
 
 vi.mock("./api", () => ({
   getHealth: vi.fn(),
@@ -42,8 +53,23 @@ vi.mock("./api", () => ({
   setSourceSync: vi.fn(),
   changeImportJob: vi.fn(),
   getImportJob: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  memoryModePlanUnsupported: vi.fn(() => false),
   apiErrorCode: vi.fn(() => null),
   completeOnboarding: (...args: unknown[]) => completeOnboarding(...args),
+  setMemoryMode: (...args: unknown[]) => setMemoryMode(...args),
+  getMemoryMode: (...args: unknown[]) => getMemoryMode(...args),
+  planMemoryMode: (...args: unknown[]) => planMemoryMode(...args),
+  putOnboardingProgress: (...args: unknown[]) => putOnboardingProgress(...args),
+  patchOnboardingProgress: (...args: unknown[]) =>
+    patchOnboardingProgress(...args),
   getModelProfiles: (...args: unknown[]) => getModelProfiles(...args),
   getMemoryProcessing: (...args: unknown[]) => getMemoryProcessing(...args),
   previewSourceDirectory: (...args: unknown[]) =>
@@ -58,20 +84,49 @@ vi.mock("./OnboardingModelController", () => ({
   OnboardingModelController: ({
     onBack,
     onSkip,
-    onEnabled,
+    onProfilePersisted,
+    onModelActiveConfirmed,
+    generationToken,
   }: {
     onBack(): void;
-    onSkip(): void;
-    onEnabled(): void;
+    onSkip?(): void;
+    onProfilePersisted(profileId: string): void;
+    onModelActiveConfirmed(token: number, profileId: string): void;
+    generationToken: number;
   }) => (
     <section aria-label="模型步骤边界">
       <button type="button" onClick={onBack}>
         返回导入
       </button>
-      <button type="button" onClick={onEnabled}>
+      <button
+        type="button"
+        onClick={() => {
+          modelActive = true;
+          getModelProfiles.mockResolvedValue([{ is_active: true }]);
+          onProfilePersisted("9be6d465-4cf2-4c72-93f7-15f3c012bc80");
+          onModelActiveConfirmed(
+            generationToken,
+            "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+          );
+        }}
+      >
         模型启用回执已确认
       </button>
-      <button type="button" onClick={onSkip}>
+      <button
+        type="button"
+        onClick={() => {
+          modelActive = true;
+          getModelProfiles.mockResolvedValue([{ is_active: true }]);
+          onProfilePersisted("8be6d465-4cf2-4c72-93f7-15f3c012bc80");
+          onModelActiveConfirmed(
+            generationToken,
+            "8be6d465-4cf2-4c72-93f7-15f3c012bc80",
+          );
+        }}
+      >
+        第二个模型启用回执已确认
+      </button>
+      <button type="button" onClick={onSkip ?? onBack}>
         跳过模型进入应用
       </button>
     </section>
@@ -83,6 +138,9 @@ const onboarding: OnboardingState = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 };
 const health = {
   status: "ok" as const,
@@ -161,7 +219,7 @@ function imports(
 
 const READ_CONSENT = "允许读取以上来源的本次历史";
 const START = "开始导入";
-const SKIP = "稍后添加，先进入";
+const SKIP = "选择记忆模式";
 async function openApps(_user?: ReturnType<typeof userEvent.setup>) {
   await waitFor(() =>
     expect(
@@ -176,8 +234,23 @@ async function skipWelcome(user?: ReturnType<typeof userEvent.setup>) {
   await openApps(user);
 }
 async function continueImport(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "配置模型，沉淀记忆" }));
+  await openModelStep(user);
   await user.click(screen.getByRole("button", { name: "模型启用回执已确认" }));
+}
+async function openModelStep(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "选择记忆模式" }));
+  await selectMode(user, /pro/i);
+  await user.click(screen.getByRole("button", { name: "配置模型" }));
+}
+async function chooseLiteAndContinue(user: ReturnType<typeof userEvent.setup>) {
+  await selectMode(user, /lite/i);
+  await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+}
+async function selectMode(
+  user: ReturnType<typeof userEvent.setup>,
+  name: RegExp,
+) {
+  await user.click(screen.getByRole("radio", { name }));
 }
 function choice(name = "Claude Code") {
   return screen.getByRole<HTMLInputElement>("checkbox", {
@@ -212,12 +285,43 @@ async function approve(user: ReturnType<typeof userEvent.setup>) {
 describe("OnboardingFlow S1.3", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    modelActive = false;
+    resetConfirmedMemoryModeForTests();
     window.localStorage.clear();
     window.oneMemory = undefined;
     completeOnboarding.mockResolvedValue({
       ...onboarding,
       status: "completed",
     });
+    setMemoryMode.mockResolvedValue({ mode: "pro" });
+    planMemoryMode.mockImplementation(async (target) => ({
+      current: "lite",
+      target,
+      effective_target: target,
+      capabilities: {},
+      effects: [],
+      warnings: [],
+      blockers:
+        target !== "lite" && !modelActive ? ["active_model_required"] : [],
+    }));
+    putOnboardingProgress.mockImplementation(
+      async (update: Partial<OnboardingState>) => ({
+        ...onboarding,
+        ...update,
+      }),
+    );
+    patchOnboardingProgress.mockImplementation(
+      async (update: Partial<OnboardingState>) => ({
+        ...onboarding,
+        ...update,
+      }),
+    );
+    getMemoryMode.mockResolvedValue({
+      mode: "pro",
+      configured_mode: "pro",
+      explicitly_configured: false,
+    });
+    getModelProfiles.mockResolvedValue([]);
   });
   afterEach(() => {
     cleanup();
@@ -325,6 +429,90 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
   });
 
+  it("keeps the import review open when a late connection result is unknown", async () => {
+    const user = userEvent.setup();
+    let rejectImport!: (reason?: unknown) => void;
+    const controller = imports({
+      connectForOnboarding: vi.fn(
+        () =>
+          new Promise<
+            Awaited<ReturnType<ImportSourcesController["connectForOnboarding"]>>
+          >((_resolve, reject) => {
+            rejectImport = reject;
+          }),
+      ),
+    });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+    expect(
+      await screen.findByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeTruthy();
+
+    await act(async () => rejectImport(new Error("response lost")));
+
+    expect(
+      screen.getByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByText("正在核对导入结果，已保存的选择不会丢失"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "把熟悉的背景，带到这里" }),
+    ).toBeNull();
+  });
+
+  it("returns to source review when Core definitely refuses the connection", async () => {
+    const user = userEvent.setup();
+    const controller = imports({
+      connectForOnboarding: vi.fn().mockRejectedValue(
+        Object.assign(new Error("source rejected"), {
+          definiteRefusal: true,
+        }),
+      ),
+    });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "把熟悉的背景，带到这里",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "本次没有来源获准导入",
+    );
+    expect(
+      screen.queryByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeNull();
+  });
+
   it("opens model setup immediately and preserves it across a late import failure", async () => {
     const user = userEvent.setup();
     let rejectImport!: (reason?: unknown) => void;
@@ -352,10 +540,10 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: START }));
 
     const continueButton = await screen.findByRole("button", {
-      name: "配置模型，沉淀记忆",
+      name: "选择记忆模式",
     });
     expect(continueButton).toHaveProperty("disabled", false);
-    await user.click(continueButton);
+    await openModelStep(user);
     const modelBoundary = screen.getByRole("region", {
       name: "模型步骤边界",
     });
@@ -365,14 +553,161 @@ describe("OnboardingFlow S1.3", () => {
       modelBoundary,
     );
     await user.click(screen.getByRole("button", { name: "返回导入" }));
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(
-        "开始导入的结果尚未确认",
+    await waitFor(() => {
+      expect(
+        screen.getByText("正在核对导入结果，已保存的选择不会丢失"),
+      ).toBeTruthy();
+    });
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
+  });
+
+  it("accepts Lite once while the import submission is still in flight", async () => {
+    const user = userEvent.setup();
+    let resolveImport!: (
+      value: Awaited<
+        ReturnType<ImportSourcesController["connectForOnboarding"]>
+      >,
+    ) => void;
+    const controller = imports({
+      connectForOnboarding: vi.fn(
+        () =>
+          new Promise<
+            Awaited<ReturnType<ImportSourcesController["connectForOnboarding"]>>
+          >((resolve) => {
+            resolveImport = resolve;
+          }),
       ),
+    });
+    const finish = vi.fn();
+    setMemoryMode.mockResolvedValueOnce({ mode: "lite" });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={finish}
+      />,
     );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+    await user.click(
+      await screen.findByRole("button", { name: "选择记忆模式" }),
+    );
+    await selectMode(user, /lite/i);
+    const enter = screen.getByRole("button", { name: "使用 Lite 进入" });
+    expect(enter).toHaveProperty("disabled", false);
+
+    await user.click(enter);
+    await user.click(enter);
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(setMemoryMode).toHaveBeenCalledExactlyOnceWith("lite");
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+
+    await act(async () =>
+      resolveImport({
+        accepted_source_ids: ["claude"],
+        failed_sources: {},
+        jobs: [],
+      }),
+    );
+    expect(finish).toHaveBeenCalledOnce();
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("shows distinct saving and completion feedback after one Lite click", async () => {
+    const user = userEvent.setup();
+    let resolveMode!: (value: { mode: "lite" }) => void;
+    let resolveCompletion!: (value: OnboardingState) => void;
+    setMemoryMode.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveMode = resolve;
+      }),
+    );
+    completeOnboarding.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    );
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /lite/i);
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     expect(
-      screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
-    ).toBeTruthy();
+      screen.getByRole("button", { name: "正在保存模式…" }),
+    ).toHaveProperty("disabled", true);
+
+    await act(async () => resolveMode({ mode: "lite" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "正在完成首次设置…" }),
+      ).toHaveProperty("disabled", true),
+    );
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () =>
+      resolveCompletion({
+        ...onboarding,
+        status: "completed",
+      }),
+    );
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+  });
+
+  it("fences duplicate Pro activation receipts while completion is pending", async () => {
+    const user = userEvent.setup();
+    let resolveCompletion!: (value: OnboardingState) => void;
+    completeOnboarding.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+    );
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    const receipt = screen.getByRole("button", {
+      name: "模型启用回执已确认",
+    });
+    fireEvent.click(receipt);
+    fireEvent.click(receipt);
+
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledOnce());
+    expect(setMemoryMode).toHaveBeenCalledExactlyOnceWith("pro");
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () =>
+      resolveCompletion({
+        ...onboarding,
+        status: "completed",
+      }),
+    );
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
   });
 
   it("D47 entering the same-page model step does not finish setup or grant processing", async () => {
@@ -388,13 +723,11 @@ describe("OnboardingFlow S1.3", () => {
         onFinish={finish}
       />,
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await openModelStep(userEvent.setup());
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
     expect(completeOnboarding).not.toHaveBeenCalled();
     expect(finish).not.toHaveBeenCalled();
-    expect(getModelProfiles).not.toHaveBeenCalled();
+    expect(getModelProfiles).toHaveBeenCalledOnce();
   });
 
   it("does not trust loaded metadata or select sources before automatic discovery resolves", async () => {
@@ -649,16 +982,14 @@ describe("OnboardingFlow S1.3", () => {
     await approve(user);
     await user.click(screen.getByRole("button", { name: START }));
     expect(onFinish).not.toHaveBeenCalled();
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await openModelStep(user);
     expect(onFinish).not.toHaveBeenCalled();
     expect(completeOnboarding).not.toHaveBeenCalled();
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
     );
     expect(onFinish).toHaveBeenCalledWith("sources");
-    expect(getModelProfiles).not.toHaveBeenCalled();
+    expect(getModelProfiles).toHaveBeenCalledOnce();
     expect(getMemoryProcessing).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("heading", { name: "配置一个模型，记忆才会生成" }),
@@ -678,13 +1009,815 @@ describe("OnboardingFlow S1.3", () => {
     );
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /lite/i);
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(completeOnboarding).toHaveBeenCalledOnce();
     expect(controller.refresh).toHaveBeenCalledOnce();
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
   });
 
-  it("allows entering the app from step three without creating a model", async () => {
+  it("shows the compact Lite and Pro mode step with contextual actions", async () => {
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
+    expect(
+      screen.getByRole("heading", {
+        name: "你希望 MemHub 如何形成记忆？",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Choose how MemHub remembers")).toBeNull();
+    expect(screen.getByText("之后可在设置中更改。")).toBeTruthy();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(screen.getByRole("radio", { name: /ultra/i })).toBeTruthy();
+    expect(screen.queryByText("推荐")).toBeNull();
+    const modeStep = screen
+      .getByRole("navigation", { name: "首次设置进度" })
+      .querySelector('[aria-current="step"]');
+    expect(modeStep?.getAttribute("aria-current")).toBe("step");
+
+    await selectMode(user, /lite/i);
+    expect(screen.getByRole("button", { name: "使用 Lite 进入" })).toBeTruthy();
+    await selectMode(user, /pro/i);
+    expect(screen.getByRole("button", { name: "配置模型" })).toBeTruthy();
+  });
+
+  it("configures Ultra scheduling before model setup and completes after activation", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getEvolveSchedule).mockResolvedValueOnce({
+      enabled: true,
+      time: "03:00",
+    });
+    vi.mocked(api.setEvolveSchedule).mockResolvedValueOnce({
+      enabled: true,
+      time: "03:00",
+    });
+    planMemoryMode.mockImplementation(async (target) => ({
+      current: "pro",
+      target,
+      effective_target: target,
+      capabilities: {
+        content_plane: "memory",
+        generation_required: target !== "lite",
+        graph_enabled: target === "ultra",
+        evolve_available: target === "ultra",
+      },
+      effects: target === "ultra" ? ["existing_memories_added_to_graph"] : [],
+      warnings: [],
+      blockers:
+        target !== "lite" && !modelActive ? ["active_model_required"] : [],
+    }));
+    setMemoryMode.mockResolvedValueOnce({ mode: "ultra" });
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const ultra = screen.getByRole("radio", { name: /ultra/i });
+    await user.click(ultra);
+    const schedule = screen.getByText("每天自动整合");
+    expect(
+      schedule.closest(".memory-mode-card")?.getAttribute("data-mode"),
+    ).toBe("ultra");
+    expect(schedule.closest("label")).toBeNull();
+    expect(ultra.getAttribute("aria-describedby")).toBe(
+      "onboarding-ultra-schedule-description",
+    );
+    expect(screen.getByText(/每天 03:00 左右自动整合/)).toBeTruthy();
+    expect(screen.getByText("后续可在设置页自定义时间或关闭。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
+    expect(putOnboardingProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode_intent: "ultra",
+        setup_step: "model",
+      }),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("ultra"));
+    expect(api.setEvolveSchedule).toHaveBeenCalledWith({
+      enabled: true,
+      time: "03:00",
+    });
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+  });
+
+  it("does not let a resumed Ultra model overwrite an unread schedule", async () => {
+    let resolveSchedule!: (value: { enabled: boolean; time: string }) => void;
+    vi.mocked(api.getEvolveSchedule).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSchedule = resolve;
+      }),
+    );
+    setMemoryMode.mockResolvedValueOnce({ mode: "ultra" });
+    vi.mocked(api.setEvolveSchedule).mockResolvedValueOnce({
+      enabled: false,
+      time: "05:30",
+    });
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={{
+          ...onboarding,
+          mode_intent: "ultra",
+          setup_step: "model",
+          model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+        }}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    expect(setMemoryMode).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("正在读取记忆模式");
+
+    await act(async () =>
+      resolveSchedule({
+        enabled: false,
+        time: "05:30",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "配置模型" })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    expect(screen.getByText(/重新开启后仍按 05:30 运行/)).toBeTruthy();
+    expect(screen.queryByText("后续可在设置页自定义时间或关闭。")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(api.setEvolveSchedule).toHaveBeenCalledWith({
+      enabled: false,
+      time: "05:30",
+    });
+  });
+
+  it("keeps Ultra selected when schedule persistence fails and retries", async () => {
+    modelActive = true;
+    getModelProfiles.mockResolvedValue([{ is_active: true }]);
+    vi.mocked(api.getEvolveSchedule).mockResolvedValueOnce({
+      enabled: true,
+      time: "03:00",
+    });
+    vi.mocked(api.setEvolveSchedule)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ enabled: true, time: "03:00" });
+    setMemoryMode.mockResolvedValue({ mode: "ultra" });
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /ultra/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "自动整合设置未能保存",
+    );
+    expect(finish).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: /ultra/i }).checked,
+    ).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(api.setEvolveSchedule).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a failed Ultra schedule read without losing the selection", async () => {
+    let resolveRetry!: (value: { enabled: boolean; time: string }) => void;
+    vi.mocked(api.getEvolveSchedule)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveRetry = resolve;
+        }),
+      );
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /ultra/i);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "记忆模式状态暂时无法读取",
+    );
+    expect(screen.getByRole("button", { name: "配置模型" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    const retry = screen.getByRole("button", { name: "重试" });
+    expect(retry.closest(".memory-mode-card")?.getAttribute("data-mode")).toBe(
+      "ultra",
+    );
+    expect(retry.closest("label")).toBeNull();
+    retry.focus();
+    await user.click(retry);
+    expect(screen.getByRole("button", { name: "重试" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(
+      retry.closest(".memory-mode-detail")?.getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(document.activeElement).toBe(retry);
+    expect(api.getEvolveSchedule).toHaveBeenCalledTimes(2);
+    await act(async () => resolveRetry({ enabled: true, time: "04:15" }));
+    await waitFor(() =>
+      expect(screen.getByText(/每天 04:15 左右自动整合/)).toBeTruthy(),
+    );
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: /ultra/i }).checked,
+    ).toBe(true);
+    expect(screen.getByRole("button", { name: "配置模型" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("drops a late mode plan after leaving the mode step", async () => {
+    let resolvePlan!: (value: {
+      current: "pro";
+      target: "lite";
+      effective_target: "lite";
+      capabilities: {
+        content_plane: "raw";
+        generation_required: false;
+        graph_enabled: false;
+        evolve_available: false;
+      };
+      effects: [];
+      warnings: [];
+      blockers: [];
+    }) => void;
+    planMemoryMode.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePlan = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    const view = render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await user.click(screen.getByRole("radio", { name: /lite/i }));
+    view.unmount();
+    await act(async () =>
+      resolvePlan({
+        current: "pro",
+        target: "lite",
+        effective_target: "lite",
+        capabilities: {
+          content_plane: "raw",
+          generation_required: false,
+          graph_enabled: false,
+          evolve_available: false,
+        },
+        effects: [],
+        warnings: [],
+        blockers: [],
+      }),
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("persists Lite mode before resumable progress and completion", async () => {
+    const order: string[] = [];
+    setMemoryMode.mockImplementationOnce(async () => {
+      order.push("mode");
+      return { mode: "lite" };
+    });
+    putOnboardingProgress.mockImplementationOnce(async (update) => {
+      order.push("progress");
+      return { ...onboarding, ...update };
+    });
+    completeOnboarding.mockImplementationOnce(async () => {
+      order.push("complete");
+      return { ...onboarding, status: "completed" };
+    });
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await chooseLiteAndContinue(user);
+    await waitFor(() =>
+      expect(order).toEqual(["mode", "progress", "complete"]),
+    );
+  });
+
+  it("does not let a late saved-mode read overwrite the user's new choice", async () => {
+    let resolveMode!: (value: {
+      mode: "pro";
+      configured_mode: "pro";
+      explicitly_configured: true;
+    }) => void;
+    getMemoryMode.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveMode = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const lite = screen.getByRole<HTMLInputElement>("radio", { name: /lite/i });
+    await selectMode(user, /lite/i);
+    await act(async () => {
+      resolveMode({
+        mode: "pro",
+        configured_mode: "pro",
+        explicitly_configured: true,
+      });
+    });
+
+    expect(lite.checked).toBe(true);
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+    expect(setMemoryMode).toHaveBeenLastCalledWith("lite");
+  });
+
+  it("retains the explicit lite choice when saving the mode fails and retries", async () => {
+    const user = userEvent.setup();
+    const controller = imports({ sources: [] });
+    const onFinish = vi.fn();
+    setMemoryMode.mockRejectedValueOnce(new Error("offline"));
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={onFinish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const lite = screen.getByRole<HTMLInputElement>("radio", { name: /lite/i });
+    expect(screen.getByRole("button", { name: "继续" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    await selectMode(user, /lite/i);
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "模式未能保存。你的选择已保留，请重试。",
+    );
+    expect(lite.checked).toBe(true);
+    expect(completeOnboarding).not.toHaveBeenCalled();
+    expect(onFinish).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(setMemoryMode).toHaveBeenLastCalledWith("lite");
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+    expect(onFinish).toHaveBeenCalledWith("sources");
+  });
+
+  it("serializes an in-flight Pro PUT before a later Lite choice so Lite wins", async () => {
+    let resolvePro!: (value: { mode: "pro" }) => void;
+    let resolveLite!: (value: { mode: "lite" }) => void;
+    setMemoryMode
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePro = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveLite = resolve;
+          }),
+      );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("pro"));
+
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    await selectMode(user, /lite/i);
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
+    expect(setMemoryMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolvePro({ mode: "pro" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(setMemoryMode.mock.calls.map(([mode]) => mode)).toEqual([
+      "pro",
+      "lite",
+    ]);
+    expect(
+      screen.getByRole("button", { name: "正在保存模式…" }),
+    ).toHaveProperty("disabled", true);
+    await act(async () => resolveLite({ mode: "lite" }));
+    await waitFor(() => expect(finish).toHaveBeenCalledWith("sources"));
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a new Pro generation while an older Pro write is pending", async () => {
+    let resolveFirst!: (value: { mode: "pro" }) => void;
+    let resolveSecond!: (value: { mode: "pro" }) => void;
+    setMemoryMode
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    modelActive = false;
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    expect(setMemoryMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveFirst({ mode: "pro" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () => resolveSecond({ mode: "pro" }));
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a new profile receipt within the same Pro generation", async () => {
+    let resolveFirst!: (value: { mode: "pro" }) => void;
+    let resolveSecond!: (value: { mode: "pro" }) => void;
+    setMemoryMode
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(1));
+
+    await user.click(
+      screen.getByRole("button", { name: "第二个模型启用回执已确认" }),
+    );
+    expect(setMemoryMode).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveFirst({ mode: "pro" }));
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledTimes(2));
+    expect(finish).not.toHaveBeenCalled();
+
+    await act(async () => resolveSecond({ mode: "pro" }));
+    await waitFor(() =>
+      expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
+    );
+    expect(completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it("drops an in-flight Pro response after returning to mode without confirming or completing", async () => {
+    let resolvePro!: (value: { mode: "pro" }) => void;
+    setMemoryMode.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePro = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    const revisionBeforePut = confirmedMemoryModeSnapshot().revision;
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("pro"));
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+
+    await act(async () => resolvePro({ mode: "pro" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "选择记忆模式" }),
+      ).toBeTruthy(),
+    );
+    expect(confirmedMemoryModeSnapshot().revision).toBe(revisionBeforePut);
+    expect(completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("serializes model and back progress writes so setup mode wins", async () => {
+    let resolveModelProgress!: (value: OnboardingState) => void;
+    putOnboardingProgress
+      .mockResolvedValueOnce({
+        ...onboarding,
+        mode_intent: "pro",
+        setup_step: "model",
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveModelProgress = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        ...onboarding,
+        mode_intent: "pro",
+        setup_step: "mode",
+      });
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await user.click(
+      screen.getByRole("button", { name: "模型启用回执已确认" }),
+    );
+    await waitFor(() => expect(putOnboardingProgress).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    expect(putOnboardingProgress).toHaveBeenCalledTimes(2);
+
+    await act(async () =>
+      resolveModelProgress({
+        ...onboarding,
+        mode_intent: "pro",
+        setup_step: "model",
+      }),
+    );
+    await waitFor(() => expect(putOnboardingProgress).toHaveBeenCalledTimes(3));
+    expect(putOnboardingProgress).toHaveBeenLastCalledWith({
+      mode_intent: "pro",
+      setup_step: "mode",
+      model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+    });
+    expect(completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("moves focus to the mode title on entry and after returning from model", async () => {
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const firstTitle = screen.getByRole("heading", { name: "选择记忆模式" });
+    await waitFor(() => expect(document.activeElement).toBe(firstTitle));
+
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    const returnedTitle = screen.getByRole("heading", {
+      name: "选择记忆模式",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(returnedTitle));
+  });
+
+  it("treats completed progress conflicts as terminal instead of retryable failures", async () => {
+    putOnboardingProgress.mockRejectedValueOnce(
+      Object.assign(new Error("completed"), {
+        response: {
+          status: 409,
+          data: { detail: "onboarding_completed" },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const finish = vi.fn();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={finish}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    await waitFor(() => expect(finish).toHaveBeenCalledWith("sources"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(setMemoryMode).not.toHaveBeenCalled();
+  });
+
+  it("persists a late profile receipt after leaving model but fences late activation", async () => {
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    const lateReceipt = screen.getByRole("button", {
+      name: "模型启用回执已确认",
+    });
+    await user.click(screen.getByRole("button", { name: "返回导入" }));
+    fireEvent.click(lateReceipt);
+
+    await waitFor(() =>
+      expect(patchOnboardingProgress).toHaveBeenCalledWith({
+        model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+      }),
+    );
+    expect(setMemoryMode).not.toHaveBeenCalled();
+    expect(completeOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("restores a persisted Pro model step directly after restart", async () => {
+    render(
+      <OnboardingFlow
+        state={{
+          ...onboarding,
+          mode_intent: "pro",
+          setup_step: "model",
+          model_profile_id: "9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+        }}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "选择记忆模式" })).toBeNull();
+  });
+
+  it("keeps the Pro choice retryable when progress persistence fails", async () => {
+    putOnboardingProgress.mockRejectedValueOnce(new Error("offline"));
+    const user = userEvent.setup();
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={imports({ sources: [] })}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await openApps();
+    await user.click(screen.getByRole("button", { name: SKIP }));
+    const pro = screen.getByRole<HTMLInputElement>("radio", { name: /pro/i });
+    await selectMode(user, /pro/i);
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "模式未能保存",
+    );
+    expect(pro.checked).toBe(true);
+    expect(screen.queryByRole("region", { name: "模型步骤边界" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
+    expect(
+      await screen.findByRole("region", { name: "模型步骤边界" }),
+    ).toBeTruthy();
+  });
+
+  it("returns from skipped pro setup to an explicit mode choice", async () => {
     const user = userEvent.setup();
     const controller = imports();
     const onFinish = vi.fn();
@@ -698,19 +1831,22 @@ describe("OnboardingFlow S1.3", () => {
     await choose(user);
     await approve(user);
     await user.click(screen.getByRole("button", { name: START }));
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await openModelStep(user);
     await user.click(screen.getByRole("button", { name: "跳过模型进入应用" }));
+    expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
+    expect(completeOnboarding).not.toHaveBeenCalled();
+    expect(onFinish).not.toHaveBeenCalled();
+    await selectMode(user, /lite/i);
+    await user.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
     expect(completeOnboarding).toHaveBeenCalledOnce();
     expect(onFinish).toHaveBeenCalledWith("sources");
-    expect(getModelProfiles).not.toHaveBeenCalled();
+    expect(getModelProfiles).toHaveBeenCalledOnce();
     expect(getMemoryProcessing).not.toHaveBeenCalled();
   });
 
   it("skipping after a selection does not grant, install, sync or connect", async () => {
     const user = userEvent.setup();
-    const controller = imports();
+    const controller = imports({ sources: [] });
     const onFinish = vi.fn();
     render(
       <OnboardingFlow
@@ -719,8 +1855,9 @@ describe("OnboardingFlow S1.3", () => {
         onFinish={onFinish}
       />,
     );
-    await choose(user);
+    await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
+    await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
     for (const fn of [
       controller.connectForOnboarding,
@@ -774,7 +1911,9 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: "重新检测位置" }));
     expect(choice()).toHaveProperty("disabled", false);
     await waitFor(() => expect(choice()).toHaveProperty("checked", true));
+    await user.click(choice());
     await user.click(screen.getByRole("button", { name: SKIP }));
+    await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
   });
@@ -797,7 +1936,9 @@ describe("OnboardingFlow S1.3", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
     expect(onFinish).not.toHaveBeenCalled();
+    await user.click(choice());
     await user.click(screen.getByRole("button", { name: SKIP }));
+    await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
   });
 
@@ -878,9 +2019,9 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(choice());
     await user.click(screen.getByRole("button", { name: "重新检测位置" }));
     expect(choice()).toHaveProperty("checked", false);
-    expect(screen.getByRole("button", { name: START })).toHaveProperty(
+    expect(screen.getByRole("button", { name: SKIP })).toHaveProperty(
       "disabled",
-      true,
+      false,
     );
   });
 
@@ -1587,7 +2728,7 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unknown connection visible and reconciles its receipt without a duplicate POST", async () => {
+  it("keeps an unknown connection visible without reporting an error or duplicating the POST", async () => {
     const user = userEvent.setup();
     const onFinish = vi.fn();
     vi.stubGlobal("crypto", webcrypto);
@@ -1603,6 +2744,7 @@ describe("OnboardingFlow S1.3", () => {
     vi.mocked(api.getSourceConnection).mockRejectedValueOnce(
       new Error("receipt offline"),
     );
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
     function Harness() {
       const controller = useImportSources({ automaticSync: false });
       return controller.loading ? (
@@ -1620,9 +2762,9 @@ describe("OnboardingFlow S1.3", () => {
     await choose(user);
     await approve(user);
     await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("alert");
+    await screen.findByText("正在核对导入结果，已保存的选择不会丢失");
     expect(onFinish).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert").textContent).toContain("尚未确认");
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(completeOnboarding).not.toHaveBeenCalled();
     expect(api.connectSources).toHaveBeenCalledOnce();
     const requestId = vi.mocked(api.connectSources).mock.calls[0][2]?.requestId;
@@ -1635,27 +2777,9 @@ describe("OnboardingFlow S1.3", () => {
         requestId,
       }),
     );
-    await user.click(screen.getByRole("button", { name: START }));
-    await waitFor(() =>
-      expect(api.getSourceConnection).toHaveBeenCalledExactlyOnceWith(
-        requestId,
-      ),
-    );
     expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(screen.getByRole("alert").textContent).toContain("尚未确认");
-    vi.mocked(api.getSourceConnection).mockResolvedValueOnce({
-      request_id: requestId,
-      accepted_source_ids: ["claude"],
-      failed_sources: {},
-      jobs: [],
-    });
-    await openApps();
-    await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("button", { name: "配置模型，沉淀记忆" });
-    await continueImport(user);
-    expect(onFinish).toHaveBeenCalledWith("sources");
-    expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(api.getSourceConnection).toHaveBeenCalledTimes(2);
+    expect(api.getSourceConnection).toHaveBeenCalledOnce();
+    expect(api.getSourceConnection).toHaveBeenCalledWith(requestId);
     expect(api.createImportJob).not.toHaveBeenCalled();
   });
 
@@ -1687,10 +2811,9 @@ describe("OnboardingFlow S1.3", () => {
       "disabled",
       true,
     );
-    expect(screen.getByRole("button", { name: SKIP })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    expect(
+      screen.getByRole("button", { name: "正在开始导入…" }),
+    ).toHaveProperty("disabled", true);
     expect(controller.refresh).toHaveBeenCalledTimes(2);
     await act(async () => resolve());
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
@@ -1868,6 +2991,7 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: START }));
     expect(onFinish).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "查看未导入的应用" }));
+    await chooseLiteAndContinue(user);
     expect(onFinish).toHaveBeenCalledWith("sources");
   });
 
@@ -2032,7 +3156,7 @@ describe("OnboardingFlow S1.3", () => {
   it("lets the user leave after completion cannot be persisted without reconnecting", async () => {
     const user = userEvent.setup();
     completeOnboarding.mockRejectedValue(new Error("disk unavailable"));
-    const controller = imports();
+    const controller = imports({ sources: [] });
     const onFinish = vi.fn();
     render(
       <OnboardingFlow
@@ -2041,7 +3165,9 @@ describe("OnboardingFlow S1.3", () => {
         onFinish={onFinish}
       />,
     );
+    await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
+    await chooseLiteAndContinue(user);
     await user.click(screen.getByRole("button", { name: "仍进入应用页" }));
     expect(onFinish).toHaveBeenCalledWith("sources");
     expect(controller.connectForOnboarding).not.toHaveBeenCalled();
@@ -2143,9 +3269,7 @@ describe("OnboardingFlow S1.3", () => {
     expect(readConnectionPreferences().hostSourceIds).toContain("claude");
     expect(controller.setSync).not.toHaveBeenCalled();
     expect(previewRecallInstall).not.toHaveBeenCalled();
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await openModelStep(user);
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
     expect(controller.setSync).not.toHaveBeenCalled();
     expect(previewRecallInstall).toHaveBeenCalledWith("claude-code");
@@ -2192,9 +3316,7 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(insertion);
     expect(insertion.checked).toBe(false);
     expect(readConnectionPreferences().hostSourceIds).toEqual([]);
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await openModelStep(user);
     expect(controller.setSync).not.toHaveBeenCalled();
     expect(previewRecallInstall).not.toHaveBeenCalled();
   });
@@ -2240,9 +3362,7 @@ describe("OnboardingFlow S1.3", () => {
     });
     expect(host.disabled).toBe(true);
     expect(host.checked).toBe(false);
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await user.click(screen.getByRole("button", { name: "选择记忆模式" }));
     expect(controller.setSync).not.toHaveBeenCalled();
     expect(previewRecallInstall).not.toHaveBeenCalled();
   });
@@ -2355,9 +3475,7 @@ describe("OnboardingFlow S1.3", () => {
     await waitFor(() => expect(insertion.disabled).toBe(false));
     expect(previewRecallInstall).not.toHaveBeenCalled();
     expect(insertion.checked).toBe(true);
-    await user.click(
-      screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-    );
+    await openModelStep(user);
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
     expect(previewRecallInstall).toHaveBeenCalledWith("claude-code");
     expect(window.oneMemory?.installRecall).toHaveBeenCalledTimes(1);

@@ -35,6 +35,12 @@ def test_profile_uses_one_model_and_keeps_key_out_of_database(tmp_path) -> None:
     )
 
     assert profile.has_api_key is True
+    assert profile.embedding_provider_kind is ProviderKind.LOCAL_ONNX
+    assert profile.embedding_model == "bge-small-zh-v1.5"
+    assert profile.embedding_dimensions == 512
+    assert profile.timeout_seconds == 240
+    assert profile.max_concurrency == 4
+    assert profile.context_window is None
     assert "api_key" not in profile.model_dump()
     assert API_KEY.encode() not in database.read_bytes()
     assert secrets.resolve(store.secret_ref(profile.profile_id) or "") == API_KEY

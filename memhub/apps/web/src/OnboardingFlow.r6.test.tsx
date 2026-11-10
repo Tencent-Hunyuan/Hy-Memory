@@ -13,7 +13,24 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OnboardingFlow } from "./OnboardingFlow";
 import type { ImportSourcesController } from "./use-import-sources";
 
-vi.mock("./api", () => ({ completeOnboarding: vi.fn() }));
+vi.mock("./api", () => ({
+  completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  }),
+  setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
+  patchOnboardingProgress: vi.fn().mockResolvedValue({}),
+}));
 vi.mock("./FirstImportReview", () => ({
   FirstImportReview: ({ sourceIds }: { sourceIds: string[] }) => (
     <p>已受理 {sourceIds.join(",")}</p>
@@ -33,6 +50,9 @@ const state = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 } as const;
 function source(
   id: string,
@@ -105,7 +125,7 @@ it("renders the final shell, double title, step one, branded rows and exact sour
   expect(
     screen.getByRole("heading", { name: "把熟悉的背景，带到这里" }),
   ).toBeTruthy();
-  expect(screen.getByText("你的记忆，从这里接上")).toBeTruthy();
+  expect(screen.queryByText("你的记忆，从这里接上")).toBeNull();
   expect(
     screen
       .getByRole("navigation", { name: "首次设置进度" })
@@ -113,8 +133,8 @@ it("renders the final shell, double title, step one, branded rows and exact sour
   ).toContain("导入历史");
   expect(screen.getByRole("heading", { name: "本机 AI 应用" })).toBeTruthy();
   expect(
-    screen.getByText("确认前只检查应用信息，不读取对话，也不安装连接。"),
-  ).toBeTruthy();
+    screen.queryByText("确认前只检查应用信息，不读取对话，也不安装连接。"),
+  ).toBeNull();
   expect(screen.queryByRole("button", { name: "导入历史包" })).toBeNull();
   expect(screen.getByText("/fixture/workbuddy · 默认位置")).toBeTruthy();
   expect(
@@ -329,7 +349,7 @@ it("custom source cancel does not grant or select and accepted import retains re
   expect(
     (screen.getByLabelText("导入 codex 历史") as HTMLInputElement).checked,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始导入" }));
   await screen.findByText("已受理 workbuddy");
   expect(vi.mocked(imports.connectForOnboarding).mock.calls[0]?.[0]).toEqual([
     "workbuddy",
@@ -353,7 +373,7 @@ it("does not submit authorization when the first-step owner leaves during final 
       done = resolve;
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "开始导入" }));
+  fireEvent.click(await screen.findByRole("button", { name: "开始导入" }));
   view.unmount();
   await act(async () =>
     done({

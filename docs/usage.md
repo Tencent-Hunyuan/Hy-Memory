@@ -38,6 +38,10 @@ with HyMemoryClient(mode="pro") as client:
             print(channel, memory["score"], memory["content"])
 ```
 
+## 业务存储
+
+Working / Coding 业务数据默认使用 SQLite，也支持 PostgreSQL；向量配置独立。安装、部署和切换边界见 [业务存储后端](business_storage.md)。
+
 ## 配置
 
 SDK 会加载项目目录中的 `.env`。完整配置见 [env_reference.md](env_reference.md)。

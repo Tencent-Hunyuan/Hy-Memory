@@ -174,6 +174,19 @@ export const settingsSpanishMessages = {
   设置分组: "Secciones de configuración",
   记忆模型: "Modelo de memorias",
   当前模型: "Modelo actual",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Gestiona por separado los modelos usados para organizar y buscar recuerdos.",
+  记忆整理: "Organización de recuerdos",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Convierte las conversaciones en recuerdos útiles a largo plazo.",
+  记忆搜索: "Búsqueda de recuerdos",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Encuentra los recuerdos más relevantes para tu pregunta cuando los necesitas.",
+  "本地内置（推荐）": "Integrado localmente (recomendado)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Personalizable tras configurar la organización de recuerdos",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Procesamiento local, sin configuración adicional",
   "正在读取模型…": "Leyendo el modelo…",
   模型状态暂不可读: "Estado del modelo no disponible",
   尚未配置模型: "No hay un modelo configurado",
@@ -238,7 +251,7 @@ export const settingsSpanishMessages = {
     "Sincroniza, organiza y ofrece memorias sin abrir la interfaz.",
   导出日志: "Exportar registros",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Empaqueta los registros locales en un archivo para su diagnóstico.",
+    "Empaqueta todos los registros locales. Pueden contener conversaciones o rutas privadas; compártelos solo con personal de desarrollo de confianza.",
   "确定退出 One Memory 界面吗？": "¿Cerrar la interfaz de MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "El servicio en segundo plano seguirá sincronizando, organizando y ofreciendo memorias.",
@@ -349,6 +362,8 @@ export const settingsSpanishMessages = {
 const chineseOverrides: Partial<
   Record<keyof typeof settingsSpanishMessages, string>
 > = {
+  "把本机运行日志打包成一个文件，发给开发排查。":
+    "打包完整本机日志，可能包含会话正文和本机路径；只发送给可信的开发人员。",
   "确定退出 One Memory 界面吗？": "确定退出 MemHub 界面吗？",
   appSettingsTitle: "{name} 应用设置",
   appMemoryScope: "让 {name} 查询已授权范围内的记忆。",

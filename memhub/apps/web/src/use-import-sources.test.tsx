@@ -129,7 +129,7 @@ function ColdIntentHarness() {
 }
 
 describe("useImportSources", () => {
-  it("queries an uncertain cold-start intent before trying another write", async () => {
+  it("recovers an uncertain cold-start write from its durable receipt immediately", async () => {
     connectSources.mockRejectedValueOnce(new Error("response lost"));
     getSourceConnection.mockImplementation(async (requestId: string) => ({
       request_id: requestId,
@@ -142,11 +142,11 @@ describe("useImportSources", () => {
     const button = screen.getByRole("button", { name: "start cold import" });
     await waitFor(() => expect(button).toHaveProperty("disabled", false));
     await userEvent.click(button);
-    await userEvent.click(button);
-    expect(connectSources).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(getSourceConnection).toHaveBeenCalledOnce());
     const sent = connectSources.mock.calls[0][2];
     expect(sent.sourceRoots).toEqual({ cursor: "root:v2:fixture" });
     expect(getSourceConnection).toHaveBeenCalledWith(sent.requestId);
+    expect(connectSources).toHaveBeenCalledTimes(1);
   });
   it("translates a source error code without exposing a generic HTTP failure", async () => {
     const reason = Object.assign(
@@ -434,6 +434,7 @@ describe("useImportSources", () => {
       expect(stored).not.toContain("authorized");
       expect(stored).not.toContain("~/.fixture");
       first.unmount();
+      getSourceConnection.mockClear();
       getHealth.mockResolvedValue(health(instance));
       getSourceConnection.mockResolvedValue(receipt(requestId, ["ok"]));
       const next = await controller();
@@ -639,7 +640,9 @@ describe("useImportSources", () => {
     let currentSource = { ...source("ok"), grant_revision: 1 };
     const saved = new Map<string, ConnectSourcesResponse>();
     getSources.mockImplementation(async () => [currentSource]);
-    getSourceConnection.mockImplementation(async (id: string) => saved.get(id));
+    getSourceConnection
+      .mockRejectedValueOnce(new Error("receipt temporarily offline"))
+      .mockImplementation(async (id: string) => saved.get(id));
     connectSources.mockImplementation(async (ids: string[], _, options) => {
       saved.set(options.requestId, receipt(options.requestId, ids));
       currentSource = { ...currentSource, authorized: true, grant_revision: 2 };
@@ -854,6 +857,7 @@ describe("useImportSources", () => {
 
   it("recovers an uncertain failed-only retry after remount without replaying accepted sources", async () => {
     const saved = new Map<string, ConnectSourcesResponse>();
+    let loseRetryReceiptOnce = true;
     connectSources.mockImplementation(async (ids: string[], _, options) => {
       const response =
         ids.length === 2
@@ -863,7 +867,17 @@ describe("useImportSources", () => {
       if (ids.length === 1) throw new Error("retry response lost");
       return response;
     });
-    getSourceConnection.mockImplementation(async (id: string) => saved.get(id));
+    getSourceConnection.mockImplementation(async (id: string) => {
+      const known = saved.get(id);
+      if (
+        loseRetryReceiptOnce &&
+        known?.accepted_source_ids.includes("failed")
+      ) {
+        loseRetryReceiptOnce = false;
+        throw new Error("retry receipt temporarily offline");
+      }
+      return known;
+    });
     const first = await controller();
     const snapshot = [source("ok"), source("failed")];
     await act(async () => {

@@ -1,7 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchPortugueseMessages } from "../gui-i18n-embedding-switch.js";
+import { modePortugueseMessages } from "../gui-i18n-mode.js";
 
 /** Portuguese (pt, Brazilian usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const portugueseMessages: Record<MessageKey, string> = {
+  ...modePortugueseMessages,
+  ...embeddingSwitchPortugueseMessages,
   "connectionFallback.title": "Conectar outras ferramentas",
   "connectionFallback.desktopOnly":
     "O pareamento local só está disponível no app para desktop.",
@@ -80,6 +84,16 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Não foi possível pesquisar as conversas originais. Tente novamente.",
   "sdk.raw.recent": "Conversas originais recentes",
+  "sdk.raw.empty":
+    "Ainda não há conversas originais. Ligue uma origem para as ver aqui.",
+  "sdk.raw.total": "{count} conversas originais",
+  "sdk.raw.total.one": "{count} conversa original",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "A memória básica está ativa. As novas conversas são guardadas como registos originais e não criam memórias avançadas. As memórias avançadas existentes continuam guardadas, mas não são mostradas nem usadas na recuperação.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "A memória inteligente está ativa. O modelo transforma novas conversas em memórias avançadas.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "A memória profunda está ativa. As novas conversas criam memórias avançadas que o grafo de conhecimento e o evolve continuam a consolidar.",
   "sdk.raw.found": "Resultados: {count}",
   "sdk.raw.found.one": "{count} resultado",
   "memoryInspector.emptyHint":
@@ -147,6 +161,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Salvar alterações",
   "selectedMemory.author.user": "Você",
   "selectedMemory.author.agent": "Assistente",
+  "selectedMemory.author.tool": "Ferramenta",
   "selectedMemory.sourceUnavailable":
     "As permissões da fonte mudaram ou o texto original não está disponível.",
   "selectedMemory.related": "Memória relacionada",
@@ -980,6 +995,19 @@ export const portugueseMessages: Record<MessageKey, string> = {
   设置分组: "Seções das configurações",
   记忆模型: "Modelo de memória",
   当前模型: "Modelo atual",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Gerencie separadamente os modelos usados para organizar e pesquisar memórias.",
+  记忆整理: "Organização de memórias",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Transforma conversas em memórias úteis a longo prazo.",
+  记忆搜索: "Pesquisa de memórias",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Encontra, quando necessário, as memórias mais relevantes para sua pergunta.",
+  "本地内置（推荐）": "Integrado localmente (recomendado)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Personalizável após configurar a organização de memórias",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Processamento local, sem configuração adicional",
   "正在读取模型…": "Carregando modelo…",
   模型状态暂不可读: "O status do modelo não está disponível",
   尚未配置模型: "Nenhum modelo configurado",
@@ -1044,7 +1072,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Continue sincronizando, processando e fornecendo memórias sem abrir o app.",
   导出日志: "Exportar logs",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Empacote os logs de diagnóstico locais em um arquivo para compartilhar com o suporte.",
+    "Empacota todos os logs locais. Eles podem conter conversas ou caminhos locais; compartilhe apenas com desenvolvedores de confiança.",
   "确定退出 One Memory 界面吗？": "Fechar a janela do MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "O serviço em segundo plano continuará sincronizando, processando e fornecendo memórias.",
@@ -1230,6 +1258,9 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "Menos repetição. Mais compreensão.",
   onboardingMoreApps: "Role para ver mais · Apps restantes: {count}",
   "onboardingMoreApps.one": "Role para ver mais · {count} app restante",
+  onboardingMoreImportApps: "Role horizontalmente · {count} apps restantes",
+  onboardingImportChecking:
+    "Verificando o resultado da importação; sua seleção foi mantida",
   onboardingAllApps: "Todos os apps exibidos ({count})",
   默认位置: "Local padrão",
   自定义位置: "Local personalizado",
@@ -1445,6 +1476,16 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Falha na conexão. Verifique o modelo, a chave e o destinatário.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Não foi possível confirmar a configuração ou o resultado do teste. Verifique antes de tentar novamente.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "A atualização do índice não foi concluída. O modelo de busca anterior continua em uso. Verifique a conexão e tente novamente.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "O resultado do último teste do modelo ainda precisa ser verificado. Tente novamente mais tarde.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "As gravações do modelo estão temporariamente pausadas. Aguarde a conclusão da manutenção do índice e tente novamente.",
+  "模型未能确认启用，请在设置中核对。":
+    "Não foi possível confirmar que o modelo foi ativado. Verifique nas Configurações.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "A configuração de modelo salva está temporariamente indisponível. Nenhuma duplicata será criada. Tente atualizar novamente.",
   所选连接已启用: "As conexões dos apps selecionados estão ativadas",
   本次未选择应用连接: "Nenhuma conexão de app selecionada desta vez",
   尚未填写接收方: "Nenhum destinatário informado",
@@ -1504,11 +1545,35 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "apps.back": "Voltar ao início",
   "apps.overview": "Visão geral das memórias",
   "apps.memories": "Memórias salvas",
+  "apps.rawConversations": "Conversas originais",
+  "apps.rawSaving": "Salvando",
+  "apps.rawSavingCompact": "Salvando",
+  "apps.rawSavingStatus": "Status de salvamento",
+  "apps.rawSavingDetail":
+    "As conversas originais são salvas sem um modelo generativo",
+  "apps.rawNoExcerpt": "Esta conversa não tem texto do usuário para exibir",
+  "apps.rawConversation": "Conversa original",
+  "apps.rawSaved": "Conversa original salva",
+  "apps.rawEmpty": "Ainda não há conversas originais salvas",
+  "apps.rawCheckedEmpty":
+    "Verificado: não há atualizações de conversas para mostrar",
+  "apps.memoryCheckedEmpty":
+    "Verificado: não há atualizações de memórias para mostrar",
+  "apps.recentEmptyCompact": "Sem atualizações",
+  "apps.rawWaiting": "As conversas originais salvas aparecerão aqui",
+  "apps.checkedRecent": "Conteúdo atual verificado",
+  "apps.currentMode": "Modo atual",
+  "apps.mode.lite": "Memória básica (lite)",
+  "apps.mode.pro": "Memória inteligente (pro)",
+  "apps.mode.ultra": "Memória profunda (ultra)",
   "apps.readingCount": "Verificando memórias locais…",
+  "apps.rawReadingCount": "Verificando conversas originais…",
   "apps.startingRetry":
     "O serviço em segundo plano está iniciando; isto será atualizado automaticamente",
   "apps.countWillUpdate":
     "A contagem de memórias será atualizada automaticamente",
+  "apps.rawCountWillUpdate":
+    "A contagem de conversas originais será atualizada automaticamente",
   "apps.showingPrevious":
     "Mostrando os dados anteriores; isto será atualizado automaticamente",
   "apps.unreadable": "Indisponível",
@@ -1608,6 +1673,8 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "apps.revision": "Versão {count}",
   "apps.conversationTime": "Hora da conversa",
   "apps.importTime": "Hora da importação",
+  "apps.writeTime": "Hora da escrita",
+  "apps.updateTime": "Hora da atualização",
   "apps.incompleteCalls":
     " · Algumas chamadas não foram registradas; a lista pode estar incompleta",
   "apps.timeoutWarning":
@@ -2059,6 +2126,15 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} não encontrou memórias correspondentes",
   "calls.headline.found": "{host} encontrou itens relacionados: {count}",
   "calls.headline.found.one": "{host} encontrou {count} item relacionado",
+  "calls.headline.rawOnly": "{host} encontrou {count} conversas originais",
+  "calls.headline.rawOnly.one": "{host} encontrou {count} conversa original",
+  "calls.headline.memoryOnly": "{host} encontrou {count} memórias",
+  "calls.headline.memoryOnly.one": "{host} encontrou {count} memória",
+  "calls.headline.mixed":
+    "{host} encontrou {memories} memórias · {raw} conversas originais",
+  "calls.headline.mixed.one":
+    "{host} encontrou {memories} memória · {raw} conversas originais",
+  "calls.headline.completed": "A chamada de {host} foi concluída",
   "calls.detail.timedOut":
     "As memórias estão sendo processadas. A consulta excedeu o tempo limite, então esta resposta não incluiu memórias.",
   "calls.detail.unavailable":

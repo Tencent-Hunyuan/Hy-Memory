@@ -103,6 +103,29 @@ class ConfigFileError(RuntimeError):
 _WRITTEN_WHEN_SET = frozenset({"memory_mode", "evolve_schedule", "memory_features", "ui_language"})
 
 
+def _sync_directory(directory: Path) -> None:
+    """Flush the rename itself, on platforms that can fsync a directory.
+
+    Windows has no ``os.O_DIRECTORY`` and cannot open a directory for fsync.
+    ``os.replace`` is already atomic there and the file's own contents were
+    fsynced before the rename, so there is nothing left to flush.
+
+    Reading the constant unguarded raised ``AttributeError`` -- which is not
+    an ``OSError``, so the ``except`` below did not catch it -- *after*
+    ``os.replace`` had landed the config. Callers therefore saw
+    ``config_write_failed`` for a write that had succeeded, while a fresh
+    ``ConfigStore`` read the new value back. Retrying the switch could not fix
+    anything, because nothing had failed.
+    """
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class ConfigStore:
     """The only writer of ``<data_dir>/config.json`` inside Core."""
 
@@ -152,6 +175,11 @@ class ConfigStore:
     def memory_mode(self) -> MemoryMode:
         with self._lock:
             return self._document.memory_mode
+
+    def memory_mode_explicitly_configured(self) -> bool:
+        """Whether a person chose the mode, including choosing the default."""
+        with self._lock:
+            return "memory_mode" in self._document.model_fields_set
 
     def set_memory_mode(self, mode: MemoryMode) -> ConfigDocument:
         if mode not in MEMORY_MODES:
@@ -278,11 +306,7 @@ class ConfigStore:
                 os.fsync(stream.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, self.path)
-            directory = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            _sync_directory(self.path.parent)
         except OSError as error:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

@@ -26,6 +26,7 @@ export function NodeDetail({
   onDraft,
   onSave,
   onDelete,
+  onOpenMemory,
   requestIds,
   onClose,
   compact = false,
@@ -39,6 +40,7 @@ export function NodeDetail({
   onDraft(next: string): void;
   onSave(event: FormEvent<HTMLFormElement>): void;
   onDelete(): void;
+  onOpenMemory?(memoryId: string): void;
   requestIds: RefObject<Map<string, string>>;
   onClose(): void;
   compact?: boolean;
@@ -138,33 +140,79 @@ export function NodeDetail({
   if (node) {
     const trace = graph ? traceFrom(graph, node.node_id, 2) : [];
     const direct = trace.filter((step) => step.hop === 1);
+    const relatedMemories = direct.filter(
+      (step) => step.node.memory_id !== null,
+    );
+    const compactNames =
+      compact && (node.node_type === "topic" || node.node_type === "schema");
     return (
       <article className="wb-detail" aria-label={t("wb.node")}>
-        <div className="wb-detail-head">
-          <span className="wb-status">{nodeTypeLabel(node.node_type, t)}</span>
-          <strong>{node.label}</strong>
-        </div>
-        <p className="wb-detail-note">
-          {t("wb.nodeNote", {
-            direct: new Intl.NumberFormat(locale).format(direct.length),
-            indirect: new Intl.NumberFormat(locale).format(
-              trace.length - direct.length,
-            ),
-          })}
-        </p>
-        <ul className="wb-trace">
-          {trace.slice(0, 8).map((step) => (
-            <li key={`${step.edge.edge_id}:${step.hop}`}>
-              <span className="wb-trace-hop">
-                {step.hop === 1 ? t("wb.direct") : t("wb.twoHops")}
-              </span>
-              {relationLabel(step.edge.relation, t)} · {step.node.label}
-              <span className="wb-trace-origin">
-                {edgeOriginLabel(step.edge.origin, t)}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {compactNames ? null : (
+          <div className="wb-detail-head">
+            <span className="wb-status">
+              {compact && node.node_type === "schema"
+                ? t("memory:关系归纳")
+                : nodeTypeLabel(node.node_type, t)}
+            </span>
+            <strong>{node.label}</strong>
+          </div>
+        )}
+        {compact ? (
+          relatedMemories.length ? (
+            <section
+              className={
+                compactNames
+                  ? "wb-node-related wb-node-related--names"
+                  : "wb-node-related"
+              }
+            >
+              {compactNames ? null : <h3>{t("selectedMemory.related")}</h3>}
+              <ul>
+                {relatedMemories.slice(0, 8).map((step) => (
+                  <li key={step.edge.edge_id}>
+                    <button
+                      type="button"
+                      className="map-related"
+                      onClick={() =>
+                        step.node.memory_id &&
+                        onOpenMemory?.(step.node.memory_id)
+                      }
+                    >
+                      <span>{step.node.label}</span>
+                      {compactNames ? null : (
+                        <small>{relationLabel(step.edge.relation, t)}</small>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null
+        ) : (
+          <>
+            <p className="wb-detail-note">
+              {t("wb.nodeNote", {
+                direct: new Intl.NumberFormat(locale).format(direct.length),
+                indirect: new Intl.NumberFormat(locale).format(
+                  trace.length - direct.length,
+                ),
+              })}
+            </p>
+            <ul className="wb-trace">
+              {trace.slice(0, 8).map((step) => (
+                <li key={`${step.edge.edge_id}:${step.hop}`}>
+                  <span className="wb-trace-hop">
+                    {step.hop === 1 ? t("wb.direct") : t("wb.twoHops")}
+                  </span>
+                  {relationLabel(step.edge.relation, t)} · {step.node.label}
+                  <span className="wb-trace-origin">
+                    {edgeOriginLabel(step.edge.origin, t)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </article>
     );
   }

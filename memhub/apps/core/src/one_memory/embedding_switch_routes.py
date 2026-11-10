@@ -126,15 +126,23 @@ def embedding_switch_router(dependencies: Sequence[Depends]) -> APIRouter:
 
     @router.post("/api/v1/embedding-switches", status_code=202, response_model=None)
     async def start_embedding_switch(value: EmbeddingSwitchStartRequest, request: Request) -> Any:
-        try:
-            job = await _service(request).start_switch(
-                value.profile_id,
-                expected_revision=value.expected_revision,
-                plan_token=value.plan_token,
-                requested_by=value.requested_by,
-            )
-        except EmbeddingSwitchError as error:
-            return refusal(error.code, plan=error.plan)
+        # One lifecycle lock orders mode/evolve/backfill and embedding
+        # maintenance. Without it each endpoint could pass its own preflight
+        # and then begin concurrently.
+        async with request.app.state.memory_mode_lock:
+            evolve = request.app.state.evolve_service
+            backfill = request.app.state.memory_graph_backfill
+            if evolve.running() or backfill.running:
+                return refusal("memory_lifecycle_busy")
+            try:
+                job = await _service(request).start_switch(
+                    value.profile_id,
+                    expected_revision=value.expected_revision,
+                    plan_token=value.plan_token,
+                    requested_by=value.requested_by,
+                )
+            except EmbeddingSwitchError as error:
+                return refusal(error.code, plan=error.plan)
         return job.model_dump(mode="json")
 
     @router.get("/api/v1/embedding-switches/current")

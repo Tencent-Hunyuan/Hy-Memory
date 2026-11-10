@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionV1,
   LiveSyncHealth,
   MemoryProcessingSummary,
   ModelProfile,
@@ -12,10 +13,12 @@ import { sdkMigrationLogPath } from "@one-memory/runtime-control";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import {
   type SdkHomeSummary,
+  validateHomeProjection,
   validateHomeSummary,
   validateLiveSync,
   validateModelProfiles,
   validateProcessing,
+  validateRawTotal,
   validateSources,
 } from "./core-responses.js";
 import { describeEmbeddingSwitchSummary } from "./embedding-switch-flow.js";
@@ -84,6 +87,10 @@ export interface PipelineSummary {
     }
   >;
   graph_build: string | null;
+  /** The ultra graph store (`graph_store.state`); null from an older Core. */
+  graph_store: string | null;
+  /** Graphs quarantined after they kept taking Core down while opening. */
+  graph_quarantine_count: number;
   /** SDK features (`memory_features`) whose value differs from the default. */
   features: Record<string, boolean | number>;
   /** The App's display language; null = never chosen or "follow the system". */
@@ -147,6 +154,10 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     item.graph_build && typeof item.graph_build === "object"
       ? (item.graph_build as Record<string, unknown>)
       : {};
+  const graphStore =
+    item.graph_store && typeof item.graph_store === "object"
+      ? (item.graph_store as Record<string, unknown>)
+      : {};
   return {
     mode: item.mode as PipelineSummary["mode"],
     configured_mode: item.configured_mode as PipelineSummary["mode"],
@@ -162,6 +173,11 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     evolve_running: Array.isArray(evolve.running) ? evolve.running.length : 0,
     evolve_users: users,
     graph_build: typeof graph.state === "string" ? graph.state : null,
+    graph_store: typeof graphStore.state === "string" ? graphStore.state : null,
+    graph_quarantine_count:
+      typeof graphStore.quarantine_count === "number"
+        ? graphStore.quarantine_count
+        : 0,
     features,
     ui_language: typeof item.ui_language === "string" ? item.ui_language : null,
     // An older Runtime has no setting: it always left the SDK on auto.
@@ -211,12 +227,12 @@ export async function composeStatusReport(options: {
     for (const name of SECTION_NAMES) sections[name] = { state, code };
   } else {
     const reader = options.reader;
-    const [sources, sync, processing, model, memories] = await Promise.all([
+    const [sources, sync, processing, model, projection] = await Promise.all([
       reader<unknown>("/api/v1/sources"),
       reader<unknown>("/api/v1/live-sync"),
       reader<unknown>("/api/v1/memory-processing"),
       reader<unknown>("/api/v1/model-profiles"),
-      reader<unknown>("/api/v2/home-summary"),
+      reader<unknown>("/api/v2/home-projection"),
     ]);
     sections.sources = section(sources, validateSources, describeSources);
     sections.sync = section(sync, validateLiveSync, describeSync);
@@ -228,11 +244,7 @@ export async function composeStatusReport(options: {
     pipeline =
       processing.state === "ok" ? describePipeline(processing.data) : null;
     sections.model = section(model, validateModelProfiles, describeModel);
-    sections.memories = section(
-      memories,
-      validateHomeSummary,
-      describeMemories,
-    );
+    sections.memories = await memorySection(reader, projection, pipeline);
   }
   // A bridge we could not inspect is unknown, not broken and not fine.
   const bridge: StatusDocument["bridge"] =
@@ -312,7 +324,9 @@ export function renderStatusText(
   ];
   for (const name of SECTION_NAMES) {
     lines.push(
-      `${SECTION_LABELS[name]}：${sectionLine(report.sections[name])}`,
+      `${sectionLabel(name, report.sections[name])}：${sectionLine(
+        report.sections[name],
+      )}`,
     );
   }
   if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
@@ -322,6 +336,8 @@ export function renderStatusText(
   if (embeddingSwitch !== null) lines.push(`向量模型：${embeddingSwitch}`);
   const backoff = modelBackoffLine(report.sections.processing);
   if (backoff !== null) lines.push(backoff);
+  const drain = writeDrainLine(report.sections.processing);
+  if (drain !== null) lines.push(drain);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -352,6 +368,20 @@ function modelBackoffLine(section: Section | undefined): string | null {
   }`;
 }
 
+/** The durable write drain, when it is not simply running: it exited on an
+ * error and is coming back (`restarting`), or it is not running at all. */
+function writeDrainLine(section: Section | undefined): string | null {
+  if (section?.state !== "ok") return null;
+  const state = section.write_drain;
+  if (state !== "restarting" && state !== "stopped") return null;
+  const error = section.write_drain_error;
+  const reason =
+    typeof error === "string" && error.length > 0 ? `（${error}）` : "";
+  return state === "restarting"
+    ? `写入队列：异常退出${reason}，正在自动重启`
+    : `写入队列：已停止${reason}`;
+}
+
 export function pipelineLine(pipeline: PipelineSummary): string {
   const parts: string[] = [pipeline.mode];
   if (pipeline.forced_by_env)
@@ -370,6 +400,8 @@ export function pipelineLine(pipeline: PipelineSummary): string {
     );
     if (pipeline.evolve_running > 0)
       parts.push(`，进行中 ${pipeline.evolve_running}`);
+    const graphStore = graphStoreText(pipeline);
+    if (graphStore) parts.push(`，${graphStore}`);
   }
   const changed = Object.entries(pipeline.features);
   if (changed.length > 0) {
@@ -392,6 +424,22 @@ export function pipelineLine(pipeline: PipelineSummary): string {
   return parts.join("");
 }
 
+const GRAPH_STORE_TEXT: Record<string, string> = {
+  opening: "知识图谱正在打开",
+  rebuilding_after_quarantine: "知识图谱文件损坏，已隔离并正在重建",
+  unavailable: "知识图谱暂不可用",
+};
+
+/** The ultra graph store, only when it is not simply ready. */
+function graphStoreText(pipeline: PipelineSummary): string | null {
+  const state = pipeline.graph_store
+    ? GRAPH_STORE_TEXT[pipeline.graph_store]
+    : undefined;
+  const count = pipeline.graph_quarantine_count;
+  if (state) return count > 0 ? `${state}（累计隔离 ${count} 次）` : state;
+  return count > 0 ? `知识图谱累计隔离 ${count} 次` : null;
+}
+
 function runtimeLine(report: StatusDocument): string {
   if (report.runtime.state !== "running") {
     return report.runtime.state === "stopped" ? "未运行" : "暂时无法确认";
@@ -409,7 +457,18 @@ const SECTION_LINE_OMITTED = new Set([
   "embedding_switch",
   "llm_backoff_until",
   "llm_backoff_error",
+  "write_drain",
+  "write_drain_error",
+  "content_plane",
+  "visible_count",
+  "effective_mode",
 ]);
+
+function sectionLabel(name: string, section: Section | undefined): string {
+  return name === "memories" && section?.content_plane === "raw"
+    ? "原始对话"
+    : SECTION_LABELS[name];
+}
 
 function sectionLine(section: Section | undefined): string {
   if (!section) return "未检查";
@@ -462,6 +521,10 @@ function fieldLabel(key: string): string {
     profiles: "配置",
     active: "当前",
     memory_count: "记忆",
+    raw_count: "原始对话",
+    visible_count: "可见",
+    content_plane: "内容层",
+    effective_mode: "模式",
   };
   return labels[key] ?? key;
 }
@@ -535,6 +598,7 @@ function describeProcessing(
     })),
     suspended: typeof summary.suspended === "number" ? summary.suspended : 0,
     ...llmBackoffFields(summary),
+    ...writeDrainFields(summary),
     ...embeddingSwitchField(summary),
   };
 }
@@ -551,6 +615,24 @@ function llmBackoffFields(summary: MemoryProcessingSummary): {
     llm_backoff_until:
       typeof until === "string" && until.length <= 64 ? until : null,
     llm_backoff_error:
+      typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
+  };
+}
+
+/** Durable write drain liveness. Null when Core does not report it (older
+ * Core, or recovery has not started the drain yet). */
+function writeDrainFields(summary: MemoryProcessingSummary): {
+  write_drain: "running" | "restarting" | "stopped" | null;
+  write_drain_error: string | null;
+} {
+  const state = summary.write_drain;
+  const error = summary.write_drain_error;
+  return {
+    write_drain:
+      state === "running" || state === "restarting" || state === "stopped"
+        ? state
+        : null,
+    write_drain_error:
       typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
   };
 }
@@ -592,6 +674,70 @@ function describeModel(profiles: ModelProfile[]): Record<string, unknown> {
 function describeMemories(summary: SdkHomeSummary): Record<string, unknown> {
   return {
     memory_count: summary.memory_count,
+  };
+}
+
+async function memorySection(
+  reader: CoreReader,
+  projection: ReadOutcome<unknown>,
+  pipeline: PipelineSummary | null,
+): Promise<Section> {
+  if (projection.state === "ok") {
+    const parsed = validateHomeProjection(projection.data);
+    return parsed === null
+      ? { state: "invalid", code: "response_invalid" }
+      : { state: "ok", ...describeProjection(parsed) };
+  }
+  if (projection.state !== "not_found") {
+    return {
+      state: projection.state === "denied" ? "denied" : "unavailable",
+      code: projection.code,
+    };
+  }
+  if (pipeline === null) {
+    return { state: "unavailable", code: "effective_mode_unavailable" };
+  }
+  if (pipeline.mode === "lite") {
+    const raw = await reader<unknown>("/api/v2/raw", {
+      limit: 1,
+      offset: 0,
+    });
+    if (raw.state !== "ok") {
+      return {
+        state: raw.state === "denied" ? "denied" : "unavailable",
+        code: raw.code,
+      };
+    }
+    const total = validateRawTotal(raw.data);
+    return total === null
+      ? { state: "invalid", code: "response_invalid" }
+      : {
+          state: "ok",
+          content_plane: "raw",
+          visible_count: total,
+          effective_mode: "lite",
+          raw_count: total,
+        };
+  }
+  const legacy = await reader<unknown>("/api/v2/home-summary");
+  return section(legacy, validateHomeSummary, (summary) => ({
+    content_plane: "memory",
+    visible_count: summary.memory_count,
+    effective_mode: pipeline.mode,
+    ...describeMemories(summary),
+  }));
+}
+
+function describeProjection(
+  projection: HomeProjectionV1,
+): Record<string, unknown> {
+  return {
+    content_plane: projection.capabilities.content_plane,
+    visible_count: projection.visible_count,
+    effective_mode: projection.effective_mode,
+    ...(projection.capabilities.content_plane === "raw"
+      ? { raw_count: projection.visible_count }
+      : { memory_count: projection.visible_count }),
   };
 }
 

@@ -102,7 +102,8 @@ Periodic polling / fs watch live in Core. UI does not schedule scans.
 ```text
 authorized harness / user action
   -> (optional) durable job row in MemHub queue  // 调度与租约，不是 memory 实体
-  -> sedimentation / model / source gates         // 管理面门禁
+  -> mode / source / embedding gates              // lite raw 不受生成模型开关影响
+  -> sedimentation / generation-model gate        // 仅 pro / ultra
   -> public HyMemoryClient write (raw / chat / coding / …)
   -> SDK stores (vector, graph, cache, history, coding, …) via SDK config/env
   -> MemHub may persist memory_id only for explicit management receipts / UI keys
@@ -128,6 +129,23 @@ surface: `hy_graph_projection.py` and `hy_graph_admin.py` may query Kuzu
 directly for low-latency Cypher projection and store-width administration.
 This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 
+The ultra graph's first open at startup (`graph_open_guard.py`) is part of the
+same graph-store administration, but never runs inside Core: a short-lived
+child (the frozen binary's hidden `--graph-open-probe`, or `python -I -c` from
+source, body in `hy_graph_admin.GRAPH_OPEN_PROBE_SOURCE`) opens and closes the
+live space's Kuzu file before Core reports ready, bounded by a wall clock
+(60–120 s) and an RSS cap (2 GB) polled from Core. A clean exit lets the SDK
+open the graph as before; a kill, crash or non-zero exit renames it to
+`graph.quarantined-<UTC>` at once (never deleted, two copies kept) and the
+normal `MemoryGraphBackfill` rebuilds it from SDK memories. A durable marker
+(`graph-open-in-progress.json`) quarantines after two starts in which Core
+itself died mid-probe, and the declared startup phase (`core-startup.json`) is
+what the Runtime supervisor honours. The graph-width check
+(`_graph_embedding_width`) reads through the same child (read-only) and is
+primed by the startup probe, so MemHub never holds a second `kuzu.Database`
+beside the SDK's in Core. The probe never touches an embedding switch's
+staging graph, and does not quarantine while a switch is open.
+
 - Storage backends：仅 SDK config/env（Chroma/FAISS/Qdrant、Kuzu/Neo4j、cache/history sqlite|mysql、coding sqlite 等）。
 - Queue：pending `memory_write_jobs` 只表示尚未调用 SDK 的待处理请求，因此没有 SDK raw/memory ID。worker 单次调用 SDK `add()`；SDK 内部完成 raw 写入与 extraction/reconciliation，成功后 MemHub 仅将返回的 raw ID / memory IDs 记作 job outcome。
 - Raw retention：MemHub 不删除任何 SDK L1 raw，任何模式都全部保留（SDK 自身也不删 raw）；每个完整 turn 只保存真人 user 与 assistant，tool 不进入 raw。记忆模式（lite / pro / ultra）与 evolve 见 `docs/contracts/memory-mode-evolve-v1.md`；SDK 可选检索与提取功能（graph rerank、episode recall 等，全局设置，默认保持 SDK 默认值）见 `docs/contracts/memory-features-v1.md`。
@@ -138,6 +156,14 @@ This exception does not extend to VDB, Coding, prompt, reconcile, or lifecycle.
 - 旧用户迁移：由 App 在可见的启动 loading 阶段统一执行；此时 Core 尚未对外提供产品读写。所有已发布版本都先经 SDK 写入，Governance/Evidence 只是镜像，所以迁移**不复制任何 memory 或 raw**：创建并校验完整 bundle、让写入队列脱离旧表、把旧版命名的 SDK 向量集合接回当前名字、用 Runtime 同样配置的公开 SDK client 按 ID 回读核对，通过后才提交 marker、删除旧表。由一个 Core 命令 `sdk-migrate` 完成；Desktop 启动与 CLI `memhub install`/`upgrade`（macOS、Linux）在启动新 Runtime 前调用它，普通用户不需要另跑命令。App 不得在 migration `deferred` 状态继续启动 Runtime。
 - 迁移期间宿主 capture hook 由 Desktop 活跃 PID marker 静默挡住，不再追加
   Evidence；cutover 后先从宿主 History checkpoint 补齐遗漏 turn，再恢复 live sync。
+- 宿主 capture hook（`one-memory capture <host>`）是短命的独立进程，**不打开主库**：
+  它只读 runtime receipt 与 runtime token，把 hook JSON 经 loopback
+  `POST /api/v1/live-capture/{source}` 交给正在运行的 Core，超时或 Core 未运行即静默丢弃，
+  不回退本地写；迁移 fence 仍在 hook 侧检查。Core 在进程内套用其余的门（grant、sync、
+  拒绝计数、自动化会话、cursor/claude 去重），再按 live file sync 的同一路径
+  （`materialize_write_input` → `stage_sdk_input` → `finalize_sdk_file`，live 优先级）
+  经单一 writer 入队。live sync 已读取其宿主文件的来源，hook 内容交给文件路径，
+  同一 turn 只进 SDK 一次；只有没有文件轮询的来源才从 hook 入队。
 - Matter 若未来重新开发，需以新的 SDK-native 合同重新设计，不继承当前占位 schema。
 
 Pinned SDK 版本见发布锁文件 / `MEMORY.md`（随发布更新）。
@@ -282,7 +308,7 @@ Support is declared per immutable GitHub Release manifest:
 - Linux x64/arm64 Runtime on native GHA runners.
 - macOS arm64/x64 App/Runtime: Developer ID, notarization, native acceptance.
 - Windows is not supported.
-- `hy-memory==2.0.13` is the current stable SDK dependency; the release
+- `hy-memory==2.0.14` is the current stable SDK dependency; the release
   lock and [`../MEMORY.md`](../MEMORY.md) are authoritative when the pin changes.
 
 See [`INSTALLATION.md`](INSTALLATION.md).

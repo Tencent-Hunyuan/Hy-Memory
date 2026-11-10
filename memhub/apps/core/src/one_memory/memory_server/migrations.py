@@ -3190,6 +3190,110 @@ async def _061_write_job_retries(cursor: Any) -> None:
         await cursor.execute(statement)
 
 
+ONBOARDING_PROGRESS_MIGRATION_VERSION = 62
+
+
+def onboarding_progress_ddl(dialect: str = "mysql") -> str:
+    """Append resumable onboarding choices without rewriting migration 12."""
+    if dialect == "sqlite":
+        return """
+ALTER TABLE onboarding_state
+ADD COLUMN mode_intent TEXT NULL;
+ALTER TABLE onboarding_state
+ADD COLUMN setup_step TEXT NULL;
+ALTER TABLE onboarding_state
+ADD COLUMN model_profile_id TEXT NULL;
+"""
+    return """
+ALTER TABLE onboarding_state
+ADD COLUMN mode_intent VARCHAR(16) NULL AFTER updated_at;
+ALTER TABLE onboarding_state
+ADD COLUMN setup_step VARCHAR(16) NULL AFTER mode_intent;
+ALTER TABLE onboarding_state
+ADD COLUMN model_profile_id VARCHAR(36) NULL AFTER setup_step;
+"""
+
+
+async def _062_onboarding_progress(cursor: Any) -> None:
+    if _dialect(cursor) == "sqlite":
+        existing = await cursor.columns("onboarding_state")
+        statements = _split_statements(onboarding_progress_ddl("sqlite"))
+        for column, statement in zip(
+            ("mode_intent", "setup_step", "model_profile_id"),
+            statements,
+            strict=True,
+        ):
+            if column not in existing:
+                await cursor.execute(statement)
+        return
+    for statement in _split_statements(onboarding_progress_ddl("mysql")):
+        try:
+            await cursor.execute(statement)
+        except Exception as error:  # noqa: BLE001 - MySQL driver error type varies
+            if _is_duplicate_column(error):
+                continue
+            raise
+
+
+IMPORT_JOB_LOOKUP_INDEXES_MIGRATION_VERSION = 63
+
+
+def import_job_lookup_indexes_ddl(dialect: str = "mysql") -> str:
+    """Index the per-source and per-status import job lookups.
+
+    Migration 7 gave SQLite `import_jobs` no index beyond its primary key (the
+    one-active-job index is partial), so every "this source's jobs" or "the
+    jobs in this state" question read and sorted the whole table. Live sync
+    adds a row per change it imports and nothing removed them, so on a machine
+    a few weeks old that table was thousands of rows read several times a poll.
+
+    `import_jobs_lane` serves the lane lookups (one user, one source, one
+    operation, a status, newest first) and the pruning of finished syncs;
+    `import_jobs_status` serves restart recovery and the status filters.
+    MySQL's migration 7 already has a status index and no `operation` column,
+    so it only gains the ordered source index.
+    """
+    if dialect == "sqlite":
+        return """
+CREATE INDEX IF NOT EXISTS import_jobs_lane
+ON import_jobs(user_id, source_id, operation, status, created_at);
+CREATE INDEX IF NOT EXISTS import_jobs_status
+ON import_jobs(status, created_at);
+"""
+    return """
+CREATE INDEX idx_import_jobs_source_created
+ON import_jobs(user_id, source_id, created_at);
+"""
+
+
+def _is_duplicate_index(error: Exception) -> bool:
+    """MySQL's "index name already there" (1061): the index is in place."""
+    args: tuple[object, ...] = getattr(error, "args", ())
+    return bool(args) and args[0] == 1061
+
+
+async def _063_import_job_lookup_indexes(cursor: Any) -> None:
+    dialect = _dialect(cursor)
+    if dialect == "sqlite":
+        # `operation` was added by the job store, not by migration 7, so a
+        # database built from the catalog alone may not have it yet. Same
+        # declaration as the store's own addition.
+        if "operation" not in await cursor.columns("import_jobs"):
+            await cursor.execute(
+                "ALTER TABLE import_jobs ADD COLUMN operation TEXT NOT NULL DEFAULT 'history'"
+            )
+        for statement in _split_statements(import_job_lookup_indexes_ddl(dialect)):
+            await cursor.execute(statement)
+        return
+    for statement in _split_statements(import_job_lookup_indexes_ddl(dialect)):
+        try:
+            await cursor.execute(statement)
+        except Exception as error:  # noqa: BLE001 - MySQL driver error type varies
+            if _is_duplicate_index(error):
+                continue
+            raise
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3201,10 +3305,17 @@ def _split_statements(sql: str) -> list[str]:
     and splitting on `;` alone produced a fragment starting with the comment
     text, which MySQL rejected with error 1064.
 
-    The scan is quote-aware: a `;` or `--` inside a `'...'`/`"..."`/`` `...` ``
-    literal is content, not a separator or a comment. A naive `str.split(";")`
-    cuts `DEFAULT 'a;b'` in half, and stripping `--` first would silently delete
-    everything after it in a string. Both would turn one statement into garbage
+    MySQL also treats `#` as a line comment, so it is stripped the same way.
+    Missing that was a real 1064: a `#: Emulates SQLite's partial index` comment
+    inside `model_profiles` contains an apostrophe, the scanner read it as the
+    start of a string literal, and the `;` separating the two `CREATE TABLE`
+    statements was swallowed — one broken statement reached the server.
+
+    The scan is quote-aware: a `;`, `--` or `#` inside a
+    `'...'`/`"..."`/`` `...` `` literal is content, not a separator or a
+    comment. A naive `str.split(";")` cuts `DEFAULT 'a;b'` in half, and
+    stripping `--`/`#` first would silently delete everything after it in a
+    string such as `DEFAULT '#fff'`. Both would turn one statement into garbage
     the engine rejects far from the migration that caused it.
 
     Comments are dropped rather than preserved because the statement is sent
@@ -3229,9 +3340,11 @@ def _split_statements(sql: str) -> list[str]:
             current.append(character)
             index += 1
             continue
-        if character == "-" and index + 1 < length and sql[index + 1] == "-":
-            # Line comment: skip to the end of the line, keep the newline so
-            # tokens on either side do not run together.
+        if character == "#" or (
+            character == "-" and index + 1 < length and sql[index + 1] == "-"
+        ):
+            # Line comment (`#` or `--`): skip to the end of the line, keep the
+            # newline so tokens on either side do not run together.
             newline = sql.find("\n", index)
             if newline == -1:
                 break
@@ -3490,4 +3603,15 @@ MIGRATIONS: tuple[Migration, ...] = (
         ("memory_note_requests",),
     ),
     Migration(61, "write_job_retries", _061_write_job_retries),
+    Migration(
+        ONBOARDING_PROGRESS_MIGRATION_VERSION,
+        "onboarding_progress",
+        _062_onboarding_progress,
+        ("onboarding_state",),
+    ),
+    Migration(
+        IMPORT_JOB_LOOKUP_INDEXES_MIGRATION_VERSION,
+        "import_job_lookup_indexes",
+        _063_import_job_lookup_indexes,
+    ),
 )

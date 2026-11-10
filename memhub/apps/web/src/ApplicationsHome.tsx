@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionV1,
   HostHomeSummary,
   LiveSyncHealth,
   MemoryProcessingSummary,
@@ -8,7 +9,15 @@ import { type GuiLocale, isMessageKey } from "@one-memory/i18n";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { getHomeSummary, getLiveSyncHealth, getMemoryProcessing } from "./api";
+import {
+  getHomeProjection,
+  getHomeSummary,
+  getLiveSyncHealth,
+  getMemoryMode,
+  getMemoryProcessing,
+  getSdkRaw,
+  homeProjectionUnsupported,
+} from "./api";
 import { AppMark } from "./app-mark";
 import {
   type CallEvent,
@@ -17,6 +26,13 @@ import {
   callRowDetail,
   getCallHistory,
 } from "./call-history-client";
+import {
+  commitConfirmedMemoryMode,
+  confirmedMemoryModeSnapshot,
+  isConfirmedModeTicketCurrent,
+  issueConfirmedModeTicket,
+  useConfirmedMemoryMode,
+} from "./confirmed-memory-mode";
 import { hostMatchesSource, sameConnectionHost } from "./connection-hosts";
 import { readConnectionPreferences } from "./connection-preferences";
 import {
@@ -25,8 +41,13 @@ import {
   retryAutoReconcile,
   useAutoConnect,
 } from "./connection-reconcile";
+import { localEvolveRunning, useEvolveState } from "./evolve-state";
 import { useGuiLanguage } from "./gui-language";
 import { HomeCardBoundary } from "./HomeCardBoundary";
+import {
+  buildHomeViewModel,
+  type HomeProjectionReadState,
+} from "./home-view-model";
 import {
   hostBridgeAvailable,
   hostConnectionApproved,
@@ -35,6 +56,7 @@ import {
   sourceConnectionIncomplete,
   useRecallHosts,
 } from "./host-state";
+import { useOnboardingTranslation } from "./onboarding-language";
 import { subscribePoll } from "./poll-scheduler";
 import { R6Button } from "./R6Controls";
 import { prefetchDataRuntime } from "./runtime-state";
@@ -83,6 +105,17 @@ function stamped(value: string, locale: GuiLocale, t: Translate, suffix = "") {
   const parts = clockParts(value, locale);
   if (!parts) return `${t("apps.unknownTime")}${suffix}`;
   return `${parts.today ? t("apps.today") : ""}${parts.clock}${suffix}`;
+}
+
+function projectionTimeBasisLabel(
+  basis: string | null,
+  t: Translate,
+): string | null {
+  if (basis === "conversation") return t("apps.conversationTime");
+  if (basis === "import") return t("apps.importTime");
+  if (basis === "write") return t("apps.writeTime");
+  if (basis === "update") return t("apps.updateTime");
+  return null;
 }
 
 type ActivityChoice = "call" | "update";
@@ -167,7 +200,6 @@ function SourceMark({ source }: { source: SourceResponse }) {
 export function ApplicationsHome({
   imports,
   onManage,
-  onMemories,
   onCalls,
   active = true,
 }: {
@@ -179,6 +211,10 @@ export function ApplicationsHome({
   active?: boolean;
 }) {
   const { locale, t, tn } = useGuiLanguage();
+  const { text } = useOnboardingTranslation();
+  const evolveState = useEvolveState(active);
+  const evolveRunning = localEvolveRunning(evolveState.data);
+  const evolveUncertain = evolveState.isError && evolveRunning;
   const hostQuery = useRecallHosts({ poll: active });
   const hostBridge = hostBridgeAvailable();
   const hosts = hostQuery.data ?? [];
@@ -192,6 +228,11 @@ export function ApplicationsHome({
   const hostStale = hostQuery.isError && hostQuery.data !== undefined;
   const auto = useAutoConnect();
   const sedimentation = useSedimentation();
+  const confirmedMode = useConfirmedMemoryMode();
+  const [projection, setProjection] = useState<HomeProjectionV1 | null>(null);
+  const [projectionState, setProjectionState] =
+    useState<HomeProjectionReadState>("loading");
+  const [legacyCore, setLegacyCore] = useState(false);
   const [summary, setSummary] = useState<HostHomeSummary | null>(null);
   const [processing, setProcessing] = useState<MemoryProcessingSummary | null>(
     null,
@@ -278,6 +319,13 @@ export function ApplicationsHome({
   const [expanded, setExpanded] = useState(retained.expanded);
   const [phase, setPhase] = useState("idle");
   const [revision, setRevision] = useState(0);
+  const previousEvolveRunning = useRef(evolveRunning);
+  useEffect(() => {
+    const previous = previousEvolveRunning.current;
+    previousEvolveRunning.current = evolveRunning;
+    if (previous && !evolveRunning && active) setRevision((value) => value + 1);
+  }, [active, evolveRunning]);
+  const confirmedModeSeen = useRef(confirmedMode);
   const expandButton = useRef<HTMLButtonElement>(null);
   const backButton = useRef<HTMLButtonElement>(null);
   const root = useRef<HTMLElement>(null);
@@ -538,6 +586,18 @@ export function ApplicationsHome({
     .map((s) => `${s.source_id}:${s.authorized}:${s.grant_revision}`)
     .join("|");
   const requestKey = `${sourceVersion}:${revision}`;
+  useEffect(() => {
+    const previous = confirmedModeSeen.current;
+    if (previous.revision === confirmedMode.revision) return;
+    confirmedModeSeen.current = confirmedMode;
+    // The first confirmed mode accompanies the first self-consistent
+    // projection. There is no old-mode projection to hide yet.
+    if (previous.mode === null) return;
+    setProjection(null);
+    setSummary(null);
+    setProjectionState("loading");
+    if (active) setRevision((value) => value + 1);
+  }, [active, confirmedMode]);
   // requestKey retriggers this read when the source snapshot or a manual retry changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: requestKey is the refresh token
   useEffect(() => {
@@ -547,8 +607,9 @@ export function ApplicationsHome({
     async function refresh() {
       if (busy || document.hidden) return;
       busy = true;
+      const homeTicket = issueConfirmedModeTicket("home");
       const [home, state, sync] = await Promise.allSettled([
-        getHomeSummary(),
+        getHomeProjection(),
         getMemoryProcessing(),
         getLiveSyncHealth(),
         refreshSedimentation(),
@@ -556,17 +617,99 @@ export function ApplicationsHome({
       busy = false;
       if (stopped) return;
       if (home.status === "fulfilled") {
-        // stale=true 表示这轮读取超时，数字不代表现状：保留上一次的概览，
-        // 等 10 秒后的下一轮轮询补上。重复 stale 仍要进入可恢复状态，
-        // 不能永远停在“正在核对”。
-        if (!("stale" in home.value) || !home.value.stale) {
-          setSummaryFailures(0);
-          setSummary(home.value);
-        } else {
-          setSummaryFailures((count) => count + 1);
-        }
+        if (
+          !commitConfirmedMemoryMode(
+            home.value.effective_mode,
+            homeTicket,
+            home.value.capabilities,
+          )
+        )
+          return;
+        setLegacyCore(false);
+        setSummaryFailures(0);
+        setProjection(home.value);
+        setProjectionState("ready");
       } else {
-        setSummaryFailures((count) => count + 1);
+        if (homeProjectionUnsupported(home.reason)) {
+          setLegacyCore(true);
+          try {
+            const modeTicket = issueConfirmedModeTicket("home");
+            const modeResult = await getMemoryMode();
+            if (stopped) return;
+            const modeAccepted = commitConfirmedMemoryMode(
+              modeResult.mode,
+              modeTicket,
+            );
+            const effectiveMode = modeAccepted
+              ? modeResult.mode
+              : confirmedMemoryModeSnapshot().mode;
+            if (effectiveMode === "lite") {
+              const raw = await getSdkRaw({ limit: 1 });
+              if (stopped || !isConfirmedModeTicketCurrent(modeTicket)) return;
+              setProjection({
+                projection_version: 1,
+                user_id: raw.user_id ?? "local",
+                effective_mode: "lite",
+                capabilities: {
+                  content_plane: "raw",
+                  generation_required: false,
+                  graph_enabled: false,
+                  evolve_available: false,
+                },
+                visible_count: raw.total,
+                display_state: raw.total > 0 ? "no_user_excerpt" : "empty",
+                latest: null,
+                observed_at: new Date().toISOString(),
+              });
+              setSummaryFailures(0);
+              setProjectionState("ready");
+              return;
+            }
+            const legacy = await getHomeSummary();
+            if (stopped || !isConfirmedModeTicketCurrent(modeTicket)) return;
+            if (!("stale" in legacy) || !legacy.stale) {
+              setSummary(legacy);
+              setSummaryFailures(0);
+              setProjectionState("ready");
+            } else {
+              setSummaryFailures((count) => {
+                const next = count + 1;
+                setProjectionState((current) =>
+                  next < 2
+                    ? current
+                    : current === "ready" || current === "stale"
+                      ? "stale"
+                      : "unavailable",
+                );
+                return next;
+              });
+            }
+          } catch {
+            setSummaryFailures((count) => {
+              const next = count + 1;
+              setProjectionState((current) =>
+                next < 2
+                  ? current
+                  : current === "ready" || current === "stale"
+                    ? "stale"
+                    : "unavailable",
+              );
+              return next;
+            });
+          }
+        } else {
+          setSummaryFailures((count) => {
+            const next = count + 1;
+            setProjectionState((current) =>
+              next < 2
+                ? current
+                : current === "ready" || current === "stale"
+                  ? "stale"
+                  : "unavailable",
+            );
+            return next;
+          });
+        }
       }
       if (state.status === "fulfilled") setProcessing(state.value);
       if (sync.status === "fulfilled") setSyncHealth(sync.value);
@@ -582,10 +725,31 @@ export function ApplicationsHome({
       stop();
     };
   }, [active, requestKey]);
-  const visible = summary;
-  const latest = visible?.latest;
-  const summaryUnavailable = visible === null && summaryFailures >= 2;
-  const summaryStale = visible !== null && summaryFailures >= 2;
+  const modeChangedPending =
+    confirmedModeSeen.current.mode !== null &&
+    confirmedModeSeen.current.revision !== confirmedMode.revision;
+  const effectiveProjection = modeChangedPending ? null : projection;
+  const visible = modeChangedPending ? null : summary;
+  const historyImporting = imports.jobs.some(
+    (job) => job.status === "running" || job.status === "pending",
+  );
+  const viewModel = buildHomeViewModel({
+    projection: effectiveProjection,
+    projectionState: modeChangedPending ? "loading" : projectionState,
+    confirmedMode: confirmedMode.mode,
+    legacySummary: legacyCore ? visible : null,
+    processing,
+    sedimentation: sedimentation ?? null,
+    recentCall,
+    importsRunning: historyImporting,
+    hostState,
+    syncEnabledCount: imports.sources.filter(
+      (source) => source.authorized && source.sync_enabled,
+    ).length,
+  });
+  const latest = viewModel.recent;
+  const summaryUnavailable = viewModel.state === "unavailable";
+  const summaryStale = viewModel.state === "stale";
   const hasCall =
     recentCall !== null &&
     (callState === "ready" || callState === "incomplete");
@@ -599,9 +763,6 @@ export function ApplicationsHome({
     activityView !== null && availableActivities.includes(activityView)
       ? activityView
       : null;
-  const historyImporting = imports.jobs.some(
-    (job) => job.status === "running" || job.status === "pending",
-  );
   const recentCallSourceId = (recentCall?.references ?? []).find(
     (reference) => reference.source_id,
   )?.source_id;
@@ -616,72 +777,46 @@ export function ApplicationsHome({
     : null;
   const attention = callAttention(callEvents);
   const attentionHost = attention ? callHostName(attention.host, locale) : null;
+  const baseActivity =
+    viewModel.activity.kind === "update"
+      ? ("memory" as const)
+      : viewModel.activity.kind;
   const activity = summaryUnavailable
     ? "unavailable"
-    : visible === null
-      ? "loading"
-      : pinned === "call"
-        ? "call"
-        : pinned === "update"
+    : pinned === "call"
+      ? "call"
+      : pinned === "update"
+        ? updateKind
+        : updateKind
           ? updateKind
-          : updateKind
-            ? updateKind
-            : hasCall
-              ? "call"
-              : callState === "unavailable"
-                ? "unavailable"
-                : historyImporting
-                  ? "importing"
-                  : callState === "loading"
-                    ? recentCall !== null
-                      ? "call"
-                      : "loading"
-                    : processing?.running
-                      ? "first-running"
-                      : processing?.pending || processing?.waiting_for_model
-                        ? "first-queued"
-                        : "empty";
+          : hasCall
+            ? "call"
+            : callState === "unavailable"
+              ? "unavailable"
+              : callState === "loading" && recentCall !== null
+                ? "call"
+                : baseActivity;
   const apps = imports.sources.filter(
     (s) => s.authorized || s.detected === true || s.location_state === "found",
   );
-  const stateLabel =
-    sedimentation?.enabled === true
-      ? t("apps.running")
-      : sedimentation?.enabled === false
-        ? t("apps.paused")
-        : t("apps.checkingStatus");
-  const stateDetail =
-    sedimentation?.enabled === false
-      ? t("apps.stoppedNew")
-      : sedimentation?.enabled === true
-        ? t("apps.organizingNew")
-        : t("apps.checkingProcessing");
-  const latestUpdatedAt =
-    latest === null || latest === undefined
-      ? null
-      : "revision" in latest
-        ? latest.updated_at
-        : latest.gmt_created === null
-          ? null
-          : new Date(latest.gmt_created * 1000).toISOString();
+  const stateLabel = t(viewModel.processingLabel as never);
+  const stateDetail = t(viewModel.processingDetail as never);
+  const latestUpdatedAt = latest?.time ?? null;
   const latestClock = latestUpdatedAt
     ? clockParts(latestUpdatedAt, locale)
     : null;
-  const latestSourceIds =
-    latest === null || latest === undefined
-      ? []
-      : "revision" in latest
-        ? latest.source_ids
-        : latest.source
-          ? [latest.source]
-          : [];
+  const latestSourceIds = latest?.sourceId ? [latest.sourceId] : [];
   const latestSourceNames = latestSourceIds.map(
     (id) =>
       imports.sources.find((source) => source.source_id === id)?.display_name ??
       id,
   );
   const time = latestClock?.clock ?? (latest ? t("apps.unknownTime") : null);
-  const checked = visible ? clockParts(visible.observed_at, locale) : null;
+  const checked = effectiveProjection
+    ? clockParts(effectiveProjection.observed_at, locale)
+    : visible
+      ? clockParts(visible.observed_at, locale)
+      : null;
   // A failed read leaves the last health in place on purpose: clearing it would
   // drop the instance it names, and that instance is what keeps memory writes
   // and backfill receipts attached to the run that produced them. So the card
@@ -784,7 +919,7 @@ export function ApplicationsHome({
     ? tn("apps.enabledCount", authorizedSyncSources.length)
     : syncApplyFailed
       ? t("apps.enableFailed")
-      : wantsSync || !visible
+      : wantsSync || viewModel.state === "loading"
         ? t("apps.checkingState")
         : t("apps.notEnabled");
   function toggleAll(next: boolean) {
@@ -830,31 +965,38 @@ export function ApplicationsHome({
             <header>
               <h2>{t("apps.overview")}</h2>
             </header>
+            {evolveRunning ? (
+              <p className="r6-evolve-status" role="status">
+                {text(evolveUncertain ? "正在核对整合状态…" : "正在整合记忆…")}
+              </p>
+            ) : null}
             <div className="r6-home-metrics">
               <div role="status" aria-live="polite" aria-atomic="true">
-                <p>{t("apps.memories")}</p>
+                <p>{t(viewModel.countLabel)}</p>
                 <p className="r6-home-figure">
                   <strong>
-                    {new Intl.NumberFormat(locale).format(
-                      visible?.memory_count ?? 0,
-                    )}
+                    {viewModel.count === null
+                      ? "—"
+                      : new Intl.NumberFormat(locale).format(viewModel.count)}
                   </strong>
-                  {t("apps.unit") ? <i>{t("apps.unit")}</i> : null}
+                  {viewModel.count !== null && t("apps.unit") ? (
+                    <i>{t("apps.unit")}</i>
+                  ) : null}
                 </p>
                 <small>
-                  {visible
+                  {viewModel.state !== "loading"
                     ? summaryStale
                       ? t("apps.showingPrevious")
-                      : t("apps.scope")
+                      : t(viewModel.countDetail)
                     : summaryUnavailable
                       ? t("apps.countWillUpdate")
                       : summaryFailures
                         ? t("apps.startingRetry")
-                        : t("apps.readingCount")}
+                        : t(viewModel.countDetail)}
                 </small>
               </div>
               <div>
-                <p>{t("apps.processing")}</p>
+                <p>{t(viewModel.processingTitle)}</p>
                 <strong className="r6-home-word">{stateLabel}</strong>
                 <small>{stateDetail}</small>
               </div>
@@ -862,16 +1004,14 @@ export function ApplicationsHome({
                 <p>{t("apps.recentUpdate")}</p>
                 <strong className={time ? "r6-home-time" : "r6-home-word"}>
                   {time ??
-                    (visible
-                      ? t("apps.notGenerated")
-                      : t("apps.checkingRecent"))}
+                    (viewModel.recentMetric.valueKey
+                      ? t(viewModel.recentMetric.valueKey)
+                      : "")}
                 </strong>
                 <small>
                   {time
-                    ? `${latestClock?.today ? `${t("apps.today")}· ` : ""}${t("apps.saved")}`
-                    : visible
-                      ? t("apps.separate")
-                      : t("apps.recentWillUpdate")}
+                    ? `${latestClock?.today ? `${t("apps.today")}· ` : ""}${t(viewModel.recentMetric.detailKey)}`
+                    : t(viewModel.recentMetric.detailKey)}
                 </small>
               </div>
             </div>
@@ -905,7 +1045,7 @@ export function ApplicationsHome({
                       ? t("apps.recentCall")
                       : activity === "memory"
                         ? t("apps.recentUpdate")
-                        : t("apps.firstBatch")}
+                        : t(viewModel.activity.headingKey)}
                 </p>
               )}
               <div>
@@ -935,7 +1075,13 @@ export function ApplicationsHome({
                   })()
                 ) : null}
                 <section>
-                  <h3>
+                  <h3
+                    className={
+                      activity === "memory" && latest?.kind === "raw"
+                        ? "r6-home-raw-excerpt"
+                        : undefined
+                    }
+                  >
                     {activity === "unavailable"
                       ? callState === "unavailable"
                         ? t("apps.callsUnavailable")
@@ -947,16 +1093,12 @@ export function ApplicationsHome({
                             locale,
                           )
                         : activity === "memory" && latest
-                          ? `${latest.content}${"truncated" in latest && latest.truncated ? "…" : ""}`
-                          : activity === "importing"
-                            ? t("apps.importing")
-                            : activity === "first-running"
-                              ? t("apps.firstRunning")
-                              : activity === "first-queued"
-                                ? t("apps.firstQueued")
-                                : activity === "loading"
-                                  ? t("apps.readingActivity")
-                                  : t("apps.emptyMemories")}
+                          ? latest.emptyExcerpt
+                            ? t("apps.rawNoExcerpt")
+                            : latest.excerpt
+                          : viewModel.activity.titleKey
+                            ? t(viewModel.activity.titleKey)
+                            : ""}
                   </h3>
                   <small>
                     {activity === "unavailable"
@@ -966,14 +1108,24 @@ export function ApplicationsHome({
                       : activity === "call" && recentCall
                         ? `${recentCallHostName} · ${stamped(recentCall.occurred_at, locale, t)} · ${callRowDetail(recentCall, locale)}${callState === "incomplete" ? t("apps.incompleteCalls") : ""}`
                         : activity === "memory" && latest
-                          ? [time, latestSourceNames.join(", ")]
+                          ? (latest.kind === "raw"
+                              ? [
+                                  t("apps.rawConversation"),
+                                  latestSourceNames.join(", "),
+                                  projectionTimeBasisLabel(latest.timeBasis, t),
+                                  time,
+                                ]
+                              : [
+                                  time,
+                                  latestSourceNames.join(", "),
+                                  projectionTimeBasisLabel(latest.timeBasis, t),
+                                ]
+                            )
                               .filter(Boolean)
                               .join(" · ")
-                          : activity === "importing"
-                            ? t("apps.savingConversations")
-                            : activity === "loading"
-                              ? t("apps.recentWillUpdate")
-                              : t("apps.waitingMemories")}
+                          : viewModel.activity.detailKey
+                            ? t(viewModel.activity.detailKey)
+                            : ""}
                   </small>
                 </section>
                 {(activity === "unavailable" ||
@@ -987,16 +1139,12 @@ export function ApplicationsHome({
                             setRevision((n) => n + 1);
                             setCallRevision((n) => n + 1);
                           }
-                        : activity === "call"
-                          ? onCalls
-                          : () => onMemories(latest?.memory_id)
+                        : onCalls
                     }
                   >
                     {activity === "unavailable"
                       ? t("apps.reread")
-                      : activity === "call"
-                        ? t("apps.viewCalls")
-                        : t("apps.viewMemory")}
+                      : t("apps.viewCalls")}
                     {activity === "unavailable" ? null : (
                       <ArrowRight size={14} aria-hidden="true" />
                     )}
@@ -1049,8 +1197,12 @@ export function ApplicationsHome({
                 <dd>{syncState}</dd>
               </div>
               <div>
-                <dt>{t("apps.organizing")}</dt>
-                <dd>{stateLabel}</dd>
+                <dt>{t(viewModel.organizingTitle)}</dt>
+                <dd>{t(viewModel.organizingLabel as never)}</dd>
+              </div>
+              <div>
+                <dt>{t("apps.currentMode")}</dt>
+                <dd>{viewModel.currentModeLabel}</dd>
               </div>
               <div>
                 <dt>{t("apps.access")}</dt>

@@ -29,7 +29,6 @@ from one_memory.imports.sources.registry import (
     build_source_catalog,
 )
 from one_memory.imports.supervisor import ImportSupervisor
-from one_memory.live_capture import capture_hook
 
 FREEZE_THRESHOLD_SECONDS = 1.0
 
@@ -228,31 +227,17 @@ async def _run(
 
         hook_text = "realtime hook while history import is running"
         hook_started = time.monotonic()
-        result["hook_accepted"] = await asyncio.to_thread(
-            capture_hook,
-            "workbuddy",
-            {
+        # A hook hands its turn to Core over loopback; it no longer writes the
+        # database itself. What is measured is that hand-off under import load.
+        handed = await client.post(
+            "/api/v1/live-capture/workbuddy",
+            json={
                 "hook_event_name": "UserPromptSubmit",
                 "session_id": "pressure-live-session",
                 "prompt": hook_text,
             },
-            app.state.evidence_store.database_path,
         )
-        hook_deadline = hook_started + 10
-        hook_stored = False
-        while time.monotonic() < hook_deadline:
-            with sqlite3.connect(app.state.evidence_store.database_path) as connection:
-                hook_stored = (
-                    connection.execute(
-                        "SELECT 1 FROM evidence WHERE source_id='workbuddy' AND verbatim=?",
-                        (hook_text,),
-                    ).fetchone()
-                    is not None
-                )
-            if hook_stored:
-                break
-            await asyncio.sleep(0.01)
-        result["hook_stored"] = hook_stored
+        result["hook_accepted"] = handed.status_code == 202
         result["hook_visible_ms"] = round((time.monotonic() - hook_started) * 1000, 1)
 
         during, during_unavailable, sampled_terminal = await _measure_recall_until(

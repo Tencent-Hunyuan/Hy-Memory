@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hy-memory"
-version = "2.0.13"
+version = "2.0.14"
 description = "HY Memory - Industrial-grade dual-system cognitive memory framework"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -38,6 +38,7 @@ qdrant = ["qdrant-client", "fastembed"]
 faiss = ["faiss-cpu"]
 graph = ["neo4j"]
 mysql = ["aiomysql"]
+postgres = ["psycopg[binary]>=3.1,<4"]
 rerank = ["torch", "transformers"]
 all = [
     "chromadb>=1.5.9",
@@ -47,6 +48,7 @@ all = [
     "kuzu",
     "neo4j",
     "aiomysql",
+    "psycopg[binary]>=3.1,<4",
     "torch",
     "transformers",
 ]

@@ -1,6 +1,7 @@
 import logging
 import re
 import sqlite3
+from collections.abc import Iterable
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -18,12 +19,26 @@ from one_memory.imports.adapters import ScanPhase, SourceCursor
 #: the drift would only surface on a fresh database.
 #:
 #: This runs on SQLite today, so the SQLite rendering is used.
-from one_memory.memory_server.migrations import import_jobs_ddl
+from one_memory.memory_server.migrations import (
+    import_job_lookup_indexes_ddl,
+    import_jobs_ddl,
+)
 
 logger = logging.getLogger("one_memory.imports.jobs")
 
 JOB_SCHEMA = import_jobs_ddl("sqlite")
+#: Migration 63, applied by the store as well so a running home gets it.
+JOB_LOOKUP_INDEXES = import_job_lookup_indexes_ddl("sqlite")
 MAX_LIVE_BACKLOG_BYTES = 256 * 1024
+
+#: Finished live syncs kept per (user, source). Live sync opens a job for every
+#: change it imports, and nothing removed them: hundreds a day on an active
+#: machine. The App shows the latest job per source and the active ones; twenty is
+#: that plus enough recent history to read a failure back.
+SYNC_JOBS_KEPT_PER_SOURCE = 20
+#: Rows one pruning transaction may delete, so it holds the single writer for
+#: a few milliseconds at most however large the table grew.
+PRUNE_BATCH_ROWS = 200
 
 
 class ImportStatus(StrEnum):
@@ -34,6 +49,12 @@ class ImportStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+#: States no job ever leaves (`ImportJobStore._TRANSITIONS`). Failed and
+#: interrupted are not among them: both can be resumed, and both still hold the
+#: source's one active slot.
+FINISHED_STATUSES = (ImportStatus.COMPLETED, ImportStatus.CANCELLED)
 
 
 class ImportJob(BaseModel):
@@ -272,6 +293,9 @@ class ImportJobStore:
                 WHERE status IN ('pending', 'running', 'paused', 'interrupted', 'failed')
                 """
             )
+        for statement in JOB_LOOKUP_INDEXES.split(";"):
+            if statement.strip():
+                connection.execute(statement)
 
     def create(
         self,
@@ -334,8 +358,8 @@ class ImportJobStore:
         read again.
         """
         opened: list[ImportJob] = []
-        for job in self.list_jobs(status=ImportStatus.FAILED):
-            if job.operation != "history" or job.stored != 0:
+        for job in self.find_jobs(operation="history", statuses=(ImportStatus.FAILED,)):
+            if job.stored != 0:
                 continue
             reasons = {issue.reason for issue in self.list_issues(job.job_id)}
             if not reasons or not reasons <= self._UNPUBLISHED_SNAPSHOT_FAILURES:
@@ -799,15 +823,171 @@ class ImportJobStore:
         return self.require(job_id)
 
     def list_jobs(self, *, status: ImportStatus | None = None) -> list[ImportJob]:
+        """Every job, oldest first. Hot paths ask `find_jobs` a narrower question."""
+        return self.find_jobs(statuses=(status,) if status is not None else None)
+
+    def find_jobs(
+        self,
+        *,
+        user_id: str | None = None,
+        source_id: str | None = None,
+        operation: Literal["history", "sync"] | None = None,
+        statuses: Iterable[ImportStatus] | None = None,
+        newest_first: bool = False,
+        limit: int | None = None,
+    ) -> list[ImportJob]:
+        """The jobs matching every given filter, oldest first unless asked otherwise.
+
+        The filters are SQL, served by `import_jobs_lane` / `import_jobs_status`
+        (migration 63). Reading the whole table and filtering here was what
+        three bulk threads and three request threads were all inside, for tens
+        of seconds, while the loop waited on them.
+        """
+        clauses: list[str] = []
+        parameters: list[str | int] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            parameters.append(user_id)
+        if source_id is not None:
+            clauses.append("source_id = ?")
+            parameters.append(source_id)
+        if operation is not None:
+            clauses.append("operation = ?")
+            parameters.append(operation)
+        if statuses is not None:
+            wanted = tuple(dict.fromkeys(ImportStatus(status) for status in statuses))
+            if not wanted:
+                return []
+            clauses.append(f"status IN ({', '.join('?' for _ in wanted)})")
+            parameters.extend(wanted)
         query = "SELECT * FROM import_jobs"
-        parameters: tuple[str, ...] = ()
-        if status is not None:
-            query += " WHERE status = ?"
-            parameters = (status,)
-        query += " ORDER BY created_at, job_id"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += (
+            " ORDER BY created_at DESC, job_id DESC"
+            if newest_first
+            else " ORDER BY created_at, job_id"
+        )
+        if limit is not None:
+            if limit < 1:
+                raise ValueError("limit must be positive")
+            query += " LIMIT ?"
+            parameters.append(limit)
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [self._to_job(row) for row in rows]
+
+    def latest_job(
+        self,
+        *,
+        user_id: str,
+        source_id: str,
+        operation: Literal["history", "sync"] | None = None,
+        statuses: Iterable[ImportStatus] | None = None,
+    ) -> ImportJob | None:
+        jobs = self.find_jobs(
+            user_id=user_id,
+            source_id=source_id,
+            operation=operation,
+            statuses=statuses,
+            newest_first=True,
+            limit=1,
+        )
+        return jobs[0] if jobs else None
+
+    def prune_finished_sync_jobs(
+        self,
+        *,
+        keep: int = SYNC_JOBS_KEPT_PER_SOURCE,
+        max_rows: int = PRUNE_BATCH_ROWS,
+    ) -> int:
+        """Delete finished live-sync jobs beyond the newest `keep` of each source.
+
+        One bounded transaction: at most `max_rows` jobs, with their issues and
+        skip counts. Returns how many jobs went; fewer than `max_rows` means
+        nothing is left to prune, so calling again until then finishes the job.
+
+        Only `sync` jobs in a state nothing leaves (completed, cancelled) are
+        ever deleted. Failed and interrupted jobs hold the source's active slot
+        and can be resumed; history jobs are named by connection receipts, by
+        the onboarding gate and by the first-import review, and there are a
+        handful per source, so they are all kept. Cursors live in their own
+        tables keyed by file, not by job, so a pruned job takes no position
+        with it. The newest job of every source is always among those kept,
+        which is the one the App and live sync health name.
+        """
+        if keep < 1:
+            raise ValueError("keep must be positive")
+        if max_rows < 1:
+            raise ValueError("max_rows must be positive")
+        finished = tuple(FINISHED_STATUSES)
+        placeholders = ", ".join("?" for _ in finished)
+        deleted = 0
+        with self._connect(writing=True) as connection:
+            lanes = connection.execute(
+                f"""
+                SELECT user_id, source_id, COUNT(*) AS finished
+                FROM import_jobs
+                WHERE operation = 'sync' AND status IN ({placeholders})
+                GROUP BY user_id, source_id
+                HAVING COUNT(*) > ?
+                """,
+                (*finished, keep),
+            ).fetchall()
+            for lane in lanes:
+                if deleted >= max_rows:
+                    break
+                # The oldest job still kept: everything strictly older goes.
+                boundary = connection.execute(
+                    f"""
+                    SELECT created_at, job_id FROM import_jobs
+                    WHERE user_id = ? AND source_id = ? AND operation = 'sync'
+                      AND status IN ({placeholders})
+                    ORDER BY created_at DESC, job_id DESC
+                    LIMIT 1 OFFSET ?
+                    """,
+                    (lane["user_id"], lane["source_id"], *finished, keep - 1),
+                ).fetchone()
+                if boundary is None:
+                    continue
+                victims = [
+                    str(row["job_id"])
+                    for row in connection.execute(
+                        f"""
+                        SELECT job_id FROM import_jobs
+                        WHERE user_id = ? AND source_id = ? AND operation = 'sync'
+                          AND status IN ({placeholders})
+                          AND (created_at < ? OR (created_at = ? AND job_id < ?))
+                        ORDER BY created_at, job_id
+                        LIMIT ?
+                        """,
+                        (
+                            lane["user_id"],
+                            lane["source_id"],
+                            *finished,
+                            boundary["created_at"],
+                            boundary["created_at"],
+                            boundary["job_id"],
+                            max_rows - deleted,
+                        ),
+                    )
+                ]
+                if not victims:
+                    continue
+                marks = ", ".join("?" for _ in victims)
+                # Foreign keys cascade these too; deleting them by name keeps
+                # the outcome the same on a connection that has them off.
+                connection.execute(f"DELETE FROM import_issues WHERE job_id IN ({marks})", victims)
+                connection.execute(
+                    f"DELETE FROM import_skip_reason_counts WHERE job_id IN ({marks})", victims
+                )
+                removed = connection.execute(
+                    f"DELETE FROM import_jobs WHERE job_id IN ({marks}) "
+                    f"AND operation = 'sync' AND status IN ({placeholders})",
+                    (*victims, *finished),
+                )
+                deleted += removed.rowcount
+        return deleted
 
     def get_source_cursors(
         self,

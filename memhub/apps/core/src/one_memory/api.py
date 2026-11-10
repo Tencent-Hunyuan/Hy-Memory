@@ -49,6 +49,7 @@ from one_memory.auth import local_api_guard, renderer_origins
 from one_memory.background_work import (
     in_sdk_read,
     in_the_background,
+    in_the_write_queue,
     shutdown_bulk_pool,
     warm_bulk_pool,
 )
@@ -93,11 +94,13 @@ from one_memory.external_memory_access import (
 )
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
+from one_memory.graph_open_guard import GraphOpenGuard, GraphOpenOutcome, GraphStoreStatus
 from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     GraphWidthMismatch,
     effective_memory_mode,
     graph_store_enabled,
+    live_graph_path,
 )
 from one_memory.hy_runtime_config import (
     HY_MEMORY_READER,
@@ -164,6 +167,7 @@ from one_memory.imports.grants import (
 )
 from one_memory.imports.host_packages import CapabilityState, HostPackageCapabilities
 from one_memory.imports.jobs import (
+    PRUNE_BATCH_ROWS,
     ImportIssueRecord,
     ImportJob,
     ImportJobStore,
@@ -224,6 +228,7 @@ from one_memory.memory_features import (
     effective_features,
     feature_activity,
     non_default_features,
+    parameter_value,
 )
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
@@ -264,7 +269,13 @@ from one_memory.model_request_audit import (
     ModelRequestAuditStore,
 )
 from one_memory.model_request_budget import BudgetedModelTransport, ModelRequestBudget
-from one_memory.onboarding import OnboardingState, OnboardingStore
+from one_memory.onboarding import (
+    OnboardingCompletedError,
+    OnboardingProgressUpdate,
+    OnboardingState,
+    OnboardingStore,
+)
+from one_memory.raw_turns import RawDisplayTurn, raw_display_turns, raw_prefix_added
 from one_memory.recall import (
     GovernedRecallTarget,
     RecallReceipt,
@@ -322,6 +333,13 @@ from one_memory.ui_language import (
     UI_LANGUAGES,
     UiLanguage,
     sdk_language,
+)
+from one_memory.ui_projection import (
+    HomeProjectionCapabilities,
+    HomeProjectionV1,
+    home_capabilities,
+    raw_list_filters,
+    read_home_projection,
 )
 from one_memory.user_scope import (
     DEFAULT_USER_ID,
@@ -592,24 +610,30 @@ class SdkRawItem(HySdkRawRecord):
     role: str | None = None
     content_hash: str
     created: datetime | None = None
+    turn_id: str | None = Field(default=None, min_length=1, max_length=96)
+    turn_index: int | None = Field(default=None, ge=0)
+    turn_count: int | None = Field(default=None, ge=1)
 
     @classmethod
-    def of(cls, record: HySdkRawRecord) -> "SdkRawItem":
-        messages = tuple(
-            SdkRawMessage(role=role, content=text)
-            for role, text in raw_turn_messages(record.content)
-        )
+    def of(cls, record: HySdkRawRecord, turn: RawDisplayTurn | None = None) -> "SdkRawItem":
+        content = turn.content if turn is not None else record.content
+        raw_messages = turn.messages if turn is not None else raw_turn_messages(record.content)
+        messages = tuple(SdkRawMessage(role=role, content=text) for role, text in raw_messages)
         roles = {message.role for message in messages}
         return cls(
-            **record.model_dump(),
+            **record.model_dump(exclude={"content"}),
+            content=content,
             messages=messages,
             role=next(iter(roles)) if len(roles) == 1 and "" not in roles else None,
-            content_hash="sha256:" + hashlib.sha256(record.content.encode("utf-8")).hexdigest(),
+            content_hash="sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
             created=(
                 datetime.fromtimestamp(record.gmt_created, tz=UTC)
                 if record.gmt_created is not None
                 else None
             ),
+            turn_id=turn.turn_id if turn is not None else None,
+            turn_index=turn.turn_index if turn is not None else None,
+            turn_count=turn.turn_count if turn is not None else None,
         )
 
 
@@ -622,10 +646,40 @@ class SdkRawPage(BaseModel):
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1, le=500)
-    #: Set when a time filter was applied to this page in Core (the SDK list
-    #: has none): `items` is the page's rows inside the range, `total` stays
-    #: the SDK's count before that filter.
+    unit: Literal["raw", "turn"] = "raw"
+    next_cursor: str | None = None
+    has_more: bool = False
+    total_exact: bool = True
+    #: Set when a time filter was applied in Core. For storage `raw`, `total`
+    #: remains the SDK count; for product `turn`, it is the filtered turn count.
     time_filtered: bool = False
+
+
+class SdkRawGraphItem(BaseModel):
+    """Small, non-authoritative projection used to draw the bounded raw map."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    turn_id: str = Field(min_length=1, max_length=96)
+    raw_id: str = Field(min_length=1)
+    label: str = Field(max_length=240)
+    source: str
+    session_id: str
+    memory_at: float | None = None
+    gmt_created: float | None = None
+
+
+class SdkRawGraphPage(BaseModel):
+    """One bounded page from the raw-turn catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    items: tuple[SdkRawGraphItem, ...] = ()
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=300)
+    has_more: bool = False
 
 
 class SdkLayerCounts(BaseModel):
@@ -638,11 +692,6 @@ class SdkLayerCounts(BaseModel):
     total: int = Field(ge=0)
     #: The statuses counted, or None for the defaults (active; raw: active+shadow).
     statuses: tuple[str, ...] | None = None
-
-
-#: Raw lifecycle states that are still a kept conversation. Pro marks a raw
-#: SHADOW once extraction succeeds; lite leaves it ACTIVE.
-RAW_STATUSES = ("active", "shadow")
 
 
 class MemoryProcessingBlock(BaseModel):
@@ -729,6 +778,12 @@ class MemoryProcessingSummary(BaseModel):
     #: The last provider failure behind the pause, as a stable code
     #: (`model_auth_failed`, `model_not_found`, `model_unreachable`, ...).
     llm_backoff_error: str | None = None
+    #: The durable write drain, the queue's only consumer: `running`,
+    #: `restarting` (it exited on an error and comes back after a pause) or
+    #: `stopped`; None before startup recovery has started it.
+    write_drain: Literal["running", "restarting", "stopped"] | None = None
+    #: Why the drain last exited unexpectedly, as a stable code; None if never.
+    write_drain_error: str | None = None
 
 
 class MemoryModeState(BaseModel):
@@ -740,10 +795,15 @@ class MemoryModeState(BaseModel):
     mode: MemoryMode
     #: The saved setting (default pro).
     configured_mode: MemoryMode
+    #: True once a person chose a mode, including explicitly choosing pro.
+    explicitly_configured: bool
     #: `ONE_MEMORY_GRAPH_STORE` (dev) forces ultra over the setting.
     forced_by_env: bool
     modes: tuple[MemoryMode, ...] = MEMORY_MODES
     graph_build: GraphBuildState
+    #: The ultra graph's own state: opening / ready / rebuilt after a
+    #: quarantine (`graph_open_guard`).
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
 
 
 class MemoryModeUpdate(BaseModel):
@@ -767,6 +827,29 @@ class MemoryModeChange(MemoryModeState):
 
     previous_mode: MemoryMode
     effects: tuple[MemoryModeEffect, ...] = ()
+
+
+MemoryModeBlocker = Literal[
+    "active_model_required",
+    "embedding_maintenance_in_progress",
+    "memory_lifecycle_busy",
+    "graph_store_unavailable",
+]
+MemoryModeWarning = Literal["forced_by_env", "effective_no_change"]
+
+
+class MemoryModePlan(BaseModel):
+    """Shared validation result used by plan and PUT."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current: MemoryMode
+    target: MemoryMode
+    effective_target: MemoryMode
+    capabilities: HomeProjectionCapabilities
+    effects: tuple[MemoryModeEffect, ...] = ()
+    warnings: tuple[MemoryModeWarning, ...] = ()
+    blockers: tuple[MemoryModeBlocker, ...] = ()
 
 
 class EvolveScheduleUpdate(BaseModel):
@@ -808,6 +891,10 @@ class PipelineStatus(BaseModel):
     #: Newest finished run across users, for a one-line status.
     last_evolve_at: datetime | None = None
     graph_build: GraphBuildState
+    #: The ultra graph's own state (`graph_open_guard`): `opening` while the
+    #: startup step runs, `rebuilding_after_quarantine` after a graph that
+    #: kept taking Core down was renamed aside, else `ready` / `not_used`.
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
     #: The SDK features (`memory_features`) whose value differs from the SDK
     #: default; empty while every feature is at its default. A parameter
     #: (`intention_dedup_threshold`) appears as its number.
@@ -877,19 +964,22 @@ class MemoryParameterState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: MemoryParameterName
-    #: What clients are built with: `configured`, else `default`.
-    value: float
+    #: What clients are built with: `configured`, else `default`. An integer
+    #: parameter (`agent_max_tokens`) is an int throughout.
+    value: int | float
     #: What a person set; null = not set, the SDK default applies.
-    configured: float | None
+    configured: int | float | None
     #: The SDK default (its code default, or its own env var when set).
-    default: float
+    default: int | float
     #: The range a `PUT` accepts, inclusive.
-    minimum: float
-    maximum: float
-    #: Whether it acts: exactly when `requires_feature` acts.
+    minimum: int | float
+    maximum: int | float
+    #: Whether it acts: when `requires_feature` acts, or, without one, when
+    #: the mode reaches `requires_mode`.
     active: bool
     reason: FeatureReason | None
-    requires_feature: MemoryFeatureName
+    requires_feature: MemoryFeatureName | None
+    requires_mode: Literal["pro", "ultra"] = "pro"
     sdk_field: str
     env: str
     description: str
@@ -1440,10 +1530,15 @@ def create_app(
                 service=app.state.evolve_service,
                 schedule=lambda: _config_store(app).evolve_schedule(),
                 users_with_memories=lambda: _users_with_memories(app),
+                lifecycle_lock=app.state.memory_mode_lock,
+                lifecycle_open=lambda: (
+                    _embedding_writes_open(app) and not app.state.memory_graph_backfill.running
+                ),
             )
             app.state.memory_graph_backfill = MemoryGraphBackfill(
                 coordinator=app.state.sdk_write_coordinator,
                 state=app.state.evolve_state_store,
+                lifecycle_open=lambda: _embedding_writes_open(app),
             )
             # C2 owns the single production budget (handle 5s + reserve 250ms,
             # total 5.25s, lease 10s, renew 1s, claim 250ms). The composition
@@ -1458,29 +1553,22 @@ def create_app(
                 # under a new SDK request id; the re-run first asks the SDK
                 # whether the old one landed (`execute_job`). Nothing stays
                 # `unknown` waiting for a person.
-                await in_the_background(
+                await in_the_write_queue(
                     memory_write_queue.recover_unknown,
                     in_flight=sdk_write_in_flight,
                 )
 
             async def admit_hy_invocation(
                 source_id: str,
+                requires_generation: bool,
                 mark_invoked: Callable[[], Awaitable[bool]],
             ) -> bool:
-                """Serialize pause with the last boundary before an HY call."""
-                source_lock = app.state.source_permission_locks.setdefault(
-                    source_id, asyncio.Lock()
+                return await _admit_pipeline_invocation(
+                    app,
+                    source_id,
+                    requires_generation,
+                    mark_invoked,
                 )
-                async with app.state.sedimentation_lock, source_lock:
-                    if not _config_store(app).sedimentation_enabled():
-                        raise RuntimeError("model_sedimentation_disabled")
-                    if not _embedding_writes_open(app):
-                        # Re-checked at the last boundary: a switch that began
-                        # after the claim keeps this job queued, unsent.
-                        raise RuntimeError("embedding_switch_in_progress")
-                    if not _source_writes_on(app, source_id):
-                        raise RuntimeError("model_content_source_disabled")
-                    return await mark_invoked()
 
             memory_write_drain = DurableWriteDrain(
                 memory_write_queue,
@@ -1529,7 +1617,7 @@ def create_app(
                 # therefore skipped on every drain tick — the note stayed
                 # "saved, waiting" with no task behind it, forever.
                 source_claim_enabled=lambda source_id: _sedimentation_claim_enabled(app, source_id),
-                model_claim_allowance=app.state.model_backoff.allowance,
+                model_claim_allowance=lambda: _model_claim_allowance(app),
             )
             app.state.memory_write_drain = memory_write_drain
 
@@ -1594,6 +1682,7 @@ def create_app(
             # Started by `recover_after_ready`: a running drain claims jobs and
             # holds the single writer, which the rest of startup still needs.
             app.state.memory_write_drain_task = None
+            app.state.import_job_pruning = None
             # D52: every entry that already holds committed Evidence goes
             # through the one durable queue. The intake turns one record into
             # one complete-turn request; the drain stays the only consumer, so
@@ -1709,6 +1798,7 @@ def create_app(
                 else None
             )
             app.state.live_sync_watch_lock = asyncio.Lock()
+            app.state.source_activation_tasks = {}
             app.state.live_sync_supervisor.set_watched_sources(
                 watch_roots if watching and runtime_settings.live_sync_enabled else ()
             )
@@ -1836,11 +1926,39 @@ def create_app(
                         app.state.embedding_switch.start_retention()
 
                 async def start_write_drain() -> None:
+                    # Supervised: an unexpected exit is reported and the drain
+                    # restarts, instead of stranding every queued write.
                     app.state.memory_write_drain_task = watched_task(
                         asyncio.get_running_loop(),
-                        lambda: memory_write_drain.run_forever(),
+                        lambda: memory_write_drain.run_supervised(),
                         name="one-memory-durable-write-drain",
                     )
+
+                async def start_import_job_pruning() -> None:
+                    app.state.import_job_pruning = watched_task(
+                        asyncio.get_running_loop(),
+                        lambda: _prune_finished_import_jobs(app.state.import_job_store),
+                        name="one-memory-import-job-pruning",
+                    )
+
+                async def resume_graph_backfill() -> None:
+                    if (
+                        app.state.graph_open_outcome == "quarantined"
+                        and _memory_mode(app) == "ultra"
+                    ):
+                        # The quarantined graph is derived data: rebuild it
+                        # from every user's memories, the normal ultra path.
+                        users = await asyncio.to_thread(_known_user_ids, app)
+                        app.state.memory_graph_backfill.start(users)
+                        return
+                    saved = app.state.evolve_state_store.graph_build()
+                    if saved.state != "running":
+                        return
+                    if _memory_mode(app) != "ultra":
+                        app.state.evolve_state_store.set_graph_build(GraphBuildState())
+                        return
+                    users = await asyncio.to_thread(_known_user_ids, app)
+                    app.state.memory_graph_backfill.recover(users)
 
                 async def start_evolve_schedule() -> None:
                     # Idle outside ultra: each tick asks the mode first.
@@ -1902,7 +2020,7 @@ def create_app(
                             )
 
                 async def resume_imports() -> None:
-                    app.state.import_supervisor.resume_interrupted()
+                    await app.state.import_supervisor.resume_interrupted_off_loop()
 
                 async def start_live_sync() -> None:
                     if runtime_settings.live_sync_enabled:
@@ -1930,11 +2048,19 @@ def create_app(
                     # served from the live space throughout.
                     if sdk:
                         await step("embedding_spaces", resume_embedding_spaces)
+                        await step("graph_backfill", resume_graph_backfill)
                     await step("write_drain", start_write_drain)
+                    if sdk and _memory_mode(app) == "lite":
+                        # A previous pro run may have parked jobs while model
+                        # sedimentation was off. Lite needs no generation model:
+                        # readmit them in the background so startup can finish
+                        # while raw conversations begin appearing.
+                        _resume_sedimentation(app)
                     if sdk:
                         await step("evolve_schedule", start_evolve_schedule)
                     else:
                         await step("pending_dispatch_replay", replay_pending_dispatch)
+                    await step("import_job_pruning", start_import_job_pruning)
                     await step("import_resume", resume_imports)
                     await step("live_sync", start_live_sync)
                     await step("source_reconcile", _reconcile_source_sync_from_config)
@@ -1956,6 +2082,18 @@ def create_app(
                     duration_ms=elapsed_ms(recovery_started),
                     details={"count": len(failed)},
                 )
+
+            # The ultra graph's first open, as its own startup step before
+            # readiness (`graph_open_guard`): a graph that freezes or kills
+            # Core while opening used to do it after readiness, inside the
+            # first SDK client, and the Runtime relaunched into the same file
+            # forever. Here the Runtime sees a declared startup phase, and a
+            # graph that took two starts down is quarantined and rebuilt.
+            app.state.graph_open_guard = GraphOpenGuard(
+                runtime_settings.data_dir,
+                instance_id=runtime_settings.instance_id,
+            )
+            app.state.graph_open_outcome = await _open_graph_store_at_startup(app)
 
             app.state.recovery_task = None
             app.state.sdk_stores_held = False
@@ -2017,6 +2155,11 @@ def create_app(
                         app.state.memory_governance_store.wait_content_candidate_backfill,
                         5.0,
                     )
+                source_activation_tasks = tuple(app.state.source_activation_tasks.values())
+                for task in source_activation_tasks:
+                    task.cancel()
+                if source_activation_tasks:
+                    await asyncio.gather(*source_activation_tasks, return_exceptions=True)
                 if app.state.live_sync_watch is not None:
                     await app.state.live_sync_watch.shutdown()
                 await app.state.live_sync_supervisor.shutdown()
@@ -2024,6 +2167,10 @@ def create_app(
                     # Recovery never reached the metadata repair step.
                     release_stores(runtime_settings.data_dir)
                     app.state.sdk_stores_held = False
+                if app.state.import_job_pruning is not None:
+                    app.state.import_job_pruning.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await app.state.import_job_pruning
                 await app.state.import_supervisor.shutdown()
                 app.state.memory_write_drain.stop()
                 if app.state.memory_write_drain_task is not None:
@@ -2126,6 +2273,19 @@ def create_app(
     from one_memory.embedding_switch_routes import embedding_switch_router
 
     app.include_router(embedding_switch_router(protected))
+    from one_memory.live_capture import live_capture_router
+
+    def file_polled(request: Request, source_id: str) -> bool:
+        """Whether live sync reads this source's own files, so the hook's copy is redundant."""
+        registration = getattr(request.app.state, "source_catalog", {}).get(source_id)
+        return (
+            runtime_settings.live_sync_enabled
+            and registration is not None
+            and registration.capabilities.live_sync is CapabilityState.IMPLEMENTED
+        )
+
+    # Host hooks hand their turn over here instead of opening the database.
+    app.include_router(live_capture_router(protected, file_polled=file_polled))
 
     app.add_middleware(
         CORSMiddleware,
@@ -2484,6 +2644,21 @@ def create_app(
     def get_onboarding() -> OnboardingState:
         return _onboarding_store(app).get()
 
+    @app.api_route(
+        "/api/v1/onboarding/progress",
+        methods=["PATCH", "PUT"],
+        response_model=OnboardingState,
+        dependencies=protected,
+    )
+    async def update_onboarding_progress(
+        update: OnboardingProgressUpdate,
+    ) -> OnboardingState:
+        """Persist only resumable onboarding choices; secrets are never accepted."""
+        try:
+            return await asyncio.to_thread(_onboarding_store(app).update_progress, update)
+        except OnboardingCompletedError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @app.post(
         "/api/v1/onboarding/complete",
         response_model=OnboardingState,
@@ -2747,17 +2922,16 @@ def create_app(
         await _refuse_overlapping_root(source_id, registration.candidate.path, DEFAULT_USER_ID)
         root_changed = prior is not None and prior.root_id != request.expected_root_id
         if root_changed:
-            source_jobs = [job for job in _job_store(app).list_jobs() if job.source_id == source_id]
+            source_jobs = await asyncio.to_thread(
+                partial(
+                    _job_store(app).find_jobs,
+                    source_id=source_id,
+                    statuses=_UNFINISHED_IMPORT_STATUSES,
+                )
+            )
             if any(job.status is ImportStatus.RUNNING for job in source_jobs):
                 raise HTTPException(status_code=409, detail="source_import_busy")
             for job in source_jobs:
-                if job.status not in {
-                    ImportStatus.PENDING,
-                    ImportStatus.PAUSED,
-                    ImportStatus.INTERRUPTED,
-                    ImportStatus.FAILED,
-                }:
-                    continue
                 await _supervisor(app).cancel(job.job_id)
         try:
             receipt = await asyncio.to_thread(
@@ -2936,21 +3110,18 @@ def create_app(
         user's own cursors and history job.
         """
         await _live_sync(app).initialize_source(source_id, baseline_missing_files=True)
-        active = {
-            ImportStatus.PENDING,
-            ImportStatus.PAUSED,
-            ImportStatus.INTERRUPTED,
-            ImportStatus.RUNNING,
-            ImportStatus.FAILED,
-        }
-        if any(
-            lane_key(job.user_id, job.source_id) == source_id
-            and job.operation == "history"
-            and job.status in active
-            for job in _job_store(app).list_jobs()
-        ):
-            return
         user_id, bare_source_id = split_lane(source_id)
+        active_history = await asyncio.to_thread(
+            partial(
+                _job_store(app).latest_job,
+                user_id=user_id,
+                source_id=bare_source_id,
+                operation="history",
+                statuses=_UNFINISHED_IMPORT_STATUSES,
+            )
+        )
+        if active_history is not None:
+            return
         await asyncio.to_thread(
             _job_store(app).create,
             user_id=user_id,
@@ -2960,18 +3131,25 @@ def create_app(
 
     async def _activate_source_resume(source_id: str) -> None:
         """Run work prepared for a source after config.json has committed."""
+        user_id, bare_source_id = split_lane(source_id)
         try:
-            for job in _job_store(app).list_jobs():
-                if lane_key(job.user_id, job.source_id) != source_id:
-                    continue
+            for job in await asyncio.to_thread(
+                partial(
+                    _job_store(app).find_jobs,
+                    user_id=user_id,
+                    source_id=bare_source_id,
+                    statuses=(
+                        ImportStatus.PENDING,
+                        ImportStatus.PAUSED,
+                        ImportStatus.INTERRUPTED,
+                        ImportStatus.FAILED,
+                    ),
+                )
+            ):
                 if job.status is ImportStatus.PENDING:
-                    _supervisor(app).enqueue(job.job_id)
-                elif job.status in {
-                    ImportStatus.PAUSED,
-                    ImportStatus.INTERRUPTED,
-                    ImportStatus.FAILED,
-                }:
-                    _supervisor(app).resume(job.job_id)
+                    await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
+                else:
+                    await _supervisor(app).resume_off_loop(job.job_id)
         except SourceAccessError as error:
             raise HTTPException(status_code=409, detail=error.code) from None
         if app.state.settings.automatic_memory_processing:
@@ -2998,22 +3176,19 @@ def create_app(
         _require_registration(app, source_id)
         if user_id != DEFAULT_USER_ID:
             return await _revoke_other_user_grant(source_id, user_id)
-        receipt = _grant_store(app).receipt(
-            user_id="local",
-            source_id=source_id,
+        receipt = await asyncio.to_thread(
+            partial(_grant_store(app).receipt, user_id="local", source_id=source_id)
         )
         if receipt is None:
             raise HTTPException(status_code=404, detail="grant_not_found")
-        active_statuses = {
-            ImportStatus.PENDING,
-            ImportStatus.RUNNING,
-            ImportStatus.PAUSED,
-            ImportStatus.INTERRUPTED,
-            ImportStatus.FAILED,
-        }
-        for job in _job_store(app).list_jobs():
-            if job.source_id == source_id and job.status in active_statuses:
-                await _supervisor(app).cancel(job.job_id)
+        for job in await asyncio.to_thread(
+            partial(
+                _job_store(app).find_jobs,
+                source_id=source_id,
+                statuses=_UNFINISHED_IMPORT_STATUSES,
+            )
+        ):
+            await _supervisor(app).cancel(job.job_id)
         # Revocation is the user's node for "stop using this source" (D73):
         # park unfinished extraction instead of leaving it to fail later, so
         # re-authorizing resumes the same work.
@@ -3025,9 +3200,8 @@ def create_app(
         await _live_sync(app).stop_source(source_id)
         _supervisor(app).unregister_adapter(source_id)
         _detection(app).pop(source_id, None)
-        receipt = _grant_store(app).revoke(
-            user_id="local",
-            source_id=source_id,
+        receipt = await asyncio.to_thread(
+            partial(_grant_store(app).revoke, user_id="local", source_id=source_id)
         )
         await asyncio.to_thread(_config_store(app).set_sync, source_id, False)
         await _refresh_live_watch(app)
@@ -3043,16 +3217,15 @@ def create_app(
         )
         if receipt is None:
             raise HTTPException(status_code=404, detail="grant_not_found")
-        active_statuses = {
-            ImportStatus.PENDING,
-            ImportStatus.RUNNING,
-            ImportStatus.PAUSED,
-            ImportStatus.INTERRUPTED,
-            ImportStatus.FAILED,
-        }
-        for job in _job_store(app).list_jobs():
-            if lane_key(job.user_id, job.source_id) == lane and job.status in active_statuses:
-                await _supervisor(app).cancel(job.job_id)
+        for job in await asyncio.to_thread(
+            partial(
+                _job_store(app).find_jobs,
+                user_id=user_id,
+                source_id=source_id,
+                statuses=_UNFINISHED_IMPORT_STATUSES,
+            )
+        ):
+            await _supervisor(app).cancel(job.job_id)
         await _live_sync(app).stop_source(lane)
         _supervisor(app).unregister_adapter(lane)
         receipt = await asyncio.to_thread(
@@ -3117,7 +3290,7 @@ def create_app(
             )
         except SourceAccessError as error:
             raise HTTPException(status_code=409, detail=error.code) from None
-        _supervisor(app).enqueue(job.job_id)
+        await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
         return job
 
     @app.post(
@@ -3128,6 +3301,69 @@ def create_app(
     async def create_import_job_v2(request: CreateImportJobV2Request) -> ImportJob:
         """`POST /api/v1/import-jobs` on one user's lane (Hermes only for another user)."""
         return await create_job_on(request.source_id, request.operation, request.user_id)
+
+    async def _activate_connected_sources(
+        request_id: str,
+        source_ids: tuple[str, ...],
+        *,
+        enable_sync: bool,
+    ) -> None:
+        """Apply one committed connection intent without holding its HTTP response."""
+        try:
+            for source_id in source_ids:
+                if enable_sync:
+                    await _live_sync(app).initialize_source(
+                        source_id,
+                        baseline_missing_files=True,
+                    )
+                else:
+                    await _live_sync(app).stop_source(source_id)
+            if enable_sync:
+                for source_id in source_ids:
+                    await _activate_source_resume(source_id)
+            await _refresh_live_watch(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            diagnostic_event(
+                level="error",
+                component="source.connection",
+                event="source.connection.activation_failed",
+                outcome="failed",
+                **diagnostic_exception(error),
+                details={"request_id": request_id, "source_ids": list(source_ids)},
+            )
+            raise
+
+    def _schedule_source_activation(
+        request_id: str,
+        source_ids: tuple[str, ...],
+        *,
+        enable_sync: bool,
+    ) -> None:
+        tasks = app.state.source_activation_tasks
+        existing = tasks.get(request_id)
+        if existing is not None and not existing.done():
+            return
+        task = watched_task(
+            asyncio.get_running_loop(),
+            lambda: _activate_connected_sources(
+                request_id,
+                source_ids,
+                enable_sync=enable_sync,
+            ),
+            component="source.connection",
+            name=f"source-connection-{request_id}",
+        )
+        if task is None:
+            return
+        tasks[request_id] = task
+
+        def forget(completed: asyncio.Future[None]) -> None:
+            if tasks.get(request_id) is completed:
+                tasks.pop(request_id, None)
+
+        task.add_done_callback(forget)
 
     @app.post(
         "/api/v1/sources/connect",
@@ -3218,44 +3454,21 @@ def create_app(
             if grant is not None:
                 _supervisor(app).register_adapter(registration.create_adapter(grant))
                 _detection(app).pop(job.source_id, None)
-                if request.enable_sync:
-                    await _prepare_source_resume(job.source_id)
-                else:
-                    await _live_sync(app).stop_source(job.source_id)
                 configured.append(job.source_id)
         if configured:
-            previous = {
-                source_id: _config_store(app).sync_enabled(source_id) for source_id in configured
-            }
-            try:
-                await asyncio.to_thread(
-                    _config_store(app).set_sync_many,
-                    {source_id: request.enable_sync for source_id in configured},
-                )
-            except BaseException:
-                for source_id in configured:
-                    if request.enable_sync:
-                        await _live_sync(app).stop_source(source_id)
-                    elif previous[source_id]:
-                        await _prepare_source_resume(source_id)
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-                raise
-            try:
-                if request.enable_sync:
-                    for source_id in configured:
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-            except BaseException:
-                await asyncio.to_thread(_config_store(app).set_sync_many, previous)
-                for source_id in configured:
-                    if request.enable_sync:
-                        await _live_sync(app).stop_source(source_id)
-                    elif previous[source_id]:
-                        await _prepare_source_resume(source_id)
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-                raise
+            await asyncio.to_thread(
+                _config_store(app).set_sync_many,
+                {source_id: request.enable_sync for source_id in configured},
+            )
+            if request.enable_sync:
+                for job in result.jobs:
+                    if job.source_id in configured and job.status is ImportStatus.PENDING:
+                        await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
+            _schedule_source_activation(
+                request.request_id,
+                tuple(configured),
+                enable_sync=request.enable_sync,
+            )
         return ConnectSourcesResponse(**result.model_dump())
 
     async def _refuse_overlapping_root(source_id: str, root: Path, user_id: str) -> None:
@@ -3412,8 +3625,10 @@ def create_app(
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
     ) -> list[ImportJob]:
         # One user's jobs: the App reads `local`'s and must not show another
-        # user's Hermes import as its own.
-        return [job for job in _job_store(app).list_jobs() if job.user_id == user_id]
+        # user's Hermes import as its own. Every one of them, oldest first, as
+        # before; finished live syncs past the newest twenty per source are
+        # pruned (`prune_finished_sync_jobs`), so this list stays short.
+        return _job_store(app).find_jobs(user_id=user_id)
 
     @app.get(
         "/api/v1/live-sync",
@@ -3510,7 +3725,7 @@ def create_app(
         dependencies=protected,
     )
     async def pause_import_job(job_id: str) -> ImportJob:
-        _require_job(app, job_id)
+        await asyncio.to_thread(_require_job, app, job_id)
         return await _translate_transition(_supervisor(app).pause(job_id))
 
     @app.post(
@@ -3519,11 +3734,11 @@ def create_app(
         dependencies=protected,
     )
     async def resume_import_job(job_id: str) -> ImportJob:
-        job = _require_job(app, job_id)
+        job = await asyncio.to_thread(_require_job, app, job_id)
         if job.status in {ImportStatus.COMPLETED, ImportStatus.CANCELLED}:
             raise HTTPException(status_code=409, detail="job_not_resumable")
         try:
-            return _supervisor(app).resume(job_id)
+            return await _supervisor(app).resume_off_loop(job_id)
         except InvalidJobTransitionError:
             raise HTTPException(409, "invalid_job_transition") from None
 
@@ -3533,7 +3748,7 @@ def create_app(
         dependencies=protected,
     )
     async def cancel_import_job(job_id: str) -> ImportJob:
-        _require_job(app, job_id)
+        await asyncio.to_thread(_require_job, app, job_id)
         return await _translate_transition(_supervisor(app).cancel(job_id))
 
     @app.get(
@@ -3830,6 +4045,30 @@ def create_app(
         return Response(status_code=204)
 
     @app.get(
+        "/api/v2/home-projection",
+        response_model=HomeProjectionV1,
+        dependencies=strict,
+    )
+    async def home_projection(
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+    ) -> HomeProjectionV1:
+        """The mode-neutral homepage read model owned by Core."""
+        try:
+            mode = _memory_mode(app)
+            handle = _sdk_client_handle(app)
+            if isinstance(handle, ActiveProfileReadHandle):
+                client = await handle.client_for_mode(mode)
+            else:
+                client = await handle.client()
+            return await read_home_projection(
+                client,
+                user_id=user_id,
+                mode=mode,
+            )
+        except Exception as error:
+            raise _sdk_http_error(error, "home_projection_read_failed") from None
+
+    @app.get(
         "/api/v2/home-summary",
         response_model=SdkHomeSummary,
         dependencies=strict,
@@ -3995,7 +4234,9 @@ def create_app(
             client = await _sdk_client_handle(app).client()
 
             def count(layer: str) -> int:
-                layer_statuses = chosen or (list(RAW_STATUSES) if layer == "l1_raw" else ["active"])
+                layer_statuses = chosen or (
+                    raw_list_filters()["statuses"] if layer == "l1_raw" else ["active"]
+                )
                 raw = client.list_memories(
                     user_id=user_id,
                     layers=[layer],
@@ -4353,6 +4594,36 @@ def create_app(
             raise _sdk_http_error(error, "hy_memory_delete_failed") from None
         return Response(status_code=204)
 
+    raw_turn_cache: dict[
+        tuple[object, ...],
+        tuple[
+            int,
+            tuple[tuple[str, str | None], ...],
+            tuple[tuple[HySdkRawRecord, RawDisplayTurn], ...],
+        ],
+    ] = {}
+    raw_turn_cache_locks: dict[tuple[object, ...], asyncio.Lock] = {}
+
+    def graph_items(
+        records: Iterable[HySdkRawRecord],
+    ) -> tuple[SdkRawGraphItem, ...]:
+        items: list[SdkRawGraphItem] = []
+        for record in records:
+            for turn in reversed(raw_display_turns(record)):
+                label = re.sub(r"\s+", " ", turn.content).strip()[:240]
+                items.append(
+                    SdkRawGraphItem(
+                        turn_id=turn.turn_id,
+                        raw_id=record.raw_id,
+                        label=label or record.raw_id,
+                        source=record.source,
+                        session_id=record.session_id,
+                        memory_at=record.memory_at,
+                        gmt_created=record.gmt_created,
+                    )
+                )
+        return tuple(items)
+
     @app.get(
         "/api/v2/raw",
         response_model=SdkRawPage,
@@ -4362,6 +4633,9 @@ def create_app(
         source: list[str] | None = Query(default=None),  # noqa: B008
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
+        unit: Literal["raw", "turn"] = Query(default="raw"),
+        paging: Literal["offset", "cursor"] = Query(default="offset"),
+        cursor: str | None = Query(default=None, max_length=160),
         user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
         exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
         session_id: list[str] | None = Query(default=None),  # noqa: B008
@@ -4375,38 +4649,348 @@ def create_app(
         The SDK lists raw only when asked for `layers=["l1_raw"]`, and only
         active rows unless told otherwise. Pro shadows a raw once extraction
         succeeds, so a raw page reads active and shadow (`statuses` narrows
-        it). `source` and `session_id` (a conversation) may repeat or be comma
+        it). `unit=turn` projects storage batches into stable product turns;
+        the first read builds an append-only in-memory index and later polls
+        only probe the latest SDK page unless it changed. `source` and
+        `session_id` (a conversation) may repeat or be comma
         separated. `after`/`before` (unix seconds, against the conversation
         time, else the stored time) have no SDK list filter: they cut this
         page in Core and mark it `time_filtered`.
         """
-        chosen_statuses = _library_values(
-            statuses or [], MEMORY_STATUSES, "memory_status_unknown"
-        ) or list(RAW_STATUSES)
+        chosen_statuses = (
+            _library_values(statuses or [], MEMORY_STATUSES, "memory_status_unknown")
+            or raw_list_filters()["statuses"]
+        )
+        if paging == "cursor" and unit != "turn":
+            raise HTTPException(status_code=422, detail="raw_cursor_requires_turn_unit")
+        if cursor is not None and paging != "cursor":
+            raise HTTPException(status_code=422, detail="raw_cursor_requires_cursor_paging")
+        if paging == "cursor" and (offset or after is not None or before is not None):
+            raise HTTPException(status_code=422, detail="raw_cursor_filter_unsupported")
+        raw_cursor = (0, 0, 0, 0, "", "")
+        if cursor:
+            parts = cursor.split(":")
+            if (
+                len(parts) != 7
+                or parts[0] != "turn"
+                or any(re.fullmatch(r"[0-9]+", part) is None for part in parts[1:5])
+                or re.fullmatch(r"(?:p?[0-9a-f]{16})?", parts[5]) is None
+                or re.fullmatch(r"[0-9a-f]{16}", parts[6]) is None
+            ):
+                raise HTTPException(status_code=422, detail="raw_cursor_invalid")
+            raw_cursor = (
+                int(parts[1]),
+                int(parts[2]),
+                int(parts[3]),
+                int(parts[4]),
+                parts[5],
+                parts[6],
+            )
+            if any(value > 100_000_000 for value in raw_cursor[:4]):
+                raise HTTPException(status_code=422, detail="raw_cursor_invalid")
         sources = split_csv(source)
         excluded = split_csv(exclude_sources)
         sessions = split_csv(session_id)
+        cursor_scope = hashlib.sha256(
+            json.dumps(
+                {
+                    "user_id": user_id,
+                    "statuses": sorted(chosen_statuses),
+                    "sources": sorted(sources),
+                    "excluded": sorted(excluded),
+                    "sessions": sorted(sessions),
+                    "order": order,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:16]
+        if cursor and raw_cursor[5] != cursor_scope:
+            raise HTTPException(status_code=422, detail="raw_cursor_scope_mismatch")
         try:
             client = await _sdk_client_handle(app).client()
-            value = await asyncio.to_thread(
-                client.list_memories,
-                user_id=user_id,
-                layers=["l1_raw"],
-                statuses=chosen_statuses,
-                include_sources=sources or None,
-                exclude_sources=excluded or None,
-                session_ids=sessions or None,
-                offset=offset,
-                limit=limit,
-                order=order,
-            )
-            page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
+            query = {
+                "user_id": user_id,
+                **raw_list_filters(chosen_statuses),
+                "include_sources": sources or None,
+                "exclude_sources": excluded or None,
+                "session_ids": sessions or None,
+                "order": order if unit == "raw" or paging == "cursor" else "desc",
+            }
+            if unit == "turn" and paging == "cursor":
+                (
+                    raw_offset,
+                    turn_offset,
+                    emitted,
+                    previous_total,
+                    expected_raw,
+                    _scope,
+                ) = raw_cursor
+                value = await asyncio.to_thread(
+                    client.list_memories,
+                    **query,
+                    offset=raw_offset,
+                    limit=min(limit + 1, 500),
+                )
+                raw_page = HySdkRawPage.from_memory_list(
+                    value, limit=min(limit + 1, 500), offset=raw_offset
+                )
+
+                def raw_anchor(record: HySdkRawRecord) -> str:
+                    return hashlib.sha256(
+                        f"{record.raw_id}\0{record.content}".encode()
+                    ).hexdigest()[:16]
+
+                if cursor:
+                    if raw_page.total < previous_total:
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
+                    observed_total = raw_page.total
+                    added = raw_page.total - previous_total
+                    if added and order == "desc":
+                        raw_offset += added
+                        value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=raw_offset,
+                            limit=min(limit + 1, 500),
+                        )
+                        raw_page = HySdkRawPage.from_memory_list(
+                            value,
+                            limit=min(limit + 1, 500),
+                            offset=raw_offset,
+                        )
+                        if raw_page.total != observed_total:
+                            raise HTTPException(status_code=409, detail="raw_cursor_stale")
+
+                    if expected_raw.startswith("p"):
+                        if raw_offset == 0:
+                            raise HTTPException(status_code=409, detail="raw_cursor_stale")
+                        previous_value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=raw_offset - 1,
+                            limit=1,
+                        )
+                        previous_page = HySdkRawPage.from_memory_list(
+                            previous_value, limit=1, offset=raw_offset - 1
+                        )
+                        valid_anchor = (
+                            previous_page.total == raw_page.total
+                            and bool(previous_page.raw)
+                            and raw_anchor(previous_page.raw[0]) == expected_raw[1:]
+                        )
+                    else:
+                        valid_anchor = (
+                            bool(raw_page.raw) and raw_anchor(raw_page.raw[0]) == expected_raw
+                        )
+                    if expected_raw and not valid_anchor:
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
+                selected_turns: list[tuple[HySdkRawRecord, RawDisplayTurn]] = []
+                next_cursor: str | None = None
+                for record_index, record in enumerate(raw_page.raw):
+                    turns = raw_display_turns(record)
+                    ordered_turns = tuple(reversed(turns)) if order == "desc" else turns
+                    start = turn_offset if record_index == 0 else 0
+                    for index in range(start, len(ordered_turns)):
+                        selected_turns.append((record, ordered_turns[index]))
+                        if len(selected_turns) < limit:
+                            continue
+                        absolute_raw = raw_offset + record_index
+                        next_raw = absolute_raw
+                        next_turn = index + 1
+                        if next_turn >= len(ordered_turns):
+                            next_raw += 1
+                            next_turn = 0
+                        if next_raw < raw_page.total:
+                            if next_turn:
+                                anchor_record = record
+                            else:
+                                next_index = record_index + 1
+                                anchor_record = (
+                                    raw_page.raw[next_index]
+                                    if next_index < len(raw_page.raw)
+                                    else None
+                                )
+                            anchor = (
+                                raw_anchor(anchor_record)
+                                if anchor_record is not None
+                                else f"p{raw_anchor(record)}"
+                            )
+                            next_cursor = (
+                                f"turn:{next_raw}:{next_turn}:"
+                                f"{emitted + len(selected_turns)}:{raw_page.total}:"
+                                f"{anchor}:{cursor_scope}"
+                            )
+                        break
+                    if len(selected_turns) >= limit:
+                        break
+                if next_cursor is None and raw_offset + len(raw_page.raw) < raw_page.total:
+                    if not raw_page.raw:
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
+                    next_raw = raw_offset + len(raw_page.raw)
+                    previous_anchor = raw_anchor(raw_page.raw[-1])
+                    next_cursor = (
+                        f"turn:{next_raw}:0:{emitted + len(selected_turns)}:"
+                        f"{raw_page.total}:p{previous_anchor}:{cursor_scope}"
+                    )
+                return SdkRawPage(
+                    user_id=user_id,
+                    items=tuple(SdkRawItem.of(record, turn) for record, turn in selected_turns),
+                    # Cursor consumers do not use a precise total. This lower
+                    # bound preserves the legacy numeric field without forcing
+                    # a full scan merely to count variable-size turn batches.
+                    total=emitted + len(selected_turns) + (1 if next_cursor else 0),
+                    offset=emitted,
+                    limit=limit,
+                    unit="turn",
+                    next_cursor=next_cursor,
+                    has_more=next_cursor is not None,
+                    total_exact=False,
+                )
+            if unit == "raw":
+                value = await asyncio.to_thread(
+                    client.list_memories,
+                    **query,
+                    offset=offset,
+                    limit=limit,
+                )
+                page = HySdkRawPage.from_memory_list(value, limit=limit, offset=offset)
+                records = page.raw
+            else:
+                cache_key = (
+                    user_id,
+                    tuple(sorted(chosen_statuses)),
+                    tuple(sorted(sources)),
+                    tuple(sorted(excluded)),
+                    tuple(sorted(sessions)),
+                )
+                if len(raw_turn_cache_locks) > 64:
+                    for stale_key, stale_lock in tuple(raw_turn_cache_locks.items()):
+                        if stale_key not in raw_turn_cache and not stale_lock.locked():
+                            raw_turn_cache_locks.pop(stale_key, None)
+                lock = raw_turn_cache_locks.setdefault(cache_key, asyncio.Lock())
+                async with lock:
+                    for _attempt in range(3):
+                        value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=0,
+                            limit=500,
+                        )
+                        first_page = HySdkRawPage.from_memory_list(value, limit=500, offset=0)
+                        signature = tuple(
+                            (record.raw_id, record.status) for record in first_page.raw
+                        )
+                        cached = raw_turn_cache.get(cache_key)
+                        if (
+                            cached is not None
+                            and cached[0] == first_page.total
+                            and cached[1] == signature
+                        ):
+                            projected_turns = cached[2]
+                            break
+                        added = (
+                            None
+                            if cached is None
+                            else raw_prefix_added(cached[1], signature, cached[0], first_page.total)
+                        )
+                        if cached is not None and added is not None:
+                            # A live session only puts new raws on top: project
+                            # those and keep the rest, instead of re-listing the
+                            # whole raw layer on every poll.
+                            projected_turns = (
+                                tuple(
+                                    (record, turn)
+                                    for record in first_page.raw[:added]
+                                    for turn in reversed(raw_display_turns(record))
+                                )
+                                + cached[2]
+                            )
+                            raw_turn_cache[cache_key] = (
+                                first_page.total,
+                                signature,
+                                projected_turns,
+                            )
+                            break
+
+                        records_list = list(first_page.raw)
+                        raw_offset = len(first_page.raw)
+                        raw_total = first_page.total
+                        while first_page.raw and raw_offset < raw_total:
+                            value = await asyncio.to_thread(
+                                client.list_memories,
+                                **query,
+                                offset=raw_offset,
+                                limit=500,
+                            )
+                            raw_page = HySdkRawPage.from_memory_list(
+                                value, limit=500, offset=raw_offset
+                            )
+                            records_list.extend(raw_page.raw)
+                            raw_offset += len(raw_page.raw)
+                            if not raw_page.raw:
+                                break
+
+                        verify_value = await asyncio.to_thread(
+                            client.list_memories,
+                            **query,
+                            offset=0,
+                            limit=500,
+                        )
+                        verify = HySdkRawPage.from_memory_list(verify_value, limit=500, offset=0)
+                        verify_signature = tuple(
+                            (record.raw_id, record.status) for record in verify.raw
+                        )
+                        if verify.total != first_page.total or verify_signature != signature:
+                            continue
+                        projected_turns = tuple(
+                            (record, turn)
+                            for record in records_list
+                            for turn in reversed(raw_display_turns(record))
+                        )
+                        raw_turn_cache[cache_key] = (
+                            first_page.total,
+                            signature,
+                            projected_turns,
+                        )
+                        while len(raw_turn_cache) > 32:
+                            oldest = next(iter(raw_turn_cache))
+                            raw_turn_cache.pop(oldest)
+                            old_lock = raw_turn_cache_locks.get(oldest)
+                            if old_lock is not None and not old_lock.locked():
+                                raw_turn_cache_locks.pop(oldest, None)
+                        break
+                    else:
+                        raise RuntimeError("hy_memory_raw_snapshot_busy")
+                if cache_key not in raw_turn_cache and not lock.locked():
+                    raw_turn_cache_locks.pop(cache_key, None)
         except HTTPException:
             raise
         except Exception as error:
             raise _sdk_http_error(error, "hy_memory_raw_list_failed") from None
-        records = page.raw
         time_filtered = after is not None or before is not None
+        if unit == "turn":
+            turns = projected_turns
+            if time_filtered:
+                turns = tuple(
+                    (record, turn)
+                    for record, turn in turns
+                    if (at := record.memory_at or record.gmt_created) is not None
+                    and (after is None or at >= after)
+                    and (before is None or at < before)
+                )
+            if order == "asc":
+                turns = tuple(reversed(turns))
+            selected = turns[offset : offset + limit]
+            return SdkRawPage(
+                user_id=user_id,
+                items=tuple(SdkRawItem.of(record, turn) for record, turn in selected),
+                total=len(turns),
+                offset=offset,
+                limit=limit,
+                unit="turn",
+                time_filtered=time_filtered,
+            )
         if time_filtered:
             records = tuple(
                 record
@@ -4421,7 +5005,79 @@ def create_app(
             total=page.total,
             offset=offset,
             limit=limit,
+            unit="raw",
             time_filtered=time_filtered,
+        )
+
+    @app.get(
+        "/api/v2/raw/graph",
+        response_model=SdkRawGraphPage,
+        dependencies=strict,
+    )
+    async def sdk_raw_graph(
+        source: list[str] | None = Query(default=None),  # noqa: B008
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=300, ge=1, le=300),
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+        exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
+        session_id: list[str] | None = Query(default=None),  # noqa: B008
+        statuses: list[str] | None = Query(default=None),  # noqa: B008
+    ) -> SdkRawGraphPage:
+        """Bounded lightweight raw graph, independent of list pagination."""
+        chosen_statuses = (
+            _library_values(
+                statuses or [],
+                MEMORY_STATUSES,
+                "memory_status_unknown",
+            )
+            or raw_list_filters()["statuses"]
+        )
+        sources = split_csv(source)
+        excluded = split_csv(exclude_sources)
+        sessions = split_csv(session_id)
+        if offset:
+            raise HTTPException(
+                status_code=422,
+                detail="raw_graph_is_single_page",
+            )
+        query: dict[str, object] = {
+            "user_id": user_id,
+            **raw_list_filters(chosen_statuses),
+            "include_sources": sources or None,
+            "exclude_sources": excluded or None,
+            "session_ids": sessions or None,
+            "order": "desc",
+        }
+        try:
+            client = await _sdk_client_handle(app).client()
+            value = await asyncio.to_thread(
+                client.list_memories,
+                **query,
+                offset=0,
+                limit=limit,
+            )
+            page = HySdkRawPage.from_memory_list(
+                value,
+                limit=limit,
+                offset=0,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise _sdk_http_error(
+                error,
+                "hy_memory_raw_graph_failed",
+            ) from None
+        projected = graph_items(page.raw)
+        selected = projected[:limit]
+        total = max(page.total, len(projected))
+        return SdkRawGraphPage(
+            user_id=user_id,
+            items=selected,
+            total=total,
+            offset=0,
+            limit=limit,
+            has_more=page.total > len(page.raw) or len(projected) > limit,
         )
 
     @app.post(
@@ -4558,6 +5214,7 @@ def create_app(
                     request,
                     model_ready=lambda: _recall_model_ready(app),
                     recall_memories=target.recall_async,
+                    bounded_sdk_primary=isinstance(target, SdkRecallTarget),
                     has_memories=lambda: _library_has_memories(app, request.user_id),
                     raw_sources=lambda: _recall_raw_sources(app, request, access, started),
                     search_raw=lambda query, limit, sources: _search_sdk_raw(
@@ -4617,6 +5274,7 @@ def create_app(
         running_rows = counts.get(MemoryTaskStatus.RUNNING, 0)
         backoff = cast(ModelBackoff | None, getattr(app.state, "model_backoff", None))
         backoff_state = backoff.state() if backoff is not None else None
+        drain = getattr(app.state, "memory_write_drain", None)
         return MemoryProcessingSummary(
             pending=(
                 sdk_counts.get("pending", 0)
@@ -4664,6 +5322,8 @@ def create_app(
                 if backoff_state is not None and backoff_state.until is not None
                 else None
             ),
+            write_drain=getattr(drain, "liveness", None),
+            write_drain_error=getattr(drain, "last_error_code", None),
         )
 
     @app.get(
@@ -4674,6 +5334,15 @@ def create_app(
     def get_memory_mode() -> MemoryModeState:
         """The SDK mode (lite / pro / ultra): configured, effective, and why."""
         return _memory_mode_state(app)
+
+    @app.post(
+        "/api/v1/settings/memory-mode/plan",
+        response_model=MemoryModePlan,
+        dependencies=strict,
+    )
+    def plan_memory_mode(request: MemoryModeUpdate) -> MemoryModePlan:
+        """Validate and explain a mode change without mutating anything."""
+        return _memory_mode_plan(app, request.mode)
 
     @app.put(
         "/api/v1/settings/memory-mode",
@@ -4693,13 +5362,14 @@ def create_app(
         added to the graph once, in the background (`graph_build`). No raw is
         ever deleted, in any mode. See docs/contracts/memory-mode-evolve-v1.md.
         """
-        if request.mode == "ultra" and importlib.util.find_spec("kuzu") is None:
-            raise HTTPException(status_code=409, detail="graph_store_unavailable")
         store = _config_store(app)
         async with app.state.memory_mode_lock:
-            previous_effective = _memory_mode(app)
+            plan = _memory_mode_plan(app, request.mode)
+            if plan.blockers:
+                raise HTTPException(status_code=409, detail=plan.blockers[0])
+            previous_effective = plan.current
             previous = store.memory_mode()
-            if previous != request.mode or "memory_mode" not in store.document().model_fields_set:
+            if previous != request.mode or not store.memory_mode_explicitly_configured():
                 await asyncio.to_thread(store.set_memory_mode, request.mode)
             effective = _memory_mode(app)
             backfill: bool | None = None
@@ -4718,6 +5388,8 @@ def create_app(
                     outcome="succeeded",
                     details={"mode": effective, "previous_mode": previous_effective},
                 )
+        if effective == "lite" and effective != previous_effective:
+            _resume_sedimentation(app)
         return MemoryModeChange(
             **_memory_mode_state(app).model_dump(),
             previous_mode=previous_effective,
@@ -4862,14 +5534,18 @@ def create_app(
         in flight and holds their next writes until it ends, and repeats
         while the SDK says there is more to do (up to 20 rounds).
         """
-        try:
-            return _evolve_service(app).start(
-                request.user_id,
-                agent_id=request.agent_id,
-                max_batches=request.max_batches,
-            )
-        except EvolveModeError:
-            raise HTTPException(status_code=409, detail="memory_mode_not_ultra") from None
+        async with app.state.memory_mode_lock:
+            _refuse_pipeline_change_during_embedding_maintenance(app)
+            if app.state.memory_graph_backfill.running:
+                raise HTTPException(status_code=409, detail="memory_lifecycle_busy")
+            try:
+                return _evolve_service(app).start(
+                    request.user_id,
+                    agent_id=request.agent_id,
+                    max_batches=request.max_batches,
+                )
+            except EvolveModeError:
+                raise HTTPException(status_code=409, detail="memory_mode_not_ultra") from None
 
     @app.get(
         "/api/v2/evolve",
@@ -4987,16 +5663,16 @@ def create_app(
         """Start or stop model-driven sedimentation, keeping the configuration.
 
         Stopping is the user's cost control: nothing further goes to the model
-        and already queued work waits rather than failing, so starting again
-        resumes it. Importing conversations is not affected either way.
+        and already queued work remains pending rather than failing. Starting
+        again lets the normal claim tick continue it; this route never broadly
+        re-admits permission/model parked jobs. Importing conversations is not
+        affected either way.
         """
         store = _config_store(app)
-        changed = False
         async with app.state.sedimentation_lock:
             previous = store.sedimentation_enabled()
             if previous is not request.enabled:
                 await asyncio.to_thread(store.set_sedimentation_enabled, request.enabled)
-                changed = True
                 diagnostic_event(
                     level="info",
                     component="memory.sedimentation",
@@ -5004,11 +5680,6 @@ def create_app(
                     outcome="succeeded",
                     details={"enabled": request.enabled},
                 )
-        if changed and request.enabled:
-            # Work parked by the stop is picked up again rather than waiting
-            # for the next natural dispatch, but not on this request's time:
-            # see _resume_sedimentation.
-            _resume_sedimentation(app)
         return SedimentationState(enabled=store.sedimentation_enabled())
 
     @app.post(
@@ -5450,6 +6121,16 @@ def _diagnostic_request_details(request: Request, event: str | None) -> dict[str
     return details
 
 
+#: Every state a job can still leave: the ones a revoke or re-root cancels.
+_UNFINISHED_IMPORT_STATUSES = (
+    ImportStatus.PENDING,
+    ImportStatus.RUNNING,
+    ImportStatus.PAUSED,
+    ImportStatus.INTERRUPTED,
+    ImportStatus.FAILED,
+)
+
+
 def _require_job(app: FastAPI, job_id: str) -> ImportJob:
     try:
         return _job_store(app).require(job_id)
@@ -5724,6 +6405,54 @@ def _backfill_state(
     return "running"
 
 
+#: How often finished live syncs are pruned while the Core runs, and how many
+#: bounded batches one such pass may take (`prune_finished_sync_jobs`).
+IMPORT_JOB_PRUNE_SECONDS = 600.0
+IMPORT_JOB_PRUNE_PASS_BATCHES = 10
+
+
+async def _prune_finished_import_jobs(
+    store: ImportJobStore,
+    *,
+    interval_seconds: float = IMPORT_JOB_PRUNE_SECONDS,
+    pass_batches: int = IMPORT_JOB_PRUNE_PASS_BATCHES,
+) -> None:
+    """Keep `import_jobs` bounded: at startup down to the keep count, then on a timer.
+
+    Every batch is its own short write transaction, made off the loop, with a
+    pause between batches so the writer's line keeps moving. The first pass
+    runs until nothing is left, which on a home that grew for weeks is the
+    one long pass; after it each pass is at most `pass_batches` batches.
+    A busy database skips the rest of a pass rather than failing it.
+    """
+    first = True
+    while True:
+        removed_total = 0
+        batches = 0
+        while first or batches < pass_batches:
+            try:
+                removed = await in_the_background(store.prune_finished_sync_jobs)
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error).lower() and "busy" not in str(error).lower():
+                    raise
+                logger.info("import_jobs_prune_deferred error_type=%s", type(error).__name__)
+                break
+            batches += 1
+            removed_total += removed
+            if removed < PRUNE_BATCH_ROWS:
+                break
+            await asyncio.sleep(0.05)
+        if removed_total:
+            logger.info(
+                "import_jobs_pruned removed=%d batches=%d startup=%s",
+                removed_total,
+                batches,
+                first,
+            )
+        first = False
+        await asyncio.sleep(interval_seconds)
+
+
 async def _keep_loop_heartbeat(watchdog: LoopWatchdog) -> None:
     """The loop saying it is still able to run something."""
     # The watchdog already logs each stall with a stack, but a stack is prose:
@@ -5808,10 +6537,19 @@ def _resume_sedimentation(app: FastAPI) -> None:
     """
     running = cast("asyncio.Task[None] | None", getattr(app.state, "sedimentation_resume", None))
     if running is not None and not running.done():
+        app.state.sedimentation_resume_again = True
         return
+
+    async def resume_until_stable() -> None:
+        while True:
+            app.state.sedimentation_resume_again = False
+            await _sdk_memory_runtime(app).resume_allowed()
+            if not app.state.sedimentation_resume_again:
+                return
+
     app.state.sedimentation_resume = watched_task(
         asyncio.get_running_loop(),
-        lambda: _sdk_memory_runtime(app).resume_allowed(),
+        resume_until_stable,
         component="memory.sedimentation",
         name="one-memory-sedimentation-resume",
     )
@@ -6069,9 +6807,8 @@ async def _recall_raw_sources(
 ) -> frozenset[str] | None:
     """The raw sources this caller may read: the `/context` raw-lane rule.
 
-    Recall's own grant does not cover original conversations. A host reads
-    them only with `om_conversations` and its granted, unrevoked sources; a
-    trusted local caller reads every source.
+    `om_conversations` plus `all-apps` reads every connected, unrevoked source.
+    A trusted local caller reads every source without an external grant.
     """
     if access is None:
         return None
@@ -6114,7 +6851,7 @@ async def _search_sdk_raw(
     `filters` are a caller's pass-through options: its floor and row filters
     apply, and its `include_sources` only narrow `sources`, never widen them.
     """
-    from one_memory.context_routes import raw_lane_overrides
+    from one_memory.context_routes import raw_lane_overrides, raw_lane_statuses
 
     include = sorted(sources) if sources else None
     if filters is not None and filters.include_sources is not None:
@@ -6141,6 +6878,8 @@ async def _search_sdk_raw(
             "scene": "chat",
             "reader": HY_MEMORY_READER,
             "layers": ["l1_raw"],
+            # Lite recall is plain RAG over every raw, shadow included.
+            **raw_lane_statuses(lite=app.state.memory_mode() == "lite"),
             **(raw_lane_overrides(filters) if filters is not None else {}),
         },
     )
@@ -6178,11 +6917,96 @@ def _memory_mode(app: FastAPI) -> MemoryMode:
 
 def _memory_mode_state(app: FastAPI) -> MemoryModeState:
     mode = _memory_mode(app)
+    store = _config_store(app)
     return MemoryModeState(
         mode=mode,
-        configured_mode=_config_store(app).memory_mode(),
+        configured_mode=store.memory_mode(),
+        explicitly_configured=store.memory_mode_explicitly_configured(),
         forced_by_env=graph_store_enabled(),
         graph_build=app.state.evolve_state_store.graph_build(),
+        graph_store=_graph_store_status(app),
+    )
+
+
+def _graph_store_status(app: FastAPI) -> GraphStoreStatus:
+    guard = cast(GraphOpenGuard | None, getattr(app.state, "graph_open_guard", None))
+    if guard is None:
+        return GraphStoreStatus()
+    backfill = getattr(app.state, "memory_graph_backfill", None)
+    running: bool | None = bool(backfill is not None and backfill.running) or (
+        app.state.evolve_state_store.graph_build().state == "running"
+    )
+    if getattr(app.state, "recovery", None) not in {"done", "failed"}:
+        # The rebuild is started by post-ready recovery; until that has run,
+        # "not running" does not mean "finished".
+        running = None
+    return guard.status(rebuild_running=running)
+
+
+async def _open_graph_store_at_startup(app: FastAPI) -> GraphOpenOutcome:
+    """Run the guarded first open of the live ultra graph; see `graph_open_guard`."""
+    guard = cast(GraphOpenGuard, app.state.graph_open_guard)
+    if app.state.memory_authority is not MemoryAuthority.SDK or _memory_mode(app) != "ultra":
+        guard.mark_not_used()
+        return "skipped"
+    live = app.state.embedding_spaces.live()
+    graph_path = live_graph_path(
+        cast(Settings, app.state.settings).data_dir,
+        live.graph_dir if live is not None else None,
+    )
+    switch = getattr(app.state, "embedding_switch", None)
+    switch_in_progress = bool(switch is not None and switch.jobs.open_job() is not None)
+    return await asyncio.to_thread(
+        guard.open_at_startup, graph_path, switch_in_progress=switch_in_progress
+    )
+
+
+def _memory_mode_plan(app: FastAPI, target: MemoryMode) -> MemoryModePlan:
+    """One validator for previews and mutations, in stable blocker order."""
+    current = _memory_mode(app)
+    effective_target = cast(MemoryMode, effective_memory_mode(target))
+    blockers: list[MemoryModeBlocker] = []
+    if not _embedding_writes_open(app):
+        blockers.append("embedding_maintenance_in_progress")
+    if (
+        effective_target != current
+        and effective_target in {"pro", "ultra"}
+        and _model_profile_store(app).active_identity() is None
+    ):
+        blockers.append("active_model_required")
+    if effective_target != current and (
+        _evolve_service(app).running() or app.state.memory_graph_backfill.running
+    ):
+        blockers.append("memory_lifecycle_busy")
+    if (
+        effective_target != current
+        and effective_target == "ultra"
+        and importlib.util.find_spec("kuzu") is None
+    ):
+        blockers.append("graph_store_unavailable")
+
+    warnings: list[MemoryModeWarning] = []
+    if graph_store_enabled():
+        warnings.append("forced_by_env")
+    if effective_target == current:
+        warnings.append("effective_no_change")
+
+    graph_backfill: bool | None = None
+    if effective_target == "ultra" and current != "ultra":
+        graph_backfill = not app.state.memory_graph_backfill.running
+    effects = memory_mode_effects(
+        current,
+        effective_target,
+        graph_backfill=graph_backfill,
+    )
+    return MemoryModePlan(
+        current=current,
+        target=target,
+        effective_target=effective_target,
+        capabilities=home_capabilities(effective_target),
+        effects=() if blockers else effects,
+        warnings=tuple(warnings),
+        blockers=tuple(blockers),
     )
 
 
@@ -6254,14 +7078,15 @@ def _memory_features_state(
         parameters.append(
             MemoryParameterState(
                 name=parameter.name,
-                value=float(effective[parameter.name]),
-                configured=cast(float | None, configured.get(parameter.name)),
-                default=float(defaults[parameter.name]),
-                minimum=parameter.minimum,
-                maximum=parameter.maximum,
+                value=parameter_value(parameter.name, effective[parameter.name]),
+                configured=configured.get(parameter.name),
+                default=parameter_value(parameter.name, defaults[parameter.name]),
+                minimum=parameter_value(parameter.name, parameter.minimum),
+                maximum=parameter_value(parameter.name, parameter.maximum),
                 active=reason is None,
                 reason=reason,
                 requires_feature=parameter.requires_feature,
+                requires_mode=parameter.requires_mode,
                 sdk_field=parameter.sdk_field,
                 env=parameter.env,
                 description=parameter.description,
@@ -6293,6 +7118,7 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
         evolve=overview,
         last_evolve_at=max(finished, default=None),
         graph_build=state.graph_build,
+        graph_store=state.graph_store,
         features=cast(
             dict[MemorySettingName, SettingValue],
             non_default_features(_memory_features(app), sdk_feature_defaults()),
@@ -6559,13 +7385,47 @@ def _sedimentation_claim_enabled(app: FastAPI, source_id: str) -> bool:
     """
 
     return (
-        _config_store(app).sedimentation_enabled()
+        _pipeline_writes_enabled(app)
         and _embedding_writes_open(app)
         and (_memory_mode(app) == "lite" or _model_profile_store(app).active_identity() is not None)
         and _history_import_gate_released(app)
         and _source_writes_on(app, source_id)
         and not _user_evolving(app, split_lane(source_id)[0])
     )
+
+
+async def _admit_pipeline_invocation(
+    app: FastAPI,
+    source_id: str,
+    requires_generation: bool,
+    mark_invoked: Callable[[], Awaitable[bool]],
+) -> bool:
+    """Serialize the final source and pipeline checks with the durable mark."""
+
+    source_lock = app.state.source_permission_locks.setdefault(source_id, asyncio.Lock())
+    async with app.state.sedimentation_lock, source_lock:
+        if requires_generation and not _config_store(app).sedimentation_enabled():
+            raise RuntimeError("model_sedimentation_disabled")
+        if not _embedding_writes_open(app):
+            raise RuntimeError("embedding_switch_in_progress")
+        if not _source_writes_on(app, source_id):
+            raise RuntimeError("model_content_source_disabled")
+        return await mark_invoked()
+
+
+def _pipeline_writes_enabled(app: FastAPI) -> bool:
+    """Raw-only lite writes run even when model sedimentation is paused."""
+
+    return _memory_mode(app) == "lite" or _config_store(app).sedimentation_enabled()
+
+
+def _model_claim_allowance(app: FastAPI) -> int | None:
+    """A failed generation model never pauses raw-only lite ingestion."""
+
+    backoff = cast(ModelBackoff, app.state.model_backoff)
+    if _memory_mode(app) == "lite":
+        return backoff.allowance(kind="embedding")
+    return backoff.allowance()
 
 
 def _user_evolving(app: FastAPI, user_id: str) -> bool:
@@ -6610,6 +7470,12 @@ def _refuse_write_during_embedding_switch(app: FastAPI) -> None:
     """Direct edits and deletes wait for the switch: 409, never a write into the old space."""
     if not _embedding_writes_open(app):
         raise HTTPException(status_code=409, detail="embedding_switch_in_progress")
+
+
+def _refuse_pipeline_change_during_embedding_maintenance(app: FastAPI) -> None:
+    """Keep mode/evolve lifecycle changes out of embedding maintenance."""
+    if not _embedding_writes_open(app):
+        raise HTTPException(status_code=409, detail="embedding_maintenance_in_progress")
 
 
 _EMBEDDING_PATCH_FIELDS = frozenset(
@@ -6664,12 +7530,12 @@ def _history_import_gate_released(app: FastAPI) -> bool:
         app.state.history_import_gate_released = True
         return True
     selected = set(state.selected_source_ids)
+    # Asked inside the drain's claim, per candidate: history jobs of `local`
+    # only, in SQL, never the whole table.
     matching = [
         job
-        for job in jobs.list_jobs()
-        if job.operation == "history"
-        and job.user_id == DEFAULT_USER_ID
-        and job.source_id in selected
+        for job in jobs.find_jobs(user_id=DEFAULT_USER_ID, operation="history")
+        if job.source_id in selected
         and (state.started_at is None or job.created_at >= state.started_at)
     ]
     if {job.source_id for job in matching} != selected:

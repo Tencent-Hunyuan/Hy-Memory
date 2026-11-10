@@ -299,3 +299,14 @@ def test_backoff_ladder_is_bounded_and_increasing() -> None:
 
 def _unused_json() -> str:
     return json.dumps({})
+
+
+def test_secrets_module_does_not_import_pwd_at_module_level() -> None:
+    """pwd is POSIX-only and is needed by one macOS-only line.
+
+    Importing it at module level made `one_memory.secrets` unimportable on
+    Windows, which took `model_profiles` -> `memory_tasks` -> `durable_queue`
+    with it. `_submit_live_memory` then raised inside capture_stdio's
+    fail-open handler, so live record assembly never ran and nothing said so.
+    """
+    assert not hasattr(secret_module, "pwd")

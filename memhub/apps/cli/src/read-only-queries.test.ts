@@ -161,6 +161,7 @@ const CORE = new Map<string, { status: number; data: unknown }>([
         blocked_stages: [
           { kind: "extract", reason: "model_missing", count: 2 },
         ],
+        pipeline: { mode: "pro", configured_mode: "pro" },
       },
     },
   ],
@@ -202,7 +203,9 @@ const READ_ONLY_PATHS = [
   "/api/v1/live-sync",
   "/api/v1/memory-processing",
   "/api/v1/model-profiles",
+  "/api/v2/home-projection",
   "/api/v2/home-summary",
+  "/api/v2/raw",
   "/api/v2/memory-library",
   "/api/v2/memories/",
   "/api/v2/user-profile",
@@ -257,6 +260,9 @@ describe("CLI-20 status summary", () => {
     expect(report.sections.model).toMatchObject({ state: "ok", profiles: 1 });
     expect(report.sections.memories).toMatchObject({
       state: "ok",
+      content_plane: "memory",
+      visible_count: 42,
+      effective_mode: "pro",
       memory_count: 42,
     });
     expect(report.summary.state).toBe("ok");
@@ -903,7 +909,10 @@ describe("CLI-21 memory reads", () => {
     expect(isReadOnlyPath("/api/v2/memories/ask")).toBe(false);
     expect(isReadOnlyPath("/api/v2/memories/m1")).toBe(true);
     expect(isReadOnlyPath("/api/v2/memory-library")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/home-projection")).toBe(true);
     expect(isReadOnlyPath("/api/v2/home-summary")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/raw")).toBe(true);
+    expect(isReadOnlyPath("/api/v1/settings/memory-mode/plan")).toBe(true);
     // The retired v1 data plane is no longer a CLI read.
     expect(isReadOnlyPath("/api/v1/memories/m1")).toBe(false);
     expect(isReadOnlyPath("/api/v1/home-summary")).toBe(false);
@@ -1085,7 +1094,8 @@ describe("malformed success responses", () => {
 
   it("refuses a model profile whose string fields are not strings", async () => {
     transport.get.mockImplementation(async (url: string) => {
-      if (url !== "/api/v1/model-profiles") return CORE.get(url);
+      if (url !== "/api/v1/model-profiles")
+        return CORE.get(url) ?? { status: 404, data: { detail: "not_found" } };
       return {
         status: 200,
         data: [
