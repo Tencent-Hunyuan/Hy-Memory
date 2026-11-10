@@ -1096,13 +1096,26 @@ class QdrantVectorStore(VectorStoreBase):
         allow_raw_layer: 默认 False，即不返回 L1_RAW（对外读路径）。
             内部管线读原始对话须显式置 True。
         """
-        from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
-
         effective_uids = list(user_ids) if user_ids else ([user_id] if user_id else [])
         if not effective_uids:
             logger.warning("[vector-store] list_by_user called without user_id/user_ids, refused")
             return []
         effective_aids = list(agent_ids) if agent_ids else ([agent_id] if agent_id else [])
+
+        # 提前判定「只点名 raw 且不允许 raw」：过滤后没有可命中的层，
+        # 直接返回空集，而不是交给 backend 用一个错误的「排除 raw」条件
+        # 去匹配所有非 raw 层（见 #189）。注意这里在导入 qdrant_client
+        # 之前短路，避免无 backend 依赖时也能正确返回。
+        if layers and not allow_raw_layer:
+            _lv = [l.value if hasattr(l, 'value') else str(l) for l in layers]
+            if all(v == MemoryLayer.L1_RAW.value for v in _lv):
+                logger.info(
+                    f"[vector-store] list_by_user: user_ids={effective_uids} "
+                    f"agent_ids={effective_aids} raw-only filter with raw disabled, returning empty"
+                )
+                return []
+
+        from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 
         if len(effective_uids) == 1:
             must_conditions = [
@@ -1151,10 +1164,10 @@ class QdrantVectorStore(VectorStoreBase):
                     FieldCondition(key="layer", match=MatchAny(any=layer_values))
                 )
             else:
-                # 只点名了 raw：过滤后为空，补排除条件使结果必然为空集，
-                # 不能省略（省略等于放开全部层级，比原意图更宽）
-                must_not_conditions.append(
-                    FieldCondition(key="layer", match=MatchValue(value=MemoryLayer.L1_RAW.value))
+                # 只点名了 raw：置为不可能命中的条件，结果必然为空集。
+                # 外层已短路返回，这里作为防御兜底，避免误匹配非 raw 层。
+                must_conditions.append(
+                    FieldCondition(key="layer", match=MatchValue(value="__blocked__"))
                 )
         elif not allow_raw_layer:
             must_not_conditions.append(
