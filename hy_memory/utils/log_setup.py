@@ -194,6 +194,8 @@ def setup_logging(
     - 控制台输出: 双流分离 — DEBUG/INFO 走 stdout，WARNING/ERROR/CRITICAL 走 stderr
       （遵循 Unix 惯例；OpenClaw 等监控平台会把 stderr 整体标 WARN，
        INFO 走 stdout 才不会被误归为告警）
+    - stdio 传输宿主（如 MCP server over stdio）可设 MEMORY_LOG_STREAM=stderr，
+      让 DEBUG/INFO 并入 stderr，保持 stdout 只承载协议帧；默认行为不变
     - 所有日志行包含 request_id 字段
 
     Args:
@@ -245,18 +247,27 @@ def setup_logging(
     file_handler.addFilter(req_filter)
     root_logger.addHandler(file_handler)
 
-    # ---- 控制台 Handler: 双流分离 ----
-    # stdout: DEBUG / INFO（用 filter 排除 WARNING 及以上）
-    # stderr: WARNING / ERROR / CRITICAL
-    # 修复 Issue: 之前所有级别都走单 StreamHandler 默认 stderr，
-    # OpenClaw 等监控平台会把整个 stderr 标 WARN，导致 INFO 日志
-    # 被误标为告警，刷屏。
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setFormatter(formatter)
-    stdout_handler.setLevel(level)
-    stdout_handler.addFilter(req_filter)
-    stdout_handler.addFilter(_StdoutLevelFilter())
-    root_logger.addHandler(stdout_handler)
+    # ---- 控制台 Handler: 双流分离（默认）/ 合并 stderr（可选）----
+    # 默认（MEMORY_LOG_STREAM 未设置或为 stdout）:
+    #   stdout: DEBUG / INFO（用 filter 排除 WARNING 及以上）
+    #   stderr: WARNING / ERROR / CRITICAL
+    #   OpenClaw 等监控平台会把整个 stderr 标 WARN，INFO 走 stdout 才不会被
+    #   误标为告警（历史修复行为，保持不变）。
+    # MEMORY_LOG_STREAM=stderr:
+    #   DEBUG/INFO 并入 stderr。stdio 传输宿主（如 MCP server over stdio）的
+    #   stdout 只能承载协议帧，SDK 日志行会破坏帧解析；此类宿主显式设置
+    #   该开关即可获得干净 stdout。
+    info_stream = (
+        sys.stderr
+        if os.getenv("MEMORY_LOG_STREAM", "stdout").strip().lower() == "stderr"
+        else sys.stdout
+    )
+    info_handler = logging.StreamHandler(info_stream)
+    info_handler.setFormatter(formatter)
+    info_handler.setLevel(level)
+    info_handler.addFilter(req_filter)
+    info_handler.addFilter(_StdoutLevelFilter())
+    root_logger.addHandler(info_handler)
 
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setFormatter(formatter)
