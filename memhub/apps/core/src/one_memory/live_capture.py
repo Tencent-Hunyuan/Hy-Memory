@@ -8,10 +8,20 @@ A source that live sync already reads from its own files is left to that
 path: the hook and the file name the same message differently (the hook has
 no workspace and often no message id), so staging both sent one turn to the
 SDK twice. Only a source no file poller follows is staged from the hook.
+
+A turn Core refuses (no grant, revoked grant, sync off) is counted in a small
+per-source rejection record under the home's `logs/` directory. The record is
+replaced atomically, so a crash or a full disk mid-write leaves the previous
+record rather than a truncated one, and an unreadable record starts a fresh
+window instead of disabling the count. `last_at` moves with every rejection;
+`window_started_at` stays at the first one in the window.
 """
 
 import asyncio
 import json
+import os
+import stat
+import tempfile
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -278,18 +288,56 @@ def record_capture_rejection(
         directory.mkdir(parents=True, exist_ok=True)
         marker = directory / f"capture-rejection-{source_id}-{reason.value}.json"
         now = time.time()
-        payload: dict[str, object] = {"source_id": source_id, "reason": reason.value}
+        stamp = datetime.fromtimestamp(now, UTC).isoformat()
+        payload: dict[str, object] | None = None
         if marker.exists() and now - marker.stat().st_mtime < window_seconds:
-            payload = json.loads(marker.read_text(encoding="utf8"))
-            previous = payload.get("count", 1)
-            payload["count"] = int(previous) + 1 if isinstance(previous, (str, int, float)) else 2
-        else:
-            payload["count"] = 1
-            payload["window_started_at"] = datetime.fromtimestamp(now, UTC).isoformat()
-            payload["last_at"] = payload["window_started_at"]
-        marker.write_text(json.dumps(payload, sort_keys=True), encoding="utf8")
+            try:
+                previous_record = json.loads(marker.read_text(encoding="utf8"))
+            except (OSError, ValueError):
+                # A truncated or hand-edited record must not disable the
+                # count for good: start a fresh window instead.
+                previous_record = None
+            if isinstance(previous_record, dict):
+                payload = previous_record
+                previous = payload.get("count", 1)
+                payload["count"] = (
+                    int(previous) + 1 if isinstance(previous, (str, int, float)) else 2
+                )
+                payload.setdefault("window_started_at", stamp)
+        if payload is None:
+            payload = {
+                "source_id": source_id,
+                "reason": reason.value,
+                "count": 1,
+                "window_started_at": stamp,
+            }
+        payload["last_at"] = stamp
+        _replace_atomically(marker, json.dumps(payload, sort_keys=True))
     except Exception:
         return
+
+
+def _replace_atomically(path: Path, content: str) -> None:
+    """Write `content` to `path` so a reader never sees a half-written file.
+
+    The content is staged in a sibling temporary file and swapped in with
+    `os.replace`; the previous file mode is kept. On any failure the staging
+    file is removed and the old record stays as it was.
+    """
+    try:
+        mode: int | None = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = None
+    descriptor, staging = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf8") as handle:
+            handle.write(content)
+        if mode is not None:
+            os.chmod(staging, mode)
+        Path(staging).replace(path)
+    except BaseException:
+        Path(staging).unlink(missing_ok=True)
+        raise
 
 
 def _conversation(payload: dict[str, object]) -> str | None:

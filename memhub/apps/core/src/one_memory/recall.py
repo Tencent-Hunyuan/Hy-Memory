@@ -250,7 +250,10 @@ class SdkRecallTarget:
         semantic_hits, outcome = await search_within(
             self.semantic_search,
             request.query,
-            hy_wait_budget(budget),
+            # Unlike governed recall, SDK search is the primary candidate
+            # source, not an optional enhancement. Leave a bounded share for
+            # resolving returned IDs, but honor the caller's remaining budget.
+            ledger_wait_budget(max(0.0, deadline - time.monotonic())),
         )
         hits: list[RecallHit] = []
         used = 0

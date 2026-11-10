@@ -449,30 +449,66 @@ export default function oneMemoryCapture(pi) {
 }
 
 function openCodePlugin(command: string, dataDir?: string): string {
-  return `// MemHub capture. Only text parts are sent.
+  return `// MemHub capture. Only visible text is sent.
 import { spawnSync } from "node:child_process";
 
 const command = ${JSON.stringify(command)};
 const pending = new Map();
+// Core keys a captured message by its id, so two entries with one id read as
+// edits of each other and the later one replaces the earlier. A message's
+// text therefore travels as one entry holding every part seen so far, keyed
+// by part (V1 part id, V2 block ordinal): a streamed update replaces its
+// part, a new block is added after the others. OpenCode may load one plugin
+// instance per location; the module state is shared, so a part seen twice
+// is still sent once.
+const messages = globalThis[Symbol.for("one-memory.capture.messages")] ?? new Map();
+globalThis[Symbol.for("one-memory.capture.messages")] = messages;
 
-function remember(sessionId, role, text) {
-  if (!sessionId || !text) return;
+function remember(sessionId, role, text, messageId, partKey) {
+  if (!sessionId || typeof text !== "string" || text.length === 0) return;
   const turn = pending.get(sessionId) ?? [];
-  turn.push({ role, parts: [{ type: "text", text }] });
+  if (!messageId) {
+    turn.push({ role, parts: [{ type: "text", text }] });
+    pending.set(sessionId, turn);
+    return;
+  }
+  const key = JSON.stringify([sessionId, messageId]);
+  const known = messages.get(key) ?? { role, texts: new Map() };
+  const part = partKey === undefined || partKey === null ? text : String(partKey);
+  if (known.texts.get(part) === text) return;
+  known.texts.set(part, text);
+  messages.delete(key);
+  messages.set(key, known);
+  if (messages.size > 200) messages.delete(messages.keys().next().value);
+  if (!turn.some((entry) => entry.key === key)) {
+    turn.push({ key, role, message_id: messageId });
+  }
   pending.set(sessionId, turn);
 }
 
 function send(sessionId) {
-  const messages = pending.get(sessionId);
+  const turn = pending.get(sessionId);
   pending.delete(sessionId);
-  if (!messages || messages.length === 0) return;
+  if (!turn || turn.length === 0) return;
+  const messagesToSend = turn.flatMap((entry) => {
+    if (!entry.key) return [entry];
+    const known = messages.get(entry.key);
+    if (!known) return [];
+    return [
+      {
+        role: entry.role,
+        parts: [...known.texts.values()].map((text) => ({ type: "text", text })),
+        message_id: entry.message_id,
+      },
+    ];
+  });
   try {
     spawnSync(command, ["capture", "opencode"], {
       input: JSON.stringify({
         hook_event_name: "session.status",
         status: "idle",
         session_id: sessionId,
-        messages,
+        messages: messagesToSend,
       }),
       timeout: 3000,
       stdio: ["pipe", "ignore", "ignore"],
@@ -483,7 +519,13 @@ function send(sessionId) {
   }
 }
 
-export default async function oneMemoryCapture() {
+function idle(status) {
+  return status === "idle" || status?.type === "idle" || status?.status === "idle";
+}
+
+// OpenCode 1 entrypoint. Object exports with \`server()\` are understood from
+// 1.18.29; the V2 loader ignores this key.
+async function server() {
   return {
     event: async ({ event }) => {
       try {
@@ -493,10 +535,16 @@ export default async function oneMemoryCapture() {
         if (type === "message.part.updated" || type === "message.part.delta") {
           const part = props.part ?? props;
           if (part?.type === "text" && typeof part.text === "string") {
-            remember(sessionId, props.role ?? "assistant", part.text);
+            remember(
+              sessionId,
+              props.role ?? "assistant",
+              part.text,
+              props.messageID ?? part.messageID,
+              part.id,
+            );
           }
         }
-        if (type === "session.idle" || (type === "session.status" && props.status === "idle")) {
+        if (type === "session.idle" || (type === "session.status" && idle(props.status))) {
           send(sessionId);
         }
       } catch {
@@ -505,5 +553,60 @@ export default async function oneMemoryCapture() {
     },
   };
 }
+
+// OpenCode 2 entrypoint. Text arrives per block; execution end and idle both
+// flush, so a retry or a version that omits one still delivers the turn.
+async function setup(ctx) {
+  if (typeof ctx?.event?.subscribe !== "function") return;
+  const controller = new AbortController();
+  const registrations = [];
+  try {
+    if (typeof ctx.session?.hook === "function") {
+      registrations.push(
+        await ctx.session.hook("prompt", (event) => {
+          const prompt = event?.prompt ?? {};
+          remember(event?.sessionID ?? prompt.sessionID, "user", prompt.text, event?.messageID);
+        }),
+      );
+    }
+  } catch {
+    // A build without the prompt hook still yields assistant text.
+  }
+  void (async () => {
+    for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+      const data = event?.data ?? event?.properties ?? {};
+      const type = event?.type;
+      if (type === "session.text.ended") {
+        remember(
+          data.sessionID,
+          "assistant",
+          data.text,
+          data.assistantMessageID,
+          data.ordinal,
+        );
+      } else if (
+        type === "session.execution.succeeded" ||
+        type === "session.execution.failed" ||
+        type === "session.execution.interrupted" ||
+        type === "session.idle" ||
+        (type === "session.status" && idle(data.status))
+      ) {
+        send(data.sessionID);
+      }
+    }
+  })().catch(() => {
+    // A closed subscription must not surface as a plugin failure.
+  });
+  return async () => {
+    try {
+      controller.abort();
+      for (const registration of registrations) await registration?.dispose?.();
+    } catch {
+      // Cleanup runs while the host unloads; a throw would fail the plugin.
+    }
+  };
+}
+
+export default { id: "one-memory-capture", server, setup };
 `;
 }

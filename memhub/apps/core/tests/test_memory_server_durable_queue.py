@@ -1300,6 +1300,42 @@ def test_a_profile_change_does_not_close_the_client_of_a_write_in_flight(monkeyp
     ]
 
 
+def test_sdk_write_sets_the_model_request_audit_context(monkeypatch) -> None:
+    """The usage panel stayed empty because the SDK write never opened an audit context.
+
+    `AuditedModelTransport` records a request only while
+    `audit_precipitation_request(request_id)` is active. Removing the private
+    bridge took away its only caller, so every precipitation request was let
+    through unrecorded and `/api/v1/diagnostics/model-usage` stayed at zero.
+    """
+    from one_memory import model_request_audit, sdk_write_processor
+
+    opened: list[_TrackedHandle] = []
+    coordinator, _ = _coordinator(monkeypatch, opened)
+    seen: list[str | None] = []
+
+    async def process(self, records, *, request_id, before_hy_invocation):
+        context = model_request_audit._audit_context.get()
+        seen.append(context.request_id if context is not None else None)
+        return sdk_write_processor.SdkWriteReceipt()
+
+    monkeypatch.setattr(sdk_write_processor.SdkWriteProcessor, "process_sdk_job", process)
+
+    async def noop(_requires_generation: bool):
+        return None
+
+    asyncio.run(
+        coordinator.process_sdk_job(
+            (),
+            request_id="audit-request-1",
+            before_hy_invocation=noop,
+        )
+    )
+    assert seen == ["audit-request-1"]
+    # Reset on the way out: a later job must not inherit this request's id.
+    assert model_request_audit._audit_context.get() is None
+
+
 def test_an_unused_stale_handle_still_closes_at_once(monkeypatch) -> None:
     opened: list[_TrackedHandle] = []
     coordinator, profiles = _coordinator(monkeypatch, opened)

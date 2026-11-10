@@ -1,5 +1,6 @@
 import { classifyModelRemove } from "@one-memory/operations";
 import axios from "axios";
+import { unknownResultCode } from "./core-operations.js";
 
 /**
  * Only paths proven side-effect free by reading the Core handlers belong here.
@@ -394,7 +395,10 @@ export async function submitMemoryWrite(
       http_status: response.status,
     };
   }
-  return { state: "unknown", code: `http_${response.status}_result_unknown` };
+  return {
+    state: "unknown",
+    code: unknownResultCode(response.data, response.status),
+  };
 }
 
 /** Ask Runtime to scan one source now, returning the import job it started.

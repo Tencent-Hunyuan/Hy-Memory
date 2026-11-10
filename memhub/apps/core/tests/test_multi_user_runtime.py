@@ -1035,3 +1035,61 @@ def test_another_users_id_answers_exactly_like_an_id_that_does_not_exist(
         assert sdk.memories == before
 
     run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_sdk_recall_http_waits_for_slow_primary_search(tmp_path, monkeypatch) -> None:
+    """A slow SDK result within the host budget is not an empty recall."""
+    import time
+
+    async def scenario(app, sdk, client):
+        sdk._store("local", "local drinks tea", source="manual", session_id="test")
+        original = sdk.search
+
+        def slow_search(*args, **kwargs):
+            time.sleep(0.65)
+            return original(*args, **kwargs)
+
+        sdk.search = slow_search
+        app.state.recall_target = _sdk_recall_target(app, "local")
+        monkeypatch.setattr("one_memory.api._recall_model_ready", lambda _app: _true())
+        response = await client.post("/api/v1/recall", json={"query": "drinks", "timeout_ms": 1500})
+        assert response.status_code == 200, response.text
+        assert any(h["content"] == "local drinks tea" for h in response.json()["hits"])
+        assert response.json()["truncated_by"] is None
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_sdk_recall_http_large_budget_stays_under_outer_ceiling(tmp_path, monkeypatch) -> None:
+    import time
+
+    import one_memory.recall_fallback as fallback
+
+    monkeypatch.setattr(fallback, "RECALL_TOTAL_CEILING_SECONDS", 1.2)
+    monkeypatch.setattr(fallback, "RECALL_TOTAL_GRACE_SECONDS", 0.4)
+
+    async def scenario(app, sdk, client):
+        sdk._store("local", "local drinks tea", source="manual", session_id="test")
+        original = sdk.search
+
+        def slow_search(*args, **kwargs):
+            time.sleep(1.0)
+            return original(*args, **kwargs)
+
+        async def slow_ready(_app):
+            await asyncio.sleep(0.2)
+            return True
+
+        sdk.search = slow_search
+        app.state.recall_target = _sdk_recall_target(app, "local")
+        monkeypatch.setattr("one_memory.api._recall_model_ready", slow_ready)
+        response = await client.post(
+            "/api/v1/recall", json={"query": "drinks", "timeout_ms": 30000}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["truncated_by"] == "timeout_budget"
+        assert response.json()["hits"] == []
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)

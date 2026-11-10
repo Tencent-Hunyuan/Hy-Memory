@@ -28,6 +28,19 @@ from agent.memory_provider import (
 )
 
 
+#: Search metadata is forwarded only when it is short, plain text; tags also
+#: spend the same MAX_CHARS budget as the content they describe.
+_LABEL_MAX_CHARS = 64
+_TAG_MAX_CHARS = 64
+_MAX_TAGS = 16
+
+
+def _label(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip() and len(value) <= _LABEL_MAX_CHARS:
+        return value
+    return None
+
+
 class ProviderError(Exception):
     """Public, sanitized failure code (never backend or request text)."""
 
@@ -132,6 +145,7 @@ class HyMemoryProvider(MemoryProvider):
             self.timeout = self._number("TIMEOUT", 5, 0.1, 30)
             self.write_timeout = self._number("WRITE_TIMEOUT", self.timeout, 0.1, 120)
             self.limit = int(self._number("LIMIT", 5, 1, 20, integer=True))
+            self.min_score = self._number("MIN_SCORE", 0.4, 0.0, 1.0)
             self.chars = int(self._number("MAX_CHARS", 4000, 256, 16000, integer=True))
             self.body_bytes = int(
                 self._number("MAX_BODY_BYTES", 262144, 1024, 1048576, integer=True)
@@ -512,7 +526,7 @@ class HyMemoryProvider(MemoryProvider):
         ):
             raise ProviderError("transport_or_response_failure") from None
 
-    def _search(self, query: str, limit: int) -> list[dict[str, str]]:
+    def _search(self, query: str, limit: int) -> list[dict[str, Any]]:
         if self._broker_config is not None:
             result = self._request(
                 "context",
@@ -540,6 +554,7 @@ class HyMemoryProvider(MemoryProvider):
                     "user_ids": [self.user_id],
                     "agent_ids": [self.agent_id],
                     "limit": limit,
+                    "min_score": self.min_score,
                 },
             )
             raw = result.get("memories")
@@ -572,8 +587,40 @@ class HyMemoryProvider(MemoryProvider):
             if not isinstance(content, str):
                 raise ProviderError("invalid_response")
             content = content[:remaining]
-            items.append({"memory_id": memory_id, "content": content})
             remaining -= len(content)
+            entry: dict[str, Any] = {"memory_id": memory_id, "content": content}
+            # Score and provenance let the caller filter further (#346 item 2).
+            # The broker's context route carries none of these, so a missing or
+            # malformed field is simply left out rather than written as None.
+            score = item.get("score")
+            if (
+                isinstance(score, (int, float))
+                and not isinstance(score, bool)
+                and math.isfinite(score)
+            ):
+                entry["score"] = float(score)
+            for key in ("retrieval_source", "layer"):
+                label = _label(item.get(key))
+                if label is not None:
+                    entry[key] = label
+            tags = item.get("tags")
+            if isinstance(tags, list):
+                kept: list[str] = []
+                for tag in tags:
+                    if len(kept) >= _MAX_TAGS:
+                        break
+                    if (
+                        not isinstance(tag, str)
+                        or not tag.strip()
+                        or len(tag) > _TAG_MAX_CHARS
+                        or len(tag) > remaining
+                    ):
+                        continue
+                    kept.append(tag)
+                    remaining -= len(tag)
+                if kept:
+                    entry["tags"] = kept
+            items.append(entry)
         return items
 
     def _add(self, text: str, session: str) -> str | None:

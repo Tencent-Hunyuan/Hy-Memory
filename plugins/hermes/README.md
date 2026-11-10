@@ -116,6 +116,7 @@ export HY_MEMORY_AGENT_ID=your-explicit-agent-id
 | `HY_MEMORY_TIMEOUT` | `5` | finite seconds, 0.1–30 |
 | `HY_MEMORY_WRITE_TIMEOUT` | read timeout | finite seconds, 0.1–120 |
 | `HY_MEMORY_LIMIT` | `5` | integer, 1–20 |
+| `HY_MEMORY_MIN_SCORE` | `0.4` | finite float, 0–1; forwarded to `POST /api/v1/search` in direct mode |
 | `HY_MEMORY_MAX_CHARS` | `4000` | integer, 256–16000 |
 | `HY_MEMORY_MAX_BODY_BYTES` | `262144` | integer, 1024–1048576 |
 | `HY_MEMORY_AUTO_RECALL` | `true` | `true` or `false` |
