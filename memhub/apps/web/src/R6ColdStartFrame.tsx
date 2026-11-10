@@ -13,7 +13,7 @@ export function R6ColdStartFrame({
 }: {
   step: 1 | 2 | 3;
   title: string;
-  eyebrow: string;
+  eyebrow?: string | null;
   children: ReactNode;
   footer: ReactNode;
   focusToken?: number;
@@ -39,7 +39,7 @@ export function R6ColdStartFrame({
         <section className="onboarding-r6-shell" data-step={step}>
           <header className="onboarding-r6-head">
             <div>
-              <p>{eyebrow}</p>
+              {eyebrow ? <p>{eyebrow}</p> : null}
               <h1
                 ref={titleRef}
                 tabIndex={focusToken === undefined ? undefined : -1}

@@ -80,6 +80,8 @@ export const koreanMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "최근 원본 대화",
   "sdk.raw.empty":
     "아직 원본 대화가 없습니다. 소스를 연결하면 여기에 표시됩니다.",
+  "sdk.raw.total": "원본 대화 {count}개",
+  "sdk.raw.total.one": "원본 대화 {count}개",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "기본 메모리를 사용 중입니다. 새 대화는 원본 기록으로 저장되며 고급 메모리를 만들지 않습니다. 기존 고급 메모리는 보존되지만 현재 표시되거나 회상에 사용되지 않습니다.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -149,6 +151,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "변경 사항 저장",
   "selectedMemory.author.user": "나",
   "selectedMemory.author.agent": "어시스턴트",
+  "selectedMemory.author.tool": "도구",
   "selectedMemory.sourceUnavailable":
     "출처 권한이 변경되었거나 원문을 사용할 수 없습니다.",
   "selectedMemory.related": "관련 기억",
@@ -1021,7 +1024,7 @@ export const koreanMessages: Record<MessageKey, string> = {
     "앱을 열지 않아도 기억을 계속 동기화, 정리하고 제공합니다.",
   导出日志: "로그 내보내기",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "로컬 진단 로그를 파일 하나로 묶어 지원팀에 보냅니다.",
+    "모든 로컬 로그를 묶습니다. 대화 내용이나 로컬 경로가 포함될 수 있으므로 신뢰할 수 있는 개발자에게만 공유하세요.",
   "确定退出 One Memory 界面吗？": "MemHub 창을 종료하시겠습니까?",
   "后台服务会继续同步、整理和提供记忆。":
     "백그라운드 서비스는 계속 기억을 동기화, 정리하고 제공합니다.",
@@ -1207,6 +1210,9 @@ export const koreanMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "반복은 줄이고, 이해는 깊게.",
   onboardingMoreApps: "스크롤하여 더 보기 · 앱 {count}개 남음",
   "onboardingMoreApps.one": "스크롤하여 더 보기 · 앱 {count}개 남음",
+  onboardingMoreImportApps: "가로로 스크롤 · 앱 {count}개 남음",
+  onboardingImportChecking:
+    "가져오기 결과를 확인하는 중이며 선택 항목은 유지됩니다",
   onboardingAllApps: "앱 {count}개 모두 표시됨",
   默认位置: "기본 위치",
   自定义位置: "사용자 지정 위치",
@@ -1480,6 +1486,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   "apps.memories": "저장된 기억",
   "apps.rawConversations": "원본 대화",
   "apps.rawSaving": "저장 중",
+  "apps.rawSavingCompact": "저장 중",
   "apps.rawSavingStatus": "저장 상태",
   "apps.rawSavingDetail": "생성 모델 없이 원본 대화를 저장합니다",
   "apps.rawNoExcerpt": "표시할 수 있는 사용자 원문이 없습니다",
@@ -1488,6 +1495,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   "apps.rawEmpty": "저장된 원본 대화가 아직 없습니다",
   "apps.rawCheckedEmpty": "확인됨: 표시할 원본 대화 업데이트가 없습니다",
   "apps.memoryCheckedEmpty": "확인됨: 표시할 메모리 업데이트가 없습니다",
+  "apps.recentEmptyCompact": "업데이트 없음",
   "apps.rawWaiting": "저장된 원본 대화가 여기에 표시됩니다",
   "apps.checkedRecent": "현재 내용 확인됨",
   "apps.currentMode": "현재 모드",

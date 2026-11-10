@@ -10,13 +10,33 @@ import type { ImportSourcesController } from "./use-import-sources";
 
 vi.mock("./api", () => ({
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  getModelProfiles: vi.fn().mockResolvedValue([]),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
   getMemoryMode: vi.fn().mockResolvedValue({
     mode: "pro",
     configured_mode: "pro",
     explicitly_configured: false,
   }),
   setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
-  planMemoryMode: vi.fn().mockResolvedValue({ blockers: [] }),
+  planMemoryMode: vi.fn().mockImplementation(async (target) => ({
+    current: "lite",
+    target,
+    effective_target: target,
+    capabilities: {
+      content_plane: target === "lite" ? "raw" : "memory",
+      generation_required: target !== "lite",
+      graph_enabled: target === "ultra",
+      evolve_available: target === "ultra",
+    },
+    effects: [],
+    warnings: [],
+    blockers: target === "lite" ? [] : ["active_model_required"],
+  })),
   putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
   patchOnboardingProgress: vi.fn().mockResolvedValue({}),
 }));
@@ -136,13 +156,12 @@ it("moves from import to the actual third step without completing onboarding", a
   );
   await userEvent.click(screen.getByRole("button", { name: "进入第三步" }));
   await userEvent.click(screen.getByRole("radio", { name: /pro/i }));
-  await userEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
+  await userEvent.click(screen.getByRole("button", { name: "配置模型" }));
   expect(screen.getByRole("heading", { name: "第三步模型页面" })).toBeTruthy();
   expect(completeOnboarding).not.toHaveBeenCalled();
   expect(finish).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "返回第二步" }));
-  await userEvent.click(screen.getByRole("button", { name: "返回导入" }));
-  expect(screen.getByText("Import accepted")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
   expect(completeOnboarding).not.toHaveBeenCalled();
 });
 
@@ -161,7 +180,7 @@ it("lets an empty first-time user enter without granting or importing a source",
       onFinish={finish}
     />,
   );
-  const skip = await screen.findByRole("button", { name: "稍后添加，先进入" });
+  const skip = await screen.findByRole("button", { name: "选择记忆模式" });
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
@@ -184,7 +203,7 @@ it("retains explicit retry or enter when saving the skipped onboarding fails", a
       onFinish={finish}
     />,
   );
-  const skip = await screen.findByRole("button", { name: "稍后添加，先进入" });
+  const skip = await screen.findByRole("button", { name: "选择记忆模式" });
   await waitFor(() => expect((skip as HTMLButtonElement).disabled).toBe(false));
   await userEvent.click(skip);
   await userEvent.click(screen.getByRole("radio", { name: /lite/i }));
@@ -273,7 +292,9 @@ it("freezes the explicitly submitted source list when a later source arrives", a
         resolveRefresh = resolve;
       }),
   );
-  await userEvent.click(screen.getByRole("button", { name: "开始导入" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "开始导入" }),
+  );
   const lateSources = [source("workbuddy"), source("codex")];
   rendered.rerender(view({ ...imports, sources: lateSources }));
   expect(checkbox("codex").checked).toBe(false);

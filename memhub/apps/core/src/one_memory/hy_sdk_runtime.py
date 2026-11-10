@@ -52,6 +52,7 @@ from one_memory.memory_features import (
     FeatureOverrides,
     SettingValue,
     feature_overrides,
+    parameter_value,
 )
 from one_memory.model_profiles import (
     ModelProfileSnapshot,
@@ -335,8 +336,8 @@ def sdk_feature_defaults() -> dict[str, SettingValue]:
         spec.name: bool(getattr(getattr(config, spec.section), spec.field)) for spec in FEATURES
     }
     for parameter in PARAMETERS:
-        defaults[parameter.name] = float(
-            getattr(getattr(config, parameter.section), parameter.field)
+        defaults[parameter.name] = parameter_value(
+            parameter.name, getattr(getattr(config, parameter.section), parameter.field)
         )
     return defaults
 
@@ -376,8 +377,9 @@ def apply_sdk_language(config: MemoryConfig, language: str | None) -> MemoryConf
     """Set the SDK prompt language (`MemoryConfig.language`), when there is one.
 
     None (no language set) sets nothing: the SDK detects zh/en as it always
-    did. Every display language, zh-Hans included, is set explicitly. Like a feature, the language never touches `vector_store`, so
-    the collection identity never depends on it.
+    did. Every display language, zh-Hans included, is set explicitly. Like a
+    feature, the language never touches `vector_store`, so the collection
+    identity never depends on it.
     """
     if language is not None:
         config.language = language

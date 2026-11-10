@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
 from functools import partial
+from pathlib import Path
 
 from pydantic import JsonValue
 
@@ -175,6 +176,9 @@ class CursorUnifiedSourceAdapter:
         self.grant = grant
         self.source_version = source_version
         self._history_listing_cache: _CursorListing | None = None
+        self._probe_listing_cache: (
+            tuple[dict[str, SourceCursor], int | None, _CursorListing] | None
+        ) = None
 
     @property
     def descriptor(self) -> SourceDescriptor:
@@ -207,6 +211,15 @@ class CursorUnifiedSourceAdapter:
         state = await self.install_state()
         return min(state.session_count, limit) if limit is not None else state.session_count
 
+    async def has_changes(self, options: ScanOptions) -> bool:
+        listing = await asyncio.to_thread(self._fresh_listing, options)
+        self._probe_listing_cache = (
+            dict(options.cursors),
+            options.max_scan_targets,
+            listing,
+        )
+        return bool(listing.transcripts or listing.stores or listing.legacy or listing.failures)
+
     async def live_baseline(self) -> dict[str, SourceCursor]:
         """Capture Cursor's current tail so the realtime lane never backfills history."""
         listing = await asyncio.to_thread(
@@ -222,9 +235,11 @@ class CursorUnifiedSourceAdapter:
             async for event in self._scan_frozen(options):
                 yield event
             return
-        listing = await asyncio.to_thread(
-            self._history_listing if options.reuse_listing else self._fresh_listing,
-            options,
+        listing = (
+            await asyncio.to_thread(self._history_listing, options)
+            if options.reuse_listing
+            else self._take_probe_listing(options)
+            or await asyncio.to_thread(self._fresh_listing, options)
         )
         for failure in listing.failures:
             yield ScanFailure(reason_code=discovery_failure_code(failure))
@@ -329,6 +344,16 @@ class CursorUnifiedSourceAdapter:
             self._history_listing_cache = listing
         return listing
 
+    def _take_probe_listing(self, options: ScanOptions) -> "_CursorListing | None":
+        cached = self._probe_listing_cache
+        self._probe_listing_cache = None
+        if cached is None:
+            return None
+        cursors, max_scan_targets, listing = cached
+        if cursors != options.cursors or max_scan_targets != options.max_scan_targets:
+            return None
+        return listing
+
     def _fresh_listing(self, options: ScanOptions) -> "_CursorListing":
         return _list_cursor_files(
             self.grant,
@@ -376,6 +401,7 @@ class CursorUnifiedSourceAdapter:
             self.grant,
             suffixes=frozenset({".db"}),
             max_targets=options.max_scan_targets or 100_000,
+            directory_predicate=_cursor_data_directory,
         ):
             if isinstance(discovered, SourceFileDiscoveryFailure):
                 yield ScanFailure(reason_code=discovery_failure_code(discovered))
@@ -477,7 +503,10 @@ def _list_cursor_files(
     legacy: list[AuthorizedSourceFile] = []
     failures: list[SourceFileDiscoveryFailure] = []
     for item in discover_source_files(
-        grant, suffixes=frozenset({".jsonl", ".db", ".vscdb"}), max_targets=max_targets
+        grant,
+        suffixes=frozenset({".jsonl", ".db", ".vscdb"}),
+        max_targets=max_targets,
+        directory_predicate=_cursor_data_directory,
     ):
         if isinstance(item, SourceFileDiscoveryFailure):
             failures.append(item)
@@ -586,6 +615,25 @@ def _is_cursor_data_file(source_file: AuthorizedSourceFile) -> bool:
     )
 
 
+def _cursor_data_directory(relative_path: Path) -> bool:
+    """Enter only Cursor directories that can contain conversation authority.
+
+    The granted root also contains extensions, skills, caches, logs and agent
+    artifacts. Recursively walking all of them every live-sync poll made the
+    reader monopolize Core even though none can pass the file predicates.
+    """
+    parts = relative_path.parts
+    if not parts:
+        return False
+    if parts[0] in {"chats", "acp-sessions"}:
+        return True
+    if parts[0] == "projects":
+        return len(parts) <= 2 or parts[2] == "agent-transcripts"
+    if parts[0] == "User":
+        return len(parts) == 1 or parts[1] in {"globalStorage", "workspaceStorage"}
+    return False
+
+
 def _is_transcript_file(source_file: AuthorizedSourceFile) -> bool:
     parts = source_file.relative_path.parts
     return source_file.relative_path.suffix == ".jsonl" and "agent-transcripts" in parts
@@ -634,6 +682,7 @@ def _select_transcript_files(
         grant,
         suffixes=frozenset({".jsonl"}),
         max_targets=100_000,
+        directory_predicate=_cursor_data_directory,
     ):
         if not isinstance(item, AuthorizedSourceFile) or not _is_transcript_file(item):
             continue
@@ -654,6 +703,7 @@ def _subagent_conversation_ids(grant: AuthorizedSourceRoot) -> set[str]:
             grant,
             suffixes=frozenset({".jsonl"}),
             max_targets=100_000,
+            directory_predicate=_cursor_data_directory,
         )
         if isinstance(item, AuthorizedSourceFile)
         and _is_transcript_file(item)

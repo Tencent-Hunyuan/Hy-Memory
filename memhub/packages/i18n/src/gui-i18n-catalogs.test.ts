@@ -229,6 +229,12 @@ describe("English catalog", () => {
   });
 
   it("uses CLDR English singular and plural forms", () => {
+    expect(translateCount("en", "sdk.raw.total", 1, { count: 1 })).toBe(
+      "1 original conversation",
+    );
+    expect(translateCount("en", "sdk.raw.total", 2, { count: 2 })).toBe(
+      "2 original conversations",
+    );
     expect(
       translateCount("en", "calls.headline.found", 1, {
         host: "Cursor",
@@ -275,9 +281,10 @@ describe("Mode catalog", () => {
       "搜索沉淀记忆，并用知识图谱补充关联。",
       "搜索沉淀后的记忆。",
       "已经处理完的旧对话不会补做；原始对话全部保留。",
-      "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。",
+      "知识图谱",
+      "普通沉淀记忆仍可使用；深度记忆新增的更高层记忆和图谱数据继续保留，但在智能记忆下不显示、不参与召回。原始对话不会删除。",
       "已有记忆会在后台加入知识图谱，期间仍可使用。",
-      "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
+      "每天自动整合会停止，已经生成的数据不会删除。",
       "记忆维护正在进行，完成后才能切换模式。",
       "模式切换影响暂时无法读取，请重试。",
     ] as const;

@@ -83,6 +83,8 @@ export const russianMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Недавние исходные диалоги",
   "sdk.raw.empty":
     "Исходных диалогов пока нет. Подключите источник, и они появятся здесь.",
+  "sdk.raw.total": "Исходных диалогов: {count}",
+  "sdk.raw.total.one": "{count} исходный диалог",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "Включена базовая память. Новые диалоги сохраняются в исходном виде и не создают расширенные воспоминания. Существующие расширенные воспоминания сохраняются, но не показываются и не используются при поиске.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -155,6 +157,7 @@ export const russianMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Сохранить изменения",
   "selectedMemory.author.user": "Вы",
   "selectedMemory.author.agent": "Ассистент",
+  "selectedMemory.author.tool": "Инструмент",
   "selectedMemory.sourceUnavailable":
     "Разрешения источника изменились, или исходный текст недоступен.",
   "selectedMemory.related": "Связанная запись памяти",
@@ -1053,7 +1056,7 @@ export const russianMessages: Record<MessageKey, string> = {
     "Синхронизация, обработка и предоставление памяти без открытия приложения.",
   导出日志: "Экспорт журналов",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Упакуйте локальные журналы диагностики в файл, чтобы отправить в поддержку.",
+    "Упаковывает все локальные журналы. Они могут содержать текст диалогов или локальные пути; отправляйте их только доверенным разработчикам.",
   "确定退出 One Memory 界面吗？": "Закрыть окно MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "Фоновая служба продолжит синхронизацию, обработку и предоставление памяти.",
@@ -1241,6 +1244,9 @@ export const russianMessages: Record<MessageKey, string> = {
     "Прокрутите, чтобы увидеть больше · осталось приложений: {count}",
   "onboardingMoreApps.one":
     "Прокрутите, чтобы увидеть больше · осталось приложений: {count}",
+  onboardingMoreImportApps:
+    "Прокрутите по горизонтали · осталось приложений: {count}",
+  onboardingImportChecking: "Проверяем результат импорта; ваш выбор сохранён",
   onboardingAllApps: "Показаны все приложения: {count}",
   默认位置: "Расположение по умолчанию",
   自定义位置: "Своё расположение",
@@ -1524,6 +1530,7 @@ export const russianMessages: Record<MessageKey, string> = {
   "apps.memories": "Сохранённые записи памяти",
   "apps.rawConversations": "Исходные разговоры",
   "apps.rawSaving": "Сохранение",
+  "apps.rawSavingCompact": "Сохранение",
   "apps.rawSavingStatus": "Статус сохранения",
   "apps.rawSavingDetail":
     "Исходные разговоры сохраняются без генеративной модели",
@@ -1534,6 +1541,7 @@ export const russianMessages: Record<MessageKey, string> = {
   "apps.rawCheckedEmpty":
     "Проверено: нет обновлений исходных диалогов для показа",
   "apps.memoryCheckedEmpty": "Проверено: нет обновлений памяти для показа",
+  "apps.recentEmptyCompact": "Нет обновлений",
   "apps.rawWaiting": "Сохранённые исходные диалоги появятся здесь",
   "apps.checkedRecent": "Текущее содержимое проверено",
   "apps.currentMode": "Текущий режим",

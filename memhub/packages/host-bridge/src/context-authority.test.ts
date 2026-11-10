@@ -60,20 +60,13 @@ function memory(): SdkContextItem {
 }
 
 describe("context response authority", () => {
-  it("accepts a raw item from a source the host was granted", () => {
-    // The write side stores under `source:<id>`, so a read that did not check
-    // the same scope would return rows from sources this host never granted.
+  it("accepts a raw item from any connected app under all-apps", () => {
     expect(
       isContextResponseAuthorized(response([raw("codex")]), identity()),
     ).toBe(true);
-  });
-
-  it("rejects a raw item from a source the host was not granted", () => {
-    // This is the symmetry rule: granted for one source, shown another's rows
-    // is a silent leak rather than an error anyone would notice.
     expect(
       isContextResponseAuthorized(response([raw("cursor")]), identity()),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("rejects raw when the conversations tool is missing", () => {
@@ -98,15 +91,13 @@ describe("context response authority", () => {
     ).toBe(false);
   });
 
-  it("rejects every item when any one of them is out of scope", () => {
-    // Not "filter the bad one out": a response that mixed in one foreign row
-    // has failed its contract, and passing the rest would hide that.
+  it("accepts raw results spanning connected apps", () => {
     expect(
       isContextResponseAuthorized(
         response([raw("codex"), raw("cursor")]),
         identity(),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("checks memory items against memory authority, not source scopes", () => {

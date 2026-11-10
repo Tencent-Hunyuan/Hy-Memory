@@ -81,6 +81,8 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Percakapan asli terbaru",
   "sdk.raw.empty":
     "Belum ada percakapan asli. Hubungkan sumber agar percakapan tampil di sini.",
+  "sdk.raw.total": "{count} percakapan asli",
+  "sdk.raw.total.one": "{count} percakapan asli",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "Memori dasar aktif. Percakapan baru disimpan sebagai catatan asli dan tidak membuat memori lanjutan. Memori lanjutan yang ada tetap tersimpan, tetapi tidak ditampilkan atau digunakan untuk recall.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -151,6 +153,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Simpan perubahan",
   "selectedMemory.author.user": "Anda",
   "selectedMemory.author.agent": "Asisten",
+  "selectedMemory.author.tool": "Alat",
   "selectedMemory.sourceUnavailable":
     "Izin sumber berubah atau teks asli tidak tersedia.",
   "selectedMemory.related": "Memori terkait",
@@ -1048,7 +1051,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Terus sinkronkan, proses, dan sediakan memori tanpa membuka aplikasi.",
   导出日志: "Ekspor log",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Kemas log diagnostik lokal menjadi satu file untuk dibagikan ke tim dukungan.",
+    "Kemas semua log lokal. Log dapat memuat isi percakapan atau jalur lokal; bagikan hanya kepada pengembang tepercaya.",
   "确定退出 One Memory 界面吗？": "Tutup jendela MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "Layanan latar belakang akan terus menyinkronkan, memproses, dan menyediakan memori.",
@@ -1236,6 +1239,9 @@ export const indonesianMessages: Record<MessageKey, string> = {
   onboardingMoreApps: "Gulir untuk melihat lainnya · {count} aplikasi lagi",
   "onboardingMoreApps.one":
     "Gulir untuk melihat lainnya · {count} aplikasi lagi",
+  onboardingMoreImportApps: "Gulir horizontal · {count} aplikasi lagi",
+  onboardingImportChecking:
+    "Memeriksa hasil impor; pilihan Anda tetap tersimpan",
   onboardingAllApps: "Semua {count} aplikasi ditampilkan",
   默认位置: "Lokasi default",
   自定义位置: "Lokasi kustom",
@@ -1519,6 +1525,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "apps.memories": "Memori tersimpan",
   "apps.rawConversations": "Percakapan asli",
   "apps.rawSaving": "Menyimpan",
+  "apps.rawSavingCompact": "Menyimpan",
   "apps.rawSavingStatus": "Status penyimpanan",
   "apps.rawSavingDetail": "Percakapan asli disimpan tanpa model generatif",
   "apps.rawNoExcerpt": "Tidak ada kutipan pengguna yang dapat ditampilkan",
@@ -1529,6 +1536,7 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "Diperiksa: tidak ada pembaruan percakapan untuk ditampilkan",
   "apps.memoryCheckedEmpty":
     "Diperiksa: tidak ada pembaruan memori untuk ditampilkan",
+  "apps.recentEmptyCompact": "Belum ada pembaruan",
   "apps.rawWaiting": "Percakapan asli yang disimpan akan muncul di sini",
   "apps.checkedRecent": "Konten saat ini telah diperiksa",
   "apps.currentMode": "Mode saat ini",

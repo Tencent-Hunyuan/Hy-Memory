@@ -109,6 +109,39 @@ describe("status on a paused model", () => {
     });
     expect(renderStatusText(report, "MemHub")).not.toContain("模型暂停");
   });
+
+  it("reports a restarting write drain and its exit code", async () => {
+    const report = await compose({
+      ...processing({ llm_backoff_until: null, llm_backoff_error: null }),
+      write_drain: "restarting",
+      write_drain_error: "operational_error",
+    });
+    expect(report.sections.processing).toMatchObject({
+      write_drain: "restarting",
+      write_drain_error: "operational_error",
+    });
+    const text = renderStatusText(report, "MemHub");
+    expect(text).toContain(
+      "写入队列：异常退出（operational_error），正在自动重启",
+    );
+    expect(text).not.toContain("write_drain");
+  });
+
+  it("says nothing about a running drain and nulls what an older Core omits", async () => {
+    const running = await compose({
+      ...processing({ llm_backoff_until: null, llm_backoff_error: null }),
+      write_drain: "running",
+      write_drain_error: null,
+    });
+    expect(renderStatusText(running, "MemHub")).not.toContain("写入队列");
+    const older = await compose(
+      processing({ llm_backoff_until: null, llm_backoff_error: null }),
+    );
+    expect(older.sections.processing).toMatchObject({
+      write_drain: null,
+      write_drain_error: null,
+    });
+  });
 });
 
 describe("status and doctor on an unfinished upgrade migration", () => {

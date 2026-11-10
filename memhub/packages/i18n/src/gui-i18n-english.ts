@@ -877,7 +877,7 @@ const baseEnglishMessages = {
     "Keep syncing, processing and providing memories without opening the app.",
   导出日志: "Export logs",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Package local diagnostic logs into a file to share with support.",
+    "Package all local logs. They may contain conversation text or local paths; share only with trusted developers.",
   "确定退出 One Memory 界面吗？": "Quit the MemHub window?",
   "后台服务会继续同步、整理和提供记忆。":
     "The background service will continue syncing, processing and providing memories.",
@@ -1063,6 +1063,9 @@ const baseEnglishMessages = {
   "少一些重复交代，多一些理解。": "Less repetition. More understanding.",
   onboardingMoreApps: "Scroll for more · {count} apps remaining",
   "onboardingMoreApps.one": "Scroll for more · {count} app remaining",
+  onboardingMoreImportApps: "Scroll horizontally · {count} apps remaining",
+  onboardingImportChecking:
+    "Checking the import result; your selection is kept",
   onboardingAllApps: "All {count} apps shown",
   默认位置: "Default location",
   自定义位置: "Custom location",
@@ -1345,6 +1348,7 @@ const baseEnglishMessages = {
   "apps.memories": "Saved memories",
   "apps.rawConversations": "Original conversations",
   "apps.rawSaving": "Saving",
+  "apps.rawSavingCompact": "Saving",
   "apps.rawSavingStatus": "Saving status",
   "apps.rawSavingDetail":
     "Original conversations are saved without a generation model",
@@ -1355,6 +1359,7 @@ const baseEnglishMessages = {
   "apps.rawCheckedEmpty":
     "Checked: no original-conversation updates to display",
   "apps.memoryCheckedEmpty": "Checked: no memory updates to display",
+  "apps.recentEmptyCompact": "No updates",
   "apps.rawWaiting": "Original conversations will appear here when saved",
   "apps.checkedRecent": "Current content checked",
   "apps.currentMode": "Current mode",

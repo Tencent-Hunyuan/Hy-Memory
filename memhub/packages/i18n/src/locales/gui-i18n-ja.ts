@@ -83,6 +83,8 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "最近の元の会話",
   "sdk.raw.empty":
     "元の会話はまだありません。ソースを接続すると、ここに表示されます。",
+  "sdk.raw.total": "元の会話 {count} 件",
+  "sdk.raw.total.one": "元の会話 {count} 件",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "基本メモリを使用中です。新しい会話は原文として保存され、高度なメモリは生成されません。既存の高度なメモリは保持されますが、現在は表示も呼び出しもされません。",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -152,6 +154,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "変更を保存",
   "selectedMemory.author.user": "あなた",
   "selectedMemory.author.agent": "アシスタント",
+  "selectedMemory.author.tool": "ツール",
   "selectedMemory.sourceUnavailable":
     "ソースの権限が変更されたか、原文を利用できません。",
   "selectedMemory.related": "関連する記憶",
@@ -1045,7 +1048,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "アプリを開かなくても、記憶の同期、処理、提供を続けます。",
   导出日志: "ログを書き出す",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "ローカルの診断ログを 1 つのファイルにまとめ、サポートに共有できます。",
+    "ローカルログをすべてまとめます。会話本文やローカルパスが含まれる場合があるため、信頼できる開発者にのみ共有してください。",
   "确定退出 One Memory 界面吗？": "MemHub のウインドウを終了しますか？",
   "后台服务会继续同步、整理和提供记忆。":
     "バックグラウンドサービスは記憶の同期、処理、提供を続けます。",
@@ -1231,6 +1234,9 @@ export const japaneseMessages: Record<MessageKey, string> = {
   onboardingMoreApps: "スクロールしてさらに表示 · 残り {count} 個のアプリ",
   "onboardingMoreApps.one":
     "スクロールしてさらに表示 · 残り {count} 個のアプリ",
+  onboardingMoreImportApps: "横にスクロール · 残り {count} 個のアプリ",
+  onboardingImportChecking:
+    "インポート結果を確認しています。選択内容は保持されています",
   onboardingAllApps: "全 {count} 個のアプリを表示中",
   默认位置: "既定の場所",
   自定义位置: "カスタムの場所",
@@ -1516,6 +1522,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "apps.memories": "保存済みの記憶",
   "apps.rawConversations": "元の会話",
   "apps.rawSaving": "保存中",
+  "apps.rawSavingCompact": "保存中",
   "apps.rawSavingStatus": "保存状態",
   "apps.rawSavingDetail": "生成モデルを使わず元の会話を保存します",
   "apps.rawNoExcerpt": "表示できるユーザーの原文がありません",
@@ -1524,6 +1531,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "apps.rawEmpty": "保存済みの元の会話はまだありません",
   "apps.rawCheckedEmpty": "確認済み：表示できる元の会話の更新はありません",
   "apps.memoryCheckedEmpty": "確認済み：表示できる記憶の更新はありません",
+  "apps.recentEmptyCompact": "更新なし",
   "apps.rawWaiting": "保存された元の会話がここに表示されます",
   "apps.checkedRecent": "現在の内容を確認済み",
   "apps.currentMode": "現在のモード",

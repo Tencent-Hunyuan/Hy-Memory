@@ -149,7 +149,7 @@ it("OBS-22: the graph inspector has no editing entry and never says changes cann
   expect(screen.queryByText(/暂不能保存更改/)).toBeNull();
 });
 
-it("replaces a topic detail with an off-page graph memory detail", async () => {
+it("keeps topic annotations out of the inspector and opens detail-bearing graph nodes", async () => {
   const onOpen = vi.fn();
   const topicGraph = {
     total_memories: 2,
@@ -221,13 +221,13 @@ it("replaces a topic detail with an off-page graph memory detail", async () => {
     />,
   );
 
+  await act(async () => {});
+  onOpen.mockClear();
   await userEvent.click(screen.getByRole("button", { name: "图中选择 git" }));
-  expect(screen.getByRole("heading", { name: "git" })).toBeTruthy();
-  expect(screen.getAllByText("第一条").length).toBeGreaterThan(0);
-  expect(screen.queryByText("对应记忆")).toBeNull();
-  expect(screen.queryByText("属于主题")).toBeNull();
-  expect(screen.queryByText("主题")).toBeNull();
-  expect(screen.queryByText("两跳")).toBeNull();
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.queryByRole("heading", { name: "git" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:m0");
   await userEvent.click(
     screen.getByRole("button", { name: "图中选择 先验证，再推送" }),
   );
@@ -491,6 +491,7 @@ function Host({
   onViewHistory,
   onConfigureModel = () => {},
   libraryView,
+  raw = false,
 }: {
   simplified?: boolean;
   date?: string | null;
@@ -509,6 +510,7 @@ function Host({
   onViewHistory?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
+  raw?: boolean;
 } = {}) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [detailLoad, setDetailLoad] = useState<{
@@ -518,6 +520,7 @@ function Host({
   return (
     <MemoryMap
       simplified={simplified}
+      contentKind={raw ? "raw" : "memory"}
       libraryView={libraryView}
       hidden={hidden}
       overlayBlocked={overlayBlocked}
@@ -587,6 +590,61 @@ function Host({
     />
   );
 }
+
+it("windows raw rows and automatically continues near the bottom", () => {
+  const items = Array.from({ length: 150 }, (_, index) => ({
+    ...memories[0],
+    memory_id: `raw-${index}`,
+    content: `原始会话 ${index}`,
+  }));
+  const onMore = vi.fn();
+  const sourceIds = Object.fromEntries(
+    items.map((item) => [item.memory_id, ["cursor"]]),
+  );
+  render(
+    <Host
+      simplified
+      raw
+      items={items}
+      libraryView={{
+        query: "",
+        source: "",
+        page: {
+          items,
+          total: 1_600,
+          offset: 0,
+          limit: 50,
+          source_ids_by_memory: sourceIds,
+        },
+        loading: false,
+        failed: false,
+        stale: false,
+        cursorPaging: true,
+        hasMore: true,
+        onQuery: vi.fn(),
+        onSource: vi.fn(),
+        resetPage: vi.fn(),
+        onPage: vi.fn(),
+        onMore,
+        onRetry: vi.fn(),
+      }}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "原始对话" });
+  Object.defineProperties(list, {
+    clientHeight: { configurable: true, value: 500 },
+    scrollHeight: { configurable: true, value: 17_400 },
+    scrollTop: { configurable: true, writable: true, value: 16_500 },
+  });
+  fireEvent.scroll(list);
+
+  expect(onMore).toHaveBeenCalledTimes(1);
+  expect(document.querySelectorAll("[data-memory-id]").length).toBeLessThan(30);
+  expect(screen.getByRole("button", { name: "加载更多" }).classList).toContain(
+    "map-load-more",
+  );
+});
+
 it("does not present an unverified empty page as zero memories", () => {
   const page = {
     items: [],

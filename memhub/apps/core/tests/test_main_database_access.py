@@ -318,7 +318,29 @@ def test_main_database_checkpoints_on_a_write_cadence(tmp_path, monkeypatch):
     with database.write() as db, db:
         db.execute("UPDATE counter SET value = 2 WHERE id = 1")
 
+    assert _access.wait_for_cadence_checkpoints()
     assert checkpoints and checkpoints[0][0] == "PASSIVE"
+
+
+def test_the_cadence_checkpoint_does_not_run_on_the_writing_thread(tmp_path, monkeypatch):
+    """The thread that wrote returns at once; the checkpointer takes the next turn."""
+    path = _database(tmp_path)
+    database = main_database(path)
+    ran_on = []
+    original = database._checkpoint_from_maintenance
+
+    def observed(mode):
+        ran_on.append(threading.current_thread().name)
+        return original(mode)
+
+    monkeypatch.setattr(database, "_checkpoint_from_maintenance", observed)
+    monkeypatch.setattr(_access, "MAIN_DATABASE_CHECKPOINT_WRITE_INTERVAL", 1)
+
+    with database.write() as db, db:
+        db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+
+    assert _access.wait_for_cadence_checkpoints()
+    assert ran_on == ["one-memory-checkpoint"]
 
 
 def test_main_database_warns_when_wal_stays_above_the_high_water_mark(
@@ -332,6 +354,7 @@ def test_main_database_warns_when_wal_stays_above_the_high_water_mark(
 
     with database.write() as db, db:
         db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+    assert _access.wait_for_cadence_checkpoints()
 
     assert any("main_database_wal_high" in record.message for record in caplog.records)
 
@@ -349,6 +372,7 @@ def test_a_wal_whose_frames_are_all_checkpointed_is_not_reported_high(
 
     with database.write() as db, db:
         db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+    assert _access.wait_for_cadence_checkpoints()
 
     assert database._wal_bytes() > 0
     assert not any("main_database_wal_high" in record.message for record in caplog.records)

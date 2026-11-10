@@ -11,6 +11,7 @@ import {
   type FormEvent,
   type Ref,
   useEffect,
+  useId,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -26,6 +27,8 @@ import {
   presetForGeneration,
   validateGenerationModel,
 } from "./GenerationModelPrimitives";
+import { modelProfileReady, profileFromProbe } from "./model-profile-readiness";
+import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { R6StateRecovery } from "./R6StateRecovery";
@@ -172,27 +175,6 @@ function validEndpoint(value: string): boolean {
   }
 }
 
-function ready(
-  profile: ModelProfile,
-  probe: ModelProbeResult | null = null,
-  error: string | null = null,
-): boolean {
-  return (
-    !error &&
-    (!probe ||
-      (probe.profile_id === profile.profile_id &&
-        probe.profile_revision === profile.revision &&
-        probe.capabilities.endpoint_reachable &&
-        probe.capabilities.model_available &&
-        probe.capabilities.embedding_available)) &&
-    profile.credential_state !== "unavailable" &&
-    !(profile.has_configured_api_key && !profile.has_api_key) &&
-    profile.capabilities.endpoint_reachable &&
-    profile.capabilities.model_available &&
-    profile.capabilities.embedding_available
-  );
-}
-
 function endpointLabel(value: string | null): string {
   if (!value) return "未提供接口地址";
   try {
@@ -238,6 +220,7 @@ export function ModelSettings({
   onSetupComplete?(): void;
 } = {}) {
   const { text, t } = useOnboardingTranslation();
+  const fieldId = useId();
   const models = useModelProfiles();
   const embeddingSwitch = useEmbeddingSwitch();
   const [provider, setProvider] = useState<ProviderKind>("openai_compatible");
@@ -275,6 +258,9 @@ export function ModelSettings({
   const [setupError, setSetupError] = useState<string | null>(null);
   const [switchTarget, setSwitchTarget] = useState<ModelProfile | null>(null);
   const [switchJobId, setSwitchJobId] = useState<string | null>(null);
+  const [switchRefreshCompleted, setSwitchRefreshCompleted] = useState<
+    string | null
+  >(null);
   const settledSwitchJob = useRef<string | null>(null);
   const flight = useRef(false);
   const alive = useRef(true);
@@ -308,10 +294,11 @@ export function ModelSettings({
       return;
     settledSwitchJob.current = finished.job_id;
     if (finished.state === "done") {
-      void models.refreshProfiles();
+      setSetupPhase("activating");
       setSetupError(null);
-      setSwitchTarget(null);
-      setSwitchJobId(null);
+      void models.refreshProfiles().then(() => {
+        if (alive.current) setSwitchRefreshCompleted(finished.job_id);
+      });
       onProfilesChanged?.();
       return;
     }
@@ -323,12 +310,52 @@ export function ModelSettings({
       );
       setSwitchTarget(null);
       setSwitchJobId(null);
+      setSwitchRefreshCompleted(null);
     }
   }, [
     embeddingSwitch.current?.last_finished,
     models.refreshProfiles,
     onProfilesChanged,
     switchJobId,
+    switchTarget,
+  ]);
+  useEffect(() => {
+    const finished = embeddingSwitch.current?.last_finished;
+    if (
+      !switchTarget ||
+      !switchJobId ||
+      finished?.job_id !== switchJobId ||
+      finished.state !== "done" ||
+      switchRefreshCompleted !== switchJobId
+    )
+      return;
+    const active = models.profiles.find(
+      (profile) =>
+        profile.profile_id === switchTarget.profile_id &&
+        profile.revision >= switchTarget.revision &&
+        profile.is_active,
+    );
+    if (!active) {
+      setSetupPhase(null);
+      setSetupError("配置已保存，尚未确认启用成功。请核对配置后重试。");
+      setSwitchTarget(null);
+      setSwitchJobId(null);
+      setSwitchRefreshCompleted(null);
+      return;
+    }
+    if (active.name !== PRESET_PROFILE_NAME) setSaved(active);
+    setSetupPhase(null);
+    setSetupError(null);
+    setSwitchTarget(null);
+    setSwitchJobId(null);
+    setSwitchRefreshCompleted(null);
+    onSetupComplete?.();
+  }, [
+    embeddingSwitch.current?.last_finished,
+    models.profiles,
+    onSetupComplete,
+    switchJobId,
+    switchRefreshCompleted,
     switchTarget,
   ]);
   useLayoutEffect(() => {
@@ -381,6 +408,7 @@ export function ModelSettings({
       saved);
   const editorLocked =
     saving ||
+    switchJobId !== null ||
     models.busy !== null ||
     !!models.pendingCreation ||
     !!models.pendingProbe ||
@@ -419,7 +447,11 @@ export function ModelSettings({
     technicalTouched.current.clear();
   };
   const isReady = (profile: ModelProfile) =>
-    ready(profile, models.probeFor(profile), models.probeErrorFor(profile));
+    modelProfileReady(
+      profile,
+      models.probeFor(profile),
+      models.probeErrorFor(profile),
+    );
 
   function editProfile(profile: ModelProfile) {
     if (ownerLocked) return;
@@ -578,7 +610,7 @@ export function ModelSettings({
       !active ||
       active.profile_id !== profile.profile_id ||
       !active.is_active ||
-      !ready(active, result)
+      !modelProfileReady(active, result)
     ) {
       setSetupError("配置已保存，尚未确认启用成功。请核对配置后重试。");
       return false;
@@ -592,38 +624,15 @@ export function ModelSettings({
     setSetupPhase("testing");
     const result = await models.probeProfile(profile.profile_id);
     if (!alive.current) return false;
-    if (
-      result &&
-      result.profile_id === profile.profile_id &&
-      result.profile_revision !== profile.revision
-    ) {
-      // A newer revision used to be accepted here, and then activation turned
-      // on whatever the configuration had become. The user is told the
-      // settings they filled in passed, so this hands them a model they never
-      // tested. `ready` below cannot catch it either: by then the probe and
-      // the activated profile are both on the new revision and agree.
-      setSetupError(
-        result.profile_revision > profile.revision
-          ? "这份配置在测试期间被改过，刚才测的是改动后的版本。配置已保存但未启用，请重新测试并启用。"
-          : "测试结果来自这份配置更早的版本。配置已保存但未启用，请重新测试并启用。",
-      );
-      return false;
-    }
-    if (
-      !result ||
-      result.profile_id !== profile.profile_id ||
-      result.profile_revision !== profile.revision ||
-      !result.capabilities.endpoint_reachable ||
-      !result.capabilities.model_available ||
-      !result.capabilities.embedding_available
-    ) {
+    const testedProfile = profileFromProbe(profile, result);
+    if (!testedProfile || !modelProfileReady(testedProfile, result ?? null)) {
       setSetupError(
         "配置已保存，连接测试未通过。请核对配置后重试，历史对话尚未发送。",
       );
       setFields(probeFieldErrors(result));
       return false;
     }
-    return activateWithPlan(profile, result);
+    return activateWithPlan(testedProfile, result ?? null);
   }
 
   async function activateTested(profile: ModelProfile) {
@@ -864,6 +873,9 @@ export function ModelSettings({
       if (!alive.current) return;
       if (created) {
         if (thenSetup) {
+          // Retrying after probe, activation, or switch confirmation failed
+          // must update this saved revision instead of creating a duplicate.
+          setEditing(created);
           // The probe decides whether this form closes. A rejected key or a
           // failed endpoint leaves the filled-in form on screen with the
           // reason; only a passing test returns to the saved card.
@@ -1339,20 +1351,37 @@ export function ModelSettings({
               )}
               {focusSection === "embedding" || advancedEmbedding ? (
                 <>
-                  <label>
-                    {text(
-                      focusSection === "embedding"
-                        ? "搜索模型"
-                        : "向量配置模式",
-                    )}
-                    <select
-                      name="embedding-mode"
+                  <div className="model-form-field">
+                    <label
+                      className="model-option-label"
+                      id={`${fieldId}-embedding-mode-label`}
+                      htmlFor={`${fieldId}-embedding-mode`}
+                    >
+                      {text(
+                        focusSection === "embedding"
+                          ? "搜索模型"
+                          : "向量配置模式",
+                      )}
+                    </label>
+                    <OptionMenu
+                      id={`${fieldId}-embedding-mode`}
+                      labelledBy={`${fieldId}-embedding-mode-label`}
                       value={embeddingMode}
                       disabled={formLocked}
-                      onChange={(event) => {
-                        setEmbeddingMode(
-                          event.target.value as "local" | "custom",
-                        );
+                      className="model-option-menu"
+                      panelClassName="model-option-menu-panel"
+                      options={[
+                        {
+                          value: "local",
+                          label: text("本地内置（推荐）"),
+                        },
+                        {
+                          value: "custom",
+                          label: text("自定义搜索模型"),
+                        },
+                      ]}
+                      onChange={(value) => {
+                        setEmbeddingMode(value as "local" | "custom");
                         setEmbeddingModeChanged(true);
                         setFields((previous) => ({
                           ...previous,
@@ -1360,11 +1389,8 @@ export function ModelSettings({
                           "embedding-base-url": undefined,
                         }));
                       }}
-                    >
-                      <option value="local">{text("本地内置（推荐）")}</option>
-                      <option value="custom">{text("自定义搜索模型")}</option>
-                    </select>
-                  </label>
+                    />
+                  </div>
                   <small>{text("技术类型：Embedding")}</small>
                   {embeddingMode === "custom" ? (
                     <>
@@ -1397,25 +1423,38 @@ export function ModelSettings({
                           </small>
                         )}
                       </label>
-                      <label>
-                        {text("向量模型来源")}
-                        <select
-                          name="embedding-provider"
+                      <div className="model-form-field">
+                        <label
+                          className="model-option-label"
+                          id={`${fieldId}-embedding-provider-label`}
+                          htmlFor={`${fieldId}-embedding-provider`}
+                        >
+                          {text("向量模型来源")}
+                        </label>
+                        <OptionMenu
+                          id={`${fieldId}-embedding-provider`}
+                          labelledBy={`${fieldId}-embedding-provider-label`}
                           value={embeddingProvider}
                           disabled={formLocked}
-                          onChange={(event) => {
-                            const next = event.target.value as
+                          className="model-option-menu"
+                          panelClassName="model-option-menu-panel"
+                          options={[
+                            { value: "ollama", label: text("本机 Ollama") },
+                            {
+                              value: "openai_compatible",
+                              label: text(
+                                "同源 OpenAI-compatible（共用 API Key）",
+                              ),
+                            },
+                          ]}
+                          onChange={(value) => {
+                            const next = value as
                               | "openai_compatible"
                               | "ollama";
                             setEmbeddingProvider(next);
                           }}
-                        >
-                          <option value="ollama">{text("本机 Ollama")}</option>
-                          <option value="openai_compatible">
-                            {text("同源 OpenAI-compatible（共用 API Key）")}
-                          </option>
-                        </select>
-                      </label>
+                        />
+                      </div>
                       <label>
                         {text("向量模型 Base URL")}
                         <input
@@ -1669,13 +1708,14 @@ export function ModelSettings({
             embeddingSwitch.clearError();
             setSwitchTarget(null);
             setSwitchJobId(null);
+            setSwitchRefreshCompleted(null);
           }}
           onStart={() => {
             void embeddingSwitch.startPlannedSwitch().then((job) => {
               if (!job || !alive.current) return;
               setSwitchJobId(job.job_id);
+              setSwitchRefreshCompleted(null);
               setSetupError(null);
-              onSetupComplete?.();
             });
           }}
         />
@@ -1861,7 +1901,11 @@ function PresetProfileCard({
           </button>
           <button
             type="button"
-            disabled={busy || !canEnable || !ready(profile, probe, probeError)}
+            disabled={
+              busy ||
+              !canEnable ||
+              !modelProfileReady(profile, probe, probeError)
+            }
             onClick={onActivate}
           >
             {text("设为当前模型")}

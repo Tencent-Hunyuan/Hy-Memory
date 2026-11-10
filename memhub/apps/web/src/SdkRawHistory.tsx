@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import { getSdkRaw, searchSdkRaw } from "./api";
 import { useGuiLanguage } from "./gui-language";
 import { subscribePoll } from "./poll-scheduler";
+import { rawRecordId } from "./sdk-raw-map";
 
 export function SdkRawHistory({ active = true }: { active?: boolean }) {
   const { locale, t, tn } = useGuiLanguage();
@@ -121,7 +122,7 @@ export function SdkRawHistory({ active = true }: { active?: boolean }) {
       ) : null}
       <ol>
         {items.map((item) => (
-          <li key={item.raw_id}>
+          <li key={rawRecordId(item)}>
             <p>{item.content}</p>
             <small>
               {item.source} · {item.session_id}
@@ -140,6 +141,9 @@ function asContextItem(item: SdkRawRecord): SdkRawContextItem {
   return {
     kind: "raw",
     raw_id: item.raw_id,
+    turn_id: item.turn_id,
+    turn_index: item.turn_index,
+    turn_count: item.turn_count,
     content: item.content,
     source: item.source,
     session_id: item.session_id,

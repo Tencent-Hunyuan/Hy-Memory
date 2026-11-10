@@ -65,12 +65,23 @@ prompt and no extra call.
 
 ### Parameters
 
-Numeric settings beside the features. Each tunes one feature and acts only
-while that feature acts.
+Numeric settings beside the features. One that tunes a feature acts only
+while that feature acts; one that tunes none (`agent_max_tokens`) acts
+whenever the mode reaches its `requires_mode`.
 
 | Name | SDK field (env) | Default | Range | Tunes |
 |---|---|---|---|---|
 | `intention_dedup_threshold` | `recall.intention_dedup_threshold` (`MEMORY_INTENTION_DEDUP_THRESHOLD`, else `MEMORY_DEDUP_THRESHOLD`) | 0.95 | 0.8–1.0 inclusive | `intention_dedup` (read time only) |
+| `agent_max_tokens` | `llm.agent_max_tokens` (`MEMORY_AGENT_MAX_TOKENS`) | 2000 | 512–32000 inclusive, whole numbers only | nothing; the output budget of the SDK's agent calls (evolve, System 2), pro and ultra |
+
+Why `agent_max_tokens`: with some local models evolve and System 2 answers
+are cut off at the SDK default of 2000 tokens (`invalid_operations_json`,
+`truncated: true`). Setting `MEMORY_AGENT_MAX_TOKENS` in the launch
+environment worked but was lost on reboot; the setting persists in
+`config.json`. Unset, an env var that is already set still supplies the
+default. Below 512 no evolve answer fits; above 32000 no supported model
+returns that much in one answer. It is an integer throughout: stored, keyed,
+reported and passed to the SDK as an int, and a non-integer is 422.
 
 Why 0.8–1.0: with dedup on, every intention at or above the threshold is
 deleted from the store at read time, and that cannot be undone. Below about
@@ -173,9 +184,25 @@ malformed setting.
       "active": true,
       "reason": null,
       "requires_feature": "intention_dedup",
+      "requires_mode": "pro",
       "sdk_field": "recall.intention_dedup_threshold",
       "env": "MEMORY_INTENTION_DEDUP_THRESHOLD",
       "description": "Cosine similarity at or above which ..."
+    },
+    {
+      "name": "agent_max_tokens",
+      "value": 2000,
+      "configured": null,
+      "default": 2000,
+      "minimum": 512,
+      "maximum": 32000,
+      "active": true,
+      "reason": null,
+      "requires_feature": null,
+      "requires_mode": "pro",
+      "sdk_field": "llm.agent_max_tokens",
+      "env": "MEMORY_AGENT_MAX_TOKENS",
+      "description": "Output token budget of the SDK's agent calls ..."
     }
   ],
   "non_default": {"graph_rerank": true}
@@ -192,8 +219,10 @@ malformed setting.
 - `cost` is one of `none`, `extra_query`, `llm_call`, `prompt_tokens`.
 - `features` always lists every feature, in the table's order.
 - `parameters` lists every parameter. `value` is what clients are built with;
-  `minimum` and `maximum` are the range a `PUT` accepts. A parameter is
-  active exactly when the feature it tunes is.
+  `minimum` and `maximum` are the range a `PUT` accepts. A parameter with a
+  `requires_feature` is active exactly when that feature is; one without
+  (`requires_feature: null`) is active when the mode reaches `requires_mode`,
+  else `requires_pro`. An integer parameter's numbers are JSON integers.
 
 ## 5. `PUT /api/v1/settings/memory-features`
 
@@ -204,7 +233,8 @@ The body has any of the feature names as keys:
 - `null` resets it to the default.
 - An absent key is left as it is.
 - Anything else answers `422`, including a non-boolean feature, `"true"`, `1`,
-  an unknown name, or a threshold outside 0.8–1.0, a string, or a boolean.
+  an unknown name, a threshold outside 0.8–1.0, a string, or a boolean, and
+  an `agent_max_tokens` outside 512–32000 or that is not a whole number.
 
 ```json
 {"graph_rerank": true, "intention_dedup_threshold": 0.9, "few_shot": null}
@@ -239,6 +269,8 @@ memhub settings features set episode_recall=true session_episodes=true   # plan 
 memhub settings features set episode_recall=true session_episodes=true --yes
 memhub settings features set intention_dedup=false --yes        # no intention dedup
 memhub settings features set intention_dedup_threshold=0.9 --yes # a looser dedup
+memhub settings features set agent_max_tokens=6000 --yes        # longer evolve / System 2 answers
+memhub settings features reset agent_max_tokens                 # back to 2000 (or the env var)
 memhub settings features reset few_shot                         # back to the default
 memhub settings features reset                                  # every set feature
 ```
@@ -246,9 +278,10 @@ memhub settings features reset                                  # every set feat
 `set` prints its plan and needs `--yes`, like `settings mode`, because some
 features spend model calls. `reset` only returns features to their defaults,
 so it applies at once. Unknown names, feature values other than `true` /
-`false`, and a threshold that is not a plain decimal in 0.8–1.0 are a usage
+`false`, a threshold that is not a plain decimal in 0.8–1.0, and an
+`agent_max_tokens` that is not a plain whole number in 512–32000 are a usage
 error (exit 2) before the Runtime is asked. Against an older Runtime that does
-not list the threshold, `set` answers `rejected` /
+not list a parameter, `set` answers `rejected` /
 `memory_feature_unsupported` without sending it.
 
 ## 8. Rules kept

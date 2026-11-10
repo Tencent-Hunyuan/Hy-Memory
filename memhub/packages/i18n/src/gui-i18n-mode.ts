@@ -10,6 +10,7 @@ const modeChineseMessages = {
   选择记忆方式: "选择记忆方式",
   选择记忆模式: "选择记忆模式",
   "之后可在设置中更改。": "之后可在设置中更改。",
+  "后续可在设置页自定义时间或关闭。": "后续可在设置页自定义时间或关闭。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra 可在完成首次设置后到设置页开启。",
   "使用 Lite 进入": "使用 Lite 进入",
@@ -23,7 +24,7 @@ const modeChineseMessages = {
   "当前模型已经启用，可以继续完成首次设置。":
     "当前模型已经启用，可以继续完成首次设置。",
   继续使用当前模型: "继续使用当前模型",
-  "你希望 MemHub 如何形成记忆？": "选择记忆模式",
+  "你希望 MemHub 如何形成记忆？": "你希望 MemHub 如何形成记忆？",
   "需要明确选择一种方式；之后仍可在设置中更改。": "之后可在设置中更改。",
   记忆模式: "记忆模式",
   记忆模式与模型: "记忆模式与模型",
@@ -47,7 +48,7 @@ const modeChineseMessages = {
   "以前生成的高级记忆会继续保留，但在 lite 下不会显示或参与记忆召回。":
     "高级记忆会保留，但在 lite 下不显示、不参与召回。",
   "每天自动整合会停止，已经生成的数据不会删除。":
-    "自动整合会停止，已有数据保留。",
+    "每天自动整合会停止；已生成的整合结果继续保留。",
   "已有高级记忆会在后台加入知识图谱，期间可以继续使用 MemHub。":
     "已有高级记忆将在后台加入知识图谱。",
   "知识图谱仍在补建，不会重复启动。": "知识图谱仍在补建，不会重复启动。",
@@ -55,12 +56,13 @@ const modeChineseMessages = {
   "使用 pro 或 ultra 前需要先配置并启用生成模型。":
     "使用 pro 或 ultra 前需要先配置并启用生成模型。",
   "正在检查或切换向量模型，完成后才能切换记忆模式。":
-    "正在检查或切换向量模型，完成后才能切换记忆模式。",
+    "正在检查或切换向量模型，完成后才能选择记忆模式。",
   "当前安装缺少知识图谱组件，无法开启 ultra。":
-    "当前安装缺少知识图谱组件，无法开启 ultra。",
+    "当前安装缺少知识图谱组件，无法选择 ultra。",
   "模式切换未能确认，仍显示上次确认的模式。":
-    "模式切换未能确认，仍显示上次确认的模式。",
+    "模式选择未能确认，仍显示上次确认的模式。",
   "自动整合设置未能保存，请重试。": "自动整合设置未能保存，请重试。",
+  "自动整合设置暂时无法读取，请重试。": "自动整合设置暂时无法读取，请重试。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在检查或切换向量模型，完成后才能整合记忆。",
   "未能开始整合记忆，请重试。": "未能开始整合记忆，请重试。",
@@ -71,7 +73,7 @@ const modeChineseMessages = {
   "开发环境当前强制使用 ultra，保存的选择暂不会生效。":
     "开发环境当前强制使用 ultra，保存的选择暂不会生效。",
   "正在检查或切换向量模型，完成前不能切换模式或手动整合。":
-    "正在检查或切换向量模型，完成前不能切换模式或手动整合。",
+    "正在检查或切换向量模型，完成前不能选择模式或手动整合。",
   "正在把已有高级记忆加入知识图谱…": "正在把已有高级记忆加入知识图谱…",
   每天自动整合: "每天自动整合",
   "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。":
@@ -83,10 +85,10 @@ const modeChineseMessages = {
   "上次整合：{time}": "上次整合：{time}",
   尚未整合: "尚未整合",
   立即整合: "立即整合",
-  "切换到 {mode}？": "切换到{mode}？",
-  "切换到 {mode}": "切换到{mode}",
+  "切换到 {mode}？": "选择{mode}？",
+  "切换到 {mode}": "选择{mode}",
   "原始对话在所有模式下都会保留。": "原始对话在所有模式下都会保留。",
-  切换模式: "切换模式",
+  切换模式: "确认选择",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "保存原始对话 · 不调用生成模型 · 搜索原始会话",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -97,18 +99,19 @@ const modeChineseMessages = {
   模型调用与费用: "模型调用与费用",
   搜索范围: "搜索范围",
   已有数据: "已有数据",
-  切换后: "切换后",
+  知识图谱: "知识图谱",
+  切换后: "选择后",
   "之后只保存原始对话，不再生成新记忆。":
     "之后只保存原始对话，不再生成新记忆。",
   "新对话会整理成记忆并写入知识图谱。": "新对话会整理成记忆并写入知识图谱。",
   "新对话会由模型整理成记忆。": "新对话会由模型整理成记忆。",
   "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。":
-    "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。",
+    "会调用当前生成模型；自动整合可能产生额外费用。选择模式本身不会立即整合。",
   "会调用当前生成模型，可能产生服务商费用。":
     "会调用当前生成模型，可能产生服务商费用。",
   "不调用生成模型，不再产生这部分费用。":
     "不调用生成模型，不再产生这部分费用。",
-  "切换后搜索原始对话。": "切换后搜索原始对话。",
+  "切换后搜索原始对话。": "选择后搜索原始对话。",
   "搜索沉淀记忆，并用知识图谱补充关联。":
     "搜索沉淀记忆，并用知识图谱补充关联。",
   "搜索沉淀后的记忆。": "搜索沉淀后的记忆。",
@@ -121,8 +124,8 @@ const modeChineseMessages = {
   "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。":
     "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
   "记忆维护正在进行，完成后才能切换模式。":
-    "记忆维护正在进行，完成后才能切换模式。",
-  "模式切换影响暂时无法读取，请重试。": "模式切换影响暂时无法读取，请重试。",
+    "记忆维护正在进行，完成后才能选择模式。",
+  "模式切换影响暂时无法读取，请重试。": "模式选择影响暂时无法读取，请重试。",
   "停止调用生成模型；每天自动整合也会停止。":
     "停止调用生成模型；每天自动整合也会停止。",
   "停止调用生成模型，不再产生这部分费用。":
@@ -180,6 +183,7 @@ const modeChineseMessages = {
     "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "模型配置已保留，确认记忆模式后会显示是否生效。",
+  "mode.graphStore.quarantined": "知识图谱文件损坏，已自动重建",
 } as const;
 
 export { modeChineseMessages };
@@ -199,6 +203,8 @@ export const modeEnglishMessages: ModeMessages = {
   选择记忆方式: "Choose how memory works",
   选择记忆模式: "Choose memory mode",
   "之后可在设置中更改。": "You can change this later in Settings.",
+  "后续可在设置页自定义时间或关闭。":
+    "You can later customize the time or turn this off in Settings.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra can be enabled in Settings after initial setup.",
   "使用 Lite 进入": "Enter with Lite",
@@ -256,6 +262,8 @@ export const modeEnglishMessages: ModeMessages = {
     "The mode change could not be confirmed. The last confirmed mode is still shown.",
   "自动整合设置未能保存，请重试。":
     "Could not save automatic consolidation settings. Please retry.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Could not load automatic consolidation settings. Please retry.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "The embedding model is being checked or changed. Wait for it to finish before consolidating memories.",
   "未能开始整合记忆，请重试。":
@@ -280,11 +288,11 @@ export const modeEnglishMessages: ModeMessages = {
   "上次整合：{time}": "Last consolidated: {time}",
   尚未整合: "Not yet consolidated",
   立即整合: "Consolidate now",
-  "切换到 {mode}？": "Switch to {mode}?",
-  "切换到 {mode}": "Switch to {mode}",
+  "切换到 {mode}？": "Choose {mode}?",
+  "切换到 {mode}": "Choose {mode}",
   "原始对话在所有模式下都会保留。":
     "Original conversations are kept in every mode.",
-  切换模式: "Switch mode",
+  切换模式: "Confirm choice",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Save original conversations · No generation model calls · Search original conversations",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -295,6 +303,7 @@ export const modeEnglishMessages: ModeMessages = {
   模型调用与费用: "Model calls and cost",
   搜索范围: "Search scope",
   已有数据: "Existing data",
+  知识图谱: "Knowledge graph",
   切换后: "After switching",
   "之后只保存原始对话，不再生成新记忆。":
     "New conversations are saved as original text only; no new memories are created.",
@@ -386,6 +395,8 @@ export const modeEnglishMessages: ModeMessages = {
     "The model is active in this mode and creates memories from new conversations.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "The model configuration is kept. Its active state appears after the memory mode is confirmed.",
+  "mode.graphStore.quarantined":
+    "The knowledge graph file was damaged and has been rebuilt automatically.",
 };
 
 export const modeSpanishMessages: ModeMessages = {
@@ -402,6 +413,8 @@ export const modeSpanishMessages: ModeMessages = {
   选择记忆方式: "Elegir cómo funciona la memoria",
   选择记忆模式: "Elegir el modo de memoria",
   "之后可在设置中更改。": "Puedes cambiarlo más adelante en Configuración.",
+  "后续可在设置页自定义时间或关闭。":
+    "Más adelante, puedes personalizar la hora o desactivarlo en Configuración.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Puedes activar Ultra en Configuración después de completar la configuración inicial.",
   "使用 Lite 进入": "Entrar con Lite",
@@ -459,6 +472,8 @@ export const modeSpanishMessages: ModeMessages = {
     "No se pudo confirmar el cambio. Se sigue mostrando el último modo confirmado.",
   "自动整合设置未能保存，请重试。":
     "No se pudo guardar la consolidación automática. Reinténtalo.",
+  "自动整合设置暂时无法读取，请重试。":
+    "No se pudo cargar la configuración de consolidación automática. Reinténtalo.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Se está comprobando o cambiando el modelo de embeddings. Espera para consolidar memorias.",
   "未能开始整合记忆，请重试。":
@@ -483,11 +498,11 @@ export const modeSpanishMessages: ModeMessages = {
   "上次整合：{time}": "Última consolidación: {time}",
   尚未整合: "Aún sin consolidar",
   立即整合: "Consolidar ahora",
-  "切换到 {mode}？": "¿Cambiar a {mode}?",
-  "切换到 {mode}": "Cambiar a {mode}",
+  "切换到 {mode}？": "¿Elegir {mode}?",
+  "切换到 {mode}": "Elegir {mode}",
   "原始对话在所有模式下都会保留。":
     "Las conversaciones originales se conservan en todos los modos.",
-  切换模式: "Cambiar modo",
+  切换模式: "Confirmar selección",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Guarda conversaciones originales · Sin llamadas al modelo generativo · Busca conversaciones originales",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -498,6 +513,7 @@ export const modeSpanishMessages: ModeMessages = {
   模型调用与费用: "Llamadas al modelo y coste",
   搜索范围: "Ámbito de búsqueda",
   已有数据: "Datos existentes",
+  知识图谱: "Grafo de conocimiento",
   切换后: "Después del cambio",
   "之后只保存原始对话，不再生成新记忆。":
     "Las conversaciones nuevas se guardan solo como texto original; no se crean memorias nuevas.",
@@ -589,6 +605,8 @@ export const modeSpanishMessages: ModeMessages = {
     "El modelo está activo en este modo y crea memorias a partir de conversaciones nuevas.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "La configuración se conserva. Su estado aparecerá cuando se confirme el modo de memoria.",
+  "mode.graphStore.quarantined":
+    "El archivo del grafo de conocimiento estaba dañado y se ha reconstruido automáticamente.",
 };
 
 export const modeTraditionalChineseMessages: ModeMessages = {
@@ -604,6 +622,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   选择记忆方式: "選擇記憶方式",
   选择记忆模式: "選擇記憶模式",
   "之后可在设置中更改。": "之後可在設定中更改。",
+  "后续可在设置页自定义时间或关闭。": "之後可在設定頁自訂時間或關閉。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "完成首次設定後，可到設定頁開啟 Ultra。",
   "使用 Lite 进入": "使用 Lite 進入",
@@ -657,6 +676,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "模式切换未能确认，仍显示上次确认的模式。":
     "無法確認模式切換，仍顯示上次確認的模式。",
   "自动整合设置未能保存，请重试。": "自動整合設定無法儲存，請重試。",
+  "自动整合设置暂时无法读取，请重试。": "暫時無法讀取自動整合設定，請重試。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在檢查或切換向量模型，完成後才能整合記憶。",
   "未能开始整合记忆，请重试。": "無法開始整合記憶，請重試。",
@@ -679,10 +699,10 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "上次整合：{time}": "上次整合：{time}",
   尚未整合: "尚未整合",
   立即整合: "立即整合",
-  "切换到 {mode}？": "切換到{mode}？",
-  "切换到 {mode}": "切換到{mode}",
+  "切换到 {mode}？": "選擇{mode}？",
+  "切换到 {mode}": "選擇{mode}",
   "原始对话在所有模式下都会保留。": "原始對話會在所有模式下保留。",
-  切换模式: "切換模式",
+  切换模式: "確認選擇",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "儲存原始對話 · 不呼叫生成模型 · 搜尋原始對話",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -693,6 +713,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   模型调用与费用: "模型呼叫與費用",
   搜索范围: "搜尋範圍",
   已有数据: "現有資料",
+  知识图谱: "知識圖譜",
   切换后: "切換後",
   "之后只保存原始对话，不再生成新记忆。":
     "之後只儲存原始對話，不再產生新記憶。",
@@ -776,6 +797,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "记忆维护正在进行，完成后才能切换模式。":
     "記憶維護正在進行，完成後才能切換模式。",
   "模式切换影响暂时无法读取，请重试。": "暫時無法讀取模式切換影響，請重試。",
+  "mode.graphStore.quarantined": "知識圖譜檔案損壞，已自動重建",
 };
 
 export const modeJapaneseMessages: ModeMessages = {
@@ -791,6 +813,8 @@ export const modeJapaneseMessages: ModeMessages = {
   选择记忆方式: "記憶方法を選択",
   选择记忆模式: "記憶モードを選択",
   "之后可在设置中更改。": "後から設定で変更できます。",
+  "后续可在设置页自定义时间或关闭。":
+    "後から設定画面で時刻を変更したり、無効にしたりできます。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "初期設定の完了後、設定画面で Ultra を有効にできます。",
   "使用 Lite 进入": "Lite で開始",
@@ -829,10 +853,10 @@ export const modeJapaneseMessages: ModeMessages = {
   "上次整合：{time}": "前回の統合：{time}",
   尚未整合: "まだ統合されていません",
   立即整合: "今すぐ統合",
-  "切换到 {mode}？": "{mode} に切り替えますか？",
-  "切换到 {mode}": "{mode} に切り替える",
+  "切换到 {mode}？": "{mode} を選択しますか？",
+  "切换到 {mode}": "{mode} を選択",
   "原始对话在所有模式下都会保留。": "元の会話はどのモードでも保持されます。",
-  切换模式: "モードを切り替える",
+  切换模式: "選択を確定",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "元の会話を保存 · 生成モデルを呼び出さない · 元の会話を検索",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -843,6 +867,7 @@ export const modeJapaneseMessages: ModeMessages = {
   模型调用与费用: "モデル呼び出しと料金",
   搜索范围: "検索範囲",
   已有数据: "既存データ",
+  知识图谱: "ナレッジグラフ",
   切换后: "切り替え後",
   "之后只保存原始对话，不再生成新记忆。":
     "以降は元の会話のみを保存し、新しい記憶は生成しません。",
@@ -935,6 +960,8 @@ export const modeJapaneseMessages: ModeMessages = {
     "モード変更を確認できませんでした。最後に確認されたモードを表示しています。",
   "自动整合设置未能保存，请重试。":
     "自動統合の設定を保存できませんでした。もう一度お試しください。",
+  "自动整合设置暂时无法读取，请重试。":
+    "自動統合の設定を読み込めませんでした。もう一度お試しください。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "埋め込みモデルを確認または切り替えています。完了後に記憶を統合できます。",
   "未能开始整合记忆，请重试。":
@@ -972,6 +999,8 @@ export const modeJapaneseMessages: ModeMessages = {
     "記憶の保守処理中です。完了後にモードを切り替えてください。",
   "模式切换影响暂时无法读取，请重试。":
     "モード変更の影響を読み取れません。もう一度お試しください。",
+  "mode.graphStore.quarantined":
+    "ナレッジグラフのファイルが破損していたため、自動的に再構築しました。",
 };
 
 export const modeGermanMessages: ModeMessages = {
@@ -989,6 +1018,8 @@ export const modeGermanMessages: ModeMessages = {
   选择记忆方式: "Erinnerungsmodus wählen",
   选择记忆模式: "Erinnerungsmodus auswählen",
   "之后可在设置中更改。": "Sie können dies später in den Einstellungen ändern.",
+  "后续可在设置页自定义时间或关闭。":
+    "Später können Sie die Uhrzeit in den Einstellungen anpassen oder die Funktion deaktivieren.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra kann nach der Ersteinrichtung in den Einstellungen aktiviert werden.",
   "使用 Lite 进入": "Mit Lite starten",
@@ -1028,11 +1059,11 @@ export const modeGermanMessages: ModeMessages = {
   "上次整合：{time}": "Zuletzt konsolidiert: {time}",
   尚未整合: "Noch nicht konsolidiert",
   立即整合: "Jetzt konsolidieren",
-  "切换到 {mode}？": "Zu {mode} wechseln?",
-  "切换到 {mode}": "Zu {mode} wechseln",
+  "切换到 {mode}？": "{mode} auswählen?",
+  "切换到 {mode}": "{mode} auswählen",
   "原始对话在所有模式下都会保留。":
     "Originalunterhaltungen bleiben in jedem Modus erhalten.",
-  切换模式: "Modus wechseln",
+  切换模式: "Auswahl bestätigen",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Originalunterhaltungen speichern · Keine Aufrufe des generativen Modells · Originalunterhaltungen durchsuchen",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1043,6 +1074,7 @@ export const modeGermanMessages: ModeMessages = {
   模型调用与费用: "Modellaufrufe und Kosten",
   搜索范围: "Suchbereich",
   已有数据: "Vorhandene Daten",
+  知识图谱: "Wissensgraph",
   切换后: "Nach dem Wechsel",
   "之后只保存原始对话，不再生成新记忆。":
     "Neue Unterhaltungen werden nur noch im Original gespeichert; es werden keine neuen Erinnerungen erstellt.",
@@ -1137,6 +1169,8 @@ export const modeGermanMessages: ModeMessages = {
     "Der Moduswechsel konnte nicht bestätigt werden. Der zuletzt bestätigte Modus wird weiterhin angezeigt.",
   "自动整合设置未能保存，请重试。":
     "Die Einstellungen zur automatischen Konsolidierung konnten nicht gespeichert werden. Bitte erneut versuchen.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Die Einstellungen zur automatischen Konsolidierung konnten nicht geladen werden. Bitte erneut versuchen.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Das Embedding-Modell wird geprüft oder gewechselt. Danach können Erinnerungen konsolidiert werden.",
   "未能开始整合记忆，请重试。":
@@ -1176,6 +1210,8 @@ export const modeGermanMessages: ModeMessages = {
     "Die Speicherwartung läuft. Wechseln Sie den Modus nach Abschluss.",
   "模式切换影响暂时无法读取，请重试。":
     "Die Auswirkungen des Moduswechsels sind nicht verfügbar. Bitte erneut versuchen.",
+  "mode.graphStore.quarantined":
+    "Die Wissensgraph-Datei war beschädigt und wurde automatisch neu aufgebaut.",
 };
 
 export const modePortugueseMessages: ModeMessages = {
@@ -1192,6 +1228,8 @@ export const modePortugueseMessages: ModeMessages = {
   选择记忆方式: "Escolher o modo de memória",
   选择记忆模式: "Escolher o modo de memória",
   "之后可在设置中更改。": "Pode alterar esta opção mais tarde nas Definições.",
+  "后续可在设置页自定义时间或关闭。":
+    "Mais tarde, pode personalizar a hora ou desativar esta opção nas Definições.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Pode ativar o Ultra nas Definições depois da configuração inicial.",
   "使用 Lite 进入": "Entrar com Lite",
@@ -1231,11 +1269,11 @@ export const modePortugueseMessages: ModeMessages = {
   "上次整合：{time}": "Última consolidação: {time}",
   尚未整合: "Ainda não consolidado",
   立即整合: "Consolidar agora",
-  "切换到 {mode}？": "Mudar para {mode}?",
-  "切换到 {mode}": "Mudar para {mode}",
+  "切换到 {mode}？": "Escolher {mode}?",
+  "切换到 {mode}": "Escolher {mode}",
   "原始对话在所有模式下都会保留。":
     "As conversas originais são mantidas em todos os modos.",
-  切换模式: "Mudar de modo",
+  切换模式: "Confirmar escolha",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Guardar conversas originais · Sem chamadas ao modelo generativo · Pesquisar conversas originais",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1246,6 +1284,7 @@ export const modePortugueseMessages: ModeMessages = {
   模型调用与费用: "Chamadas ao modelo e custos",
   搜索范围: "Âmbito da pesquisa",
   已有数据: "Dados existentes",
+  知识图谱: "Grafo de conhecimento",
   切换后: "Após a mudança",
   "之后只保存原始对话，不再生成新记忆。":
     "As novas conversas passam a ser guardadas apenas como texto original; não são criadas novas memórias.",
@@ -1340,6 +1379,8 @@ export const modePortugueseMessages: ModeMessages = {
     "Não foi possível confirmar a mudança. Continua a ser mostrado o último modo confirmado.",
   "自动整合设置未能保存，请重试。":
     "Não foi possível guardar a consolidação automática. Tente novamente.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Não foi possível carregar as configurações de consolidação automática. Tente novamente.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "O modelo de embeddings está a ser verificado ou alterado. Aguarde para consolidar memórias.",
   "未能开始整合记忆，请重试。":
@@ -1379,6 +1420,8 @@ export const modePortugueseMessages: ModeMessages = {
     "A manutenção da memória está em curso. Aguarde antes de mudar de modo.",
   "模式切换影响暂时无法读取，请重试。":
     "Não é possível ler os efeitos da mudança de modo. Tente novamente.",
+  "mode.graphStore.quarantined":
+    "O arquivo do grafo de conhecimento estava danificado e foi reconstruído automaticamente.",
 };
 
 export const modeFrenchMessages: ModeMessages = {
@@ -1397,6 +1440,8 @@ export const modeFrenchMessages: ModeMessages = {
   选择记忆模式: "Choisir le mode de mémoire",
   "之后可在设置中更改。":
     "Vous pourrez le modifier plus tard dans les réglages.",
+  "后续可在设置页自定义时间或关闭。":
+    "Vous pourrez ensuite personnaliser l’heure ou désactiver cette option dans les réglages.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Vous pourrez activer Ultra dans les réglages après la configuration initiale.",
   "使用 Lite 进入": "Entrer avec Lite",
@@ -1436,11 +1481,11 @@ export const modeFrenchMessages: ModeMessages = {
   "上次整合：{time}": "Dernière consolidation : {time}",
   尚未整合: "Pas encore consolidé",
   立即整合: "Consolider maintenant",
-  "切换到 {mode}？": "Passer à {mode} ?",
-  "切换到 {mode}": "Passer à {mode}",
+  "切换到 {mode}？": "Choisir {mode} ?",
+  "切换到 {mode}": "Choisir {mode}",
   "原始对话在所有模式下都会保留。":
     "Les conversations originales sont conservées dans tous les modes.",
-  切换模式: "Changer de mode",
+  切换模式: "Confirmer le choix",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Enregistrer les conversations originales · Aucun appel au modèle génératif · Rechercher les conversations originales",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1451,6 +1496,7 @@ export const modeFrenchMessages: ModeMessages = {
   模型调用与费用: "Appels au modèle et coût",
   搜索范围: "Périmètre de recherche",
   已有数据: "Données existantes",
+  知识图谱: "Graphe de connaissances",
   切换后: "Après le changement",
   "之后只保存原始对话，不再生成新记忆。":
     "Les nouvelles conversations sont uniquement enregistrées dans leur forme originale ; aucune nouvelle mémoire n’est créée.",
@@ -1545,6 +1591,8 @@ export const modeFrenchMessages: ModeMessages = {
     "Le changement n’a pas pu être confirmé. Le dernier mode confirmé reste affiché.",
   "自动整合设置未能保存，请重试。":
     "Impossible d’enregistrer la consolidation automatique. Réessayez.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Impossible de charger les paramètres de consolidation automatique. Réessayez.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Le modèle d’embeddings est en cours de vérification ou de changement. Patientez avant de consolider les mémoires.",
   "未能开始整合记忆，请重试。":
@@ -1584,6 +1632,8 @@ export const modeFrenchMessages: ModeMessages = {
     "La maintenance de la mémoire est en cours. Attendez avant de changer de mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Les effets du changement de mode sont indisponibles. Réessayez.",
+  "mode.graphStore.quarantined":
+    "Le fichier du graphe de connaissances était endommagé et a été reconstruit automatiquement.",
 };
 
 export const modeKoreanMessages: ModeMessages = {
@@ -1599,6 +1649,8 @@ export const modeKoreanMessages: ModeMessages = {
   选择记忆方式: "메모리 방식 선택",
   选择记忆模式: "메모리 모드 선택",
   "之后可在设置中更改。": "나중에 설정에서 변경할 수 있습니다.",
+  "后续可在设置页自定义时间或关闭。":
+    "나중에 설정에서 시간을 변경하거나 끌 수 있습니다.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "초기 설정을 마친 후 설정에서 Ultra를 켤 수 있습니다.",
   "使用 Lite 进入": "Lite로 시작",
@@ -1637,10 +1689,10 @@ export const modeKoreanMessages: ModeMessages = {
   "上次整合：{time}": "마지막 통합: {time}",
   尚未整合: "아직 통합되지 않음",
   立即整合: "지금 통합",
-  "切换到 {mode}？": "{mode}(으)로 전환할까요?",
-  "切换到 {mode}": "{mode}(으)로 전환",
+  "切换到 {mode}？": "{mode}을(를) 선택할까요?",
+  "切换到 {mode}": "{mode} 선택",
   "原始对话在所有模式下都会保留。": "원본 대화는 모든 모드에서 유지됩니다.",
-  切换模式: "모드 전환",
+  切换模式: "선택 확인",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "원본 대화 저장 · 생성 모델 호출 없음 · 원본 대화 검색",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1651,6 +1703,7 @@ export const modeKoreanMessages: ModeMessages = {
   模型调用与费用: "모델 호출 및 비용",
   搜索范围: "검색 범위",
   已有数据: "기존 데이터",
+  知识图谱: "지식 그래프",
   切换后: "전환 후",
   "之后只保存原始对话，不再生成新记忆。":
     "이후 새 대화는 원본만 저장되며 새 메모리는 생성되지 않습니다.",
@@ -1743,6 +1796,8 @@ export const modeKoreanMessages: ModeMessages = {
     "모드 전환을 확인하지 못했습니다. 마지막으로 확인된 모드가 계속 표시됩니다.",
   "自动整合设置未能保存，请重试。":
     "자동 통합 설정을 저장하지 못했습니다. 다시 시도하세요.",
+  "自动整合设置暂时无法读取，请重试。":
+    "자동 통합 설정을 불러오지 못했습니다. 다시 시도하세요.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "임베딩 모델을 확인하거나 전환 중입니다. 완료된 후 메모리를 통합할 수 있습니다.",
   "未能开始整合记忆，请重试。":
@@ -1780,6 +1835,8 @@ export const modeKoreanMessages: ModeMessages = {
     "메모리 유지 관리 중입니다. 완료 후 모드를 전환하세요.",
   "模式切换影响暂时无法读取，请重试。":
     "모드 전환 영향을 읽을 수 없습니다. 다시 시도하세요.",
+  "mode.graphStore.quarantined":
+    "지식 그래프 파일이 손상되어 자동으로 다시 구축했습니다.",
 };
 
 export const modeRussianMessages: ModeMessages = {
@@ -1796,6 +1853,8 @@ export const modeRussianMessages: ModeMessages = {
   选择记忆方式: "Выберите режим памяти",
   选择记忆模式: "Выберите режим памяти",
   "之后可在设置中更改。": "Позже режим можно изменить в настройках.",
+  "后续可在设置页自定义时间或关闭。":
+    "Позже в настройках можно изменить время или отключить эту функцию.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra можно включить в настройках после завершения первоначальной настройки.",
   "使用 Lite 进入": "Войти с Lite",
@@ -1835,11 +1894,11 @@ export const modeRussianMessages: ModeMessages = {
   "上次整合：{time}": "Последнее объединение: {time}",
   尚未整合: "Ещё не объединялись",
   立即整合: "Объединить сейчас",
-  "切换到 {mode}？": "Переключиться на {mode}?",
-  "切换到 {mode}": "Переключиться на {mode}",
+  "切换到 {mode}？": "Выбрать {mode}?",
+  "切换到 {mode}": "Выбрать {mode}",
   "原始对话在所有模式下都会保留。":
     "Исходные диалоги сохраняются во всех режимах.",
-  切换模式: "Переключить режим",
+  切换模式: "Подтвердить выбор",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Сохранять исходные диалоги · Не вызывать генеративную модель · Искать в исходных диалогах",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -1850,6 +1909,7 @@ export const modeRussianMessages: ModeMessages = {
   模型调用与费用: "Вызовы модели и расходы",
   搜索范围: "Область поиска",
   已有数据: "Существующие данные",
+  知识图谱: "Граф знаний",
   切换后: "После переключения",
   "之后只保存原始对话，不再生成新记忆。":
     "Новые диалоги будут сохраняться только в исходном виде; новые воспоминания создаваться не будут.",
@@ -1943,6 +2003,8 @@ export const modeRussianMessages: ModeMessages = {
     "Не удалось подтвердить смену режима. По-прежнему показан последний подтверждённый режим.",
   "自动整合设置未能保存，请重试。":
     "Не удалось сохранить настройки автообъединения. Повторите попытку.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Не удалось загрузить настройки автообъединения. Повторите попытку.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Модель эмбеддингов проверяется или меняется. После завершения можно будет объединить воспоминания.",
   "未能开始整合记忆，请重试。":
@@ -1982,6 +2044,8 @@ export const modeRussianMessages: ModeMessages = {
     "Идёт обслуживание памяти. Дождитесь завершения перед сменой режима.",
   "模式切换影响暂时无法读取，请重试。":
     "Не удалось прочитать последствия смены режима. Повторите попытку.",
+  "mode.graphStore.quarantined":
+    "Файл графа знаний был повреждён и автоматически перестроен.",
 };
 
 export const modeIndonesianMessages: ModeMessages = {
@@ -1999,6 +2063,8 @@ export const modeIndonesianMessages: ModeMessages = {
   选择记忆方式: "Pilih cara kerja memori",
   选择记忆模式: "Pilih mode memori",
   "之后可在设置中更改。": "Anda dapat mengubahnya nanti di Pengaturan.",
+  "后续可在设置页自定义时间或关闭。":
+    "Nanti, Anda dapat menyesuaikan waktunya atau menonaktifkannya di Pengaturan.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra dapat diaktifkan di Pengaturan setelah penyiapan awal selesai.",
   "使用 Lite 进入": "Masuk dengan Lite",
@@ -2038,10 +2104,10 @@ export const modeIndonesianMessages: ModeMessages = {
   "上次整合：{time}": "Terakhir dikonsolidasikan: {time}",
   尚未整合: "Belum dikonsolidasikan",
   立即整合: "Konsolidasikan sekarang",
-  "切换到 {mode}？": "Beralih ke {mode}?",
-  "切换到 {mode}": "Beralih ke {mode}",
+  "切换到 {mode}？": "Pilih {mode}?",
+  "切换到 {mode}": "Pilih {mode}",
   "原始对话在所有模式下都会保留。": "Percakapan asli disimpan di semua mode.",
-  切换模式: "Beralih mode",
+  切换模式: "Konfirmasi pilihan",
   "保存原始对话 · 不调用生成模型 · 搜索原始会话":
     "Simpan percakapan asli · Tanpa panggilan model generatif · Cari percakapan asli",
   "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆":
@@ -2052,6 +2118,7 @@ export const modeIndonesianMessages: ModeMessages = {
   模型调用与费用: "Panggilan model dan biaya",
   搜索范围: "Cakupan pencarian",
   已有数据: "Data yang ada",
+  知识图谱: "Graf pengetahuan",
   切换后: "Setelah beralih",
   "之后只保存原始对话，不再生成新记忆。":
     "Percakapan baru hanya disimpan sebagai teks asli; tidak ada memori baru yang dibuat.",
@@ -2145,6 +2212,8 @@ export const modeIndonesianMessages: ModeMessages = {
     "Perubahan mode tidak dapat dikonfirmasi. Mode terakhir yang dikonfirmasi tetap ditampilkan.",
   "自动整合设置未能保存，请重试。":
     "Pengaturan konsolidasi otomatis tidak dapat disimpan. Coba lagi.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Pengaturan konsolidasi otomatis tidak dapat dimuat. Coba lagi.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Model embedding sedang diperiksa atau diganti. Tunggu hingga selesai sebelum mengonsolidasikan memori.",
   "未能开始整合记忆，请重试。":
@@ -2183,4 +2252,6 @@ export const modeIndonesianMessages: ModeMessages = {
     "Pemeliharaan memori sedang berjalan. Tunggu sebelum mengganti mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Dampak perubahan mode tidak dapat dibaca. Coba lagi.",
+  "mode.graphStore.quarantined":
+    "File grafik pengetahuan rusak dan telah dibangun ulang secara otomatis.",
 };

@@ -118,7 +118,7 @@ class OnboardingState(BaseModel):
     selected_source_ids: tuple[str, ...]
     started_at: datetime | None
     completed_at: datetime | None
-    mode_intent: Literal["lite", "pro"] | None
+    mode_intent: Literal["lite", "pro", "ultra"] | None
     setup_step: Literal["review", "mode", "model"] | None
     model_profile_id: str | None
 
@@ -128,7 +128,7 @@ class OnboardingProgressUpdate(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    mode_intent: Literal["lite", "pro"] | None = None
+    mode_intent: Literal["lite", "pro", "ultra"] | None = None
     setup_step: Literal["review", "mode", "model"] | None = None
     model_profile_id: str | None = Field(default=None, min_length=36, max_length=36)
 

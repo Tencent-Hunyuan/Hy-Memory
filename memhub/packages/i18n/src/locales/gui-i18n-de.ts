@@ -86,6 +86,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Letzte Originalunterhaltungen",
   "sdk.raw.empty":
     "Noch keine Originalunterhaltungen. Verbinde eine Quelle, damit sie hier erscheinen.",
+  "sdk.raw.total": "{count} Originalunterhaltungen",
+  "sdk.raw.total.one": "{count} Originalunterhaltung",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "Der Basisspeicher ist aktiv. Neue Unterhaltungen werden als Originale gespeichert und erzeugen keine erweiterten Erinnerungen. Vorhandene erweiterte Erinnerungen bleiben gespeichert, werden aber nicht angezeigt oder abgerufen.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -158,6 +160,7 @@ export const germanMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Speichern",
   "selectedMemory.author.user": "Sie",
   "selectedMemory.author.agent": "Assistent",
+  "selectedMemory.author.tool": "Tool",
   "selectedMemory.sourceUnavailable":
     "Quellberechtigungen haben sich geändert oder der Originaltext ist nicht verfügbar.",
   "selectedMemory.related": "Zugehörige Erinnerung",
@@ -1065,7 +1068,7 @@ export const germanMessages: Record<MessageKey, string> = {
     "Erinnerungen weiter synchronisieren, verarbeiten und bereitstellen, ohne die App zu öffnen.",
   导出日志: "Protokolle exportieren",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Packen Sie lokale Diagnoseprotokolle in eine Datei, um sie an den Support zu senden.",
+    "Packt alle lokalen Protokolle. Sie können Gesprächsinhalte oder lokale Pfade enthalten; nur mit vertrauenswürdigen Entwicklern teilen.",
   "确定退出 One Memory 界面吗？": "MemHub-Fenster beenden?",
   "后台服务会继续同步、整理和提供记忆。":
     "Der Hintergrunddienst synchronisiert, verarbeitet und liefert Erinnerungen weiter.",
@@ -1252,6 +1255,9 @@ export const germanMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "Weniger Wiederholung. Mehr Verständnis.",
   onboardingMoreApps: "Für mehr scrollen · {count} Apps verbleibend",
   "onboardingMoreApps.one": "Für mehr scrollen · {count} App verbleibend",
+  onboardingMoreImportApps: "Horizontal scrollen · Noch {count} Apps",
+  onboardingImportChecking:
+    "Importergebnis wird geprüft; Ihre Auswahl bleibt erhalten",
   onboardingAllApps: "Alle {count} Apps angezeigt",
   默认位置: "Standardort",
   自定义位置: "Eigener Ort",
@@ -1544,6 +1550,7 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.memories": "Gespeicherte Erinnerungen",
   "apps.rawConversations": "Originalunterhaltungen",
   "apps.rawSaving": "Wird gespeichert",
+  "apps.rawSavingCompact": "Wird gespeichert",
   "apps.rawSavingStatus": "Speicherstatus",
   "apps.rawSavingDetail":
     "Originalunterhaltungen werden ohne generatives Modell gespeichert",
@@ -1555,6 +1562,7 @@ export const germanMessages: Record<MessageKey, string> = {
     "Geprüft: keine anzeigbaren Aktualisierungen der Originalunterhaltungen",
   "apps.memoryCheckedEmpty":
     "Geprüft: keine anzeigbaren Erinnerungsaktualisierungen",
+  "apps.recentEmptyCompact": "Keine Updates",
   "apps.rawWaiting": "Gespeicherte Originalunterhaltungen erscheinen hier",
   "apps.checkedRecent": "Aktueller Inhalt geprüft",
   "apps.currentMode": "Aktueller Modus",

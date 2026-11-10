@@ -149,6 +149,13 @@ def test_progress_patch_and_put_round_trip_only_resumable_choices(tmp_path: Path
             assert replaced.json()["model_profile_id"] == profile_id
             assert (await client.get("/api/v1/onboarding")).json() == replaced.json()
 
+            ultra = await client.put(
+                "/api/v1/onboarding/progress",
+                json={"mode_intent": "ultra", "setup_step": "model"},
+            )
+            assert ultra.status_code == 200
+            assert ultra.json()["mode_intent"] == "ultra"
+
     asyncio.run(scenario())
 
 
@@ -166,7 +173,7 @@ def test_progress_rejects_unknown_or_invalid_fields(tmp_path: Path) -> None:
             )
             invalid_mode = await client.patch(
                 "/api/v1/onboarding/progress",
-                json={"mode_intent": "ultra"},
+                json={"mode_intent": "future"},
             )
 
             assert secret.status_code == 422

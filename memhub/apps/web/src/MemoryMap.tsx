@@ -16,6 +16,7 @@ import type {
 import type { GuiLocale } from "@one-memory/i18n";
 import {
   ArrowUp,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -110,12 +111,15 @@ type Props = {
     settledSource?: string;
     settledQuery?: string;
     requestedOffset?: number;
+    cursorPaging?: boolean;
+    hasMore?: boolean;
     /** The source id the SDK uses for "no source given" (shown as 未识别来源). */
     unattributedSource?: string;
     onQuery(value: string): void;
     onSource(value: string): void;
     resetPage(): void;
     onPage(offset: number): void;
+    onMore?(): void;
     onRetry(): void;
   };
 };
@@ -176,6 +180,8 @@ const SCENE_LABELS: Record<SdkMemoryScene, string> = {
   working: "工作",
   coding: "编码",
 };
+const RAW_ROW_HEIGHT = 116;
+const RAW_LIST_OVERSCAN = 6;
 
 export function MemoryMap(props: Props) {
   const { locale, text, count, plain } = useMemoryLanguage();
@@ -254,6 +260,10 @@ export function MemoryMap(props: Props) {
   const pane = useRef<HTMLElement>(null);
   const memoryList = useRef<HTMLUListElement>(null);
   const inspectorBody = useRef<HTMLDivElement>(null);
+  const [rawListWindow, setRawListWindow] = useState({
+    start: 0,
+    end: 20,
+  });
   const openedDefault = useRef(false);
   const scrollSelection = useRef(false);
   const controlledSource = library
@@ -339,6 +349,33 @@ export function MemoryMap(props: Props) {
       ),
     [active, group, search, serverPaged, axis, groupKey],
   );
+  const rawWindowed = raw && !!library?.cursorPaging && filtered.length > 100;
+  const visibleMemories = rawWindowed
+    ? filtered.slice(rawListWindow.start, rawListWindow.end)
+    : filtered;
+  const rawTopSpace = rawWindowed ? rawListWindow.start * RAW_ROW_HEIGHT : 0;
+  const rawBottomSpace = rawWindowed
+    ? Math.max(0, filtered.length - rawListWindow.end) * RAW_ROW_HEIGHT
+    : 0;
+  const updateRawListWindow = useCallback(
+    (element: HTMLUListElement) => {
+      if (!rawWindowed) return;
+      const first = Math.max(
+        0,
+        Math.floor(element.scrollTop / RAW_ROW_HEIGHT) - RAW_LIST_OVERSCAN,
+      );
+      const visible = Math.ceil(element.clientHeight / RAW_ROW_HEIGHT);
+      setRawListWindow({
+        start: first,
+        end: Math.min(filtered.length, first + visible + RAW_LIST_OVERSCAN * 2),
+      });
+    },
+    [filtered.length, rawWindowed],
+  );
+  useLayoutEffect(() => {
+    if (rawWindowed && memoryList.current)
+      updateRawListWindow(memoryList.current);
+  }, [rawWindowed, updateRawListWindow]);
   const projection = useMemo(() => {
     // Until the new scope's graph arrives (or after it failed), drawing the
     // previous scope's graph would show the wrong source.
@@ -354,7 +391,7 @@ export function MemoryMap(props: Props) {
     // left-hand list window. Projecting the graph back down to the current
     // 20-row page made "All applications" look like whichever source happened
     // to dominate that page. Keyword search is intentionally page-scoped.
-    if (serverPaged && !library?.query) {
+    if (serverPaged && (!library?.query || raw)) {
       return (
         baseGraph ??
         projectMap(
@@ -406,6 +443,7 @@ export function MemoryMap(props: Props) {
     search,
     sources,
     serverPaged,
+    raw,
     library?.query,
     library?.graphLoading,
     library?.graphFailed,
@@ -684,6 +722,9 @@ export function MemoryMap(props: Props) {
     setGroupKey(key);
   }
   function pickNode(node: MemoryGraphNode) {
+    // Topics are graph annotations, not detail-bearing records. They remain
+    // hoverable in the canvas but must not replace the memory inspector.
+    if (node.node_type === "topic") return;
     if (node.memory_id) {
       pick(node.memory_id);
       return;
@@ -707,11 +748,6 @@ export function MemoryMap(props: Props) {
           );
         if (first) pick(first, false);
       }
-    }
-    if (node.node_type === "topic") {
-      if (props.simplified) return;
-      setAxis("topic");
-      setGroupKey(`topic:${node.label}`);
     }
   }
   const label =
@@ -1025,11 +1061,42 @@ export function MemoryMap(props: Props) {
         )}
         <ul
           ref={memoryList}
-          className="map-memory-list"
+          className={`map-memory-list${raw ? " raw" : ""}`}
           aria-label={raw ? t("memory:原始对话") : text("地图记忆列表")}
           id="memory-pane-memories"
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            updateRawListWindow(element);
+            if (
+              library?.cursorPaging &&
+              library.hasMore &&
+              !pageTransitioning &&
+              element.scrollHeight - element.scrollTop - element.clientHeight <
+                element.clientHeight
+            )
+              library.onMore?.();
+          }}
+          onWheel={(event) => {
+            const element = event.currentTarget;
+            if (
+              event.deltaY > 0 &&
+              library?.cursorPaging &&
+              library.hasMore &&
+              !pageTransitioning &&
+              element.scrollHeight - element.scrollTop - element.clientHeight <
+                8
+            )
+              library.onMore?.();
+          }}
         >
-          {filtered.map((m) => (
+          {rawTopSpace ? (
+            <li
+              className="map-memory-spacer"
+              style={{ height: rawTopSpace }}
+              aria-hidden="true"
+            />
+          ) : null}
+          {visibleMemories.map((m) => (
             <li key={m.memory_id} data-memory-id={m.memory_id}>
               <button
                 type="button"
@@ -1085,6 +1152,13 @@ export function MemoryMap(props: Props) {
               </button>
             </li>
           ))}
+          {rawBottomSpace ? (
+            <li
+              className="map-memory-spacer"
+              style={{ height: rawBottomSpace }}
+              aria-hidden="true"
+            />
+          ) : null}
         </ul>
         {library?.failed && (
           <div role="alert">
@@ -1133,62 +1207,93 @@ export function MemoryMap(props: Props) {
               aria-busy={pageTransitioning || undefined}
               className="map-pagination"
             >
-              <button
-                type="button"
-                className="quiet map-tool"
-                aria-label={text("上一页记忆")}
-                title={text("上一页记忆")}
-                disabled={pageTransitioning || library.page.offset === 0}
-                onClick={() => {
-                  if (axis === "topic") setGroupKey("");
-                  if (library.page) {
-                    const offset = library.page.offset - library.page.limit;
-                    setPageRetrying(false);
-                    pageRetrySawLoading.current = false;
-                    setPendingPageOffset(offset);
-                    library.onPage(offset);
-                  }
-                }}
-              >
-                <ChevronLeft size={16} aria-hidden="true" />
-              </button>
-              <span>
-                {text(
-                  "共 {count} 条，第 {page} / {pages} 页",
-                  {
-                    count: count(library.page.total),
-                    page:
-                      library.page.total === 0
-                        ? 0
-                        : Math.floor(library.page.offset / library.page.limit) +
-                          1,
-                    pages: Math.ceil(library.page.total / library.page.limit),
-                  },
-                  library.page.total,
-                )}
-              </span>
-              <button
-                type="button"
-                className="quiet map-tool"
-                aria-label={text("下一页记忆")}
-                title={text("下一页记忆")}
-                disabled={
-                  pageTransitioning ||
-                  library.page.offset + library.page.limit >= library.page.total
-                }
-                onClick={() => {
-                  if (axis === "topic") setGroupKey("");
-                  if (library.page) {
-                    const offset = library.page.offset + library.page.limit;
-                    setPageRetrying(false);
-                    pageRetrySawLoading.current = false;
-                    setPendingPageOffset(offset);
-                    library.onPage(offset);
-                  }
-                }}
-              >
-                <ChevronRight size={16} aria-hidden="true" />
-              </button>
+              {library.cursorPaging ? (
+                library.hasMore ? (
+                  <button
+                    type="button"
+                    className="map-load-more"
+                    disabled={pageTransitioning}
+                    aria-label={
+                      pageTransitioning ? text("正在读取…") : text("加载更多")
+                    }
+                    title={
+                      pageTransitioning ? text("正在读取…") : text("加载更多")
+                    }
+                    onClick={() => library.onMore?.()}
+                  >
+                    <ChevronDown
+                      size={18}
+                      aria-hidden="true"
+                      className={pageTransitioning ? "loading" : undefined}
+                    />
+                  </button>
+                ) : (
+                  <span>{text("已加载全部")}</span>
+                )
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="quiet map-tool"
+                    aria-label={text("上一页记忆")}
+                    title={text("上一页记忆")}
+                    disabled={pageTransitioning || library.page.offset === 0}
+                    onClick={() => {
+                      if (axis === "topic") setGroupKey("");
+                      if (library.page) {
+                        const offset = library.page.offset - library.page.limit;
+                        setPageRetrying(false);
+                        pageRetrySawLoading.current = false;
+                        setPendingPageOffset(offset);
+                        library.onPage(offset);
+                      }
+                    }}
+                  >
+                    <ChevronLeft size={16} aria-hidden="true" />
+                  </button>
+                  <span>
+                    {text(
+                      "共 {count} 条，第 {page} / {pages} 页",
+                      {
+                        count: count(library.page.total),
+                        page:
+                          library.page.total === 0
+                            ? 0
+                            : Math.floor(
+                                library.page.offset / library.page.limit,
+                              ) + 1,
+                        pages: Math.ceil(
+                          library.page.total / library.page.limit,
+                        ),
+                      },
+                      library.page.total,
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="quiet map-tool"
+                    aria-label={text("下一页记忆")}
+                    title={text("下一页记忆")}
+                    disabled={
+                      pageTransitioning ||
+                      library.page.offset + library.page.limit >=
+                        library.page.total
+                    }
+                    onClick={() => {
+                      if (axis === "topic") setGroupKey("");
+                      if (library.page) {
+                        const offset = library.page.offset + library.page.limit;
+                        setPageRetrying(false);
+                        pageRetrySawLoading.current = false;
+                        setPendingPageOffset(offset);
+                        library.onPage(offset);
+                      }
+                    }}
+                  >
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                </>
+              )}
             </nav>
           )}
         {!library && loaded && !filtered.length && (search || groupKey) && (
@@ -1215,19 +1320,21 @@ export function MemoryMap(props: Props) {
             <h2>
               {props.simplified
                 ? raw
-                  ? t("memory:原始对话")
+                  ? text("来源归属")
                   : text("记忆关联")
                 : label}
             </h2>
-            {props.simplified && (
-              <p className="selected-graph-subtitle">
-                {projection.nodes.length
-                  ? text("来源归属")
-                  : raw
-                    ? t("sdk.raw.empty")
-                    : text("可在沉淀记忆后查看视图")}
-              </p>
-            )}
+            {props.simplified &&
+              (!raw || !projection.nodes.length) &&
+              !(raw && library?.graphLoading) && (
+                <p className="selected-graph-subtitle">
+                  {projection.nodes.length
+                    ? text("来源归属")
+                    : raw
+                      ? t("sdk.raw.empty")
+                      : text("可在沉淀记忆后查看视图")}
+                </p>
+              )}
           </div>
           {compact && (activeId || selectedSource) && !inspectorOpen && (
             <button

@@ -87,6 +87,10 @@ export interface PipelineSummary {
     }
   >;
   graph_build: string | null;
+  /** The ultra graph store (`graph_store.state`); null from an older Core. */
+  graph_store: string | null;
+  /** Graphs quarantined after they kept taking Core down while opening. */
+  graph_quarantine_count: number;
   /** SDK features (`memory_features`) whose value differs from the default. */
   features: Record<string, boolean | number>;
   /** The App's display language; null = never chosen or "follow the system". */
@@ -150,6 +154,10 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     item.graph_build && typeof item.graph_build === "object"
       ? (item.graph_build as Record<string, unknown>)
       : {};
+  const graphStore =
+    item.graph_store && typeof item.graph_store === "object"
+      ? (item.graph_store as Record<string, unknown>)
+      : {};
   return {
     mode: item.mode as PipelineSummary["mode"],
     configured_mode: item.configured_mode as PipelineSummary["mode"],
@@ -165,6 +173,11 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     evolve_running: Array.isArray(evolve.running) ? evolve.running.length : 0,
     evolve_users: users,
     graph_build: typeof graph.state === "string" ? graph.state : null,
+    graph_store: typeof graphStore.state === "string" ? graphStore.state : null,
+    graph_quarantine_count:
+      typeof graphStore.quarantine_count === "number"
+        ? graphStore.quarantine_count
+        : 0,
     features,
     ui_language: typeof item.ui_language === "string" ? item.ui_language : null,
     // An older Runtime has no setting: it always left the SDK on auto.
@@ -323,6 +336,8 @@ export function renderStatusText(
   if (embeddingSwitch !== null) lines.push(`向量模型：${embeddingSwitch}`);
   const backoff = modelBackoffLine(report.sections.processing);
   if (backoff !== null) lines.push(backoff);
+  const drain = writeDrainLine(report.sections.processing);
+  if (drain !== null) lines.push(drain);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -353,6 +368,20 @@ function modelBackoffLine(section: Section | undefined): string | null {
   }`;
 }
 
+/** The durable write drain, when it is not simply running: it exited on an
+ * error and is coming back (`restarting`), or it is not running at all. */
+function writeDrainLine(section: Section | undefined): string | null {
+  if (section?.state !== "ok") return null;
+  const state = section.write_drain;
+  if (state !== "restarting" && state !== "stopped") return null;
+  const error = section.write_drain_error;
+  const reason =
+    typeof error === "string" && error.length > 0 ? `（${error}）` : "";
+  return state === "restarting"
+    ? `写入队列：异常退出${reason}，正在自动重启`
+    : `写入队列：已停止${reason}`;
+}
+
 export function pipelineLine(pipeline: PipelineSummary): string {
   const parts: string[] = [pipeline.mode];
   if (pipeline.forced_by_env)
@@ -371,6 +400,8 @@ export function pipelineLine(pipeline: PipelineSummary): string {
     );
     if (pipeline.evolve_running > 0)
       parts.push(`，进行中 ${pipeline.evolve_running}`);
+    const graphStore = graphStoreText(pipeline);
+    if (graphStore) parts.push(`，${graphStore}`);
   }
   const changed = Object.entries(pipeline.features);
   if (changed.length > 0) {
@@ -393,6 +424,22 @@ export function pipelineLine(pipeline: PipelineSummary): string {
   return parts.join("");
 }
 
+const GRAPH_STORE_TEXT: Record<string, string> = {
+  opening: "知识图谱正在打开",
+  rebuilding_after_quarantine: "知识图谱文件损坏，已隔离并正在重建",
+  unavailable: "知识图谱暂不可用",
+};
+
+/** The ultra graph store, only when it is not simply ready. */
+function graphStoreText(pipeline: PipelineSummary): string | null {
+  const state = pipeline.graph_store
+    ? GRAPH_STORE_TEXT[pipeline.graph_store]
+    : undefined;
+  const count = pipeline.graph_quarantine_count;
+  if (state) return count > 0 ? `${state}（累计隔离 ${count} 次）` : state;
+  return count > 0 ? `知识图谱累计隔离 ${count} 次` : null;
+}
+
 function runtimeLine(report: StatusDocument): string {
   if (report.runtime.state !== "running") {
     return report.runtime.state === "stopped" ? "未运行" : "暂时无法确认";
@@ -410,6 +457,8 @@ const SECTION_LINE_OMITTED = new Set([
   "embedding_switch",
   "llm_backoff_until",
   "llm_backoff_error",
+  "write_drain",
+  "write_drain_error",
   "content_plane",
   "visible_count",
   "effective_mode",
@@ -549,6 +598,7 @@ function describeProcessing(
     })),
     suspended: typeof summary.suspended === "number" ? summary.suspended : 0,
     ...llmBackoffFields(summary),
+    ...writeDrainFields(summary),
     ...embeddingSwitchField(summary),
   };
 }
@@ -565,6 +615,24 @@ function llmBackoffFields(summary: MemoryProcessingSummary): {
     llm_backoff_until:
       typeof until === "string" && until.length <= 64 ? until : null,
     llm_backoff_error:
+      typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
+  };
+}
+
+/** Durable write drain liveness. Null when Core does not report it (older
+ * Core, or recovery has not started the drain yet). */
+function writeDrainFields(summary: MemoryProcessingSummary): {
+  write_drain: "running" | "restarting" | "stopped" | null;
+  write_drain_error: string | null;
+} {
+  const state = summary.write_drain;
+  const error = summary.write_drain_error;
+  return {
+    write_drain:
+      state === "running" || state === "restarting" || state === "stopped"
+        ? state
+        : null,
+    write_drain_error:
       typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
   };
 }

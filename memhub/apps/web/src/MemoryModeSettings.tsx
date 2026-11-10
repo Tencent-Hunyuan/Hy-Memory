@@ -1,6 +1,4 @@
 import type {
-  EvolveOverview,
-  EvolveRunReceipt,
   EvolveSchedule,
   MemoryModeChange,
   MemoryModePlan,
@@ -11,7 +9,6 @@ import { legacyMemoryModePlan } from "@one-memory/operations";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   apiErrorCode,
-  getEvolveOverview,
   getEvolveSchedule,
   getMemoryMode,
   getMemoryProcessing,
@@ -25,94 +22,19 @@ import {
   commitConfirmedMemoryMode,
   issueConfirmedModeTicket,
 } from "./confirmed-memory-mode";
-import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
+import { commitEvolveRun, useEvolveState } from "./evolve-state";
+import {
+  BLOCKER_COPY,
+  MemoryModeConfirmDialog,
+  MODE_COPY,
+  MODE_TIER,
+  modeDisplayName,
+} from "./memory-mode-ui";
+import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
-import { R6Button, R6Switch } from "./R6Controls";
+import { R6Button } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
-
-const MODE_COPY: Record<
-  MemoryPipelineMode,
-  { title: string; description: string }
-> = {
-  lite: {
-    title: "基础记忆（lite）",
-    description: "保存原始对话 · 不调用生成模型 · 搜索原始会话",
-  },
-  pro: {
-    title: "智能记忆（pro）",
-    description: "沉淀高级记忆 · 调用生成模型 · 搜索沉淀记忆",
-  },
-  ultra: {
-    title: "深度记忆（ultra）",
-    description: "智能记忆 + 知识图谱 · 可自动 Evolve · 增强关联召回",
-  },
-};
-
-function planRows(plan: MemoryModePlan) {
-  const rows = [
-    {
-      label: "新对话",
-      content:
-        plan.capabilities.content_plane === "raw"
-          ? "之后只保存原始对话，不再生成新记忆。"
-          : plan.capabilities.graph_enabled
-            ? "新对话会整理成记忆并写入知识图谱。"
-            : "新对话会由模型整理成记忆。",
-    },
-    {
-      label: "模型调用与费用",
-      content: plan.capabilities.generation_required
-        ? plan.capabilities.evolve_available
-          ? "会调用当前生成模型；自动整合可能产生额外费用。切换本身不会立即整合。"
-          : "会调用当前生成模型，可能产生服务商费用。"
-        : "不调用生成模型，不再产生这部分费用。",
-    },
-    {
-      label: "搜索范围",
-      content:
-        plan.capabilities.content_plane === "raw"
-          ? "切换后搜索原始对话。"
-          : plan.capabilities.graph_enabled
-            ? "搜索沉淀记忆，并用知识图谱补充关联。"
-            : "搜索沉淀后的记忆。",
-    },
-  ];
-  if (plan.effects.includes("earlier_raw_not_extracted"))
-    rows.push({
-      label: "已有数据",
-      content: "已经处理完的旧对话不会补做；原始对话全部保留。",
-    });
-  if (plan.effects.includes("higher_mode_memories_hidden"))
-    rows.push({
-      label: "已有数据",
-      content: "已有记忆继续保留，但高级记忆在当前模式下不显示、不参与召回。",
-    });
-  if (plan.effects.includes("existing_memories_added_to_graph"))
-    rows.push({
-      label: "已有数据",
-      content: "已有记忆会在后台加入知识图谱，期间仍可使用。",
-    });
-  if (plan.effects.includes("evolve_stopped"))
-    rows.push({
-      label: "已有数据",
-      content:
-        "普通沉淀记忆仍可使用；更高层记忆和图谱数据继续保留，但不参与当前召回；每天自动整合会停止。",
-    });
-  if (plan.capabilities.evolve_available)
-    rows.push({
-      label: "切换后",
-      content: "可设置每天自动整合时间，也可以随时立即整合一次。",
-    });
-  return rows;
-}
-
-const BLOCKER_COPY: Record<MemoryModePlan["blockers"][number], string> = {
-  active_model_required: "使用 pro 或 ultra 前需要先配置并启用生成模型。",
-  embedding_maintenance_in_progress:
-    "正在检查或切换向量模型，完成后才能切换记忆模式。",
-  memory_lifecycle_busy: "记忆维护正在进行，完成后才能切换模式。",
-  graph_store_unavailable: "当前安装缺少知识图谱组件，无法开启 ultra。",
-};
+import { UltraEvolveScheduleFields } from "./UltraEvolveScheduleFields";
 
 export function MemoryModeSettings({
   hasActiveModel,
@@ -129,7 +51,11 @@ export function MemoryModeSettings({
   const id = useId();
   const [state, setState] = useState<MemoryModeState | null>(null);
   const [schedule, setScheduleState] = useState<EvolveSchedule | null>(null);
-  const [overview, setOverview] = useState<EvolveOverview | null>(null);
+  const evolveState = useEvolveState();
+  const overview = evolveState.data ?? null;
+  const run =
+    overview?.running.find((candidate) => candidate.user_id === "local") ??
+    null;
   const [pendingMode, setPendingMode] = useState<MemoryPipelineMode | null>(
     null,
   );
@@ -138,94 +64,47 @@ export function MemoryModeSettings({
   const [maintenance, setMaintenance] = useState(false);
   const [error, setError] = useState("");
   const [readFailed, setReadFailed] = useState(false);
-  const [run, setRun] = useState<EvolveRunReceipt | null>(null);
+  const [scheduleReadFailed, setScheduleReadFailed] = useState(false);
   const refreshVersion = useRef(0);
-  const dialog = useRef<HTMLElement>(null);
   const dialogOpener = useRef<HTMLElement | null>(null);
   const focusEvolveWhenReady = useRef(false);
   const focusModeWhenReady = useRef<MemoryPipelineMode | null>(null);
-  const busyRef = useRef(false);
-  busyRef.current = busy;
-
-  useEffect(() => {
-    if (!pendingMode || !dialog.current) return;
-    const panel = dialog.current;
-    const inertSiblings = new Map<HTMLElement, boolean>();
-    let branch: HTMLElement = panel.parentElement ?? panel;
-    while (branch.parentElement) {
-      for (const sibling of branch.parentElement.children) {
-        if (!(sibling instanceof HTMLElement) || sibling === branch) continue;
-        inertSiblings.set(sibling, sibling.inert);
-        sibling.inert = true;
-      }
-      branch = branch.parentElement;
-      if (branch === document.body) break;
-    }
-    const controls = () =>
-      Array.from(panel.querySelectorAll<HTMLElement>("button:not(:disabled)"));
-    controls()[0]?.focus();
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busyRef.current) {
-        event.preventDefault();
-        setPendingPlan(null);
-        setPendingMode(null);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = controls();
-      const first = items[0];
-      const last = items.at(-1);
-      if (!first || !last) {
-        event.preventDefault();
-        panel.focus();
-        return;
-      }
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    panel.addEventListener("keydown", handleKey);
-    return () => {
-      panel.removeEventListener("keydown", handleKey);
-      for (const [sibling, wasInert] of inertSiblings) sibling.inert = wasInert;
-      if (dialogOpener.current?.isConnected) dialogOpener.current.focus();
-    };
-  }, [pendingMode]);
-
-  useEffect(() => {
-    if (pendingMode && busy) dialog.current?.focus();
-  }, [busy, pendingMode]);
+  const focusScheduleWhenReady = useRef(false);
 
   useEffect(() => {
     if (!focusEvolveWhenReady.current || pendingMode || state?.mode !== "ultra")
       return;
-    focusEvolveWhenReady.current = false;
-    document.getElementById(`${id}-evolve`)?.focus();
+    const evolve = document.getElementById(`${id}-evolve`);
+    if (evolve) {
+      focusEvolveWhenReady.current = false;
+      evolve.focus();
+    }
   }, [id, pendingMode, state?.mode]);
 
   useEffect(() => {
     const target = focusModeWhenReady.current;
     if (!target || busy || pendingMode || state?.mode !== target) return;
     focusModeWhenReady.current = null;
+    document.getElementById(`${id}-select`)?.focus();
+  }, [busy, id, pendingMode, state?.mode]);
+
+  useEffect(() => {
+    if (!focusScheduleWhenReady.current || scheduleReadFailed || !schedule)
+      return;
+    focusScheduleWhenReady.current = false;
     document
-      .querySelector<HTMLInputElement>(
-        `.r6-memory-mode-settings input[type="radio"][value="${target}"]`,
-      )
+      .getElementById(`${id}-evolve`)
+      ?.querySelector<HTMLElement>('[role="switch"]')
       ?.focus();
-  }, [busy, pendingMode, state?.mode]);
+  }, [id, schedule, scheduleReadFailed]);
 
   const refresh = useCallback(async () => {
     const version = ++refreshVersion.current;
     const modeTicket = issueConfirmedModeTicket("settings");
-    const [modeResult, scheduleResult, overviewResult, processingResult] =
+    const [modeResult, scheduleResult, processingResult] =
       await Promise.allSettled([
         getMemoryMode(),
         getEvolveSchedule(),
-        getEvolveOverview(),
         getMemoryProcessing(),
       ]);
     if (version !== refreshVersion.current) return;
@@ -239,11 +118,11 @@ export function MemoryModeSettings({
       setError("记忆模式状态暂时无法读取，请重试。");
       setReadFailed(true);
     }
-    if (scheduleResult.status === "fulfilled")
+    if (scheduleResult.status === "fulfilled") {
       setScheduleState(scheduleResult.value);
-    if (overviewResult.status === "fulfilled") {
-      setOverview(overviewResult.value);
-      setRun(overviewResult.value.running[0] ?? null);
+      setScheduleReadFailed(false);
+    } else {
+      setScheduleReadFailed(true);
     }
     if (processingResult.status === "fulfilled")
       setMaintenance(Boolean(processingResult.value.embedding_switch));
@@ -253,22 +132,25 @@ export function MemoryModeSettings({
     void refresh();
   }, [refresh]);
 
+  // A graph that kept taking Core down while opening was renamed aside and
+  // is being rebuilt from the memories (Core `graph_open_guard`).
+  const graphRebuilding =
+    state?.graph_store?.state === "rebuilding_after_quarantine";
+
   useEffect(() => {
     const running =
-      maintenance ||
-      state?.graph_build.state === "running" ||
-      run?.state === "running";
+      maintenance || state?.graph_build.state === "running" || graphRebuilding;
     if (!running) return;
     const timer = window.setInterval(() => void refresh(), 1500);
     return () => window.clearInterval(timer);
-  }, [maintenance, refresh, run?.state, state?.graph_build.state]);
+  }, [maintenance, refresh, state?.graph_build.state, graphRebuilding]);
 
   const lifecycleBusy =
     maintenance ||
     run?.state === "running" ||
     state?.graph_build.state === "running";
 
-  async function choose(mode: MemoryPipelineMode, opener: HTMLElement) {
+  async function choose(mode: MemoryPipelineMode) {
     if (!state || mode === state.mode || busy || lifecycleBusy) return;
     setError("");
     setBusy(true);
@@ -278,6 +160,7 @@ export function MemoryModeSettings({
     } catch (reason) {
       if (!memoryModePlanUnsupported(reason)) {
         setError("模式切换影响暂时无法读取，请重试。");
+        focusModeWhenReady.current = state.mode;
         setBusy(false);
         return;
       }
@@ -288,7 +171,7 @@ export function MemoryModeSettings({
       onConfigureModel(BLOCKER_COPY.active_model_required);
       return;
     }
-    dialogOpener.current = opener;
+    dialogOpener.current = document.getElementById(`${id}-select`);
     setPendingPlan(plan);
     setPendingMode(mode);
   }
@@ -330,21 +213,34 @@ export function MemoryModeSettings({
     setError("");
     try {
       setScheduleState(await setEvolveSchedule(update));
+      return true;
     } catch {
       setError("自动整合设置未能保存，请重试。");
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
   async function evolveNow() {
+    if (!state) return;
     refreshVersion.current++;
     setBusy(true);
     setError("");
     try {
       const receipt = await startEvolve();
-      setRun(receipt);
-      await refresh();
+      commitEvolveRun(
+        receipt,
+        overview ??
+          (schedule
+            ? {
+                mode: state.mode,
+                schedule,
+                users: {},
+                running: [],
+              }
+            : undefined),
+      );
     } catch (reason) {
       const code = apiErrorCode(reason);
       setError(
@@ -369,189 +265,145 @@ export function MemoryModeSettings({
           <p>{text("模式决定新对话如何保存，以及记忆页面展示什么。")}</p>
         </div>
       </div>
-      <MemoryModeChoiceList
-        aria-label={text("当前模式")}
-        aria-busy={state === null}
-        modes={(["lite", "pro", "ultra"] as const).map((mode) => ({
-          mode,
-          title: text(MODE_COPY[mode].title),
-          description: text(MODE_COPY[mode].description),
-        }))}
-        current={state?.mode}
-        selected={state?.mode ?? null}
-        currentBadge={text("当前模式")}
-        disabled={(mode) =>
-          !state ||
-          busy ||
-          lifecycleBusy ||
-          Boolean(state.forced_by_env && mode !== state.mode) ||
-          (mode !== "lite" && !modelStateKnown)
-        }
-        onChange={(mode, control) => void choose(mode, control)}
-      />
-      {state?.forced_by_env ? (
-        <p className="r6-settings-note" role="status">
-          {text("开发环境当前强制使用 ultra，保存的选择暂不会生效。")}
-        </p>
-      ) : null}
-      {maintenance ? (
-        <p className="r6-settings-note" role="status">
-          {text("正在检查或切换向量模型，完成前不能切换模式或手动整合。")}
-        </p>
-      ) : null}
-      {state?.graph_build.state === "running" ? (
-        <p className="r6-settings-note" role="status">
-          {text("正在把已有高级记忆加入知识图谱…")}
-        </p>
-      ) : null}
-      {error && !pendingMode ? (
-        readFailed ? (
-          <R6StateRecovery
-            message={text(error)}
-            onRetry={() => void refresh()}
+      <div
+        className="r6-mode-control"
+        data-expanded={state?.mode === "ultra" || undefined}
+      >
+        <div className="r6-mode-setting-row" aria-busy={state === null}>
+          <OptionMenu
+            id={`${id}-select`}
+            ariaLabel={text("记忆模式")}
+            value={state?.mode ?? ""}
+            disabled={
+              !state || busy || lifecycleBusy || Boolean(state?.forced_by_env)
+            }
+            options={(["lite", "pro", "ultra"] as const).map((mode) => ({
+              value: mode,
+              label: modeDisplayName(text, mode),
+              suffix: MODE_TIER[mode],
+              description: text(MODE_COPY[mode].description),
+              disabled: mode !== "lite" && !modelStateKnown,
+            }))}
+            className="r6-language-option-menu r6-mode-option-menu"
+            panelClassName="r6-language-option-menu-panel--settings r6-mode-option-menu-panel"
+            onChange={(value) => {
+              if (value === "lite" || value === "pro" || value === "ultra")
+                void choose(value);
+            }}
           />
-        ) : (
-          <p className="r6-settings-error" role="alert">
-            {text(error)}
+        </div>
+        {state?.forced_by_env ? (
+          <p className="r6-settings-note" role="status">
+            {text("开发环境当前强制使用 ultra，保存的选择暂不会生效。")}
           </p>
-        )
-      ) : null}
-
-      {state?.mode === "ultra" && schedule ? (
-        <section
-          id={`${id}-evolve`}
-          className="r6-evolve-settings"
-          aria-labelledby={`${id}-evolve-title`}
-          tabIndex={-1}
-        >
-          <div className="r6-evolve-heading">
-            <h3 id={`${id}-evolve-title`}>{text("记忆整合（Evolve）")}</h3>
-            <p>{text("定期重新整理已有记忆，补充更稳定的关联和结论。")}</p>
-          </div>
-          <div className="r6-evolve-setting">
-            <div className="r6-evolve-setting-copy">
-              <h3>{text("每天自动整合")}</h3>
-              <p>
-                {text(
-                  schedule.enabled
-                    ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
-                    : "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
-                ).replace("{time}", schedule.time)}
-              </p>
-            </div>
-            <R6Switch
-              label={text("每天自动整合")}
-              checked={schedule.enabled}
-              disabled={busy || maintenance}
-              onCheckedChange={(enabled) => void changeSchedule({ enabled })}
+        ) : null}
+        {maintenance ? (
+          <p className="r6-settings-note" role="status">
+            {text("正在检查或切换向量模型，完成前不能切换模式或手动整合。")}
+          </p>
+        ) : null}
+        {graphRebuilding ? (
+          <p className="r6-settings-note" role="status">
+            {text("mode.graphStore.quarantined")}
+          </p>
+        ) : null}
+        {state?.graph_build.state === "running" ? (
+          <p className="r6-settings-note" role="status">
+            {text("正在把已有高级记忆加入知识图谱…")}
+          </p>
+        ) : null}
+        {error && !pendingMode ? (
+          readFailed ? (
+            <R6StateRecovery
+              message={text(error)}
+              onRetry={() => void refresh()}
             />
-            {schedule.enabled ? (
-              <div className="r6-evolve-time">
-                <div>
-                  <label htmlFor={`${id}-evolve-time`}>
-                    {text("执行时间")}
-                  </label>
-                  <p>{text("使用这台设备的本地时间。")}</p>
-                </div>
-                <input
-                  id={`${id}-evolve-time`}
-                  type="time"
-                  value={schedule.time}
-                  disabled={busy || maintenance}
-                  onChange={(event) =>
-                    void changeSchedule({ time: event.target.value })
-                  }
-                />
-              </div>
-            ) : null}
-          </div>
-          <div className="r6-evolve-setting r6-evolve-setting--manual">
-            <div className="r6-evolve-setting-copy">
-              <h3>{text("立即整合一次")}</h3>
-              <p>
-                {text("只运行这一次，不改变每天的计划。")}
-                {" · "}
-                {text(
-                  run?.state === "running"
-                    ? "正在整合记忆…"
-                    : last?.last_run_at
-                      ? text("上次整合：{time}").replace(
-                          "{time}",
-                          new Date(last.last_run_at).toLocaleString(locale),
-                        )
-                      : "尚未整合",
-                )}
-              </p>
-            </div>
-            <R6Button
-              pending={run?.state === "running"}
-              disabled={busy || lifecycleBusy}
-              onClick={() => void evolveNow()}
-            >
-              {text("立即整合")}
-            </R6Button>
-          </div>
-        </section>
-      ) : null}
+          ) : (
+            <p className="r6-settings-error" role="alert">
+              {text(error)}
+            </p>
+          )
+        ) : null}
 
-      {pendingMode ? (
-        <div className="r6-settings-dialog-layer" role="presentation">
+        {state?.mode === "ultra" ? (
           <section
-            ref={dialog}
-            className="r6-settings-dialog r6-mode-confirm-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="memory-mode-confirm-title"
+            id={`${id}-evolve`}
+            className="r6-evolve-settings"
+            aria-labelledby={`${id}-evolve-title`}
             tabIndex={-1}
           >
-            <h2 id="memory-mode-confirm-title">
-              {text("切换到 {mode}？").replace(
-                "{mode}",
-                text(MODE_COPY[pendingMode].title),
-              )}
-            </h2>
-            <dl className="r6-mode-confirm-effects">
-              {(pendingPlan ? planRows(pendingPlan) : []).map((row) => (
-                <div key={`${row.label}:${row.content}`}>
-                  <dt>{text(row.label)}</dt>
-                  <dd>{text(row.content)}</dd>
+            {schedule ? (
+              <UltraEvolveScheduleFields
+                schedule={schedule}
+                headingId={`${id}-evolve-title`}
+                disabled={busy || maintenance}
+                onEnabledChange={(enabled) => void changeSchedule({ enabled })}
+                onTimeChange={(time) => changeSchedule({ time })}
+              />
+            ) : (
+              <>
+                <div className="r6-evolve-heading">
+                  <h3 id={`${id}-evolve-title`}>
+                    {text("记忆整合（Evolve）")}
+                  </h3>
+                  <p>
+                    {text("定期重新整理已有记忆，补充更稳定的关联和结论。")}
+                  </p>
                 </div>
-              ))}
-            </dl>
-            {(pendingPlan?.blockers ?? []).map((blocker) => (
-              <p className="r6-settings-error" role="alert" key={blocker}>
-                {text(BLOCKER_COPY[blocker])}
-              </p>
-            ))}
-            {error ? (
-              <p className="r6-settings-error" role="alert">
-                {text(error)}
-              </p>
-            ) : null}
-            <footer>
+                {scheduleReadFailed ? (
+                  <R6StateRecovery
+                    message={text("自动整合设置暂时无法读取，请重试。")}
+                    onRetry={() => {
+                      focusScheduleWhenReady.current = true;
+                      void refresh();
+                    }}
+                  />
+                ) : null}
+              </>
+            )}
+            <div className="r6-evolve-setting r6-evolve-setting--manual">
+              <div className="r6-evolve-setting-copy">
+                <h3>{text("立即整合一次")}</h3>
+                <p>
+                  {text("只运行这一次，不改变每天的计划。")}
+                  {" · "}
+                  {text(
+                    run?.state === "running"
+                      ? "正在整合记忆…"
+                      : last?.last_run_at
+                        ? text("上次整合：{time}").replace(
+                            "{time}",
+                            new Date(last.last_run_at).toLocaleString(locale),
+                          )
+                        : "尚未整合",
+                  )}
+                </p>
+              </div>
               <R6Button
-                disabled={busy}
-                onClick={() => {
-                  setPendingPlan(null);
-                  setPendingMode(null);
-                }}
+                pending={run?.state === "running"}
+                disabled={busy || lifecycleBusy}
+                onClick={() => void evolveNow()}
               >
-                {text("取消")}
+                {text("立即整合")}
               </R6Button>
-              <R6Button
-                variant="primary"
-                pending={busy}
-                disabled={Boolean(pendingPlan?.blockers.length)}
-                onClick={() => void commitMode()}
-              >
-                {text("切换到 {mode}").replace(
-                  "{mode}",
-                  text(MODE_COPY[pendingMode].title),
-                )}
-              </R6Button>
-            </footer>
+            </div>
           </section>
-        </div>
+        ) : null}
+      </div>
+
+      {pendingMode && pendingPlan ? (
+        <MemoryModeConfirmDialog
+          mode={pendingMode}
+          plan={pendingPlan}
+          busy={busy}
+          error={error}
+          opener={dialogOpener.current}
+          onCancel={() => {
+            setPendingPlan(null);
+            setPendingMode(null);
+          }}
+          onConfirm={() => void commitMode()}
+        />
       ) : null}
     </section>
   );

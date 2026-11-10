@@ -1,6 +1,7 @@
 """Authenticated SDK context search route, without generation or reindex side effects."""
 
 import asyncio
+import logging
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -30,11 +31,14 @@ from one_memory.hy_sdk_types import (
     parse_sdk_search,
 )
 from one_memory.imports.storage import EvidenceStore
+from one_memory.raw_turns import raw_display_turns, turns_for_hit
 from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
 from one_memory.semantic_deadline import SemanticMemoryHit
 from one_memory.user_scope import owns
 
 CALL_EVENT_RESPONSE_BUDGET_MS = 250
+SDK_CONTEXT_CONTENT_LIMIT = 20_000
+logger = logging.getLogger(__name__)
 
 #: Pass-through filters the raw lane honours. Scene, layers, reader and the
 #: schema/working floors describe memory lanes; the raw lane is always the
@@ -70,11 +74,30 @@ def raw_lane_overrides(value: SdkSearchFilters) -> dict[str, object]:
     return found
 
 
+def raw_lane_statuses(*, lite: bool) -> dict[str, list[str]]:
+    """Which raw statuses the raw lane searches.
+
+    Lite extracts nothing, so its search is plain RAG over every raw,
+    including the shadow raws pro already processed before the switch to
+    lite. Pro and ultra keep the SDK default (active only): a shadow raw is
+    already represented by the memories extracted from it, and returning it
+    again would repeat that content in the caller's context budget.
+    """
+    return {"statuses": ["active", "shadow"]} if lite else {}
+
+
 def hit_namespace(hit: SemanticMemoryHit) -> dict[str, str]:
     """The `get` namespace of a hit: nothing for chat, kind and variant otherwise."""
     if hit.kind in {"experience", "fact"} and hit.variant is not None:
         return {"kind": hit.kind, "variant": hit.variant}
     return {}
+
+
+def bounded_context_content(content: str) -> tuple[str, bool]:
+    """Fit SDK text into its wire contract before Pydantic validates it."""
+    if len(content) <= SDK_CONTEXT_CONTENT_LIMIT:
+        return content, False
+    return content[:SDK_CONTEXT_CONTENT_LIMIT], True
 
 
 def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
@@ -120,6 +143,9 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             sources = raw_lane_sources(authority.raw_sources, value.include_sources)
             if sources is None:
                 return ()
+            # Plain RAG: every vector hit over the floor is an answer, ranked
+            # by its score. Each hit yields at least one item, so the SDK
+            # needs to return no more hits than the caller's limit.
             raw = await asyncio.to_thread(
                 client.search,
                 value.query,
@@ -135,27 +161,65 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     "scene": "chat",
                     "reader": HY_MEMORY_READER,
                     "layers": ["l1_raw"],
+                    **raw_lane_statuses(lite=lite),
                     **raw_lane_overrides(value),
                 },
             )
             hits = tuple(
                 hit for hit in parse_sdk_raw_search(raw) if value.passes_floor("raw", hit.score)
             )
-            return tuple(
-                SdkRawContextItem(
-                    raw_id=hit.raw_id,
-                    content=hit.content,
-                    source=hit.source,
-                    session_id=hit.session_id,
-                    memory_at=(
-                        datetime.fromtimestamp(hit.memory_at, tz=UTC)
-                        if hit.memory_at is not None
-                        else None
-                    ),
-                    score=hit.score,
+            # One item per hit first, so a hit is never crowded out by another
+            # hit's sibling turns; the siblings fill whatever room is left.
+            primary: list[SdkRawContextItem] = []
+            siblings: list[SdkRawContextItem] = []
+            for hit in hits:
+                memory_at = (
+                    datetime.fromtimestamp(hit.memory_at, tz=UTC)
+                    if hit.memory_at is not None
+                    else None
                 )
-                for hit in hits
-            )
+                turns = raw_display_turns(hit) if value.raw_unit == "turn" else ()
+                if not turns:
+                    content, truncated = bounded_context_content(hit.content)
+                    primary.append(
+                        SdkRawContextItem(
+                            raw_id=hit.raw_id,
+                            content=content,
+                            source=hit.source,
+                            session_id=hit.session_id,
+                            memory_at=memory_at,
+                            score=hit.score,
+                            truncated=truncated,
+                        )
+                    )
+                    continue
+                # The embedding is the batch's: the hit is shown by the turns
+                # that contain the query, or else by its closest turn, each
+                # with the hit's score.
+                shown: list[SdkRawContextItem] = []
+                for turn in turns_for_hit(turns, value.query):
+                    content, truncated = bounded_context_content(turn.content)
+                    shown.append(
+                        SdkRawContextItem(
+                            raw_id=hit.raw_id,
+                            turn_id=turn.turn_id,
+                            turn_index=turn.turn_index,
+                            turn_count=turn.turn_count,
+                            content=content,
+                            source=hit.source,
+                            session_id=hit.session_id,
+                            memory_at=memory_at,
+                            score=hit.score,
+                            truncated=truncated,
+                        )
+                    )
+                primary.append(shown[0])
+                siblings.extend(shown[1:])
+            chosen = primary[: value.limit]
+            chosen.extend(siblings[: value.limit - len(chosen)])
+            # Stable: a hit's turns stay together, in hit-score order.
+            chosen.sort(key=lambda item: item.score, reverse=True)
+            return tuple(chosen)
 
         async def memory_lane() -> tuple[SdkMemoryContextItem, ...]:
             # lite extracts nothing: its search answers raw turns, which the
@@ -201,16 +265,15 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                     or not owns(memory.user_id, value.user_id)
                 ):
                     continue
+                content, truncated = bounded_context_content(
+                    hit.formatted_content
+                    if hit.sdk_formatted and hit.formatting_complete and hit.formatted_content
+                    else memory.content
+                )
                 items.append(
                     SdkMemoryContextItem(
                         memory_id=memory.memory_id,
-                        content=(
-                            hit.formatted_content
-                            if hit.sdk_formatted
-                            and hit.formatting_complete
-                            and hit.formatted_content
-                            else memory.content
-                        ),
+                        content=content,
                         layer=memory.layer,
                         status=memory.status,
                         source=memory.source,
@@ -220,6 +283,7 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
                             else None
                         ),
                         score=hit.score,
+                        truncated=truncated,
                     )
                 )
             return tuple(items)
@@ -269,10 +333,45 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             if isinstance(lane, EmbeddingUnavailableError):
                 # No lexical fallback: the query could not be embedded.
                 raise HTTPException(503, EMBEDDING_UNAVAILABLE)
-        partial = isinstance(raw_items, Exception) or isinstance(memory_items, Exception)
+        requested_lanes = {
+            "raw": raw_items,
+            "memory": memory_items,
+        }
+        failed_lanes = {
+            name: lane
+            for name, lane in requested_lanes.items()
+            if name in value.kinds and isinstance(lane, Exception)
+        }
+        for name, error in failed_lanes.items():
+            logger.warning(
+                "sdk_context_lane_failed lane=%s error_class=%s",
+                name,
+                type(error).__name__,
+            )
+        all_requested_failed = len(failed_lanes) == len(value.kinds)
+        partial = bool(failed_lanes)
         raw_candidates = (
             () if isinstance(raw_items, Exception) else cast(tuple[SdkContextItem, ...], raw_items)
         )
+        if access is not None and raw_candidates:
+            try:
+                current = await asyncio.to_thread(
+                    resolve_context_authority,
+                    value,
+                    access,
+                    database,
+                    deadline=started + value.timeout_ms / 1000,
+                )
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(503, "context_authority_unavailable") from None
+            current_sources = current.raw_sources or frozenset()
+            raw_candidates = tuple(
+                item
+                for item in raw_candidates
+                if item.kind == "raw" and item.source in current_sources
+            )
         memory_candidates = (
             ()
             if isinstance(memory_items, Exception)
@@ -298,11 +397,20 @@ def sdk_context_router(dependencies: Sequence[Depends]) -> APIRouter:
             if len(content) > remaining:
                 item = item.model_copy(update={"content": content[:remaining], "truncated": True})
                 truncated = True
+            truncated = truncated or item.truncated
             selected.append(item)
             used += len(item.content)
         final = SdkContextSearchResponse(
             request_id=str(uuid4()),
-            state=("partial" if partial else "grounded" if selected else "empty"),
+            state=(
+                "unavailable"
+                if all_requested_failed
+                else "partial"
+                if partial
+                else "grounded"
+                if selected
+                else "empty"
+            ),
             items=tuple(selected),
             used_characters=used,
             truncated=truncated,

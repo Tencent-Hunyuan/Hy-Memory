@@ -242,6 +242,75 @@ class _InTurn:
             self._line.remove(place)
 
 
+class _Checkpointer:
+    """The one thread that runs cadence checkpoints, for every main database.
+
+    A database asks for at most one checkpoint at a time: a request made
+    while one is already waiting is the same request. The checkpoint goes
+    through the database's own writer, in its line, like any other write.
+    A waiting request holds the database weakly: it must not keep alive a
+    database nobody else holds any more.
+    """
+
+    def __init__(self) -> None:
+        self._state = threading.Condition()
+        self._due: OrderedDict[int, weakref.ref[MainDatabase]] = OrderedDict()
+        self._running = 0
+        self._thread: threading.Thread | None = None
+
+    def request(self, database: "MainDatabase") -> None:
+        with self._state:
+            self._due.setdefault(id(database), weakref.ref(database))
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._run,
+                    name="one-memory-checkpoint",
+                    daemon=True,
+                )
+                self._thread.start()
+            self._state.notify_all()
+
+    def forget(self, database: "MainDatabase") -> None:
+        with self._state:
+            self._due.pop(id(database), None)
+            self._state.notify_all()
+
+    def wait_idle(self, timeout: float) -> bool:
+        """Whether every requested checkpoint has run within `timeout` seconds."""
+        with self._state:
+            return self._state.wait_for(lambda: not self._due and not self._running, timeout)
+
+    def _run(self) -> None:
+        while True:
+            with self._state:
+                self._state.wait_for(lambda: bool(self._due))
+                _key, reference = self._due.popitem(last=False)
+                database = reference()
+                if database is None:
+                    self._state.notify_all()
+                    continue
+                self._running += 1
+            try:
+                database._cadence_checkpoint()
+            except Exception:  # noqa: BLE001 - maintenance must not end the thread
+                logger.warning(
+                    "main_database_checkpoint_failed file=%s", database.path.name, exc_info=True
+                )
+            finally:
+                del database
+                with self._state:
+                    self._running -= 1
+                    self._state.notify_all()
+
+
+_checkpointer = _Checkpointer()
+
+
+def wait_for_cadence_checkpoints(timeout: float = 5.0) -> bool:
+    """Wait for the cadence checkpoints already requested; for tests and shutdown."""
+    return _checkpointer.wait_idle(timeout)
+
+
 def _locked() -> sqlite3.OperationalError:
     # Callers tell a busy database from a broken one by these, as they would
     # for SQLite's own refusal.
@@ -614,13 +683,23 @@ class MainDatabase:
             return None
 
     def _maybe_checkpoint_after_write(self) -> None:
-        """Checkpoint on a write cadence without opening another connection.
+        """Count a write, and hand a due cadence checkpoint to the checkpointer.
 
         SQLite's default autocheckpoint only runs when the writer itself
         crosses the page threshold. Production hit a state where the WAL grew
         to 13GB, so the main database needs its own bounded, observable
-        maintenance path. This runs after the caller's checkout has been reset
-        and only re-enters the same serialized writer queue.
+        maintenance path: every `checkpoint_write_interval()` writes or
+        `MAIN_DATABASE_CHECKPOINT_SECONDS`, whichever comes first.
+
+        The checkpoint itself used to run right here, on the thread that had
+        just written, as one more turn in the writer's line. That thread was
+        an import heartbeat or a durable lease renewal as often as not, and
+        it then waited behind the whole line a second time before it could
+        return. The idle TRUNCATE (#278) cannot replace the cadence: under a
+        sustained import the database is never idle, and that is exactly when
+        the WAL grows. So the cadence stays, and one checkpointer thread runs
+        it (`_Checkpointer`); the writer stays the only connection that
+        writes, and no caller waits for maintenance it did not ask for.
         """
         now = time.monotonic()
         with self._state:
@@ -632,8 +711,12 @@ class MainDatabase:
             if due:
                 self._writes_since_checkpoint = 0
                 self._last_checkpoint_at = now
-        if not due:
-            return
+        if due:
+            _checkpointer.request(self)
+
+    def _cadence_checkpoint(self) -> None:
+        """One PASSIVE checkpoint through the writer, and the WAL alert after it."""
+        now = time.monotonic()
         try:
             busy, log_frames, checkpointed = self._checkpoint_from_maintenance("PASSIVE")
         except sqlite3.Error:
@@ -707,6 +790,8 @@ class MainDatabase:
 
     def close(self) -> None:
         """Close every idle connection now; ones in use close when handed back."""
+        # A checkpoint still waiting would open the writer again after this.
+        _checkpointer.forget(self)
         with self._state:
             self._generation += 1
             self._identity = None

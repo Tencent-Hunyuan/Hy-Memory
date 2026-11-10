@@ -42,7 +42,10 @@ RAW_ROWS = {
     "local": [
         {
             "memory_id": "raw-1",
-            "content": "[user]: 我叫费天翔\n[assistant]: 好的，记住了。",
+            "content": (
+                "[user]: 我叫费天翔\n[assistant]: 好的，记住了。"
+                "\n[user]: 我喜欢绿茶\n[assistant]: 也记住了。"
+            ),
             "status": "shadow",
             "session_id": "s-1",
             "source": "hermes",
@@ -88,6 +91,40 @@ def _chat(user_id: str, memory_id: str, content: str, layer: str, source: str) -
     }
 
 
+#: The keyword parameters of the pinned `HyMemoryClient.search`, which takes
+#: no **kwargs. `test_pinned_sdk_raw_search` checks this set against the
+#: installed wheel, so the stand-in below rejects what the release rejects.
+SDK_SEARCH_PARAMETERS = frozenset(
+    {
+        "queries",
+        "scene",
+        "search_mode",
+        "user_ids",
+        "agent_ids",
+        "session_ids",
+        "include_sources",
+        "exclude_sources",
+        "limit",
+        "min_score",
+        "working_fact_min_score",
+        "working_experience_min_score",
+        "schema_min_score",
+        "schema_limit",
+        "intention_limit",
+        "created_after",
+        "reader",
+        "workspace_id",
+        "branch",
+        "request_id",
+        "layers",
+        "statuses",
+        "embed_override",
+        "query_embedding",
+        "rerank",
+    }
+)
+
+
 class RecordingSdk:
     """The public client surface, recording every call's keyword arguments."""
 
@@ -106,6 +143,10 @@ class RecordingSdk:
     # The SDK answers rows below a caller's floor in some lanes (a schema
     # floor, a fused rank score), so Core must filter what it returns.
     def search(self, query, **kwargs):
+        unknown = set(kwargs) - SDK_SEARCH_PARAMETERS
+        if unknown:
+            # The pinned `HyMemoryClient.search` takes no **kwargs.
+            raise TypeError(f"search() got unexpected keyword arguments {sorted(unknown)}")
         self._record("search", {"query": query, **kwargs})
         [user_id] = kwargs["user_ids"]
         if kwargs.get("layers") == ["l1_raw"]:
@@ -173,7 +214,15 @@ class RecordingSdk:
                 )
                 and (not kwargs.get("session_ids") or row["session_id"] in kwargs["session_ids"])
             ]
-            return {"vdb": {"memories": rows, "total": len(rows)}}
+            total = len(rows)
+            offset = kwargs.get("offset", 0)
+            limit = kwargs.get("limit", 100)
+            return {
+                "vdb": {
+                    "memories": rows[offset : offset + limit],
+                    "total": total,
+                }
+            }
         rows = [_chat(user_id, *row[:2], *row[3:]) for row in CHAT_ROWS.get(user_id, [])]
         if layers:
             rows = [row for row in rows if row["layer"] in layers]
@@ -271,6 +320,10 @@ async def _model_ready(_app) -> bool:
     return True
 
 
+async def _model_not_ready(_app) -> bool:
+    return False
+
+
 def run_with_sdk(tmp_path, monkeypatch, scenario) -> None:
     async def main() -> None:
         app = application(tmp_path)
@@ -343,6 +396,170 @@ def test_every_context_search_option_reaches_the_sdk_and_absent_ones_keep_the_ol
         for name, value in EXPECTED_SEARCH.items():
             assert sent[name] == value, name
         assert sent["user_ids"] == ["local"]
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_raw_context_search_can_return_turns_instead_of_storage_batches(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario(app, sdk, client):
+        response = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "绿茶",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "limit": 20,
+            },
+        )
+        assert response.status_code == 200, response.text
+        raw_one = [item for item in response.json()["items"] if item["raw_id"] == "raw-1"]
+        assert len(raw_one) == 1
+        assert raw_one[0]["turn_index"] == 1
+        assert "我喜欢绿茶" in raw_one[0]["content"]
+        assert "我叫费天翔" not in raw_one[0]["content"]
+        # pro/ultra: a shadow raw is already in its extracted memories.
+        assert "statuses" not in sdk.last("search")
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_lite_raw_search_is_plain_rag_over_active_and_shadow_raws(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        app.state.memory_mode = lambda: "lite"
+        response = await client.post(
+            "/api/v2/context/search",
+            json={"query": "喜欢喝绿茶的人", "kinds": ["raw"], "raw_unit": "turn", "limit": 5},
+        )
+        assert response.status_code == 200, response.text
+        sent = sdk.last("search")
+        assert sent["statuses"] == ["active", "shadow"] and sent["limit"] == 5
+        items = response.json()["items"]
+        # No turn contains the query, yet every vector hit is returned, in
+        # score order: raw-1 by its closest turn, raw-2 by its only one.
+        assert [(item["raw_id"], item["turn_index"]) for item in items] == [
+            ("raw-1", 1),
+            ("raw-2", 0),
+        ]
+        assert [item["score"] for item in items] == [0.97, 0.3]
+        assert "我喜欢绿茶" in items[0]["content"]
+
+        floored = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "喜欢喝绿茶的人",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "min_score": 0.5,
+            },
+        )
+        assert [item["raw_id"] for item in floored.json()["items"]] == ["raw-1"]
+
+        # Lite has no model, so recall answers from the raw layer.
+        monkeypatch.setattr("one_memory.api._recall_model_ready", _model_not_ready)
+        recall = await client.post("/api/v1/recall", json={"query": "喜欢喝绿茶的人"})
+        assert recall.status_code == 200, recall.text
+        assert recall.json()["mode"] == "raw"
+        assert sdk.last("search")["statuses"] == ["active", "shadow"]
+        assert [hit["memory_id"] for hit in recall.json()["hits"]][:1] == ["raw-1"]
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_long_semantic_raw_hit_cannot_erase_an_earlier_match(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        app.state.memory_mode = lambda: "lite"
+
+        def search(query, **kwargs):
+            sdk._record("search", {"query": query, **kwargs})
+            memories = [
+                {
+                    "memory_id": "raw-target",
+                    "content": "[user]: lite 模式的 3d 图需要调整",
+                    "layer": "l1_raw",
+                    "status": "active",
+                    "user_id": "local",
+                    "agent_id": "all-apps",
+                    "session_id": "target-session",
+                    "source": "cursor",
+                    "memory_at": 1_790_100_000,
+                    "score": 0.97,
+                },
+                {
+                    "memory_id": "raw-long",
+                    "content": f"[user]: {'x' * 20_001}",
+                    "layer": "l1_raw",
+                    "status": "active",
+                    "user_id": "local",
+                    "agent_id": "all-apps",
+                    "session_id": "long-session",
+                    "source": "cursor",
+                    "memory_at": 1_790_000_000,
+                    "score": 0.9,
+                },
+            ]
+            return {
+                "request_id": "long-raw",
+                "memories": memories[1:] if query == "oversized" else memories,
+            }
+
+        sdk.search = search
+        response = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "3d",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "limit": 20,
+                "character_budget": 20_000,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["state"] == "grounded"
+        assert body["items"][0]["raw_id"] == "raw-target"
+        assert "3d" in body["items"][0]["content"]
+        assert body["items"][1]["raw_id"] == "raw-long"
+        assert body["items"][1]["truncated"] is True
+        assert body["truncated"] is True
+
+        single = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "oversized",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "character_budget": 20_000,
+            },
+        )
+        assert single.json()["items"][0]["truncated"] is True
+        assert single.json()["truncated"] is True
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_raw_only_lane_failure_is_unavailable_not_an_empty_partial(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        app.state.memory_mode = lambda: "lite"
+
+        def search(_query, **_kwargs):
+            raise ValueError("private conversation text must not reach logs")
+
+        sdk.search = search
+        response = await client.post(
+            "/api/v2/context/search",
+            json={"query": "3d", "kinds": ["raw"], "raw_unit": "turn"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["state"] == "unavailable"
+        assert response.json()["items"] == []
 
     run_with_sdk(tmp_path, monkeypatch, scenario)
 
@@ -574,7 +791,12 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         assert sent["layers"] == ["l1_raw"] and sent["statuses"] == ["active", "shadow"]
         first = next(item for item in body["items"] if item["raw_id"] == "raw-1")
         assert first["status"] == "shadow"
-        assert [message["role"] for message in first["messages"]] == ["user", "assistant"]
+        assert [message["role"] for message in first["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
         assert first["messages"][0]["content"] == "我叫费天翔"
         assert first["role"] is None
         expected = hashlib.sha256(first["content"].encode()).hexdigest()
@@ -583,6 +805,144 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         assert first["created"].startswith("2026-")
         second = next(item for item in body["items"] if item["raw_id"] == "raw-2")
         assert second["role"] == "user"
+
+        turns = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert turns["unit"] == "turn" and turns["total"] == 3
+        first_turns = [item for item in turns["items"] if item["raw_id"] == "raw-1"]
+        assert [item["turn_index"] for item in first_turns] == [1, 0]
+        assert len({item["turn_id"] for item in first_turns}) == 2
+        assert [[message["content"] for message in item["messages"]] for item in first_turns] == [
+            ["我喜欢绿茶", "也记住了。"],
+            ["我叫费天翔", "好的，记住了。"],
+        ]
+        cursor = None
+        first_cursor = None
+        cursor_turns = []
+        cursor_calls = len(sdk.all("list_memories"))
+        while True:
+            params = {"unit": "turn", "paging": "cursor", "limit": 1}
+            if cursor is not None:
+                params["cursor"] = cursor
+            response = await client.get("/api/v2/raw", params=params)
+            assert response.status_code == 200, response.text
+            cursor_page = response.json()
+            assert cursor_page["total_exact"] is False
+            assert len(cursor_page["items"]) == 1
+            cursor_turns.append(cursor_page["items"][0]["messages"][0]["content"])
+            cursor = cursor_page["next_cursor"]
+            if first_cursor is None:
+                first_cursor = cursor
+            if cursor is None:
+                assert cursor_page["has_more"] is False
+                break
+            assert cursor_page["has_more"] is True
+        assert cursor_turns == ["我喜欢绿茶", "我叫费天翔", "你好"]
+        assert len(sdk.all("list_memories")) == cursor_calls + 3
+        graph_calls = len(sdk.all("list_memories"))
+        graph = await client.get("/api/v2/raw/graph", params={"limit": 2})
+        assert graph.status_code == 200, graph.text
+        assert len(sdk.all("list_memories")) == graph_calls + 1
+        graph_body = graph.json()
+        assert graph_body["total"] == 3
+        assert graph_body["has_more"] is True
+        assert [item["label"] for item in graph_body["items"]] == [
+            "[user]: 我喜欢绿茶 [assistant]: 也记住了。",
+            "[user]: 我叫费天翔 [assistant]: 好的，记住了。",
+        ]
+        assert (await client.get("/api/v2/raw/graph", params={"limit": 301})).status_code == 422
+        assert (
+            await client.get(
+                "/api/v2/raw/graph",
+                params={"limit": 2, "offset": 2},
+            )
+        ).status_code == 422
+        inserted = {
+            "memory_id": "raw-new",
+            "content": "[user]: 新消息",
+            "status": "active",
+            "session_id": "s-new",
+            "source": "cursor",
+            "memory_at": 1_790_200_000,
+            "gmt_created": 1_790_200_100,
+        }
+        RAW_ROWS["local"].insert(0, inserted)
+        try:
+            updated_graph = (await client.get("/api/v2/raw/graph")).json()
+            assert updated_graph["total"] == 4
+            assert updated_graph["items"][0]["label"] == "[user]: 新消息"
+            continued = await client.get(
+                "/api/v2/raw",
+                params={
+                    "unit": "turn",
+                    "paging": "cursor",
+                    "limit": 1,
+                    "cursor": first_cursor,
+                },
+            )
+            assert continued.status_code == 200, continued.text
+            assert continued.json()["items"][0]["messages"][0]["content"] == "我叫费天翔"
+        finally:
+            RAW_ROWS["local"].remove(inserted)
+        assert (
+            await client.get(
+                "/api/v2/raw",
+                params={
+                    "unit": "turn",
+                    "paging": "cursor",
+                    "cursor": first_cursor,
+                    "source": "hermes",
+                },
+            )
+        ).status_code == 422
+        assert (
+            await client.get(
+                "/api/v2/raw",
+                params={
+                    "unit": "turn",
+                    "paging": "cursor",
+                    "cursor": "turn:²:0:0:2::0000000000000000",
+                },
+            )
+        ).status_code == 422
+
+        calls_before_refresh = len(sdk.all("list_memories"))
+        await client.get("/api/v2/raw", params={"unit": "turn"})
+        assert len(sdk.all("list_memories")) == calls_before_refresh + 1
+
+        # A live session puts a new raw on top: one listing call, not a rescan.
+        newest = {
+            **RAW_ROWS["local"][1],
+            "memory_id": "raw-new",
+            "content": "[user]: 刚刚说的",
+            "status": "active",
+        }
+        original = RAW_ROWS["local"]
+        monkeypatch.setitem(RAW_ROWS, "local", [newest, *original])
+        calls_before_append = len(sdk.all("list_memories"))
+        appended = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert len(sdk.all("list_memories")) == calls_before_append + 1
+        assert appended["total"] == 4
+        assert [item["raw_id"] for item in appended["items"]][:1] == ["raw-new"]
+        assert [item["turn_id"] for item in appended["items"][1:]] == [
+            item["turn_id"] for item in turns["items"]
+        ]
+        # Anything else (here a raw going away) lists the raw layer again.
+        monkeypatch.setitem(RAW_ROWS, "local", [newest, original[1]])
+        calls_before_delete = len(sdk.all("list_memories"))
+        shrunk = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert len(sdk.all("list_memories")) > calls_before_delete + 1
+        assert shrunk["total"] == 2
+        monkeypatch.setitem(RAW_ROWS, "local", original)
+        calls_before_restore = len(sdk.all("list_memories"))
+        restored = (await client.get("/api/v2/raw", params={"unit": "turn"})).json()
+        assert len(sdk.all("list_memories")) > calls_before_restore + 1
+        assert restored["total"] == 3
+
+        ascending = (
+            await client.get("/api/v2/raw", params={"unit": "turn", "order": "asc"})
+        ).json()
+        ascending_first = [item for item in ascending["items"] if item["raw_id"] == "raw-1"]
+        assert [item["turn_index"] for item in ascending_first] == [0, 1]
 
         await client.get(
             "/api/v2/raw",

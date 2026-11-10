@@ -45,6 +45,7 @@ import {
   type SdkMemoryStatus,
   type SdkMemoryVariant,
   type SdkRawContextItem,
+  type SdkRawGraphPage,
   type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
@@ -986,16 +987,48 @@ export async function getSdkRaw({
   sessionId,
   offset = 0,
   limit = 100,
+  unit = "turn",
+  paging,
+  cursor,
   signal,
 }: {
   source?: string;
   sessionId?: string;
   offset?: number;
   limit?: number;
+  unit?: "raw" | "turn";
+  paging?: "offset" | "cursor";
+  cursor?: string | null;
   signal?: AbortSignal;
 } = {}): Promise<SdkRawPage> {
   const response = await client.get<SdkRawPage>("/api/v2/raw", {
-    params: { source, session_id: sessionId, offset, limit },
+    params: {
+      source,
+      session_id: sessionId,
+      offset,
+      limit,
+      unit,
+      paging,
+      cursor: cursor || undefined,
+    },
+    signal,
+  });
+  return response.data;
+}
+
+export async function getSdkRawGraph({
+  source,
+  offset = 0,
+  limit = 300,
+  signal,
+}: {
+  source?: string;
+  offset?: number;
+  limit?: number;
+  signal?: AbortSignal;
+} = {}): Promise<SdkRawGraphPage> {
+  const response = await client.get<SdkRawGraphPage>("/api/v2/raw/graph", {
+    params: { source, offset, limit },
     signal,
   });
   return response.data;
@@ -1011,11 +1044,14 @@ export async function searchSdkRaw(
       query,
       kinds: ["raw"],
       ...(options.source ? { include_sources: [options.source] } : {}),
+      raw_unit: "turn",
       limit: 20,
       character_budget: 12_000,
     },
     { signal: options.signal, timeout: 10_000 },
   );
+  if (response.data?.state !== "grounded" && response.data?.state !== "empty")
+    throw new Error("raw_search_unavailable");
   const items = response.data?.items;
   return Array.isArray(items)
     ? items.filter(

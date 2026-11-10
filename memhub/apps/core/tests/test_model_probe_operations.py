@@ -91,6 +91,51 @@ def test_reserved_before_transport_and_atomic_result_reopens_without_resending(e
     asyncio.run(scenario())
 
 
+def test_pre_dispatch_failure_marks_operation_failed_and_unfences(env, monkeypatch):
+    store, secrets, profile, ops, calls, respond = env
+    operation = str(uuid4())
+
+    def fail_require(*args, **kwargs):
+        raise RuntimeError("profile load failed")
+
+    prober = ModelProber(store=store, secrets=secrets, transport=httpx.MockTransport(respond))
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "require", fail_require)
+        receipt = asyncio.run(
+            prober.probe(
+                profile.profile_id,
+                operation_id=operation,
+                expected_profile_revision=profile.revision,
+            )
+        )
+
+    assert receipt.state == "failed"
+    assert receipt.code == "model_probe_execution_failed"
+    assert receipt.result is None
+    assert calls == []
+    assert ops.lookup(operation) == receipt
+    assert (
+        asyncio.run(
+            prober.probe(
+                profile.profile_id,
+                operation_id=operation,
+                expected_profile_revision=profile.revision,
+            )
+        )
+        == receipt
+    )
+
+    completed = asyncio.run(
+        prober.probe(
+            profile.profile_id,
+            operation_id=str(uuid4()),
+            expected_profile_revision=profile.revision,
+        )
+    )
+    assert completed.state == "completed"
+    assert len(calls) == 3
+
+
 def test_same_id_and_same_profile_concurrency_refused_before_second_call(env):
     store, secrets, profile, ops, calls, respond = env
 

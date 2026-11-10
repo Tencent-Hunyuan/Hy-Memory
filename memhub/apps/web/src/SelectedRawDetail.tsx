@@ -5,7 +5,7 @@ import type {
 } from "@one-memory/contracts";
 import { clockStamp } from "./clock-stamp";
 import { useGuiLanguage } from "./gui-language";
-import { rawRecordTime } from "./sdk-raw-map";
+import { rawRecordId, rawRecordTime } from "./sdk-raw-map";
 import { sourceNameOr, UNATTRIBUTED_SOURCE_ID } from "./source-label";
 
 type RawRecord = SdkRawRecord | SdkRawContextItem;
@@ -14,6 +14,7 @@ function authorLabel(role: string, t: ReturnType<typeof useGuiLanguage>["t"]) {
   if (role === "user") return t("selectedMemory.author.user");
   if (role === "assistant" || role === "agent")
     return t("selectedMemory.author.agent");
+  if (role === "tool") return t("selectedMemory.author.tool");
   return t("selectedMemory.author.unknown");
 }
 
@@ -46,11 +47,10 @@ export function SelectedRawDetail({
           record.source || t("selectedMemory.sourceUnknown"),
         );
   return (
-    <article className="map-dialogue-reading">
-      <p className="selected-memory-status">{t("memory:原始对话")}</p>
+    <article className="map-dialogue-reading" aria-label={t("memory:原始对话")}>
       <ul className="map-transcript">
         {messages.map((message) => (
-          <li key={`${record.raw_id}:${message.role}:${message.content}`}>
+          <li key={`${rawRecordId(record)}:${message.role}:${message.content}`}>
             <small>{authorLabel(message.role, t)}</small>
             <p>{message.content}</p>
           </li>

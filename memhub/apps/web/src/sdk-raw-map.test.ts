@@ -76,4 +76,28 @@ describe("raw map projection", () => {
       history: [],
     });
   });
+
+  it("uses a turn identity while retaining the parent raw id", () => {
+    const turn = {
+      ...record,
+      raw_id: "raw-batch",
+      turn_id: "raw-turn:batch:1",
+      turn_index: 1,
+      turn_count: 2,
+      content: "[user]: second question\n[assistant]: second answer",
+      messages: [
+        { role: "user", content: "second question" },
+        { role: "assistant", content: "second answer" },
+      ],
+    };
+
+    expect(
+      rawLibraryPage({ items: [turn], total: 2, offset: 0, limit: 20 }),
+    ).toMatchObject({
+      items: [{ memory_id: "raw-turn:batch:1", content: turn.content }],
+      source_ids_by_memory: { "raw-turn:batch:1": ["cursor"] },
+    });
+    expect(rawDetail(turn).memory.memory_id).toBe("raw-turn:batch:1");
+    expect(turn.raw_id).toBe("raw-batch");
+  });
 });

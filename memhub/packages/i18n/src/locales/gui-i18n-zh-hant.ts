@@ -74,6 +74,8 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed": "原始對話搜尋失敗，請重試。",
   "sdk.raw.recent": "最近原始對話",
   "sdk.raw.empty": "還沒有原始對話。連接來源後，對話會顯示在這裡。",
+  "sdk.raw.total": "{count} 則原始對話",
+  "sdk.raw.total.one": "{count} 則原始對話",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "目前使用基礎記憶。新對話會保留為原始記錄，不會產生進階記憶；過去的進階記憶仍會保留，但目前不會顯示或參與記憶召回。",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -139,6 +141,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "儲存修改",
   "selectedMemory.author.user": "你",
   "selectedMemory.author.agent": "助理",
+  "selectedMemory.author.tool": "工具",
   "selectedMemory.sourceUnavailable": "來源權限已變化或原文不可用。",
   "selectedMemory.related": "對應記憶",
   "selectedMemory.viewMemory": "檢視記憶",
@@ -951,7 +954,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
     "不需開啟視窗，也能持續同步、整理和提供記憶。",
   导出日志: "匯出日誌",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "把本機執行日誌打包成一個檔案，提供給開發人員排查。",
+    "打包完整本機日誌，可能包含對話正文和本機路徑；只傳送給可信的開發人員。",
   "确定退出 One Memory 界面吗？": "要關閉 MemHub 視窗嗎？",
   "后台服务会继续同步、整理和提供记忆。":
     "背景服務會繼續同步、整理和提供記憶。",
@@ -1130,6 +1133,8 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "少一些重複交代，多一些理解。",
   onboardingMoreApps: "向下捲動檢視更多 · 還有 {count} 個 App",
   "onboardingMoreApps.one": "向下捲動檢視更多 · 還有 {count} 個 App",
+  onboardingMoreImportApps: "橫向捲動查看更多 · 還有 {count} 個 App",
+  onboardingImportChecking: "正在確認匯入結果，已保留你的選擇",
   onboardingAllApps: "已顯示全部 {count} 個 App",
   默认位置: "預設位置",
   自定义位置: "自訂位置",
@@ -1388,6 +1393,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "apps.memories": "已建立的記憶",
   "apps.rawConversations": "原始對話",
   "apps.rawSaving": "儲存中",
+  "apps.rawSavingCompact": "儲存中",
   "apps.rawSavingStatus": "儲存狀態",
   "apps.rawSavingDetail": "原始對話會持續儲存，不需要生成模型",
   "apps.rawNoExcerpt": "這段對話沒有可顯示的使用者原文",
@@ -1396,6 +1402,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "apps.rawEmpty": "還沒有儲存的原始對話",
   "apps.rawCheckedEmpty": "已核對，暫無可顯示的原始對話更新",
   "apps.memoryCheckedEmpty": "已核對，暫無可顯示的記憶更新",
+  "apps.recentEmptyCompact": "暫無更新",
   "apps.rawWaiting": "原始對話儲存後會顯示在這裡",
   "apps.checkedRecent": "已核對目前內容",
   "apps.currentMode": "目前模式",

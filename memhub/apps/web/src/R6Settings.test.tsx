@@ -21,6 +21,9 @@ import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { queryClient, resetClient } from "./query-client";
 import { R6Settings } from "./R6Settings";
 
+const editProfileAction = vi.fn(() => true);
+const addProfileAction = vi.fn(() => true);
+
 it("changes settings copy live without rereading profiles or changing permissions", async () => {
   const user = userEvent.setup();
   localStorage.setItem(LANGUAGE_STORAGE_KEY, "es");
@@ -112,8 +115,8 @@ vi.mock("./ModelSettings", async () => {
     }) => {
       useImperativeHandle(controlsRef, () => ({
         edit: () => false,
-        editProfile: () => false,
-        add: () => false,
+        editProfile: editProfileAction,
+        add: addProfileAction,
         test: () => Promise.resolve(undefined),
       }));
       return createElement(
@@ -166,6 +169,7 @@ it("shows the help and diagnostics group by default and hides it when opted out"
   await user.click(screen.getByRole("button", { name: "帮助与诊断" }));
   expect(screen.getByRole("heading", { name: "帮助与诊断" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "导出日志" })).toBeTruthy();
+  expect(screen.getByText(/可能包含会话正文和本机路径/)).toBeTruthy();
   expect(screen.getByRole("heading", { name: "关于" })).toBeTruthy();
   expect(screen.getByText("1.0.4")).toBeTruthy();
   expect(screen.getByText("8")).toBeTruthy();
@@ -200,7 +204,13 @@ it("uses one sidebar hierarchy and explains when a saved model is inactive in li
   await user.click(screen.getByRole("button", { name: "界面语言" }));
   expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "模型配置" }));
-  expect(await screen.findByText("当前是基础记忆（lite）")).toBeTruthy();
+  expect(
+    await screen.findByText(
+      (_, element) =>
+        element?.tagName === "STRONG" &&
+        element.textContent === "基础记忆 · Lite",
+    ),
+  ).toBeTruthy();
   expect(
     screen.getByText(/是否开始整理取决于.*“用模型沉淀记忆”.*开关/),
   ).toBeTruthy();
@@ -239,8 +249,9 @@ it("carries a missing-model explanation into model configuration and moves focus
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
 
+  await user.click(await screen.findByRole("combobox", { name: "记忆模式" }));
   await user.click(
-    await screen.findByRole("radio", { name: /智能记忆（pro）/ }),
+    await screen.findByRole("option", { name: /智能记忆 · Pro/ }),
   );
 
   expect(
@@ -304,6 +315,7 @@ it("reports a stop that did not confirm instead of showing it stopped", async ()
 });
 
 it("opens the model area even when a pending probe fences the editor, so recovery stays reachable", async () => {
+  editProfileAction.mockReturnValueOnce(false);
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "模型配置" }));
@@ -321,10 +333,13 @@ it("opens the model area even when a pending probe fences the editor, so recover
   expect(alert.textContent).toContain("待核对");
   // What changed is that the recovery entry no longer hides with the form it
   // is supposed to unlock.
-  expect(screen.getByRole("button", { name: "核对测试结果" })).toBeTruthy();
+  expect(
+    within(generationLane).getByRole("button", { name: "核对测试结果" }),
+  ).toBeTruthy();
 });
 
 it("reaches the same recovery entry when no model has been configured yet", async () => {
+  addProfileAction.mockReturnValueOnce(false);
   vi.mocked(getModelProfiles).mockResolvedValueOnce([]);
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
@@ -368,11 +383,46 @@ it("shows separate compact lanes and opens the requested presentation", async ()
   expect(embeddingLane.textContent).toContain("Embedding");
 
   await user.click(within(embeddingLane).getByRole("button", { name: "配置" }));
-  expect(screen.getByText("embedding")).toBeTruthy();
+  expect(await within(embeddingLane).findByText("embedding")).toBeTruthy();
+  expect(editProfileAction).toHaveBeenCalledTimes(1);
+  expect(editProfileAction).toHaveBeenLastCalledWith(
+    expect.objectContaining({ profile_id: "profile-1" }),
+  );
+  expect(embeddingLane.dataset.expanded).toBe("true");
+  expect(
+    within(embeddingLane)
+      .getByRole("button", { name: "收起" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
   await user.click(
     within(generationLane).getByRole("button", { name: "配置" }),
   );
-  expect(screen.getByText("generation")).toBeTruthy();
+  expect(await within(generationLane).findByText("generation")).toBeTruthy();
+  expect(editProfileAction).toHaveBeenCalledTimes(2);
+  expect(generationLane.dataset.expanded).toBe("true");
+  expect(within(embeddingLane).queryByText("embedding")).toBeNull();
+
+  await user.click(
+    within(generationLane).getByRole("button", { name: "收起" }),
+  );
+  expect(
+    within(generationLane)
+      .getByText("generation")
+      .closest(".r6-model-owner")
+      ?.hasAttribute("hidden"),
+  ).toBe(true);
+
+  await user.click(
+    within(generationLane).getByRole("button", { name: "配置" }),
+  );
+  expect(editProfileAction).toHaveBeenCalledTimes(2);
+  expect(
+    within(generationLane)
+      .getByText("generation")
+      .closest(".r6-model-owner")
+      ?.hasAttribute("hidden"),
+  ).toBe(false);
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 it("leaves the switch unusable when the state cannot be read", async () => {

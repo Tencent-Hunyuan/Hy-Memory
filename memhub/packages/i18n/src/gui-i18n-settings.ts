@@ -251,7 +251,7 @@ export const settingsSpanishMessages = {
     "Sincroniza, organiza y ofrece memorias sin abrir la interfaz.",
   导出日志: "Exportar registros",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Empaqueta los registros locales en un archivo para su diagnóstico.",
+    "Empaqueta todos los registros locales. Pueden contener conversaciones o rutas privadas; compártelos solo con personal de desarrollo de confianza.",
   "确定退出 One Memory 界面吗？": "¿Cerrar la interfaz de MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "El servicio en segundo plano seguirá sincronizando, organizando y ofreciendo memorias.",
@@ -362,6 +362,8 @@ export const settingsSpanishMessages = {
 const chineseOverrides: Partial<
   Record<keyof typeof settingsSpanishMessages, string>
 > = {
+  "把本机运行日志打包成一个文件，发给开发排查。":
+    "打包完整本机日志，可能包含会话正文和本机路径；只发送给可信的开发人员。",
   "确定退出 One Memory 界面吗？": "确定退出 MemHub 界面吗？",
   appSettingsTitle: "{name} 应用设置",
   appMemoryScope: "让 {name} 查询已授权范围内的记忆。",

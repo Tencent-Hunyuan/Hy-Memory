@@ -3235,6 +3235,65 @@ async def _062_onboarding_progress(cursor: Any) -> None:
             raise
 
 
+IMPORT_JOB_LOOKUP_INDEXES_MIGRATION_VERSION = 63
+
+
+def import_job_lookup_indexes_ddl(dialect: str = "mysql") -> str:
+    """Index the per-source and per-status import job lookups.
+
+    Migration 7 gave SQLite `import_jobs` no index beyond its primary key (the
+    one-active-job index is partial), so every "this source's jobs" or "the
+    jobs in this state" question read and sorted the whole table. Live sync
+    adds a row per change it imports and nothing removed them, so on a machine
+    a few weeks old that table was thousands of rows read several times a poll.
+
+    `import_jobs_lane` serves the lane lookups (one user, one source, one
+    operation, a status, newest first) and the pruning of finished syncs;
+    `import_jobs_status` serves restart recovery and the status filters.
+    MySQL's migration 7 already has a status index and no `operation` column,
+    so it only gains the ordered source index.
+    """
+    if dialect == "sqlite":
+        return """
+CREATE INDEX IF NOT EXISTS import_jobs_lane
+ON import_jobs(user_id, source_id, operation, status, created_at);
+CREATE INDEX IF NOT EXISTS import_jobs_status
+ON import_jobs(status, created_at);
+"""
+    return """
+CREATE INDEX idx_import_jobs_source_created
+ON import_jobs(user_id, source_id, created_at);
+"""
+
+
+def _is_duplicate_index(error: Exception) -> bool:
+    """MySQL's "index name already there" (1061): the index is in place."""
+    args: tuple[object, ...] = getattr(error, "args", ())
+    return bool(args) and args[0] == 1061
+
+
+async def _063_import_job_lookup_indexes(cursor: Any) -> None:
+    dialect = _dialect(cursor)
+    if dialect == "sqlite":
+        # `operation` was added by the job store, not by migration 7, so a
+        # database built from the catalog alone may not have it yet. Same
+        # declaration as the store's own addition.
+        if "operation" not in await cursor.columns("import_jobs"):
+            await cursor.execute(
+                "ALTER TABLE import_jobs ADD COLUMN operation TEXT NOT NULL DEFAULT 'history'"
+            )
+        for statement in _split_statements(import_job_lookup_indexes_ddl(dialect)):
+            await cursor.execute(statement)
+        return
+    for statement in _split_statements(import_job_lookup_indexes_ddl(dialect)):
+        try:
+            await cursor.execute(statement)
+        except Exception as error:  # noqa: BLE001 - MySQL driver error type varies
+            if _is_duplicate_index(error):
+                continue
+            raise
+
+
 def _split_statements(sql: str) -> list[str]:
     """Split a multi-statement script, dropping blanks, PRAGMA and comments.
 
@@ -3540,5 +3599,10 @@ MIGRATIONS: tuple[Migration, ...] = (
         "onboarding_progress",
         _062_onboarding_progress,
         ("onboarding_state",),
+    ),
+    Migration(
+        IMPORT_JOB_LOOKUP_INDEXES_MIGRATION_VERSION,
+        "import_job_lookup_indexes",
+        _063_import_job_lookup_indexes,
     ),
 )

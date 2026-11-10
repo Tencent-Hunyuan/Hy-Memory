@@ -86,6 +86,8 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Conversas originais recentes",
   "sdk.raw.empty":
     "Ainda não há conversas originais. Ligue uma origem para as ver aqui.",
+  "sdk.raw.total": "{count} conversas originais",
+  "sdk.raw.total.one": "{count} conversa original",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "A memória básica está ativa. As novas conversas são guardadas como registos originais e não criam memórias avançadas. As memórias avançadas existentes continuam guardadas, mas não são mostradas nem usadas na recuperação.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -159,6 +161,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Salvar alterações",
   "selectedMemory.author.user": "Você",
   "selectedMemory.author.agent": "Assistente",
+  "selectedMemory.author.tool": "Ferramenta",
   "selectedMemory.sourceUnavailable":
     "As permissões da fonte mudaram ou o texto original não está disponível.",
   "selectedMemory.related": "Memória relacionada",
@@ -1069,7 +1072,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Continue sincronizando, processando e fornecendo memórias sem abrir o app.",
   导出日志: "Exportar logs",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Empacote os logs de diagnóstico locais em um arquivo para compartilhar com o suporte.",
+    "Empacota todos os logs locais. Eles podem conter conversas ou caminhos locais; compartilhe apenas com desenvolvedores de confiança.",
   "确定退出 One Memory 界面吗？": "Fechar a janela do MemHub?",
   "后台服务会继续同步、整理和提供记忆。":
     "O serviço em segundo plano continuará sincronizando, processando e fornecendo memórias.",
@@ -1255,6 +1258,9 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "Menos repetição. Mais compreensão.",
   onboardingMoreApps: "Role para ver mais · Apps restantes: {count}",
   "onboardingMoreApps.one": "Role para ver mais · {count} app restante",
+  onboardingMoreImportApps: "Role horizontalmente · {count} apps restantes",
+  onboardingImportChecking:
+    "Verificando o resultado da importação; sua seleção foi mantida",
   onboardingAllApps: "Todos os apps exibidos ({count})",
   默认位置: "Local padrão",
   自定义位置: "Local personalizado",
@@ -1541,6 +1547,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "apps.memories": "Memórias salvas",
   "apps.rawConversations": "Conversas originais",
   "apps.rawSaving": "Salvando",
+  "apps.rawSavingCompact": "Salvando",
   "apps.rawSavingStatus": "Status de salvamento",
   "apps.rawSavingDetail":
     "As conversas originais são salvas sem um modelo generativo",
@@ -1552,6 +1559,7 @@ export const portugueseMessages: Record<MessageKey, string> = {
     "Verificado: não há atualizações de conversas para mostrar",
   "apps.memoryCheckedEmpty":
     "Verificado: não há atualizações de memórias para mostrar",
+  "apps.recentEmptyCompact": "Sem atualizações",
   "apps.rawWaiting": "As conversas originais salvas aparecerão aqui",
   "apps.checkedRecent": "Conteúdo atual verificado",
   "apps.currentMode": "Modo atual",

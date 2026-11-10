@@ -259,7 +259,7 @@ export interface ConnectSourcesResponse {
   request_id?: string | null;
 }
 
-export type OnboardingModeIntent = "lite" | "pro";
+export type OnboardingModeIntent = "lite" | "pro" | "ultra";
 export type OnboardingSetupStep = "review" | "mode" | "model";
 
 export interface OnboardingProgressUpdate {
@@ -510,6 +510,10 @@ export interface MemoryLibraryPage {
   total: number;
   offset: number;
   limit: number;
+  /** Cursor paging: opaque continuation for a page whose exact total is not read. */
+  next_cursor?: string | null;
+  has_more?: boolean;
+  total_exact?: boolean;
   /** Active evidence sources for each returned memory, from the same authorized page snapshot. */
   source_ids_by_memory?: Record<string, string[]>;
   /** When each returned memory's cited conversation happened (D96). `import`
@@ -675,7 +679,12 @@ export interface SdkUserProfileResponse {
 }
 
 export interface SdkRawRecord {
+  /** Parent SDK L1 raw storage batch. */
   raw_id: string;
+  /** Stable product identity of one turn inside `raw_id`, when unit=turn. */
+  turn_id?: string | null;
+  turn_index?: number | null;
+  turn_count?: number | null;
   content: string;
   user_id: string;
   agent_id: string;
@@ -703,8 +712,34 @@ export interface SdkRawPage {
   total: number;
   limit: number;
   offset: number;
+  unit?: "raw" | "turn";
+  next_cursor?: string | null;
+  has_more?: boolean;
+  total_exact?: boolean;
   /** A time range was applied to this page in Core (the SDK list has none). */
   time_filtered?: boolean;
+}
+
+/** Lightweight bounded-map projection. Raw text remains SDK-owned. */
+export interface SdkRawGraphItem {
+  turn_id: string;
+  raw_id: string;
+  label: string;
+  source: string;
+  session_id: string;
+  memory_at: number | null;
+  gmt_created: number | null;
+}
+
+export interface SdkRawGraphPage {
+  user_id: string;
+  items: SdkRawGraphItem[];
+  /** SDK-reported matching raw scope; `items` remains capped by `limit`. */
+  total: number;
+  limit: number;
+  offset: number;
+  /** More matching turns exist, but the product map does not auto-page them. */
+  has_more: boolean;
 }
 
 /** `GET /api/v2/memory-library/layers`: memories per SDK layer. */
@@ -1003,6 +1038,24 @@ export interface EvolveOverview {
   running: EvolveRunReceipt[];
 }
 
+/** The ultra graph's own state (Core `graph_open_guard`). */
+export interface GraphStoreStatus {
+  state:
+    | "not_used"
+    | "opening"
+    | "ready"
+    | "rebuilding_after_quarantine"
+    | "unavailable";
+  /** Every quarantine this home has seen (fewer copies are kept). */
+  quarantine_count: number;
+  last_quarantined_at: string | null;
+  /** A probe outcome (`timeout`, `rss_cap`, `crashed`, `exit_nonzero`) or
+   *  `core_died_during_probe`; optional for an older Core. */
+  last_quarantine_reason?: string | null;
+  /** Starts that died while opening the graph, not yet resolved. */
+  failed_open_attempts: number;
+}
+
 export interface MemoryModeState {
   mode: MemoryPipelineMode;
   configured_mode: MemoryPipelineMode;
@@ -1010,6 +1063,8 @@ export interface MemoryModeState {
   forced_by_env: boolean;
   modes: MemoryPipelineMode[];
   graph_build: GraphBuildState;
+  /** Optional: an older Core does not report it. */
+  graph_store?: GraphStoreStatus;
 }
 
 export interface MemoryModeChange extends MemoryModeState {
@@ -1046,6 +1101,7 @@ export interface MemoryPipelineStatus {
   evolve: EvolveOverview;
   last_evolve_at: string | null;
   graph_build: GraphBuildState;
+  graph_store?: GraphStoreStatus;
   features: Record<string, boolean | number>;
   ui_language?: string | null;
   sdk_language?: string;
@@ -1112,6 +1168,11 @@ export interface MemoryProcessingSummary {
   llm_backoff_until?: string | null;
   /** The provider failure behind the pause, as a stable code. */
   llm_backoff_error?: string | null;
+  /** The durable write drain: `restarting` after an unexpected exit, until it
+   * runs again. Null before startup recovery started it. */
+  write_drain?: "running" | "restarting" | "stopped" | null;
+  /** Why the drain last exited unexpectedly, as a stable code. */
+  write_drain_error?: string | null;
   /** The active memory pipeline and its graph/evolve status. */
   pipeline?: MemoryPipelineStatus | null;
   /** A running embedding switch or startup merge pauses mode mutations. */

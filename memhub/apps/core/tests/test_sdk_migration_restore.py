@@ -293,6 +293,22 @@ def _retry_succeeds(home: Path, monkeypatch) -> None:
     assert len(list((home / "backups").glob("*-pre-cutover.sdk-bundle"))) == 1
 
 
+def test_evidence_an_older_capture_hook_recreated_is_dropped_on_the_next_start(home):
+    # Builds through 1.0.6 let the hook process open `EvidenceStore`, which
+    # rebuilt the retired tables on an SDK home. Nothing reads them there, and
+    # the next startup migration's leftovers cleanup removes them again.
+    assert _run(home).state == "cutover"
+    database = home / "one-memory.sqlite3"
+    EvidenceStore(database)
+    assert "evidence" in legacy_tables_present(database)
+
+    result = _run(home)
+
+    assert result.state == "complete"
+    assert {"evidence", "evidence_search"} <= set(result.dropped_tables)
+    assert legacy_tables_present(database) == ()
+
+
 def test_a_failure_after_the_cutover_commit_is_not_restored(home, monkeypatch):
     import one_memory.sdk_migration_runner as runner
 

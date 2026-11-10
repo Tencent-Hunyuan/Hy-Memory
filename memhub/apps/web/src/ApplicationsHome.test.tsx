@@ -72,15 +72,23 @@ it("localizes the whole home live without repeating reads or changing imported t
   expect(summary).toHaveBeenCalledTimes(calls);
 });
 
-const { summary, projection, processing, sedimentation, history, liveSync } =
-  vi.hoisted(() => ({
-    summary: vi.fn(),
-    projection: vi.fn(),
-    processing: vi.fn(),
-    sedimentation: vi.fn(),
-    history: vi.fn(),
-    liveSync: vi.fn(),
-  }));
+const {
+  summary,
+  projection,
+  processing,
+  sedimentation,
+  history,
+  liveSync,
+  evolve,
+} = vi.hoisted(() => ({
+  summary: vi.fn(),
+  projection: vi.fn(),
+  processing: vi.fn(),
+  sedimentation: vi.fn(),
+  history: vi.fn(),
+  liveSync: vi.fn(),
+  evolve: vi.fn(),
+}));
 vi.mock("./call-history-client", async (original) => ({
   ...(await original<typeof import("./call-history-client")>()),
   getCallHistory: history,
@@ -105,6 +113,7 @@ vi.mock("./api", () => ({
   getSdkRaw: vi.fn(),
   getLiveSyncHealth: liveSync,
   getMemoryProcessing: processing,
+  getEvolveOverview: evolve,
   getSedimentation: sedimentation,
   getSources: vi.fn().mockResolvedValue([]),
 }));
@@ -146,6 +155,12 @@ beforeEach(() => {
   history
     .mockReset()
     .mockResolvedValue({ available: true, recording_error: false, items: [] });
+  evolve.mockReset().mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  });
   imports.refresh = vi.fn();
   summary.mockReset().mockResolvedValue({
     memory_count: 601,
@@ -940,6 +955,39 @@ it.each([
   },
 );
 
+it("keeps the home snapshot visible during Evolve and refreshes when it ends", async () => {
+  evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [
+      {
+        run_id: "run-1",
+        user_id: "local",
+        state: "running",
+      },
+    ],
+  });
+  render(mountHome());
+
+  expect(await screen.findByText("601")).toBeTruthy();
+  expect(await screen.findByText("正在整合记忆…")).toBeTruthy();
+  const readsBeforeCompletion = projection.mock.calls.length;
+
+  act(() => {
+    queryClient.setQueryData(["evolve", "local"], {
+      mode: "ultra",
+      schedule: { enabled: true, time: "03:00" },
+      users: {},
+      running: [],
+    });
+  });
+
+  await waitFor(() =>
+    expect(projection.mock.calls.length).toBeGreaterThan(readsBeforeCompletion),
+  );
+});
+
 afterEach(() => {
   cleanup();
   resetClient();
@@ -1235,7 +1283,9 @@ it("shows lite raw ingestion as running even when model sedimentation is paused"
     />,
   );
 
-  expect(await screen.findAllByText("正在保存原始对话")).toHaveLength(2);
+  expect(await screen.findAllByText("正在保存")).toHaveLength(2);
+  expect(screen.getByText("暂无更新")).toBeTruthy();
+  expect(screen.getByText("已核对，暂无可显示的原始对话更新")).toBeTruthy();
   expect(screen.getByText("原始对话持续保存，不需要生成模型")).toBeTruthy();
   expect(screen.queryByText("已暂停")).toBeNull();
 });

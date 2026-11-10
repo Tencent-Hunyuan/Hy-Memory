@@ -87,6 +87,8 @@ export const frenchMessages: Record<MessageKey, string> = {
   "sdk.raw.recent": "Conversations originales récentes",
   "sdk.raw.empty":
     "Aucune conversation originale pour le moment. Connectez une source pour les afficher ici.",
+  "sdk.raw.total": "{count} conversations originales",
+  "sdk.raw.total.one": "{count} conversation originale",
   "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
     "La mémoire de base est active. Les nouvelles conversations sont conservées telles quelles et ne créent pas de mémoires avancées. Les mémoires avancées existantes restent enregistrées, mais ne sont ni affichées ni rappelées.",
   "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
@@ -162,6 +164,7 @@ export const frenchMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Enregistrer",
   "selectedMemory.author.user": "Vous",
   "selectedMemory.author.agent": "Assistant",
+  "selectedMemory.author.tool": "Outil",
   "selectedMemory.sourceUnavailable":
     "Les autorisations de la source ont changé ou le texte original est indisponible.",
   "selectedMemory.related": "Mémoire associée",
@@ -1078,7 +1081,7 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Continuez à synchroniser, traiter et fournir les mémoires sans ouvrir l’application.",
   导出日志: "Exporter les journaux",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Regroupez les journaux de diagnostic locaux dans un fichier à transmettre à l’assistance.",
+    "Regroupe tous les journaux locaux. Ils peuvent contenir des conversations ou des chemins locaux ; partagez-les uniquement avec des développeurs de confiance.",
   "确定退出 One Memory 界面吗？": "Quitter la fenêtre MemHub ?",
   "后台服务会继续同步、整理和提供记忆。":
     "Le service en arrière-plan continuera de synchroniser, traiter et fournir les mémoires.",
@@ -1268,6 +1271,10 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Faites défiler pour voir plus · {count} applications restantes",
   "onboardingMoreApps.one":
     "Faites défiler pour voir plus · {count} application restante",
+  onboardingMoreImportApps:
+    "Faites défiler horizontalement · encore {count} applications",
+  onboardingImportChecking:
+    "Vérification du résultat de l’importation ; votre sélection est conservée",
   onboardingAllApps: "Les {count} applications sont affichées",
   默认位置: "Emplacement par défaut",
   自定义位置: "Emplacement personnalisé",
@@ -1565,6 +1572,7 @@ export const frenchMessages: Record<MessageKey, string> = {
   "apps.memories": "Mémoires enregistrées",
   "apps.rawConversations": "Conversations d’origine",
   "apps.rawSaving": "Enregistrement",
+  "apps.rawSavingCompact": "Enregistrement",
   "apps.rawSavingStatus": "État de l’enregistrement",
   "apps.rawSavingDetail":
     "Les conversations d’origine sont enregistrées sans modèle génératif",
@@ -1576,6 +1584,7 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Vérifié : aucune mise à jour de conversation à afficher",
   "apps.memoryCheckedEmpty":
     "Vérifié : aucune mise à jour de mémoire à afficher",
+  "apps.recentEmptyCompact": "Aucune mise à jour",
   "apps.rawWaiting":
     "Les conversations d’origine enregistrées apparaîtront ici",
   "apps.checkedRecent": "Contenu actuel vérifié",

@@ -239,7 +239,7 @@ describe("GUI messages", () => {
         "上次整合：11/3/2026, 4:00:00 PM",
         "Last consolidated: 11/3/2026, 4:00:00 PM",
       ],
-      ["切换到 ultra？", "Switch to ultra?"],
+      ["切换到 ultra？", "Choose ultra?"],
     ] as const;
     for (const [source, expected] of cases) {
       expect(isMessageKey(source)).toBe(true);
