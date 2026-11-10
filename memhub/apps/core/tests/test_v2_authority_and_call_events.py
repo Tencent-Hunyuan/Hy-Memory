@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from one_memory import api
 from one_memory.api import create_app
 from one_memory.config import Settings
+from one_memory.imports.sources.registry import RootCandidateKind
 from one_memory.sdk_data_plane_migration import MemoryAuthority
 from one_memory.sdk_memory_qa import SdkAskMemory, SdkMemoryAnswer
 from one_memory.secrets import InMemorySecretStore
@@ -96,8 +97,11 @@ class Sdk:
 
 
 class Handle:
+    def __init__(self, sdk=None):
+        self.sdk = sdk or Sdk()
+
     async def client(self):
-        return Sdk()
+        return self.sdk
 
     async def close(self):
         return None
@@ -195,3 +199,50 @@ def test_v2_host_calls_are_recorded_and_renderer_calls_are_not(tmp_path, monkeyp
             assert listed.json()["total"] == 3
 
     asyncio.run(scenario())
+
+
+@pytest.mark.fresh_sdk
+def test_v2_raw_rechecks_a_source_revoked_during_search(tmp_path):
+    app = application(tmp_path)
+
+    class RevokingRawSdk:
+        def search(self, query, **kwargs):
+            app.state.source_grant_store.revoke(user_id="local", source_id="cursor")
+            return {
+                "memories": {
+                    "schema": [],
+                    "proactive": [],
+                    "normal": [
+                        {
+                            "memory_id": "raw-1",
+                            "content": "must not escape",
+                            "user_id": "local",
+                            "agent_id": "all-apps",
+                            "session_id": "session-1",
+                            "source": "cursor",
+                            "score": 0.9,
+                        }
+                    ],
+                }
+            }
+
+    async def scenario():
+        async with app.router.lifespan_context(app), client_for(app, EXTERNAL) as host:
+            root = tmp_path / "cursor"
+            root.mkdir()
+            app.state.source_grant_store.grant(
+                user_id="local",
+                source_id="cursor",
+                root=root,
+                candidate_kind=RootCandidateKind.DEFAULT,
+            )
+            app.state.sdk_client_handle = Handle(RevokingRawSdk())
+            return await host.post(
+                "/api/v2/context/search",
+                json={"query": "private", "kinds": ["raw"]},
+            )
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 403
+    assert "must not escape" not in response.text

@@ -1,17 +1,35 @@
-"""Write visible hook text into Evidence. Tool output stays out."""
+"""Core's intake for host hooks: visible text only, staged under Core's writer.
 
+The hook process (`capture_handoff`) never opens the database; it posts the
+hook's JSON to `POST /api/v1/live-capture/{source}` on the running Core, which
+calls `capture_hook` here. Tool output stays out.
+
+A source that live sync already reads from its own files is left to that
+path: the hook and the file name the same message differently (the hook has
+no workspace and often no message id), so staging both sent one turn to the
+SDK twice. Only a source no file poller follows is staged from the hook.
+"""
+
+import asyncio
 import json
-import tempfile
-import stat
-import os
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TextIO, cast
+from typing import cast
 
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.params import Depends
 from pydantic import JsonValue
 
+from one_memory.capture_handoff import (
+    CAPTURE_ROUTE,
+    CAPTURE_SOURCES,
+    MAX_PAYLOAD_BYTES,
+    SDK_MIGRATION_CAPTURE_FENCE,
+    sdk_migration_capture_fenced,
+)
 from one_memory.database_access import main_database
 from one_memory.derived_echo import PREFACE, strip_injected_memory
 from one_memory.imports.access import opaque_workspace_id, safe_project_label
@@ -21,6 +39,7 @@ from one_memory.imports.models import (
     EvidenceRecord,
     OriginMetadata,
     WrittenBy,
+    materialize_write_input,
 )
 from one_memory.imports.sources.claude_code import parse_claude_code_record
 from one_memory.imports.sources.codex import HARNESS_PREFIXES, parse_codex_record
@@ -40,23 +59,21 @@ from one_memory.imports.sources.parsing import (
 )
 from one_memory.imports.sources.pi import _is_automated_session
 from one_memory.imports.sources.workbuddy import _is_scheduled_automation, parse_workbuddy_record
-from one_memory.imports.storage import EvidenceStore
+from one_memory.memory_server.durable_queue import DurableWriteQueue
+from one_memory.sdk_data_plane_migration import MemoryAuthority
 
-CAPTURE_SOURCES = frozenset(
-    {
-        "workbuddy",
-        "claude-code",
-        "codex",
-        "cursor",
-        "pi",
-        "qwen-code",
-        "qwenwork",
-        "hermes",
-        "deepseek-harness",
-        "opencode",
-        "openclaw",
-    }
-)
+__all__ = [
+    "CAPTURE_SOURCES",
+    "SDK_MIGRATION_CAPTURE_FENCE",
+    "CaptureOutcome",
+    "CaptureRejection",
+    "capture_hook",
+    "capture_rejection",
+    "live_capture_router",
+    "record_capture_rejection",
+    "sdk_migration_capture_fenced",
+]
+
 _UNKNOWN_USER = frozenset({"hermes", "opencode", "openclaw"})
 _USER_FIELDS = {
     "UserPromptSubmit": "prompt",
@@ -77,112 +94,130 @@ _FILE_FALLBACK = {
 }
 _FALLBACK_EVENTS = frozenset({"Stop", "stop", "SubagentStop", "StopFailure"})
 _TEXT_BLOCKS = frozenset({"text"})
-SDK_MIGRATION_CAPTURE_FENCE = ".sdk-migration-capture-fence.json"
 
 
-def database_path() -> Path:
-    from one_memory.config import load_settings
+class CaptureOutcome(StrEnum):
+    """What Core did with one hook payload. Never the payload itself."""
 
-    return load_settings().data_dir / "one-memory.sqlite3"
-
-
-def capture_stdio(source_id: str, stdin: TextIO, output: TextIO) -> int:
-    """Host hooks must stay silent. A bad payload does not fail the turn."""
-
-    del output
-    if source_id not in CAPTURE_SOURCES:
-        return 2
-    database = database_path()
-    if sdk_migration_capture_fenced(database.parent):
-        return 0
-    try:
-        payload = json.loads(stdin.read() or "")
-    except json.JSONDecodeError:
-        return 0
-    try:
-        capture_hook(source_id, payload, database)
-    except Exception:
-        return 0
-    return 0
+    STAGED = "staged"
+    #: Live sync reads this source's own files; that path owns the turn.
+    FILE_POLLED = "file_polled"
+    REJECTED = "rejected"
+    IGNORED = "ignored"
 
 
-def sdk_migration_capture_fenced(data_dir: Path) -> bool:
-    """Ignore stale fences; a live migration or a failed one pauses hook writes.
+def capture_hook(
+    source_id: str,
+    payload: object,
+    database: Path,
+    *,
+    queue: DurableWriteQueue,
+    file_polled: Callable[[str], bool] = lambda _source_id: False,
+) -> CaptureOutcome:
+    """Gate one hook payload and stage its visible lines, inside Core.
 
-    A failed upgrade migration leaves the fence `frozen` (no pid): the home was
-    put back as it was before the upgrade and takes no writes until the next
-    migration attempt, which replaces the fence and lifts it on success.
+    Runs on SDK authority through Core's single writer: the lines become
+    write-job input exactly as live file sync stages them
+    (`materialize_write_input` -> `stage_sdk_input` -> `finalize_sdk_file`,
+    live priority). No Evidence table is involved.
     """
-    marker = data_dir / SDK_MIGRATION_CAPTURE_FENCE
-    try:
-        document = json.loads(marker.read_text(encoding="utf-8"))
-        if isinstance(document, dict) and document.get("frozen") is True:
-            return True
-        pid = int(document["pid"])
-        if pid < 1:
-            raise ValueError("invalid migration fence pid")
-        os.kill(pid, 0)
-        return True
-    except FileNotFoundError:
-        return False
-    except ProcessLookupError:
-        marker.unlink(missing_ok=True)
-        return False
-    except PermissionError:
-        return True
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
-        marker.unlink(missing_ok=True)
-        return False
-
-
-def capture_hook(source_id: str, payload: object, database: Path) -> bool:
     if source_id not in CAPTURE_SOURCES or not isinstance(payload, dict):
-        return False
+        return CaptureOutcome.IGNORED
     # Cursor also runs ~/.claude/settings.json hooks; its own hook already files the turn.
     if source_id != "cursor" and "cursor_version" in payload:
-        return False
+        return CaptureOutcome.IGNORED
     if not database.is_file():
-        return False
+        return CaptureOutcome.IGNORED
     rejection = capture_rejection(database, source_id)
     if rejection is not None:
         # Silent, and the reason is counted rather than printed: a hook that
         # spoke would put this into the host's turn as text.
         record_capture_rejection(database, source_id, rejection)
-        return False
+        return CaptureOutcome.REJECTED
     if source_id == "pi" and _is_automated_session(first_string(payload.get("cwd"))):
-        return False
-    lines = _messages(source_id, payload)
-    if lines:
-        conversation_id = _conversation(payload)
-        store = EvidenceStore(database)
-        wrote = False
-        for role, written_by, verbatim, message_id in lines:
-            target = conversation_id
-            if target is None:
-                continue
-            result = store.put(
-                EvidenceInput(
-                    source_id=source_id,
-                    conversation_id=target,
-                    message_id=message_id,
-                    source_ordinal=None if message_id else "hook-visible",
-                    role=role,
-                    written_by=written_by,
-                    created_at=datetime.now(UTC),
-                    verbatim=verbatim,
-                    origin_meta={EvidenceOrigin.HOOK: OriginMetadata()},
-                )
-            )
-            _submit_live_memory(
-                store, result.record, changed=result.was_created or result.was_revised
-            )
-            wrote = True
-        return wrote
-    return _capture_transcript(source_id, payload, database)
+        return CaptureOutcome.IGNORED
+    if file_polled(source_id):
+        # The same turn reaches the SDK once, from the file: the two lanes give
+        # one message different identities, so staging both wrote it twice.
+        return CaptureOutcome.FILE_POLLED
+    inputs = _hook_inputs(source_id, payload) or _capture_transcript(source_id, payload, database)
+    if not inputs:
+        return CaptureOutcome.IGNORED
+    observed = datetime.now(UTC)
+    conversations: dict[str, list[EvidenceRecord]] = {}
+    for value in inputs:
+        conversations.setdefault(value.conversation_id, []).append(
+            materialize_write_input(value, observed_at=observed)
+        )
+    for conversation_id, records in conversations.items():
+        # The turn rule decides what is written (`turn_batches`): a turn is
+        # complete when the next user message arrives, batches are 5 turns or
+        # 8000 characters, and Core writes the rest after 10 quiet minutes.
+        queue.assemble_live_records(tuple(records), file_key=f"hook:{conversation_id}")
+    return CaptureOutcome.STAGED
 
 
-def _sync_open(database: Path, source_id: str) -> bool:
-    return capture_rejection(database, source_id) is None
+def _hook_inputs(source_id: str, payload: dict[str, object]) -> list[EvidenceInput]:
+    conversation_id = _conversation(payload)
+    if conversation_id is None:
+        return []
+    observed = datetime.now(UTC)
+    return [
+        EvidenceInput(
+            source_id=source_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            source_ordinal=None if message_id else "hook-visible",
+            role=role,
+            written_by=written_by,
+            created_at=observed,
+            verbatim=verbatim,
+            origin_meta={EvidenceOrigin.HOOK: OriginMetadata()},
+        )
+        for role, written_by, verbatim, message_id in _messages(source_id, payload)
+    ]
+
+
+def live_capture_router(
+    dependencies: list[Depends],
+    *,
+    file_polled: Callable[[Request, str], bool],
+) -> APIRouter:
+    """`POST /api/v1/live-capture/{source_id}`: a hook's payload, handed over by the hook.
+
+    202 whatever the gates decide, so a hook has nothing to print. The answer
+    names the outcome only, never any of the payload.
+    """
+    router = APIRouter(dependencies=dependencies)
+
+    @router.post(CAPTURE_ROUTE, status_code=202)
+    async def live_capture(source_id: str, request: Request) -> dict[str, str]:
+        if source_id not in CAPTURE_SOURCES:
+            raise HTTPException(status_code=404, detail="capture_source_not_found")
+        body = await request.body()
+        if len(body) > MAX_PAYLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="capture_payload_too_large")
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeError) as error:
+            raise HTTPException(status_code=422, detail="capture_payload_invalid") from error
+        state = request.app.state
+        queue = getattr(state, "memory_write_queue", None)
+        if getattr(state, "memory_authority", None) is not MemoryAuthority.SDK or queue is None:
+            # Only an SDK-authority home is served; nothing here may bring the
+            # retired Evidence tables back for any other.
+            return {"outcome": CaptureOutcome.IGNORED.value}
+        outcome = await asyncio.to_thread(
+            capture_hook,
+            source_id,
+            payload,
+            queue.database_path,
+            queue=queue,
+            file_polled=lambda source: file_polled(request, source),
+        )
+        return {"outcome": outcome.value}
+
+    return router
 
 
 class CaptureRejection(StrEnum):
@@ -220,30 +255,6 @@ def capture_rejection(database: Path, source_id: str) -> CaptureRejection | None
     return None
 
 
-def _publish(path: Path, content: str) -> None:
-    """Write *content* to *path* without ever leaving it truncated.
-
-    The record is read by support as-is, so a half-written file is worse than
-    no file: ``json.loads`` then fails on every later call.  Stage the content
-    in a sibling file and swap it in with ``Path.replace``, keeping the
-    original mode.
-    """
-    try:
-        mode = stat.S_IMODE(path.stat().st_mode)
-    except OSError:
-        mode = None
-    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf8") as handle:
-            handle.write(content)
-        if mode is not None:
-            os.chmod(staging, mode)
-        Path(staging).replace(path)
-    except BaseException:
-        Path(staging).unlink(missing_ok=True)
-        raise
-
-
 def record_capture_rejection(
     database: Path,
     source_id: str,
@@ -268,40 +279,17 @@ def record_capture_rejection(
         marker = directory / f"capture-rejection-{source_id}-{reason.value}.json"
         now = time.time()
         payload: dict[str, object] = {"source_id": source_id, "reason": reason.value}
-        started_at = datetime.fromtimestamp(now, UTC).isoformat()
         if marker.exists() and now - marker.stat().st_mtime < window_seconds:
-            try:
-                payload = json.loads(marker.read_text(encoding="utf8"))
-            except (OSError, ValueError):
-                # A truncated or hand-edited marker must not disable the sink
-                # for the rest of the process: start the window again.
-                payload = {"source_id": source_id, "reason": reason.value, "count": 0}
+            payload = json.loads(marker.read_text(encoding="utf8"))
             previous = payload.get("count", 1)
             payload["count"] = int(previous) + 1 if isinstance(previous, (str, int, float)) else 2
-            payload.setdefault("window_started_at", started_at)
         else:
             payload["count"] = 1
-            payload["window_started_at"] = started_at
-        payload["last_at"] = started_at
-        _publish(marker, json.dumps(payload, sort_keys=True))
+            payload["window_started_at"] = datetime.fromtimestamp(now, UTC).isoformat()
+            payload["last_at"] = payload["window_started_at"]
+        marker.write_text(json.dumps(payload, sort_keys=True), encoding="utf8")
     except Exception:
         return
-
-
-def _submit_live_memory(store: EvidenceStore, record: EvidenceRecord, *, changed: bool) -> None:
-    """Add the record to its conversation's live assembling row.
-
-    The turn rule decides what is written (`turn_batches`): a turn is
-    complete when the next user message arrives, batches are 5 turns or
-    8000 characters, and Core writes the rest after 10 quiet minutes.
-    """
-    if not changed or not _sync_open(store.database_path, record.source_id):
-        return
-    from one_memory.memory_server.durable_queue import DurableWriteQueue
-
-    DurableWriteQueue(store.database_path, evidence=store).assemble_live_records(
-        (record,), file_key=f"hook:{record.conversation_id}"
-    )
 
 
 def _conversation(payload: dict[str, object]) -> str | None:
@@ -503,34 +491,35 @@ def _opencode_messages(
     return lines
 
 
-def _capture_transcript(source_id: str, payload: dict[str, object], database: Path) -> bool:
+def _capture_transcript(
+    source_id: str, payload: dict[str, object], database: Path
+) -> list[EvidenceInput]:
     """Stop without in-memory text reads the granted transcript, then the same parser."""
 
     event = payload.get("hook_event_name") or payload.get("hookEventName")
     parser = _FILE_FALLBACK.get(source_id)
     transcript = payload.get("transcript_path")
     if event not in _FALLBACK_EVENTS or parser is None or not isinstance(transcript, str):
-        return False
+        return []
     root = _grant_root(database, source_id)
     if root is None:
-        return False
+        return []
     try:
         granted = root.resolve()
         target = Path(transcript).resolve()
     except OSError:
-        return False
+        return []
     if target != granted and granted not in target.parents:
-        return False
+        return []
     if not target.is_file():
-        return False
+        return []
     _wait_stable(target)
     try:
         raw = target.read_text(encoding="utf-8")
     except OSError:
-        return False
+        return []
     relative = target.relative_to(granted).as_posix()
-    store = EvidenceStore(database)
-    wrote = False
+    inputs: list[EvidenceInput] = []
     for index, line in enumerate(raw.splitlines()):
         if not line.strip():
             continue
@@ -547,7 +536,7 @@ def _capture_transcript(source_id: str, payload: dict[str, object], database: Pa
         if not isinstance(parsed, ParsedMessage):
             continue
         for row_index, row in enumerate(parsed.rows()):
-            result = store.put(
+            inputs.append(
                 EvidenceInput(
                     source_id=source_id,
                     workspace=opaque_workspace_id(source_id, row.workspace),
@@ -566,11 +555,7 @@ def _capture_transcript(source_id: str, payload: dict[str, object], database: Pa
                     origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
                 )
             )
-            _submit_live_memory(
-                store, result.record, changed=result.was_created or result.was_revised
-            )
-        wrote = True
-    return wrote
+    return inputs
 
 
 def _grant_root(database: Path, source_id: str) -> Path | None:

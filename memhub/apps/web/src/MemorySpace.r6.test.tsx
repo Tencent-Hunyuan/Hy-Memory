@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { LANGUAGE_STORAGE_KEY, LanguageProvider } from "./gui-language";
 import { MemorySpace } from "./MemorySpace";
+import { queryClient, resetClient } from "./query-client";
 
 it("translates memory filters and detail affordances live without refetching", async () => {
   setup();
@@ -77,7 +78,9 @@ const { reads } = vi.hoisted(() => ({
     processing: vi.fn(),
     profiles: vi.fn(),
     raw: vi.fn(),
+    rawGraph: vi.fn(),
     rawSearch: vi.fn(),
+    evolve: vi.fn(),
   },
 }));
 vi.mock("./api", async (importOriginal) => ({
@@ -87,7 +90,9 @@ vi.mock("./api", async (importOriginal) => ({
   getMemoryProcessing: reads.processing,
   getModelProfiles: reads.profiles,
   getSdkRaw: reads.raw,
+  getSdkRawGraph: reads.rawGraph,
   searchSdkRaw: reads.rawSearch,
+  getEvolveOverview: reads.evolve,
 }));
 vi.mock("./GraphWidthPrompt", () => ({ GraphWidthPrompt: () => null }));
 vi.mock("./MemoryAddComposer", () => ({
@@ -117,10 +122,16 @@ vi.mock("./MemoryAddComposer", () => ({
   ),
 }));
 vi.mock("./MemoryGraph3D", () => ({
-  MemoryGraph3D: () => <div data-testid="graph-owner" />,
+  MemoryGraph3D: ({ graph }: { graph?: { nodes?: unknown[] } | null }) => (
+    <div
+      data-testid="graph-owner"
+      data-graph-nodes={graph?.nodes?.length ?? 0}
+    />
+  ),
 }));
 afterEach(() => {
   cleanup();
+  resetClient();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
@@ -154,7 +165,94 @@ it("translates the model-required prompt without configuring a model", async () 
   localStorage.clear();
 });
 
+it("keeps the memory snapshot visible during Evolve and refreshes when it ends", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("ultra"));
+  reads.evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [
+      {
+        run_id: "run-1",
+        user_id: "local",
+        state: "running",
+      },
+    ],
+  });
+  render(<MemorySpace simplified />);
+
+  expect((await screen.findAllByText("已保存的记忆")).length).toBeGreaterThan(
+    0,
+  );
+  expect(await screen.findByText("正在整合记忆…")).toBeTruthy();
+  const readsBeforeCompletion = reads.sdkLibrary.mock.calls.length;
+
+  act(() => {
+    queryClient.setQueryData(["evolve", "local"], {
+      mode: "ultra",
+      schedule: { enabled: true, time: "03:00" },
+      users: {},
+      running: [],
+    });
+  });
+
+  await waitFor(() =>
+    expect(reads.sdkLibrary.mock.calls.length).toBeGreaterThan(
+      readsBeforeCompletion,
+    ),
+  );
+});
+
+it("keeps the last successful graph when its Evolve refresh fails", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("ultra"));
+  reads.evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [{ run_id: "run-1", user_id: "local", state: "running" }],
+  });
+  const firstSource = {
+    source_id: "cursor",
+    display_name: "Cursor",
+    authorized: true,
+    sync_enabled: true,
+    imported_messages: 1,
+    imported_conversations: 1,
+  } as SourceResponse;
+  const view = render(<MemorySpace simplified sources={[firstSource]} />);
+
+  await waitFor(() =>
+    expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("1"),
+  );
+  reads.sdkGraph.mockRejectedValueOnce(new Error("evolve write lock"));
+
+  view.rerender(
+    <MemorySpace
+      simplified
+      sources={[
+        firstSource,
+        {
+          ...firstSource,
+          source_id: "codex",
+          display_name: "Codex",
+        },
+      ]}
+    />,
+  );
+
+  await waitFor(() => expect(reads.sdkGraph).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("1");
+});
+
 function setup() {
+  reads.evolve.mockResolvedValue({
+    mode: "ultra",
+    schedule: { enabled: true, time: "03:00" },
+    users: {},
+    running: [],
+  });
   const memories = [
     {
       memory_id: "m1",
@@ -207,6 +305,24 @@ function setup() {
     total: 0,
     limit: 100,
     offset: 0,
+  });
+  reads.rawGraph.mockResolvedValue({
+    user_id: "local",
+    items: [
+      {
+        turn_id: "raw-1",
+        raw_id: "raw-1",
+        label: "原始对话内容",
+        source: "cursor",
+        session_id: "session-1",
+        memory_at: null,
+        gmt_created: 1_761_000_000,
+      },
+    ],
+    total: 1,
+    limit: 300,
+    offset: 0,
+    has_more: false,
   });
   reads.rawSearch.mockResolvedValue([]);
 }
@@ -321,6 +437,94 @@ it("shows raw conversations instead of advanced memory in lite", async () => {
   expect(document.querySelector(".memory-mode-notice")).toBeNull();
 });
 
+it("loads one bounded raw graph page without claiming an exact turn total", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("lite"));
+  reads.rawGraph.mockResolvedValue({
+    user_id: "local",
+    items: Array.from({ length: 300 }, (_, index) => ({
+      turn_id: `turn-${index}`,
+      raw_id: `raw-${index}`,
+      label: `原始会话 ${index}`,
+      source: "cursor",
+      session_id: `session-${index}`,
+      memory_at: null,
+      gmt_created: 1_761_000_000,
+    })),
+    total: 1_600,
+    limit: 300,
+    offset: 0,
+    has_more: true,
+  });
+
+  render(<MemorySpace simplified />);
+
+  await waitFor(() => expect(reads.rawGraph).toHaveBeenCalledTimes(1));
+  expect(reads.rawGraph).toHaveBeenCalledWith({
+    source: undefined,
+    offset: 0,
+    limit: 300,
+    signal: expect.any(AbortSignal),
+  });
+  expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("301");
+  expect(document.querySelector(".memory-loaded-count")?.textContent).not.toBe(
+    "1,600 条原始对话",
+  );
+  expect(screen.queryByText("1,600 / 1,600")).toBeNull();
+});
+
+it("keeps the last successful Lite graph when a background refresh fails", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("lite"));
+  const source = {
+    source_id: "cursor",
+    display_name: "Cursor",
+    authorized: true,
+    imported_messages: 1,
+    imported_conversations: 1,
+  } as SourceResponse;
+  const view = render(<MemorySpace simplified sources={[source]} />);
+
+  await waitFor(() =>
+    expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("2"),
+  );
+  reads.rawGraph.mockRejectedValueOnce(new Error("refresh failed"));
+  view.rerender(
+    <MemorySpace
+      simplified
+      sources={[
+        source,
+        {
+          ...source,
+          source_id: "codex",
+          display_name: "Codex",
+        },
+      ]}
+    />,
+  );
+
+  await waitFor(() => expect(reads.rawGraph).toHaveBeenCalledTimes(2));
+  expect(screen.getByTestId("graph-owner").dataset.graphNodes).toBe("2");
+  expect(screen.queryByText("原始对话暂时无法读取。")).toBeNull();
+});
+
+it("does not request the raw graph for a keyword search", async () => {
+  setup();
+  reads.processing.mockResolvedValue(modeProcessing("lite"));
+  reads.rawSearch.mockResolvedValue([]);
+  const user = userEvent.setup();
+  render(<MemorySpace simplified />);
+
+  await waitFor(() => expect(reads.rawGraph).toHaveBeenCalledTimes(1));
+  await user.type(
+    screen.getByRole("textbox", { name: "搜索原始对话" }),
+    "发布计划",
+  );
+  await user.click(screen.getByRole("button", { name: "搜索" }));
+  await waitFor(() => expect(reads.rawSearch).toHaveBeenCalledTimes(1));
+  expect(reads.rawGraph).toHaveBeenCalledTimes(1);
+});
+
 it("pages and filters the raw conversation data plane in lite", async () => {
   setup();
   reads.processing.mockResolvedValue(modeProcessing("lite"));
@@ -368,9 +572,12 @@ it("pages and filters the raw conversation data plane in lite", async () => {
   );
 
   expect(await screen.findAllByText("原始会话 all-first")).toHaveLength(2);
+  await waitFor(() => expect(reads.rawGraph).toHaveBeenCalledTimes(1));
+  const graphCalls = reads.rawGraph.mock.calls.length;
   await user.click(screen.getByRole("button", { name: "加载更多" }));
   expect(await screen.findAllByText("原始会话 all-more")).toHaveLength(1);
   expect(screen.getAllByText("原始会话 all-first")).toHaveLength(2);
+  expect(reads.rawGraph).toHaveBeenCalledTimes(graphCalls);
   expect(reads.raw).toHaveBeenLastCalledWith(
     expect.objectContaining({
       source: undefined,
@@ -620,6 +827,14 @@ it("opens a search hit with the complete role transcript", async () => {
       truncated: true,
     },
   ]);
+  reads.rawGraph.mockResolvedValue({
+    user_id: "local",
+    items: [],
+    total: 1_600,
+    limit: 300,
+    offset: 0,
+    has_more: false,
+  });
   const user = userEvent.setup();
   render(<MemorySpace simplified />);
 

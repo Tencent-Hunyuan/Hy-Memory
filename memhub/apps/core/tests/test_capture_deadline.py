@@ -131,3 +131,24 @@ def test_run_as_the_entry_it_ends_itself_while_still_importing(tmp_path) -> None
         _reap([process])
     assert process.returncode == -signal.SIGALRM
     assert time.monotonic() - started < 10
+
+
+def test_with_no_core_a_real_capture_exits_at_once_and_writes_nothing(tmp_path) -> None:
+    # The process a host actually starts: no Core is running for this home,
+    # so the turn is dropped. Nothing may fall back to writing the database.
+    data_dir = tmp_path / "data"
+    env = {
+        key: value for key, value in os.environ.items() if key != "ONE_MEMORY_CAPTURE_DEADLINE_S"
+    }
+    env.update(HOME=str(tmp_path), ONE_MEMORY_DATA_DIR=str(data_dir))
+    payload = b'{"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": "hi"}'
+    result = subprocess.run(
+        [sys.executable, "-m", "one_memory.cli", "capture", "workbuddy"],
+        input=payload,
+        capture_output=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
+    assert not (data_dir / "one-memory.sqlite3").exists()

@@ -159,7 +159,7 @@ button.r6-button {
   min-height: 44px;
   height: 44px;
   padding: 0 20px;
-  gap: 0;
+  gap: 8px;
   border: 1px solid var(--r6-control-edge);
   border-radius: 8px;
   background: rgb(255 255 255 / 20%);
@@ -190,6 +190,10 @@ button.r6-button[data-variant="primary"] {
     0 3px 8px -2px rgb(64 87 102 / 12%);
 }
 
+button.r6-button[data-pending-capable="true"] {
+  padding-inline: 32px;
+}
+
 button.r6-button[data-variant="quiet"] {
   height: 36px;
   min-height: 36px;
@@ -202,6 +206,10 @@ button.r6-button[data-variant="quiet"] {
   font-weight: 400;
   line-height: 26px;
   color: var(--r6-muted);
+}
+
+button.r6-button[data-variant="quiet"][data-pending-capable="true"] {
+  padding-inline: 24px;
 }
 
 button.r6-button:hover:not(:disabled) {
@@ -242,16 +250,26 @@ button.r6-button[data-variant="quiet"]:disabled {
 }
 .r6-button-label {
   min-width: 0;
+  text-align: center;
 }
 .r6-button-spinner {
   position: absolute;
-  right: 5px;
+  top: 50%;
+  right: 12px;
+  flex: 0 0 auto;
   width: 12px;
   height: 12px;
+  margin-top: -6px;
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
+  visibility: hidden;
   animation: r6-spin 1.8s linear infinite;
+  animation-play-state: paused;
+}
+.r6-button-spinner[data-visible="true"] {
+  visibility: visible;
+  animation-play-state: running;
 }
 
 .r6-stepper {

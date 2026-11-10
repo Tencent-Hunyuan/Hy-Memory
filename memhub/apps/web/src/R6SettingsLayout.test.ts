@@ -8,14 +8,19 @@ function declaration(file: string, selector: string): string {
 }
 
 it("fills settings controls without widening shared fallback controls", () => {
-  for (const selector of [
-    ".r6-memory-mode-settings .memory-mode-choice-list",
+  const modeMenu = declaration(
+    "r6-settings.css",
+    ".r6-settings .r6-mode-option-menu",
+  );
+  expect(modeMenu).toMatch(/(?:^|[\s;])width:\s*100%\s*;/);
+  expect(modeMenu).toMatch(/(?:^|[\s;])max-width:\s*none\s*;/);
+
+  const fallback = declaration(
+    "r6-settings.css",
     ".r6-settings .connection-fallback .custom-harness-name",
-  ]) {
-    const rule = declaration("r6-settings.css", selector);
-    expect(rule, selector).toMatch(/(?:^|[\s;])width:\s*100%\s*;/);
-    expect(rule, selector).toMatch(/(?:^|[\s;])max-width:\s*none\s*;/);
-  }
+  );
+  expect(fallback).toMatch(/(?:^|[\s;])width:\s*100%\s*;/);
+  expect(fallback).toMatch(/(?:^|[\s;])max-width:\s*none\s*;/);
   expect(declaration("core-visual.css", ".custom-harness-name")).toMatch(
     /(?:^|[\s;])max-width:\s*420px\s*;/,
   );

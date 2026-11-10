@@ -225,6 +225,22 @@
     overscroll-behavior: contain;
     scrollbar-width: thin;
   }
+  .onboarding-r6-body:has(> .onboarding-r6-mode) {
+    padding-block: 14px;
+    overflow-y: auto;
+  }
+  .onboarding-r6-mode {
+    width: 100%;
+    gap: 12px;
+  }
+  .onboarding-r6-mode-intro h2 {
+    font-size: 20px;
+    line-height: 28px;
+  }
+  .onboarding-r6-mode-intro p {
+    font-size: 12px;
+    line-height: 20px;
+  }
 }
 .onboarding-r6-discovery {
   height: 100%;
@@ -541,41 +557,55 @@
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 .onboarding-r6-mode-intro {
-  text-align: center;
+  text-align: left;
+}
+.onboarding-r6-mode-intro h2 {
+  margin: 0;
+  color: #263947;
+  font-size: 22px;
+  line-height: 32px;
 }
 .onboarding-r6-mode-intro p {
-  margin: 0;
+  margin: 4px 0 0;
   color: #637381;
   font-size: 14px;
   line-height: 22px;
 }
-.onboarding-r6-mode .memory-mode-choice-list {
-  background: rgb(255 255 255 / 72%);
+.onboarding-r6-ultra-default {
+  display: grid;
+  gap: 2px;
 }
-.onboarding-r6-mode .memory-mode-choice {
-  min-height: 82px;
-  padding: 15px 18px;
+.onboarding-r6-ultra-default strong {
+  color: #304757;
+  font-size: 12px;
+  font-weight: 600;
 }
-.onboarding-r6-mode .memory-mode-choice-copy {
-  gap: 4px;
+.onboarding-r6-ultra-default small {
+  color: #607482;
+  font-size: 11px;
+  line-height: 18px;
 }
-.onboarding-r6-mode .memory-mode-choice-copy strong {
-  font-size: 16px;
-  line-height: 25px;
-}
-.onboarding-r6-mode .memory-mode-choice-copy small {
-  font-size: 13px;
-  line-height: 22px;
-}
-.onboarding-r6-mode-ultra-note {
-  margin: -6px 0 0;
-  color: #637381;
+.onboarding-r6-schedule-loading {
+  margin: 0;
+  color: #607482;
   font-size: 12px;
   line-height: 20px;
-  text-align: center;
+}
+.memory-mode-detail .onboarding-r6-schedule-recovery {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+.memory-mode-detail .onboarding-r6-schedule-retry {
+  flex: 0 0 auto;
+  min-width: 76px;
 }
 .onboarding-r6-evolve-settings {
   margin-top: 0;
@@ -604,15 +634,12 @@
   font-weight: 600;
   line-height: 22px;
 }
-.onboarding-r6-schedule-recovery {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
+.onboarding-r6-mode .onboarding-r6-schedule-recovery {
   color: #944242;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
 }
-.onboarding-r6-schedule-recovery p {
+.onboarding-r6-mode .onboarding-r6-schedule-recovery p {
   margin: 0;
 }
 .onboarding-r6-mode-error {
@@ -622,6 +649,24 @@
   text-align: center;
   font-size: 13px;
   line-height: 20px;
+}
+@media (min-width: 761px) {
+  .onboarding-r6-mode {
+    min-height: 100%;
+  }
+}
+@media (min-width: 761px) and (max-height: 959px) {
+  .onboarding-r6-mode {
+    gap: 12px;
+  }
+  .onboarding-r6-mode-intro h2 {
+    font-size: 20px;
+    line-height: 28px;
+  }
+  .onboarding-r6-mode-intro p {
+    font-size: 12px;
+    line-height: 20px;
+  }
 }
 .onboarding-r6-empty {
   margin: 0;
@@ -790,6 +835,13 @@
     padding: 18px 20px;
     flex-wrap: wrap;
     flex-basis: auto;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-recovery {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .memory-mode-detail .onboarding-r6-schedule-retry {
+    align-self: flex-start;
   }
 }
 @media (prefers-reduced-transparency: reduce) {

@@ -13,6 +13,7 @@ import { useGuiLanguage } from "./gui-language";
 export interface OptionMenuItem {
   value: string;
   label: string;
+  suffix?: string;
   description?: string;
   disabled?: boolean;
   lang?: string;
@@ -21,6 +22,17 @@ export interface OptionMenuItem {
 const VIEWPORT_MARGIN = 12;
 const PANEL_GAP = 4;
 const MAX_PANEL_HEIGHT = 280;
+
+function optionLabel(label: string, suffix?: string) {
+  return suffix ? (
+    <>
+      {label}
+      <span className="om-option-menu-suffix"> · {suffix}</span>
+    </>
+  ) : (
+    label
+  );
+}
 
 export function optionMenuPosition(
   anchor: Pick<DOMRect, "top" | "right" | "bottom" | "left" | "width">,
@@ -268,11 +280,11 @@ export function OptionMenu(props: {
       >
         {selected?.description ? (
           <span className="om-option-menu-copy">
-            <span>{visibleLabel}</span>
+            <span>{optionLabel(visibleLabel, selected.suffix)}</span>
             <small>{selected.description}</small>
           </span>
         ) : (
-          visibleLabel
+          optionLabel(visibleLabel, selected?.suffix)
         )}
       </button>
       {open &&
@@ -299,6 +311,14 @@ export function OptionMenu(props: {
                 lang={item.lang}
                 data-active={activeIndex === index || undefined}
                 aria-selected={item.value === props.value}
+                aria-label={
+                  item.suffix ? `${item.label} · ${item.suffix}` : undefined
+                }
+                aria-describedby={
+                  item.description && item.suffix
+                    ? `${panelId}-option-${index}-description`
+                    : undefined
+                }
                 disabled={item.disabled}
                 tabIndex={-1}
                 onMouseEnter={() => {
@@ -308,11 +328,13 @@ export function OptionMenu(props: {
               >
                 {item.description ? (
                   <span className="om-option-menu-copy">
-                    <span>{item.label}</span>
-                    <small>{item.description}</small>
+                    <span>{optionLabel(item.label, item.suffix)}</span>
+                    <small id={`${panelId}-option-${index}-description`}>
+                      {item.description}
+                    </small>
                   </span>
                 ) : (
-                  item.label
+                  optionLabel(item.label, item.suffix)
                 )}
               </button>
             ))}

@@ -45,6 +45,7 @@ import {
   type SdkMemoryStatus,
   type SdkMemoryVariant,
   type SdkRawContextItem,
+  type SdkRawGraphPage,
   type SdkRawPage,
   type SourceDirectoryCandidate,
   type SourceImportReceipt,
@@ -1015,6 +1016,24 @@ export async function getSdkRaw({
   return response.data;
 }
 
+export async function getSdkRawGraph({
+  source,
+  offset = 0,
+  limit = 300,
+  signal,
+}: {
+  source?: string;
+  offset?: number;
+  limit?: number;
+  signal?: AbortSignal;
+} = {}): Promise<SdkRawGraphPage> {
+  const response = await client.get<SdkRawGraphPage>("/api/v2/raw/graph", {
+    params: { source, offset, limit },
+    signal,
+  });
+  return response.data;
+}
+
 export async function searchSdkRaw(
   query: string,
   options: { source?: string; signal?: AbortSignal } = {},
@@ -1031,6 +1050,8 @@ export async function searchSdkRaw(
     },
     { signal: options.signal, timeout: 10_000 },
   );
+  if (response.data?.state !== "grounded" && response.data?.state !== "empty")
+    throw new Error("raw_search_unavailable");
   const items = response.data?.items;
   return Array.isArray(items)
     ? items.filter(

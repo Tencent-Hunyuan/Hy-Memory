@@ -46,6 +46,7 @@ export function defaultHostSourceIds(
 export type ImportConnectionDraft = {
   hostSourceIds: readonly string[];
 };
+export type ImportSubmissionState = "confirmed" | "checking" | "refused";
 export interface FirstImportReviewProps {
   sourceIds: readonly string[];
   sources: SourceResponse[];
@@ -54,6 +55,7 @@ export interface FirstImportReviewProps {
   acceptedJobIds?: readonly string[];
   failedSources?: Record<string, string>;
   sourceSnapshot?: { confirmedAt: string | null; stale: boolean };
+  importSubmissionState?: ImportSubmissionState;
   busy?: boolean;
   error?: string | null;
   connectionNote?: string;
@@ -78,6 +80,7 @@ export function FirstImportReview({
   acceptedJobIds,
   failedSources = {},
   sourceSnapshot,
+  importSubmissionState = "confirmed",
   busy = false,
   error,
   connectionNote,
@@ -148,6 +151,11 @@ export function FirstImportReview({
   const canResume = batch.some((job) =>
     ["paused", "interrupted", "failed"].includes(job.status),
   );
+  const allCompleted =
+    batch.length > 0 &&
+    ids.every((id) => batch.some((job) => job.source_id === id)) &&
+    batch.every((job) => job.status === "completed") &&
+    !Object.keys(failedSources).length;
   const title = "对话正在汇入，记忆从这里开始";
   const hostEligible = importHostEligible(sources, ids);
   const draftReady = !!connectionDraft && !!onConnectionDraftChange;
@@ -258,72 +266,9 @@ export function FirstImportReview({
       step={2}
       title={text(title)}
       footer={
-        <div className="first-import-r6-footer-actions">
-          {changing ? (
-            <R6Button
-              onClick={() => {
-                stopBatch.current = true;
-              }}
-            >
-              {text("停止后续操作")}
-            </R6Button>
-          ) : onChangeJob && (canPause || canResume) ? (
-            <R6Button
-              disabled={busy || (stale && !canPause)}
-              onClick={() => void changeBatch(canPause ? "pause" : "resume")}
-            >
-              {canPause ? (
-                <Pause size={16} aria-hidden="true" />
-              ) : (
-                <Play size={16} aria-hidden="true" />
-              )}
-              {text(canPause ? "暂停导入" : "继续导入")}
-            </R6Button>
-          ) : null}
-          {recovery ? (
-            <>
-              <R6Button
-                disabled={busy}
-                onClick={() => {
-                  stopBatch.current = true;
-                  recovery.onSkip();
-                }}
-              >
-                {text(
-                  recovery.destination === "sources"
-                    ? "仍进入应用页"
-                    : recovery.destination === "settings"
-                      ? "仍进入设置"
-                      : "仍进入工作台",
-                )}
-              </R6Button>
-              <R6Button
-                variant="primary"
-                disabled={busy}
-                onClick={() => leave(recovery.destination)}
-              >
-                {text("重试保存并进入")}
-              </R6Button>
-            </>
-          ) : (
-            <R6Button
-              variant="primary"
-              disabled={busy}
-              onClick={() => leave("settings")}
-            >
-              {text("选择记忆模式")}
-            </R6Button>
-          )}
-        </div>
-      }
-    >
-      <div className="first-import-r6-layout">
-        <section
-          className="first-import-r6-main"
-          aria-label={text("导入与原文")}
-        >
-          {(error || actionMessage) && (
-            <div className="first-import-r6-feedback">
+        <>
+          <div className="first-import-r6-footer-note">
+            {(error || actionMessage) && (
               <p
                 role={
                   error?.includes("应用连接") ||
@@ -342,8 +287,87 @@ export function FirstImportReview({
               >
                 {error ? text(error) : actionMessage}
               </p>
-            </div>
-          )}
+            )}
+          </div>
+          <div className="first-import-r6-footer-actions">
+            {changing ? (
+              <R6Button
+                onClick={() => {
+                  stopBatch.current = true;
+                }}
+              >
+                {text("停止后续操作")}
+              </R6Button>
+            ) : onChangeJob && (canPause || canResume) ? (
+              <R6Button
+                disabled={busy || (stale && !canPause)}
+                onClick={() => void changeBatch(canPause ? "pause" : "resume")}
+              >
+                {canPause ? (
+                  <Pause size={16} aria-hidden="true" />
+                ) : (
+                  <Play size={16} aria-hidden="true" />
+                )}
+                {text(canPause ? "暂停导入" : "继续导入")}
+              </R6Button>
+            ) : null}
+            {recovery ? (
+              <>
+                <R6Button
+                  disabled={busy}
+                  onClick={() => {
+                    stopBatch.current = true;
+                    recovery.onSkip();
+                  }}
+                >
+                  {text(
+                    recovery.destination === "sources"
+                      ? "仍进入应用页"
+                      : recovery.destination === "settings"
+                        ? "仍进入设置"
+                        : "仍进入工作台",
+                  )}
+                </R6Button>
+                <R6Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => leave(recovery.destination)}
+                >
+                  {text("重试保存并进入")}
+                </R6Button>
+              </>
+            ) : (
+              <R6Button
+                variant="primary"
+                disabled={busy}
+                onClick={() => leave("settings")}
+              >
+                {text("选择记忆模式")}
+              </R6Button>
+            )}
+          </div>
+        </>
+      }
+    >
+      <div className="first-import-r6-layout">
+        <section
+          className="first-import-r6-main"
+          aria-label={text("导入与原文")}
+        >
+          <p className="first-import-r6-intro">
+            {importSubmissionState === "checking"
+              ? t("onboardingImportChecking")
+              : text(
+                  allCompleted
+                    ? "本次导入已结束。已保存的对话无需重复导入。"
+                    : "对话先保存在本机。你可以同时设置后续连接。",
+                )}
+          </p>
+          <p className="first-import-r6-subintro">
+            {text(
+              "导入不会自动开放应用读取权限。配置模型后，才会开始生成记忆。",
+            )}
+          </p>
           {historyWindowLimited && (
             <p className="first-import-r6-history-window" role="status">
               {t("onboardingHistoryWindow")}
@@ -430,13 +454,11 @@ export function FirstImportReview({
               {text(connectionNote)}
             </p>
           )}
-          <p className="first-import-r6-options-note">
-            {text(
-              draftReady
-                ? "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。"
-                : "暂时无法连接应用，当前不会安装连接。",
-            )}
-          </p>
+          {!draftReady && (
+            <p className="first-import-r6-options-note">
+              {text("暂时无法连接应用，当前不会安装连接。")}
+            </p>
+          )}
         </aside>
       </div>
     </R6ColdStartFrame>

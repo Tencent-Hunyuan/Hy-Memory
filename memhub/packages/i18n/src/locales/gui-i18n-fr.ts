@@ -1271,6 +1271,10 @@ export const frenchMessages: Record<MessageKey, string> = {
     "Faites défiler pour voir plus · {count} applications restantes",
   "onboardingMoreApps.one":
     "Faites défiler pour voir plus · {count} application restante",
+  onboardingMoreImportApps:
+    "Faites défiler horizontalement · encore {count} applications",
+  onboardingImportChecking:
+    "Vérification du résultat de l’importation ; votre sélection est conservée",
   onboardingAllApps: "Les {count} applications sont affichées",
   默认位置: "Emplacement par défaut",
   自定义位置: "Emplacement personnalisé",

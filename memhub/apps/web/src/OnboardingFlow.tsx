@@ -2,8 +2,6 @@ import type {
   ConnectSourcesResponse,
   EvolveSchedule,
   ImportJob,
-  MemoryModePlan,
-  MemoryPipelineMode,
   OnboardingModeIntent,
   OnboardingState,
   SourceResponse,
@@ -43,25 +41,24 @@ import {
   defaultHostSourceIds,
   FirstImportReview,
   type ImportConnectionDraft,
+  type ImportSubmissionState,
 } from "./FirstImportReview";
 import {
   enableHostConnection,
   hostCapabilities,
   hostWriteReason,
 } from "./host-state";
-import { MemoryModeChoiceList } from "./MemoryModeChoiceList";
-import {
-  BLOCKER_COPY,
-  MemoryModeConfirmDialog,
-  MODE_COPY,
-} from "./memory-mode-ui";
+import { MemoryModeCards } from "./MemoryModeCards";
+import { BLOCKER_COPY } from "./memory-mode-ui";
 import { OnboardingModelController } from "./OnboardingModelController";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6ColdStartFrame } from "./R6ColdStartFrame";
 import { R6Button } from "./R6Controls";
-import { UltraEvolveScheduleFields } from "./UltraEvolveScheduleFields";
 import { traceUiAction } from "./ui-trace";
-import type { ImportSourcesController } from "./use-import-sources";
+import {
+  type ImportSourcesController,
+  isDefiniteAccessRefusal,
+} from "./use-import-sources";
 import { isDefiniteRefusal } from "./write-outcome";
 import "./cold-start.css";
 
@@ -138,6 +135,8 @@ export function OnboardingFlow({
   const [startingImport, setStartingImport] = useState<SourceResponse[] | null>(
     null,
   );
+  const [importSubmissionState, setImportSubmissionState] =
+    useState<ImportSubmissionState>("confirmed");
   const resumedStep =
     state.mode_intent &&
     state.mode_intent !== "lite" &&
@@ -159,20 +158,14 @@ export function OnboardingFlow({
   );
   const modeSaving = modePhase !== "idle";
   const [modeError, setModeError] = useState<string | null>(null);
-  const [knownMode, setKnownMode] = useState<MemoryPipelineMode>("pro");
-  const [pendingMode, setPendingMode] = useState<OnboardingMemoryMode | null>(
-    null,
-  );
-  const [pendingPlan, setPendingPlan] = useState<MemoryModePlan | null>(null);
-  const [modePlanBusy, setModePlanBusy] = useState(false);
-  const modeDialogOpener = useRef<HTMLElement | null>(null);
-  const modePlanOperation = useRef(0);
+  const [knownMode, setKnownMode] = useState<OnboardingMemoryMode>("pro");
   const [ultraSchedule, setUltraSchedule] = useState<EvolveSchedule>({
     enabled: true,
     time: "03:00",
   });
   const [scheduleLoaded, setScheduleLoaded] = useState(false);
   const [scheduleReadFailed, setScheduleReadFailed] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const scheduleReadOperation = useRef(0);
   const [modeFocusToken, setModeFocusToken] = useState(
     resumedStep === "mode" ? 1 : 0,
@@ -438,7 +431,7 @@ export function OnboardingFlow({
   const refreshUltraSchedule = useCallback(async () => {
     const operation = ++scheduleReadOperation.current;
     setScheduleLoaded(false);
-    setScheduleReadFailed(false);
+    setScheduleLoading(true);
     try {
       const schedule = await getEvolveSchedule();
       if (!alive.current || scheduleReadOperation.current !== operation) return;
@@ -454,6 +447,9 @@ export function OnboardingFlow({
         setScheduleLoaded(false);
         setScheduleReadFailed(true);
       }
+    } finally {
+      if (alive.current && scheduleReadOperation.current === operation)
+        setScheduleLoading(false);
     }
   }, []);
 
@@ -704,10 +700,6 @@ export function OnboardingFlow({
   const requestModeChoice = useCallback(
     (destination: OnboardingDestination) => {
       if (finished.current) return;
-      modePlanOperation.current += 1;
-      setModePlanBusy(false);
-      setPendingMode(null);
-      setPendingPlan(null);
       if (setupStepRef.current === "model")
         leaveModelStep(intentRef.current === "ultra" ? "ultra" : "pro", "mode");
       else {
@@ -724,45 +716,19 @@ export function OnboardingFlow({
     [leaveModelStep, modeChoice],
   );
 
-  const requestModeSelection = useCallback(
-    async (mode: OnboardingMemoryMode, opener: HTMLElement) => {
-      if (modePlanBusy || modeSaving || completionBusy) return;
-      const operation = ++modePlanOperation.current;
-      setModePlanBusy(true);
-      setModeError(null);
+  const loadModePlan = useCallback(
+    async (target: OnboardingMemoryMode) => {
       try {
-        let plan: MemoryModePlan;
-        try {
-          plan = await planMemoryMode(mode);
-        } catch (reason) {
-          if (!memoryModePlanUnsupported(reason)) throw reason;
-          const profiles = await getModelProfiles();
-          plan = legacyMemoryModePlan(knownMode, mode, {
-            hasActiveModel: profiles.some((profile) => profile.is_active),
-          });
-        }
-        if (
-          !alive.current ||
-          modePlanOperation.current !== operation ||
-          setupStepRef.current !== "mode"
-        )
-          return;
-        modeDialogOpener.current = opener;
-        setPendingMode(mode);
-        setPendingPlan(plan);
-      } catch {
-        if (
-          alive.current &&
-          modePlanOperation.current === operation &&
-          setupStepRef.current === "mode"
-        )
-          setModeError("模式切换影响暂时无法读取，请重试。");
-      } finally {
-        if (alive.current && modePlanOperation.current === operation)
-          setModePlanBusy(false);
+        return await planMemoryMode(target);
+      } catch (reason) {
+        if (!memoryModePlanUnsupported(reason)) throw reason;
+        const profiles = await getModelProfiles();
+        return legacyMemoryModePlan(knownMode, target, {
+          hasActiveModel: profiles.some((profile) => profile.is_active),
+        });
       }
     },
-    [completionBusy, knownMode, modePlanBusy, modeSaving],
+    [knownMode],
   );
 
   const saveModeChoice = useCallback(async () => {
@@ -777,7 +743,7 @@ export function OnboardingFlow({
       if (modeChoice !== "lite") {
         const target = modeChoice;
         const [plan, profiles] = await Promise.all([
-          planMemoryMode(target),
+          loadModePlan(target),
           getModelProfiles(),
         ]);
         if (!ownsModeOperation()) return;
@@ -856,6 +822,14 @@ export function OnboardingFlow({
         ownsModeOperation() &&
         intentRef.current === "lite" &&
         setupStepRef.current === "mode";
+      const plan = await loadModePlan("lite");
+      if (!liteStillCurrent()) return;
+      if (plan.blockers.length > 0) {
+        setModeError(
+          plan.blockers.map((blocker) => BLOCKER_COPY[blocker]).join(" "),
+        );
+        return;
+      }
       const changed = await queueModeWrite("lite", liteStillCurrent);
       if (!liteStillCurrent()) return;
       commitConfirmedMemoryMode(changed.mode, modeTicket);
@@ -890,6 +864,7 @@ export function OnboardingFlow({
     modeSaving,
     completionBusy,
     finishOnce,
+    loadModePlan,
     queueModeWrite,
     queueProgressWrite,
     scheduleLoaded,
@@ -947,7 +922,7 @@ export function OnboardingFlow({
       setModeError(null);
       const modeTicket = issueConfirmedModeTicket("onboarding");
       try {
-        const plan = await planMemoryMode(target);
+        const plan = await loadModePlan(target);
         if (!ownsConfirmation()) return;
         if (plan.blockers.length > 0) throw new Error(plan.blockers.join(","));
         const changed = await queueModeWrite(target, ownsConfirmation);
@@ -994,6 +969,7 @@ export function OnboardingFlow({
       finishOnce,
       leave,
       leaveModelStep,
+      loadModePlan,
       modeDestination,
       queueModeWrite,
       queueProgressWrite,
@@ -1089,6 +1065,7 @@ export function OnboardingFlow({
 
   async function submitImport(approved: SourceResponse[]) {
     sourceFlight.current = true;
+    setImportSubmissionState("checking");
     if (window.oneMemory) setStartingImport(approved);
     const version = scopeVersion.current;
     const retryFailed = Object.keys(itemErrors).length > 0;
@@ -1100,8 +1077,11 @@ export function OnboardingFlow({
       try {
         current = (await imports.refresh()).sources;
       } catch {
-        if (alive.current)
+        if (alive.current) {
+          setStartingImport(null);
+          setImportSubmissionState("refused");
           setError("暂时无法核对来源，尚未提交授权。选择已保留，可以重试。");
+        }
         return;
       }
       if (!alive.current) return;
@@ -1124,6 +1104,7 @@ export function OnboardingFlow({
       setItemErrors(result.failed_sources);
       if (result.accepted_source_ids.length === 0) {
         setStartingImport(null);
+        setImportSubmissionState("refused");
         setError(
           "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。",
         );
@@ -1132,13 +1113,25 @@ export function OnboardingFlow({
       // Keep the accepted intent and job IDs while the user inspects early originals.
       setAccepted(result);
       setStartingImport(null);
+      setImportSubmissionState("confirmed");
       setError(null);
-    } catch {
+    } catch (reason) {
       if (alive.current) {
-        setStartingImport(null);
-        setError(
-          "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
-        );
+        const refused = isDefiniteAccessRefusal(reason);
+        if (refused) {
+          setStartingImport(null);
+          setImportSubmissionState("refused");
+          setError(
+            "本次没有来源获准导入。请核对下方原因后重试，或到应用页查看状态。",
+          );
+        } else {
+          setImportSubmissionState("checking");
+          setError(
+            window.oneMemory
+              ? null
+              : "开始导入的结果尚未确认，选择已保留。可以重试，或进入应用页核对。",
+          );
+        }
       }
     } finally {
       connectSent.current = false;
@@ -1214,6 +1207,7 @@ export function OnboardingFlow({
             jobs={reviewJobs}
             failedSources={accepted?.failed_sources}
             sourceSnapshot={imports.sourceSnapshot}
+            importSubmissionState={importSubmissionState}
             busy={completionBusy}
             error={error && text(error)}
             onContinue={(destination) => {
@@ -1249,125 +1243,119 @@ export function OnboardingFlow({
           />
         </div>
         {setupStep === "mode" && (
-          <>
-            <R6ColdStartFrame
-              step={3}
-              title={text("选择记忆模式")}
-              focusToken={modeFocusToken}
-              footer={
-                <R6Button
-                  className="onboarding-r6-submit"
-                  variant="primary"
-                  pending={modeSaving || modePlanBusy}
-                  disabled={
-                    !modeChoice ||
-                    completionBusy ||
-                    modePlanBusy ||
-                    (modeChoice === "ultra" && !scheduleLoaded)
-                  }
-                  onClick={() => void saveModeChoice()}
-                >
-                  {text(
-                    modePhase === "saving"
-                      ? "正在保存模式…"
-                      : modePhase === "completing"
-                        ? "正在完成首次设置…"
+          <R6ColdStartFrame
+            step={3}
+            title={text("选择记忆模式")}
+            focusToken={modeFocusToken}
+            footer={
+              <R6Button
+                className="onboarding-r6-submit"
+                variant="primary"
+                pending={modeSaving}
+                disabled={
+                  !modeChoice ||
+                  completionBusy ||
+                  (modeChoice === "ultra" && !scheduleLoaded)
+                }
+                onClick={() => void saveModeChoice()}
+              >
+                {text(
+                  modePhase === "saving"
+                    ? "正在保存模式…"
+                    : modePhase === "completing"
+                      ? "正在完成首次设置…"
+                      : !modeChoice
+                        ? "继续"
                         : modeChoice === "lite"
                           ? "使用 Lite 进入"
-                          : modeChoice === "pro"
-                            ? "继续配置模型"
-                            : "继续",
-                  )}
-                </R6Button>
-              }
-            >
-              <section
-                className="onboarding-r6-mode"
-                aria-label={text("记忆模式")}
-              >
-                <MemoryModeChoiceList
-                  aria-label={text("记忆模式")}
-                  modes={(["lite", "pro", "ultra"] as const).map((mode) => ({
-                    mode,
-                    title: text(MODE_COPY[mode].title),
-                    description: text(MODE_COPY[mode].description),
-                  }))}
-                  selected={modeChoice}
-                  disabled={modeSaving || completionBusy || modePlanBusy}
-                  onChange={(mode, control) =>
-                    void requestModeSelection(
-                      mode as OnboardingMemoryMode,
-                      control,
-                    )
-                  }
-                />
-                {modeChoice === "ultra" && scheduleLoaded ? (
-                  <section
-                    className="r6-evolve-settings onboarding-r6-evolve-settings"
-                    aria-label={text("记忆整合（Evolve）")}
-                  >
-                    <UltraEvolveScheduleFields
-                      schedule={ultraSchedule}
-                      disabled={modeSaving || !scheduleLoaded}
-                      onEnabledChange={(enabled) =>
-                        setUltraSchedule((current) => ({
-                          ...current,
-                          enabled,
-                        }))
-                      }
-                      onTimeChange={async (time) => {
-                        setUltraSchedule((current) => ({ ...current, time }));
-                        return true;
-                      }}
-                    />
-                  </section>
-                ) : null}
-                {modeChoice === "ultra" && scheduleReadFailed ? (
-                  <div className="onboarding-r6-schedule-recovery">
-                    <p role="alert">
-                      {text("记忆模式状态暂时无法读取，请重试。")}
-                    </p>
-                    <R6Button
-                      className="onboarding-r6-schedule-retry"
-                      onClick={() => void refreshUltraSchedule()}
-                    >
-                      {text("重试")}
-                    </R6Button>
-                  </div>
-                ) : null}
-                {(modeError || error) && (
-                  <p className="onboarding-r6-mode-error" role="alert">
-                    {text(modeError ?? error ?? "")}
-                  </p>
+                          : "配置模型",
                 )}
-              </section>
-            </R6ColdStartFrame>
-            {pendingMode && pendingPlan ? (
-              <MemoryModeConfirmDialog
-                mode={pendingMode}
-                plan={pendingPlan}
-                busy={modePlanBusy}
-                opener={modeDialogOpener.current}
-                allowedBlockers={["active_model_required"]}
-                onCancel={() => {
-                  modePlanOperation.current += 1;
-                  setModePlanBusy(false);
-                  setPendingMode(null);
-                  setPendingPlan(null);
+              </R6Button>
+            }
+          >
+            <section
+              className="onboarding-r6-mode"
+              aria-label={text("记忆模式")}
+            >
+              <div className="onboarding-r6-mode-intro">
+                <h2>{text("你希望 MemHub 如何形成记忆？")}</h2>
+                <p>{text("需要明确选择一种方式；之后仍可在设置中更改。")}</p>
+              </div>
+              <MemoryModeCards
+                aria-label={text("记忆模式")}
+                value={modeChoice}
+                layout="rows"
+                describedBy={{
+                  ultra:
+                    modeChoice === "ultra"
+                      ? "onboarding-ultra-schedule-description"
+                      : undefined,
                 }}
-                onConfirm={() => {
-                  modePlanOperation.current += 1;
-                  setModePlanBusy(false);
+                disabled={modeSaving || completionBusy}
+                ultraDetailBusy={scheduleLoading}
+                onChange={(mode) => {
                   modeChoiceTouched.current = true;
-                  intentRef.current = pendingMode;
-                  setModeChoice(pendingMode);
+                  intentRef.current = mode;
+                  setModeChoice(mode);
                   setModeError(null);
-                  setPendingMode(null);
-                  setPendingPlan(null);
                 }}
+                ultraDetail={
+                  scheduleLoaded ? (
+                    <div className="onboarding-r6-ultra-default" role="status">
+                      <strong>{text("每天自动整合")}</strong>
+                      <small id="onboarding-ultra-schedule-description">
+                        {text(
+                          ultraSchedule.enabled
+                            ? "每天 {time} 左右自动整合，使用这台设备的本地时间；休眠错过后会补跑。"
+                            : "已关闭。重新开启后仍按 {time} 运行；已生成的结果会保留。",
+                        ).replace("{time}", ultraSchedule.time)}
+                        {ultraSchedule.enabled ? (
+                          <>
+                            <br />
+                            <span>
+                              {text("后续可在设置页自定义时间或关闭。")}
+                            </span>
+                          </>
+                        ) : null}
+                      </small>
+                    </div>
+                  ) : scheduleReadFailed ? (
+                    <div className="onboarding-r6-schedule-recovery">
+                      <p
+                        id="onboarding-ultra-schedule-description"
+                        role="alert"
+                      >
+                        {text("记忆模式状态暂时无法读取，请重试。")}
+                      </p>
+                      <R6Button
+                        className="onboarding-r6-schedule-retry"
+                        pending={scheduleLoading}
+                        disabled={
+                          scheduleLoading || modeSaving || completionBusy
+                        }
+                        onClick={() => void refreshUltraSchedule()}
+                      >
+                        {text("重试")}
+                      </R6Button>
+                    </div>
+                  ) : (
+                    <p
+                      id="onboarding-ultra-schedule-description"
+                      className="onboarding-r6-schedule-loading"
+                      role="status"
+                    >
+                      {text("正在读取自动整合设置…")}
+                    </p>
+                  )
+                }
               />
-            ) : null}
-          </>
+              {(modeError || error) && (
+                <p className="onboarding-r6-mode-error" role="alert">
+                  {text(modeError ?? error ?? "")}
+                </p>
+              )}
+            </section>
+          </R6ColdStartFrame>
         )}
         {visitedModel && (
           <div hidden={setupStep !== "model"}>

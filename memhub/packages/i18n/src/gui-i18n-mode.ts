@@ -10,6 +10,7 @@ const modeChineseMessages = {
   选择记忆方式: "选择记忆方式",
   选择记忆模式: "选择记忆模式",
   "之后可在设置中更改。": "之后可在设置中更改。",
+  "后续可在设置页自定义时间或关闭。": "后续可在设置页自定义时间或关闭。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra 可在完成首次设置后到设置页开启。",
   "使用 Lite 进入": "使用 Lite 进入",
@@ -23,7 +24,7 @@ const modeChineseMessages = {
   "当前模型已经启用，可以继续完成首次设置。":
     "当前模型已经启用，可以继续完成首次设置。",
   继续使用当前模型: "继续使用当前模型",
-  "你希望 MemHub 如何形成记忆？": "选择记忆模式",
+  "你希望 MemHub 如何形成记忆？": "你希望 MemHub 如何形成记忆？",
   "需要明确选择一种方式；之后仍可在设置中更改。": "之后可在设置中更改。",
   记忆模式: "记忆模式",
   记忆模式与模型: "记忆模式与模型",
@@ -61,6 +62,7 @@ const modeChineseMessages = {
   "模式切换未能确认，仍显示上次确认的模式。":
     "模式选择未能确认，仍显示上次确认的模式。",
   "自动整合设置未能保存，请重试。": "自动整合设置未能保存，请重试。",
+  "自动整合设置暂时无法读取，请重试。": "自动整合设置暂时无法读取，请重试。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在检查或切换向量模型，完成后才能整合记忆。",
   "未能开始整合记忆，请重试。": "未能开始整合记忆，请重试。",
@@ -181,6 +183,7 @@ const modeChineseMessages = {
     "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "模型配置已保留，确认记忆模式后会显示是否生效。",
+  "mode.graphStore.quarantined": "知识图谱文件损坏，已自动重建",
 } as const;
 
 export { modeChineseMessages };
@@ -200,6 +203,8 @@ export const modeEnglishMessages: ModeMessages = {
   选择记忆方式: "Choose how memory works",
   选择记忆模式: "Choose memory mode",
   "之后可在设置中更改。": "You can change this later in Settings.",
+  "后续可在设置页自定义时间或关闭。":
+    "You can later customize the time or turn this off in Settings.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra can be enabled in Settings after initial setup.",
   "使用 Lite 进入": "Enter with Lite",
@@ -257,6 +262,8 @@ export const modeEnglishMessages: ModeMessages = {
     "The mode change could not be confirmed. The last confirmed mode is still shown.",
   "自动整合设置未能保存，请重试。":
     "Could not save automatic consolidation settings. Please retry.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Could not load automatic consolidation settings. Please retry.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "The embedding model is being checked or changed. Wait for it to finish before consolidating memories.",
   "未能开始整合记忆，请重试。":
@@ -388,6 +395,8 @@ export const modeEnglishMessages: ModeMessages = {
     "The model is active in this mode and creates memories from new conversations.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "The model configuration is kept. Its active state appears after the memory mode is confirmed.",
+  "mode.graphStore.quarantined":
+    "The knowledge graph file was damaged and has been rebuilt automatically.",
 };
 
 export const modeSpanishMessages: ModeMessages = {
@@ -404,6 +413,8 @@ export const modeSpanishMessages: ModeMessages = {
   选择记忆方式: "Elegir cómo funciona la memoria",
   选择记忆模式: "Elegir el modo de memoria",
   "之后可在设置中更改。": "Puedes cambiarlo más adelante en Configuración.",
+  "后续可在设置页自定义时间或关闭。":
+    "Más adelante, puedes personalizar la hora o desactivarlo en Configuración.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Puedes activar Ultra en Configuración después de completar la configuración inicial.",
   "使用 Lite 进入": "Entrar con Lite",
@@ -461,6 +472,8 @@ export const modeSpanishMessages: ModeMessages = {
     "No se pudo confirmar el cambio. Se sigue mostrando el último modo confirmado.",
   "自动整合设置未能保存，请重试。":
     "No se pudo guardar la consolidación automática. Reinténtalo.",
+  "自动整合设置暂时无法读取，请重试。":
+    "No se pudo cargar la configuración de consolidación automática. Reinténtalo.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Se está comprobando o cambiando el modelo de embeddings. Espera para consolidar memorias.",
   "未能开始整合记忆，请重试。":
@@ -592,6 +605,8 @@ export const modeSpanishMessages: ModeMessages = {
     "El modelo está activo en este modo y crea memorias a partir de conversaciones nuevas.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "La configuración se conserva. Su estado aparecerá cuando se confirme el modo de memoria.",
+  "mode.graphStore.quarantined":
+    "El archivo del grafo de conocimiento estaba dañado y se ha reconstruido automáticamente.",
 };
 
 export const modeTraditionalChineseMessages: ModeMessages = {
@@ -607,6 +622,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   选择记忆方式: "選擇記憶方式",
   选择记忆模式: "選擇記憶模式",
   "之后可在设置中更改。": "之後可在設定中更改。",
+  "后续可在设置页自定义时间或关闭。": "之後可在設定頁自訂時間或關閉。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "完成首次設定後，可到設定頁開啟 Ultra。",
   "使用 Lite 进入": "使用 Lite 進入",
@@ -660,6 +676,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "模式切换未能确认，仍显示上次确认的模式。":
     "無法確認模式切換，仍顯示上次確認的模式。",
   "自动整合设置未能保存，请重试。": "自動整合設定無法儲存，請重試。",
+  "自动整合设置暂时无法读取，请重试。": "暫時無法讀取自動整合設定，請重試。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "正在檢查或切換向量模型，完成後才能整合記憶。",
   "未能开始整合记忆，请重试。": "無法開始整合記憶，請重試。",
@@ -780,6 +797,7 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "记忆维护正在进行，完成后才能切换模式。":
     "記憶維護正在進行，完成後才能切換模式。",
   "模式切换影响暂时无法读取，请重试。": "暫時無法讀取模式切換影響，請重試。",
+  "mode.graphStore.quarantined": "知識圖譜檔案損壞，已自動重建",
 };
 
 export const modeJapaneseMessages: ModeMessages = {
@@ -795,6 +813,8 @@ export const modeJapaneseMessages: ModeMessages = {
   选择记忆方式: "記憶方法を選択",
   选择记忆模式: "記憶モードを選択",
   "之后可在设置中更改。": "後から設定で変更できます。",
+  "后续可在设置页自定义时间或关闭。":
+    "後から設定画面で時刻を変更したり、無効にしたりできます。",
   "Ultra 可在完成首次设置后到设置页开启。":
     "初期設定の完了後、設定画面で Ultra を有効にできます。",
   "使用 Lite 进入": "Lite で開始",
@@ -940,6 +960,8 @@ export const modeJapaneseMessages: ModeMessages = {
     "モード変更を確認できませんでした。最後に確認されたモードを表示しています。",
   "自动整合设置未能保存，请重试。":
     "自動統合の設定を保存できませんでした。もう一度お試しください。",
+  "自动整合设置暂时无法读取，请重试。":
+    "自動統合の設定を読み込めませんでした。もう一度お試しください。",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "埋め込みモデルを確認または切り替えています。完了後に記憶を統合できます。",
   "未能开始整合记忆，请重试。":
@@ -977,6 +999,8 @@ export const modeJapaneseMessages: ModeMessages = {
     "記憶の保守処理中です。完了後にモードを切り替えてください。",
   "模式切换影响暂时无法读取，请重试。":
     "モード変更の影響を読み取れません。もう一度お試しください。",
+  "mode.graphStore.quarantined":
+    "ナレッジグラフのファイルが破損していたため、自動的に再構築しました。",
 };
 
 export const modeGermanMessages: ModeMessages = {
@@ -994,6 +1018,8 @@ export const modeGermanMessages: ModeMessages = {
   选择记忆方式: "Erinnerungsmodus wählen",
   选择记忆模式: "Erinnerungsmodus auswählen",
   "之后可在设置中更改。": "Sie können dies später in den Einstellungen ändern.",
+  "后续可在设置页自定义时间或关闭。":
+    "Später können Sie die Uhrzeit in den Einstellungen anpassen oder die Funktion deaktivieren.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra kann nach der Ersteinrichtung in den Einstellungen aktiviert werden.",
   "使用 Lite 进入": "Mit Lite starten",
@@ -1143,6 +1169,8 @@ export const modeGermanMessages: ModeMessages = {
     "Der Moduswechsel konnte nicht bestätigt werden. Der zuletzt bestätigte Modus wird weiterhin angezeigt.",
   "自动整合设置未能保存，请重试。":
     "Die Einstellungen zur automatischen Konsolidierung konnten nicht gespeichert werden. Bitte erneut versuchen.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Die Einstellungen zur automatischen Konsolidierung konnten nicht geladen werden. Bitte erneut versuchen.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Das Embedding-Modell wird geprüft oder gewechselt. Danach können Erinnerungen konsolidiert werden.",
   "未能开始整合记忆，请重试。":
@@ -1182,6 +1210,8 @@ export const modeGermanMessages: ModeMessages = {
     "Die Speicherwartung läuft. Wechseln Sie den Modus nach Abschluss.",
   "模式切换影响暂时无法读取，请重试。":
     "Die Auswirkungen des Moduswechsels sind nicht verfügbar. Bitte erneut versuchen.",
+  "mode.graphStore.quarantined":
+    "Die Wissensgraph-Datei war beschädigt und wurde automatisch neu aufgebaut.",
 };
 
 export const modePortugueseMessages: ModeMessages = {
@@ -1198,6 +1228,8 @@ export const modePortugueseMessages: ModeMessages = {
   选择记忆方式: "Escolher o modo de memória",
   选择记忆模式: "Escolher o modo de memória",
   "之后可在设置中更改。": "Pode alterar esta opção mais tarde nas Definições.",
+  "后续可在设置页自定义时间或关闭。":
+    "Mais tarde, pode personalizar a hora ou desativar esta opção nas Definições.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Pode ativar o Ultra nas Definições depois da configuração inicial.",
   "使用 Lite 进入": "Entrar com Lite",
@@ -1347,6 +1379,8 @@ export const modePortugueseMessages: ModeMessages = {
     "Não foi possível confirmar a mudança. Continua a ser mostrado o último modo confirmado.",
   "自动整合设置未能保存，请重试。":
     "Não foi possível guardar a consolidação automática. Tente novamente.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Não foi possível carregar as configurações de consolidação automática. Tente novamente.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "O modelo de embeddings está a ser verificado ou alterado. Aguarde para consolidar memórias.",
   "未能开始整合记忆，请重试。":
@@ -1386,6 +1420,8 @@ export const modePortugueseMessages: ModeMessages = {
     "A manutenção da memória está em curso. Aguarde antes de mudar de modo.",
   "模式切换影响暂时无法读取，请重试。":
     "Não é possível ler os efeitos da mudança de modo. Tente novamente.",
+  "mode.graphStore.quarantined":
+    "O arquivo do grafo de conhecimento estava danificado e foi reconstruído automaticamente.",
 };
 
 export const modeFrenchMessages: ModeMessages = {
@@ -1404,6 +1440,8 @@ export const modeFrenchMessages: ModeMessages = {
   选择记忆模式: "Choisir le mode de mémoire",
   "之后可在设置中更改。":
     "Vous pourrez le modifier plus tard dans les réglages.",
+  "后续可在设置页自定义时间或关闭。":
+    "Vous pourrez ensuite personnaliser l’heure ou désactiver cette option dans les réglages.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Vous pourrez activer Ultra dans les réglages après la configuration initiale.",
   "使用 Lite 进入": "Entrer avec Lite",
@@ -1553,6 +1591,8 @@ export const modeFrenchMessages: ModeMessages = {
     "Le changement n’a pas pu être confirmé. Le dernier mode confirmé reste affiché.",
   "自动整合设置未能保存，请重试。":
     "Impossible d’enregistrer la consolidation automatique. Réessayez.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Impossible de charger les paramètres de consolidation automatique. Réessayez.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Le modèle d’embeddings est en cours de vérification ou de changement. Patientez avant de consolider les mémoires.",
   "未能开始整合记忆，请重试。":
@@ -1592,6 +1632,8 @@ export const modeFrenchMessages: ModeMessages = {
     "La maintenance de la mémoire est en cours. Attendez avant de changer de mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Les effets du changement de mode sont indisponibles. Réessayez.",
+  "mode.graphStore.quarantined":
+    "Le fichier du graphe de connaissances était endommagé et a été reconstruit automatiquement.",
 };
 
 export const modeKoreanMessages: ModeMessages = {
@@ -1607,6 +1649,8 @@ export const modeKoreanMessages: ModeMessages = {
   选择记忆方式: "메모리 방식 선택",
   选择记忆模式: "메모리 모드 선택",
   "之后可在设置中更改。": "나중에 설정에서 변경할 수 있습니다.",
+  "后续可在设置页自定义时间或关闭。":
+    "나중에 설정에서 시간을 변경하거나 끌 수 있습니다.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "초기 설정을 마친 후 설정에서 Ultra를 켤 수 있습니다.",
   "使用 Lite 进入": "Lite로 시작",
@@ -1752,6 +1796,8 @@ export const modeKoreanMessages: ModeMessages = {
     "모드 전환을 확인하지 못했습니다. 마지막으로 확인된 모드가 계속 표시됩니다.",
   "自动整合设置未能保存，请重试。":
     "자동 통합 설정을 저장하지 못했습니다. 다시 시도하세요.",
+  "自动整合设置暂时无法读取，请重试。":
+    "자동 통합 설정을 불러오지 못했습니다. 다시 시도하세요.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "임베딩 모델을 확인하거나 전환 중입니다. 완료된 후 메모리를 통합할 수 있습니다.",
   "未能开始整合记忆，请重试。":
@@ -1789,6 +1835,8 @@ export const modeKoreanMessages: ModeMessages = {
     "메모리 유지 관리 중입니다. 완료 후 모드를 전환하세요.",
   "模式切换影响暂时无法读取，请重试。":
     "모드 전환 영향을 읽을 수 없습니다. 다시 시도하세요.",
+  "mode.graphStore.quarantined":
+    "지식 그래프 파일이 손상되어 자동으로 다시 구축했습니다.",
 };
 
 export const modeRussianMessages: ModeMessages = {
@@ -1805,6 +1853,8 @@ export const modeRussianMessages: ModeMessages = {
   选择记忆方式: "Выберите режим памяти",
   选择记忆模式: "Выберите режим памяти",
   "之后可在设置中更改。": "Позже режим можно изменить в настройках.",
+  "后续可在设置页自定义时间或关闭。":
+    "Позже в настройках можно изменить время или отключить эту функцию.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra можно включить в настройках после завершения первоначальной настройки.",
   "使用 Lite 进入": "Войти с Lite",
@@ -1953,6 +2003,8 @@ export const modeRussianMessages: ModeMessages = {
     "Не удалось подтвердить смену режима. По-прежнему показан последний подтверждённый режим.",
   "自动整合设置未能保存，请重试。":
     "Не удалось сохранить настройки автообъединения. Повторите попытку.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Не удалось загрузить настройки автообъединения. Повторите попытку.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Модель эмбеддингов проверяется или меняется. После завершения можно будет объединить воспоминания.",
   "未能开始整合记忆，请重试。":
@@ -1992,6 +2044,8 @@ export const modeRussianMessages: ModeMessages = {
     "Идёт обслуживание памяти. Дождитесь завершения перед сменой режима.",
   "模式切换影响暂时无法读取，请重试。":
     "Не удалось прочитать последствия смены режима. Повторите попытку.",
+  "mode.graphStore.quarantined":
+    "Файл графа знаний был повреждён и автоматически перестроен.",
 };
 
 export const modeIndonesianMessages: ModeMessages = {
@@ -2009,6 +2063,8 @@ export const modeIndonesianMessages: ModeMessages = {
   选择记忆方式: "Pilih cara kerja memori",
   选择记忆模式: "Pilih mode memori",
   "之后可在设置中更改。": "Anda dapat mengubahnya nanti di Pengaturan.",
+  "后续可在设置页自定义时间或关闭。":
+    "Nanti, Anda dapat menyesuaikan waktunya atau menonaktifkannya di Pengaturan.",
   "Ultra 可在完成首次设置后到设置页开启。":
     "Ultra dapat diaktifkan di Pengaturan setelah penyiapan awal selesai.",
   "使用 Lite 进入": "Masuk dengan Lite",
@@ -2156,6 +2212,8 @@ export const modeIndonesianMessages: ModeMessages = {
     "Perubahan mode tidak dapat dikonfirmasi. Mode terakhir yang dikonfirmasi tetap ditampilkan.",
   "自动整合设置未能保存，请重试。":
     "Pengaturan konsolidasi otomatis tidak dapat disimpan. Coba lagi.",
+  "自动整合设置暂时无法读取，请重试。":
+    "Pengaturan konsolidasi otomatis tidak dapat dimuat. Coba lagi.",
   "正在检查或切换向量模型，完成后才能整合记忆。":
     "Model embedding sedang diperiksa atau diganti. Tunggu hingga selesai sebelum mengonsolidasikan memori.",
   "未能开始整合记忆，请重试。":
@@ -2194,4 +2252,6 @@ export const modeIndonesianMessages: ModeMessages = {
     "Pemeliharaan memori sedang berjalan. Tunggu sebelum mengganti mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Dampak perubahan mode tidak dapat dibaca. Coba lagi.",
+  "mode.graphStore.quarantined":
+    "File grafik pengetahuan rusak dan telah dibangun ulang secara otomatis.",
 };

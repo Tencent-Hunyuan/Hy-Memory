@@ -470,6 +470,101 @@ def test_lite_raw_search_is_plain_rag_over_active_and_shadow_raws(tmp_path, monk
 
 
 @pytest.mark.fresh_sdk
+def test_long_semantic_raw_hit_cannot_erase_an_earlier_match(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        app.state.memory_mode = lambda: "lite"
+
+        def search(query, **kwargs):
+            sdk._record("search", {"query": query, **kwargs})
+            memories = [
+                {
+                    "memory_id": "raw-target",
+                    "content": "[user]: lite 模式的 3d 图需要调整",
+                    "layer": "l1_raw",
+                    "status": "active",
+                    "user_id": "local",
+                    "agent_id": "all-apps",
+                    "session_id": "target-session",
+                    "source": "cursor",
+                    "memory_at": 1_790_100_000,
+                    "score": 0.97,
+                },
+                {
+                    "memory_id": "raw-long",
+                    "content": f"[user]: {'x' * 20_001}",
+                    "layer": "l1_raw",
+                    "status": "active",
+                    "user_id": "local",
+                    "agent_id": "all-apps",
+                    "session_id": "long-session",
+                    "source": "cursor",
+                    "memory_at": 1_790_000_000,
+                    "score": 0.9,
+                },
+            ]
+            return {
+                "request_id": "long-raw",
+                "memories": memories[1:] if query == "oversized" else memories,
+            }
+
+        sdk.search = search
+        response = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "3d",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "limit": 20,
+                "character_budget": 20_000,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["state"] == "grounded"
+        assert body["items"][0]["raw_id"] == "raw-target"
+        assert "3d" in body["items"][0]["content"]
+        assert body["items"][1]["raw_id"] == "raw-long"
+        assert body["items"][1]["truncated"] is True
+        assert body["truncated"] is True
+
+        single = await client.post(
+            "/api/v2/context/search",
+            json={
+                "query": "oversized",
+                "kinds": ["raw"],
+                "raw_unit": "turn",
+                "character_budget": 20_000,
+            },
+        )
+        assert single.json()["items"][0]["truncated"] is True
+        assert single.json()["truncated"] is True
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_raw_only_lane_failure_is_unavailable_not_an_empty_partial(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        app.state.memory_mode = lambda: "lite"
+
+        def search(_query, **_kwargs):
+            raise ValueError("private conversation text must not reach logs")
+
+        sdk.search = search
+        response = await client.post(
+            "/api/v2/context/search",
+            json={"query": "3d", "kinds": ["raw"], "raw_unit": "turn"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["state"] == "unavailable"
+        assert response.json()["items"] == []
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
 def test_every_recall_and_ask_option_reaches_the_sdk(tmp_path, monkeypatch) -> None:
     async def scenario(app, sdk, client):
         recalled = await client.post(
@@ -743,6 +838,24 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
             assert cursor_page["has_more"] is True
         assert cursor_turns == ["我喜欢绿茶", "我叫费天翔", "你好"]
         assert len(sdk.all("list_memories")) == cursor_calls + 3
+        graph_calls = len(sdk.all("list_memories"))
+        graph = await client.get("/api/v2/raw/graph", params={"limit": 2})
+        assert graph.status_code == 200, graph.text
+        assert len(sdk.all("list_memories")) == graph_calls + 1
+        graph_body = graph.json()
+        assert graph_body["total"] == 3
+        assert graph_body["has_more"] is True
+        assert [item["label"] for item in graph_body["items"]] == [
+            "[user]: 我喜欢绿茶 [assistant]: 也记住了。",
+            "[user]: 我叫费天翔 [assistant]: 好的，记住了。",
+        ]
+        assert (await client.get("/api/v2/raw/graph", params={"limit": 301})).status_code == 422
+        assert (
+            await client.get(
+                "/api/v2/raw/graph",
+                params={"limit": 2, "offset": 2},
+            )
+        ).status_code == 422
         inserted = {
             "memory_id": "raw-new",
             "content": "[user]: 新消息",
@@ -754,6 +867,9 @@ def test_raw_lists_active_and_shadow_turns_with_roles_and_hashes(tmp_path, monke
         }
         RAW_ROWS["local"].insert(0, inserted)
         try:
+            updated_graph = (await client.get("/api/v2/raw/graph")).json()
+            assert updated_graph["total"] == 4
+            assert updated_graph["items"][0]["label"] == "[user]: 新消息"
             continued = await client.get(
                 "/api/v2/raw",
                 params={

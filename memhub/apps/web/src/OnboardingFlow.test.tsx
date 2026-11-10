@@ -240,7 +240,7 @@ async function continueImport(user: ReturnType<typeof userEvent.setup>) {
 async function openModelStep(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "选择记忆模式" }));
   await selectMode(user, /pro/i);
-  await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+  await user.click(screen.getByRole("button", { name: "配置模型" }));
 }
 async function chooseLiteAndContinue(user: ReturnType<typeof userEvent.setup>) {
   await selectMode(user, /lite/i);
@@ -251,7 +251,6 @@ async function selectMode(
   name: RegExp,
 ) {
   await user.click(screen.getByRole("radio", { name }));
-  await user.click(await screen.findByRole("button", { name: "确认选择" }));
 }
 function choice(name = "Claude Code") {
   return screen.getByRole<HTMLInputElement>("checkbox", {
@@ -430,6 +429,90 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
   });
 
+  it("keeps the import review open when a late connection result is unknown", async () => {
+    const user = userEvent.setup();
+    let rejectImport!: (reason?: unknown) => void;
+    const controller = imports({
+      connectForOnboarding: vi.fn(
+        () =>
+          new Promise<
+            Awaited<ReturnType<ImportSourcesController["connectForOnboarding"]>>
+          >((_resolve, reject) => {
+            rejectImport = reject;
+          }),
+      ),
+    });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+    expect(
+      await screen.findByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeTruthy();
+
+    await act(async () => rejectImport(new Error("response lost")));
+
+    expect(
+      screen.getByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByText("正在核对导入结果，已保存的选择不会丢失"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "把熟悉的背景，带到这里" }),
+    ).toBeNull();
+  });
+
+  it("returns to source review when Core definitely refuses the connection", async () => {
+    const user = userEvent.setup();
+    const controller = imports({
+      connectForOnboarding: vi.fn().mockRejectedValue(
+        Object.assign(new Error("source rejected"), {
+          definiteRefusal: true,
+        }),
+      ),
+    });
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
+    render(
+      <OnboardingFlow
+        state={onboarding}
+        imports={controller}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    await choose(user);
+    await approve(user);
+    await user.click(screen.getByRole("button", { name: START }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "把熟悉的背景，带到这里",
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "本次没有来源获准导入",
+    );
+    expect(
+      screen.queryByRole("heading", {
+        name: "对话正在汇入，记忆从这里开始",
+      }),
+    ).toBeNull();
+  });
+
   it("opens model setup immediately and preserves it across a late import failure", async () => {
     const user = userEvent.setup();
     let rejectImport!: (reason?: unknown) => void;
@@ -470,11 +553,11 @@ describe("OnboardingFlow S1.3", () => {
       modelBoundary,
     );
     await user.click(screen.getByRole("button", { name: "返回导入" }));
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(
-        "开始导入的结果尚未确认",
-      ),
-    );
+    await waitFor(() => {
+      expect(
+        screen.getByText("正在核对导入结果，已保存的选择不会丢失"),
+      ).toBeTruthy();
+    });
     expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
   });
 
@@ -605,7 +688,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     const receipt = screen.getByRole("button", {
       name: "模型启用回执已确认",
     });
@@ -948,7 +1031,13 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: SKIP }));
 
     expect(screen.getByRole("heading", { name: "选择记忆模式" })).toBeTruthy();
-    expect(screen.queryByText("之后可在设置中更改。")).toBeNull();
+    expect(
+      screen.getByRole("heading", {
+        name: "你希望 MemHub 如何形成记忆？",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Choose how MemHub remembers")).toBeNull();
+    expect(screen.getByText("之后可在设置中更改。")).toBeTruthy();
     expect(screen.getAllByRole("radio")).toHaveLength(3);
     expect(screen.getByRole("radio", { name: /ultra/i })).toBeTruthy();
     expect(screen.queryByText("推荐")).toBeNull();
@@ -960,7 +1049,7 @@ describe("OnboardingFlow S1.3", () => {
     await selectMode(user, /lite/i);
     expect(screen.getByRole("button", { name: "使用 Lite 进入" })).toBeTruthy();
     await selectMode(user, /pro/i);
-    expect(screen.getByRole("button", { name: "继续配置模型" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "配置模型" })).toBeTruthy();
   });
 
   it("configures Ultra scheduling before model setup and completes after activation", async () => {
@@ -1000,26 +1089,19 @@ describe("OnboardingFlow S1.3", () => {
 
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
-    await user.click(screen.getByRole("radio", { name: /ultra/i }));
+    const ultra = screen.getByRole("radio", { name: /ultra/i });
+    await user.click(ultra);
+    const schedule = screen.getByText("每天自动整合");
     expect(
-      await screen.findByRole("heading", {
-        name: "选择深度记忆（ultra）？",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("使用 pro 或 ultra 前需要先配置并启用生成模型。"),
-    ).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "确认选择" }));
-
-    expect(
-      screen
-        .getByRole("switch", { name: "每天自动整合" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(
-      screen.getByRole("button", { name: "执行时间，03:00" }),
-    ).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "继续" }));
+      schedule.closest(".memory-mode-card")?.getAttribute("data-mode"),
+    ).toBe("ultra");
+    expect(schedule.closest("label")).toBeNull();
+    expect(ultra.getAttribute("aria-describedby")).toBe(
+      "onboarding-ultra-schedule-description",
+    );
+    expect(screen.getByText(/每天 03:00 左右自动整合/)).toBeTruthy();
+    expect(screen.getByText("后续可在设置页自定义时间或关闭。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     expect(screen.getByRole("region", { name: "模型步骤边界" })).toBeTruthy();
     expect(putOnboardingProgress).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1082,18 +1164,15 @@ describe("OnboardingFlow S1.3", () => {
       }),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "继续" })).toHaveProperty(
+      expect(screen.getByRole("button", { name: "配置模型" })).toHaveProperty(
         "disabled",
         false,
       ),
     );
-    expect(
-      screen
-        .getByRole("switch", { name: "每天自动整合" })
-        .getAttribute("aria-checked"),
-    ).toBe("false");
+    expect(screen.getByText(/重新开启后仍按 05:30 运行/)).toBeTruthy();
+    expect(screen.queryByText("后续可在设置页自定义时间或关闭。")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await waitFor(() =>
       expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
     );
@@ -1127,7 +1206,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /ultra/i);
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
       "自动整合设置未能保存",
     );
@@ -1136,7 +1215,7 @@ describe("OnboardingFlow S1.3", () => {
       screen.getByRole<HTMLInputElement>("radio", { name: /ultra/i }).checked,
     ).toBe(true);
 
-    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await waitFor(() =>
       expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
     );
@@ -1144,9 +1223,14 @@ describe("OnboardingFlow S1.3", () => {
   });
 
   it("retries a failed Ultra schedule read without losing the selection", async () => {
+    let resolveRetry!: (value: { enabled: boolean; time: string }) => void;
     vi.mocked(api.getEvolveSchedule)
       .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({ enabled: true, time: "04:15" });
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveRetry = resolve;
+        }),
+      );
     const user = userEvent.setup();
     render(
       <OnboardingFlow
@@ -1162,21 +1246,35 @@ describe("OnboardingFlow S1.3", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "记忆模式状态暂时无法读取",
     );
-    expect(screen.getByRole("button", { name: "继续" })).toHaveProperty(
+    expect(screen.getByRole("button", { name: "配置模型" })).toHaveProperty(
       "disabled",
       true,
     );
 
-    await user.click(screen.getByRole("button", { name: "重试" }));
+    const retry = screen.getByRole("button", { name: "重试" });
+    expect(retry.closest(".memory-mode-card")?.getAttribute("data-mode")).toBe(
+      "ultra",
+    );
+    expect(retry.closest("label")).toBeNull();
+    retry.focus();
+    await user.click(retry);
+    expect(screen.getByRole("button", { name: "重试" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(
+      retry.closest(".memory-mode-detail")?.getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(document.activeElement).toBe(retry);
+    expect(api.getEvolveSchedule).toHaveBeenCalledTimes(2);
+    await act(async () => resolveRetry({ enabled: true, time: "04:15" }));
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "执行时间，04:15" }),
-      ).toBeTruthy(),
+      expect(screen.getByText(/每天 04:15 左右自动整合/)).toBeTruthy(),
     );
     expect(
       screen.getByRole<HTMLInputElement>("radio", { name: /ultra/i }).checked,
     ).toBe(true);
-    expect(screen.getByRole("button", { name: "继续" })).toHaveProperty(
+    expect(screen.getByRole("button", { name: "配置模型" })).toHaveProperty(
       "disabled",
       false,
     );
@@ -1369,7 +1467,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
     );
@@ -1423,7 +1521,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
     );
@@ -1431,7 +1529,7 @@ describe("OnboardingFlow S1.3", () => {
 
     await user.click(screen.getByRole("button", { name: "返回导入" }));
     modelActive = false;
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
     );
@@ -1477,7 +1575,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
     );
@@ -1519,7 +1617,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     const revisionBeforePut = confirmedMemoryModeSnapshot().revision;
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
@@ -1568,7 +1666,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await user.click(
       screen.getByRole("button", { name: "模型启用回执已确认" }),
     );
@@ -1608,7 +1706,7 @@ describe("OnboardingFlow S1.3", () => {
     await waitFor(() => expect(document.activeElement).toBe(firstTitle));
 
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await user.click(screen.getByRole("button", { name: "返回导入" }));
     const returnedTitle = screen.getByRole("heading", {
       name: "选择记忆模式",
@@ -1638,7 +1736,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     await waitFor(() => expect(finish).toHaveBeenCalledWith("sources"));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(setMemoryMode).not.toHaveBeenCalled();
@@ -1657,7 +1755,7 @@ describe("OnboardingFlow S1.3", () => {
     await openApps();
     await user.click(screen.getByRole("button", { name: SKIP }));
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     const lateReceipt = screen.getByRole("button", {
       name: "模型启用回执已确认",
     });
@@ -1706,14 +1804,14 @@ describe("OnboardingFlow S1.3", () => {
     await user.click(screen.getByRole("button", { name: SKIP }));
     const pro = screen.getByRole<HTMLInputElement>("radio", { name: /pro/i });
     await selectMode(user, /pro/i);
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
       "模式未能保存",
     );
     expect(pro.checked).toBe(true);
     expect(screen.queryByRole("region", { name: "模型步骤边界" })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "继续配置模型" }));
+    await user.click(screen.getByRole("button", { name: "配置模型" }));
     expect(
       await screen.findByRole("region", { name: "模型步骤边界" }),
     ).toBeTruthy();
@@ -2630,7 +2728,7 @@ describe("OnboardingFlow S1.3", () => {
     expect(controller.connectForOnboarding).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unknown connection visible and reconciles its receipt without a duplicate POST", async () => {
+  it("keeps an unknown connection visible without reporting an error or duplicating the POST", async () => {
     const user = userEvent.setup();
     const onFinish = vi.fn();
     vi.stubGlobal("crypto", webcrypto);
@@ -2646,6 +2744,7 @@ describe("OnboardingFlow S1.3", () => {
     vi.mocked(api.getSourceConnection).mockRejectedValueOnce(
       new Error("receipt offline"),
     );
+    window.oneMemory = {} as NonNullable<typeof window.oneMemory>;
     function Harness() {
       const controller = useImportSources({ automaticSync: false });
       return controller.loading ? (
@@ -2663,9 +2762,9 @@ describe("OnboardingFlow S1.3", () => {
     await choose(user);
     await approve(user);
     await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("alert");
+    await screen.findByText("正在核对导入结果，已保存的选择不会丢失");
     expect(onFinish).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert").textContent).toContain("尚未确认");
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(completeOnboarding).not.toHaveBeenCalled();
     expect(api.connectSources).toHaveBeenCalledOnce();
     const requestId = vi.mocked(api.connectSources).mock.calls[0][2]?.requestId;
@@ -2678,27 +2777,9 @@ describe("OnboardingFlow S1.3", () => {
         requestId,
       }),
     );
-    await user.click(screen.getByRole("button", { name: START }));
-    await waitFor(() =>
-      expect(api.getSourceConnection).toHaveBeenCalledExactlyOnceWith(
-        requestId,
-      ),
-    );
     expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(screen.getByRole("alert").textContent).toContain("尚未确认");
-    vi.mocked(api.getSourceConnection).mockResolvedValueOnce({
-      request_id: requestId,
-      accepted_source_ids: ["claude"],
-      failed_sources: {},
-      jobs: [],
-    });
-    await openApps();
-    await user.click(screen.getByRole("button", { name: START }));
-    await screen.findByRole("button", { name: "选择记忆模式" });
-    await continueImport(user);
-    expect(onFinish).toHaveBeenCalledWith("sources");
-    expect(api.connectSources).toHaveBeenCalledOnce();
-    expect(api.getSourceConnection).toHaveBeenCalledTimes(2);
+    expect(api.getSourceConnection).toHaveBeenCalledOnce();
+    expect(api.getSourceConnection).toHaveBeenCalledWith(requestId);
     expect(api.createImportJob).not.toHaveBeenCalled();
   });
 

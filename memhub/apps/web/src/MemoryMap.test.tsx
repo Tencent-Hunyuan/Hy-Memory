@@ -491,6 +491,7 @@ function Host({
   onViewHistory,
   onConfigureModel = () => {},
   libraryView,
+  raw = false,
 }: {
   simplified?: boolean;
   date?: string | null;
@@ -509,6 +510,7 @@ function Host({
   onViewHistory?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
+  raw?: boolean;
 } = {}) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [detailLoad, setDetailLoad] = useState<{
@@ -518,6 +520,7 @@ function Host({
   return (
     <MemoryMap
       simplified={simplified}
+      contentKind={raw ? "raw" : "memory"}
       libraryView={libraryView}
       hidden={hidden}
       overlayBlocked={overlayBlocked}
@@ -587,6 +590,61 @@ function Host({
     />
   );
 }
+
+it("windows raw rows and automatically continues near the bottom", () => {
+  const items = Array.from({ length: 150 }, (_, index) => ({
+    ...memories[0],
+    memory_id: `raw-${index}`,
+    content: `原始会话 ${index}`,
+  }));
+  const onMore = vi.fn();
+  const sourceIds = Object.fromEntries(
+    items.map((item) => [item.memory_id, ["cursor"]]),
+  );
+  render(
+    <Host
+      simplified
+      raw
+      items={items}
+      libraryView={{
+        query: "",
+        source: "",
+        page: {
+          items,
+          total: 1_600,
+          offset: 0,
+          limit: 50,
+          source_ids_by_memory: sourceIds,
+        },
+        loading: false,
+        failed: false,
+        stale: false,
+        cursorPaging: true,
+        hasMore: true,
+        onQuery: vi.fn(),
+        onSource: vi.fn(),
+        resetPage: vi.fn(),
+        onPage: vi.fn(),
+        onMore,
+        onRetry: vi.fn(),
+      }}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "原始对话" });
+  Object.defineProperties(list, {
+    clientHeight: { configurable: true, value: 500 },
+    scrollHeight: { configurable: true, value: 17_400 },
+    scrollTop: { configurable: true, writable: true, value: 16_500 },
+  });
+  fireEvent.scroll(list);
+
+  expect(onMore).toHaveBeenCalledTimes(1);
+  expect(document.querySelectorAll("[data-memory-id]").length).toBeLessThan(30);
+  expect(screen.getByRole("button", { name: "加载更多" }).classList).toContain(
+    "map-load-more",
+  );
+});
+
 it("does not present an unverified empty page as zero memories", () => {
   const page = {
     items: [],

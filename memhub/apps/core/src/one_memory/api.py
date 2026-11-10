@@ -94,11 +94,13 @@ from one_memory.external_memory_access import (
 )
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
+from one_memory.graph_open_guard import GraphOpenGuard, GraphOpenOutcome, GraphStoreStatus
 from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     GraphWidthMismatch,
     effective_memory_mode,
     graph_store_enabled,
+    live_graph_path,
 )
 from one_memory.hy_runtime_config import (
     HY_MEMORY_READER,
@@ -226,6 +228,7 @@ from one_memory.memory_features import (
     effective_features,
     feature_activity,
     non_default_features,
+    parameter_value,
 )
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
@@ -652,6 +655,33 @@ class SdkRawPage(BaseModel):
     time_filtered: bool = False
 
 
+class SdkRawGraphItem(BaseModel):
+    """Small, non-authoritative projection used to draw the bounded raw map."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    turn_id: str = Field(min_length=1, max_length=96)
+    raw_id: str = Field(min_length=1)
+    label: str = Field(max_length=240)
+    source: str
+    session_id: str
+    memory_at: float | None = None
+    gmt_created: float | None = None
+
+
+class SdkRawGraphPage(BaseModel):
+    """One bounded page from the raw-turn catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: str
+    items: tuple[SdkRawGraphItem, ...] = ()
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=300)
+    has_more: bool = False
+
+
 class SdkLayerCounts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -771,6 +801,9 @@ class MemoryModeState(BaseModel):
     forced_by_env: bool
     modes: tuple[MemoryMode, ...] = MEMORY_MODES
     graph_build: GraphBuildState
+    #: The ultra graph's own state: opening / ready / rebuilt after a
+    #: quarantine (`graph_open_guard`).
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
 
 
 class MemoryModeUpdate(BaseModel):
@@ -858,6 +891,10 @@ class PipelineStatus(BaseModel):
     #: Newest finished run across users, for a one-line status.
     last_evolve_at: datetime | None = None
     graph_build: GraphBuildState
+    #: The ultra graph's own state (`graph_open_guard`): `opening` while the
+    #: startup step runs, `rebuilding_after_quarantine` after a graph that
+    #: kept taking Core down was renamed aside, else `ready` / `not_used`.
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
     #: The SDK features (`memory_features`) whose value differs from the SDK
     #: default; empty while every feature is at its default. A parameter
     #: (`intention_dedup_threshold`) appears as its number.
@@ -927,19 +964,22 @@ class MemoryParameterState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: MemoryParameterName
-    #: What clients are built with: `configured`, else `default`.
-    value: float
+    #: What clients are built with: `configured`, else `default`. An integer
+    #: parameter (`agent_max_tokens`) is an int throughout.
+    value: int | float
     #: What a person set; null = not set, the SDK default applies.
-    configured: float | None
+    configured: int | float | None
     #: The SDK default (its code default, or its own env var when set).
-    default: float
+    default: int | float
     #: The range a `PUT` accepts, inclusive.
-    minimum: float
-    maximum: float
-    #: Whether it acts: exactly when `requires_feature` acts.
+    minimum: int | float
+    maximum: int | float
+    #: Whether it acts: when `requires_feature` acts, or, without one, when
+    #: the mode reaches `requires_mode`.
     active: bool
     reason: FeatureReason | None
-    requires_feature: MemoryFeatureName
+    requires_feature: MemoryFeatureName | None
+    requires_mode: Literal["pro", "ultra"] = "pro"
     sdk_field: str
     env: str
     description: str
@@ -1758,6 +1798,7 @@ def create_app(
                 else None
             )
             app.state.live_sync_watch_lock = asyncio.Lock()
+            app.state.source_activation_tasks = {}
             app.state.live_sync_supervisor.set_watched_sources(
                 watch_roots if watching and runtime_settings.live_sync_enabled else ()
             )
@@ -1901,6 +1942,15 @@ def create_app(
                     )
 
                 async def resume_graph_backfill() -> None:
+                    if (
+                        app.state.graph_open_outcome == "quarantined"
+                        and _memory_mode(app) == "ultra"
+                    ):
+                        # The quarantined graph is derived data: rebuild it
+                        # from every user's memories, the normal ultra path.
+                        users = await asyncio.to_thread(_known_user_ids, app)
+                        app.state.memory_graph_backfill.start(users)
+                        return
                     saved = app.state.evolve_state_store.graph_build()
                     if saved.state != "running":
                         return
@@ -2033,6 +2083,18 @@ def create_app(
                     details={"count": len(failed)},
                 )
 
+            # The ultra graph's first open, as its own startup step before
+            # readiness (`graph_open_guard`): a graph that freezes or kills
+            # Core while opening used to do it after readiness, inside the
+            # first SDK client, and the Runtime relaunched into the same file
+            # forever. Here the Runtime sees a declared startup phase, and a
+            # graph that took two starts down is quarantined and rebuilt.
+            app.state.graph_open_guard = GraphOpenGuard(
+                runtime_settings.data_dir,
+                instance_id=runtime_settings.instance_id,
+            )
+            app.state.graph_open_outcome = await _open_graph_store_at_startup(app)
+
             app.state.recovery_task = None
             app.state.sdk_stores_held = False
             try:
@@ -2093,6 +2155,11 @@ def create_app(
                         app.state.memory_governance_store.wait_content_candidate_backfill,
                         5.0,
                     )
+                source_activation_tasks = tuple(app.state.source_activation_tasks.values())
+                for task in source_activation_tasks:
+                    task.cancel()
+                if source_activation_tasks:
+                    await asyncio.gather(*source_activation_tasks, return_exceptions=True)
                 if app.state.live_sync_watch is not None:
                     await app.state.live_sync_watch.shutdown()
                 await app.state.live_sync_supervisor.shutdown()
@@ -2206,6 +2273,19 @@ def create_app(
     from one_memory.embedding_switch_routes import embedding_switch_router
 
     app.include_router(embedding_switch_router(protected))
+    from one_memory.live_capture import live_capture_router
+
+    def file_polled(request: Request, source_id: str) -> bool:
+        """Whether live sync reads this source's own files, so the hook's copy is redundant."""
+        registration = getattr(request.app.state, "source_catalog", {}).get(source_id)
+        return (
+            runtime_settings.live_sync_enabled
+            and registration is not None
+            and registration.capabilities.live_sync is CapabilityState.IMPLEMENTED
+        )
+
+    # Host hooks hand their turn over here instead of opening the database.
+    app.include_router(live_capture_router(protected, file_polled=file_polled))
 
     app.add_middleware(
         CORSMiddleware,
@@ -3222,6 +3302,69 @@ def create_app(
         """`POST /api/v1/import-jobs` on one user's lane (Hermes only for another user)."""
         return await create_job_on(request.source_id, request.operation, request.user_id)
 
+    async def _activate_connected_sources(
+        request_id: str,
+        source_ids: tuple[str, ...],
+        *,
+        enable_sync: bool,
+    ) -> None:
+        """Apply one committed connection intent without holding its HTTP response."""
+        try:
+            for source_id in source_ids:
+                if enable_sync:
+                    await _live_sync(app).initialize_source(
+                        source_id,
+                        baseline_missing_files=True,
+                    )
+                else:
+                    await _live_sync(app).stop_source(source_id)
+            if enable_sync:
+                for source_id in source_ids:
+                    await _activate_source_resume(source_id)
+            await _refresh_live_watch(app)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            diagnostic_event(
+                level="error",
+                component="source.connection",
+                event="source.connection.activation_failed",
+                outcome="failed",
+                **diagnostic_exception(error),
+                details={"request_id": request_id, "source_ids": list(source_ids)},
+            )
+            raise
+
+    def _schedule_source_activation(
+        request_id: str,
+        source_ids: tuple[str, ...],
+        *,
+        enable_sync: bool,
+    ) -> None:
+        tasks = app.state.source_activation_tasks
+        existing = tasks.get(request_id)
+        if existing is not None and not existing.done():
+            return
+        task = watched_task(
+            asyncio.get_running_loop(),
+            lambda: _activate_connected_sources(
+                request_id,
+                source_ids,
+                enable_sync=enable_sync,
+            ),
+            component="source.connection",
+            name=f"source-connection-{request_id}",
+        )
+        if task is None:
+            return
+        tasks[request_id] = task
+
+        def forget(completed: asyncio.Future[None]) -> None:
+            if tasks.get(request_id) is completed:
+                tasks.pop(request_id, None)
+
+        task.add_done_callback(forget)
+
     @app.post(
         "/api/v1/sources/connect",
         response_model=ConnectSourcesResponse,
@@ -3311,44 +3454,21 @@ def create_app(
             if grant is not None:
                 _supervisor(app).register_adapter(registration.create_adapter(grant))
                 _detection(app).pop(job.source_id, None)
-                if request.enable_sync:
-                    await _prepare_source_resume(job.source_id)
-                else:
-                    await _live_sync(app).stop_source(job.source_id)
                 configured.append(job.source_id)
         if configured:
-            previous = {
-                source_id: _config_store(app).sync_enabled(source_id) for source_id in configured
-            }
-            try:
-                await asyncio.to_thread(
-                    _config_store(app).set_sync_many,
-                    {source_id: request.enable_sync for source_id in configured},
-                )
-            except BaseException:
-                for source_id in configured:
-                    if request.enable_sync:
-                        await _live_sync(app).stop_source(source_id)
-                    elif previous[source_id]:
-                        await _prepare_source_resume(source_id)
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-                raise
-            try:
-                if request.enable_sync:
-                    for source_id in configured:
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-            except BaseException:
-                await asyncio.to_thread(_config_store(app).set_sync_many, previous)
-                for source_id in configured:
-                    if request.enable_sync:
-                        await _live_sync(app).stop_source(source_id)
-                    elif previous[source_id]:
-                        await _prepare_source_resume(source_id)
-                        await _activate_source_resume(source_id)
-                await _refresh_live_watch(app)
-                raise
+            await asyncio.to_thread(
+                _config_store(app).set_sync_many,
+                {source_id: request.enable_sync for source_id in configured},
+            )
+            if request.enable_sync:
+                for job in result.jobs:
+                    if job.source_id in configured and job.status is ImportStatus.PENDING:
+                        await _supervisor(app).enqueue_off_loop(job.job_id, job=job)
+            _schedule_source_activation(
+                request.request_id,
+                tuple(configured),
+                enable_sync=request.enable_sync,
+            )
         return ConnectSourcesResponse(**result.model_dump())
 
     async def _refuse_overlapping_root(source_id: str, root: Path, user_id: str) -> None:
@@ -4484,6 +4604,26 @@ def create_app(
     ] = {}
     raw_turn_cache_locks: dict[tuple[object, ...], asyncio.Lock] = {}
 
+    def graph_items(
+        records: Iterable[HySdkRawRecord],
+    ) -> tuple[SdkRawGraphItem, ...]:
+        items: list[SdkRawGraphItem] = []
+        for record in records:
+            for turn in reversed(raw_display_turns(record)):
+                label = re.sub(r"\s+", " ", turn.content).strip()[:240]
+                items.append(
+                    SdkRawGraphItem(
+                        turn_id=turn.turn_id,
+                        raw_id=record.raw_id,
+                        label=label or record.raw_id,
+                        source=record.source,
+                        session_id=record.session_id,
+                        memory_at=record.memory_at,
+                        gmt_created=record.gmt_created,
+                    )
+                )
+        return tuple(items)
+
     @app.get(
         "/api/v2/raw",
         response_model=SdkRawPage,
@@ -4620,15 +4760,11 @@ def create_app(
                             offset=raw_offset,
                         )
                         if raw_page.total != observed_total:
-                            raise HTTPException(
-                                status_code=409, detail="raw_cursor_stale"
-                            )
+                            raise HTTPException(status_code=409, detail="raw_cursor_stale")
 
                     if expected_raw.startswith("p"):
                         if raw_offset == 0:
-                            raise HTTPException(
-                                status_code=409, detail="raw_cursor_stale"
-                            )
+                            raise HTTPException(status_code=409, detail="raw_cursor_stale")
                         previous_value = await asyncio.to_thread(
                             client.list_memories,
                             **query,
@@ -4641,13 +4777,11 @@ def create_app(
                         valid_anchor = (
                             previous_page.total == raw_page.total
                             and bool(previous_page.raw)
-                            and raw_anchor(previous_page.raw[0])
-                            == expected_raw[1:]
+                            and raw_anchor(previous_page.raw[0]) == expected_raw[1:]
                         )
                     else:
                         valid_anchor = (
-                            bool(raw_page.raw)
-                            and raw_anchor(raw_page.raw[0]) == expected_raw
+                            bool(raw_page.raw) and raw_anchor(raw_page.raw[0]) == expected_raw
                         )
                     if expected_raw and not valid_anchor:
                         raise HTTPException(status_code=409, detail="raw_cursor_stale")
@@ -4655,9 +4789,7 @@ def create_app(
                 next_cursor: str | None = None
                 for record_index, record in enumerate(raw_page.raw):
                     turns = raw_display_turns(record)
-                    ordered_turns = (
-                        tuple(reversed(turns)) if order == "desc" else turns
-                    )
+                    ordered_turns = tuple(reversed(turns)) if order == "desc" else turns
                     start = turn_offset if record_index == 0 else 0
                     for index in range(start, len(ordered_turns)):
                         selected_turns.append((record, ordered_turns[index]))
@@ -4692,14 +4824,9 @@ def create_app(
                         break
                     if len(selected_turns) >= limit:
                         break
-                if (
-                    next_cursor is None
-                    and raw_offset + len(raw_page.raw) < raw_page.total
-                ):
+                if next_cursor is None and raw_offset + len(raw_page.raw) < raw_page.total:
                     if not raw_page.raw:
-                        raise HTTPException(
-                            status_code=409, detail="raw_cursor_stale"
-                        )
+                        raise HTTPException(status_code=409, detail="raw_cursor_stale")
                     next_raw = raw_offset + len(raw_page.raw)
                     previous_anchor = raw_anchor(raw_page.raw[-1])
                     next_cursor = (
@@ -4708,10 +4835,7 @@ def create_app(
                     )
                 return SdkRawPage(
                     user_id=user_id,
-                    items=tuple(
-                        SdkRawItem.of(record, turn)
-                        for record, turn in selected_turns
-                    ),
+                    items=tuple(SdkRawItem.of(record, turn) for record, turn in selected_turns),
                     # Cursor consumers do not use a precise total. This lower
                     # bound preserves the legacy numeric field without forcing
                     # a full scan merely to count variable-size turn batches.
@@ -4883,6 +5007,77 @@ def create_app(
             limit=limit,
             unit="raw",
             time_filtered=time_filtered,
+        )
+
+    @app.get(
+        "/api/v2/raw/graph",
+        response_model=SdkRawGraphPage,
+        dependencies=strict,
+    )
+    async def sdk_raw_graph(
+        source: list[str] | None = Query(default=None),  # noqa: B008
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=300, ge=1, le=300),
+        user_id: str = Query(default=DEFAULT_USER_ID, pattern=USER_ID_PATTERN),
+        exclude_sources: list[str] | None = Query(default=None),  # noqa: B008
+        session_id: list[str] | None = Query(default=None),  # noqa: B008
+        statuses: list[str] | None = Query(default=None),  # noqa: B008
+    ) -> SdkRawGraphPage:
+        """Bounded lightweight raw graph, independent of list pagination."""
+        chosen_statuses = (
+            _library_values(
+                statuses or [],
+                MEMORY_STATUSES,
+                "memory_status_unknown",
+            )
+            or raw_list_filters()["statuses"]
+        )
+        sources = split_csv(source)
+        excluded = split_csv(exclude_sources)
+        sessions = split_csv(session_id)
+        if offset:
+            raise HTTPException(
+                status_code=422,
+                detail="raw_graph_is_single_page",
+            )
+        query: dict[str, object] = {
+            "user_id": user_id,
+            **raw_list_filters(chosen_statuses),
+            "include_sources": sources or None,
+            "exclude_sources": excluded or None,
+            "session_ids": sessions or None,
+            "order": "desc",
+        }
+        try:
+            client = await _sdk_client_handle(app).client()
+            value = await asyncio.to_thread(
+                client.list_memories,
+                **query,
+                offset=0,
+                limit=limit,
+            )
+            page = HySdkRawPage.from_memory_list(
+                value,
+                limit=limit,
+                offset=0,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise _sdk_http_error(
+                error,
+                "hy_memory_raw_graph_failed",
+            ) from None
+        projected = graph_items(page.raw)
+        selected = projected[:limit]
+        total = max(page.total, len(projected))
+        return SdkRawGraphPage(
+            user_id=user_id,
+            items=selected,
+            total=total,
+            offset=0,
+            limit=limit,
+            has_more=page.total > len(page.raw) or len(projected) > limit,
         )
 
     @app.post(
@@ -6611,9 +6806,8 @@ async def _recall_raw_sources(
 ) -> frozenset[str] | None:
     """The raw sources this caller may read: the `/context` raw-lane rule.
 
-    Recall's own grant does not cover original conversations. A host reads
-    them only with `om_conversations` and its granted, unrevoked sources; a
-    trusted local caller reads every source.
+    `om_conversations` plus `all-apps` reads every connected, unrevoked source.
+    A trusted local caller reads every source without an external grant.
     """
     if access is None:
         return None
@@ -6729,6 +6923,40 @@ def _memory_mode_state(app: FastAPI) -> MemoryModeState:
         explicitly_configured=store.memory_mode_explicitly_configured(),
         forced_by_env=graph_store_enabled(),
         graph_build=app.state.evolve_state_store.graph_build(),
+        graph_store=_graph_store_status(app),
+    )
+
+
+def _graph_store_status(app: FastAPI) -> GraphStoreStatus:
+    guard = cast(GraphOpenGuard | None, getattr(app.state, "graph_open_guard", None))
+    if guard is None:
+        return GraphStoreStatus()
+    backfill = getattr(app.state, "memory_graph_backfill", None)
+    running: bool | None = bool(backfill is not None and backfill.running) or (
+        app.state.evolve_state_store.graph_build().state == "running"
+    )
+    if getattr(app.state, "recovery", None) not in {"done", "failed"}:
+        # The rebuild is started by post-ready recovery; until that has run,
+        # "not running" does not mean "finished".
+        running = None
+    return guard.status(rebuild_running=running)
+
+
+async def _open_graph_store_at_startup(app: FastAPI) -> GraphOpenOutcome:
+    """Run the guarded first open of the live ultra graph; see `graph_open_guard`."""
+    guard = cast(GraphOpenGuard, app.state.graph_open_guard)
+    if app.state.memory_authority is not MemoryAuthority.SDK or _memory_mode(app) != "ultra":
+        guard.mark_not_used()
+        return "skipped"
+    live = app.state.embedding_spaces.live()
+    graph_path = live_graph_path(
+        cast(Settings, app.state.settings).data_dir,
+        live.graph_dir if live is not None else None,
+    )
+    switch = getattr(app.state, "embedding_switch", None)
+    switch_in_progress = bool(switch is not None and switch.jobs.open_job() is not None)
+    return await asyncio.to_thread(
+        guard.open_at_startup, graph_path, switch_in_progress=switch_in_progress
     )
 
 
@@ -6849,14 +7077,15 @@ def _memory_features_state(
         parameters.append(
             MemoryParameterState(
                 name=parameter.name,
-                value=float(effective[parameter.name]),
-                configured=cast(float | None, configured.get(parameter.name)),
-                default=float(defaults[parameter.name]),
-                minimum=parameter.minimum,
-                maximum=parameter.maximum,
+                value=parameter_value(parameter.name, effective[parameter.name]),
+                configured=configured.get(parameter.name),
+                default=parameter_value(parameter.name, defaults[parameter.name]),
+                minimum=parameter_value(parameter.name, parameter.minimum),
+                maximum=parameter_value(parameter.name, parameter.maximum),
                 active=reason is None,
                 reason=reason,
                 requires_feature=parameter.requires_feature,
+                requires_mode=parameter.requires_mode,
                 sdk_field=parameter.sdk_field,
                 env=parameter.env,
                 description=parameter.description,
@@ -6888,6 +7117,7 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
         evolve=overview,
         last_evolve_at=max(finished, default=None),
         graph_build=state.graph_build,
+        graph_store=state.graph_store,
         features=cast(
             dict[MemorySettingName, SettingValue],
             non_default_features(_memory_features(app), sdk_feature_defaults()),
