@@ -931,3 +931,57 @@ def test_real_http_response_body_framing(
         assert result == {"success": False, "error": "transport_or_response_failure"}
     else:
         assert result["success"] is True
+
+
+def test_search_surfaces_score_and_metadata(provider, monkeypatch):
+    fixture = {
+        "memories": [
+            {
+                "memory_id": "memory-1",
+                "content": "fact",
+                "score": 0.72,
+                "retrieval_source": "vdb",
+                "layer": "l2_fact",
+                "tags": ["work"],
+            },
+            {
+                "memory_id": "memory-2",
+                "content": "no metadata here",
+            },
+        ]
+    }
+    transport(monkeypatch, fixture)
+    result = call(provider, query="remember")
+    assert result["success"]
+    first, second = result["memories"]
+    # score / retrieval_source / layer / tags 应透出，供调用方二次过滤（#346 问题 2）
+    assert first["score"] == 0.72
+    assert first["retrieval_source"] == "vdb"
+    assert first["layer"] == "l2_fact"
+    assert first["tags"] == ["work"]
+    # 缺失字段的条目保持干净的 {memory_id, content}，不写 None / 空占位
+    assert second == {"memory_id": "memory-2", "content": "no metadata here"}
+
+
+def test_search_surfaces_metadata_through_prefetch(provider, monkeypatch):
+    monkeypatch.setattr(
+        provider,
+        "_search",
+        lambda query, limit: [
+            {
+                "memory_id": "m1",
+                "content": "reference",
+                "score": 0.88,
+                "retrieval_source": "vdb",
+                "layer": "l2_fact",
+                "tags": ["important"],
+            }
+        ],
+    )
+    provider.queue_prefetch("query")
+    provider._queue.join()
+    injected = prefetched_items(provider.prefetch("next"))
+    assert injected[0]["score"] == 0.88
+    assert injected[0]["retrieval_source"] == "vdb"
+    assert injected[0]["layer"] == "l2_fact"
+    assert injected[0]["tags"] == ["important"]

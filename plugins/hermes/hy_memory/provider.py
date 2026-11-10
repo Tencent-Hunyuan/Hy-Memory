@@ -512,7 +512,7 @@ class HyMemoryProvider(MemoryProvider):
         ):
             raise ProviderError("transport_or_response_failure") from None
 
-    def _search(self, query: str, limit: int) -> list[dict[str, str]]:
+    def _search(self, query: str, limit: int) -> list[dict[str, Any]]:
         if self._broker_config is not None:
             result = self._request(
                 "context",
@@ -572,7 +572,19 @@ class HyMemoryProvider(MemoryProvider):
             if not isinstance(content, str):
                 raise ProviderError("invalid_response")
             content = content[:remaining]
-            items.append({"memory_id": memory_id, "content": content})
+            entry: dict[str, Any] = {"memory_id": memory_id, "content": content}
+            # 透出分数与来源，调用方可据此自行二次过滤（#346 问题 2）。search 接口
+            # 返回 score/layer/retrieval_source；broker 的 context 接口没有这些
+            # 字段，此时按缺失处理（不写 None，避免污染注入的 JSON）。
+            if isinstance(item.get("score"), (int, float)):
+                entry["score"] = float(item["score"])
+            if isinstance(item.get("retrieval_source"), str) and item["retrieval_source"]:
+                entry["retrieval_source"] = item["retrieval_source"]
+            if isinstance(item.get("layer"), str) and item["layer"]:
+                entry["layer"] = item["layer"]
+            if isinstance(item.get("tags"), list):
+                entry["tags"] = item["tags"]
+            items.append(entry)
             remaining -= len(content)
         return items
 
