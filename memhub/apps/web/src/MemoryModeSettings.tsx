@@ -132,12 +132,18 @@ export function MemoryModeSettings({
     void refresh();
   }, [refresh]);
 
+  // A graph that kept taking Core down while opening was renamed aside and
+  // is being rebuilt from the memories (Core `graph_open_guard`).
+  const graphRebuilding =
+    state?.graph_store?.state === "rebuilding_after_quarantine";
+
   useEffect(() => {
-    const running = maintenance || state?.graph_build.state === "running";
+    const running =
+      maintenance || state?.graph_build.state === "running" || graphRebuilding;
     if (!running) return;
     const timer = window.setInterval(() => void refresh(), 1500);
     return () => window.clearInterval(timer);
-  }, [maintenance, refresh, state?.graph_build.state]);
+  }, [maintenance, refresh, state?.graph_build.state, graphRebuilding]);
 
   const lifecycleBusy =
     maintenance ||
@@ -294,6 +300,11 @@ export function MemoryModeSettings({
         {maintenance ? (
           <p className="r6-settings-note" role="status">
             {text("正在检查或切换向量模型，完成前不能切换模式或手动整合。")}
+          </p>
+        ) : null}
+        {graphRebuilding ? (
+          <p className="r6-settings-note" role="status">
+            {text("mode.graphStore.quarantined")}
           </p>
         ) : null}
         {state?.graph_build.state === "running" ? (
