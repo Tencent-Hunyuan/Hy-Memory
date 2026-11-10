@@ -265,7 +265,7 @@ node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups
 
 - `create` 不加 `--yes` 只显示目标和预计大小（`GET /api/v1/backup/estimate`），
   不写任何东西；加 `--yes` 才写。复制期间记忆写入短暂暂停（约 1 秒 / 千条记忆），
-  结束后自动恢复，结果里有 `pause_ms`。目标必须在数据目录内且尚不存在。
+  结束后自动恢复，结果里有 `pause_ms`。目标必须是 `<数据目录>/backups/` 下尚不存在的名字（路径中的 `..` 与符号链接都会被解析，指向别处一律拒绝）。
 - `restore` 需 Runtime 已停止，并用 `--confirm` 再写一遍路径。它替换主库和记忆库，
   然后核对记忆条数（每个用户每一层、每个向量集合、图谱节点）；不一致就整体回滚，
   `backup_restore_counts_mismatch`。之前的数据留在

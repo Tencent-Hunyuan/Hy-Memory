@@ -21,8 +21,13 @@ A v2 backup is what a person needs to get their memories back.
 
 A v2 backup is a directory `<data dir>/backups/<name>.memhub-backup/`
 (0700; every file 0600). `backups/x` and the v1 habit `backups/x.sqlite3`
-both name `backups/x.memhub-backup`. The target must be inside the data
-directory and must not exist.
+both name `backups/x.memhub-backup`. Every person-supplied path (a backup
+target, a restore source) goes through one helper,
+`memory_backup.confined_backup_path`: it is canonicalised (`..` collapsed,
+symlinks followed) and must then be a direct entry of `<data dir>/backups`;
+a symlink at that name, a `backups` directory that is a link, or anything
+else is refused (`backup_target_outside_data_dir`,
+`backup_restore_source_outside_home`). A target must not exist yet.
 
 ```
 manifest.json

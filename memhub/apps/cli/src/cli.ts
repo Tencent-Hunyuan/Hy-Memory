@@ -3792,7 +3792,7 @@ async function applyBackupCreate(
   const attachment = await attachToRuntimeOrNull(environment);
   if (attachment === null) return runtimeUnavailable(descriptor, asJson);
   const nextStep =
-    "备份目标必须是数据目录内的新路径；要能用 backup restore 恢复，请放在 <数据目录>/backups/ 下。";
+    "备份目标必须是 <数据目录>/backups/ 下尚不存在的名字（例如 backups/2026-11-11）。";
   const refuse = (error: unknown): number => {
     const message = error instanceof Error ? error.message : String(error);
     // Runtime refusing the target (e.g. `backup_target_outside_data_dir`) is a

@@ -348,7 +348,7 @@ async def restore(hooks: BackupHooks, source_name: str) -> BackupRestoreResponse
 
         try:
             result = await asyncio.to_thread(
-                restore_managed_backup, data_dir=hooks.data_dir, source=source_name
+                restore_managed_backup, data_dir=hooks.data_dir, source=str(source.path)
             )
         except RestoreRejected as error:
             raise BackupError(error.code) from error

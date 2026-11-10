@@ -806,7 +806,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "--target <path>",
         summary:
-          "create 的备份目录，必须在数据目录内且尚不存在（backups/x 写成 backups/x.memhub-backup）。",
+          "create 的备份目录：<数据目录>/backups/ 下尚不存在的名字（backups/x 写成 backups/x.memhub-backup）。",
       },
       {
         flag: "--source <path>",

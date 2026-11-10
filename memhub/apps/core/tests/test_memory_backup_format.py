@@ -31,6 +31,7 @@ from one_memory.memory_backup import (
 )
 from one_memory.storage_backends import GraphBackend, StorageBackends, VectorBackend
 
+
 def _sqlite(path: Path, rows: int = 1) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as database:
@@ -93,6 +94,10 @@ def test_the_target_is_a_new_directory_inside_the_home(tmp_path) -> None:
         resolve_target(home, str(tmp_path / "outside"))
     with pytest.raises(BackupError, match="backup_target_outside_data_dir"):
         resolve_target(home, "../escape")
+    # Only a direct entry of `backups/`: not the home itself, not deeper.
+    for elsewhere in ("one", "hy-memory/x", "backups/a/b", "backups", "backups/.."):
+        with pytest.raises(BackupError, match="backup_target_outside_data_dir"):
+            resolve_target(home, elsewhere)
     (home / "backups" / "b.memhub-backup").mkdir(parents=True)
     with pytest.raises(BackupError, match="backup_target_exists"):
         resolve_target(home, "backups/b")
@@ -293,3 +298,63 @@ def test_run_restore_refuses_a_pending_journal(tmp_path) -> None:
     source = locate(home, "backups/one.memhub-backup")
     with pytest.raises(BackupError, match="backup_restore_pending"):
         asyncio.run(memory_backup.run_restore(home, source, current=BackendIdentity()))
+
+
+ESCAPES = (
+    "backups/../one-memory.sqlite3",
+    "backups/../../outside",
+    "../outside",
+    "/etc/passwd",
+    "backups/./../hy-memory",
+    "backups/sub/../../outside",
+    "",
+    "backups/\x00name",
+)
+
+
+@pytest.mark.parametrize("value", ESCAPES)
+def test_a_traversal_never_leaves_the_backups_directory(tmp_path, value) -> None:
+    home = _home(tmp_path)
+    (home / "backups").mkdir(exist_ok=True)
+    (tmp_path / "outside").mkdir()
+    with pytest.raises(BackupError, match="backup_restore_source_outside_home"):
+        locate(home, value)
+    with pytest.raises(BackupError, match="backup_target_outside_data_dir"):
+        resolve_target(home, value)
+
+
+def test_a_symlink_never_leads_out_of_the_backups_directory(tmp_path) -> None:
+    home = _home(tmp_path)
+    backups = home / "backups"
+    backups.mkdir(exist_ok=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "manifest.json").write_text("{}")
+    _backup(home, "real")
+    # A link to a directory outside, and a link to a real backup inside: both refused.
+    (backups / "escape.memhub-backup").symlink_to(outside)
+    (backups / "alias.memhub-backup").symlink_to(backups / "real.memhub-backup")
+    for name in ("escape.memhub-backup", "alias.memhub-backup"):
+        with pytest.raises(BackupError, match="backup_restore_source_outside_home"):
+            locate(home, f"backups/{name}")
+        with pytest.raises(BackupError, match="backup_target_outside_data_dir"):
+            resolve_target(home, f"backups/{name}")
+    assert locate(home, "backups/real.memhub-backup").schema_version == 2
+
+
+def test_a_backups_directory_that_is_a_link_is_refused(tmp_path) -> None:
+    home = _home(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "x.memhub-backup").mkdir(parents=True)
+    (home / "backups").symlink_to(elsewhere)
+    with pytest.raises(BackupError, match="backup_restore_source_outside_home"):
+        locate(home, "backups/x.memhub-backup")
+    with pytest.raises(BackupError, match="backup_target_outside_data_dir"):
+        resolve_target(home, "backups/new")
+
+
+def test_an_absolute_path_inside_the_backups_directory_is_accepted(tmp_path) -> None:
+    home = _home(tmp_path)
+    _backup(home, "abs")
+    source = locate(home, str(home / "backups" / "abs.memhub-backup"))
+    assert source.path == (home / "backups" / "abs.memhub-backup").resolve()

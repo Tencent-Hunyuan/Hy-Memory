@@ -273,23 +273,43 @@ def estimate(
     return BackupEstimate(local + export, len(planned), local, export, free, backend)
 
 
+def confined_backup_path(data_dir: Path, value: str, *, code: str) -> Path:
+    """The one place a person-supplied backup path becomes a filesystem path.
+
+    `value` may be a bare name, `backups/<name>`, or an absolute path; it is
+    canonicalised (`..` collapsed, symlinks followed) and must then name a
+    direct child of `<home>/backups`. A symlink at that name is refused, as
+    is a `backups` directory that is itself a link elsewhere: the canonical
+    path is compared with the literal `<home>/backups`, so either escape
+    lands outside it. Anything else raises `code`.
+    """
+    if not value or "\x00" in value or len(value) > 4096:
+        raise BackupError(code)
+    home = os.path.realpath(data_dir)
+    backups = os.path.join(home, "backups")
+    joined = os.path.normpath(os.path.join(home, value))
+    if os.path.islink(joined):
+        raise BackupError(code)
+    real = os.path.realpath(joined)
+    if not real.startswith(backups + os.sep) or os.path.dirname(real) != backups:
+        raise BackupError(code)
+    return Path(real)
+
+
 def resolve_target(data_dir: Path, target: str) -> Path:
-    """The backup directory `target` names, inside the home and not taken yet.
+    """The backup directory `target` names: a new entry of `<home>/backups`.
 
     `backups/x.sqlite3` (the v1 habit) becomes `backups/x.memhub-backup`: a
     v2 backup is a directory, and its name says so.
     """
-    home = data_dir.resolve()
-    candidate = Path(target)
-    resolved = (candidate if candidate.is_absolute() else home / candidate).resolve()
-    if not (resolved == home or home in resolved.parents) or resolved == home:
-        raise BackupError("backup_target_outside_data_dir")
-    name = resolved.name
+    head, name = os.path.split(target.rstrip("/"))
     if name.endswith(".sqlite3"):
         name = name.removesuffix(".sqlite3")
-    if not name.endswith(BACKUP_SUFFIX):
+    if name and name not in {".", ".."} and not name.endswith(BACKUP_SUFFIX):
         name = f"{name}{BACKUP_SUFFIX}"
-    resolved = resolved.with_name(name)
+    resolved = confined_backup_path(
+        data_dir, os.path.join(head, name), code="backup_target_outside_data_dir"
+    )
     if resolved.exists() or resolved.is_symlink():
         raise BackupError("backup_target_exists")
     return resolved
@@ -600,15 +620,7 @@ class BackupSource:
 
 def locate(data_dir: Path, source: str) -> BackupSource:
     """The managed backup `source` names: a v1 file or a v2 directory in `backups/`."""
-    home = data_dir.resolve()
-    backups = (home / "backups").resolve()
-    candidate = Path(source)
-    unresolved = candidate if candidate.is_absolute() else home / candidate
-    if unresolved.is_symlink():
-        raise BackupError("backup_restore_source_outside_home")
-    resolved = unresolved.resolve()
-    if resolved.parent != backups:
-        raise BackupError("backup_restore_source_outside_home")
+    resolved = confined_backup_path(data_dir, source, code="backup_restore_source_outside_home")
     if resolved.is_file():
         return BackupSource(resolved, 1)
     if not resolved.is_dir():
