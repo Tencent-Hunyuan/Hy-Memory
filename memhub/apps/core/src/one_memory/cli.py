@@ -97,6 +97,12 @@ def main() -> None:
         from one_memory.keychain_deleter import main as delete_keychain
 
         raise SystemExit(delete_keychain())
+    if sys.argv[1:2] == ["--graph-open-probe"]:
+        # Hidden: the child `graph_open_guard` watches while it opens the
+        # ultra graph. Imports nothing but Kuzu.
+        from one_memory.hy_graph_admin import run_graph_open_probe
+
+        raise SystemExit(run_graph_open_probe(sys.argv[2:]))
     if sys.argv[1:2] == ["capture"] and __name__ != "__main__":
         _end_by(os.environ.get("ONE_MEMORY_CAPTURE_DEADLINE_S"))
 

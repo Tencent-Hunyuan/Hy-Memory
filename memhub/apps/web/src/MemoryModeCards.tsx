@@ -1,7 +1,7 @@
 import type { MemoryPipelineMode } from "@one-memory/contracts";
 import { Check, Clock3 } from "lucide-react";
 import { type ReactNode, useId } from "react";
-import { MODE_COPY } from "./memory-mode-ui";
+import { MODE_COPY, MODE_TIER, modeDisplayName } from "./memory-mode-ui";
 import { useOnboardingTranslation } from "./onboarding-language";
 import "./memory-mode-cards.css";
 
@@ -33,8 +33,10 @@ export function MemoryModeCards({
   currentBadge,
   disabled = false,
   layout = "grid",
+  describedBy,
   onChange,
   ultraDetail,
+  ultraDetailBusy = false,
   "aria-label": ariaLabel,
   "aria-busy": ariaBusy,
 }: {
@@ -43,8 +45,10 @@ export function MemoryModeCards({
   currentBadge?: ReactNode;
   disabled?: boolean | ((mode: MemoryPipelineMode) => boolean);
   layout?: "grid" | "rows";
+  describedBy?: Partial<Record<MemoryPipelineMode, string | undefined>>;
   onChange(mode: MemoryPipelineMode, control: HTMLInputElement): void;
   ultraDetail?: ReactNode;
+  ultraDetailBusy?: boolean;
   "aria-label": string;
   "aria-busy"?: boolean;
 }) {
@@ -64,11 +68,8 @@ export function MemoryModeCards({
         {MODES.map((mode) => {
           const selected = value === mode.id;
           const modeDisabled = unavailable(mode.id);
-          const localizedTitle = text(MODE_COPY[mode.id].title);
-          const title = localizedTitle.replace(
-            /\s*[（(](?:lite|pro|ultra)[)）]\s*$/i,
-            "",
-          );
+          const title = modeDisplayName(text, mode.id);
+          const tier = MODE_TIER[mode.id];
           const features = text(MODE_COPY[mode.id].description).split(
             /\s*·\s*/,
           );
@@ -86,7 +87,8 @@ export function MemoryModeCards({
                   type="radio"
                   name={name}
                   value={mode.id}
-                  aria-label={localizedTitle}
+                  aria-label={`${title} · ${tier}`}
+                  aria-describedby={describedBy?.[mode.id]}
                   checked={selected}
                   disabled={modeDisabled}
                   onChange={(event) => onChange(mode.id, event.currentTarget)}
@@ -94,9 +96,7 @@ export function MemoryModeCards({
                 <span className="memory-mode-title">
                   <span className="memory-mode-index">{mode.index}</span>
                   <strong>{title}</strong>
-                  <span className="memory-mode-tier">
-                    {mode.id.toUpperCase()}
-                  </span>
+                  <span className="memory-mode-tier">· {tier}</span>
                   {current === mode.id && currentBadge ? (
                     <span className="memory-mode-current">{currentBadge}</span>
                   ) : null}
@@ -115,13 +115,16 @@ export function MemoryModeCards({
                     </span>
                   ))}
                 </span>
-                {mode.id === "ultra" && selected && ultraDetail ? (
-                  <div className="memory-mode-detail">
-                    <Clock3 size={14} aria-hidden="true" />
-                    <div>{ultraDetail}</div>
-                  </div>
-                ) : null}
               </label>
+              {mode.id === "ultra" && selected && ultraDetail ? (
+                <div
+                  className="memory-mode-detail"
+                  aria-busy={ultraDetailBusy || undefined}
+                >
+                  <Clock3 size={14} aria-hidden="true" />
+                  <div>{ultraDetail}</div>
+                </div>
+              ) : null}
             </div>
           );
         })}

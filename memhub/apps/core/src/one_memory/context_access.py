@@ -11,14 +11,14 @@ from one_memory.context_models import ContextSearchRequest
 from one_memory.external_memory_access import ExternalMemoryAccess
 from one_memory.memory_server.store_binding import store_for
 
-#: The revoked-source query, per engine.
+#: The connected-source query, per engine.
 #:
 #: Identical text today because it uses no placeholders and reads by position,
 #: which both engines support. Kept as a named constant so that adding a
 #: parameter later forces the `?`/`%s` difference to be considered here rather
 #: than being introduced silently at the call site.
-REVOKED_SOURCES_SQL = (
-    "SELECT source_id FROM source_grants WHERE user_id='local' AND revoked_at IS NOT NULL"
+CONNECTED_SOURCES_SQL = (
+    "SELECT DISTINCT source_id FROM source_grants WHERE user_id='local' AND revoked_at IS NULL"
 )
 
 
@@ -49,16 +49,10 @@ def resolve_context_authority(
         scope for scope in access.scopes if scope == "all-apps" or scope.startswith("workspace:v1:")
     )
     memory_allowed = memory_requested and "om_recall" in access.tools and bool(memory_scopes)
-    declared_sources = frozenset(
-        scope.removeprefix("source:") for scope in access.scopes if scope.startswith("source:")
-    )
     raw_allowed = (
-        raw_requested
-        and "om_conversations" in access.tools
-        and "all-apps" in access.scopes
-        and bool(declared_sources)
+        raw_requested and "om_conversations" in access.tools and "all-apps" in access.scopes
     )
-    if explicit is not None and (not raw_allowed or not explicit <= declared_sources):
+    if explicit is not None and not raw_allowed:
         raise HTTPException(403, "external_context_scope_denied")
 
     raw_sources: frozenset[str] = frozenset()
@@ -70,10 +64,10 @@ def resolve_context_authority(
             # the same code runs on both engines without a branch per engine.
             if hasattr(db, "set_progress_handler"):
                 db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-            revoked = frozenset(str(row[0]) for row in db.execute(REVOKED_SOURCES_SQL))
+            connected = frozenset(str(row[0]) for row in db.execute(CONNECTED_SOURCES_SQL))
         if time.monotonic() >= deadline:
             raise TimeoutError
-        raw_sources = declared_sources - revoked
+        raw_sources = connected
         if explicit is not None:
             if not explicit <= raw_sources:
                 raise HTTPException(403, "external_context_scope_denied")

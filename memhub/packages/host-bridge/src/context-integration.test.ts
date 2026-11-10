@@ -530,15 +530,20 @@ it("rechecks the WorkBuddy installation after Core records delivery", async () =
 it.each([
   { tools: ["om_recall"], scopes: ["all-apps"] },
   { tools: ["om_recall"], scopes: [`workspace:v1:${"a".repeat(64)}`] },
-  { tools: ["om_conversations"], scopes: ["all-apps", "source:codex"] },
+  { tools: ["om_conversations"], scopes: ["all-apps"] },
+  {
+    tools: ["om_conversations"],
+    scopes: ["all-apps", "source:codex"],
+    body: { query: "original", raw_source_ids: ["cursor"] },
+  },
 ])(
   "combines only the underlying grants: $tools $scopes",
-  async ({ tools, scopes }) => {
+  async ({ tools, scopes, body }) => {
     const f = await fixture(tools as HostReadTool[], scopes);
-    expect((await f.post()).status).toBe(200);
+    expect((await f.post(body)).status).toBe(200);
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0].url).toBe("/api/v2/context/search");
-    expect(f.calls[0].body).toEqual({ query: "original" });
+    expect(f.calls[0].body).toEqual(body ?? { query: "original" });
     expect(
       JSON.parse(f.calls[0].headers["x-one-memory-allowed-tools"] as string),
     ).toEqual(tools);
@@ -552,16 +557,10 @@ it.each([
   { tools: [], scopes: ["all-apps"], body: { query: "x" } },
   { tools: ["om_ask"], scopes: ["all-apps"], body: { query: "x" } },
   { tools: ["om_recall"], scopes: ["source:codex"], body: { query: "x" } },
-  { tools: ["om_conversations"], scopes: ["all-apps"], body: { query: "x" } },
   {
     tools: ["om_recall"],
     scopes: ["all-apps"],
     body: { query: "x", kinds: ["raw"] },
-  },
-  {
-    tools: ["om_recall", "om_conversations"],
-    scopes: ["all-apps", "source:codex"],
-    body: { query: "x", raw_source_ids: ["cursor"] },
   },
 ])(
   "denies invalid requested authority before Core: $tools $body",
@@ -1069,11 +1068,6 @@ it.each([
     scopes: ["all-apps", "source:codex"],
     response: receiptFor([memory]),
   },
-  {
-    tools: ["om_recall", "om_conversations"],
-    scopes: ["all-apps", "source:codex"],
-    response: receiptFor([{ ...raw, source: "cursor" }]),
-  },
 ])(
   "checks captured identity on Core output: $tools $scopes",
   async ({ tools, scopes, response }) => {
@@ -1099,8 +1093,8 @@ it.each([
   },
   {
     tools: ["om_conversations"],
-    scopes: ["all-apps", "source:codex"],
-    response: receiptFor([raw]),
+    scopes: ["all-apps"],
+    response: receiptFor([{ ...raw, source: "cursor" }]),
   },
 ])(
   "preserves correctly authorized single-lane output: $tools $scopes",

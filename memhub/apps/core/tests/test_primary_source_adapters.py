@@ -1394,12 +1394,7 @@ def test_cursor_discovery_does_not_enter_non_conversation_trees(tmp_path) -> Non
         ],
     )
     write_jsonl(
-        root
-        / "extensions"
-        / "large-cache"
-        / "agent-transcripts"
-        / "ignored"
-        / "ignored.jsonl",
+        root / "extensions" / "large-cache" / "agent-transcripts" / "ignored" / "ignored.jsonl",
         [
             {
                 "role": "user",

@@ -835,6 +835,9 @@ class GraphStoreConfig:
     username: str = None  # Neo4j/Memgraph 用户名
     password: str = None  # Neo4j/Memgraph 密码
     database: str = None  # Neo4j 数据库名
+    # Kuzu 内存上限。Kuzu 默认 buffer pool ≈ 物理内存的 80%，嵌入式记忆图用不到。
+    buffer_pool_mb: int = None  # env: MEMORY_GRAPH_BUFFER_POOL_MB，默认 512；0 = Kuzu 默认
+    max_threads: int = None     # env: MEMORY_GRAPH_MAX_THREADS，默认 4；0 = Kuzu 默认（全部核）
 
     # ── 记忆关系图（pro 模式）──
     # 写侧：把 L2_FACT 投影进图并建 RELATED_TO / TAGGED_WITH 边
@@ -910,6 +913,10 @@ class GraphStoreConfig:
             )
         if self.database is None:
             self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        if self.buffer_pool_mb is None:
+            self.buffer_pool_mb = _get_env_int("MEMORY_GRAPH_BUFFER_POOL_MB", 512)
+        if self.max_threads is None:
+            self.max_threads = _get_env_int("MEMORY_GRAPH_MAX_THREADS", 4)
 
         # ── 记忆关系图参数（默认值见 docs/pro_graph_design.md）──
         if self.memory_graph_write is None:

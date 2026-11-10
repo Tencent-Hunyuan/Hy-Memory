@@ -1019,18 +1019,16 @@ export async function getSdkRaw({
 export async function getSdkRawGraph({
   source,
   offset = 0,
-  limit = 500,
-  snapshotId,
+  limit = 300,
   signal,
 }: {
   source?: string;
   offset?: number;
   limit?: number;
-  snapshotId?: string;
   signal?: AbortSignal;
 } = {}): Promise<SdkRawGraphPage> {
   const response = await client.get<SdkRawGraphPage>("/api/v2/raw/graph", {
-    params: { source, offset, limit, snapshot_id: snapshotId },
+    params: { source, offset, limit },
     signal,
   });
   return response.data;
@@ -1052,6 +1050,8 @@ export async function searchSdkRaw(
     },
     { signal: options.signal, timeout: 10_000 },
   );
+  if (response.data?.state !== "grounded" && response.data?.state !== "empty")
+    throw new Error("raw_search_unavailable");
   const items = response.data?.items;
   return Array.isArray(items)
     ? items.filter(

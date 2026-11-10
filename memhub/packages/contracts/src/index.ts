@@ -720,7 +720,7 @@ export interface SdkRawPage {
   time_filtered?: boolean;
 }
 
-/** Lightweight complete-map projection. Raw text remains SDK-owned. */
+/** Lightweight bounded-map projection. Raw text remains SDK-owned. */
 export interface SdkRawGraphItem {
   turn_id: string;
   raw_id: string;
@@ -734,11 +734,12 @@ export interface SdkRawGraphItem {
 export interface SdkRawGraphPage {
   user_id: string;
   items: SdkRawGraphItem[];
+  /** SDK-reported matching raw scope; `items` remains capped by `limit`. */
   total: number;
   limit: number;
   offset: number;
+  /** More matching turns exist, but the product map does not auto-page them. */
   has_more: boolean;
-  snapshot_id: string;
 }
 
 /** `GET /api/v2/memory-library/layers`: memories per SDK layer. */
@@ -1037,6 +1038,24 @@ export interface EvolveOverview {
   running: EvolveRunReceipt[];
 }
 
+/** The ultra graph's own state (Core `graph_open_guard`). */
+export interface GraphStoreStatus {
+  state:
+    | "not_used"
+    | "opening"
+    | "ready"
+    | "rebuilding_after_quarantine"
+    | "unavailable";
+  /** Every quarantine this home has seen (fewer copies are kept). */
+  quarantine_count: number;
+  last_quarantined_at: string | null;
+  /** A probe outcome (`timeout`, `rss_cap`, `crashed`, `exit_nonzero`) or
+   *  `core_died_during_probe`; optional for an older Core. */
+  last_quarantine_reason?: string | null;
+  /** Starts that died while opening the graph, not yet resolved. */
+  failed_open_attempts: number;
+}
+
 export interface MemoryModeState {
   mode: MemoryPipelineMode;
   configured_mode: MemoryPipelineMode;
@@ -1044,6 +1063,8 @@ export interface MemoryModeState {
   forced_by_env: boolean;
   modes: MemoryPipelineMode[];
   graph_build: GraphBuildState;
+  /** Optional: an older Core does not report it. */
+  graph_store?: GraphStoreStatus;
 }
 
 export interface MemoryModeChange extends MemoryModeState {
@@ -1080,6 +1101,7 @@ export interface MemoryPipelineStatus {
   evolve: EvolveOverview;
   last_evolve_at: string | null;
   graph_build: GraphBuildState;
+  graph_store?: GraphStoreStatus;
   features: Record<string, boolean | number>;
   ui_language?: string | null;
   sdk_language?: string;

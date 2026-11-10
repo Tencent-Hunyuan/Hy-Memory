@@ -15,9 +15,7 @@ class HyLifecycle:
         object.__setattr__(self, "hidden", MappingProxyType(dict(self.hidden)))
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, HyLifecycle) and dict(self.hidden) == dict(
-            other.hidden
-        )
+        return isinstance(other, HyLifecycle) and dict(self.hidden) == dict(other.hidden)
 
     def __hash__(self) -> int:
         return hash(tuple(sorted(self.hidden.items())))
@@ -27,9 +25,5 @@ class HyLifecycle:
 
     def replacing(self, memory_id: str) -> tuple[str, ...]:
         return tuple(
-            sorted(
-                old
-                for old, replacements in self.hidden.items()
-                if memory_id in replacements
-            )
+            sorted(old for old, replacements in self.hidden.items() if memory_id in replacements)
         )

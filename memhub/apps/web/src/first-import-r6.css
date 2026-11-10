@@ -1,10 +1,10 @@
 /* 143:2419/2502/2594/2685: only step2; shared frame/progress are owned elsewhere. */
 .first-import-r6-layout {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  min-height: 100%;
-  height: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 738px) 278px;
+  gap: 30px;
+  height: 560.2px;
+  min-height: 0;
 }
 .first-import-r6-main {
   min-width: 0;
@@ -13,24 +13,19 @@
   flex-direction: column;
 }
 .first-import-r6-intro {
-  position: relative;
-  margin: 0 0 8px;
-}
-.first-import-r6-intro h2 {
-  margin: 0 0 3px;
-  color: #262a2e;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 26px;
-}
-.first-import-r6-intro p {
   margin: 0;
+  color: #5a6169;
+  font-size: 13px;
+  line-height: 25px;
+}
+.first-import-r6-subintro {
+  margin: 1px 0 20px;
   color: #63707b;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 24px;
 }
 .first-import-r6-history-window {
-  margin: 0 0 12px;
+  margin: -10px 0 12px;
   padding: 8px 10px;
   border: 1px solid #ead7a7;
   border-radius: 8px;
@@ -40,114 +35,13 @@
   line-height: 20px;
 }
 .first-import-r6-main > .r6-import-progress {
-  flex: 0 0 auto;
-  width: 100%;
-  margin-inline: auto;
-}
-.first-import-r6-main > .r6-import-progress[data-count="1"] {
-  grid-auto-columns: min(320px, 100%);
-  justify-content: center;
-}
-.first-import-r6-main > .r6-import-progress[data-count="2"] {
-  grid-auto-columns: min(320px, calc((100% - 16px) / 2));
-  justify-content: center;
-}
-.first-import-r6-main > .r6-import-progress[data-count="3"] {
-  grid-auto-columns: calc((100% - 32px) / 3);
-  justify-content: center;
-  overflow-x: hidden;
-}
-.first-import-r6-main > .r6-import-progress[data-count="many"] {
-  grid-auto-flow: column;
-  grid-auto-columns: calc((100% - 32px) / 3);
-  justify-content: start;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-snap-type: x mandatory;
-  scrollbar-color: rgb(102 128 145 / 50%) transparent;
-}
-.first-import-r6-main > .r6-import-progress:focus-visible {
-  outline: 2px solid #557c93;
-  outline-offset: 3px;
-}
-.first-import-r6-main > .r6-import-progress .r6-import-progress-card {
-  min-height: 128px;
-  padding: 16px 20px;
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
-  align-content: center;
-  column-gap: 18px;
-  text-align: left;
-  scroll-snap-align: start;
-}
-.first-import-r6-main > .r6-import-progress .r6-import-progress-orbit {
-  width: 86px;
-  height: 86px;
-  grid-column: 1;
-  grid-row: 1 / 4;
-  margin: 0;
-}
-.first-import-r6-main > .r6-import-progress .r6-import-progress-icon {
-  width: 54px;
-  height: 54px;
-  border-radius: 14px;
-}
-.first-import-r6-main > .r6-import-progress :is(h2, p, small) {
-  grid-column: 2;
-}
-.first-import-r6-main > .r6-import-progress .r6-import-progress-card h2 {
-  align-self: end;
-}
-.first-import-r6-intro .first-import-r6-submission-status {
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: #41697d;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.first-import-r6-submission-status::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgb(88 124 144 / 28%);
-  border-top-color: #587c90;
-  border-radius: 50%;
-  animation: first-import-r6-checking 1.2s linear infinite;
-}
-.first-import-r6-intro:has(.first-import-r6-submission-status) {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.first-import-r6-intro:has(.first-import-r6-submission-status) h2 {
-  flex: 0 0 auto;
-  margin: 0;
-}
-.first-import-r6-intro .first-import-r6-scroll-hint {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  color: #6b7e8b;
-  font-size: 11px;
-  line-height: 20px;
-  white-space: nowrap;
-}
-.first-import-r6-intro:has(.first-import-r6-scroll-hint) {
-  padding-right: 190px;
-}
-@keyframes first-import-r6-checking {
-  to {
-    transform: rotate(360deg);
-  }
+  flex: 0 0 218px;
 }
 .first-import-r6-feed {
-  flex: 0 0 auto;
-  margin-top: 20px;
-  overflow: visible;
+  min-height: 0;
+  flex: 1;
+  margin-top: 26px;
+  overflow: auto;
   scrollbar-width: thin;
   overscroll-behavior: contain;
 }
@@ -194,14 +88,9 @@
   margin: 0;
 }
 .first-import-r6-options {
-  flex: 1 1 auto;
   min-width: 0;
-  min-height: 132px;
-  padding: 22px 24px;
-  display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.3fr);
-  align-items: center;
-  gap: 0 28px;
+  min-height: 0;
+  padding: 24px;
   border: 1px solid #ffffffe0;
   border-radius: 22px;
   background:
@@ -210,13 +99,9 @@
   box-shadow:
     inset 0 1px #fff,
     0 12px 32px rgb(49 75 101 / 4%);
-  overflow: visible;
+  overflow: auto;
   scrollbar-width: thin;
   overscroll-behavior: contain;
-  align-self: stretch;
-}
-.first-import-r6-options-head {
-  min-width: 0;
 }
 .first-import-r6-eyebrow {
   margin: 0 0 14px;
@@ -243,12 +128,12 @@
   position: relative;
   display: block;
   width: 100%;
-  min-height: 104px;
-  margin: 0;
-  padding: 18px 52px 16px 18px;
+  min-height: 124px;
+  margin: 0 0 16px;
+  padding: 18px 16px 12px;
   border: 1px solid rgb(179 196 209 / 42%);
-  border-radius: 12px;
-  background: rgb(255 255 255 / 34%);
+  border-radius: 0;
+  background: rgb(255 255 255 / 10%);
   box-shadow: inset 0 1px 1px #ffffffd9;
   backdrop-filter: blur(20px);
   cursor: pointer;
@@ -277,8 +162,8 @@
 .first-import-r6-selection input {
   appearance: none;
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: 22px;
+  right: 18px;
   width: 16px;
   height: 16px;
   min-height: 16px;
@@ -316,11 +201,10 @@
   display: block;
   font-size: 12px;
   line-height: 20px;
-  margin-top: 7px;
+  margin-top: 8px;
   color: #5e6e7a;
 }
 .first-import-r6-options-note {
-  grid-column: 1 / -1;
   font-size: 11px;
   line-height: 22px;
   margin: 0 0 12px;
@@ -340,37 +224,33 @@
 .first-import-r6-options details p {
   margin: 6px 0;
 }
-.first-import-r6-feedback {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgb(255 255 255 / 50%);
+.first-import-r6-footer-note {
+  flex: 1;
+  min-width: 0;
+  max-height: 64px;
+  overflow: auto;
 }
-.first-import-r6-feedback p {
+.first-import-r6-footer-note p {
   margin: 0;
   font-size: 12px;
   line-height: 20px;
   color: #63707b;
 }
-.first-import-r6-feedback [role="alert"] {
+.first-import-r6-footer-note [role="alert"] {
   color: #944242;
 }
-.first-import-r6-feedback .first-import-r6-partial-success {
+.first-import-r6-footer-note .first-import-r6-partial-success {
   color: #245f50;
   font-weight: 600;
 }
 .first-import-r6-footer-actions {
   display: flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 100%;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 16px;
   align-items: center;
-  margin-left: auto;
 }
 .first-import-r6-footer-actions > [data-variant="primary"] {
-  min-width: min(160px, 100%);
+  min-width: 210px;
 }
 .first-import-r6-footer-actions .r6-button-label {
   display: inline-flex;
@@ -517,28 +397,13 @@ dialog.first-import-r6-original[open] {
 }
 @media (max-width: 1150px) {
   .first-import-r6-layout {
-    gap: 18px;
-  }
-}
-@media (min-width: 761px) and (max-height: 859px) {
-  .onboarding-r6:has(.first-import-r6-layout)
-    > :is(.onboarding-r6-titlebar, .onboarding-r6-local-footer) {
-    display: none;
-  }
-  .onboarding-r6:has(.first-import-r6-layout) > .onboarding-r6-stage {
-    min-height: 0;
-    height: 100dvh;
-    padding: 10px 24px 2px;
-  }
-  .onboarding-r6:has(.first-import-r6-layout)
-    > .onboarding-r6-stage
-    > .onboarding-r6-shell {
-    height: 100%;
+    grid-template-columns: minmax(0, 1fr) 278px;
+    gap: 24px;
   }
 }
 @media (min-width: 761px) and (max-height: 959px) {
   .onboarding-r6-body:has(> .first-import-r6-layout) {
-    overflow-y: auto;
+    overflow: hidden;
     padding-top: 16px;
     padding-bottom: 16px;
   }
@@ -548,8 +413,8 @@ dialog.first-import-r6-original[open] {
 }
 @media (min-width: 761px) and (max-height: 859px) {
   .first-import-r6-options {
-    padding: 18px 20px;
-    overflow: visible;
+    padding: 14px;
+    overflow: hidden;
   }
   .first-import-r6-eyebrow {
     margin-bottom: 4px;
@@ -566,16 +431,16 @@ dialog.first-import-r6-original[open] {
   }
   .first-import-r6-selection,
   .first-import-r6-selection + .first-import-r6-selection {
-    min-height: 96px;
-    margin-bottom: 0;
-    padding: 15px 48px 13px 16px;
+    min-height: 86px;
+    margin-bottom: 8px;
+    padding: 9px 12px;
   }
   .first-import-r6-selection strong {
     line-height: 24px;
   }
   .first-import-r6-selection input {
-    top: 17px;
-    right: 16px;
+    top: 13px;
+    right: 12px;
   }
   .first-import-r6-selection span {
     margin-top: 4px;
@@ -596,7 +461,6 @@ dialog.first-import-r6-original[open] {
     overflow: visible;
   }
   .first-import-r6-options {
-    display: block;
     overflow: visible;
   }
   .first-import-r6-footer-note {
@@ -654,10 +518,6 @@ dialog.first-import-r6-original[open] {
   outline-offset: 3px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .first-import-r6-submission-status::before {
-    animation: none;
-    border-color: #587c90;
-  }
   .first-import-r6-selection,
   .first-import-r6-selection input::after {
     transition: none;

@@ -25,6 +25,7 @@ describe("R6 shared controls", () => {
       </R6Button>,
     );
     const button = screen.getByRole("button", { name: "保存修改" });
+    expect(button.getAttribute("data-pending-capable")).toBe("true");
     const reservedSpinner = button.querySelector(".r6-button-spinner");
     expect(reservedSpinner).toBeTruthy();
     expect(reservedSpinner?.getAttribute("data-visible")).toBeNull();

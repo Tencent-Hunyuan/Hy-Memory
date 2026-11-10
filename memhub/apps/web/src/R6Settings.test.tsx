@@ -204,7 +204,13 @@ it("uses one sidebar hierarchy and explains when a saved model is inactive in li
   await user.click(screen.getByRole("button", { name: "界面语言" }));
   expect(screen.getByRole("combobox", { name: "语言" })).toBeTruthy();
   await user.click(screen.getByRole("button", { name: "模型配置" }));
-  expect(await screen.findByText("当前是基础记忆（lite）")).toBeTruthy();
+  expect(
+    await screen.findByText(
+      (_, element) =>
+        element?.tagName === "STRONG" &&
+        element.textContent === "基础记忆 · Lite",
+    ),
+  ).toBeTruthy();
   expect(
     screen.getByText(/是否开始整理取决于.*“用模型沉淀记忆”.*开关/),
   ).toBeTruthy();
@@ -243,8 +249,9 @@ it("carries a missing-model explanation into model configuration and moves focus
   const user = userEvent.setup();
   render(<R6Settings onDiagnostics={vi.fn()} />);
 
+  await user.click(await screen.findByRole("combobox", { name: "记忆模式" }));
   await user.click(
-    await screen.findByRole("radio", { name: /智能记忆（pro）/ }),
+    await screen.findByRole("option", { name: /智能记忆 · Pro/ }),
   );
 
   expect(

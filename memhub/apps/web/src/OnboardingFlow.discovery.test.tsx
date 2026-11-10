@@ -156,7 +156,7 @@ it("moves from import to the actual third step without completing onboarding", a
   );
   await userEvent.click(screen.getByRole("button", { name: "进入第三步" }));
   await userEvent.click(screen.getByRole("radio", { name: /pro/i }));
-  await userEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
+  await userEvent.click(screen.getByRole("button", { name: "配置模型" }));
   expect(screen.getByRole("heading", { name: "第三步模型页面" })).toBeTruthy();
   expect(completeOnboarding).not.toHaveBeenCalled();
   expect(finish).not.toHaveBeenCalled();

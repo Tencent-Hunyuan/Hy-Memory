@@ -75,9 +75,13 @@ async function chooseMode(
   user: ReturnType<typeof userEvent.setup>,
   name: RegExp,
 ) {
-  const option = await screen.findByRole("radio", { name });
+  const control = await screen.findByRole("combobox", {
+    name: "记忆模式",
+  });
+  await user.click(control);
+  const option = await screen.findByRole("option", { name });
   await user.click(option);
-  return option;
+  return control;
 }
 
 afterEach(() => {
@@ -88,17 +92,43 @@ afterEach(() => {
   vi.mocked(memoryModePlanUnsupported).mockReturnValue(false);
 });
 
-it("renders all settings modes as one grouped shared choice list", async () => {
+it("shows the current mode in a compact dropdown", async () => {
   prepare("pro");
+  const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  const group = await screen.findByRole("radiogroup", {
-    name: "当前模式",
+  const control = await screen.findByRole("combobox", {
+    name: "记忆模式",
   });
-  expect(within(group).getAllByRole("radio")).toHaveLength(3);
+  expect(control.textContent).toContain("智能记忆 · Pro");
+  expect(control.textContent).toContain("沉淀高级记忆");
   expect(
-    within(group).getByText("当前模式").closest("label")?.textContent,
-  ).toContain("智能记忆PRO");
+    control.querySelector(".om-option-menu-suffix")?.textContent,
+  ).toContain("· Pro");
+  expect(control.textContent).not.toContain("（");
+  expect(screen.queryByText("当前模式")).toBeNull();
+  expect(screen.queryByRole("radiogroup")).toBeNull();
+
+  await user.click(control);
+  expect(screen.getAllByRole("option")).toHaveLength(3);
+});
+
+it("shows the effective Ultra mode and disables selection when forced by the environment", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    configured_mode: "pro",
+    forced_by_env: true,
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  const control = await screen.findByRole("combobox", {
+    name: "记忆模式",
+  });
+  expect(control.textContent).toContain("深度记忆 · Ultra");
+  expect(control).toHaveProperty("disabled", true);
+  expect(screen.getByRole("switch", { name: "每天自动整合" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
 });
 
 it("confirms the data effects before switching to lite", async () => {
@@ -111,7 +141,7 @@ it("confirms the data effects before switching to lite", async () => {
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /基础记忆（lite）/);
+  await chooseMode(user, /基础记忆 · Lite/);
   expect(screen.getByText(/已有记忆继续保留/)).toBeTruthy();
   expect(screen.getByText("模型调用与费用")).toBeTruthy();
   expect(screen.getByText("搜索范围")).toBeTruthy();
@@ -121,18 +151,18 @@ it("confirms the data effects before switching to lite", async () => {
   await waitFor(() => expect(setMemoryMode).toHaveBeenCalledWith("lite"));
   await waitFor(() =>
     expect(document.activeElement).toBe(
-      screen.getByRole("radio", { name: /基础记忆（lite）/ }),
+      screen.getByRole("combobox", { name: "记忆模式" }),
     ),
   );
 });
 
-it("traps modal focus, closes on Escape and restores the mode-card focus", async () => {
+it("traps modal focus, closes on Escape and restores the mode dropdown", async () => {
   prepare("pro");
   const outside = document.createElement("button");
   document.body.append(outside);
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  const lite = await chooseMode(user, /基础记忆（lite）/);
+  const lite = await chooseMode(user, /基础记忆 · Lite/);
 
   const cancel = screen.getByRole("button", { name: "取消" });
   await waitFor(() => expect(document.activeElement).toBe(cancel));
@@ -154,7 +184,7 @@ it("keeps focus inside the modal while the mode change is pending", async () => 
   vi.mocked(setMemoryMode).mockReturnValue(new Promise(() => {}));
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  await chooseMode(user, /基础记忆（lite）/);
+  await chooseMode(user, /基础记忆 · Lite/);
   await user.click(screen.getByRole("button", { name: "确认选择" }));
 
   const modal = screen.getByRole("dialog");
@@ -185,7 +215,7 @@ it("routes to model setup instead of switching pro without a model", async () =>
     <MemoryModeSettings hasActiveModel={false} onConfigureModel={configure} />,
   );
 
-  await chooseMode(user, /智能记忆（pro）/);
+  await chooseMode(user, /智能记忆 · Pro/);
   expect(configure).toHaveBeenCalledExactlyOnceWith(
     "使用 pro 或 ultra 前需要先配置并启用生成模型。",
   );
@@ -199,9 +229,27 @@ it("uses the isolated legacy plan only for a route-level old-Core 404", async ()
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /基础记忆（lite）/);
+  await chooseMode(user, /基础记忆 · Lite/);
   expect(planMemoryMode).toHaveBeenCalledWith("lite");
   expect(await screen.findByText(/已有记忆继续保留/)).toBeTruthy();
+});
+
+it("restores focus to the mode dropdown when planning fails", async () => {
+  prepare("pro");
+  vi.mocked(planMemoryMode).mockRejectedValue(new Error("offline"));
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await chooseMode(user, /基础记忆 · Lite/);
+
+  expect(
+    await screen.findByText("模式选择影响暂时无法读取，请重试。"),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole("combobox", { name: "记忆模式" }),
+    ),
+  );
 });
 
 it("keeps downgrade effects when an old Core falls back from ultra to pro", async () => {
@@ -211,7 +259,7 @@ it("keeps downgrade effects when an old Core falls back from ultra to pro", asyn
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /智能记忆（pro）/);
+  await chooseMode(user, /智能记忆 · Pro/);
 
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getAllByText("已有数据")).toHaveLength(1);
@@ -223,7 +271,7 @@ it("explains model cost, search scope and the next step before switching to ultr
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /深度记忆（ultra）/);
+  await chooseMode(user, /深度记忆 · Ultra/);
 
   expect(screen.getByText("模型调用与费用")).toBeTruthy();
   expect(screen.getByText("搜索范围")).toBeTruthy();
@@ -239,7 +287,7 @@ it("distinguishes regular memories from higher-level Ultra data when switching t
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /智能记忆（pro）/);
+  await chooseMode(user, /智能记忆 · Pro/);
 
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getAllByText("已有数据")).toHaveLength(1);
@@ -256,7 +304,7 @@ it("does not show automatic consolidation when switching from lite to pro", asyn
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /智能记忆（pro）/);
+  await chooseMode(user, /智能记忆 · Pro/);
 
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getAllByText("已有数据")).toHaveLength(1);
@@ -273,10 +321,10 @@ it("focuses the Evolve settings after switching to ultra", async () => {
   });
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  await screen.findByRole("radio", { name: /智能记忆（pro）/ });
+  await screen.findByRole("combobox", { name: "记忆模式" });
   vi.mocked(getMemoryMode).mockResolvedValue(state("ultra"));
 
-  await chooseMode(user, /深度记忆（ultra）/);
+  await chooseMode(user, /深度记忆 · Ultra/);
   await user.click(screen.getByRole("button", { name: "确认选择" }));
 
   await waitFor(() =>
@@ -285,6 +333,29 @@ it("focuses the Evolve settings after switching to ultra", async () => {
   expect(
     screen.getByRole("heading", { name: "记忆整合（Evolve）" }),
   ).toBeTruthy();
+});
+
+it("focuses the recoverable Evolve section when Ultra schedule loading fails", async () => {
+  prepare("pro");
+  vi.mocked(getEvolveSchedule).mockRejectedValue(new Error("offline"));
+  vi.mocked(setMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    previous_mode: "pro",
+    effects: ["existing_memories_added_to_graph"],
+  });
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  await screen.findByRole("combobox", { name: "记忆模式" });
+  vi.mocked(getMemoryMode).mockResolvedValue(state("ultra"));
+
+  await chooseMode(user, /深度记忆 · Ultra/);
+  await user.click(screen.getByRole("button", { name: "确认选择" }));
+
+  await waitFor(() =>
+    expect(document.activeElement?.getAttribute("id")).toContain("-evolve"),
+  );
+  expect(screen.getByText("自动整合设置暂时无法读取，请重试。")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
 });
 
 it("shows the default nightly evolve controls in ultra", async () => {
@@ -303,6 +374,26 @@ it("shows the default nightly evolve controls in ultra", async () => {
   expect(timePicker.textContent).toContain("03:00");
   expect(screen.getByText(/只运行这一次，不改变每天的计划/)).toBeTruthy();
   expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
+});
+
+it("keeps the immediate action visible and recovers when the schedule read fails", async () => {
+  prepare("ultra");
+  vi.mocked(getEvolveSchedule).mockRejectedValueOnce(new Error("offline"));
+  const user = userEvent.setup();
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(
+    await screen.findByText("自动整合设置暂时无法读取，请重试。"),
+  ).toBeTruthy();
+  expect(screen.queryByRole("switch", { name: "每天自动整合" })).toBeNull();
+  expect(screen.getByRole("button", { name: "立即整合" })).toBeTruthy();
+
+  await user.click(screen.getByRole("button", { name: "重新读取" }));
+
+  const automatic = await screen.findByRole("switch", {
+    name: "每天自动整合",
+  });
+  await waitFor(() => expect(document.activeElement).toBe(automatic));
 });
 
 it("opens the time picker from the whole control and saves a complete time", async () => {
@@ -443,9 +534,9 @@ it("hides the time field when automatic evolve is off and keeps the saved time v
 it("updates mode state automatically without showing a manual refresh control", async () => {
   prepare("pro");
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
-  const pro = await screen.findByRole("radio", { name: /智能记忆（pro）/ });
+  const mode = await screen.findByRole("combobox", { name: "记忆模式" });
 
-  expect((pro as HTMLInputElement).checked).toBe(true);
+  expect(mode.textContent).toContain("智能记忆 · Pro");
   expect(screen.queryByRole("button", { name: "刷新记忆模式" })).toBeNull();
   expect(getMemoryMode).toHaveBeenCalledTimes(1);
   await waitFor(() => {
@@ -459,9 +550,9 @@ it("keeps the mode usable when an evolve status read fails", async () => {
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
   expect(
-    (await screen.findByRole("radio", {
-      name: /智能记忆（pro）/,
-    })) as HTMLInputElement,
+    await screen.findByRole("combobox", {
+      name: "记忆模式",
+    }),
   ).toHaveProperty("disabled", false);
 });
 
@@ -474,15 +565,17 @@ it("offers a text recovery action when the mode read fails", async () => {
   expect(
     await screen.findByText("记忆模式状态暂时无法读取，请重试。"),
   ).toBeTruthy();
-  expect(
-    screen.getByRole("radio", { name: /基础记忆（lite）/ }),
-  ).toHaveProperty("disabled", true);
+  expect(screen.getByRole("combobox", { name: "记忆模式" })).toHaveProperty(
+    "disabled",
+    true,
+  );
 
   await user.click(screen.getByRole("button", { name: "重新读取" }));
   await waitFor(() =>
-    expect(
-      screen.getByRole("radio", { name: /智能记忆（pro）/ }),
-    ).toHaveProperty("disabled", false),
+    expect(screen.getByRole("combobox", { name: "记忆模式" })).toHaveProperty(
+      "disabled",
+      false,
+    ),
   );
 });
 
@@ -493,7 +586,7 @@ it("keeps a failed switch explanation inside the open confirmation dialog", asyn
   const user = userEvent.setup();
   render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
 
-  await chooseMode(user, /深度记忆（ultra）/);
+  await chooseMode(user, /深度记忆 · Ultra/);
   await user.click(screen.getByRole("button", { name: "确认选择" }));
 
   const dialog = screen.getByRole("dialog");
@@ -514,15 +607,17 @@ it("keeps lite available while model status is unknown", async () => {
     />,
   );
 
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("combobox", { name: "记忆模式" }));
   expect(
-    await screen.findByRole("radio", { name: /基础记忆（lite）/ }),
+    await screen.findByRole("option", { name: /基础记忆 · Lite/ }),
   ).toHaveProperty("disabled", false);
-  expect(screen.getByRole("radio", { name: /智能记忆（pro）/ })).toHaveProperty(
+  expect(screen.getByRole("option", { name: /智能记忆 · Pro/ })).toHaveProperty(
     "disabled",
     true,
   );
   expect(
-    screen.getByRole("radio", { name: /深度记忆（ultra）/ }),
+    screen.getByRole("option", { name: /深度记忆 · Ultra/ }),
   ).toHaveProperty("disabled", true);
 });
 
@@ -538,9 +633,10 @@ it("blocks mode and Evolve controls during embedding maintenance", async () => {
       "正在检查或切换向量模型，完成前不能选择模式或手动整合。",
     ),
   ).toBeTruthy();
-  expect(
-    screen.getByRole("radio", { name: /基础记忆（lite）/ }),
-  ).toHaveProperty("disabled", true);
+  expect(screen.getByRole("combobox", { name: "记忆模式" })).toHaveProperty(
+    "disabled",
+    true,
+  );
   expect(screen.getByRole("button", { name: "立即整合" })).toHaveProperty(
     "disabled",
     true,
@@ -567,4 +663,37 @@ it("blocks lifecycle controls while the knowledge graph is being built", async (
     "disabled",
     true,
   );
+});
+
+it("says a damaged graph was quarantined and is being rebuilt", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_store: {
+      state: "rebuilding_after_quarantine",
+      quarantine_count: 1,
+      last_quarantined_at: "2026-11-09T00:00:00Z",
+      failed_open_attempts: 0,
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(await screen.findByText("知识图谱文件损坏，已自动重建")).toBeTruthy();
+});
+
+it("shows no graph notice once the graph is ready", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_store: {
+      state: "ready",
+      quarantine_count: 1,
+      last_quarantined_at: "2026-11-09T00:00:00Z",
+      failed_open_attempts: 0,
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await screen.findByRole("combobox", { name: "记忆模式" });
+  expect(screen.queryByText("知识图谱文件损坏，已自动重建")).toBeNull();
 });
