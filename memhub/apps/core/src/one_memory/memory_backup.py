@@ -287,11 +287,15 @@ def confined_backup_path(data_dir: Path, value: str, *, code: str) -> Path:
         raise BackupError(code)
     home = os.path.realpath(data_dir)
     backups = os.path.join(home, "backups")
+    # Lexically first: nothing outside `backups/` is even looked at.
     joined = os.path.normpath(os.path.join(home, value))
+    if not joined.startswith(backups + os.sep) or os.path.dirname(joined) != backups:
+        raise BackupError(code)
+    # Then on disk: no link at the name, and no link on the way to it.
     if os.path.islink(joined):
         raise BackupError(code)
     real = os.path.realpath(joined)
-    if not real.startswith(backups + os.sep) or os.path.dirname(real) != backups:
+    if not real.startswith(backups + os.sep) or real != joined:
         raise BackupError(code)
     return Path(real)
 
