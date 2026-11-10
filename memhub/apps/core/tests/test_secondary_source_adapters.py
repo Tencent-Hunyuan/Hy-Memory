@@ -710,6 +710,16 @@ def test_opencode_v2_reads_text_and_tool_content(tmp_path: Path) -> None:
                 now,
                 json.dumps({"tokens": {"input": 1}}),
             ),
+            (
+                # Text OpenCode injected on the person's behalf; not theirs.
+                "message-v2-synthetic",
+                "session-v2",
+                "synthetic",
+                4,
+                now,
+                now,
+                json.dumps({"text": SECRET}),
+            ),
         ],
     )
 
@@ -824,6 +834,93 @@ def test_opencode_v2_keeps_an_interrupted_reply_after_the_settle_window(
     events = _scan(create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path)))
 
     assert _evidence_text(events) == ["interrupted"]
+
+
+def test_opencode_upgrade_from_v1_does_not_reimport_messages(tmp_path: Path) -> None:
+    root = tmp_path / "opencode"
+    root.mkdir()
+    database = root / "opencode.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT
+        );
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT, time_created INTEGER, data TEXT
+        );
+        INSERT INTO session VALUES ('session-o', '/private/project');
+        INSERT INTO message VALUES
+            ('message-user', 'session-o', 1000, '{"role":"user"}'),
+            ('message-answer', 'session-o', 1001, '{"role":"assistant"}');
+        INSERT INTO part VALUES
+            ('part-q1', 'message-user', 1000, '{"type":"text","text":"question"}'),
+            ('part-q2', 'message-user', 1000, '{"type":"text","text":"more"}'),
+            ('part-a', 'message-answer', 1001, '{"type":"text","text":"answer"}');
+        """
+    )
+    connection.close()
+    adapter = create_opencode_adapter(_grant(OPENCODE_DESCRIPTOR.source_id, root, tmp_path))
+    v1 = _scan(adapter)
+    assert _evidence_text(v1) == ["question\nmore", "answer"]
+
+    # One more V1 message the V1 reader never saw, then the upgrade: OpenCode 2
+    # migrates the history in place under the same ids (joining user text with
+    # a blank line), in its own order, and the person keeps chatting in V2.
+    now = int(time.time() * 1000)
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        INSERT INTO message VALUES
+            ('message-late', 'session-o', 1002, '{"role":"user"}');
+        INSERT INTO part VALUES
+            ('part-late', 'message-late', 1002, '{"type":"text","text":"late v1"}');
+        CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT NOT NULL);
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+            seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        INSERT INTO session_v2 VALUES ('session-o', '/private/project');
+        """
+    )
+    done = {"time": {"created": now, "completed": now}}
+    connection.executemany(
+        "INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            ("message-late", "session-o", "user", 2, 1002, 1002, '{"text":"late v1"}'),
+            ("message-user", "session-o", "user", 0, 1000, 1000, '{"text":"question\\n\\nmore"}'),
+            (
+                "message-answer",
+                "session-o",
+                "assistant",
+                1,
+                1001,
+                1001,
+                json.dumps({**done, "content": [{"type": "text", "text": "answer"}]}),
+            ),
+            ("message-new", "session-o", "user", 3, now, now, '{"text":"new in v2"}'),
+        ],
+    )
+    connection.commit()
+    connection.close()
+
+    # A scan stopped after one message must still remember what V1 imported.
+    async def first_only() -> list[ScanEvent]:
+        return [
+            event async for event in adapter.scan(ScanOptions(cursors=_cursors(v1), max_messages=1))
+        ]
+
+    partial = asyncio.run(first_only())
+    assert _evidence_text(partial) == ["late v1"]
+    rest = _scan(adapter, cursors={**_cursors(v1), **_cursors(partial)})
+    assert _evidence_text(rest) == ["new in v2"]
+    assert not _evidence(
+        _scan(adapter, cursors={**_cursors(v1), **_cursors(partial), **_cursors(rest)})
+    )
+    # Without a V1 cursor nothing is known to be imported, so all of it is read.
+    assert _evidence_text(_scan(adapter)) == ["late v1", "question\n\nmore", "answer", "new in v2"]
 
 
 def _write_opencode_v2(

@@ -461,14 +461,24 @@ describe("capture hooks installed with recall", () => {
         messageID: "message-user",
         prompt: { text: "question" },
       });
-      yield {
-        type: "session.text.ended",
-        data: {
-          sessionID: "session-v2",
-          assistantMessageID: "message-v2",
-          text: "answer",
-        },
-      };
+      // One reply in two text blocks (a tool call sat between them), the
+      // first delivered twice. They must leave as one message, not as two
+      // entries with one id that Core would read as a revision.
+      for (const [ordinal, text] of [
+        [0, "answer"],
+        [0, "answer"],
+        [2, "after the tool"],
+      ] as const) {
+        yield {
+          type: "session.text.ended",
+          data: {
+            sessionID: "session-v2",
+            assistantMessageID: "message-v2",
+            ordinal,
+            text,
+          },
+        };
+      }
       yield {
         type: "session.execution.succeeded",
         data: { sessionID: "session-v2" },
@@ -503,10 +513,14 @@ describe("capture hooks installed with recall", () => {
         {
           role: "assistant",
           message_id: "message-v2",
-          parts: [{ type: "text", text: "answer" }],
+          parts: [
+            { type: "text", text: "answer" },
+            { type: "text", text: "after the tool" },
+          ],
         },
       ],
     });
+    expect(payload.messages).toHaveLength(2);
   });
 });
 

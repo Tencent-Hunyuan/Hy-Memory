@@ -98,9 +98,9 @@ export default { id: "one-memory-capture", server, setup }
 ```
 
 - `server()`：V1 入口（对象形态自 OpenCode 1.18.29 起支持），监听 `message.part.updated` / `session.idle`。
-- `setup(ctx)`：V2 入口。用户文本来自 `ctx.session.hook("prompt")`，助手文本来自 `ctx.event.subscribe()` 的 `session.text.ended`（按块追加，不覆盖），`session.execution.succeeded` / `failed` / `interrupted` 与 `session.idle` / 空闲 `session.status` 触发 flush。
+- `setup(ctx)`：V2 入口。用户文本来自 `ctx.session.hook("prompt")`，助手文本来自 `ctx.event.subscribe()` 的 `session.text.ended`（按块 `ordinal` 收集，不覆盖），`session.execution.succeeded` / `failed` / `interrupted` 与 `session.idle` / 空闲 `session.status` 触发 flush。
 - 两个入口都把文本通过 `one-memory capture opencode` 送给 Core，payload 一致；Plugin 超时和异常不会阻断 OpenCode。
-- 带 `message_id` 的条目会被 Core 用于去重；同一进程内重复加载多个 Plugin 实例也不会重复发送。
+- 带 `message_id` 的条目会被 Core 用于去重。同一条消息的多个文本块（V1 按 part id、V2 按 `ordinal`）合并为一个条目发送，避免同一 id 的两个条目被 Core 当作相互修订；同一进程内重复加载多个 Plugin 实例也不会重复发送。
 
 因此 OpenCode 有两条会话进入 MemHub 的路径：
 
@@ -127,3 +127,5 @@ OpenCode V2 会监听配置与 Plugin 目录并热加载，但 MCP 连接与 Plu
 - 安装器只写 `opencode.json`；配置仅存在于 `opencode.jsonc` 时，会新建一个 `opencode.json`。V2 同时读取两者，功能不受影响，但文件会分成两个。
 - V2 表的 `session_part` 目前为空，文本与工具内容都在 `session_message.data`；Adapter 暂不读取该表。
 - 流式中的助手消息会等到 `time.completed` 或 10 分钟静默窗口后再入库，避免保存半句回复。
+- 只读 `user` / `assistant` 行；`synthetic`（OpenCode 代用户注入的文本，V1 的 synthetic text part 迁移后即此类型）、`compaction`、`idle` 等行不入库。
+- 从 V1 升级到 V2：OpenCode 原地迁移并保留消息 id。V1 Adapter 留下的游标仍能在旧 `message` 表上验证，Adapter 据此跳过已导入的消息（V2 游标携带 `;v1=<rowid>` 水位，扫描中断后仍有效），不会重复入库或重复触发模型写入。

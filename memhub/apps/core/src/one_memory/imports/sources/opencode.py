@@ -157,28 +157,74 @@ def _read_opencode_db(
     source_version: str | None,
 ) -> Iterator[ScanEvent]:
     checkpoint = resume_checkpoint(source_file, options)
-    last_rowid = _row_checkpoint(checkpoint)
+    last_rowid, _ = _row_checkpoint(checkpoint)
     previous = options.cursors.get(source_file.safe_id)
     anchor = previous.checkpoint_anchor if previous is not None else None
+    # What V1 already imported is judged from the stored cursor itself, even
+    # when the file metadata says "start over": the upgrade migrates the file
+    # in place, and the anchor check below is what proves the cursor applies.
+    stored_rowid, v1_imported_through = _row_checkpoint(
+        previous.checkpoint if previous is not None else None
+    )
     with open_sqlite_readonly(source_file) as connection:
         schema = _opencode_schema(connection)
         if schema is None:
             yield ScanFailure(reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA)
             return
-        last_rowid = _validated_row_checkpoint(
+        if schema == "v1":
+            last_rowid = _validated_row_checkpoint(
+                connection,
+                table="message",
+                last_rowid=last_rowid,
+                checkpoint_anchor=anchor,
+                dialect="v1",
+            )
+            yield from _read_v1_rows(
+                connection,
+                source_file=source_file,
+                source_id=source_id,
+                source_version=source_version,
+                last_rowid=last_rowid,
+                checkpoint_anchor=anchor if last_rowid else None,
+            )
+            return
+        validated = _validated_row_checkpoint(
             connection,
-            table="session_message" if schema == "v2" else "message",
+            table="session_message",
             last_rowid=last_rowid,
             checkpoint_anchor=anchor,
+            dialect="v2",
         )
-        reader = _read_v2_rows if schema == "v2" else _read_v1_rows
-        yield from reader(
+        # The upgrade case. OpenCode 2 migrates the V1 history into
+        # `session_message` in place and keeps every message id, so a cursor
+        # left by the V1 reader still names a row of the old `message` table.
+        # Everything up to it was imported already; re-reading it would store
+        # each message again (with V2's text joining, as a revision) and pay
+        # for its extraction twice.
+        if (
+            stored_rowid
+            and not validated
+            and v1_imported_through is None
+            and _has_columns(connection, "message", {"id"})
+            and _validated_row_checkpoint(
+                connection,
+                table="message",
+                last_rowid=stored_rowid,
+                checkpoint_anchor=anchor,
+                dialect="v1",
+            )
+        ):
+            v1_imported_through = stored_rowid
+        if v1_imported_through is not None and not _has_columns(connection, "message", {"id"}):
+            v1_imported_through = None
+        yield from _read_v2_rows(
             connection,
             source_file=source_file,
             source_id=source_id,
             source_version=source_version,
-            last_rowid=last_rowid,
-            checkpoint_anchor=anchor if last_rowid else None,
+            last_rowid=validated,
+            checkpoint_anchor=anchor if validated else None,
+            v1_imported_through=v1_imported_through,
         )
 
 
@@ -293,26 +339,36 @@ def _read_v2_rows(
     source_version: str | None,
     last_rowid: int,
     checkpoint_anchor: str | None,
+    v1_imported_through: int | None,
 ) -> Iterator[ScanEvent]:
     session_table = _v2_session_table(connection)
     if session_table is None:  # pragma: no cover - guarded by _opencode_schema
         yield ScanFailure(reason_code=ScanIssueCode.UNSUPPORTED_SCHEMA)
         return
+    # Messages the V1 reader already imported keep their ids across the
+    # upgrade; they are recognised here and skipped, never sent to Core again.
+    imported_in_v1 = (
+        "EXISTS (SELECT 1 FROM message v1 WHERE v1.id = m.id AND v1.rowid <= ?)"
+        if v1_imported_through is not None
+        else "0"
+    )
+    imported_params = () if v1_imported_through is None else (v1_imported_through,)
     rows = connection.execute(
         f"""
         SELECT m.rowid AS source_rowid, m.id AS message_id, m.session_id,
                m.time_created, m.time_updated, m.type AS message_type,
-               m.data AS message_data, s.directory
+               m.data AS message_data, s.directory,
+               {imported_in_v1} AS imported_in_v1
         FROM session_message m
         LEFT JOIN "{session_table}" s ON s.id = m.session_id
         WHERE m.rowid > ?
         ORDER BY m.rowid
         """,
-        (last_rowid,),
+        (*imported_params, last_rowid),
     )
     before = source_cursor(
         source_file,
-        f"row:{last_rowid}",
+        _v2_checkpoint(last_rowid, v1_imported_through),
         checkpoint_anchor=checkpoint_anchor,
     )
     now_ms = time.time() * 1000
@@ -325,14 +381,18 @@ def _read_v2_rows(
         source_rowid = int(row["source_rowid"])
         cursor = source_cursor(
             source_file,
-            f"row:{source_rowid}",
-            checkpoint_anchor=_checkpoint_anchor(message_id),
+            _v2_checkpoint(source_rowid, v1_imported_through),
+            checkpoint_anchor=_checkpoint_anchor(message_id, dialect="v2"),
         )
         message_type = str(row["message_type"])
         conversation_id = str(row["session_id"])
-        if message_type not in {"user", "assistant"}:
-            # Idle/usage/compaction rows carry no words; they still move the
-            # cursor when nothing earlier is waiting to settle.
+        if message_type not in {"user", "assistant"} or row["imported_in_v1"]:
+            # Idle/usage/compaction rows carry no words, and `synthetic` rows
+            # are text OpenCode injected on the person's behalf (V1's
+            # synthetic text parts migrate to this type), so none of them is
+            # read. A message the V1 reader imported is not read again. All of
+            # them still move the cursor when nothing earlier is waiting to
+            # settle.
             if not blocked:
                 before = cursor
             continue
@@ -587,13 +647,31 @@ def _milliseconds(value: object) -> float | None:
     return float(value) * (1000 if value < 100_000_000_000 else 1)
 
 
-def _row_checkpoint(checkpoint: str | None) -> int:
+def _row_checkpoint(checkpoint: str | None) -> tuple[int, int | None]:
+    """The stored row, and how far the V1 reader got before an upgrade.
+
+    The second value is carried in V2 checkpoints written after an upgrade
+    from V1 (`row:<rowid>;v1=<rowid>`), so a scan that stops part way keeps
+    skipping what V1 already imported on the next poll.
+    """
     if checkpoint is None or not checkpoint.startswith("row:"):
-        return 0
+        return 0, None
+    position, _, carried = checkpoint.removeprefix("row:").partition(";v1=")
     try:
-        return max(0, int(checkpoint.removeprefix("row:")))
+        rowid = max(0, int(position))
     except ValueError:
-        return 0
+        return 0, None
+    try:
+        imported_through = int(carried) if carried else None
+    except ValueError:
+        imported_through = None
+    return rowid, imported_through
+
+
+def _v2_checkpoint(rowid: int, v1_imported_through: int | None) -> str:
+    if v1_imported_through is None:
+        return f"row:{rowid}"
+    return f"row:{rowid};v1={v1_imported_through}"
 
 
 def _validated_row_checkpoint(
@@ -602,6 +680,7 @@ def _validated_row_checkpoint(
     table: str,
     last_rowid: int,
     checkpoint_anchor: str | None,
+    dialect: str,
 ) -> int:
     if last_rowid == 0:
         return 0
@@ -612,11 +691,15 @@ def _validated_row_checkpoint(
     if (
         row is None
         or checkpoint_anchor is None
-        or _checkpoint_anchor(str(row["id"])) != checkpoint_anchor
+        or _checkpoint_anchor(str(row["id"]), dialect=dialect) != checkpoint_anchor
     ):
         return 0
     return last_rowid
 
 
-def _checkpoint_anchor(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
+def _checkpoint_anchor(value: str, *, dialect: str = "v1") -> str:
+    # V2 keeps V1's message ids, so a bare id hash would let a V1 cursor pass
+    # as a V2 one whenever both tables hold the same id at the same rowid. The
+    # V2 anchor is salted to keep the two apart; V1's stays as it always was.
+    material = value if dialect == "v1" else f"session_message\0{value}"
+    return hashlib.sha256(material.encode()).hexdigest()

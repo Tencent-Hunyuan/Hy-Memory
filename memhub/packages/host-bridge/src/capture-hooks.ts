@@ -454,39 +454,61 @@ import { spawnSync } from "node:child_process";
 
 const command = ${JSON.stringify(command)};
 const pending = new Map();
-// OpenCode may load one plugin instance per location. Module state is shared,
-// so a streamed part seen twice is still sent once.
-const seen = globalThis[Symbol.for("one-memory.capture.seen")] ?? new Set();
-globalThis[Symbol.for("one-memory.capture.seen")] = seen;
+// Core keys a captured message by its id, so two entries with one id read as
+// edits of each other and the later one replaces the earlier. A message's
+// text therefore travels as one entry holding every part seen so far, keyed
+// by part (V1 part id, V2 block ordinal): a streamed update replaces its
+// part, a new block is added after the others. OpenCode may load one plugin
+// instance per location; the module state is shared, so a part seen twice
+// is still sent once.
+const messages = globalThis[Symbol.for("one-memory.capture.messages")] ?? new Map();
+globalThis[Symbol.for("one-memory.capture.messages")] = messages;
 
-function remember(sessionId, role, text, messageId) {
+function remember(sessionId, role, text, messageId, partKey) {
   if (!sessionId || typeof text !== "string" || text.length === 0) return;
-  if (messageId) {
-    const key = JSON.stringify([sessionId, messageId, text]);
-    if (seen.has(key)) return;
-    seen.add(key);
-    if (seen.size > 500) seen.delete(seen.values().next().value);
-  }
   const turn = pending.get(sessionId) ?? [];
-  turn.push({
-    role,
-    parts: [{ type: "text", text }],
-    ...(messageId ? { message_id: messageId } : {}),
-  });
+  if (!messageId) {
+    turn.push({ role, parts: [{ type: "text", text }] });
+    pending.set(sessionId, turn);
+    return;
+  }
+  const key = JSON.stringify([sessionId, messageId]);
+  const known = messages.get(key) ?? { role, texts: new Map() };
+  const part = partKey === undefined || partKey === null ? text : String(partKey);
+  if (known.texts.get(part) === text) return;
+  known.texts.set(part, text);
+  messages.delete(key);
+  messages.set(key, known);
+  if (messages.size > 200) messages.delete(messages.keys().next().value);
+  if (!turn.some((entry) => entry.key === key)) {
+    turn.push({ key, role, message_id: messageId });
+  }
   pending.set(sessionId, turn);
 }
 
 function send(sessionId) {
-  const messages = pending.get(sessionId);
+  const turn = pending.get(sessionId);
   pending.delete(sessionId);
-  if (!messages || messages.length === 0) return;
+  if (!turn || turn.length === 0) return;
+  const messagesToSend = turn.flatMap((entry) => {
+    if (!entry.key) return [entry];
+    const known = messages.get(entry.key);
+    if (!known) return [];
+    return [
+      {
+        role: entry.role,
+        parts: [...known.texts.values()].map((text) => ({ type: "text", text })),
+        message_id: entry.message_id,
+      },
+    ];
+  });
   try {
     spawnSync(command, ["capture", "opencode"], {
       input: JSON.stringify({
         hook_event_name: "session.status",
         status: "idle",
         session_id: sessionId,
-        messages,
+        messages: messagesToSend,
       }),
       timeout: 3000,
       stdio: ["pipe", "ignore", "ignore"],
@@ -518,6 +540,7 @@ async function server() {
               props.role ?? "assistant",
               part.text,
               props.messageID ?? part.messageID,
+              part.id,
             );
           }
         }
@@ -554,7 +577,13 @@ async function setup(ctx) {
       const data = event?.data ?? event?.properties ?? {};
       const type = event?.type;
       if (type === "session.text.ended") {
-        remember(data.sessionID, "assistant", data.text, data.assistantMessageID);
+        remember(
+          data.sessionID,
+          "assistant",
+          data.text,
+          data.assistantMessageID,
+          data.ordinal,
+        );
       } else if (
         type === "session.execution.succeeded" ||
         type === "session.execution.failed" ||
