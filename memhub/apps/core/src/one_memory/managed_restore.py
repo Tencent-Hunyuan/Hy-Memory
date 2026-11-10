@@ -32,6 +32,49 @@ class RestoreRejected(RuntimeError):
 
 
 @dataclass(frozen=True)
+class DatabaseIdentity:
+    """What makes a SQLite file a One Memory management database."""
+
+    #: The tables the atomic replace checks again (`MainDatabase.restore_from`).
+    required_tables: frozenset[str]
+    schema_version: int
+    #: Written by a newer build than this one.
+    too_new: bool
+
+
+def database_identity(path: Path) -> DatabaseIdentity | None:
+    """The identity of a backed-up management database; None if it is not one.
+
+    Identity is structural: a real One Memory database always has these
+    tables. It must not depend on the migration ledger, which only exists
+    after a migration run and is absent from normally-created databases.
+    """
+    try:
+        with main_database(path).read() as connection:
+            present = {
+                str(row[0])
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if present >= _LEGACY_IDENTITY:
+                required = frozenset({"evidence"})
+            elif present >= _SDK_IDENTITY and _sdk_authority(connection):
+                required = _SDK_IDENTITY
+            else:
+                return None
+            version = 0
+            if SCHEMA_TABLE in present:
+                row = connection.execute(
+                    f"SELECT version FROM {SCHEMA_TABLE} ORDER BY version DESC LIMIT 1"
+                ).fetchone()
+                if row is not None:
+                    version = int(row[0])
+    except sqlite3.Error:
+        return None
+    latest_known = max((migration.version for migration in MIGRATIONS), default=0)
+    return DatabaseIdentity(required, version, version > latest_known > 0)
+
+
+@dataclass(frozen=True)
 class RestoreResult:
     restored_bytes: int
     previous_backup_path: Path
@@ -52,39 +95,15 @@ def restore_managed_backup(
     if resolved.is_symlink() or resolved.parent != backups or not resolved.is_file():
         raise RestoreRejected("backup_restore_source_outside_home")
 
-    # Identity is structural: a real One Memory database always has these
-    # tables. It must not depend on the migration ledger, which only exists
-    # after a migration run and is absent from normally-created databases.
-    try:
-        with main_database(resolved).read() as connection:
-            present = {
-                str(row[0])
-                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            }
-            if present >= _LEGACY_IDENTITY:
-                identity = frozenset({"evidence"})
-            elif present >= _SDK_IDENTITY and _sdk_authority(connection):
-                identity = _SDK_IDENTITY
-            else:
-                raise RestoreRejected("backup_restore_source_invalid")
-            source_version = 0
-            if SCHEMA_TABLE in present:
-                row = connection.execute(
-                    f"SELECT version FROM {SCHEMA_TABLE} ORDER BY version DESC LIMIT 1"
-                ).fetchone()
-                if row is not None:
-                    source_version = int(row[0])
-    except RestoreRejected:
-        raise
-    except sqlite3.Error as error:
-        raise RestoreRejected("backup_restore_source_invalid") from error
-
-    latest_known = max((migration.version for migration in MIGRATIONS), default=0)
-    if source_version > latest_known > 0:
+    identity = database_identity(resolved)
+    if identity is None:
+        raise RestoreRejected("backup_restore_source_invalid")
+    if identity.too_new:
         # A newer build wrote this backup. Restoring it would give the current
         # build a schema it cannot interpret, so fail closed and leave the
         # live database untouched.
         raise RestoreRejected("backup_restore_source_too_new")
+    source_version = identity.schema_version
 
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%S%fZ")
     protective = backups / f"pre-restore-{stamp}.sqlite3"
@@ -98,7 +117,7 @@ def restore_managed_backup(
         # Drop every cached connection before the atomic replacement: a pooled
         # connection would otherwise keep reading the old inode.
         close_main_databases()
-        main_database(live).restore_from(resolved, required_tables=identity)
+        main_database(live).restore_from(resolved, required_tables=identity.required_tables)
         close_main_databases()
     except (OSError, sqlite3.Error, ValueError, RuntimeError) as error:
         close_main_databases()

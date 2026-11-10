@@ -52,6 +52,7 @@ from one_memory.background_work import (
     shutdown_bulk_pool,
     warm_bulk_pool,
 )
+from one_memory.backup_routes import BackupHooks
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import sdk_context_router
 from one_memory.conversation_processing import (
@@ -209,6 +210,7 @@ from one_memory.memory_evolution import (
     EvolveService,
     EvolveStateStore,
     GraphBuildState,
+    GraphBuildUser,
     MemoryGraphBackfill,
     UserEvolveState,
 )
@@ -392,28 +394,6 @@ class HealthResponse(BaseModel):
     # (`{kind, state, percent, eta_s}`): the loading screen and the status
     # line read it. Reads are served throughout; model writes are paused.
     embedding_switch: dict[str, object] | None = None
-
-
-class BackupRequest(BaseModel):
-    target: str
-
-
-class BackupResult(BaseModel):
-    target: str
-    bytes: int
-
-
-class BackupRestoreRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: str = Field(min_length=1, max_length=4096)
-
-
-class BackupRestoreResponse(BaseModel):
-    state: Literal["restored"]
-    restored_bytes: int
-    previous_backup_path: str
-    source_schema_version: int
 
 
 class SourceResponse(BaseModel):
@@ -1416,6 +1396,9 @@ def create_app(
             }
             app.state.sedimentation_lock = asyncio.Lock()
             app.state.memory_mode_lock = asyncio.Lock()
+            # A backup pauses SDK writes for its copy (`memory_backup`).
+            app.state.backup_pause = False
+            app.state.backup_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
 
@@ -1665,6 +1648,11 @@ def create_app(
                         raise RuntimeError("embedding_switch_clients_busy")
                     await asyncio.sleep(0.2)
 
+            # The backup and the restore pause writes and close every SDK
+            # client the same way the embedding switch does.
+            app.state.sdk_writes_drained = embedding_writes_drained
+            app.state.quiesce_sdk_clients = quiesce_sdk_clients
+
             async def after_embedding_commit(job: EmbeddingSwitchJob) -> None:
                 from one_memory.hy_graph_admin import forget_graph_widths
 
@@ -1718,6 +1706,7 @@ def create_app(
                     app, previous, current
                 ),
             )
+            app.state.backup_hooks = _backup_hooks(app, manage_runtime=manage_runtime)
             if app.state.memory_authority is not MemoryAuthority.SDK:
                 # Only an SDK-authority home has SDK spaces to scan and merge.
                 app.state.embedding_switch.release_scan_hold()
@@ -2323,6 +2312,9 @@ def create_app(
     from one_memory.storage_backend_routes import storage_backend_router
 
     app.include_router(storage_backend_router(strict))
+    from one_memory.backup_routes import backup_router
+
+    app.include_router(backup_router(protected))
     from one_memory.live_capture import live_capture_router
 
     def file_polled(request: Request, source_id: str) -> bool:
@@ -2574,61 +2566,6 @@ def create_app(
     def runtime_identity() -> HealthResponse:
         """Authenticated proof that a discovery receipt names this Core."""
         return health()
-
-    @app.post(
-        "/api/v1/backup",
-        response_model=BackupResult,
-        dependencies=protected,
-    )
-    async def create_backup(request: BackupRequest) -> BackupResult:
-        """Copy the committed database to `target`, for the CLI's `backup create`.
-
-        Run in a thread: the copy is a blocking file operation, and doing it on
-        the event loop is exactly what the loop watchdog reports (real logs
-        showed `event loop blocked for 12.9s`). It also holds the writer for
-        the duration, so a long copy would otherwise stall every other caller.
-
-        A target outside the data directory is refused: the CLI can name any
-        path, and an unrestricted server-side write would turn a read-only
-        client into a file-write primitive.
-        """
-        settings = cast(Settings, app.state.settings)
-        data_dir = settings.data_dir.resolve()
-        target = Path(request.target)
-        resolved = target.resolve() if target.is_absolute() else (data_dir / target).resolve()
-        if not (resolved == data_dir or data_dir in resolved.parents):
-            raise HTTPException(status_code=422, detail="backup_target_outside_data_dir")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        # `back_up` is on the database access point, not the evidence store.
-        await asyncio.to_thread(main_database(_evidence_store(app).database_path).back_up, resolved)
-        return BackupResult(target=str(resolved), bytes=resolved.stat().st_size)
-
-    @app.post(
-        "/api/v1/backup/restore",
-        response_model=BackupRestoreResponse,
-        dependencies=protected,
-    )
-    async def restore_backup(request: BackupRestoreRequest) -> BackupRestoreResponse:
-        """Restore a managed backup; only a non-runtime maintenance Core may do so."""
-        if manage_runtime:
-            raise HTTPException(status_code=409, detail="backup_restore_runtime_running")
-        from one_memory.managed_restore import RestoreRejected, restore_managed_backup
-
-        settings = cast(Settings, app.state.settings)
-        try:
-            result = await asyncio.to_thread(
-                restore_managed_backup,
-                data_dir=settings.data_dir,
-                source=request.source,
-            )
-        except RestoreRejected as error:
-            raise HTTPException(status_code=422, detail=error.code) from error
-        return BackupRestoreResponse(
-            state="restored",
-            restored_bytes=result.restored_bytes,
-            previous_backup_path=str(result.previous_backup_path),
-            source_schema_version=result.source_schema_version,
-        )
 
     def web_assets_root() -> Path | None:
         configured = os.environ.get("ONE_MEMORY_WEB_DIR")
@@ -5979,7 +5916,17 @@ def _known_user_ids(app: FastAPI) -> tuple[str, ...]:
 
 
 async def _users_with_memories(app: FastAPI) -> tuple[str, ...]:
-    """Known users the SDK holds any memory for: the nightly evolve's users."""
+    """Known users the SDK holds any memory for: the nightly evolve's users.
+
+    In a task of its own: a read client is held until the task that asked for
+    it ends (`ActiveProfileReadHandle`), and the evolve schedule's loop never
+    ends, so asking from it held a client for good and no backup or graph
+    re-embed could close every client.
+    """
+    return await asyncio.create_task(_users_with_memories_now(app))
+
+
+async def _users_with_memories_now(app: FastAPI) -> tuple[str, ...]:
     users = await asyncio.to_thread(_known_user_ids, app)
     client = await _sdk_client_handle(app).client()
     found: list[str] = []
@@ -7587,12 +7534,91 @@ def _embedding_switch(app: FastAPI) -> EmbeddingSwitchService:
     return cast(EmbeddingSwitchService, app.state.embedding_switch)
 
 
+def _backup_hooks(app: FastAPI, *, manage_runtime: bool) -> BackupHooks:
+    """What a backup and a restore need from this Core (`backup_routes`)."""
+    settings = cast(Settings, app.state.settings)
+
+    def set_pause(paused: bool) -> None:
+        app.state.backup_pause = paused
+
+    async def read_client() -> Any:
+        return await _sdk_client_handle(app).client()
+
+    def switch_writes_open() -> bool:
+        switch = getattr(app.state, "embedding_switch", None)
+        return switch is None or switch.writes_open()
+
+    async def count_layers_after_restore(users: list[str]) -> dict[str, dict[str, int]] | None:
+        """The restored layer counts, through a client built from the restored database."""
+        from one_memory.memory_backup import count_layers
+
+        app.state.embedding_spaces.invalidate()
+        handle = ActiveProfileReadHandle(
+            profiles=_model_profile_store(app),
+            secrets=_secret_store(app),
+            data_dir=settings.data_dir,
+            memory_mode=lambda: "pro",
+            spaces=app.state.embedding_spaces,
+            storage=lambda: _storage_resolved(app),
+        )
+        try:
+            client = await handle.client()
+            return await asyncio.to_thread(count_layers, client, users)
+        except Exception as error:  # noqa: BLE001 - reported as an unverified count
+            logger.warning(
+                "backup_restore_layer_count_unavailable error_type=%s", type(error).__name__
+            )
+            return None
+        finally:
+            await handle.close()
+
+    def schedule_graph_rebuild(users: tuple[str, ...], clear_first: bool) -> None:
+        """Rebuild the graph from the restored memories after the next start."""
+        app.state.evolve_state_store.set_graph_build(
+            GraphBuildState(
+                state="running",
+                started_at=datetime.now(UTC),
+                users={user_id: GraphBuildUser() for user_id in users},
+                clear_first=clear_first,
+            )
+        )
+
+    def after_restore() -> None:
+        app.state.embedding_spaces.invalidate()
+        forget = getattr(_read_handle(app), "health", None)
+        if forget is not None:
+            forget.forget()
+
+    return BackupHooks(
+        data_dir=settings.data_dir,
+        manage_runtime=manage_runtime,
+        storage=lambda: _storage_settings(app),
+        known_users=lambda: _known_user_ids(app),
+        read_client=read_client,
+        memory_mode=lambda: _memory_mode(app),
+        live_space=lambda: app.state.embedding_spaces.live(),
+        spaces=lambda: app.state.embedding_spaces.list_spaces(),
+        switch_writes_open=switch_writes_open,
+        lifecycle_lock=app.state.memory_mode_lock,
+        set_pause=set_pause,
+        drained=getattr(app.state, "sdk_writes_drained", None),
+        quiesce=getattr(app.state, "quiesce_sdk_clients", None),
+        count_layers_after_restore=count_layers_after_restore,
+        schedule_graph_rebuild=schedule_graph_rebuild,
+        after_restore=after_restore,
+        runtime_build=__version__,
+    )
+
+
 def _embedding_writes_open(app: FastAPI) -> bool:
     """False while an embedding switch or merge runs, or the startup scan has not decided.
 
     Intake is not affected: conversations keep being queued, and sediment
     into the live space once the gate opens again.
     """
+    if getattr(app.state, "backup_pause", False):
+        # A backup is copying the SDK stores (`_backup_write_pause`).
+        return False
     switch = getattr(app.state, "embedding_switch", None)
     return switch is None or switch.writes_open()
 
@@ -7609,6 +7635,8 @@ def _embedding_switch_summary(app: FastAPI) -> dict[str, object] | None:
 
 def _refuse_write_during_embedding_switch(app: FastAPI) -> None:
     """Direct edits and deletes wait for the switch: 409, never a write into the old space."""
+    if getattr(app.state, "backup_pause", False):
+        raise HTTPException(status_code=409, detail="backup_in_progress")
     if not _embedding_writes_open(app):
         raise HTTPException(status_code=409, detail="embedding_switch_in_progress")
 

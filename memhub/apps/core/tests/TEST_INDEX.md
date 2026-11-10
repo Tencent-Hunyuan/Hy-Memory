@@ -14,6 +14,7 @@
 | `test_background_work.py` | `contract` | 覆盖 a request does not wait behind a catch up、bulk work is kept to a few threads at a time、the pool outlives one hand off 等 4 个场景。 |
 | `test_backup_destroy_restore_reconciliation.py` | `contract` | Backup -> destroy -> restore, reconciled row for row. |
 | `test_backup_endpoint.py` | `integration` | The 'POST /api/v1/backup' endpoint the CLI's 'backup create' calls. |
+| `test_backup_includes_memories.py` | `integration` | A backup holds the memories: back up, wipe, restore, and everything is back. |
 | `test_backup_restore_api.py` | `integration` | 覆盖 restore endpoint refuses when runtime owns the core、restore endpoint restores a managed backup、restore endpoint rejects a source outside home 场景。 |
 | `test_baseline_probe.py` | `contract` | A0-04: the baseline probe itself must be trustworthy. |
 | `test_bug01_workbuddy_root.py` | `contract` | 3925a kernel item 2 (BUG-01, backend half): WorkBuddy import root. |
@@ -163,6 +164,7 @@
 | `test_measure_c1_loop_blocking_contract.py` | `integration` | Contract guards for the C1 event-loop blocking measurement. |
 | `test_memhub_display_identity.py` | `contract` | Display name MemHub must not fork the technical identity. |
 | `test_memory_additions.py` | `integration` | Add one memory directly: `POST /api/v2/memories` and `GET /api/v2/memories/additions/{id}`. |
+| `test_memory_backup_format.py` | `contract` | The v2 backup format without the SDK: what is copied, named, verified, rolled back. |
 | `test_memory_batch_extraction.py` | `contract` | 覆盖 batch extractor keeps only unique known evidence ids、batch extractor maps provider failure to machine error 场景。 |
 | `test_memory_citation_query_plan.py` | `contract` | Correlated citation checks must look links up by memory, not scan by 'active'. |
 | `test_memory_content_import.py` | `integration` | 覆盖 existing memory preview keeps unknown author and exact original、invalid existing memory records never leave a partial upload、memory content requires explicit mode and rejects vendor guessing 等 5 个场景。 |
@@ -333,4 +335,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 328 个测试文件。
+共 330 个测试文件。

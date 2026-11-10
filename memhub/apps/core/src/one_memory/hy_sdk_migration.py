@@ -82,6 +82,47 @@ def restore_data_plane(
     )
 
 
+async def vector_store_counts(data_dir: Path) -> dict[str, dict[str, dict[str, int]]]:
+    """Every record of the home's Chroma store, per space, role and `user_id`.
+
+    The backup's store-level count (`memory_backup`): taken while writes are
+    paused and checked again after a restore. Read-only, through the SDK's own
+    scan (the same one the startup stray-space scan uses), so it runs beside
+    live SDK clients exactly as the embedding switch's scan does. A space is
+    keyed `<collection base>|<width>` (`auto` for an unsuffixed space).
+    """
+    backend = SdkReembedBackend(data_dir)
+    if not (backend.persist_directory / "chroma.sqlite3").is_file():
+        return {}
+    await asyncio.to_thread(backend._open_chroma_once)
+    found = await hy_memory.scan_vector_spaces(str(backend.persist_directory), per_user=True)
+    return {
+        f"{item.base_name}|{item.dims if item.dims else 'auto'}": {
+            str(role): {str(user): int(count) for user, count in entry.per_user.items()}
+            for role, entry in item.roles.items()
+        }
+        for item in found
+    }
+
+
+def release_chroma_systems() -> None:
+    """Drop Chroma's process-wide client systems; only while no SDK client is open.
+
+    A restore renames the store directory; a cached system would keep reading
+    the old files. The caller holds the stores offline (`hold_stores_offline`).
+    """
+    import sys
+
+    if "chromadb" not in sys.modules:
+        return
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except Exception:  # noqa: BLE001 - best effort; a stale system fails the count check
+        return
+
+
 def repair_sdk_metadata_from_bundle(
     *,
     data_dir: Path,

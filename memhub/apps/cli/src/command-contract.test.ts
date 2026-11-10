@@ -285,14 +285,18 @@ describe("CLI-22 shared output contract", () => {
       }
     });
 
-    it("says backup does not include the memories themselves", async () => {
+    it("says a backup includes the memories, and an old one does not", async () => {
       const streams = captureStreams();
       try {
         expect(await run(["help", "backup"], {})).toBe(0);
       } finally {
         streams.restore();
       }
-      expect(streams.stdout()).toContain("不包含记忆本身");
+      expect(streams.stdout()).toContain("全部记忆");
+      expect(streams.stdout()).toContain("先显示预计大小");
+      expect(streams.stdout()).toContain(
+        "旧格式备份（单个 .sqlite3）不包含记忆本身",
+      );
     });
 
     it("does not promise a rollback after the migration started", async () => {

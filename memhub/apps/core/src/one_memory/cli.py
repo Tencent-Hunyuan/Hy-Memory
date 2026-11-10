@@ -244,6 +244,19 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
             f"已恢复完整迁移备份：{sdk_result.bundle_id}。",
         )
         return 0
+    candidate = Path(source)
+    if (candidate if candidate.is_absolute() else settings.data_dir / candidate).is_dir():
+        # A v2 backup (memories included) is a directory; a v1 backup is
+        # the bare management database and keeps the path below.
+        from one_memory.memory_backup import BackupError, locate
+
+        try:
+            located = locate(settings.data_dir, source)
+        except BackupError as error:
+            document = {"schema_version": 1, "state": "failed", "code": error.code}
+            _write_restore(stream, as_json, document, f"恢复失败：{error.code}")
+            return 1
+        return _restore_with_memories(settings.data_dir, located, stream, as_json)
     try:
         managed_result = restore_managed_backup(data_dir=settings.data_dir, source=source)
     except RestoreRejected as error:
@@ -260,12 +273,61 @@ def restore(options: Sequence[str], stream: TextIO) -> int:
         "restored_bytes": managed_result.restored_bytes,
         "previous_backup_path": str(managed_result.previous_backup_path),
         "source_schema_version": managed_result.source_schema_version,
+        "backup_schema_version": 1,
+        "memories_included": False,
+        "note": "management_database_only_no_memories",
     }
     _write_restore(
         stream,
         as_json,
         document,
-        f"已恢复：{managed_result.previous_backup_path} 为保护性备份。",
+        f"已恢复：{managed_result.previous_backup_path} 为保护性备份。"
+        "这是旧格式备份，只含主库，不含记忆；记忆库 hy-memory/ 保持原样。",
+    )
+    return 0
+
+
+def _restore_with_memories(data_dir: Path, located: Any, stream: TextIO, as_json: bool) -> int:
+    """Restore a v2 backup (memories included) while the Runtime is stopped.
+
+    No SDK client runs in this process, so nothing is quiesced; the layer
+    counts need a model profile's client and are left to the Runtime's
+    maintenance restore (`POST /api/v1/backup/restore`), while the store and
+    graph counts are verified here.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from one_memory.memory_backup import BackendIdentity, BackupError, run_restore
+    from one_memory.memory_evolution import EvolveStateStore, GraphBuildState, GraphBuildUser
+    from one_memory.memory_server.config_state import ConfigStore
+
+    def schedule(users: tuple[str, ...], clear_first: bool) -> None:
+        EvolveStateStore(data_dir).set_graph_build(
+            GraphBuildState(
+                state="running",
+                started_at=datetime.now(UTC),
+                users={user_id: GraphBuildUser() for user_id in users},
+                clear_first=clear_first,
+            )
+        )
+
+    try:
+        current = BackendIdentity.of(ConfigStore(data_dir).storage_backends())
+        result = asyncio.run(
+            run_restore(data_dir, located, current=current, schedule_graph_rebuild=schedule)
+        )
+    except BackupError as error:
+        document = {"schema_version": 1, "state": "failed", "code": error.code}
+        _write_restore(stream, as_json, document, f"恢复失败：{error.code}")
+        return 1
+    document = {"schema_version": 1, **result.document()}
+    _write_restore(
+        stream,
+        as_json,
+        document,
+        f"已恢复（含记忆）：{result.files} 个文件，{result.bytes} 字节；"
+        f"之前的数据保留在 {result.previous}。",
     )
     return 0
 
@@ -754,6 +816,11 @@ def serve(*, maintenance: bool = False) -> None:
     from one_memory.runtime import CoreRuntime, parent_pid
 
     settings = load_settings()
+    from one_memory.memory_backup import recover_interrupted_restore
+
+    # A backup restore killed between its renames: put the previous data
+    # back before anything reads the home (`memory_backup.roll_back`).
+    recover_interrupted_restore(settings.data_dir)
     if not maintenance:
         _refuse_unmigrated_home(settings.data_dir)
     # HY resolves some trace paths at import time and its pipeline path when

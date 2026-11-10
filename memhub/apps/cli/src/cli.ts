@@ -90,6 +90,7 @@ import {
   createCoreReader,
   createUiSessionRequest,
   deleteModelProfile,
+  fetchBackupEstimate,
   type MemoryWriteReceipt,
   parseOpenAIMessages,
   probeAdapter,
@@ -3775,36 +3776,30 @@ async function classifyRefusedRemoval(
   return "not_found";
 }
 
-/** `backup create`: ask Runtime to copy its main database.
+/** `backup create`: show the expected size, then write a backup with the memories.
  *
- * Only `one-memory.sqlite3` is copied (sources, queues, settings); the SDK
- * memory store under `hy-memory/` is not part of it.
+ * A v2 backup (docs/contracts/backup-v2.md) holds the management database
+ * and every memory: the SDK files under `hy-memory/`, and on a Qdrant server
+ * an export through the SDK. It can be large, so without `--yes` this only
+ * reports how large it would be and where it would go.
  */
 async function applyBackupCreate(
   asJson: boolean,
   descriptor: CommandDescriptor | undefined,
   environment: NodeJS.ProcessEnv,
-  parsed: { target: string },
+  parsed: { target: string; confirmed: boolean },
 ): Promise<number> {
   const attachment = await attachToRuntimeOrNull(environment);
   if (attachment === null) return runtimeUnavailable(descriptor, asJson);
-  try {
-    const result = await submitBackup(attachment, parsed.target);
-    process.stdout.write(
-      asJson
-        ? `${JSON.stringify({ schema_version: 1, product: PRODUCT, command: "backup", verb: "create", state: "committed", backup: result })}\n`
-        : `target: ${result.target}\nbytes: ${result.bytes}\n`,
-    );
-    return EXIT_OK;
-  } catch (error) {
+  const nextStep =
+    "备份目标必须是数据目录内的新路径；要能用 backup restore 恢复，请放在 <数据目录>/backups/ 下。";
+  const refuse = (error: unknown): number => {
     const message = error instanceof Error ? error.message : String(error);
     // Runtime refusing the target (e.g. `backup_target_outside_data_dir`) is a
     // security rejection, not a malformed argument: the flags were fine.
     const code = /^[a-z0-9_.:-]{1,128}$/.test(message)
       ? message
       : "backup_failed";
-    const nextStep =
-      "备份目标必须是数据目录内的路径；要能用 backup restore 恢复，请放在 <数据目录>/backups/ 下。";
     if (asJson) {
       process.stdout.write(
         `${JSON.stringify({
@@ -3822,7 +3817,71 @@ async function applyBackupCreate(
       process.stderr.write(`备份失败：${code}\n下一步：${nextStep}\n`);
     }
     return EXIT_FAILED;
+  };
+  if (!parsed.confirmed) {
+    let estimate: Awaited<ReturnType<typeof fetchBackupEstimate>>;
+    try {
+      estimate = await fetchBackupEstimate(attachment, parsed.target);
+    } catch (error) {
+      return refuse(error);
+    }
+    const retry = `${PRODUCT} backup create --target ${parsed.target} --yes`;
+    const size =
+      estimate === null
+        ? "大小未知（旧版 Runtime）"
+        : formatBackupBytes(estimate.bytes);
+    const free =
+      estimate?.free_bytes === null || estimate === null
+        ? ""
+        : `；可用空间 ${formatBackupBytes(estimate.free_bytes)}`;
+    process.stdout.write(
+      asJson
+        ? `${JSON.stringify({
+            schema_version: 1,
+            product: PRODUCT,
+            command: "backup",
+            verb: "create",
+            state: "preview",
+            target: estimate?.target ?? parsed.target,
+            memories_included: estimate?.memories_included ?? false,
+            bytes: estimate?.bytes ?? null,
+            free_bytes: estimate?.free_bytes ?? null,
+            backend: estimate?.backend ?? null,
+            applied: false,
+            next_step: retry,
+          })}\n`
+        : `将要备份到 ${estimate?.target ?? parsed.target}：主库和全部记忆（记忆库 hy-memory/${estimate?.backend.kind === "remote_vector" ? "，以及服务器上的记忆导出" : ""}），预计 ${size}${free}。\n` +
+            "备份期间记忆写入会短暂暂停，结束后自动恢复。未执行任何改动。确认后运行：" +
+            `${retry}\n`,
+    );
+    return EXIT_OK;
   }
+  try {
+    const result = await submitBackup(attachment, parsed.target);
+    process.stdout.write(
+      asJson
+        ? `${JSON.stringify({ schema_version: 1, product: PRODUCT, command: "backup", verb: "create", state: "committed", backup: result })}\n`
+        : `target: ${result.target}\nbytes: ${result.bytes}\n` +
+            (result.memories_included === true
+              ? `memories_included: true\nfiles: ${result.files ?? "?"}\nwrites_paused_ms: ${result.pause_ms ?? "?"}\n`
+              : "memories_included: false（旧版 Runtime：只备份了主库）\n"),
+    );
+    return EXIT_OK;
+  } catch (error) {
+    return refuse(error);
+  }
+}
+
+/** `12.3 MB`: a size for people; the JSON documents keep the bytes. */
+export function formatBackupBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${bytes} B` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
 /** `backup restore`: replace the main database with a managed backup.
@@ -3866,7 +3925,7 @@ async function applyBackupRestore(
       command: "backup restore",
       target: parsed.source,
       effect:
-        "用这份受管备份覆盖当前主库（来源、写入队列、配置）；先自动做一份保护性备份。SDK 记忆库 hy-memory/ 不会被替换。需要 Runtime 已停止",
+        "用这份受管备份替换当前主库（来源、写入队列、配置）和全部记忆（记忆库 hy-memory/）；恢复后核对记忆条数，不一致就整体回滚。之前的数据先保留为保护性副本。旧格式备份（单个 .sqlite3 文件）只含主库，记忆保持原样。需要 Runtime 已停止",
       retry: `${PRODUCT} backup restore --source ${parsed.source} --yes --confirm ${parsed.source}`,
     });
   }
@@ -3909,33 +3968,64 @@ async function applyBackupRestore(
     source: parsed.source,
   });
   if (restored.state === "restored") {
+    const result = restored.result;
+    const memories = result.memoriesIncluded === true;
     const document = {
       schema_version: 1 as const,
       product: PRODUCT,
       command: "backup",
       verb: "restore" as const,
       state: "restored" as const,
-      restored_bytes: restored.result.restoredBytes,
-      previous_backup_path: restored.result.previousBackupPath,
-      source_schema_version: restored.result.sourceSchemaVersion,
+      restored_bytes: result.restoredBytes,
+      previous_backup_path: result.previousBackupPath,
+      source_schema_version: result.sourceSchemaVersion,
+      backup_schema_version: result.backupSchemaVersion ?? 1,
+      memories_included: memories,
+      verification: result.verification ?? null,
+      graph_rebuild_scheduled: result.graphRebuildScheduled === true,
+      note: result.note ?? null,
     };
     emit(
       asJson
         ? `${JSON.stringify(document)}\n`
-        : `已恢复受管备份：${restored.result.restoredBytes} 字节；保护性备份 ${restored.result.previousBackupPath}\n`,
+        : memories
+          ? `已恢复备份（含记忆）：${result.restoredFiles ?? "?"} 个文件，${result.restoredBytes} 字节；记忆条数已核对。之前的数据保留在 ${result.previousBackupPath}\n` +
+            (result.graphRebuildScheduled === true
+              ? "图谱将在下次启动时从恢复的记忆重建。\n"
+              : "")
+          : `已恢复旧格式备份：只含主库，不含记忆；记忆库 hy-memory/ 保持原样。${result.restoredBytes} 字节；保护性备份 ${result.previousBackupPath}\n`,
     );
     return EXIT_OK;
   }
   return refuse(
     restored.code,
-    restored.code === "backup_restore_contract_unavailable"
-      ? "当前 Core 不提供受管恢复端点；请升级到包含该合同的 Runtime。"
-      : "检查来源是否为 <数据目录>/backups/ 中的受管备份后重试。",
-    restored.code === "backup_restore_contract_unavailable"
+    RESTORE_NEXT_STEP[restored.code] ??
+      "检查来源是否为 <数据目录>/backups/ 中的受管备份后重试。",
+    restored.code === "backup_restore_contract_unavailable" ||
+      restored.code === "backup_restore_remote_sdk_unsupported" ||
+      restored.code === "backup_restore_backend_mismatch"
       ? EXIT_PLAN_BLOCKED
       : EXIT_FAILED,
   );
 }
+
+/** What to do after a refused restore; nothing has changed in any of these. */
+const RESTORE_NEXT_STEP: Readonly<Record<string, string>> = {
+  backup_restore_contract_unavailable:
+    "当前 Core 不提供受管恢复端点；请升级到包含该合同的 Runtime。",
+  backup_restore_backend_mismatch:
+    "这份备份来自另一种存储后端（本机 Kuzu + Chroma 与服务器不能互相恢复）。先用 memhub settings backends 切回备份时的后端，再恢复。",
+  backup_restore_remote_sdk_unsupported:
+    "记忆在 Qdrant 服务器上：当前 SDK 不能按原 id 写回，暂不支持恢复记忆。备份里的 export/memories.jsonl 已保存全部记忆；服务器侧请用 Qdrant 快照。",
+  backup_restore_counts_mismatch:
+    "恢复后的记忆条数与备份记录不一致，已整体回滚到恢复前的数据。备份可能不完整，请换一份备份。",
+  backup_restore_verify_failed:
+    "备份文件与清单不一致（缺失或被改动），未做任何改动。请换一份备份。",
+  backup_restore_disk_space_insufficient:
+    "磁盘空间不足以放下这份备份，清理后重试。",
+  backup_restore_pending:
+    "上一次恢复没有完成；重新启动 Runtime 会先把数据回滚到那次恢复之前，然后重试。",
+};
 
 /** `scan --source <id>`: ask Runtime to sync one source now. */
 async function applyScan(

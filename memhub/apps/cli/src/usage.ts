@@ -42,7 +42,7 @@ export function renderGeneralHelp(): string {
       (exit) => `  ${exit.code}  ${pad(exit.name, 17)}${exit.summary}`,
     ),
     "",
-    "确认约定：只有不可逆操作（memories delete、models remove、delete-data、backup restore、graph-width --decision rebuild_with_new）需要 --yes；不加时只说明将要做什么，不做任何改动，exit 0。delete-data 与 backup restore 还要用 --confirm <path> 再写一遍目标路径。install/upgrade/uninstall/service-install/service-uninstall 不加 --yes 时只出计划。其它写命令直接执行。",
+    "确认约定：只有不可逆操作（memories delete、models remove、delete-data、backup restore、graph-width --decision rebuild_with_new）需要 --yes；不加时只说明将要做什么，不做任何改动，exit 0。delete-data 与 backup restore 还要用 --confirm <path> 再写一遍目标路径。backup create 不加 --yes 时只显示预计大小（备份含全部记忆，可能很大）。install/upgrade/uninstall/service-install/service-uninstall 不加 --yes 时只出计划。其它写命令直接执行。",
     "异步操作返回 ID，用对应命令查进度：sources receipt、models receipt、memories add-status、write status。",
     "目前仅支持 macOS 与 Linux 连接本机 Runtime。",
     "stdout 只输出数据，进度与诊断写入 stderr。",

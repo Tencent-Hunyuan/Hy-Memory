@@ -262,6 +262,45 @@ def _printed_width(output: str) -> int | None:
     return None
 
 
+def count_graph_memories(graph_path: Path) -> dict[str, dict[str, int]] | None:
+    """Memory nodes per user and layer of a Kuzu graph, read in a child; None if unreadable.
+
+    The same child as the open probe, read-only and bounded by the same wall
+    clock, so a graph that cannot be opened costs only that process. Used by
+    the backup (`memory_backup`) on its own copy and after a restore; never on
+    a graph an SDK client holds open read-write in another process.
+    """
+    if not _graph_has_files(graph_path):
+        return {}
+    timeout = probe_timeout_s(graph_path)
+    argv = [*default_probe_command(graph_path, int(timeout) + 5, read_only=True), "counts"]
+    try:
+        completed = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+            close_fds=True,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in reversed(completed.stdout.decode("utf-8", "replace").splitlines()):
+        if line.startswith("counts="):
+            with suppress(ValueError):
+                value = json.loads(line.removeprefix("counts="))
+                if isinstance(value, dict):
+                    return {
+                        str(user): {str(layer): int(number) for layer, number in layers.items()}
+                        for user, layers in value.items()
+                        if isinstance(layers, dict)
+                    }
+            return None
+    return None
+
+
 def process_rss_bytes(pid: int) -> int | None:
     """Resident memory of `pid`, or None when it cannot be read."""
     status = Path(f"/proc/{pid}/status")

@@ -5,7 +5,8 @@ There is no Qdrant server in CI, so the child interpreter answers every
 own local engine, `:memory:`): to the SDK it is a server every store and every
 client shares, exactly what MemHub requires (`storage_backends`). The rest is
 real: Core's routes, the setting and its secret, the SDK's Qdrant store, the
-lite write path and raw search, backup and restore.
+lite write path and raw search, backup (with the export) and the restore
+refusal.
 
 Like `test_pinned_sdk_raw_search`, the child runs with `-I` so `hy_memory` is
 the installed wheel, with a deterministic local embedder (no model, no ONNX).
@@ -123,6 +124,11 @@ _CHILD = textwrap.dedent(
         await http.put("/api/v1/settings/memory-mode", json={"mode": "lite"})
 
     async def write(app, text, session_id):
+        # From a task of its own: a read client is held until the asking
+        # task ends, and a backup closes every client.
+        await asyncio.create_task(_write(app, text, session_id))
+
+    async def _write(app, text, session_id):
         client = await app.state.sdk_client_handle.client()
         written = client.add(
             [{"role": "user", "content": text}, {"role": "assistant", "content": "noted"}],
@@ -190,12 +196,19 @@ _CHILD = textwrap.dedent(
         spaces = (await http.get("/api/v1/embedding-spaces")).json()
         result["spaces_scan_error"] = spaces["scan_error"]
 
-        backup = await http.post("/api/v1/backup", json={"target": "backups/qdrant.sqlite3"})
+        backup = await http.post("/api/v1/backup", json={"target": "backups/qdrant"})
         result["backup"] = backup.status_code
+        result["backup_kind"] = backup.json()["backend"]["kind"]
         restore = await http.post(
-            "/api/v1/backup/restore", json={"source": "backups/qdrant.sqlite3"}
+            "/api/v1/backup/restore", json={"source": "backups/qdrant.memhub-backup"}
         )
         result["restore"] = [restore.status_code, restore.json().get("detail")]
+        # An old backup (the management database alone) restores as before.
+        from one_memory.database_access import main_database
+
+        main_database(data / "one-memory.sqlite3").back_up(data / "backups" / "old.sqlite3")
+        old = await http.post("/api/v1/backup/restore", json={"source": "backups/old.sqlite3"})
+        result["restore_old"] = [old.status_code, old.json().get("memories_included")]
 
     async def second(app, http):
         # A restart, after the restore: the setting and its secret held,
@@ -304,7 +317,10 @@ def test_embedding_maintenance_skips_or_refuses_on_qdrant(qdrant) -> None:
     assert capabilities["embedding_switch"] == "refused"
     assert capabilities["embedding_space_scan"] == "skipped"
     assert capabilities["upgrade_migration"] == "skipped"
-    assert capabilities["backup"] == capabilities["restore"] == "works"
+    assert capabilities["backup"] == "works"
+    # Restoring memories onto Qdrant needs an SDK write that keeps ids and
+    # vectors (hy-memory 2.0.15 has none): refused, see backup-v2.md.
+    assert capabilities["restore"] == "refused"
     assert qdrant["scan"] == ["done", "embedding_scan_skipped_custom_backend", False]
     assert qdrant["spaces_scan_error"] == "embedding_scan_skipped_custom_backend"
 
@@ -316,9 +332,11 @@ def test_status_shows_the_active_backends(qdrant) -> None:
     assert storage["health"] == "ok"
 
 
-def test_backup_and_restore_work_and_keep_the_setting(qdrant) -> None:
+def test_backup_works_and_restore_keeps_the_setting(qdrant) -> None:
     assert qdrant["backup"] == 200
-    assert qdrant["restore"][0] == 200, qdrant["restore"]
+    assert qdrant["backup_kind"] == "remote_vector"
+    assert qdrant["restore"] == [422, "backup_restore_remote_sdk_unsupported"]
+    assert qdrant["restore_old"] == [200, False]
     assert any("Miso" in hit for hit in qdrant["after_restart_hits"])
 
 
