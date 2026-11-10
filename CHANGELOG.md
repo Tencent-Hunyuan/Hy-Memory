@@ -4,6 +4,18 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Hy Memory: `HyMemoryClient.export_user_memories()` /
+  `import_user_memories()` (and their `async_` forms) export one user's
+  vector-store memories with their ids and vectors, and write them back into
+  an empty store as they were: every layer including `L1_RAW`, every status,
+  the evolution pointers and the times. A node without its vector is
+  re-embedded with the current embedding service; a width that does not match
+  the store, a node of another user or a non-empty target is refused, and a
+  failed write is rolled back. The graph is not touched (rebuild it with
+  `build_memory_graph()`). This is what a backup needs to restore memories
+  onto another store, a Qdrant server included; `clone_user()` only copies
+  within one store under new ids, and `add_extracted()` re-reconciles. No
+  version change.
 - MemHub: the graph and vector stores can be chosen from the CLI and the API.
   The default stays the embedded Kuzu + Chroma pair. `memhub settings backends
   show|set|test|reset` (and `GET/PUT/DELETE /api/v1/settings/storage-backends`,
