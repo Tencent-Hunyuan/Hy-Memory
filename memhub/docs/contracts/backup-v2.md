@@ -224,9 +224,15 @@ changes.
   local files: `memhub settings backends reset` returns the home to Kuzu +
   Chroma, and the backup then restores.
 - **Qdrant backup onto Qdrant: refused** (`backup_restore_remote_sdk_unsupported`)
-  until MemHub pins an SDK with an import API that keeps ids and vectors (the
-  SDK follow-up adds `import_user_memories`). The backup itself works and
-  holds the export; Qdrant's own snapshots back up the server.
+  until MemHub pins an SDK with an import API that keeps ids and vectors. The
+  backup itself works and holds the export; Qdrant's own snapshots back up the
+  server. SDK follow-up: Tencent-Hunyuan/Hy-Memory#424 adds
+  `HyMemoryClient.export_user_memories` / `import_user_memories` (ids,
+  statuses, evolution pointers, times and vectors; re-embeds a node without
+  its vector). Once a release with it is pinned, the export switches to it
+  (vectors included) and the restore imports instead of refusing. Still to
+  cover in the SDK before that: the Coding/Working experience vectors and
+  Qdrant's retrieval-clause side index.
 - **Neo4j/Memgraph graph with Chroma vectors**: restores the local files like
   a local backup; the server's graph is not replaced. A rebuild of every
   user's fact projection is scheduled with `clear_first` (the SDK's
