@@ -985,3 +985,53 @@ def test_search_surfaces_metadata_through_prefetch(provider, monkeypatch):
     assert injected[0]["retrieval_source"] == "vdb"
     assert injected[0]["layer"] == "l2_fact"
     assert injected[0]["tags"] == ["important"]
+
+
+def test_search_drops_malformed_tags_and_metadata(provider, monkeypatch):
+    transport(
+        monkeypatch,
+        {
+            "memories": [
+                {
+                    "memory_id": "memory-1",
+                    "content": "fact",
+                    "score": True,
+                    "retrieval_source": "x" * 65,
+                    "layer": 7,
+                    "tags": ["ok", 3, None, "", "t" * 65, {"nested": "tag"}],
+                },
+                {"memory_id": "memory-2", "content": "fact", "tags": "work"},
+            ]
+        },
+    )
+    first, second = call(provider, query="remember")["memories"]
+    assert first == {"memory_id": "memory-1", "content": "fact", "tags": ["ok"]}
+    assert second == {"memory_id": "memory-2", "content": "fact"}
+
+
+def test_search_tags_spend_the_max_chars_budget(provider, monkeypatch):
+    tag = "t" * 64
+    budget = provider.chars
+    transport(
+        monkeypatch,
+        {
+            "memories": [
+                {
+                    "memory_id": "memory-1",
+                    "content": "c" * (budget - 100),
+                    "tags": [tag, tag, tag],
+                },
+                {"memory_id": "memory-2", "content": "more", "tags": ["late"]},
+            ]
+        },
+    )
+    memories = call(provider, query="remember")["memories"]
+    used = sum(
+        len(item["content"]) + sum(len(t) for t in item.get("tags", []))
+        for item in memories
+    )
+    # 100 chars left after the first content: one 64-char tag fits, the next
+    # two do not, and the second memory spends what is left.
+    assert memories[0]["tags"] == [tag]
+    assert memories[1] == {"memory_id": "memory-2", "content": "more", "tags": ["late"]}
+    assert used == budget - 100 + 64 + 4 + 4 <= budget

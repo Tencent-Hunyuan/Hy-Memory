@@ -28,6 +28,19 @@ from agent.memory_provider import (
 )
 
 
+#: Search metadata is forwarded only when it is short, plain text; tags also
+#: spend the same MAX_CHARS budget as the content they describe.
+_LABEL_MAX_CHARS = 64
+_TAG_MAX_CHARS = 64
+_MAX_TAGS = 16
+
+
+def _label(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip() and len(value) <= _LABEL_MAX_CHARS:
+        return value
+    return None
+
+
 class ProviderError(Exception):
     """Public, sanitized failure code (never backend or request text)."""
 
@@ -572,20 +585,40 @@ class HyMemoryProvider(MemoryProvider):
             if not isinstance(content, str):
                 raise ProviderError("invalid_response")
             content = content[:remaining]
-            entry: dict[str, Any] = {"memory_id": memory_id, "content": content}
-            # 透出分数与来源，调用方可据此自行二次过滤（#346 问题 2）。search 接口
-            # 返回 score/layer/retrieval_source；broker 的 context 接口没有这些
-            # 字段，此时按缺失处理（不写 None，避免污染注入的 JSON）。
-            if isinstance(item.get("score"), (int, float)):
-                entry["score"] = float(item["score"])
-            if isinstance(item.get("retrieval_source"), str) and item["retrieval_source"]:
-                entry["retrieval_source"] = item["retrieval_source"]
-            if isinstance(item.get("layer"), str) and item["layer"]:
-                entry["layer"] = item["layer"]
-            if isinstance(item.get("tags"), list):
-                entry["tags"] = item["tags"]
-            items.append(entry)
             remaining -= len(content)
+            entry: dict[str, Any] = {"memory_id": memory_id, "content": content}
+            # Score and provenance let the caller filter further (#346 item 2).
+            # The broker's context route carries none of these, so a missing or
+            # malformed field is simply left out rather than written as None.
+            score = item.get("score")
+            if (
+                isinstance(score, (int, float))
+                and not isinstance(score, bool)
+                and math.isfinite(score)
+            ):
+                entry["score"] = float(score)
+            for key in ("retrieval_source", "layer"):
+                label = _label(item.get(key))
+                if label is not None:
+                    entry[key] = label
+            tags = item.get("tags")
+            if isinstance(tags, list):
+                kept: list[str] = []
+                for tag in tags:
+                    if len(kept) >= _MAX_TAGS:
+                        break
+                    if (
+                        not isinstance(tag, str)
+                        or not tag.strip()
+                        or len(tag) > _TAG_MAX_CHARS
+                        or len(tag) > remaining
+                    ):
+                        continue
+                    kept.append(tag)
+                    remaining -= len(tag)
+                if kept:
+                    entry["tags"] = kept
+            items.append(entry)
         return items
 
     def _add(self, text: str, session: str) -> str | None:
