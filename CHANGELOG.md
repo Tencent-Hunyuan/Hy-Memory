@@ -4,6 +4,24 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Hy Memory's Kuzu graph store bounds its memory, shares one database per
+  file, and keeps its setup off the event loop. Every `kuzu.Database` the SDK
+  opens (the graph store and the re-embed copies) now gets an explicit buffer
+  pool, 512 MB by default (`GraphStoreConfig.buffer_pool_mb` /
+  `MEMORY_GRAPH_BUFFER_POOL_MB`; 0 keeps Kuzu's default of about 80% of RAM),
+  and at most 4 query threads (`max_threads` / `MEMORY_GRAPH_MAX_THREADS`).
+  Graph stores in one process that point at the same file now share a single
+  `kuzu.Database`, each with its own connection. Before, every client opened
+  its own, and Kuzu's file lock does not stop a second open from the same
+  process: the two databases overwrote each other's checkpoints, losing
+  writes, and could corrupt the primary-key index. A file corrupted this way
+  can make the next open allocate gigabytes. `close()` and
+  `build_memory_graph` now run `CHECKPOINT`, so no WAL is left for the next
+  open to replay. The schema check and DDL run in the same worker thread as
+  the open instead of on the loop thread. One limit remains: kuzu 0.11 holds
+  the GIL for the whole `kuzu.Database()` call and has no option to release
+  it, so an open that stalls inside Kuzu still stalls every thread in the
+  process.
 - MemHub: a knowledge graph that freezes or kills the process opening it is
   quarantined and rebuilt instead of restarting Core forever. In ultra, Kuzu's
   open of a corrupt graph file held the GIL, grew RSS to 5–13 GB and the OS
