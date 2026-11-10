@@ -103,12 +103,61 @@ def test_http_403_rate_limit_body_stays_a_rate_limit(tmp_path) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             403,
-            json={"error": {"message": "rate limit exceeded, too many requests"}},
+            json={
+                "error": {
+                    "message": "Rate limit reached for requests",
+                    "type": "requests",
+                    "code": "rate_limit_exceeded",
+                }
+            },
         )
 
     result = _probe(_generation_only(handler), tmp_path)
 
     assert result.stages[1].code is ProbeCode.RATE_LIMITED
+
+
+def test_http_403_credit_wording_without_a_quota_code_stays_unauthorized(
+    tmp_path,
+) -> None:
+    """Words like "credit" or "balance" in a 403 message are not a quota code.
+
+    "No credit permission for this model" is a permission problem: the key is
+    not allowed to use the model. Only an explicit provider quota or rate-limit
+    code/type may move a 401/403 away from UNAUTHORIZED.
+    """
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "message": "no credit permission for this model",
+                    "type": "permission_error",
+                    "code": "forbidden",
+                }
+            },
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.UNAUTHORIZED
+
+
+def test_http_403_balance_wording_without_a_code_stays_unauthorized(
+    tmp_path,
+) -> None:
+    """Free-text balance wording alone does not reclassify a 403."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {"message": "balance check failed: permission denied"}},
+        )
+
+    result = _probe(_generation_only(handler), tmp_path)
+
+    assert result.stages[1].code is ProbeCode.UNAUTHORIZED
 
 
 def test_http_403_without_a_recognisable_body_stays_unauthorized(tmp_path) -> None:

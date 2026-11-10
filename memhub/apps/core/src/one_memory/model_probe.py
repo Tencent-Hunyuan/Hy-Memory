@@ -357,8 +357,13 @@ class ModelProber:
             body_error = _body_error_code(response)
             if body_error is ProbeCode.MODEL_NOT_FOUND:
                 return _stage(stage, False, ProbeCode.MODEL_NOT_FOUND, started)
-            if body_error in {ProbeCode.INSUFFICIENT_BALANCE, ProbeCode.RATE_LIMITED}:
-                return _stage(stage, False, body_error, started)
+            # Only an explicit provider error code/type moves a 401/403 off
+            # UNAUTHORIZED. Free-text words such as "credit" or "balance" also
+            # appear in genuine permission errors ("no credit permission for
+            # this model"), and those still need a different key.
+            permission_quota = _permission_quota_code(response)
+            if permission_quota is not None:
+                return _stage(stage, False, permission_quota, started)
             return _stage(stage, False, ProbeCode.UNAUTHORIZED, started)
         if response.status_code == 402:
             # 402 就是欠费，不看 body：网关常常只回这个状态码而不写字面量，
@@ -620,6 +625,54 @@ def _embedding_request(
         _headers(provider, secret),
         {"model": profile.embedding_model, "input": "memory probe"},
     )
+
+
+_BALANCE_ERROR_CODES = frozenset({"insufficientbalance", "balanceinsufficient"})
+_RATE_LIMIT_ERROR_CODES = frozenset(
+    {
+        "429",
+        "insufficientquota",
+        "quotaexceeded",
+        "ratelimitexceeded",
+        "ratelimiterror",
+        "ratelimited",
+        "toomanyrequests",
+        "requestlimitexceeded",
+    }
+)
+
+
+def _compact_code(value: object) -> str:
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
+def _permission_quota_code(response: httpx.Response) -> ProbeCode | None:
+    """Read an explicit quota/rate-limit code from a 401/403 error body.
+
+    Only the structured ``code``/``ret_code``/``type`` fields are matched, and
+    each must equal a known provider code once case and separators are
+    dropped. The free-text ``message`` is never read here, so a permission
+    error that merely mentions credit or balance stays UNAUTHORIZED.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        values = [error.get(key) for key in ("code", "ret_code", "type")]
+    elif isinstance(error, str):
+        values = [error]
+    else:
+        return None
+    codes = {_compact_code(value) for value in values if value not in (None, "")}
+    if codes & _BALANCE_ERROR_CODES:
+        return ProbeCode.INSUFFICIENT_BALANCE
+    if codes & _RATE_LIMIT_ERROR_CODES:
+        return ProbeCode.RATE_LIMITED
+    return None
 
 
 def _body_error_code(response: httpx.Response) -> ProbeCode | None:
