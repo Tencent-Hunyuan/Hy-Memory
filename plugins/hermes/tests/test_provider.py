@@ -126,6 +126,7 @@ def test_scope_nested_and_sanitization(provider, monkeypatch):
         "user_ids": ["owner-A"],
         "agent_ids": ["agent-A"],
         "limit": 5,
+        "min_score": 0.6,
     }
     assert call(provider, "add", text="save") == {
         "success": False,
@@ -767,6 +768,57 @@ def test_official_module_is_the_provider_base():
     assert HyMemoryProvider.__bases__ == (MemoryProvider,)
     assert "hermes_cli.memory.provider" not in sys.modules
     assert not getattr(HyMemoryProvider, "__abstractmethods__", set())
+
+
+def test_search_passes_min_score_and_surfaces_metadata(provider, monkeypatch):
+    fixture = {
+        "memories": [
+            {
+                "memory_id": "memory-1",
+                "content": "fact",
+                "score": 0.72,
+                "retrieval_source": "vdb",
+                "layer": "l2_fact",
+                "tags": ["work"],
+            },
+            {
+                "memory_id": "memory-2",
+                "content": "no metadata here",
+            },
+        ]
+    }
+    calls = transport(monkeypatch, fixture)
+    result = call(provider, query="remember")
+    assert result["success"]
+    first, second = result["memories"]
+    # score / retrieval_source / layer / tags 应透出，供调用方二次过滤
+    assert first["score"] == 0.72
+    assert first["retrieval_source"] == "vdb"
+    assert first["layer"] == "l2_fact"
+    assert first["tags"] == ["work"]
+    # 缺失字段的条目不写 None / 空占位，保持干净的 {memory_id, content}
+    assert second == {"memory_id": "memory-2", "content": "no metadata here"}
+    # 请求体必须带上 min_score
+    payload = json.loads(calls[0][0].data)
+    assert payload["min_score"] == provider.min_score
+
+
+def test_min_score_configurable(monkeypatch):
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    monkeypatch.setenv("HY_MEMORY_MIN_SCORE", "0.45")
+    p = HyMemoryProvider()
+    assert p.is_available()
+    assert p.min_score == 0.45
+    p.shutdown()
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-0.1", "1.1"])
+def test_min_score_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    monkeypatch.setenv("HY_MEMORY_MIN_SCORE", value)
+    assert not HyMemoryProvider().is_available()
 
 
 @pytest.mark.parametrize("chunked", [False, True])

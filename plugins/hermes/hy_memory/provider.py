@@ -138,6 +138,10 @@ class HyMemoryProvider(MemoryProvider):
             )
             self.auto_recall = self._boolean("AUTO_RECALL", default=True)
             self.auto_capture = self._boolean("AUTO_CAPTURE")
+            # 召回分数阈值：低于该分数的记忆不出现在结果里。SDK 侧默认 0.4 对
+            # 中文短句记忆偏低（负样本 top1 常到 0.4~0.57），这里默认取 0.6，
+            # 落到 0.57~0.66 的有效阈值带下沿（见 #346 实测分布）。
+            self.min_score = self._number("MIN_SCORE", 0.6, 0.0, 1.0)
             self._broker_config = self._load_broker_configuration()
             if self._broker_config is not None:
                 self.user_id = self.agent_id = "memhub-managed"
@@ -512,7 +516,7 @@ class HyMemoryProvider(MemoryProvider):
         ):
             raise ProviderError("transport_or_response_failure") from None
 
-    def _search(self, query: str, limit: int) -> list[dict[str, str]]:
+    def _search(self, query: str, limit: int) -> list[dict[str, Any]]:
         if self._broker_config is not None:
             result = self._request(
                 "context",
@@ -540,6 +544,7 @@ class HyMemoryProvider(MemoryProvider):
                     "user_ids": [self.user_id],
                     "agent_ids": [self.agent_id],
                     "limit": limit,
+                    "min_score": self.min_score,
                 },
             )
             raw = result.get("memories")
@@ -572,7 +577,19 @@ class HyMemoryProvider(MemoryProvider):
             if not isinstance(content, str):
                 raise ProviderError("invalid_response")
             content = content[:remaining]
-            items.append({"memory_id": memory_id, "content": content})
+            entry: dict[str, Any] = {"memory_id": memory_id, "content": content}
+            # 透出分数与来源，调用方可据此自行二次过滤（#346）。search 接口
+            # 返回 score/layer/retrieval_source；broker 的 context 接口没有这些
+            # 字段，此时按缺失处理（不写 None，避免污染注入的 JSON）。
+            if isinstance(item.get("score"), (int, float)):
+                entry["score"] = float(item["score"])
+            if isinstance(item.get("retrieval_source"), str) and item["retrieval_source"]:
+                entry["retrieval_source"] = item["retrieval_source"]
+            if isinstance(item.get("layer"), str) and item["layer"]:
+                entry["layer"] = item["layer"]
+            if isinstance(item.get("tags"), list):
+                entry["tags"] = item["tags"]
+            items.append(entry)
             remaining -= len(content)
         return items
 
