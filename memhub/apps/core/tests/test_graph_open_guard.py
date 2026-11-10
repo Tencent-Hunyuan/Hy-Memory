@@ -196,6 +196,29 @@ def test_the_frozen_subcommand_runs_the_same_probe(tmp_path) -> None:
     assert GraphOpenProbe(command=command, timeout_s=60)(garbage).condemns_graph
 
 
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {},
+        {"MEMORY_GRAPH_BUFFER_POOL_MB": "256", "MEMORY_GRAPH_MAX_THREADS": "2"},
+        {"MEMORY_GRAPH_BUFFER_POOL_MB": "16", "MEMORY_GRAPH_MAX_THREADS": "0"},
+        {"MEMORY_GRAPH_BUFFER_POOL_MB": "0", "MEMORY_GRAPH_MAX_THREADS": "not-a-number"},
+    ],
+)
+def test_the_probe_opens_the_graph_with_the_sdks_resource_bounds(monkeypatch, environment) -> None:
+    """The probe replays the WAL in the buffer pool the SDK will open the graph with."""
+    graph_store_kuzu = pytest.importorskip("hy_memory.data.graph_store_kuzu")
+    from one_memory.hy_graph_admin import GRAPH_PROBE_DATABASE_KWARGS_SOURCE
+
+    monkeypatch.delenv("MEMORY_GRAPH_BUFFER_POOL_MB", raising=False)
+    monkeypatch.delenv("MEMORY_GRAPH_MAX_THREADS", raising=False)
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    namespace: dict[str, object] = {}
+    exec(compile(GRAPH_PROBE_DATABASE_KWARGS_SOURCE, "<probe-kwargs>", "exec"), namespace)
+    assert namespace["database_kwargs"] == graph_store_kuzu.kuzu_database_kwargs()
+
+
 def test_probe_budget_and_cap_are_bounded_and_configurable(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("ONE_MEMORY_GRAPH_PROBE_TIMEOUT_S", raising=False)
     monkeypatch.delenv("ONE_MEMORY_GRAPH_PROBE_MAX_RSS_MB", raising=False)

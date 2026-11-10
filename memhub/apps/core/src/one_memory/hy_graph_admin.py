@@ -204,11 +204,35 @@ def retire_mismatched_graph_store(config: Any) -> Path | None:
     return archive
 
 
+#: The `kuzu.Database` resource bounds of the probe child: the SDK's
+#: (`kuzu_database_kwargs`, hy-memory >= 2.0.15), from the same environment
+#: (`MEMORY_GRAPH_BUFFER_POOL_MB`, `MEMORY_GRAPH_MAX_THREADS`) and defaults,
+#: so the probe replays the WAL in the buffer pool the SDK will open it with
+#: and not in Kuzu's default of most of physical memory. Kept inline: the
+#: child does not import the SDK.
+GRAPH_PROBE_DATABASE_KWARGS_SOURCE = """
+import os
+def _probe_env_int(key, default):
+    try:
+        return int(os.environ.get(key, default))
+    except (TypeError, ValueError):
+        return default
+database_kwargs = {}
+_pool_mb = _probe_env_int("MEMORY_GRAPH_BUFFER_POOL_MB", 512)
+if _pool_mb > 0:
+    database_kwargs["buffer_pool_size"] = max(_pool_mb, 64) << 20
+_threads = _probe_env_int("MEMORY_GRAPH_MAX_THREADS", 4)
+if _threads > 0:
+    database_kwargs["max_num_threads"] = _threads
+"""
+
 #: The body of the graph-open probe child (`graph_open_guard.GraphOpenProbe`).
 #: Run as `python -I -c <this> <graph> <alarm_s>` from source; the frozen
 #: binary runs the same through `--graph-open-probe` (`run_graph_open_probe`).
 #: It imports nothing of MemHub, so a broken graph costs only this process.
-GRAPH_OPEN_PROBE_SOURCE = """
+GRAPH_OPEN_PROBE_SOURCE = (
+    GRAPH_PROBE_DATABASE_KWARGS_SOURCE
+    + """
 import re, signal, sys
 if hasattr(signal, "alarm"):
     # Default SIGALRM action ends the process in the kernel, GIL or not.
@@ -218,7 +242,7 @@ try:
     import kuzu
 except ImportError:
     raise SystemExit(3)
-database = kuzu.Database(sys.argv[1], read_only=read_only)
+database = kuzu.Database(sys.argv[1], read_only=read_only, **database_kwargs)
 connection = kuzu.Connection(database)
 connection.execute("RETURN 1")
 width = ""
@@ -236,6 +260,7 @@ connection.close()
 database.close()
 print("width=" + width, flush=True)
 """
+)
 
 
 def run_graph_open_probe(arguments: list[str]) -> int:

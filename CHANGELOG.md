@@ -56,6 +56,13 @@ Hy Memory and MemHub are versioned and released independently.
   are built, so evolve and System 2 output from local models is no longer cut
   off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
   existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
+- MemHub pins `hy-memory==2.0.15`. In ultra, the read client and the write
+  coordinator's client in one Core now share one `kuzu.Database` on the live
+  graph instead of each opening their own, whose checkpoints overwrote each
+  other and lost graph writes; that graph is opened with a 512 MB buffer pool
+  and at most 4 Kuzu threads (`MEMORY_GRAPH_BUFFER_POOL_MB`,
+  `MEMORY_GRAPH_MAX_THREADS`). The startup graph-open probe now opens the
+  graph with the same bounds.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an
